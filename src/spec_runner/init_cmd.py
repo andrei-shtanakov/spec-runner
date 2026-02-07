@@ -3,7 +3,7 @@ spec-runner init — install Claude Code skills to project.
 
 Usage:
     spec-runner-init              # Install to .claude/skills in current directory
-    spec-runner-init --global     # Install to ~/.claude/skills
+    spec-runner-init /path/to/project
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 def get_skills_source_dir() -> Path:
     """Get the directory containing bundled skills."""
-    return Path(__file__).parent / "skills"
+    return Path(__file__).parent / "skills" / "spec-generator-skill"
 
 
 def install_skills(target_dir: Path, force: bool = False) -> bool:
@@ -63,7 +63,6 @@ def main() -> None:
         epilog="""
 Examples:
     spec-runner-init              # Install to ./.claude/skills
-    spec-runner-init --global     # Install to ~/.claude/skills
     spec-runner-init --force      # Overwrite existing skills
     spec-runner-init /path/to/project
         """,
@@ -75,13 +74,6 @@ Examples:
         help="Target directory (default: current directory)",
     )
     parser.add_argument(
-        "--global",
-        "-g",
-        dest="global_install",
-        action="store_true",
-        help="Install to ~/.claude/skills (global installation)",
-    )
-    parser.add_argument(
         "--force",
         "-f",
         action="store_true",
@@ -90,7 +82,7 @@ Examples:
 
     args = parser.parse_args()
 
-    target_dir = Path.home() if args.global_install else Path(args.target).resolve()
+    target_dir = Path(args.target).resolve()
 
     if not target_dir.is_dir():
         print(f"Error: {target_dir} is not a directory", file=sys.stderr)

@@ -1,13 +1,13 @@
 # Design Specification
 
-> Architecture, API, data schemas, and key decisions for {{PROJECT_NAME}}
+> Architecture, APIs, data schemas, and key decisions for {{PROJECT_NAME}}
 
 ## 1. Architecture Overview
 
 ### 1.1 Principles
 
 | Principle | Description |
-|---------|----------|
+|-----------|-------------|
 | {{PRINCIPLE_1}} | {{DESCRIPTION_1}} |
 | {{PRINCIPLE_2}} | {{DESCRIPTION_2}} |
 | {{PRINCIPLE_3}} | {{DESCRIPTION_3}} |
@@ -38,12 +38,12 @@
 {{COMPONENT_DESCRIPTION}}
 
 #### Interface
-```python
-class {{ComponentName}}(ABC):
-    @abstractmethod
-    def {{method_name}}(self, {{param}}: {{Type}}) -> {{ReturnType}}:
-        """{{Description}}"""
-        pass
+
+<!-- Use language-appropriate syntax from Language Profiles in SKILL.md -->
+<!-- Python: ABC + @abstractmethod | Rust: pub trait + fn -->
+
+```{{python|rust}}
+{{Interface definition using appropriate language idioms}}
 ```
 
 #### Configuration
@@ -62,12 +62,11 @@ class {{ComponentName}}(ABC):
 {{COMPONENT_DESCRIPTION}}
 
 #### Data Model
-```python
-@dataclass
-class {{ModelName}}:
-    {{field_1}}: {{type_1}}
-    {{field_2}}: {{type_2}}
-    {{field_3}}: {{type_3}} = {{default}}
+
+<!-- Python: @dataclass | Rust: #[derive(Debug, Clone, Serialize)] struct -->
+
+```{{python|rust}}
+{{Data model definition using appropriate language idioms}}
 ```
 
 #### API
@@ -112,7 +111,7 @@ CREATE TABLE {{table_name}} (
 ### 4.1 {{INTEGRATION_NAME}}
 
 | Aspect | Value |
-|--------|----------|
+|--------|-------|
 | Protocol | {{protocol}} |
 | Endpoint | {{endpoint}} |
 | Authentication | {{auth_method}} |
@@ -138,16 +137,16 @@ CREATE TABLE {{table_name}} (
 ## 5. Key Decisions (ADR)
 
 ### ADR-001: {{DECISION_TITLE}}
-**Status:** Accepted | Proposed | Deprecated  
+**Status:** Accepted | Proposed | Deprecated
 **Date:** {{DATE}}
 
-**Context:**  
+**Context:**
 {{CONTEXT_DESCRIPTION}}
 
-**Decision:**  
+**Decision:**
 {{DECISION_DESCRIPTION}}
 
-**Rationale:**  
+**Rationale:**
 {{RATIONALE}}
 
 **Consequences:**

@@ -182,6 +182,25 @@ def parse_tasks(filepath: Path) -> list[Task]:
     return tasks
 
 
+def history_file_for(tasks_file: Path) -> Path:
+    """Derive history log path from tasks file path.
+
+    E.g. spec/phase5-tasks.md -> spec/.phase5-task-history.log
+         spec/tasks.md        -> spec/.task-history.log
+    """
+    stem = tasks_file.stem  # e.g. "phase5-tasks" or "tasks"
+    prefix = stem[: -len("tasks")] if stem.endswith("-tasks") else ""
+    return tasks_file.parent / f".{prefix}task-history.log"
+
+
+def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
+    """Log change to history"""
+    history_file.parent.mkdir(exist_ok=True)
+    with open(history_file, "a") as f:
+        timestamp = datetime.now().isoformat()
+        f.write(f"{timestamp} | {task_id} | {change}\n")
+
+
 def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     """Update task status in file"""
     content = filepath.read_text()
@@ -212,7 +231,11 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
                 lines[i] = new_line
 
                 filepath.write_text("\n".join(lines))
-                log_change(task_id, f"status -> {new_status}")
+                log_change(
+                    task_id,
+                    f"status -> {new_status}",
+                    history_file_for(filepath),
+                )
                 return True
 
     return False
@@ -241,6 +264,7 @@ def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked
                 log_change(
                     task_id,
                     f"checklist[{item_index}] -> {'done' if checked else 'undone'}",
+                    history_file_for(filepath),
                 )
                 return True
             checklist_count += 1
@@ -268,24 +292,19 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
         if in_task and line.startswith("### TASK-"):
             break
 
-        if in_task and CHECKLIST_ITEM.match(line):
-            if "[ ]" in line:
-                lines[i] = line.replace("[ ]", "[x]")
-                marked_count += 1
+        if in_task and CHECKLIST_ITEM.match(line) and "[ ]" in line:
+            lines[i] = line.replace("[ ]", "[x]")
+            marked_count += 1
 
     if marked_count > 0:
         filepath.write_text("\n".join(lines))
-        log_change(task_id, f"checklist: marked {marked_count} items done")
+        log_change(
+            task_id,
+            f"checklist: marked {marked_count} items done",
+            history_file_for(filepath),
+        )
 
     return marked_count
-
-
-def log_change(task_id: str, change: str):
-    """Log change to history"""
-    HISTORY_FILE.parent.mkdir(exist_ok=True)
-    with open(HISTORY_FILE, "a") as f:
-        timestamp = datetime.now().isoformat()
-        f.write(f"{timestamp} | {task_id} | {change}\n")
 
 
 def get_task_by_id(tasks: list[Task], task_id: str) -> Task | None:
@@ -423,7 +442,7 @@ def cmd_show(args, tasks: list[Task]):
             print(f"   {i}. {mark} {item}")
 
 
-def cmd_start(args, tasks: list[Task]):
+def cmd_start(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
     """Start task"""
     task = get_task_by_id(tasks, args.task_id.upper())
     if not task:
@@ -433,6 +452,9 @@ def cmd_start(args, tasks: list[Task]):
     # Check dependencies
     tasks = resolve_dependencies(tasks)
     task = get_task_by_id(tasks, args.task_id.upper())
+    if not task:
+        print(f"❌ Task {args.task_id} not found after resolving")
+        return
 
     if task.depends_on:
         print(f"⚠️  Task depends on incomplete: {', '.join(task.depends_on)}")
@@ -440,13 +462,13 @@ def cmd_start(args, tasks: list[Task]):
             print("   Use --force to start anyway")
             return
 
-    if update_task_status(TASKS_FILE, task.id, "in_progress"):
+    if update_task_status(tasks_file, task.id, "in_progress"):
         print(f"🔄 {task.id} started!")
     else:
         print("❌ Failed to update status")
 
 
-def cmd_done(args, tasks: list[Task]):
+def cmd_done(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
     """Complete task"""
     task = get_task_by_id(tasks, args.task_id.upper())
     if not task:
@@ -461,11 +483,11 @@ def cmd_done(args, tasks: list[Task]):
             print("   Use --force to complete anyway")
             return
 
-    if update_task_status(TASKS_FILE, task.id, "done"):
+    if update_task_status(tasks_file, task.id, "done"):
         print(f"✅ {task.id} completed!")
 
         # Show unblocked tasks
-        tasks = parse_tasks(TASKS_FILE)
+        tasks = parse_tasks(tasks_file)
         tasks = resolve_dependencies(tasks)
         unblocked = [t for t in tasks if t.status == "todo" and not t.depends_on]
         if unblocked:
@@ -476,20 +498,20 @@ def cmd_done(args, tasks: list[Task]):
         print("❌ Failed to update status")
 
 
-def cmd_block(args, tasks: list[Task]):
+def cmd_block(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
     """Block task"""
     task = get_task_by_id(tasks, args.task_id.upper())
     if not task:
         print(f"❌ Task {args.task_id} not found")
         return
 
-    if update_task_status(TASKS_FILE, task.id, "blocked"):
+    if update_task_status(tasks_file, task.id, "blocked"):
         print(f"⏸️ {task.id} blocked")
     else:
         print("❌ Failed to update status")
 
 
-def cmd_check(args, tasks: list[Task]):
+def cmd_check(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
     """Mark checklist item"""
     task = get_task_by_id(tasks, args.task_id.upper())
     if not task:
@@ -504,7 +526,7 @@ def cmd_check(args, tasks: list[Task]):
     item_text, was_checked = task.checklist[item_index]
     new_checked = not was_checked  # toggle
 
-    if update_checklist_item(TASKS_FILE, task.id, item_index, new_checked):
+    if update_checklist_item(tasks_file, task.id, item_index, new_checked):
         mark = "✅" if new_checked else "⬜"
         print(f"{mark} {item_text}")
     else:
@@ -515,9 +537,9 @@ def cmd_stats(args, tasks: list[Task]):
     """Task statistics"""
     tasks = resolve_dependencies(tasks)
 
-    by_status = {}
-    by_priority = {}
-    by_milestone = {}
+    by_status: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    by_milestone: dict[str, int] = {}
     total_estimate = 0
 
     for task in tasks:
@@ -595,7 +617,7 @@ def cmd_graph(args, tasks: list[Task]):
     # Find roots (no dependencies)
     roots = [t for t in tasks if not t.depends_on]
 
-    def print_tree(task_id: str, indent: int = 0, visited: set = None):
+    def print_tree(task_id: str, indent: int = 0, visited: set | None = None):
         if visited is None:
             visited = set()
 
@@ -659,6 +681,13 @@ def main():
         epilog=__doc__,
     )
 
+    parser.add_argument(
+        "--spec-prefix",
+        type=str,
+        default="",
+        help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # list
@@ -710,25 +739,30 @@ def main():
         parser.print_help()
         return
 
-    tasks = parse_tasks(TASKS_FILE)
+    tasks_file = Path(f"spec/{args.spec_prefix}tasks.md") if args.spec_prefix else TASKS_FILE
+    tasks = parse_tasks(tasks_file)
 
-    commands = {
-        "list": cmd_list,
-        "ls": cmd_list,
-        "show": cmd_show,
+    # Commands that modify the tasks file need tasks_file passed
+    write_commands = {
         "start": cmd_start,
         "done": cmd_done,
         "block": cmd_block,
         "check": cmd_check,
+    }
+    read_commands = {
+        "list": cmd_list,
+        "ls": cmd_list,
+        "show": cmd_show,
         "stats": cmd_stats,
         "next": cmd_next,
         "graph": cmd_graph,
         "export-gh": cmd_export_gh,
     }
 
-    cmd_func = commands.get(args.command)
-    if cmd_func:
-        cmd_func(args, tasks)
+    if args.command in write_commands:
+        write_commands[args.command](args, tasks, tasks_file)
+    elif args.command in read_commands:
+        read_commands[args.command](args, tasks)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spec-runner"
-version = "0.1.3"
+version = "0.1.4"
 description = "Task automation from markdown specs via Claude CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,8 +46,8 @@ spec-task = "spec_runner.task:main"
 spec-runner-init = "spec_runner.init_cmd:main"
 
 [project.urls]
-Homepage = "https://github.com/pr0sto/spec-runner"
-Repository = "https://github.com/pr0sto/spec-runner"
+Homepage = "https://github.com/andrei-shtanakov/spec-runner"
+Repository = "https://github.com/andrei-shtanakov/spec-runner"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -78,5 +78,9 @@ markers = [
 [dependency-groups]
 dev = [
     "build>=1.4.0",
+    "mypy>=1.19.1",
+    "pyrefly>=0.51.1",
+    "pytest>=9.0.2",
     "ruff>=0.14.14",
+    "types-pyyaml>=6.0.12.20250915",
 ]

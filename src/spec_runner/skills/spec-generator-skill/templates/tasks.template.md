@@ -5,9 +5,9 @@
 ## Legend
 
 **Priority:**
-- 🔴 P0 — Critical, blocks release
-- 🟠 P1 — High, needed for full functionality
-- 🟡 P2 — Medium, improves experience
+- 🔴 P0 — Critical, blocks the release
+- 🟠 P1 — High, needed for full usability
+- 🟡 P2 — Medium, experience improvement
 - 🟢 P3 — Low, nice to have
 
 **Status:**
@@ -18,13 +18,13 @@
 
 **Estimate:**
 - Use days (d) or hours (h)
-- Prefer a range: 3-5d
+- A range is preferred: 3-5d
 
 ---
 
 ## Definition of Done (for EVERY task)
 
-> ⚠️ A task is NOT considered complete without meeting these criteria:
+> ⚠️ A task is NOT considered complete without fulfilling these items:
 
 - [ ] **Unit tests** — coverage ≥80% of new code
 - [ ] **Tests pass** — all tests pass locally
@@ -40,18 +40,19 @@
 ### TASK-100: Test Infrastructure Setup
 🔴 P0 | ⬜ TODO | Est: 2d
 
-**Description:**  
+**Description:**
 Set up the test infrastructure.
 
 **Checklist:**
-- [ ] Test framework setup (pytest/jest/etc.)
-- [ ] Coverage reporting
-- [ ] CI workflow
-- [ ] Test fixtures structure
+- [ ] Test framework setup (Python: `pytest` | Rust: built-in `#[test]` + `cargo test`)
+- [ ] Coverage reporting (Python: `pytest-cov` | Rust: `cargo-tarpaulin` / `cargo-llvm-cov`)
+- [ ] CI workflow (see Language Profiles in SKILL.md for pipeline steps)
+- [ ] Test fixtures structure (Python: `conftest.py` | Rust: `tests/` + test modules)
+- [ ] Linting & formatting (Python: `ruff` | Rust: `clippy` + `rustfmt`)
 - [ ] Pre-commit hooks
 
-**Traces to:** [NFR-000]  
-**Depends on:** —  
+**Traces to:** [NFR-000]
+**Depends on:** —
 **Blocks:** All other tasks
 
 ---
@@ -61,7 +62,7 @@ Set up the test infrastructure.
 ### TASK-001: {{TASK_NAME}}
 🔴 P0 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
@@ -75,8 +76,8 @@ Set up the test infrastructure.
 - [ ] Integration test (if needed)
 - [ ] Coverage ≥80%
 
-**Traces to:** [REQ-XXX], [REQ-YYY]  
-**Depends on:** [TASK-100]  
+**Traces to:** [REQ-XXX], [REQ-YYY]
+**Depends on:** [TASK-100]
 **Blocks:** [TASK-XXX]
 
 ---
@@ -84,15 +85,15 @@ Set up the test infrastructure.
 ### TASK-002: {{TASK_NAME}}
 🔴 P0 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 - [ ] {{SUBTASK_2}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-001]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-001]
 **Blocks:** [TASK-XXX]
 
 ---
@@ -100,15 +101,15 @@ Set up the test infrastructure.
 ### TASK-003: {{TASK_NAME}}
 🟠 P1 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 - [ ] {{SUBTASK_2}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-001], [TASK-002]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-001], [TASK-002]
 **Blocks:** —
 
 ---
@@ -118,15 +119,15 @@ Set up the test infrastructure.
 ### TASK-010: {{TASK_NAME}}
 🟠 P1 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 - [ ] {{SUBTASK_2}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-XXX]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-XXX]
 **Blocks:** —
 
 ---
@@ -134,15 +135,15 @@ Set up the test infrastructure.
 ### TASK-011: {{TASK_NAME}}
 🟡 P2 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 - [ ] {{SUBTASK_2}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-XXX]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-XXX]
 **Blocks:** —
 
 ---
@@ -152,15 +153,15 @@ Set up the test infrastructure.
 ### TASK-020: {{TASK_NAME}}
 🟡 P2 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 - [ ] {{SUBTASK_2}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-XXX]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-XXX]
 **Blocks:** —
 
 ---
@@ -168,14 +169,14 @@ Set up the test infrastructure.
 ### TASK-021: {{TASK_NAME}}
 🟢 P3 | ⬜ TODO | Est: {{X}}d
 
-**Description:**  
+**Description:**
 {{TASK_DESCRIPTION}}
 
 **Checklist:**
 - [ ] {{SUBTASK_1}}
 
-**Traces to:** [REQ-XXX]  
-**Depends on:** [TASK-XXX]  
+**Traces to:** [REQ-XXX]
+**Depends on:** [TASK-XXX]
 **Blocks:** —
 
 ---

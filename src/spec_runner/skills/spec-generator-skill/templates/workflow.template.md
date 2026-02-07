@@ -6,7 +6,7 @@ The task management system works directly with the `spec/tasks.md` file:
 - Statuses and checklists are updated in markdown
 - Change history is logged in `.task-history.log`
 - Dependencies are tracked automatically
-- **Automated execution via Claude CLI**
+- **Automatic execution via Claude CLI**
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ make task-next            # What to do next
 make task-start ID=TASK-001
 make task-done ID=TASK-001
 
-# === Automated mode (Claude CLI) ===
+# === Automatic mode (Claude CLI) ===
 make exec                 # Execute next task
 make exec-all             # Execute all ready tasks
 make exec-mvp             # Execute MVP tasks
@@ -26,22 +26,22 @@ make exec-status          # Execution status
 
 ---
 
-## Automated Execution (Claude CLI)
+## Automatic Execution (Claude CLI)
 
 ### Concept
 
-The executor runs Claude CLI for each task:
+The executor launches Claude CLI for each task:
 1. Reads the specification (requirements.md, design.md)
-2. Generates a prompt with task context
+2. Builds a prompt with task context
 3. Claude implements code and tests
-4. Verifies the result (tests, lint)
-5. On success — proceeds to the next task
-6. On failure — retry with a limit
+4. Validates the result (tests, lint)
+5. On success — moves to the next task
+6. On failure — retry with limit
 
 ### Commands
 
 ```bash
-# Execute the next ready task
+# Execute next ready task
 python executor.py run
 
 # Execute a specific task
@@ -85,7 +85,7 @@ python executor.py run --no-branch
 python executor.py run --auto-commit
 ```
 
-### Automated Execution Workflow
+### Automatic Execution Workflow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -106,9 +106,9 @@ python executor.py run --auto-commit
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  3. Generate prompt                                         │
+│  3. Build prompt                                             │
 │     - Context from requirements.md, design.md               │
-│     - Task checklist                                        │
+│     - Task checklist                                         │
 │     - Related REQ-XXX, DESIGN-XXX                           │
 └─────────────────────┬───────────────────────────────────────┘
                       │
@@ -120,10 +120,10 @@ python executor.py run --auto-commit
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  5. Verify result                                           │
-│     - Did Claude return "TASK_COMPLETE"?                    │
-│     - Do tests pass? (make test)                            │
-│     - Is lint clean? (make lint)                            │
+│  5. Validate result                                          │
+│     - Did Claude return "TASK_COMPLETE"?                     │
+│     - Do tests pass? (make test)                             │
+│     - Is lint clean? (make lint)                             │
 └─────────────────────┬───────────────────────────────────────┘
                       │
             ┌─────────┴─────────┐
@@ -151,11 +151,11 @@ python executor.py run --auto-commit
 ### Safety Mechanisms
 
 | Mechanism | Default | Description |
-|-----------|---------|-------------|
+|----------|---------|----------|
 | max_retries | 3 | Max attempts per task |
 | max_consecutive_failures | 2 | Stop after N consecutive failures |
 | task_timeout | 30 min | Timeout per task |
-| post_done tests | ON | Test verification |
+| post_done tests | ON | Run tests after completion |
 
 ### Logs
 
@@ -190,7 +190,7 @@ File `executor.config.yaml`:
 executor:
   max_retries: 3
   task_timeout_minutes: 30
-  
+
   hooks:
     pre_start:
       create_git_branch: true
@@ -246,17 +246,17 @@ python task.py block TASK-001
 # Show task with checklist
 python task.py show TASK-001
 
-# Toggle item
+# Toggle checklist item
 python task.py check TASK-001 0   # first item
 python task.py check TASK-001 2   # third item
 ```
 
 ## Workflow
 
-### 1. Choosing a Task
+### 1. Choose a Task
 
 ```bash
-# Check what's ready to work on
+# See what's ready to work on
 python task.py next
 
 # Output:
@@ -266,10 +266,10 @@ python task.py next
 #    Est: 2d | Milestone 1: MVP ✓ deps OK
 ```
 
-### 2. Starting Work
+### 2. Start Working
 
 ```bash
-# Start a task
+# Start the task
 python task.py start TASK-100
 
 # ✓ TASK-100 started!
@@ -277,7 +277,7 @@ python task.py start TASK-100
 
 Status in `tasks.md` is updated: `⬜ TODO` → `🔄 IN PROGRESS`
 
-### 3. Working with the Checklist
+### 3. Work with Checklist
 
 ```bash
 # View checklist
@@ -288,10 +288,10 @@ python task.py check TASK-100 0
 python task.py check TASK-100 1
 ```
 
-### 4. Completion
+### 4. Complete
 
 ```bash
-# Complete
+# Complete the task
 python task.py done TASK-100
 
 # ✅ TASK-100 completed!
@@ -301,7 +301,7 @@ python task.py done TASK-100
 #    TASK-004: Test Loader
 ```
 
-### 5. Checking Progress
+### 5. Check Progress
 
 ```bash
 python task.py stats
@@ -319,12 +319,12 @@ python task.py stats
 
 The system automatically tracks dependencies:
 
-- `task next` — shows only tasks with completed dependencies
-- `task start` — warns about incomplete dependencies
-- `task done` — shows unblocked tasks
+- On `task next` — shows only tasks with completed dependencies
+- On `task start` — warns about incomplete dependencies
+- On `task done` — shows unblocked tasks
 
 ```bash
-# Attempt to start a task with incomplete dependencies
+# Attempting to start a task with incomplete dependencies
 python task.py start TASK-003
 
 # ⚠️  Task depends on incomplete: TASK-001
@@ -337,13 +337,13 @@ python task.py start TASK-003
 # Generates commands for gh CLI
 python task.py export-gh
 
-# Run the generated commands:
+# Execute the generated commands:
 # gh issue create --title "TASK-001: ATP Protocol Models" ...
 ```
 
 ## Git Integration
 
-Recommended branch workflow:
+Recommended workflow with branches:
 
 ```bash
 # 1. Start task
@@ -364,7 +364,7 @@ git merge task/TASK-001-protocol-models
 For convenience — targets in the Makefile:
 
 | Command | Description |
-|---------|-------------|
+|---------|----------|
 | `make task-list` | List all tasks |
 | `make task-todo` | TODO tasks |
 | `make task-progress` | Tasks in progress |
@@ -373,8 +373,8 @@ For convenience — targets in the Makefile:
 | `make task-graph` | Dependency graph |
 | `make task-p0` | P0 only |
 | `make task-mvp` | MVP tasks |
-| `make task-start ID=X` | Start task |
-| `make task-done ID=X` | Complete task |
+| `make task-start ID=X` | Start a task |
+| `make task-done ID=X` | Complete a task |
 | `make task-show ID=X` | Show details |
 
 ## Change History
@@ -389,8 +389,8 @@ All changes are logged in `spec/.task-history.log`:
 
 ## Tips
 
-1. **Start your day with `task next`** — see priority tasks that are ready
-2. **Update the checklist regularly** — progress is visible immediately
-3. **Don't force dependencies** — they exist for a reason
-4. **Commit tasks.md** — keep history in Git
+1. **Start the day with `task next`** — see priority tasks that are ready
+2. **Mark checklist items regularly** — progress is visible immediately
+3. **Don't force dependencies** — they are there for a reason
+4. **Commit tasks.md** — history is in Git
 5. **Use `--force` consciously** — only when truly necessary

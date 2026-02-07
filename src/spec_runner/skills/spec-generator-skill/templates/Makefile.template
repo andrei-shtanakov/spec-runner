@@ -80,13 +80,13 @@ task-mvp:  ## MVP tasks
 # === Task Workflow ===
 
 # Usage: make task-start ID=TASK-001
-task-start:  ## Start task (make task-start ID=TASK-001)
+task-start:  ## Start a task (make task-start ID=TASK-001)
 	@python task.py start $(ID)
 
-task-done:  ## Complete task (make task-done ID=TASK-001)
+task-done:  ## Complete a task (make task-done ID=TASK-001)
 	@python task.py done $(ID)
 
-task-show:  ## Show task (make task-show ID=TASK-001)
+task-show:  ## Show task details (make task-show ID=TASK-001)
 	@python task.py show $(ID)
 
 # === Documentation ===
@@ -103,7 +103,7 @@ docs-serve:  ## Start docs server
 build:  ## Build package
 	python -m build
 
-clean:  ## Clean build artifacts
+clean:  ## Clean artifacts
 	rm -rf build/ dist/ *.egg-info/
 	rm -rf .pytest_cache/ .coverage htmlcov/
 	rm -rf .mypy_cache/ .ruff_cache/
@@ -126,7 +126,7 @@ exec-mvp:  ## Execute MVP tasks
 exec-status:  ## Execution status
 	@python executor.py status
 
-exec-retry:  ## Retry task (make exec-retry ID=TASK-001)
+exec-retry:  ## Retry a task (make exec-retry ID=TASK-001)
 	@python executor.py retry $(ID)
 
 exec-logs:  ## Task logs (make exec-logs ID=TASK-001)

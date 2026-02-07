@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -23,11 +24,11 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 import yaml
 
 from .task import (
-    TASKS_FILE,
     Task,
     get_next_tasks,
     get_task_by_id,
@@ -86,7 +87,7 @@ def _send_callback(
 
     import urllib.request
 
-    payload = {
+    payload: dict[str, str | float] = {
         "task_id": task_id,
         "status": status,
         "timestamp": datetime.now().isoformat(),
@@ -114,12 +115,12 @@ class ExecutorLock:
 
     def __init__(self, lock_path: Path):
         self.lock_path = lock_path
-        self.lock_file = None
+        self.lock_file: TextIO | None = None
 
     def acquire(self) -> bool:
         """Try to acquire lock. Returns True if successful."""
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_file = open(self.lock_path, "w")
+        self.lock_file = open(self.lock_path, "w")  # noqa: SIM115
         try:
             fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.lock_file.write(f"PID: {os.getpid()}\nStarted: {datetime.now().isoformat()}\n")
@@ -136,10 +137,8 @@ class ExecutorLock:
             fcntl.flock(self.lock_file, fcntl.LOCK_UN)
             self.lock_file.close()
             self.lock_file = None
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 self.lock_path.unlink()
-            except FileNotFoundError:
-                pass
 
 
 # Configuration file path
@@ -203,12 +202,48 @@ class ExecutorConfig:
     # Callback URL for reporting task progress to orchestrator
     callback_url: str = ""
 
+    # Spec file prefix (e.g. "phase5-" for phase5-tasks.md)
+    spec_prefix: str = ""
+
     # Test command (using uv)
     test_command: str = "uv run pytest tests/ -v -m 'not slow'"
     lint_command: str = "uv run ruff check ."
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
+
+    def __post_init__(self):
+        """Resolve project_root and namespace state/log paths by spec_prefix."""
+        self.project_root = self.project_root.resolve()
+
+        if self.spec_prefix:
+            default_state = Path("spec/.executor-state.json")
+            default_logs = Path("spec/.executor-logs")
+            if self.state_file == default_state:
+                self.state_file = Path(f"spec/.executor-{self.spec_prefix}state.json")
+            if self.logs_dir == default_logs:
+                self.logs_dir = Path(f"spec/.executor-{self.spec_prefix}logs")
+
+        if not self.state_file.is_absolute():
+            self.state_file = self.project_root / self.state_file
+        if not self.logs_dir.is_absolute():
+            self.logs_dir = self.project_root / self.logs_dir
+
+    @property
+    def stop_file(self) -> Path:
+        return self.project_root / "spec" / ".executor-stop"
+
+    @property
+    def tasks_file(self) -> Path:
+        return self.project_root / "spec" / f"{self.spec_prefix}tasks.md"
+
+    @property
+    def requirements_file(self) -> Path:
+        return self.project_root / "spec" / f"{self.spec_prefix}requirements.md"
+
+    @property
+    def design_file(self) -> Path:
+        return self.project_root / "spec" / f"{self.spec_prefix}design.md"
 
 
 def build_cli_command(
@@ -340,9 +375,11 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "test_command": commands.get("test"),
             "lint_command": commands.get("lint"),
             "lint_fix_command": commands.get("lint_fix"),
+            "project_root": Path(paths["root"]) if paths.get("root") else None,
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
             "state_file": Path(paths["state"]) if paths.get("state") else None,
             "callback_url": executor_config.get("callback_url"),
+            "spec_prefix": executor_config.get("spec_prefix"),
         }
     except Exception as e:
         print(f"⚠️  Warning: Failed to load config from {config_path}: {e}")
@@ -384,6 +421,10 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["run_review"] = False
     if hasattr(args, "callback_url") and args.callback_url:
         config_kwargs["callback_url"] = args.callback_url
+    if hasattr(args, "spec_prefix") and args.spec_prefix:
+        config_kwargs["spec_prefix"] = args.spec_prefix
+    if hasattr(args, "project_root") and args.project_root:
+        config_kwargs["project_root"] = Path(args.project_root)
 
     return ExecutorConfig(**config_kwargs)
 
@@ -408,7 +449,7 @@ class TaskState:
 
     task_id: str
     status: str  # pending, running, success, failed, skipped
-    attempts: list = field(default_factory=list)
+    attempts: list[TaskAttempt] = field(default_factory=list)
     started_at: str | None = None
     completed_at: str | None = None
 
@@ -526,6 +567,17 @@ class ExecutorState:
     def should_stop(self) -> bool:
         """Check if we should stop"""
         return self.consecutive_failures >= self.config.max_consecutive_failures
+
+
+def check_stop_requested(config: ExecutorConfig) -> bool:
+    """Check if graceful shutdown was requested via stop file."""
+    return config.stop_file.exists()
+
+
+def clear_stop_file(config: ExecutorConfig) -> None:
+    """Remove stop file if it exists."""
+    with contextlib.suppress(FileNotFoundError):
+        config.stop_file.unlink()
 
 
 # === Prompt Builder ===
@@ -651,7 +703,7 @@ def format_error_summary(error: str, output: str | None = None, max_lines: int =
                 lines.append(f"     ... and {len(relevant_lines) - max_lines} more")
         else:
             # No specific errors found, show last few lines
-            output_lines = [l.strip() for l in output.split("\n") if l.strip()]
+            output_lines = [ln.strip() for ln in output.split("\n") if ln.strip()]
             if output_lines:
                 lines.append("  📋 Last output:")
                 for line in output_lines[-5:]:
@@ -696,15 +748,13 @@ def build_task_prompt(
     """Build prompt for Claude with task context and previous attempt info."""
 
     # Read specifications
-    spec_dir = config.project_root / "spec"
-
     requirements = ""
-    if (spec_dir / "requirements.md").exists():
-        requirements = (spec_dir / "requirements.md").read_text()
+    if config.requirements_file.exists():
+        requirements = config.requirements_file.read_text()
 
     design = ""
-    if (spec_dir / "design.md").exists():
-        design = (spec_dir / "design.md").read_text()
+    if config.design_file.exists():
+        design = config.design_file.read_text()
 
     # Find related requirements
     related_reqs = []
@@ -762,8 +812,12 @@ def build_task_prompt(
             "ESTIMATE": task.estimate or "TBD",
             "MILESTONE": task.milestone or "N/A",
             "CHECKLIST": checklist_text,
-            "RELATED_REQS": "\n".join(related_reqs) if related_reqs else "See spec/requirements.md",
-            "RELATED_DESIGN": "\n".join(related_design) if related_design else "See spec/design.md",
+            "RELATED_REQS": "\n".join(related_reqs)
+            if related_reqs
+            else f"See {config.requirements_file}",
+            "RELATED_DESIGN": "\n".join(related_design)
+            if related_design
+            else f"See {config.design_file}",
             "PREVIOUS_ATTEMPTS": attempts_section,
         }
         return render_template(template, variables)
@@ -783,17 +837,17 @@ def build_task_prompt(
 
 ## Related Requirements:
 
-{chr(10).join(related_reqs) if related_reqs else "See spec/requirements.md"}
+{chr(10).join(related_reqs) if related_reqs else f"See {config.requirements_file}"}
 
 ## Related Design:
 
-{chr(10).join(related_design) if related_design else "See spec/design.md"}
+{chr(10).join(related_design) if related_design else f"See {config.design_file}"}
 
 ## Instructions:
 
 1. Implement ALL checklist items for this task
 2. Write unit tests for new code (coverage ≥80%)
-3. Follow the design patterns from spec/design.md
+3. Follow the design patterns from {config.design_file}
 4. Use existing code style and conventions
 5. Create/update files as needed
 
@@ -865,6 +919,7 @@ def get_main_branch(config: ExecutorConfig) -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--verify", branch],
             capture_output=True,
+            text=True,
             cwd=config.project_root,
         )
         if result.returncode == 0:
@@ -934,6 +989,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
             result = subprocess.run(
                 ["git", "rev-parse", "--git-dir"],
                 capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
             if result.returncode != 0:
@@ -943,6 +999,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
             if result.returncode != 0:
@@ -963,6 +1020,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
             result = subprocess.run(
                 ["git", "rev-parse", "--verify", branch_name],
                 capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
 
@@ -979,12 +1037,13 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
                 result = subprocess.run(
                     ["git", "checkout", "-b", branch_name],
                     capture_output=True,
+                    text=True,
                     cwd=config.project_root,
                 )
                 if result.returncode == 0:
                     print(f"   Created branch: {branch_name}")
                 else:
-                    print(f"   ⚠️  Failed to create branch: {result.stderr.decode()}")
+                    print(f"   ⚠️  Failed to create branch: {result.stderr}")
 
         except FileNotFoundError:
             pass  # git not installed
@@ -1168,9 +1227,7 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
         else:
             # No explicit marker — treat as passed but log for visibility
             preview = output.strip()[-200:] if output.strip() else "(empty)"
-            log_progress(
-                f"✅ Code review completed (no explicit status marker)", task.id
-            )
+            log_progress("✅ Code review completed (no explicit status marker)", task.id)
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
             return True, None
 
@@ -1201,13 +1258,14 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             config.test_command,
             shell=True,
             capture_output=True,
+            text=True,
             cwd=config.project_root,
         )
         if result.returncode != 0:
             print("   ❌ Tests failed!")
             # Combine stdout and stderr for full picture
-            test_output = result.stdout.decode() + "\n" + result.stderr.decode()
-            print(result.stderr.decode()[:500])
+            test_output = result.stdout + "\n" + result.stderr
+            print(result.stderr[:500])
             return False, f"Tests failed:\n{test_output}"
         print("   ✅ Tests passed")
 
@@ -1218,6 +1276,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             config.lint_command,
             shell=True,
             capture_output=True,
+            text=True,
             cwd=config.project_root,
         )
 
@@ -1228,6 +1287,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 config.lint_fix_command,
                 shell=True,
                 capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
 
@@ -1236,13 +1296,14 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 config.lint_command,
                 shell=True,
                 capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
 
             if recheck.returncode != 0:
                 # Step 3: Still failing — block or warn
                 if config.lint_blocking:
-                    lint_output = recheck.stdout.decode() + "\n" + recheck.stderr.decode()
+                    lint_output = recheck.stdout + "\n" + recheck.stderr
                     print("   ❌ Lint errors remain after auto-fix!")
                     return False, f"Lint errors (not auto-fixable):\n{lint_output}"
                 else:
@@ -1395,7 +1456,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
     # Update status
     state.mark_running(task_id)
-    update_task_status(TASKS_FILE, task_id, "in_progress")
+    update_task_status(config.tasks_file, task_id, "in_progress")
     _send_callback(config.callback_url, task_id, "started")
 
     # Get previous attempts for context (to inform Claude about past failures)
@@ -1480,8 +1541,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
             if hook_success:
                 state.record_attempt(task_id, True, duration, output=output)
-                update_task_status(TASKS_FILE, task_id, "done")
-                mark_all_checklist_done(TASKS_FILE, task_id)
+                update_task_status(config.tasks_file, task_id, "done")
+                mark_all_checklist_done(config.tasks_file, task_id)
                 log_progress(f"✅ Completed in {duration:.1f}s", task_id)
                 _send_callback(config.callback_url, task_id, "success", duration)
                 return True
@@ -1565,7 +1626,7 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
     # Handle based on on_task_failure setting
     if config.on_task_failure == "stop":
-        update_task_status(TASKS_FILE, task.id, "blocked")
+        update_task_status(config.tasks_file, task.id, "blocked")
         return False
 
     elif config.on_task_failure == "ask":
@@ -1581,16 +1642,16 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
             state._save()
             return run_with_retries(task, config, state)
         elif choice == "q":
-            update_task_status(TASKS_FILE, task.id, "blocked")
+            update_task_status(config.tasks_file, task.id, "blocked")
             return False
         else:
             # Skip (default)
-            update_task_status(TASKS_FILE, task.id, "blocked")
+            update_task_status(config.tasks_file, task.id, "blocked")
             log_progress("⏭️ Skipped, continuing to next task", task.id)
             return "SKIP"
 
     else:  # "skip" (default)
-        update_task_status(TASKS_FILE, task.id, "blocked")
+        update_task_status(config.tasks_file, task.id, "blocked")
         log_progress("⏭️ Skipped, continuing to next task", task.id)
         return "SKIP"
 
@@ -1617,7 +1678,10 @@ def cmd_run(args, config: ExecutorConfig):
 
 def _run_tasks(args, config: ExecutorConfig):
     """Internal task execution logic."""
-    tasks = parse_tasks(TASKS_FILE)
+    # Clear any leftover stop file from previous runs
+    clear_stop_file(config)
+
+    tasks = parse_tasks(config.tasks_file)
     state = ExecutorState(config)
 
     # Check failure limit
@@ -1671,8 +1735,15 @@ def _run_tasks(args, config: ExecutorConfig):
         executed_ids: set[str] = set()
         include_in_progress = not getattr(args, "restart", False)
         while True:
+            # Check for graceful shutdown request
+            if check_stop_requested(config):
+                clear_stop_file(config)
+                print("\n🛑 Graceful shutdown requested (spec/.executor-stop)")
+                log_progress("🛑 Graceful shutdown requested")
+                break
+
             # Re-parse tasks to get updated statuses
-            tasks = parse_tasks(TASKS_FILE)
+            tasks = parse_tasks(config.tasks_file)
             ready_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
 
             # Filter by milestone if specified
@@ -1686,7 +1757,7 @@ def _run_tasks(args, config: ExecutorConfig):
 
             if not ready_tasks:
                 # Show why we're stopping
-                all_tasks = parse_tasks(TASKS_FILE)
+                all_tasks = parse_tasks(config.tasks_file)
                 todo_tasks = [t for t in all_tasks if t.status == "todo"]
                 if todo_tasks:
                     print(f"\n⏸️  No more ready tasks. {len(todo_tasks)} tasks blocked:")
@@ -1721,6 +1792,13 @@ def _run_tasks(args, config: ExecutorConfig):
     else:
         # For single task or milestone mode, execute the fixed list
         for task in tasks_to_run:
+            # Check for graceful shutdown request
+            if check_stop_requested(config):
+                clear_stop_file(config)
+                print("\n🛑 Graceful shutdown requested (spec/.executor-stop)")
+                log_progress("🛑 Graceful shutdown requested")
+                break
+
             result = run_with_retries(task, config, state)
 
             if result == "API_ERROR":
@@ -1737,7 +1815,7 @@ def _run_tasks(args, config: ExecutorConfig):
 
     # Summary
     # Re-read tasks to get updated statuses after execution
-    tasks = parse_tasks(TASKS_FILE)
+    tasks = parse_tasks(config.tasks_file)
 
     # Calculate statistics
     failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
@@ -1793,7 +1871,7 @@ def cmd_status(args, config: ExecutorConfig):
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
 
-    tasks = parse_tasks(TASKS_FILE)
+    tasks = parse_tasks(config.tasks_file)
     state = ExecutorState(config)
 
     task = get_task_by_id(tasks, args.task_id.upper())
@@ -1828,10 +1906,10 @@ def cmd_retry(args, config: ExecutorConfig):
     success = execute_task(task, config, state)
 
     if success:
-        update_task_status(TASKS_FILE, task.id, "done")
-        mark_all_checklist_done(TASKS_FILE, task.id)
+        update_task_status(config.tasks_file, task.id, "done")
+        mark_all_checklist_done(config.tasks_file, task.id)
     else:
-        update_task_status(TASKS_FILE, task.id, "blocked")
+        update_task_status(config.tasks_file, task.id, "blocked")
 
 
 def cmd_logs(args, config: ExecutorConfig):
@@ -1850,12 +1928,23 @@ def cmd_logs(args, config: ExecutorConfig):
     print(latest.read_text()[:5000])  # Limit output
 
 
+def cmd_stop(args, config: ExecutorConfig):
+    """Request graceful shutdown of the running executor."""
+    stop_file = config.stop_file
+    stop_file.parent.mkdir(parents=True, exist_ok=True)
+    stop_file.write_text(f"Stop requested at {datetime.now().isoformat()}\n")
+    print("🛑 Stop requested — executor will finish current task and exit")
+    print(f"   Created {stop_file}")
+
+
 def cmd_reset(args, config: ExecutorConfig):
     """Reset executor state"""
 
     if config.state_file.exists():
         config.state_file.unlink()
         print("✅ State reset")
+
+    clear_stop_file(config)
 
     if args.logs and config.logs_dir.exists():
         shutil.rmtree(config.logs_dir)
@@ -1869,26 +1958,24 @@ def cmd_plan(args, config: ExecutorConfig):
     print(f"\n📝 Planning: {description}")
     print("=" * 60)
 
-    spec_dir = config.project_root / "spec"
-
     # Load context
     requirements_summary = "No requirements.md found"
-    if (spec_dir / "requirements.md").exists():
-        content = (spec_dir / "requirements.md").read_text()
+    if config.requirements_file.exists():
+        content = config.requirements_file.read_text()
         # Extract just headers and first lines for summary
         lines = content.split("\n")[:100]
         requirements_summary = "\n".join(lines) + "\n...(truncated)"
 
     design_summary = "No design.md found"
-    if (spec_dir / "design.md").exists():
-        content = (spec_dir / "design.md").read_text()
+    if config.design_file.exists():
+        content = config.design_file.read_text()
         lines = content.split("\n")[:100]
         design_summary = "\n".join(lines) + "\n...(truncated)"
 
     # Get existing tasks
     existing_tasks = "No existing tasks"
-    if TASKS_FILE.exists():
-        tasks = parse_tasks(TASKS_FILE)
+    if config.tasks_file.exists():
+        tasks = parse_tasks(config.tasks_file)
         task_lines = [f"- {t.id}: {t.name} ({t.status})" for t in tasks[-20:]]
         existing_tasks = "\n".join(task_lines) if task_lines else "No tasks yet"
 
@@ -2037,20 +2124,18 @@ When done, respond with: PLAN_READY
 
                 if confirm == "y":
                     # Append tasks to tasks.md
-                    if TASKS_FILE.exists():
-                        content = TASKS_FILE.read_text()
-                    else:
-                        content = "# Tasks\n\n"
+                    tasks_file = config.tasks_file
+                    content = tasks_file.read_text() if tasks_file.exists() else "# Tasks\n\n"
 
                     for block in task_blocks:
                         content += f"\n### {block.strip()}\n"
 
-                    TASKS_FILE.write_text(content)
-                    print(f"\n✅ Added {len(task_blocks)} task(s) to {TASKS_FILE}")
+                    tasks_file.write_text(content)
+                    print(f"\n✅ Added {len(task_blocks)} task(s) to {tasks_file}")
                     log_progress(f"✅ Created {len(task_blocks)} tasks")
 
                 elif confirm == "edit":
-                    print(f"\nEdit {TASKS_FILE} manually, then run 'executor.py run'")
+                    print(f"\nEdit {config.tasks_file} manually, then run 'executor.py run'")
 
                 else:
                     print("\n❌ Cancelled")
@@ -2096,6 +2181,18 @@ def main():
     parser.add_argument(
         "--callback-url", type=str, default="", help="URL to POST task status updates to"
     )
+    parser.add_argument(
+        "--spec-prefix",
+        type=str,
+        default="",
+        help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
+    )
+    parser.add_argument(
+        "--project-root",
+        type=str,
+        default="",
+        help="Project root directory (default: current directory)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -2127,6 +2224,9 @@ def main():
     logs_parser.add_argument("task_id", help="Task ID")
 
     # reset
+    # stop
+    subparsers.add_parser("stop", help="Graceful shutdown of running executor")
+
     reset_parser = subparsers.add_parser("reset", help="Reset executor state")
     reset_parser.add_argument("--logs", action="store_true", help="Also clear logs")
 
@@ -2150,6 +2250,7 @@ def main():
         "status": cmd_status,
         "retry": cmd_retry,
         "logs": cmd_logs,
+        "stop": cmd_stop,
         "reset": cmd_reset,
         "plan": cmd_plan,
     }

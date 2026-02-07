@@ -5,12 +5,12 @@ Task automation from markdown specs via Claude CLI. Execute tasks from a structu
 ## Installation
 
 ```bash
-pip install spec-runner
+uv add spec-runner
 ```
 
 Or for development:
 ```bash
-pip install -e ".[dev]"
+uv sync
 ```
 
 Requirements:
@@ -98,8 +98,8 @@ spec-runner plan "feature"          # Interactive task creation
 
 ```bash
 spec-runner-init                    # Install skills to ./.claude/skills
-spec-runner-init --global           # Install to ~/.claude/skills
 spec-runner-init --force            # Overwrite existing skills
+spec-runner-init /path/to/project   # Install to specific project
 ```
 
 ### spec-task
@@ -115,6 +115,16 @@ spec-task next                      # Show next ready tasks
 spec-task graph                     # Dependency graph
 ```
 
+### Multi-phase / Multi-project Options
+
+Both `spec-runner` and `spec-task` support `--spec-prefix` for phase-based workflows:
+
+```bash
+spec-runner run --spec-prefix=phase5-          # Uses spec/phase5-tasks.md
+spec-runner run --project-root=/path/to/proj   # Run against another project
+spec-task list --spec-prefix=phase5-           # List phase 5 tasks
+```
+
 ## Configuration
 
 Configuration file: `executor.config.yaml`
@@ -125,6 +135,7 @@ executor:
   task_timeout_minutes: 30
   claude_command: "claude"
   claude_model: "sonnet"
+  spec_prefix: ""              # e.g. "phase5-" for phase5-tasks.md
 
   # Custom CLI template (optional). Placeholders: {cmd}, {model}, {prompt}
   # command_template: "{cmd} -p {prompt} --model {model}"
@@ -149,6 +160,11 @@ executor:
   commands:
     test: "pytest tests/ -v"
     lint: "ruff check ."
+
+  paths:
+    root: "."                        # Project root directory
+    logs: "spec/.executor-logs"
+    state: "spec/.executor-state.json"
 ```
 
 ### Git Branch Workflow
@@ -232,7 +248,12 @@ project/
 │   └── spec_runner/
 │       ├── __init__.py
 │       ├── executor.py
-│       └── task.py
+│       ├── task.py
+│       ├── init_cmd.py
+│       └── skills/
+│           └── spec-generator-skill/
+│               ├── SKILL.md
+│               └── templates/
 └── spec/
     ├── tasks.md
     ├── requirements.md

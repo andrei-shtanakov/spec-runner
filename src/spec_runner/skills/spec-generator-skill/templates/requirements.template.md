@@ -18,7 +18,7 @@
 
 ### 1.3 Stakeholders
 
-| Role | Interests | Impact |
+| Role | Interests | Influence |
 |------|----------|---------|
 | {{ROLE_1}} | {{INTERESTS_1}} | High/Medium/Low |
 | {{ROLE_2}} | {{INTERESTS_2}} | High/Medium/Low |
@@ -38,8 +38,8 @@
 ### 2.1 {{FEATURE_GROUP_1}}
 
 #### REQ-001: {{REQUIREMENT_NAME}}
-**As a** {{ROLE}}  
-**I want** {{ACTION}}  
+**As a** {{ROLE}}
+**I want** {{ACTION}}
 **So that** {{VALUE}}
 
 **Acceptance Criteria:**
@@ -50,14 +50,14 @@ THEN {{RESULT}}
 AND {{ADDITIONAL_RESULT}}
 ```
 
-**Priority:** P0 | P1 | P2 | P3  
+**Priority:** P0 | P1 | P2 | P3
 **Traces to:** [TASK-XXX], [DESIGN-XXX]
 
 ---
 
 #### REQ-002: {{REQUIREMENT_NAME}}
-**As a** {{ROLE}}  
-**I want** {{ACTION}}  
+**As a** {{ROLE}}
+**I want** {{ACTION}}
 **So that** {{VALUE}}
 
 **Acceptance Criteria:**
@@ -67,7 +67,7 @@ WHEN {{ACTION}}
 THEN {{RESULT}}
 ```
 
-**Priority:** P0 | P1 | P2 | P3  
+**Priority:** P0 | P1 | P2 | P3
 **Traces to:** [TASK-XXX], [DESIGN-XXX]
 
 ---
@@ -101,7 +101,7 @@ THEN {{RESULT}}
 
 ### NFR-001: Performance
 | Metric | Requirement |
-|---------|------------|
+|--------|------------|
 | {{METRIC}} | {{VALUE}} |
 
 **Traces to:** [TASK-XXX]
@@ -119,7 +119,7 @@ THEN {{RESULT}}
 
 ### NFR-003: Usability
 | Metric | Requirement |
-|---------|------------|
+|--------|------------|
 | {{METRIC}} | {{VALUE}} |
 
 **Traces to:** [TASK-XXX]
@@ -130,8 +130,8 @@ THEN {{RESULT}}
 
 ### 4.1 Technology Constraints
 
-| Aspect | Solution | Rationale |
-|--------|---------|-------------|
+| Aspect | Decision | Rationale |
+|--------|---------|-----------|
 | Language | {{LANGUAGE}} | {{RATIONALE}} |
 | Database | {{DB}} | {{RATIONALE}} |
 | Infrastructure | {{INFRA}} | {{RATIONALE}} |
