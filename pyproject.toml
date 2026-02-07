@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spec-runner"
-version = "0.1.4"
+version = "0.1.4.post1"
 description = "Task automation from markdown specs via Claude CLI"
 readme = "README.md"
 requires-python = ">=3.10"
