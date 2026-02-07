@@ -1,18 +1,18 @@
 # Design Specification
 
-> Архитектура, API, схемы данных и ключевые решения для {{PROJECT_NAME}}
+> Architecture, API, data schemas, and key decisions for {{PROJECT_NAME}}
 
-## 1. Обзор архитектуры
+## 1. Architecture Overview
 
-### 1.1 Принципы
+### 1.1 Principles
 
-| Принцип | Описание |
+| Principle | Description |
 |---------|----------|
 | {{PRINCIPLE_1}} | {{DESCRIPTION_1}} |
 | {{PRINCIPLE_2}} | {{DESCRIPTION_2}} |
 | {{PRINCIPLE_3}} | {{DESCRIPTION_3}} |
 
-### 1.2 Высокоуровневая диаграмма
+### 1.2 High-Level Diagram
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -30,11 +30,11 @@
 
 ---
 
-## 2. Компоненты
+## 2. Components
 
 ### DESIGN-001: {{COMPONENT_NAME}}
 
-#### Описание
+#### Description
 {{COMPONENT_DESCRIPTION}}
 
 #### Interface
@@ -46,7 +46,7 @@ class {{ComponentName}}(ABC):
         pass
 ```
 
-#### Конфигурация
+#### Configuration
 ```yaml
 {{component_name}}:
   {{option}}: {{value}}
@@ -58,7 +58,7 @@ class {{ComponentName}}(ABC):
 
 ### DESIGN-002: {{COMPONENT_NAME}}
 
-#### Описание
+#### Description
 {{COMPONENT_DESCRIPTION}}
 
 #### Data Model
@@ -80,7 +80,7 @@ class {{ModelName}}:
 
 ---
 
-## 3. Схемы данных
+## 3. Data Schemas
 
 ### 3.1 {{ENTITY_NAME}}
 
@@ -107,24 +107,24 @@ CREATE TABLE {{table_name}} (
 
 ---
 
-## 4. Интеграции
+## 4. Integrations
 
 ### 4.1 {{INTEGRATION_NAME}}
 
-| Аспект | Значение |
+| Aspect | Value |
 |--------|----------|
-| Протокол | {{protocol}} |
+| Protocol | {{protocol}} |
 | Endpoint | {{endpoint}} |
-| Аутентификация | {{auth_method}} |
+| Authentication | {{auth_method}} |
 
-#### Пример запроса
+#### Request Example
 ```json
 {
   "{{field}}": "{{value}}"
 }
 ```
 
-#### Пример ответа
+#### Response Example
 ```json
 {
   "{{field}}": "{{value}}"
@@ -135,7 +135,7 @@ CREATE TABLE {{table_name}} (
 
 ---
 
-## 5. Ключевые решения (ADR)
+## 5. Key Decisions (ADR)
 
 ### ADR-001: {{DECISION_TITLE}}
 **Status:** Accepted | Proposed | Deprecated  

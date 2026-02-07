@@ -2,30 +2,30 @@
 
 > {{PROJECT_NAME}} — {{PROJECT_TAGLINE}}
 
-## 1. Контекст и цели
+## 1. Context and Goals
 
-### 1.1 Проблема
+### 1.1 Problem
 
 {{PROBLEM_DESCRIPTION}}
 
-### 1.2 Цели проекта
+### 1.2 Project Goals
 
-| ID | Цель | Метрика успеха |
+| ID | Goal | Success Metric |
 |----|------|----------------|
 | G-1 | {{GOAL_1}} | {{METRIC_1}} |
 | G-2 | {{GOAL_2}} | {{METRIC_2}} |
 | G-3 | {{GOAL_3}} | {{METRIC_3}} |
 
-### 1.3 Стейкхолдеры
+### 1.3 Stakeholders
 
-| Роль | Интересы | Влияние |
+| Role | Interests | Impact |
 |------|----------|---------|
-| {{ROLE_1}} | {{INTERESTS_1}} | Высокое/Среднее/Низкое |
-| {{ROLE_2}} | {{INTERESTS_2}} | Высокое/Среднее/Низкое |
+| {{ROLE_1}} | {{INTERESTS_1}} | High/Medium/Low |
+| {{ROLE_2}} | {{INTERESTS_2}} | High/Medium/Low |
 
 ### 1.4 Out of Scope
 
-> ⚠️ Явно укажи, что НЕ входит в проект
+> ⚠️ Explicitly state what is NOT included in the project
 
 - ❌ {{OUT_OF_SCOPE_1}}
 - ❌ {{OUT_OF_SCOPE_2}}
@@ -33,7 +33,7 @@
 
 ---
 
-## 2. Функциональные требования
+## 2. Functional Requirements
 
 ### 2.1 {{FEATURE_GROUP_1}}
 
@@ -79,28 +79,28 @@ THEN {{RESULT}}
 
 ---
 
-## 3. Нефункциональные требования
+## 3. Non-Functional Requirements
 
 ### NFR-000: Testing Requirements
-| Аспект | Требование |
+| Aspect | Requirement |
 |--------|------------|
-| Unit test coverage | ≥ {{COVERAGE}}% для core modules |
-| Integration tests | Каждый ключевой компонент |
+| Unit test coverage | ≥ {{COVERAGE}}% for core modules |
+| Integration tests | Each key component |
 | Test framework | {{TEST_FRAMEWORK}} |
-| CI requirement | Все тесты проходят перед merge |
+| CI requirement | All tests pass before merge |
 
-**Definition of Done для любой задачи:**
-- [ ] Unit tests написаны и проходят
-- [ ] Coverage не упал
-- [ ] Integration test если затронуты интерфейсы
-- [ ] Документация обновлена
+**Definition of Done for any task:**
+- [ ] Unit tests written and passing
+- [ ] Coverage has not decreased
+- [ ] Integration test if interfaces are affected
+- [ ] Documentation updated
 
 **Traces to:** [TASK-100]
 
 ---
 
 ### NFR-001: Performance
-| Метрика | Требование |
+| Metric | Requirement |
 |---------|------------|
 | {{METRIC}} | {{VALUE}} |
 
@@ -109,7 +109,7 @@ THEN {{RESULT}}
 ---
 
 ### NFR-002: Security
-| Аспект | Требование |
+| Aspect | Requirement |
 |--------|------------|
 | {{ASPECT}} | {{REQUIREMENT}} |
 
@@ -118,7 +118,7 @@ THEN {{RESULT}}
 ---
 
 ### NFR-003: Usability
-| Метрика | Требование |
+| Metric | Requirement |
 |---------|------------|
 | {{METRIC}} | {{VALUE}} |
 
@@ -126,30 +126,30 @@ THEN {{RESULT}}
 
 ---
 
-## 4. Ограничения и техстек
+## 4. Constraints and Tech Stack
 
-### 4.1 Технологические ограничения
+### 4.1 Technology Constraints
 
-| Аспект | Решение | Обоснование |
+| Aspect | Solution | Rationale |
 |--------|---------|-------------|
-| Язык | {{LANGUAGE}} | {{RATIONALE}} |
-| База данных | {{DB}} | {{RATIONALE}} |
-| Инфраструктура | {{INFRA}} | {{RATIONALE}} |
+| Language | {{LANGUAGE}} | {{RATIONALE}} |
+| Database | {{DB}} | {{RATIONALE}} |
+| Infrastructure | {{INFRA}} | {{RATIONALE}} |
 
-### 4.2 Интеграционные ограничения
+### 4.2 Integration Constraints
 
 - {{INTEGRATION_CONSTRAINT_1}}
 - {{INTEGRATION_CONSTRAINT_2}}
 
-### 4.3 Бизнес-ограничения
+### 4.3 Business Constraints
 
-- Бюджет: {{BUDGET}}
-- Сроки: {{TIMELINE}}
-- Команда: {{TEAM_SIZE}}
+- Budget: {{BUDGET}}
+- Timeline: {{TIMELINE}}
+- Team: {{TEAM_SIZE}}
 
 ---
 
-## 5. Критерии приёмки
+## 5. Acceptance Criteria
 
 ### Milestone 1: MVP
 - [ ] REQ-001 — {{DESCRIPTION}}

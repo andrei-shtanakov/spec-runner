@@ -1,47 +1,47 @@
 # Tasks
 
-> Задачи с приоритетами, зависимостями и трассировкой к требованиям
+> Tasks with priorities, dependencies, and traceability to requirements
 
-## Легенда
+## Legend
 
-**Приоритет:**
-- 🔴 P0 — Critical, блокирует релиз
-- 🟠 P1 — High, нужно для полноценного использования
-- 🟡 P2 — Medium, улучшение опыта
+**Priority:**
+- 🔴 P0 — Critical, blocks release
+- 🟠 P1 — High, needed for full functionality
+- 🟡 P2 — Medium, improves experience
 - 🟢 P3 — Low, nice to have
 
-**Статус:**
+**Status:**
 - ⬜ TODO
 - 🔄 IN PROGRESS
 - ✅ DONE
 - ⏸️ BLOCKED
 
-**Оценка:**
-- Указывай в днях (d) или часах (h)
-- Лучше диапазон: 3-5d
+**Estimate:**
+- Use days (d) or hours (h)
+- Prefer a range: 3-5d
 
 ---
 
-## Definition of Done (для КАЖДОЙ задачи)
+## Definition of Done (for EVERY task)
 
-> ⚠️ Задача НЕ считается завершённой без выполнения этих пунктов:
+> ⚠️ A task is NOT considered complete without meeting these criteria:
 
-- [ ] **Unit tests** — покрытие ≥80% нового кода
-- [ ] **Tests pass** — все тесты проходят локально
-- [ ] **Integration test** — если изменены публичные интерфейсы
-- [ ] **CI green** — pipeline проходит
-- [ ] **Docs updated** — документация актуальна
+- [ ] **Unit tests** — coverage ≥80% of new code
+- [ ] **Tests pass** — all tests pass locally
+- [ ] **Integration test** — if public interfaces are changed
+- [ ] **CI green** — pipeline passes
+- [ ] **Docs updated** — documentation is up to date
 - [ ] **Code review** — PR approved
 
 ---
 
-## Testing Tasks (обязательные)
+## Testing Tasks (required)
 
 ### TASK-100: Test Infrastructure Setup
 🔴 P0 | ⬜ TODO | Est: 2d
 
 **Description:**  
-Настроить тестовую инфраструктуру.
+Set up the test infrastructure.
 
 **Checklist:**
 - [ ] Test framework setup (pytest/jest/etc.)
@@ -72,7 +72,7 @@
 **Tests (Definition of Done):**
 - [ ] Unit tests: {{test_scope_1}}
 - [ ] Unit tests: {{test_scope_2}}
-- [ ] Integration test (если нужен)
+- [ ] Integration test (if needed)
 - [ ] Coverage ≥80%
 
 **Traces to:** [REQ-XXX], [REQ-YYY]  

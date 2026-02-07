@@ -2,52 +2,52 @@
 
 ## Overview
 
-Skill для создания проектных спецификаций в Kiro-style формате: три связанных документа с трассировкой требований к задачам.
+A skill for creating project specifications in Kiro-style format: three interlinked documents with requirements-to-tasks traceability.
 
-## Когда использовать
+## When to Use
 
-- Начало нового проекта — создание полной спецификации
-- Документирование существующего проекта
-- Запросы типа: "создай спеку", "напиши ТЗ", "документируй проект"
+- Starting a new project -- creating a full specification
+- Documenting an existing project
+- Requests like: "create a spec", "write a project brief", "document the project"
 
-## Структура
+## Structure
 
-Спецификация состоит из 3 файлов в директории `spec/`:
+A specification consists of 3 files in the `spec/` directory:
 
 ```
 project/
 └── spec/
-    ├── requirements.md   # ЧТО делаем
-    ├── design.md         # КАК делаем
-    └── tasks.md          # КОГДА делаем
+    ├── requirements.md   # WHAT we build
+    ├── design.md         # HOW we build it
+    └── tasks.md          # WHEN we build it
 ```
 
-## Файлы
+## Files
 
 ### 1. requirements.md
 
-**Содержит:**
-- Контекст и цели проекта
-- Стейкхолдеры
-- Out of Scope (явно!)
-- Функциональные требования (REQ-XXX) в формате User Story + GIVEN-WHEN-THEN
-- Нефункциональные требования (NFR-XXX)
-- Ограничения и техстек
-- Критерии приёмки по milestones
+**Contains:**
+- Project context and goals
+- Stakeholders
+- Out of Scope (explicit!)
+- Functional requirements (REQ-XXX) in User Story + GIVEN-WHEN-THEN format
+- Non-functional requirements (NFR-XXX)
+- Constraints and tech stack
+- Acceptance criteria per milestone
 
-**Формат требования:**
+**Requirement format:**
 ```markdown
-#### REQ-001: Название
-**As a** <роль>
-**I want** <действие>
-**So that** <ценность>
+#### REQ-001: Title
+**As a** <role>
+**I want** <action>
+**So that** <value>
 
 **Acceptance Criteria:**
 \```gherkin
-GIVEN <предусловие>
-WHEN <действие>
-THEN <результат>
-AND <дополнительный результат>
+GIVEN <precondition>
+WHEN <action>
+THEN <result>
+AND <additional result>
 \```
 
 **Priority:** P0 | P1 | P2 | P3
@@ -56,20 +56,20 @@ AND <дополнительный результат>
 
 ### 2. design.md
 
-**Содержит:**
-- Архитектурные принципы
-- Высокоуровневая диаграмма (ASCII)
-- Компоненты системы (DESIGN-XXX)
-- API и интерфейсы
-- Схемы данных
-- Ключевые решения (ADR)
+**Contains:**
+- Architectural principles
+- High-level diagram (ASCII)
+- System components (DESIGN-XXX)
+- APIs and interfaces
+- Data schemas
+- Key decisions (ADR)
 - Directory structure
 
-**Формат компонента:**
+**Component format:**
 ```markdown
-### DESIGN-001: Название компонента
+### DESIGN-001: Component Name
 
-#### Описание
+#### Description
 ...
 
 #### Interface
@@ -80,7 +80,7 @@ class Component(ABC):
         pass
 \```
 
-#### Конфигурация
+#### Configuration
 \```yaml
 component:
   option: value
@@ -91,35 +91,35 @@ component:
 
 ### 3. tasks.md
 
-**Содержит:**
-- Легенда приоритетов и статусов
-- Задачи (TASK-XXX) с чеклистами
-- Зависимости между задачами
-- Трассировка к требованиям
+**Contains:**
+- Priority and status legend
+- Tasks (TASK-XXX) with checklists
+- Dependencies between tasks
+- Traceability to requirements
 - Dependency graph
-- Summary по milestones
+- Summary per milestone
 
-**Формат задачи:**
+**Task format:**
 ```markdown
-### TASK-001: Название
+### TASK-001: Title
 🔴 P0 | ⬜ TODO | Est: 3d
 
 **Description:**
-Краткое описание задачи.
+Brief description of the task.
 
 **Checklist:**
-- [ ] Подзадача 1
-- [ ] Подзадача 2
-- [ ] Подзадача 3
+- [ ] Subtask 1
+- [ ] Subtask 2
+- [ ] Subtask 3
 
 **Traces to:** [REQ-XXX], [REQ-YYY]
 **Depends on:** [TASK-ZZZ]
 **Blocks:** [TASK-AAA]
 ```
 
-## Трассировка
+## Traceability
 
-Ключевая фича — связь между документами:
+The key feature is linking documents together:
 
 ```
 REQ-001 ──────► DESIGN-001
@@ -128,140 +128,140 @@ REQ-001 ──────► DESIGN-001
     └─────────► TASK-001
 ```
 
-- Каждое требование ссылается на design и tasks
-- Каждый design ссылается на требования
-- Каждая задача ссылается на требования и design
-- Используй формат `[REQ-XXX]`, `[DESIGN-XXX]`, `[TASK-XXX]`
+- Every requirement references its design and tasks
+- Every design references its requirements
+- Every task references its requirements and design
+- Use the format `[REQ-XXX]`, `[DESIGN-XXX]`, `[TASK-XXX]`
 
-## Приоритеты
+## Priorities
 
-| Emoji | Код | Описание |
-|-------|-----|----------|
-| 🔴 | P0 | Critical — блокирует релиз |
-| 🟠 | P1 | High — нужно для полноценного использования |
-| 🟡 | P2 | Medium — улучшение опыта |
-| 🟢 | P3 | Low — nice to have |
+| Emoji | Code | Description |
+|-------|------|-------------|
+| 🔴 | P0 | Critical -- blocks release |
+| 🟠 | P1 | High -- required for full usability |
+| 🟡 | P2 | Medium -- improves user experience |
+| 🟢 | P3 | Low -- nice to have |
 
-## Статусы
+## Statuses
 
-| Emoji | Статус | Описание |
-|-------|--------|----------|
-| ⬜ | TODO | Не начато |
-| 🔄 | IN PROGRESS | В работе |
-| ✅ | DONE | Завершено |
-| ⏸️ | BLOCKED | Заблокировано |
+| Emoji | Status | Description |
+|-------|--------|-------------|
+| ⬜ | TODO | Not started |
+| 🔄 | IN PROGRESS | In progress |
+| ✅ | DONE | Completed |
+| ⏸️ | BLOCKED | Blocked |
 
-## Процесс создания
+## Creation Process
 
-1. **Собери контекст:**
-   - Какую проблему решаем?
-   - Кто пользователи?
-   - Какие ограничения?
+1. **Gather context:**
+   - What problem are we solving?
+   - Who are the users?
+   - What are the constraints?
 
-2. **Начни с requirements.md:**
-   - Цели и метрики успеха
-   - Out of scope (важно!)
-   - Требования в формате user stories
-   - Acceptance criteria в GIVEN-WHEN-THEN
+2. **Start with requirements.md:**
+   - Goals and success metrics
+   - Out of scope (important!)
+   - Requirements in user story format
+   - Acceptance criteria in GIVEN-WHEN-THEN
 
-3. **Затем design.md:**
-   - Архитектура от требований
-   - Компоненты и интерфейсы
-   - ADR для ключевых решений
-   - Ссылки на требования
+3. **Then design.md:**
+   - Architecture driven by requirements
+   - Components and interfaces
+   - ADRs for key decisions
+   - References to requirements
 
-4. **Завершай tasks.md:**
-   - Декомпозиция design на задачи
-   - Зависимости между задачами
-   - Оценки и приоритеты
+4. **Finish with tasks.md:**
+   - Break down the design into tasks
+   - Dependencies between tasks
+   - Estimates and priorities
    - Milestones
 
-## Шаблоны
+## Templates
 
-Шаблоны файлов находятся в `templates/`:
-- `requirements.template.md` — шаблон требований
-- `design.template.md` — шаблон дизайна
-- `tasks.template.md` — шаблон задач
-- `workflow.template.md` — руководство по workflow
-- `task.py` — CLI для управления задачами
-- `executor.py` — автовыполнение через Claude CLI
-- `executor.config.yaml` — конфигурация executor
-- `Makefile.template` — Make команды для проекта
+File templates are located in `templates/`:
+- `requirements.template.md` -- requirements template
+- `design.template.md` -- design template
+- `tasks.template.md` -- tasks template
+- `workflow.template.md` -- workflow guide
+- `task.py` -- CLI for task management
+- `executor.py` -- automated execution via Claude CLI
+- `executor.config.yaml` -- executor configuration
+- `Makefile.template` -- Make targets for the project
 
-## Примеры
+## Examples
 
-См. примеры в `examples/`:
-- `atp-platform/` — Agent Test Platform
+See examples in `examples/`:
+- `atp-platform/` -- Agent Test Platform
 
 ## Task Management
 
-Спецификация включает CLI для управления задачами:
+The specification includes a CLI for task management:
 
 ```bash
-# === Ручной режим ===
-python task.py list              # Список задач
-python task.py next              # Следующие задачи
-python task.py start TASK-001    # Начать
-python task.py done TASK-001     # Завершить
+# === Manual mode ===
+python task.py list              # List tasks
+python task.py next              # Next available tasks
+python task.py start TASK-001    # Start a task
+python task.py done TASK-001     # Complete a task
 
-# === Автоматический режим (Claude CLI) ===
-python executor.py run           # Выполнить следующую задачу
-python executor.py run --all     # Выполнить все готовые
-python executor.py status        # Статус
+# === Automatic mode (Claude CLI) ===
+python executor.py run           # Execute the next task
+python executor.py run --all     # Execute all ready tasks
+python executor.py status        # Show status
 python executor.py retry TASK-001
 ```
 
-**Автоматическое выполнение:**
-- Формирует промпт из spec/* для Claude
-- Запускает `claude -p "<prompt>"`
-- Проверяет результат (тесты, lint)
-- При неудаче — retry с лимитом
-- Защита: max_retries=3, max_consecutive_failures=2
+**Automated execution:**
+- Builds a prompt from spec/* for Claude
+- Runs `claude -p "<prompt>"`
+- Validates the result (tests, lint)
+- On failure -- retries with a limit
+- Safeguards: max_retries=3, max_consecutive_failures=2
 
-Также создаётся `Makefile` с targets:
-- `make exec` — выполнить следующую задачу
-- `make exec-all` — выполнить все готовые
-- `make exec-mvp` — только MVP milestone
+A `Makefile` is also generated with targets:
+- `make exec` -- execute the next task
+- `make exec-all` -- execute all ready tasks
+- `make exec-mvp` -- MVP milestone only
 
-Подробнее в `spec/WORKFLOW.md`.
+See `spec/WORKFLOW.md` for more details.
 
 ## TASK-000: Project Scaffolding
 
-**ВАЖНО:** При создании спецификации для **нового проекта** (не существующего) всегда добавляй TASK-000 как первую задачу. Эта задача блокирует все остальные.
+**IMPORTANT:** When creating a specification for a **new project** (not an existing one), always include TASK-000 as the first task. This task blocks all other tasks.
 
 ```markdown
 ### TASK-000: Project Scaffolding
 🔴 P0 | ⬜ TODO | Est: 1h
 
 **Description:**
-Инициализация структуры проекта: директории, конфигурация, зависимости.
+Initialize project structure: directories, configuration, dependencies.
 
 **Checklist:**
-- [ ] Создать директории (src/, tests/, examples/)
-- [ ] Создать pyproject.toml с runtime и dev зависимостями
-- [ ] Запустить `uv sync` для создания виртуального окружения
-- [ ] Создать .gitignore
-- [ ] Инициализировать git репозиторий
+- [ ] Create directories (src/, tests/, examples/)
+- [ ] Create pyproject.toml with runtime and dev dependencies
+- [ ] Run `uv sync` to create the virtual environment
+- [ ] Create .gitignore
+- [ ] Initialize the git repository
 
 **Traces to:** —
 **Depends on:** —
 **Blocks:** [TASK-001], [TASK-002], ...
 ```
 
-**Когда НЕ нужен TASK-000:**
-- Проект уже существует (есть pyproject.toml, src/, etc.)
-- Документируется существующий код
-- Добавляется фича в существующий проект
+**When TASK-000 is NOT needed:**
+- The project already exists (pyproject.toml, src/, etc. are present)
+- You are documenting existing code
+- You are adding a feature to an existing project
 
 ## Best Practices
 
-1. **Out of Scope обязателен** — явно указывай, что НЕ входит в проект
-2. **Acceptance criteria конкретны** — GIVEN-WHEN-THEN, не абстракции
-3. **Трассировка полная** — каждое требование связано с задачами
-4. **Приоритеты честные** — не все P0, распределяй реалистично
-5. **Оценки приблизительные** — лучше диапазон (3-5d), чем точная цифра
-6. **ADR для важных решений** — документируй "почему", а не только "что"
-7. **Dependency graph** — визуализируй зависимости задач
-8. **Тесты в каждой задаче** — Definition of Done включает unit tests
-9. **NFR на testing** — требование на coverage обязательно
-10. **Test tasks первыми** — TASK-100 (Test Infrastructure) блокирует остальные
+1. **Out of Scope is mandatory** -- explicitly state what is NOT part of the project
+2. **Acceptance criteria must be concrete** -- use GIVEN-WHEN-THEN, not abstractions
+3. **Full traceability** -- every requirement must be linked to tasks
+4. **Honest priorities** -- not everything is P0; distribute realistically
+5. **Approximate estimates** -- a range (3-5d) is better than an exact number
+6. **ADRs for important decisions** -- document the "why", not just the "what"
+7. **Dependency graph** -- visualize task dependencies
+8. **Tests in every task** -- Definition of Done includes unit tests
+9. **NFR for testing** -- a coverage requirement is mandatory
+10. **Test tasks come first** -- TASK-100 (Test Infrastructure) blocks the rest

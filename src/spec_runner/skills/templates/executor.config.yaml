@@ -1,43 +1,43 @@
 # ATP Executor Configuration
-# Настройки автоматического выполнения задач через Claude CLI
+# Settings for automated task execution via Claude CLI
 
 executor:
   # Retry policy
-  max_retries: 3                    # Максимум попыток на задачу
-  retry_delay_seconds: 5            # Пауза между попытками
-  max_consecutive_failures: 2       # Стоп после N подряд неудач
+  max_retries: 3                    # Max attempts per task
+  retry_delay_seconds: 5            # Delay between retries
+  max_consecutive_failures: 2       # Stop after N consecutive failures
   
   # Timeout
-  task_timeout_minutes: 30          # Таймаут на одну задачу
+  task_timeout_minutes: 30          # Timeout per task
   
   # Claude CLI
-  claude_command: "claude"          # Команда (claude, claude-code, etc.)
-  claude_model: ""                  # Модель (пусто = default)
+  claude_command: "claude"          # Command (claude, claude-code, etc.)
+  claude_model: ""                  # Model (empty = default)
   
   # Hooks
   hooks:
     pre_start:
-      create_git_branch: true       # Создавать ветку task/TASK-XXX
+      create_git_branch: true       # Create branch task/TASK-XXX
     
     post_done:
-      run_tests: true               # Запускать тесты
-      run_lint: true                # Запускать lint
-      auto_commit: false            # Автокоммит изменений
+      run_tests: true               # Run tests
+      run_lint: true                # Run lint
+      auto_commit: false            # Auto-commit changes
   
   # Commands
   commands:
-    test: "make test-fast"          # Команда тестов
-    lint: "make lint"               # Команда lint
+    test: "make test-fast"          # Test command
+    lint: "make lint"               # Lint command
     
   # Paths
   paths:
-    logs: "spec/.executor-logs"     # Директория логов
-    state: "spec/.executor-state.json"  # Файл состояния
+    logs: "spec/.executor-logs"     # Logs directory
+    state: "spec/.executor-state.json"  # State file
 
 # Task execution order (optional override)
-# По умолчанию используется приоритет из tasks.md + зависимости
+# By default, priority from tasks.md + dependencies is used
 execution_order:
-  # Можно указать явный порядок:
+  # You can specify an explicit order:
   # - TASK-100
   # - TASK-001
   # - TASK-004

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-ATP Task Executor — автоматическое выполнение задач через Claude CLI
+ATP Task Executor — automated task execution via Claude CLI
 
-Использование:
-    python executor.py run                    # Выполнить следующую задачу
-    python executor.py run --task=TASK-001    # Выполнить конкретную задачу
-    python executor.py run --all              # Выполнить все готовые задачи
-    python executor.py run --milestone=mvp    # Выполнить задачи milestone
-    python executor.py status                 # Статус выполнения
-    python executor.py retry TASK-001         # Повторить неудавшуюся
-    python executor.py logs TASK-001          # Логи задачи
+Usage:
+    python executor.py run                    # Execute the next task
+    python executor.py run --task=TASK-001    # Execute a specific task
+    python executor.py run --all              # Execute all ready tasks
+    python executor.py run --milestone=mvp    # Execute tasks for a milestone
+    python executor.py status                 # Execution status
+    python executor.py retry TASK-001         # Retry a failed task
+    python executor.py logs TASK-001          # Task logs
 """
 
 import os
@@ -24,27 +24,27 @@ from dataclasses import dataclass, field
 from typing import Optional
 import shutil
 
-# Импортируем парсер задач
+# Import task parser
 from task import parse_tasks, get_task_by_id, get_next_tasks, update_task_status, Task, TASKS_FILE
 
 # === Configuration ===
 
 @dataclass
 class ExecutorConfig:
-    """Конфигурация исполнителя"""
-    max_retries: int = 3                    # Максимум попыток на задачу
-    retry_delay_seconds: int = 5            # Пауза между попытками
-    task_timeout_minutes: int = 30          # Таймаут на задачу
-    max_consecutive_failures: int = 2       # Стоп после N подряд неудач
-    
+    """Executor configuration"""
+    max_retries: int = 3                    # Max attempts per task
+    retry_delay_seconds: int = 5            # Delay between retries
+    task_timeout_minutes: int = 30          # Timeout per task
+    max_consecutive_failures: int = 2       # Stop after N consecutive failures
+
     # Claude CLI
-    claude_command: str = "claude"          # Команда Claude CLI
-    claude_model: str = ""                  # Модель (пусто = default)
-    
+    claude_command: str = "claude"          # Claude CLI command
+    claude_model: str = ""                  # Model (empty = default)
+
     # Hooks
-    run_tests_on_done: bool = True          # Запускать тесты при завершении
-    create_git_branch: bool = True          # Создавать ветку при старте
-    auto_commit: bool = False               # Автокоммит при успехе
+    run_tests_on_done: bool = True          # Run tests on completion
+    create_git_branch: bool = True          # Create branch on start
+    auto_commit: bool = False               # Auto-commit on success
     
     # Paths
     project_root: Path = Path(".")
@@ -60,7 +60,7 @@ class ExecutorConfig:
 
 @dataclass
 class TaskAttempt:
-    """Попытка выполнения задачи"""
+    """Task execution attempt"""
     timestamp: str
     success: bool
     duration_seconds: float
@@ -69,7 +69,7 @@ class TaskAttempt:
 
 @dataclass
 class TaskState:
-    """Состояние задачи в executor"""
+    """Task state in executor"""
     task_id: str
     status: str  # pending, running, success, failed, skipped
     attempts: list = field(default_factory=list)
@@ -88,7 +88,7 @@ class TaskState:
 
 
 class ExecutorState:
-    """Глобальное состояние executor"""
+    """Global executor state"""
     
     def __init__(self, config: ExecutorConfig):
         self.config = config
@@ -99,7 +99,7 @@ class ExecutorState:
         self._load()
     
     def _load(self):
-        """Загрузить состояние из файла"""
+        """Load state from file"""
         if self.config.state_file.exists():
             data = json.loads(self.config.state_file.read_text())
             for task_id, task_data in data.get("tasks", {}).items():
@@ -118,7 +118,7 @@ class ExecutorState:
             self.total_failed = data.get("total_failed", 0)
     
     def _save(self):
-        """Сохранить состояние в файл"""
+        """Save state to file"""
         self.config.state_file.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "tasks": {
@@ -152,7 +152,7 @@ class ExecutorState:
     
     def record_attempt(self, task_id: str, success: bool, duration: float, 
                        error: Optional[str] = None, output: Optional[str] = None):
-        """Записать попытку выполнения"""
+        """Record an execution attempt"""
         state = self.get_task_state(task_id)
         state.attempts.append(TaskAttempt(
             timestamp=datetime.now().isoformat(),
@@ -182,16 +182,16 @@ class ExecutorState:
         self._save()
     
     def should_stop(self) -> bool:
-        """Проверить, нужно ли остановиться"""
+        """Check if we should stop"""
         return self.consecutive_failures >= self.config.max_consecutive_failures
 
 
 # === Prompt Builder ===
 
 def build_task_prompt(task: Task, config: ExecutorConfig) -> str:
-    """Создать промпт для Claude с контекстом задачи"""
+    """Build a prompt for Claude with task context"""
     
-    # Читаем спецификации
+    # Read specifications
     spec_dir = config.project_root / "spec"
     
     requirements = ""
@@ -202,17 +202,17 @@ def build_task_prompt(task: Task, config: ExecutorConfig) -> str:
     if (spec_dir / "design.md").exists():
         design = (spec_dir / "design.md").read_text()
     
-    # Находим связанные требования
+    # Find related requirements
     related_reqs = []
     for ref in task.traces_to:
         if ref.startswith("REQ-"):
-            # Извлекаем требование из requirements.md
+            # Extract requirement from requirements.md
             pattern = rf'#### {ref}:.*?(?=####|\Z)'
             match = re.search(pattern, requirements, re.DOTALL)
             if match:
                 related_reqs.append(match.group(0).strip())
     
-    # Находим связанный design
+    # Find related design
     related_design = []
     for ref in task.traces_to:
         if ref.startswith("DESIGN-"):
@@ -221,7 +221,7 @@ def build_task_prompt(task: Task, config: ExecutorConfig) -> str:
             if match:
                 related_design.append(match.group(0).strip())
     
-    # Чеклист
+    # Checklist
     checklist_text = "\n".join([
         f"- {'[x]' if done else '[ ]'} {item}"
         for item, done in task.checklist
@@ -279,21 +279,21 @@ Begin implementation:
 # === Hooks ===
 
 def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
-    """Hook перед началом задачи"""
+    """Pre-task start hook"""
     print(f"🔧 Pre-start hook for {task.id}")
     
-    # Создать git ветку
+    # Create git branch
     if config.create_git_branch:
         branch_name = f"task/{task.id.lower()}-{task.name.lower().replace(' ', '-')[:30]}"
         try:
-            # Проверяем, есть ли git
+            # Check if git is available
             result = subprocess.run(
                 ["git", "rev-parse", "--git-dir"],
                 capture_output=True,
                 cwd=config.project_root
             )
             if result.returncode == 0:
-                # Создаём ветку
+                # Create branch
                 subprocess.run(
                     ["git", "checkout", "-b", branch_name],
                     capture_output=True,
@@ -301,19 +301,19 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
                 )
                 print(f"   Created branch: {branch_name}")
         except FileNotFoundError:
-            pass  # git не установлен
+            pass  # git not installed
     
     return True
 
 
 def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> bool:
-    """Hook после завершения задачи"""
+    """Post-task completion hook"""
     print(f"🔧 Post-done hook for {task.id} (success={success})")
     
     if not success:
         return False
     
-    # Запустить тесты
+    # Run tests
     if config.run_tests_on_done:
         print("   Running tests...")
         result = subprocess.run(
@@ -328,7 +328,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> bool:
             return False
         print("   ✅ Tests passed")
     
-    # Запустить lint
+    # Run lint
     if config.lint_command:
         print("   Running lint...")
         result = subprocess.run(
@@ -361,7 +361,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> bool:
 # === Task Executor ===
 
 def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool:
-    """Выполнить одну задачу через Claude CLI"""
+    """Execute a single task via Claude CLI"""
     
     task_id = task.id
     print(f"\n{'='*60}")
@@ -373,21 +373,21 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         print("❌ Pre-start hook failed")
         return False
     
-    # Обновляем статус
+    # Update status
     state.mark_running(task_id)
     update_task_status(TASKS_FILE, task_id, 'in_progress')
     
-    # Создаём промпт
+    # Build prompt
     prompt = build_task_prompt(task, config)
     
-    # Сохраняем промпт в лог
+    # Save prompt to log
     config.logs_dir.mkdir(parents=True, exist_ok=True)
     log_file = config.logs_dir / f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     
     with open(log_file, 'w') as f:
         f.write(f"=== PROMPT ===\n{prompt}\n\n")
     
-    # Запускаем Claude
+    # Run Claude
     start_time = datetime.now()
     
     try:
@@ -408,19 +408,19 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         duration = (datetime.now() - start_time).total_seconds()
         output = result.stdout
         
-        # Сохраняем output
+        # Save output
         with open(log_file, 'a') as f:
             f.write(f"=== OUTPUT ===\n{output}\n\n")
             f.write(f"=== STDERR ===\n{result.stderr}\n\n")
             f.write(f"=== RETURN CODE: {result.returncode} ===\n")
         
-        # Проверяем результат
+        # Check result
         success = "TASK_COMPLETE" in output and "TASK_FAILED" not in output
         
         if success:
             print(f"✅ Claude reports: TASK_COMPLETE")
             
-            # Post-done hook (тесты, lint)
+            # Post-done hook (tests, lint)
             hook_success = post_done_hook(task, config, True)
             
             if hook_success:
@@ -429,13 +429,13 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 print(f"✅ {task_id} completed successfully in {duration:.1f}s")
                 return True
             else:
-                # Hook failed (тесты не прошли)
+                # Hook failed (tests did not pass)
                 error = "Post-done hook failed (tests/lint)"
                 state.record_attempt(task_id, False, duration, error=error, output=output)
                 print(f"❌ {task_id} failed: {error}")
                 return False
         else:
-            # Claude сообщил о неудаче
+            # Claude reported failure
             error_match = re.search(r'TASK_FAILED:\s*(.+)', output)
             error = error_match.group(1) if error_match else "Unknown error"
             state.record_attempt(task_id, False, duration, error=error, output=output)
@@ -458,7 +458,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
 
 def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool:
-    """Выполнить задачу с повторами"""
+    """Execute task with retries"""
     
     task_state = state.get_task_state(task.id)
     
@@ -481,20 +481,20 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 # === CLI Commands ===
 
 def cmd_run(args, config: ExecutorConfig):
-    """Выполнить задачи"""
+    """Execute tasks"""
     
     tasks = parse_tasks(TASKS_FILE)
     state = ExecutorState(config)
     
-    # Проверяем лимит неудач
+    # Check failure limit
     if state.should_stop():
         print(f"⛔ Stopped: {state.consecutive_failures} consecutive failures")
         print("   Use 'executor.py retry <TASK-ID>' to retry specific task")
         return
     
-    # Определяем какие задачи выполнять
+    # Determine which tasks to run
     if args.task:
-        # Конкретная задача
+        # Specific task
         task = get_task_by_id(tasks, args.task.upper())
         if not task:
             print(f"❌ Task {args.task} not found")
@@ -502,20 +502,20 @@ def cmd_run(args, config: ExecutorConfig):
         tasks_to_run = [task]
     
     elif args.all:
-        # Все готовые задачи
+        # All ready tasks
         tasks_to_run = get_next_tasks(tasks)
         if args.milestone:
             tasks_to_run = [t for t in tasks_to_run 
                           if args.milestone.lower() in t.milestone.lower()]
     
     elif args.milestone:
-        # Задачи конкретного milestone
+        # Tasks for specific milestone
         next_tasks = get_next_tasks(tasks)
         tasks_to_run = [t for t in next_tasks 
                        if args.milestone.lower() in t.milestone.lower()]
     
     else:
-        # Следующая задача
+        # Next task
         next_tasks = get_next_tasks(tasks)
         tasks_to_run = next_tasks[:1] if next_tasks else []
     
@@ -528,7 +528,7 @@ def cmd_run(args, config: ExecutorConfig):
     for t in tasks_to_run:
         print(f"   - {t.id}: {t.name}")
     
-    # Выполняем
+    # Execute
     for task in tasks_to_run:
         success = run_with_retries(task, config, state)
         
@@ -536,7 +536,7 @@ def cmd_run(args, config: ExecutorConfig):
             print(f"\n⛔ Stopping: too many consecutive failures")
             break
     
-    # Итог
+    # Summary
     print(f"\n{'='*60}")
     print(f"📊 Execution Summary")
     print(f"{'='*60}")
@@ -546,7 +546,7 @@ def cmd_run(args, config: ExecutorConfig):
 
 
 def cmd_status(args, config: ExecutorConfig):
-    """Статус выполнения"""
+    """Execution status"""
     
     state = ExecutorState(config)
     tasks = parse_tasks(TASKS_FILE)
@@ -557,7 +557,7 @@ def cmd_status(args, config: ExecutorConfig):
     print(f"Total failed:          {state.total_failed}")
     print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
     
-    # Задачи с попытками
+    # Tasks with attempts
     attempted = [ts for ts in state.tasks.values() if ts.attempts]
     if attempted:
         print(f"\n📝 Task History:")
@@ -569,7 +569,7 @@ def cmd_status(args, config: ExecutorConfig):
 
 
 def cmd_retry(args, config: ExecutorConfig):
-    """Повторить неудавшуюся задачу"""
+    """Retry a failed task"""
     
     tasks = parse_tasks(TASKS_FILE)
     state = ExecutorState(config)
@@ -579,7 +579,7 @@ def cmd_retry(args, config: ExecutorConfig):
         print(f"❌ Task {args.task_id} not found")
         return
     
-    # Сбрасываем состояние
+    # Reset state
     task_state = state.get_task_state(task.id)
     task_state.attempts = []
     task_state.status = "pending"
@@ -591,7 +591,7 @@ def cmd_retry(args, config: ExecutorConfig):
 
 
 def cmd_logs(args, config: ExecutorConfig):
-    """Показать логи задачи"""
+    """Show task logs"""
     
     task_id = args.task_id.upper()
     log_files = sorted(config.logs_dir.glob(f"{task_id}-*.log"))
@@ -603,11 +603,11 @@ def cmd_logs(args, config: ExecutorConfig):
     latest = log_files[-1]
     print(f"📄 Latest log: {latest}")
     print("=" * 50)
-    print(latest.read_text()[:5000])  # Ограничиваем вывод
+    print(latest.read_text()[:5000])  # Limit output
 
 
 def cmd_reset(args, config: ExecutorConfig):
-    """Сбросить состояние executor"""
+    """Reset executor state"""
     
     if config.state_file.exists():
         config.state_file.unlink()
@@ -622,7 +622,7 @@ def cmd_reset(args, config: ExecutorConfig):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='ATP Task Executor — автоматическое выполнение задач через Claude',
+        description='ATP Task Executor — automated task execution via Claude',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
