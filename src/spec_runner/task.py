@@ -218,9 +218,7 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     return False
 
 
-def update_checklist_item(
-    filepath: Path, task_id: str, item_index: int, checked: bool
-) -> bool:
+def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked: bool) -> bool:
     """Update checklist item"""
     content = filepath.read_text()
     lines = content.split("\n")
@@ -305,22 +303,49 @@ def resolve_dependencies(tasks: list[Task]) -> list[Task]:
     for task in tasks:
         # Remove completed dependencies
         task.depends_on = [
-            dep
-            for dep in task.depends_on
-            if dep in task_map and task_map[dep].status != "done"
+            dep for dep in task.depends_on if dep in task_map and task_map[dep].status != "done"
         ]
 
     return tasks
 
 
-def get_next_tasks(tasks: list[Task]) -> list[Task]:
-    """Return tasks ready to execute"""
+def get_in_progress_tasks(tasks: list[Task]) -> list[Task]:
+    """Return tasks that are currently in progress (interrupted/incomplete).
+
+    These should be resumed before starting new tasks.
+    """
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+    priority_order = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
+    in_progress.sort(key=lambda t: priority_order.get(t.priority, 99))
+    return in_progress
+
+
+def get_next_tasks(tasks: list[Task], include_in_progress: bool = True) -> list[Task]:
+    """Return tasks ready to execute.
+
+    Args:
+        tasks: List of all tasks
+        include_in_progress: If True, in_progress tasks are returned first (default).
+                            Set to False to only get TODO tasks.
+
+    Returns:
+        List of tasks ready to execute, with in_progress tasks first (if enabled),
+        then TODO tasks with resolved dependencies, sorted by priority.
+    """
+    result = []
+
+    # First, add in_progress tasks (interrupted tasks should be resumed first)
+    if include_in_progress:
+        result.extend(get_in_progress_tasks(tasks))
+
+    # Then add TODO tasks with resolved dependencies
     tasks = resolve_dependencies(tasks)
     ready = [t for t in tasks if t.status == "todo" and not t.depends_on]
-    # Sort by priority
     priority_order = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
     ready.sort(key=lambda t: priority_order.get(t.priority, 99))
-    return ready
+    result.extend(ready)
+
+    return result
 
 
 # === CLI Commands ===
@@ -344,9 +369,7 @@ def cmd_list(args, tasks: list[Task]):
         print("No tasks matching criteria")
         return
 
-    header = (
-        f"\n{'ID':<12} {'Status':<4} {'P':<3} {'Name':<40} {'Progress':<10} {'Est':<6}"
-    )
+    header = f"\n{'ID':<12} {'Status':<4} {'P':<3} {'Name':<40} {'Progress':<10} {'Est':<6}"
     print(header)
     print("-" * 85)
 
@@ -623,10 +646,7 @@ def cmd_export_gh(args, tasks: list[Task]):
         if task.depends_on:
             body += f"\\n**Depends on:** {', '.join(task.depends_on)}"
 
-        cmd = (
-            f'gh issue create --title "{task.id}: {task.name}" '
-            f'--body "{body}" --label "{labels}"'
-        )
+        cmd = f'gh issue create --title "{task.id}: {task.name}" --body "{body}" --label "{labels}"'
         print(cmd)
 
     print("```")
@@ -643,9 +663,7 @@ def main():
 
     # list
     list_parser = subparsers.add_parser("list", aliases=["ls"], help="List tasks")
-    list_parser.add_argument(
-        "--status", "-s", choices=["todo", "in_progress", "done", "blocked"]
-    )
+    list_parser.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
     list_parser.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
     list_parser.add_argument("--milestone", "-m", help="Filter by milestone")
 
@@ -656,9 +674,7 @@ def main():
     # start
     start_parser = subparsers.add_parser("start", help="Start task")
     start_parser.add_argument("task_id", help="Task ID")
-    start_parser.add_argument(
-        "--force", "-f", action="store_true", help="Ignore dependencies"
-    )
+    start_parser.add_argument("--force", "-f", action="store_true", help="Ignore dependencies")
 
     # done
     done_parser = subparsers.add_parser("done", help="Complete task")

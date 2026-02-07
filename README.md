@@ -124,6 +124,18 @@ executor:
   max_retries: 3
   task_timeout_minutes: 30
   claude_command: "claude"
+  claude_model: "sonnet"
+
+  # Custom CLI template (optional). Placeholders: {cmd}, {model}, {prompt}
+  # command_template: "{cmd} -p {prompt} --model {model}"
+
+  # Review can use different CLI
+  review_command: "codex"
+  review_model: "gpt-4"
+  # review_command_template: "{cmd} -p {prompt}"
+
+  # Git settings
+  main_branch: ""  # Auto-detect (main/master) or set explicitly: "master"
 
   hooks:
     pre_start:
@@ -138,6 +150,77 @@ executor:
     test: "pytest tests/ -v"
     lint: "ruff check ."
 ```
+
+### Git Branch Workflow
+
+The executor manages git branches automatically:
+
+1. **Branch detection**: Auto-detects `main` or `master`, or use `main_branch` config
+2. **Task branches**: Creates `task/task-001-name` branches for each task
+3. **Auto-merge**: Merges task branch to main after completion
+
+**Fresh repository (after `git init`):**
+- TASK-000 (scaffolding) runs on the initial branch without creating a separate task branch
+- First commit is made on `main`
+- Subsequent tasks create their own branches
+
+**Existing repository:**
+- Each task creates a new branch from `main`
+- After task completion, branch is merged back to `main`
+- Task branch is deleted after successful merge
+
+**Interrupted tasks:**
+- Tasks marked as `in_progress` are resumed first on next run
+- Use `--restart` flag to ignore in-progress tasks and start fresh
+
+### Supported CLIs
+
+| CLI | Auto-detected | Example template |
+|-----|--------------|------------------|
+| Claude | ✅ | `{cmd} -p {prompt} --model {model}` |
+| Codex | ✅ | `{cmd} -p {prompt} --model {model}` |
+| Ollama | ✅ | `{cmd} run {model} {prompt}` |
+| llama-cli | ✅ | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
+| llama-server | ✅ | via curl to localhost:8080 |
+| Custom | Use template | `{cmd} --prompt {prompt}` |
+
+### Custom Prompts
+
+You can customize prompts for different LLMs by creating files in `spec/prompts/`:
+
+```
+spec/prompts/
+├── review.md           # Default review prompt
+├── review.codex.md     # Codex-specific review prompt
+├── review.claude.md    # Claude-specific review prompt
+├── review.ollama.md    # Ollama-specific review prompt
+├── review.llama.md     # llama.cpp-specific review prompt
+└── task.md             # Task execution prompt
+```
+
+The executor automatically selects the prompt based on the CLI being used:
+- `review_command: "codex"` → uses `review.codex.md` if exists, otherwise `review.md`
+- `review_command: "ollama"` → uses `review.ollama.md` if exists, otherwise `review.md`
+
+#### Prompt Variables
+
+Use `${VARIABLE}` or `{{VARIABLE}}` syntax in templates:
+
+| Variable | Description |
+|----------|-------------|
+| `${TASK_ID}` | Task ID (e.g., TASK-001) |
+| `${TASK_NAME}` | Task name |
+| `${CHANGED_FILES}` | List of changed files |
+| `${GIT_DIFF}` | Git diff summary |
+
+#### Response Format
+
+All review prompts should instruct the LLM to end responses with one of:
+- `REVIEW_PASSED` — code is acceptable
+- `REVIEW_FIXED` — issues found and fixed
+- `REVIEW_FAILED` — issues remain
+
+**Tip for smaller models (Ollama, llama):** Use shorter, simpler prompts and emphasize the response format requirement.
 
 ## Project Structure
 

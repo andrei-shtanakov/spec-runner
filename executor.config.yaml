@@ -19,8 +19,8 @@ executor:
 
   # Code Review CLI (optional, uses claude_command if empty)
   # Supports: claude, codex, ollama, or any CLI with "-p prompt" syntax
-  review_command: ""                # Examples: "codex", "ollama", "claude"
-  review_model: ""                  # Examples: "gpt-4o", "llama3", "claude-3-haiku-20240307"
+  review_command: "codex"           # Examples: "codex", "ollama", "claude"
+  review_model: "gpt-5-codex"       # Examples: "gpt-4o", "llama3", "claude-3-haiku-20240307"
 
   # Hooks
   hooks:

@@ -34,6 +34,7 @@ from .executor import (
 from .task import (
     TASKS_FILE,
     Task,
+    get_in_progress_tasks,
     get_next_tasks,
     get_task_by_id,
     mark_all_checklist_done,
@@ -53,6 +54,7 @@ __all__ = [
     "TASKS_FILE",
     "parse_tasks",
     "get_next_tasks",
+    "get_in_progress_tasks",
     "get_task_by_id",
     "resolve_dependencies",
     "update_task_status",

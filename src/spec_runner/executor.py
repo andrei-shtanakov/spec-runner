@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -25,8 +26,6 @@ from pathlib import Path
 
 import yaml
 
-import fcntl
-
 from .task import (
     TASKS_FILE,
     Task,
@@ -36,7 +35,6 @@ from .task import (
     parse_tasks,
     update_task_status,
 )
-
 
 # === Progress Logging ===
 
@@ -62,6 +60,53 @@ def check_error_patterns(output: str) -> str | None:
         if pattern.lower() in output_lower:
             return pattern
     return None
+
+
+def _send_callback(
+    callback_url: str,
+    task_id: str,
+    status: str,
+    duration: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Send task status callback to orchestrator.
+
+    Uses urllib to avoid adding dependencies. Errors are silently
+    ignored — callback is best-effort, state file is the fallback.
+
+    Args:
+        callback_url: URL to POST status to.
+        task_id: Task identifier.
+        status: Task status (started, success, failed).
+        duration: Execution duration in seconds.
+        error: Error message if failed.
+    """
+    if not callback_url:
+        return
+
+    import urllib.request
+
+    payload = {
+        "task_id": task_id,
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+    }
+    if duration is not None:
+        payload["duration_seconds"] = duration
+    if error:
+        payload["error"] = error
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            callback_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass  # Best-effort, state file is the fallback
 
 
 class ExecutorLock:
@@ -96,6 +141,7 @@ class ExecutorLock:
             except FileNotFoundError:
                 pass
 
+
 # Configuration file path
 CONFIG_FILE = Path("executor.config.yaml")
 PROGRESS_FILE = Path("spec/.executor-progress.txt")
@@ -125,22 +171,37 @@ class ExecutorConfig:
     claude_command: str = "claude"  # Claude CLI command
     claude_model: str = ""  # Model (empty = default)
     skip_permissions: bool = True  # Skip permission prompts
+    # Command template for custom CLIs. Placeholders: {cmd}, {model}, {prompt}, {prompt_file}
+    # Examples:
+    #   claude: "{cmd} -p {prompt}" or "{cmd} -p {prompt} --model {model}"
+    #   codex: "{cmd} -p {prompt}"
+    #   ollama: "{cmd} run {model} {prompt}"
+    #   llama-cli: "{cmd} -m {model} -p {prompt} --no-display-prompt"
+    #   llama-server: "curl -s http://localhost:8080/completion -d '{{\"prompt\": {prompt}}}'"
+    # If empty, auto-detects based on command name
+    command_template: str = ""
 
     # Hooks
     run_tests_on_done: bool = True  # Run tests on completion
     create_git_branch: bool = True  # Create branch on start
     auto_commit: bool = True  # Auto-commit on success
+    main_branch: str = ""  # Main branch name (empty = auto-detect: main/master)
 
     # Code review
     run_review: bool = True  # Run code review after task completion
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
     review_model: str = ""  # Review model (empty = use claude_model)
+    # Review command template (if empty, uses command_template or auto-detect)
+    review_command_template: str = ""
 
     # Paths
     project_root: Path = Path(".")
     logs_dir: Path = Path("spec/.executor-logs")
     state_file: Path = Path("spec/.executor-state.json")
+
+    # Callback URL for reporting task progress to orchestrator
+    callback_url: str = ""
 
     # Test command (using uv)
     test_command: str = "uv run pytest tests/ -v -m 'not slow'"
@@ -148,6 +209,88 @@ class ExecutorConfig:
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
+
+
+def build_cli_command(
+    cmd: str,
+    prompt: str,
+    model: str = "",
+    template: str = "",
+    skip_permissions: bool = False,
+    prompt_file: Path | None = None,
+) -> list[str]:
+    """Build CLI command from template or auto-detect based on command name.
+
+    Args:
+        cmd: CLI command name (e.g., "claude", "codex", "llama-cli")
+        prompt: The prompt text
+        model: Model name (optional)
+        template: Command template with placeholders (optional)
+        skip_permissions: Add --dangerously-skip-permissions for Claude (optional)
+        prompt_file: Path to file containing prompt (optional, for large prompts)
+
+    Returns:
+        List of command arguments ready for subprocess.
+
+    Template placeholders:
+        {cmd} - CLI command
+        {model} - Model name
+        {prompt} - Prompt text (shell-escaped)
+        {prompt_file} - Path to prompt file
+    """
+    import shlex
+
+    # Use template if provided
+    if template:
+        # Replace placeholders
+        prompt_escaped = shlex.quote(prompt)
+        prompt_file_str = str(prompt_file) if prompt_file else ""
+
+        formatted = template.format(
+            cmd=cmd,
+            model=model,
+            prompt=prompt_escaped,
+            prompt_file=prompt_file_str,
+        )
+        # Parse the formatted string into arguments
+        return shlex.split(formatted)
+
+    # Auto-detect based on command name
+    cmd_lower = cmd.lower()
+
+    if "llama-cli" in cmd_lower or "llama.cpp" in cmd_lower:
+        # llama.cpp CLI
+        result = [cmd, "-p", prompt, "--no-display-prompt"]
+        if model:
+            result.extend(["-m", model])
+        return result
+
+    elif "llama-server" in cmd_lower or "localhost:8080" in cmd_lower:
+        # llama.cpp server via curl
+        import json
+
+        payload = json.dumps({"prompt": prompt})
+        return ["curl", "-s", "http://localhost:8080/completion", "-d", payload]
+
+    elif "ollama" in cmd_lower:
+        # Ollama CLI
+        return [cmd, "run", model or "llama3", prompt]
+
+    elif "codex" in cmd_lower:
+        # Codex CLI
+        result = [cmd, "-p", prompt]
+        if model:
+            result.extend(["--model", model])
+        return result
+
+    else:
+        # Claude CLI (default)
+        result = [cmd, "-p", prompt]
+        if skip_permissions:
+            result.append("--dangerously-skip-permissions")
+        if model:
+            result.extend(["--model", model])
+        return result
 
 
 def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
@@ -183,6 +326,7 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "claude_model": executor_config.get("claude_model"),
             "skip_permissions": executor_config.get("skip_permissions"),
             "create_git_branch": pre_start.get("create_git_branch"),
+            "main_branch": executor_config.get("main_branch"),
             "run_tests_on_done": post_done.get("run_tests"),
             "run_lint_on_done": post_done.get("run_lint"),
             "lint_blocking": post_done.get("lint_blocking"),
@@ -191,11 +335,14 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),
             "review_model": executor_config.get("review_model"),
+            "command_template": executor_config.get("command_template"),
+            "review_command_template": executor_config.get("review_command_template"),
             "test_command": commands.get("test"),
             "lint_command": commands.get("lint"),
             "lint_fix_command": commands.get("lint_fix"),
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
             "state_file": Path(paths["state"]) if paths.get("state") else None,
+            "callback_url": executor_config.get("callback_url"),
         }
     except Exception as e:
         print(f"⚠️  Warning: Failed to load config from {config_path}: {e}")
@@ -235,6 +382,8 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["auto_commit"] = False
     if hasattr(args, "no_review") and args.no_review:
         config_kwargs["run_review"] = False
+    if hasattr(args, "callback_url") and args.callback_url:
+        config_kwargs["callback_url"] = args.callback_url
 
     return ExecutorConfig(**config_kwargs)
 
@@ -384,36 +533,63 @@ class ExecutorState:
 PROMPTS_DIR = Path("spec/prompts")
 
 
-def load_prompt_template(name: str) -> str | None:
+def load_prompt_template(name: str, cli_name: str = "") -> str | None:
     """Load prompt template from spec/prompts/ directory.
+
+    Tries to load CLI-specific template first (e.g., review.codex.md),
+    then falls back to generic template (e.g., review.md or review.txt).
 
     Args:
         name: Template name without extension (e.g., 'task', 'review')
+        cli_name: CLI name for CLI-specific templates (e.g., 'codex', 'claude')
 
     Returns:
-        Template content with comments stripped, or None if not found.
+        Template content, or None if not found.
     """
-    template_path = PROMPTS_DIR / f"{name}.txt"
-    if not template_path.exists():
-        return None
+    # Try CLI-specific template first
+    if cli_name:
+        cli_lower = cli_name.lower()
+        # Extract base CLI name (e.g., "codex" from "/usr/bin/codex")
+        cli_base = cli_lower.split("/")[-1]
 
-    content = template_path.read_text()
+        # Try different CLI-specific patterns
+        for pattern in [f"{name}.{cli_base}.md", f"{name}.{cli_base}.txt"]:
+            template_path = PROMPTS_DIR / pattern
+            if template_path.exists():
+                return _read_template(template_path)
 
-    # Strip comment lines (lines starting with #)
-    lines = []
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if not stripped.startswith("#"):
-            lines.append(line)
+    # Try generic templates
+    for ext in [".md", ".txt"]:
+        template_path = PROMPTS_DIR / f"{name}{ext}"
+        if template_path.exists():
+            return _read_template(template_path)
 
-    return "\n".join(lines).strip()
+    return None
+
+
+def _read_template(path: Path) -> str:
+    """Read and process template file."""
+    content = path.read_text()
+
+    # Strip comment lines (lines starting with #) only for .txt files
+    if path.suffix == ".txt":
+        lines = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("#"):
+                lines.append(line)
+        return "\n".join(lines).strip()
+
+    return content.strip()
 
 
 def render_template(template: str, variables: dict[str, str]) -> str:
     """Render template with variable substitution.
 
+    Supports both {{VARIABLE}} and ${VARIABLE} placeholder syntax.
+
     Args:
-        template: Template string with {{VARIABLE}} placeholders
+        template: Template string with placeholders
         variables: Dict of variable names to values
 
     Returns:
@@ -421,7 +597,9 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     """
     result = template
     for name, value in variables.items():
+        # Support both {{VAR}} and ${VAR} syntax
         result = result.replace(f"{{{{{name}}}}}", value)
+        result = result.replace(f"${{{name}}}", value)
     return result
 
 
@@ -445,11 +623,23 @@ def format_error_summary(error: str, output: str | None = None, max_lines: int =
         for line in output.split("\n"):
             line_lower = line.lower()
             # Look for error indicators
-            if any(kw in line_lower for kw in [
-                "error", "failed", "exception", "traceback",
-                "assert", "expected", "actual", "typeerror",
-                "nameerror", "valueerror", "keyerror", "attributeerror"
-            ]):
+            if any(
+                kw in line_lower
+                for kw in [
+                    "error",
+                    "failed",
+                    "exception",
+                    "traceback",
+                    "assert",
+                    "expected",
+                    "actual",
+                    "typeerror",
+                    "nameerror",
+                    "valueerror",
+                    "keyerror",
+                    "attributeerror",
+                ]
+            ):
                 relevant_lines.append(line.strip())
 
         if relevant_lines:
@@ -553,9 +743,7 @@ def build_task_prompt(
                 if attempt.claude_output:
                     failures = extract_test_failures(attempt.claude_output)
                     if failures:
-                        attempts_section += (
-                            f"**Test failures:**\n```\n{failures}\n```\n\n"
-                        )
+                        attempts_section += f"**Test failures:**\n```\n{failures}\n```\n\n"
 
             attempts_section += (
                 "**IMPORTANT:** Review the errors above and fix the issues. "
@@ -648,7 +836,20 @@ def get_task_branch_name(task: Task) -> str:
 
 
 def get_main_branch(config: ExecutorConfig) -> str:
-    """Determine main branch name (main or master)"""
+    """Determine main branch name (main or master).
+
+    Detection order:
+    1. Config setting (main_branch)
+    2. Remote HEAD (origin/HEAD)
+    3. Existing main or master branch
+    4. Current branch (if no main/master exists yet)
+    5. Default to "main"
+    """
+    # 0. Use config if explicitly set
+    if config.main_branch:
+        return config.main_branch
+
+    # 1. Try remote HEAD
     result = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
         capture_output=True,
@@ -659,7 +860,7 @@ def get_main_branch(config: ExecutorConfig) -> str:
         # refs/remotes/origin/main -> main
         return result.stdout.strip().split("/")[-1]
 
-    # Fallback: check if main or master exists
+    # 2. Check if main or master branch exists
     for branch in ["main", "master"]:
         result = subprocess.run(
             ["git", "rev-parse", "--verify", branch],
@@ -669,7 +870,48 @@ def get_main_branch(config: ExecutorConfig) -> str:
         if result.returncode == 0:
             return branch
 
-    return "main"  # default
+    # 3. If no main/master, use current branch as "main"
+    # (handles fresh repos where first branch might be named differently)
+    result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+
+    return "main"  # default for brand new repos
+
+
+def _ensure_on_main_branch(config: ExecutorConfig) -> None:
+    """Ensure we're on main branch after all tasks complete."""
+    try:
+        main_branch = get_main_branch(config)
+
+        # Check current branch
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        current_branch = result.stdout.strip()
+
+        if current_branch != main_branch:
+            print(f"   Switching to {main_branch}...")
+            result = subprocess.run(
+                ["git", "checkout", main_branch],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode == 0:
+                print(f"   ✅ On {main_branch}")
+            else:
+                print(f"   ⚠️  Could not switch to {main_branch}: {result.stderr.strip()}")
+    except Exception:
+        pass  # Ignore git errors
 
 
 def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
@@ -678,9 +920,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
 
     # Sync dependencies
     print("   Syncing dependencies...")
-    result = subprocess.run(
-        ["uv", "sync"], capture_output=True, text=True, cwd=config.project_root
-    )
+    result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
     if result.returncode == 0:
         print("   ✅ Dependencies synced")
     else:
@@ -698,6 +938,18 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
             )
             if result.returncode != 0:
                 return True  # No git repository
+
+            # Check if repo has any commits
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                cwd=config.project_root,
+            )
+            if result.returncode != 0:
+                # Fresh repo without commits — skip branching for now
+                # TASK-000 typically does git init, first commit will be on main
+                print("   ⚠️  No commits yet, skipping branch creation")
+                return True
 
             # Switch to main
             main_branch = get_main_branch(config)
@@ -740,9 +992,14 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
     return True
 
 
-def build_review_prompt(task: Task, config: ExecutorConfig) -> str:
-    """Build code review prompt for Claude."""
+def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") -> str:
+    """Build code review prompt for the specified CLI.
 
+    Args:
+        task: Task that was completed
+        config: Executor configuration
+        cli_name: CLI name for CLI-specific prompt template (e.g., 'codex', 'claude')
+    """
     # Get changed files from git
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD~1"],
@@ -750,7 +1007,9 @@ def build_review_prompt(task: Task, config: ExecutorConfig) -> str:
         text=True,
         cwd=config.project_root,
     )
-    changed_files = result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
+    changed_files = (
+        result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
+    )
 
     # Get git diff
     result = subprocess.run(
@@ -761,8 +1020,8 @@ def build_review_prompt(task: Task, config: ExecutorConfig) -> str:
     )
     git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
 
-    # Try to load custom template
-    template = load_prompt_template("review")
+    # Try to load CLI-specific or custom template
+    template = load_prompt_template("review", cli_name=cli_name)
 
     if template:
         variables = {
@@ -821,38 +1080,33 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
     """
     log_progress("🔍 Starting code review", task.id)
 
-    prompt = build_review_prompt(task, config)
+    # Use review-specific command/model if configured, otherwise fall back to main settings
+    review_cmd = config.review_command or config.claude_command
+    review_model = config.review_model or config.claude_model
+    review_template = config.review_command_template or config.command_template
+
+    # Build prompt with CLI-specific template
+    prompt = build_review_prompt(task, config, cli_name=review_cmd)
 
     # Save review prompt to log
-    log_file = (
-        config.logs_dir / f"{task.id}-review-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    )
+    log_file = config.logs_dir / f"{task.id}-review-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     with open(log_file, "w") as f:
         f.write(f"=== REVIEW PROMPT ===\n{prompt}\n\n")
 
     try:
-        # Use review-specific command/model if configured, otherwise fall back to main settings
-        review_cmd = config.review_command or config.claude_command
-        review_model = config.review_model or config.claude_model
+        # Build command using template or auto-detect
+        cmd = build_cli_command(
+            cmd=review_cmd,
+            prompt=prompt,
+            model=review_model,
+            template=review_template,
+            skip_permissions=config.skip_permissions,
+        )
 
-        # Build command based on the tool being used
-        if "codex" in review_cmd.lower():
-            # Codex CLI syntax
-            cmd = [review_cmd, "-p", prompt]
-            if review_model:
-                cmd.extend(["--model", review_model])
-        elif "ollama" in review_cmd.lower():
-            # Ollama syntax
-            cmd = [review_cmd, "run", review_model or "llama3", prompt]
-        else:
-            # Claude CLI syntax (default)
-            cmd = [review_cmd, "-p", prompt]
-            if config.skip_permissions:
-                cmd.append("--dangerously-skip-permissions")
-            if review_model:
-                cmd.extend(["--model", review_model])
-
-        log_progress(f"🔍 Review using: {review_cmd}" + (f" ({review_model})" if review_model else ""), task.id)
+        log_progress(
+            f"🔍 Review using: {review_cmd}" + (f" ({review_model})" if review_model else ""),
+            task.id,
+        )
 
         result = subprocess.run(
             cmd,
@@ -901,9 +1155,7 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
         return False, str(e)
 
 
-def post_done_hook(
-    task: Task, config: ExecutorConfig, success: bool
-) -> tuple[bool, str | None]:
+def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[bool, str | None]:
     """Hook after task completion.
 
     Returns:
@@ -963,9 +1215,7 @@ def post_done_hook(
             if recheck.returncode != 0:
                 # Step 3: Still failing — block or warn
                 if config.lint_blocking:
-                    lint_output = (
-                        recheck.stdout.decode() + "\n" + recheck.stderr.decode()
-                    )
+                    lint_output = recheck.stdout.decode() + "\n" + recheck.stderr.decode()
                     print("   ❌ Lint errors remain after auto-fix!")
                     return False, f"Lint errors (not auto-fixable):\n{lint_output}"
                 else:
@@ -1012,9 +1262,7 @@ def post_done_hook(
                 if commit_body_lines:
                     commit_msg += "\n\n" + "\n".join(commit_body_lines)
 
-                subprocess.run(
-                    ["git", "commit", "-m", commit_msg], cwd=config.project_root
-                )
+                subprocess.run(["git", "commit", "-m", commit_msg], cwd=config.project_root)
                 print("   Committed changes")
         except Exception as e:
             print(f"   Commit failed: {e}")
@@ -1025,6 +1273,19 @@ def post_done_hook(
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)
 
+            # Check current branch — if we're already on main, skip merge
+            # (happens for TASK-000 or fresh repos)
+            result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            current_branch = result.stdout.strip()
+            if current_branch == main_branch:
+                # Already on main, no merge needed
+                return True, None
+
             # Switch to main
             result = subprocess.run(
                 ["git", "checkout", main_branch],
@@ -1033,8 +1294,25 @@ def post_done_hook(
                 cwd=config.project_root,
             )
             if result.returncode != 0:
-                print(f"   ⚠️  Failed to switch to {main_branch}")
-                return True, None
+                # Try with -f flag if there are uncommitted changes
+                error_msg = result.stderr.strip()
+                if "uncommitted" in error_msg.lower() or "changes" in error_msg.lower():
+                    # Stash changes first
+                    subprocess.run(
+                        ["git", "stash"],
+                        capture_output=True,
+                        cwd=config.project_root,
+                    )
+                    result = subprocess.run(
+                        ["git", "checkout", main_branch],
+                        capture_output=True,
+                        text=True,
+                        cwd=config.project_root,
+                    )
+
+                if result.returncode != 0:
+                    print(f"   ⚠️  Failed to switch to {main_branch}: {error_msg}")
+                    return True, None
 
             # Merge task branch
             result = subprocess.run(
@@ -1091,6 +1369,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     # Update status
     state.mark_running(task_id)
     update_task_status(TASKS_FILE, task_id, "in_progress")
+    _send_callback(config.callback_url, task_id, "started")
 
     # Get previous attempts for context (to inform Claude about past failures)
     task_state = state.get_task_state(task_id)
@@ -1101,9 +1380,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
     # Save prompt to log
     config.logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = (
-        config.logs_dir / f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    )
+    log_file = config.logs_dir / f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
     with open(log_file, "w") as f:
         f.write(f"=== PROMPT ===\n{prompt}\n\n")
@@ -1112,11 +1389,14 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     start_time = datetime.now()
 
     try:
-        cmd = [config.claude_command, "-p", prompt]
-        if config.skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
-        if config.claude_model:
-            cmd.extend(["--model", config.claude_model])
+        # Build command using template or auto-detect
+        cmd = build_cli_command(
+            cmd=config.claude_command,
+            prompt=prompt,
+            model=config.claude_model,
+            template=config.command_template,
+            skip_permissions=config.skip_permissions,
+        )
 
         flags = " --dangerously-skip-permissions" if config.skip_permissions else ""
         print(f"🤖 Running: {config.claude_command} -p ...{flags}")
@@ -1147,6 +1427,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             print("   Check your usage: claude usage")
             print("   Or wait and retry later.")
             state.record_attempt(task_id, False, duration, error=f"API error: {error_pattern}")
+            _send_callback(
+                config.callback_url, task_id, "failed", duration, f"API error: {error_pattern}"
+            )
             return "API_ERROR"
 
         # Check result
@@ -1173,6 +1456,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 update_task_status(TASKS_FILE, task_id, "done")
                 mark_all_checklist_done(TASKS_FILE, task_id)
                 log_progress(f"✅ Completed in {duration:.1f}s", task_id)
+                _send_callback(config.callback_url, task_id, "success", duration)
                 return True
             else:
                 # Hook failed (tests didn't pass)
@@ -1182,10 +1466,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 full_output = output
                 if hook_error:
                     full_output = f"{output}\n\n=== TEST FAILURES ===\n{hook_error}"
-                state.record_attempt(
-                    task_id, False, duration, error=error, output=full_output
-                )
-                log_progress(f"❌ Failed: tests/lint check", task_id)
+                state.record_attempt(task_id, False, duration, error=error, output=full_output)
+                log_progress("❌ Failed: tests/lint check", task_id)
+                _send_callback(config.callback_url, task_id, "failed", duration, error)
                 return False
         else:
             # Claude reported failure
@@ -1193,6 +1476,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             error = error_match.group(1) if error_match else "Unknown error"
             state.record_attempt(task_id, False, duration, error=error, output=output)
             log_progress(f"❌ Failed: {error[:50]}", task_id)
+            _send_callback(config.callback_url, task_id, "failed", duration, error)
             return False
 
     except subprocess.TimeoutExpired:
@@ -1200,6 +1484,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         error = f"Timeout after {config.task_timeout_minutes} minutes"
         state.record_attempt(task_id, False, duration, error=error)
         log_progress(f"⏰ Timeout after {config.task_timeout_minutes}m", task_id)
+        _send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
 
     except Exception as e:
@@ -1207,6 +1492,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         error = str(e)
         state.record_attempt(task_id, False, duration, error=error)
         log_progress(f"💥 Error: {error[:50]}", task_id)
+        _send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
 
 
@@ -1273,12 +1559,12 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         else:
             # Skip (default)
             update_task_status(TASKS_FILE, task.id, "blocked")
-            log_progress(f"⏭️ Skipped, continuing to next task", task.id)
+            log_progress("⏭️ Skipped, continuing to next task", task.id)
             return "SKIP"
 
     else:  # "skip" (default)
         update_task_status(TASKS_FILE, task.id, "blocked")
-        log_progress(f"⏭️ Skipped, continuing to next task", task.id)
+        log_progress("⏭️ Skipped, continuing to next task", task.id)
         return "SKIP"
 
 
@@ -1323,8 +1609,9 @@ def _run_tasks(args, config: ExecutorConfig):
         tasks_to_run = [task]
 
     elif args.all:
-        # All ready tasks
-        tasks_to_run = get_next_tasks(tasks)
+        # All ready tasks (include in_progress unless --restart)
+        include_in_progress = not getattr(args, "restart", False)
+        tasks_to_run = get_next_tasks(tasks, include_in_progress=include_in_progress)
         if args.milestone:
             tasks_to_run = [
                 t for t in tasks_to_run if args.milestone.lower() in t.milestone.lower()
@@ -1332,14 +1619,14 @@ def _run_tasks(args, config: ExecutorConfig):
 
     elif args.milestone:
         # Tasks for specific milestone
-        next_tasks = get_next_tasks(tasks)
-        tasks_to_run = [
-            t for t in next_tasks if args.milestone.lower() in t.milestone.lower()
-        ]
+        include_in_progress = not getattr(args, "restart", False)
+        next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
+        tasks_to_run = [t for t in next_tasks if args.milestone.lower() in t.milestone.lower()]
 
     else:
-        # Next task
-        next_tasks = get_next_tasks(tasks)
+        # Next task (include in_progress unless --restart)
+        include_in_progress = not getattr(args, "restart", False)
+        next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
         tasks_to_run = next_tasks[:1] if next_tasks else []
 
     if not tasks_to_run:
@@ -1355,17 +1642,16 @@ def _run_tasks(args, config: ExecutorConfig):
     if args.all:
         # For --all mode, continuously re-evaluate ready tasks after each completion
         executed_ids: set[str] = set()
+        include_in_progress = not getattr(args, "restart", False)
         while True:
             # Re-parse tasks to get updated statuses
             tasks = parse_tasks(TASKS_FILE)
-            ready_tasks = get_next_tasks(tasks)
+            ready_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
 
             # Filter by milestone if specified
             if args.milestone:
                 ready_tasks = [
-                    t
-                    for t in ready_tasks
-                    if args.milestone.lower() in t.milestone.lower()
+                    t for t in ready_tasks if args.milestone.lower() in t.milestone.lower()
                 ]
 
             # Filter out already executed tasks
@@ -1382,6 +1668,8 @@ def _run_tasks(args, config: ExecutorConfig):
                         print(f"   - {t.id}: waiting on [{deps}]")
                 else:
                     print("\n✅ All tasks completed!")
+                    # Ensure we're on main branch at the end
+                    _ensure_on_main_branch(config)
                 break
 
             task = ready_tasks[0]
@@ -1425,9 +1713,7 @@ def _run_tasks(args, config: ExecutorConfig):
     tasks = parse_tasks(TASKS_FILE)
 
     # Calculate statistics
-    failed_attempts = sum(
-        1 for ts in state.tasks.values() for a in ts.attempts if not a.success
-    )
+    failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
     remaining = len([t for t in tasks if t.status == "todo"])
 
     print(f"\n{'=' * 60}")
@@ -1449,9 +1735,7 @@ def cmd_status(args, config: ExecutorConfig):
     completed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "success")
     failed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "failed")
     running_tasks = [ts for ts in state.tasks.values() if ts.status == "running"]
-    failed_attempts = sum(
-        1 for ts in state.tasks.values() for a in ts.attempts if not a.success
-    )
+    failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
 
     print("\n📊 Executor Status")
     print(f"{'=' * 50}")
@@ -1461,23 +1745,14 @@ def cmd_status(args, config: ExecutorConfig):
         print(f"Tasks in progress:     {len(running_tasks)}")
     if failed_attempts > 0:
         print(f"Failed attempts:       {failed_attempts} (retried)")
-    print(
-        f"Consecutive failures:  "
-        f"{state.consecutive_failures}/{config.max_consecutive_failures}"
-    )
+    print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
 
     # Tasks with attempts
     attempted = [ts for ts in state.tasks.values() if ts.attempts]
     if attempted:
         print("\n📝 Task History:")
         for ts in attempted:
-            icon = (
-                "✅"
-                if ts.status == "success"
-                else "❌"
-                if ts.status == "failed"
-                else "🔄"
-            )
+            icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
             attempts_info = f"{ts.attempt_count} attempt"
             if ts.attempt_count > 1:
                 attempts_info += "s"
@@ -1594,12 +1869,15 @@ def cmd_plan(args, config: ExecutorConfig):
     template = load_prompt_template("plan")
 
     if template:
-        prompt = render_template(template, {
-            "DESCRIPTION": description,
-            "REQUIREMENTS_SUMMARY": requirements_summary,
-            "DESIGN_SUMMARY": design_summary,
-            "EXISTING_TASKS": existing_tasks,
-        })
+        prompt = render_template(
+            template,
+            {
+                "DESCRIPTION": description,
+                "REQUIREMENTS_SUMMARY": requirements_summary,
+                "DESIGN_SUMMARY": design_summary,
+                "EXISTING_TASKS": existing_tasks,
+            },
+        )
     else:
         prompt = f"""# Task Planning Request
 
@@ -1669,9 +1947,7 @@ When done, respond with: PLAN_READY
                 return
 
             # Check for QUESTION
-            question_match = re.search(
-                r"QUESTION:\s*(.+?)(?:OPTIONS:|$)", output, re.DOTALL
-            )
+            question_match = re.search(r"QUESTION:\s*(.+?)(?:OPTIONS:|$)", output, re.DOTALL)
             if question_match:
                 question = question_match.group(1).strip()
                 print(f"\n❓ {question}")
@@ -1786,17 +2062,12 @@ def main():
     parser.add_argument(
         "--timeout", type=int, default=30, help="Task timeout in minutes (default: 30)"
     )
+    parser.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
+    parser.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
+    parser.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
+    parser.add_argument("--no-review", action="store_true", help="Skip code review after task")
     parser.add_argument(
-        "--no-tests", action="store_true", help="Skip tests on task completion"
-    )
-    parser.add_argument(
-        "--no-branch", action="store_true", help="Skip git branch creation"
-    )
-    parser.add_argument(
-        "--no-commit", action="store_true", help="Skip auto-commit on success"
-    )
-    parser.add_argument(
-        "--no-review", action="store_true", help="Skip code review after task"
+        "--callback-url", type=str, default="", help="URL to POST task status updates to"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -1804,10 +2075,13 @@ def main():
     # run
     run_parser = subparsers.add_parser("run", help="Execute tasks")
     run_parser.add_argument("--task", "-t", help="Specific task ID")
-    run_parser.add_argument(
-        "--all", "-a", action="store_true", help="Run all ready tasks"
-    )
+    run_parser.add_argument("--all", "-a", action="store_true", help="Run all ready tasks")
     run_parser.add_argument("--milestone", "-m", help="Filter by milestone")
+    run_parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Ignore in-progress tasks, start fresh with TODO tasks only",
+    )
 
     # status
     subparsers.add_parser("status", help="Show execution status")
