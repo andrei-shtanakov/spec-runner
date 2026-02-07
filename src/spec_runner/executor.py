@@ -143,7 +143,7 @@ class ExecutorLock:
 
 
 # Configuration file path
-CONFIG_FILE = Path("executor.config.yaml")
+CONFIG_FILE = Path("spec/executor.config.yaml")
 PROGRESS_FILE = Path("spec/.executor-progress.txt")
 
 # Error patterns for graceful exit (rate limits, context window, etc.)
@@ -1117,12 +1117,14 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
         )
 
         output = result.stdout
-        combined_output = output + "\n" + result.stderr
+        stderr = result.stderr
+        combined_output = output + "\n" + stderr
 
         # Save output
         with open(log_file, "a") as f:
             f.write(f"=== OUTPUT ===\n{output}\n\n")
-            f.write(f"=== STDERR ===\n{result.stderr}\n\n")
+            f.write(f"=== STDERR ===\n{stderr}\n\n")
+            f.write(f"=== RETURN CODE: {result.returncode} ===\n")
 
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
@@ -1130,11 +1132,26 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
             log_progress(f"⚠️ Review API error: {error_pattern}", task.id)
             return False, f"API error: {error_pattern}"
 
-        # Check review result
-        if "REVIEW_PASSED" in output:
+        # Check for empty or failed response
+        if result.returncode != 0 and not output.strip():
+            log_progress(
+                f"⚠️ Review process failed (exit code {result.returncode})",
+                task.id,
+            )
+            if stderr.strip():
+                log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
+            return False, f"Review process exited with code {result.returncode}"
+
+        if not output.strip():
+            log_progress("⚠️ Review returned empty response", task.id)
+            return False, "Review returned empty response"
+
+        # Check review result (case-insensitive, check both stdout and stderr)
+        output_upper = combined_output.upper()
+        if "REVIEW_PASSED" in output_upper:
             log_progress("✅ Code review passed", task.id)
             return True, None
-        elif "REVIEW_FIXED" in output:
+        elif "REVIEW_FIXED" in output_upper:
             log_progress("✅ Code review: issues fixed", task.id)
             # Commit the fixes
             subprocess.run(["git", "add", "-A"], cwd=config.project_root)
@@ -1143,9 +1160,19 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
                 cwd=config.project_root,
             )
             return True, None
+        elif "REVIEW_FAILED" in output_upper:
+            log_progress("❌ Code review found unresolved issues", task.id)
+            preview = output.strip()[-300:]
+            log_progress(f"   Review output (last 300 chars): {preview}", task.id)
+            return False, "Code review found unresolved issues"
         else:
-            log_progress("⚠️ Review completed (status unclear)", task.id)
-            return True, None  # Don't block on unclear status
+            # No explicit marker — treat as passed but log for visibility
+            preview = output.strip()[-200:] if output.strip() else "(empty)"
+            log_progress(
+                f"✅ Code review completed (no explicit status marker)", task.id
+            )
+            log_progress(f"   Review output (last 200 chars): {preview}", task.id)
+            return True, None
 
     except subprocess.TimeoutExpired:
         log_progress(f"⏰ Review timeout after {config.review_timeout_minutes}m", task.id)
