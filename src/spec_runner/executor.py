@@ -2162,42 +2162,44 @@ When done, respond with: PLAN_READY
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="spec-runner — task automation from markdown specs via Claude CLI",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    # Global options
-    parser.add_argument(
+    # Shared options available to every subcommand
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--max-retries", type=int, default=3, help="Max retries per task (default: 3)"
     )
-    parser.add_argument(
+    common.add_argument(
         "--timeout", type=int, default=30, help="Task timeout in minutes (default: 30)"
     )
-    parser.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
-    parser.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
-    parser.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
-    parser.add_argument("--no-review", action="store_true", help="Skip code review after task")
-    parser.add_argument(
+    common.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
+    common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
+    common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
+    common.add_argument("--no-review", action="store_true", help="Skip code review after task")
+    common.add_argument(
         "--callback-url", type=str, default="", help="URL to POST task status updates to"
     )
-    parser.add_argument(
+    common.add_argument(
         "--spec-prefix",
         type=str,
         default="",
         help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
     )
-    parser.add_argument(
+    common.add_argument(
         "--project-root",
         type=str,
         default="",
         help="Project root directory (default: current directory)",
     )
 
+    parser = argparse.ArgumentParser(
+        description="spec-runner — task automation from markdown specs via Claude CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # run
-    run_parser = subparsers.add_parser("run", help="Execute tasks")
+    run_parser = subparsers.add_parser("run", parents=[common], help="Execute tasks")
     run_parser.add_argument("--task", "-t", help="Specific task ID")
     run_parser.add_argument("--all", "-a", action="store_true", help="Run all ready tasks")
     run_parser.add_argument("--milestone", "-m", help="Filter by milestone")
@@ -2208,10 +2210,10 @@ def main():
     )
 
     # status
-    subparsers.add_parser("status", help="Show execution status")
+    subparsers.add_parser("status", parents=[common], help="Show execution status")
 
     # retry
-    retry_parser = subparsers.add_parser("retry", help="Retry failed task")
+    retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")
     retry_parser.add_argument("task_id", help="Task ID to retry")
     retry_parser.add_argument(
         "--fresh",
@@ -2220,18 +2222,18 @@ def main():
     )
 
     # logs
-    logs_parser = subparsers.add_parser("logs", help="Show task logs")
+    logs_parser = subparsers.add_parser("logs", parents=[common], help="Show task logs")
     logs_parser.add_argument("task_id", help="Task ID")
 
-    # reset
     # stop
-    subparsers.add_parser("stop", help="Graceful shutdown of running executor")
+    subparsers.add_parser("stop", parents=[common], help="Graceful shutdown of running executor")
 
-    reset_parser = subparsers.add_parser("reset", help="Reset executor state")
+    # reset
+    reset_parser = subparsers.add_parser("reset", parents=[common], help="Reset executor state")
     reset_parser.add_argument("--logs", action="store_true", help="Also clear logs")
 
     # plan
-    plan_parser = subparsers.add_parser("plan", help="Interactive task planning")
+    plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
     plan_parser.add_argument("description", help="Feature description")
 
     args = parser.parse_args()

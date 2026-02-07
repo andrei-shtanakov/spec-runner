@@ -675,63 +675,68 @@ def cmd_export_gh(args, tasks: list[Task]):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="spec-task — manage tasks from tasks.md",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-
-    parser.add_argument(
+    # Shared options available to every subcommand
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--spec-prefix",
         type=str,
         default="",
         help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
     )
 
+    parser = argparse.ArgumentParser(
+        description="spec-task — manage tasks from tasks.md",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+        parents=[common],
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # list
-    list_parser = subparsers.add_parser("list", aliases=["ls"], help="List tasks")
+    list_parser = subparsers.add_parser(
+        "list", aliases=["ls"], parents=[common], help="List tasks"
+    )
     list_parser.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
     list_parser.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
     list_parser.add_argument("--milestone", "-m", help="Filter by milestone")
 
     # show
-    show_parser = subparsers.add_parser("show", help="Task details")
+    show_parser = subparsers.add_parser("show", parents=[common], help="Task details")
     show_parser.add_argument("task_id", help="Task ID (e.g., TASK-001)")
 
     # start
-    start_parser = subparsers.add_parser("start", help="Start task")
+    start_parser = subparsers.add_parser("start", parents=[common], help="Start task")
     start_parser.add_argument("task_id", help="Task ID")
     start_parser.add_argument("--force", "-f", action="store_true", help="Ignore dependencies")
 
     # done
-    done_parser = subparsers.add_parser("done", help="Complete task")
+    done_parser = subparsers.add_parser("done", parents=[common], help="Complete task")
     done_parser.add_argument("task_id", help="Task ID")
     done_parser.add_argument(
         "--force", "-f", action="store_true", help="Ignore incomplete checklist"
     )
 
     # block
-    block_parser = subparsers.add_parser("block", help="Block task")
+    block_parser = subparsers.add_parser("block", parents=[common], help="Block task")
     block_parser.add_argument("task_id", help="Task ID")
 
     # check
-    check_parser = subparsers.add_parser("check", help="Mark checklist item")
+    check_parser = subparsers.add_parser("check", parents=[common], help="Mark checklist item")
     check_parser.add_argument("task_id", help="Task ID")
     check_parser.add_argument("item_index", help="Item index (0, 1, 2...)")
 
     # stats
-    subparsers.add_parser("stats", help="Statistics")
+    subparsers.add_parser("stats", parents=[common], help="Statistics")
 
     # next
-    subparsers.add_parser("next", help="Next tasks")
+    subparsers.add_parser("next", parents=[common], help="Next tasks")
 
     # graph
-    subparsers.add_parser("graph", help="Dependency graph")
+    subparsers.add_parser("graph", parents=[common], help="Dependency graph")
 
     # export-gh
-    subparsers.add_parser("export-gh", help="Export to GitHub Issues")
+    subparsers.add_parser("export-gh", parents=[common], help="Export to GitHub Issues")
 
     args = parser.parse_args()
 

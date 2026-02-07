@@ -754,58 +754,62 @@ def cmd_reset(args, config: ExecutorConfig):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "ATP Task Executor — automatic task execution via Claude"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    # Global options
-    parser.add_argument(
+    # Shared options available to every subcommand
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--max-retries",
         type=int,
         default=3,
         help="Max retries per task (default: 3)",
     )
-    parser.add_argument(
+    common.add_argument(
         "--timeout",
         type=int,
         default=30,
         help="Task timeout in minutes (default: 30)",
     )
-    parser.add_argument(
+    common.add_argument(
         "--no-tests",
         action="store_true",
         help="Skip tests on task completion",
     )
-    parser.add_argument(
+    common.add_argument(
         "--no-branch",
         action="store_true",
         help="Skip git branch creation",
     )
-    parser.add_argument(
+    common.add_argument(
         "--auto-commit",
         action="store_true",
         help="Auto-commit on success",
     )
-    parser.add_argument(
+    common.add_argument(
         "--spec-prefix",
         type=str,
         default="",
         help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
     )
-    parser.add_argument(
+    common.add_argument(
         "--project-root",
         type=str,
         default="",
         help="Project root directory (default: current directory)",
     )
 
+    parser = argparse.ArgumentParser(
+        description=(
+            "ATP Task Executor — automatic task execution via Claude"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # run
-    run_parser = subparsers.add_parser("run", help="Execute tasks")
+    run_parser = subparsers.add_parser(
+        "run", parents=[common], help="Execute tasks"
+    )
     run_parser.add_argument("--task", "-t", help="Specific task ID")
     run_parser.add_argument(
         "--all", "-a", action="store_true", help="Run all ready tasks"
@@ -815,21 +819,25 @@ def main():
     )
 
     # status
-    subparsers.add_parser("status", help="Show execution status")
+    subparsers.add_parser(
+        "status", parents=[common], help="Show execution status"
+    )
 
     # retry
     retry_parser = subparsers.add_parser(
-        "retry", help="Retry failed task"
+        "retry", parents=[common], help="Retry failed task"
     )
     retry_parser.add_argument("task_id", help="Task ID to retry")
 
     # logs
-    logs_parser = subparsers.add_parser("logs", help="Show task logs")
+    logs_parser = subparsers.add_parser(
+        "logs", parents=[common], help="Show task logs"
+    )
     logs_parser.add_argument("task_id", help="Task ID")
 
     # reset
     reset_parser = subparsers.add_parser(
-        "reset", help="Reset executor state"
+        "reset", parents=[common], help="Reset executor state"
     )
     reset_parser.add_argument(
         "--logs", action="store_true", help="Also clear logs"
