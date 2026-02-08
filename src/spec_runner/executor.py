@@ -737,7 +737,7 @@ def extract_test_failures(output: str) -> str:
         elif in_failure and line.strip():
             result_lines.append(line)
 
-    return "\n".join(result_lines[-50:]) if result_lines else output[-1500:]
+    return "\n".join(result_lines[-30:]) if result_lines else output[-500:]
 
 
 def build_task_prompt(
@@ -780,20 +780,35 @@ def build_task_prompt(
         [f"- {'[x]' if done else '[ ]'} {item}" for item, done in task.checklist]
     )
 
-    # Build previous attempts section
+    # Build previous attempts section (keep last 2 to avoid prompt overflow)
     attempts_section = ""
+    max_attempts_context = 2
+    max_attempts_chars = 30_000
     if previous_attempts:
         failed_attempts = [a for a in previous_attempts if not a.success]
         if failed_attempts:
-            attempts_section = "\n## ⚠️ PREVIOUS ATTEMPTS FAILED - FIX THESE ISSUES:\n\n"
-            for i, attempt in enumerate(failed_attempts, 1):
+            # Only include the most recent failures
+            recent = failed_attempts[-max_attempts_context:]
+            attempts_section = (
+                f"\n## ⚠️ PREVIOUS ATTEMPTS FAILED "
+                f"({len(failed_attempts)} total, showing last "
+                f"{len(recent)}):\n\n"
+            )
+            for i, attempt in enumerate(recent, len(failed_attempts) - len(recent) + 1):
                 attempts_section += f"### Attempt {i} (failed):\n"
                 if attempt.error:
-                    attempts_section += f"**Error:** {attempt.error}\n\n"
+                    error_text = attempt.error[:2000]
+                    attempts_section += f"**Error:** {error_text}\n\n"
                 if attempt.claude_output:
                     failures = extract_test_failures(attempt.claude_output)
                     if failures:
-                        attempts_section += f"**Test failures:**\n```\n{failures}\n```\n\n"
+                        attempts_section += (
+                            f"**Test failures:**\n```\n{failures}\n```\n\n"
+                        )
+
+            # Hard cap on total attempts context size
+            if len(attempts_section) > max_attempts_chars:
+                attempts_section = attempts_section[:max_attempts_chars] + "\n...(truncated)\n"
 
             attempts_section += (
                 "**IMPORTANT:** Review the errors above and fix the issues. "
