@@ -3,13 +3,13 @@
 ATP Task Executor — automatic task execution via Claude CLI
 
 Usage:
-    python executor.py run                    # Execute the next task
-    python executor.py run --task=TASK-001    # Execute a specific task
-    python executor.py run --all              # Execute all ready tasks
-    python executor.py run --milestone=mvp    # Execute milestone tasks
-    python executor.py status                 # Execution status
-    python executor.py retry TASK-001         # Retry a failed task
-    python executor.py logs TASK-001          # Task logs
+    python executor.py (or spec-runner) run                    # Execute the next task
+    python executor.py (or spec-runner) run --task=TASK-001    # Execute a specific task
+    python executor.py (or spec-runner) run --all              # Execute all ready tasks
+    python executor.py (or spec-runner) run --milestone=mvp    # Execute milestone tasks
+    python executor.py (or spec-runner) status                 # Execution status
+    python executor.py (or spec-runner) retry TASK-001         # Retry a failed task
+    python executor.py (or spec-runner) logs TASK-001          # Task logs
 """
 
 import argparse
@@ -601,7 +601,7 @@ def cmd_run(args, config: ExecutorConfig):
             f"⛔ Stopped: {state.consecutive_failures} "
             f"consecutive failures"
         )
-        print("   Use 'executor.py retry <TASK-ID>' to retry")
+        print("   Use 'spec-runner retry <TASK-ID>' to retry")
         return
 
     # Determine which tasks to execute

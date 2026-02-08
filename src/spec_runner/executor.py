@@ -1687,7 +1687,7 @@ def _run_tasks(args, config: ExecutorConfig):
     # Check failure limit
     if state.should_stop():
         print(f"⛔ Stopped: {state.consecutive_failures} consecutive failures")
-        print("   Use 'executor.py retry <TASK-ID>' to retry specific task")
+        print("   Use 'spec-runner retry <TASK-ID>' to retry specific task")
         return
 
     # Determine which tasks to execute
@@ -2135,7 +2135,7 @@ When done, respond with: PLAN_READY
                     log_progress(f"✅ Created {len(task_blocks)} tasks")
 
                 elif confirm == "edit":
-                    print(f"\nEdit {config.tasks_file} manually, then run 'executor.py run'")
+                    print(f"\nEdit {config.tasks_file} manually, then run 'spec-runner run'")
 
                 else:
                     print("\n❌ Cancelled")
