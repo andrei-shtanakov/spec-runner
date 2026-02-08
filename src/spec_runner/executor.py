@@ -1851,18 +1851,31 @@ def cmd_status(args, config: ExecutorConfig):
 
     state = ExecutorState(config)
 
+    # Parse tasks from tasks.md to cross-reference
+    all_tasks: list[Task] = []
+    if config.tasks_file.exists():
+        all_tasks = parse_tasks(config.tasks_file)
+    total_in_spec = len(all_tasks)
+
     # Calculate statistics from actual task state
     completed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "success")
     failed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "failed")
     running_tasks = [ts for ts in state.tasks.values() if ts.status == "running"]
     failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
 
+    # Find tasks in spec but not in state (pending / never started)
+    state_ids = set(state.tasks.keys())
+    not_started = [t for t in all_tasks if t.id not in state_ids]
+
     print("\n📊 Executor Status")
     print(f"{'=' * 50}")
+    print(f"Tasks in spec:         {total_in_spec}")
     print(f"Tasks completed:       {completed_tasks}")
     print(f"Tasks failed:          {failed_tasks}")
     if running_tasks:
         print(f"Tasks in progress:     {len(running_tasks)}")
+    if not_started:
+        print(f"Tasks not started:     {len(not_started)}")
     if failed_attempts > 0:
         print(f"Failed attempts:       {failed_attempts} (retried)")
     print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
@@ -1881,6 +1894,12 @@ def cmd_status(args, config: ExecutorConfig):
                 print(f"      Last error: {ts.last_error[:50]}...")
             elif ts.status == "running" and ts.last_error:
                 print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
+
+    # Show tasks not yet in executor state
+    if not_started:
+        print(f"\n⏳ Not started ({len(not_started)}):")
+        for t in not_started:
+            print(f"   ⬜ {t.id}: {t.name}")
 
 
 def cmd_retry(args, config: ExecutorConfig):
