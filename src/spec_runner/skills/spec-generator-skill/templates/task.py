@@ -310,7 +310,11 @@ def get_task_by_id(
 
 
 def resolve_dependencies(tasks: list[Task]) -> list[Task]:
-    """Update depends_on based on dependency status"""
+    """Update depends_on based on dependency status.
+
+    Removes completed dependencies and promotes blocked tasks
+    to todo when all their dependencies are done.
+    """
     task_map = {t.id: t for t in tasks}
 
     for task in tasks:
@@ -320,6 +324,9 @@ def resolve_dependencies(tasks: list[Task]) -> list[Task]:
             for dep in task.depends_on
             if dep in task_map and task_map[dep].status != "done"
         ]
+        # Auto-promote: blocked → todo when all deps satisfied
+        if task.status == "blocked" and not task.depends_on:
+            task.status = "todo"
 
     return tasks
 
