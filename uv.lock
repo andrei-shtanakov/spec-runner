@@ -936,7 +936,7 @@ wheels = [
 
 [[package]]
 name = "spec-runner"
-version = "0.1.4.post4"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

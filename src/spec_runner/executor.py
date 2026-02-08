@@ -1031,6 +1031,19 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
                 cwd=config.project_root,
             )
 
+            # Clean up leftover files from previous task
+            subprocess.run(
+                ["git", "checkout", "--", "."],
+                capture_output=True,
+                cwd=config.project_root,
+            )
+            # Remove untracked files that could contaminate tests
+            subprocess.run(
+                ["git", "clean", "-fd", "--exclude=spec/"],
+                capture_output=True,
+                cwd=config.project_root,
+            )
+
             # Check if branch exists
             result = subprocess.run(
                 ["git", "rev-parse", "--verify", branch_name],
