@@ -19,13 +19,13 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .executor import (
-    build_task_prompt,
     execute_task,
     run_with_retries,
 )
 from .executor import (
     main as executor_main,
 )
+from .prompt import build_task_prompt
 from .state import (
     ExecutorState,
     TaskAttempt,
