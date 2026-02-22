@@ -32,6 +32,7 @@ from .hooks import (
 )
 from .prompt import (
     build_task_prompt,
+    extract_test_failures,
     format_error_summary,
     load_prompt_template,
     render_template,
@@ -45,6 +46,7 @@ from .runner import (
 from .state import (
     ErrorCode,
     ExecutorState,
+    RetryContext,
     check_stop_requested,
     clear_stop_file,
 )
@@ -92,8 +94,29 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     task_state = state.get_task_state(task_id)
     previous_attempts = task_state.attempts if task_state.attempts else None
 
-    # Build prompt with previous attempt context
-    prompt = build_task_prompt(task, config, previous_attempts)
+    # Build RetryContext from previous failed attempts
+    retry_context: RetryContext | None = None
+    if previous_attempts:
+        failed = [a for a in previous_attempts if not a.success]
+        if failed:
+            last = failed[-1]
+            retry_context = RetryContext(
+                attempt_number=task_state.attempt_count + 1,
+                max_attempts=config.max_retries,
+                previous_error_code=last.error_code or ErrorCode.UNKNOWN,
+                previous_error=last.error or "Unknown error",
+                what_was_tried=f"Previous attempt for {task.name}",
+                test_failures=(
+                    extract_test_failures(last.claude_output)
+                    if last.claude_output
+                    else None
+                ),
+            )
+
+    # Build prompt with RetryContext
+    prompt = build_task_prompt(
+        task, config, previous_attempts, retry_context=retry_context
+    )
 
     # Save prompt to log
     config.logs_dir.mkdir(parents=True, exist_ok=True)

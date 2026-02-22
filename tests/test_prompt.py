@@ -11,7 +11,7 @@ from spec_runner.prompt import (
     load_prompt_template,
     render_template,
 )
-from spec_runner.state import TaskAttempt
+from spec_runner.state import ErrorCode, RetryContext, TaskAttempt
 from spec_runner.task import Task
 
 # === render_template ===
@@ -219,3 +219,92 @@ class TestBuildTaskPrompt:
         config = self._make_config(tmp_path)
         result = build_task_prompt(task, config)
         assert "Must handle errors" in result
+
+
+# === RetryContext rendering ===
+
+
+class TestRetryContextRendering:
+    """Tests for structured RetryContext rendering in build_task_prompt."""
+
+    def _make_task(self, **overrides) -> Task:
+        defaults = {
+            "id": "TASK-042",
+            "name": "Implement feature X",
+            "priority": "p1",
+            "status": "todo",
+            "estimate": "2d",
+            "milestone": "mvp",
+            "checklist": [("Write tests", False), ("Implement code", True)],
+            "traces_to": [],
+            "depends_on": [],
+        }
+        defaults.update(overrides)
+        return Task(**defaults)
+
+    def _make_config(self, tmp_path: Path) -> ExecutorConfig:
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir(exist_ok=True)
+        return ExecutorConfig(project_root=tmp_path)
+
+    def test_retry_context_in_prompt(self, tmp_path, monkeypatch):
+        """build_task_prompt with RetryContext shows structured error info."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        ctx = RetryContext(
+            attempt_number=2,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TEST_FAILURE,
+            previous_error="Tests failed",
+            what_was_tried="Implemented login page",
+            test_failures="FAILED test_login - AssertionError",
+        )
+        prompt = build_task_prompt(task, config, retry_context=ctx)
+        assert "Attempt 2 of 3" in prompt
+        assert "TEST_FAILURE" in prompt
+        assert "FAILED test_login" in prompt
+
+    def test_no_retry_context_no_retry_section(self, tmp_path, monkeypatch):
+        """Without RetryContext, no structured retry section."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert "RETRY" not in prompt
+
+    def test_retry_context_timeout(self, tmp_path, monkeypatch):
+        """TIMEOUT error code renders correctly."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        ctx = RetryContext(
+            attempt_number=1,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TIMEOUT,
+            previous_error="Timeout after 30 minutes",
+            what_was_tried="Implementing feature",
+            test_failures=None,
+        )
+        prompt = build_task_prompt(task, config, retry_context=ctx)
+        assert "TIMEOUT" in prompt
+        assert "Timeout after 30 minutes" in prompt
+        # No test failures section
+        assert "Test failures" not in prompt
+
+    def test_retry_context_without_test_failures(self, tmp_path, monkeypatch):
+        """RetryContext without test_failures doesn't show that section."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        ctx = RetryContext(
+            attempt_number=2,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TASK_FAILED,
+            previous_error="Could not compile",
+            what_was_tried="Implementing feature",
+            test_failures=None,
+        )
+        prompt = build_task_prompt(task, config, retry_context=ctx)
+        assert "TASK_FAILED" in prompt
+        assert "Could not compile" in prompt

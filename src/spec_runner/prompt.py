@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from .config import ExecutorConfig
-from .state import TaskAttempt
+from .state import RetryContext, TaskAttempt
 from .task import Task
 
 PROMPTS_DIR = Path("spec/prompts")
@@ -174,6 +174,7 @@ def build_task_prompt(
     task: Task,
     config: ExecutorConfig,
     previous_attempts: list[TaskAttempt] | None = None,
+    retry_context: RetryContext | None = None,
 ) -> str:
     """Build prompt for Claude with task context and previous attempt info."""
 
@@ -210,21 +211,39 @@ def build_task_prompt(
         [f"- {'[x]' if done else '[ ]'} {item}" for item, done in task.checklist]
     )
 
-    # Build previous attempts section (keep last 2 to avoid prompt overflow)
+    # Build retry context section
     attempts_section = ""
-    max_attempts_context = 2
-    max_attempts_chars = 30_000
-    if previous_attempts:
+    if retry_context:
+        attempts_section = (
+            f"\n## \u26a0\ufe0f RETRY \u2014 Attempt {retry_context.attempt_number}"
+            f" of {retry_context.max_attempts}\n\n"
+            f"**Error type:** {retry_context.previous_error_code.value}\n"
+            f"**What was tried:** {retry_context.what_was_tried}\n"
+            f"**Error:** {retry_context.previous_error}\n"
+        )
+        if retry_context.test_failures:
+            attempts_section += (
+                f"\n**Test failures:**\n```\n{retry_context.test_failures}\n```\n"
+            )
+        attempts_section += (
+            "\n**IMPORTANT:** Review the error above and fix the issue. "
+            "Do not repeat the same mistake.\n\n"
+        )
+    elif previous_attempts:
+        # Fallback: keep existing raw attempts logic for backward compat
         failed_attempts = [a for a in previous_attempts if not a.success]
         if failed_attempts:
-            # Only include the most recent failures
+            max_attempts_context = 2
+            max_attempts_chars = 30_000
             recent = failed_attempts[-max_attempts_context:]
             attempts_section = (
-                f"\n## ⚠️ PREVIOUS ATTEMPTS FAILED "
+                f"\n## \u26a0\ufe0f PREVIOUS ATTEMPTS FAILED "
                 f"({len(failed_attempts)} total, showing last "
                 f"{len(recent)}):\n\n"
             )
-            for i, attempt in enumerate(recent, len(failed_attempts) - len(recent) + 1):
+            for i, attempt in enumerate(
+                recent, len(failed_attempts) - len(recent) + 1
+            ):
                 attempts_section += f"### Attempt {i} (failed):\n"
                 if attempt.error:
                     error_text = attempt.error[:2000]
@@ -232,11 +251,14 @@ def build_task_prompt(
                 if attempt.claude_output:
                     failures = extract_test_failures(attempt.claude_output)
                     if failures:
-                        attempts_section += f"**Test failures:**\n```\n{failures}\n```\n\n"
+                        attempts_section += (
+                            f"**Test failures:**\n```\n{failures}\n```\n\n"
+                        )
 
-            # Hard cap on total attempts context size
             if len(attempts_section) > max_attempts_chars:
-                attempts_section = attempts_section[:max_attempts_chars] + "\n...(truncated)\n"
+                attempts_section = (
+                    attempts_section[:max_attempts_chars] + "\n...(truncated)\n"
+                )
 
             attempts_section += (
                 "**IMPORTANT:** Review the errors above and fix the issues. "
