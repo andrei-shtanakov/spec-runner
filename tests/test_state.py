@@ -1,5 +1,6 @@
 """Tests for spec_runner.state module."""
 
+import sqlite3
 from pathlib import Path
 
 from spec_runner.config import ExecutorConfig
@@ -16,8 +17,8 @@ from spec_runner.state import (
 
 def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
     """Create an ExecutorConfig rooted in tmp_path."""
-    defaults = {
-        "state_file": tmp_path / "state.json",
+    defaults: dict = {
+        "state_file": tmp_path / "state.db",
         "project_root": tmp_path,
     }
     defaults.update(overrides)
@@ -151,6 +152,103 @@ class TestExecutorState:
         ts = state.get_task_state("TASK-001")
         assert ts.status == "running"
         assert ts.started_at is not None
+
+
+# --- ExecutorState SQLite ---
+
+
+class TestExecutorStateSQLite:
+    def test_creates_db_file(self, tmp_path):
+        config = _make_config(tmp_path)
+        ExecutorState(config)
+        assert config.state_file.exists()
+
+    def test_db_has_wal_mode(self, tmp_path):
+        config = _make_config(tmp_path)
+        ExecutorState(config)
+        conn = sqlite3.connect(str(config.state_file))
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        conn.close()
+        assert mode == "wal"
+
+    def test_db_has_tables(self, tmp_path):
+        config = _make_config(tmp_path)
+        ExecutorState(config)
+        conn = sqlite3.connect(str(config.state_file))
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.close()
+        assert "tasks" in tables
+        assert "attempts" in tables
+        assert "executor_meta" in tables
+
+    def test_record_attempt_stores_error_code(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt(
+            "TASK-001",
+            success=False,
+            duration=1.0,
+            error="tests failed",
+            error_code=ErrorCode.TEST_FAILURE,
+        )
+        # Reload from DB
+        state2 = ExecutorState(config)
+        ts = state2.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.TEST_FAILURE
+
+    def test_consecutive_failures_persisted(self, tmp_path):
+        config = _make_config(tmp_path, max_retries=5)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=False, duration=1.0, error="e1")
+        state.record_attempt("T2", success=False, duration=1.0, error="e2")
+        state2 = ExecutorState(config)
+        assert state2.consecutive_failures == 2
+
+    def test_total_completed_persisted(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=True, duration=1.0)
+        state2 = ExecutorState(config)
+        assert state2.total_completed == 1
+
+    def test_total_failed_persisted(self, tmp_path):
+        config = _make_config(tmp_path, max_retries=1)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=False, duration=1.0, error="e")
+        state2 = ExecutorState(config)
+        assert state2.total_failed == 1
+
+    def test_mark_running_persisted(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.mark_running("TASK-001")
+        state2 = ExecutorState(config)
+        ts = state2.get_task_state("TASK-001")
+        assert ts.status == "running"
+        assert ts.started_at is not None
+
+    def test_save_syncs_in_memory_mutations(self, tmp_path):
+        """Test that _save() persists direct in-memory changes."""
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=False, duration=1.0, error="e")
+        # Direct in-memory mutation (as executor.py does)
+        ts = state.get_task_state("T1")
+        ts.attempts = []
+        ts.status = "pending"
+        state.consecutive_failures = 0
+        state._save()
+        # Reload and verify
+        state2 = ExecutorState(config)
+        ts2 = state2.get_task_state("T1")
+        assert ts2.status == "pending"
+        assert ts2.attempt_count == 0
+        assert state2.consecutive_failures == 0
 
 
 # --- Stop file ---

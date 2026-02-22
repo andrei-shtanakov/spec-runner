@@ -33,7 +33,7 @@ def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
     """Create an ExecutorConfig rooted in tmp_path."""
     defaults = {
         "project_root": tmp_path,
-        "state_file": tmp_path / "state.json",
+        "state_file": tmp_path / "state.db",
         "logs_dir": tmp_path / "logs",
         "max_retries": 3,
         "retry_delay_seconds": 0,
