@@ -35,7 +35,7 @@ def check_error_patterns(output: str) -> str | None:
     return None
 
 
-def _send_callback(
+def send_callback(
     callback_url: str,
     task_id: str,
     status: str,

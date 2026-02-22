@@ -26,7 +26,7 @@ from .config import (
     load_config_from_yaml,
 )
 from .hooks import (
-    _ensure_on_main_branch,
+    ensure_on_main_branch,
     post_done_hook,
     pre_start_hook,
 )
@@ -37,10 +37,10 @@ from .prompt import (
     render_template,
 )
 from .runner import (
-    _send_callback,
     build_cli_command,
     check_error_patterns,
     log_progress,
+    send_callback,
 )
 from .state import (
     ExecutorState,
@@ -80,7 +80,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     # Update status
     state.mark_running(task_id)
     update_task_status(config.tasks_file, task_id, "in_progress")
-    _send_callback(config.callback_url, task_id, "started")
+    send_callback(config.callback_url, task_id, "started")
 
     # Get previous attempts for context (to inform Claude about past failures)
     task_state = state.get_task_state(task_id)
@@ -138,7 +138,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             print("   Check your usage: claude usage")
             print("   Or wait and retry later.")
             state.record_attempt(task_id, False, duration, error=f"API error: {error_pattern}")
-            _send_callback(
+            send_callback(
                 config.callback_url, task_id, "failed", duration, f"API error: {error_pattern}"
             )
             return "API_ERROR"
@@ -167,7 +167,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
                 log_progress(f"✅ Completed in {duration:.1f}s", task_id)
-                _send_callback(config.callback_url, task_id, "success", duration)
+                send_callback(config.callback_url, task_id, "success", duration)
                 return True
             else:
                 # Hook failed (tests didn't pass)
@@ -179,7 +179,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     full_output = f"{output}\n\n=== TEST FAILURES ===\n{hook_error}"
                 state.record_attempt(task_id, False, duration, error=error, output=full_output)
                 log_progress("❌ Failed: tests/lint check", task_id)
-                _send_callback(config.callback_url, task_id, "failed", duration, error)
+                send_callback(config.callback_url, task_id, "failed", duration, error)
                 return False
         else:
             # Claude reported failure
@@ -187,7 +187,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             error = error_match.group(1) if error_match else "Unknown error"
             state.record_attempt(task_id, False, duration, error=error, output=output)
             log_progress(f"❌ Failed: {error[:50]}", task_id)
-            _send_callback(config.callback_url, task_id, "failed", duration, error)
+            send_callback(config.callback_url, task_id, "failed", duration, error)
             return False
 
     except subprocess.TimeoutExpired:
@@ -195,7 +195,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         error = f"Timeout after {config.task_timeout_minutes} minutes"
         state.record_attempt(task_id, False, duration, error=error)
         log_progress(f"⏰ Timeout after {config.task_timeout_minutes}m", task_id)
-        _send_callback(config.callback_url, task_id, "failed", duration, error)
+        send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
 
     except Exception as e:
@@ -203,7 +203,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         error = str(e)
         state.record_attempt(task_id, False, duration, error=error)
         log_progress(f"💥 Error: {error[:50]}", task_id)
-        _send_callback(config.callback_url, task_id, "failed", duration, error)
+        send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
 
 
@@ -390,7 +390,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 else:
                     print("\n✅ All tasks completed!")
                     # Ensure we're on main branch at the end
-                    _ensure_on_main_branch(config)
+                    ensure_on_main_branch(config)
                 break
 
             task = ready_tasks[0]

@@ -69,7 +69,7 @@ def get_main_branch(config: ExecutorConfig) -> str:
     return "main"  # default for brand new repos
 
 
-def _ensure_on_main_branch(config: ExecutorConfig) -> None:
+def ensure_on_main_branch(config: ExecutorConfig) -> None:
     """Ensure we're on main branch after all tasks complete."""
     try:
         main_branch = get_main_branch(config)
