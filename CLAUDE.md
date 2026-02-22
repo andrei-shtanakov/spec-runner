@@ -44,7 +44,7 @@ All code is in `src/spec_runner/`:
 |---|---|---|
 | `executor.py` | ~900 | CLI entry point, main loop, retry orchestration |
 | `config.py` | ~260 | ExecutorConfig, YAML loading, build_config |
-| `state.py` | ~160 | ExecutorState, TaskState, TaskAttempt, JSON persistence |
+| `state.py` | ~320 | ExecutorState, TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence |
 | `prompt.py` | ~320 | Prompt building, templates, error formatting |
 | `hooks.py` | ~580 | Pre/post hooks, git ops, code review |
 | `runner.py` | ~160 | CLI command building, subprocess exec, progress logging |
@@ -66,7 +66,9 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 ### Key Classes
 
 - **`ExecutorConfig`** — Dataclass merging YAML config + CLI args. Handles `spec_prefix` path resolution for multi-phase projects.
-- **`ExecutorState`** / **`TaskState`** / **`TaskAttempt`** — Execution state persisted to `spec/.executor-state.json`.
+- **`ExecutorState`** / **`TaskState`** / **`TaskAttempt`** — Execution state persisted to SQLite (`spec/.executor-state.db`) with WAL mode. Auto-migrates from legacy JSON on first run.
+- **`ErrorCode`** — `str` enum classifying failures: TIMEOUT, RATE_LIMIT, SYNTAX, TEST_FAILURE, LINT_FAILURE, TASK_FAILED, HOOK_FAILURE, UNKNOWN. Stored in `attempts.error_code` column.
+- **`RetryContext`** — Structured retry info (attempt number, error code, previous error, test failures) passed to `build_task_prompt()` for focused retry prompts.
 - **`Task`** — Parsed task with id, priority (p0-p3), status (todo/in_progress/done/blocked), checklist, dependency graph, traceability to `[REQ-XXX]`/`[DESIGN-XXX]`.
 
 ### Configuration Precedence
@@ -75,7 +77,7 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 ### Multi-phase Support
 
-`--spec-prefix=phase2-` namespaces all paths: `phase2-tasks.md`, `phase2-requirements.md`, `.executor-phase2-state.json`, etc.
+`--spec-prefix=phase2-` namespaces all paths: `phase2-tasks.md`, `phase2-requirements.md`, `.executor-phase2-state.db`, etc.
 
 ## Code Style
 
@@ -89,10 +91,10 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 - **Specs**: `spec/` (requirements.md, design.md, tasks.md, WORKFLOW.md)
 - **Config**: `executor.config.yaml` at repo root
-- **Runtime state**: `spec/.executor-state.json`, `spec/.executor-logs/`, `spec/.task-history.log`
+- **Runtime state**: `spec/.executor-state.db` (SQLite + WAL), `spec/.executor-logs/`, `spec/.task-history.log`
 - **Bundled skills**: `src/spec_runner/skills/spec-generator-skill/` (templates + review prompts for claude/codex/ollama/llama)
 - **Tests**: `tests/` — group by CLI module, mark slow tests with `@pytest.mark.slow`, mock Claude CLI invocations
 
 ## Testing
 
-Tests use pytest. The existing test file `tests/test_spec_prefix.py` covers `ExecutorConfig` path resolution and `spec_prefix` behavior. When adding tests, mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (167 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
