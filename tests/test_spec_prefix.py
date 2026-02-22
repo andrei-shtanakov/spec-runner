@@ -31,7 +31,7 @@ class TestExecutorConfigDefaults:
     def test_state_file_default_is_absolute(self):
         c = ExecutorConfig()
         assert c.state_file.is_absolute()
-        assert str(c.state_file).endswith("spec/.executor-state.json")
+        assert str(c.state_file).endswith("spec/.executor-state.db")
 
     def test_logs_dir_default_is_absolute(self):
         c = ExecutorConfig()
