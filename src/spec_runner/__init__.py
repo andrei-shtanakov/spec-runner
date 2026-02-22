@@ -17,15 +17,13 @@ Usage as CLI:
 
 from importlib.metadata import PackageNotFoundError, version
 
+from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .executor import (
-    ExecutorConfig,
     ExecutorState,
     TaskAttempt,
     TaskState,
-    build_config,
     build_task_prompt,
     execute_task,
-    load_config_from_yaml,
     run_with_retries,
 )
 from .executor import (
