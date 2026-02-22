@@ -66,7 +66,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     """Execute a single task via Claude CLI.
 
     Returns:
-        True if successful, False if failed, or "API_ERROR" if rate limited.
+        True if successful, False if failed, "API_ERROR" if rate limited,
+        or "HOOK_ERROR" if pre-start hook failed (fail fast, no retries).
     """
 
     task_id = task.id
@@ -83,7 +84,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             error="Pre-start hook failed",
             error_code=ErrorCode.HOOK_FAILURE,
         )
-        return False
+        return "HOOK_ERROR"
 
     # Update status
     state.mark_running(task_id)
@@ -281,6 +282,10 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         # API error - stop immediately, don't retry
         if result == "API_ERROR":
             return "API_ERROR"
+
+        # Hook error - stop immediately, don't retry
+        if result == "HOOK_ERROR":
+            return False
 
         if result is True:
             return True

@@ -235,20 +235,20 @@ class TestExecuteTask:
 
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.pre_start_hook", return_value=False)
-    def test_pre_hook_failure_returns_false(
+    def test_pre_hook_failure_returns_hook_error(
         self,
         mock_pre,
         mock_log,
         tmp_path,
     ):
-        """When pre_start_hook fails, execute_task returns False immediately."""
+        """When pre_start_hook fails, execute_task returns 'HOOK_ERROR'."""
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)
 
         result = execute_task(task, config, state)
 
-        assert result is False
+        assert result == "HOOK_ERROR"
         mock_pre.assert_called_once()
 
     @patch("spec_runner.executor.update_task_status")
@@ -320,6 +320,25 @@ class TestRunWithRetries:
         result = run_with_retries(task, config, state)
 
         assert result == "API_ERROR"
+        assert mock_exec.call_count == 1
+
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_hook_error_stops_immediately(
+        self,
+        mock_exec,
+        mock_log,
+        tmp_path,
+    ):
+        """HOOK_ERROR stops retries immediately."""
+        mock_exec.return_value = "HOOK_ERROR"
+        task = _make_task()
+        config = _make_config(tmp_path, max_retries=3)
+        state = _make_state(config)
+
+        result = run_with_retries(task, config, state)
+
+        assert result is False
         assert mock_exec.call_count == 1
 
     @patch("spec_runner.executor.log_progress")
