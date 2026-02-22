@@ -43,6 +43,7 @@ from .runner import (
     send_callback,
 )
 from .state import (
+    ErrorCode,
     ExecutorState,
     check_stop_requested,
     clear_stop_file,
@@ -75,6 +76,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     # Pre-start hook
     if not pre_start_hook(task, config):
         print("❌ Pre-start hook failed")
+        state.record_attempt(
+            task_id, False, 0.0,
+            error="Pre-start hook failed",
+            error_code=ErrorCode.HOOK_FAILURE,
+        )
         return False
 
     # Update status
@@ -137,7 +143,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             print(f"\n⚠️  API error detected: '{error_pattern}'")
             print("   Check your usage: claude usage")
             print("   Or wait and retry later.")
-            state.record_attempt(task_id, False, duration, error=f"API error: {error_pattern}")
+            state.record_attempt(
+                task_id, False, duration,
+                error=f"API error: {error_pattern}",
+                error_code=ErrorCode.RATE_LIMIT,
+            )
             send_callback(
                 config.callback_url, task_id, "failed", duration, f"API error: {error_pattern}"
             )
@@ -173,11 +183,24 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 # Hook failed (tests didn't pass)
                 # Include detailed error info for next attempt
                 error = hook_error or "Post-done hook failed (tests/lint)"
+                # Classify the hook failure
+                error_code = ErrorCode.UNKNOWN
+                if hook_error:
+                    if "Tests failed" in hook_error:
+                        error_code = ErrorCode.TEST_FAILURE
+                    elif "Lint errors" in hook_error:
+                        error_code = ErrorCode.LINT_FAILURE
+                    else:
+                        error_code = ErrorCode.HOOK_FAILURE
                 # Combine Claude output with test failures for context
                 full_output = output
                 if hook_error:
                     full_output = f"{output}\n\n=== TEST FAILURES ===\n{hook_error}"
-                state.record_attempt(task_id, False, duration, error=error, output=full_output)
+                state.record_attempt(
+                    task_id, False, duration,
+                    error=error, output=full_output,
+                    error_code=error_code,
+                )
                 log_progress("❌ Failed: tests/lint check", task_id)
                 send_callback(config.callback_url, task_id, "failed", duration, error)
                 return False
@@ -185,7 +208,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
             error = error_match.group(1) if error_match else "Unknown error"
-            state.record_attempt(task_id, False, duration, error=error, output=output)
+            state.record_attempt(
+                task_id, False, duration,
+                error=error, output=output,
+                error_code=ErrorCode.TASK_FAILED,
+            )
             log_progress(f"❌ Failed: {error[:50]}", task_id)
             send_callback(config.callback_url, task_id, "failed", duration, error)
             return False
@@ -193,7 +220,10 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     except subprocess.TimeoutExpired:
         duration = config.task_timeout_minutes * 60
         error = f"Timeout after {config.task_timeout_minutes} minutes"
-        state.record_attempt(task_id, False, duration, error=error)
+        state.record_attempt(
+            task_id, False, duration,
+            error=error, error_code=ErrorCode.TIMEOUT,
+        )
         log_progress(f"⏰ Timeout after {config.task_timeout_minutes}m", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
@@ -201,7 +231,10 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
         error = str(e)
-        state.record_attempt(task_id, False, duration, error=error)
+        state.record_attempt(
+            task_id, False, duration,
+            error=error, error_code=ErrorCode.UNKNOWN,
+        )
         log_progress(f"💥 Error: {error[:50]}", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
