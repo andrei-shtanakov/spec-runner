@@ -27,7 +27,9 @@ from .executor import (
 )
 from .prompt import build_task_prompt
 from .state import (
+    ErrorCode,
     ExecutorState,
+    RetryContext,
     TaskAttempt,
     TaskState,
 )
@@ -61,8 +63,10 @@ __all__ = [
     "update_checklist_item",
     "mark_all_checklist_done",
     # Executor
+    "ErrorCode",
     "ExecutorConfig",
     "ExecutorState",
+    "RetryContext",
     "TaskAttempt",
     "TaskState",
     "build_config",
