@@ -71,13 +71,9 @@ class ExecutorConfig:
             default_state = Path("spec/.executor-state.json")
             default_logs = Path("spec/.executor-logs")
             if self.state_file == default_state:
-                self.state_file = Path(
-                    f"spec/.executor-{self.spec_prefix}state.json"
-                )
+                self.state_file = Path(f"spec/.executor-{self.spec_prefix}state.json")
             if self.logs_dir == default_logs:
-                self.logs_dir = Path(
-                    f"spec/.executor-{self.spec_prefix}logs"
-                )
+                self.logs_dir = Path(f"spec/.executor-{self.spec_prefix}logs")
 
         if not self.state_file.is_absolute():
             self.state_file = self.project_root / self.state_file
@@ -90,9 +86,7 @@ class ExecutorConfig:
 
     @property
     def requirements_file(self) -> Path:
-        return (
-            self.project_root / "spec" / f"{self.spec_prefix}requirements.md"
-        )
+        return self.project_root / "spec" / f"{self.spec_prefix}requirements.md"
 
     @property
     def design_file(self) -> Path:
@@ -150,10 +144,7 @@ class ExecutorState:
         if self.config.state_file.exists():
             data = json.loads(self.config.state_file.read_text())
             for task_id, task_data in data.get("tasks", {}).items():
-                attempts = [
-                    TaskAttempt(**a)
-                    for a in task_data.get("attempts", [])
-                ]
+                attempts = [TaskAttempt(**a) for a in task_data.get("attempts", [])]
                 self.tasks[task_id] = TaskState(
                     task_id=task_id,
                     status=task_data.get("status", "pending"),
@@ -161,9 +152,7 @@ class ExecutorState:
                     started_at=task_data.get("started_at"),
                     completed_at=task_data.get("completed_at"),
                 )
-            self.consecutive_failures = data.get(
-                "consecutive_failures", 0
-            )
+            self.consecutive_failures = data.get("consecutive_failures", 0)
             self.total_completed = data.get("total_completed", 0)
             self.total_failed = data.get("total_failed", 0)
 
@@ -197,9 +186,7 @@ class ExecutorState:
 
     def get_task_state(self, task_id: str) -> TaskState:
         if task_id not in self.tasks:
-            self.tasks[task_id] = TaskState(
-                task_id=task_id, status="pending"
-            )
+            self.tasks[task_id] = TaskState(task_id=task_id, status="pending")
         return self.tasks[task_id]
 
     def record_attempt(
@@ -243,10 +230,7 @@ class ExecutorState:
 
     def should_stop(self) -> bool:
         """Check whether execution should stop"""
-        return (
-            self.consecutive_failures
-            >= self.config.max_consecutive_failures
-        )
+        return self.consecutive_failures >= self.config.max_consecutive_failures
 
 
 # === Prompt Builder ===
@@ -284,22 +268,11 @@ def build_task_prompt(task: Task, config: ExecutorConfig) -> str:
 
     # Checklist
     checklist_text = "\n".join(
-        [
-            f"- {'[x]' if done else '[ ]'} {item}"
-            for item, done in task.checklist
-        ]
+        [f"- {'[x]' if done else '[ ]'} {item}" for item, done in task.checklist]
     )
 
-    reqs_text = (
-        chr(10).join(related_reqs)
-        if related_reqs
-        else f"See {config.requirements_file}"
-    )
-    design_text = (
-        chr(10).join(related_design)
-        if related_design
-        else f"See {config.design_file}"
-    )
+    reqs_text = chr(10).join(related_reqs) if related_reqs else f"See {config.requirements_file}"
+    design_text = chr(10).join(related_design) if related_design else f"See {config.design_file}"
 
     prompt = f"""# Task Execution Request
 
@@ -359,10 +332,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
 
     # Create git branch
     if config.create_git_branch:
-        branch_name = (
-            f"task/{task.id.lower()}-"
-            f"{task.name.lower().replace(' ', '-')[:30]}"
-        )
+        branch_name = f"task/{task.id.lower()}-{task.name.lower().replace(' ', '-')[:30]}"
         try:
             # Check if git is available
             result = subprocess.run(
@@ -384,9 +354,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
     return True
 
 
-def post_done_hook(
-    task: Task, config: ExecutorConfig, success: bool
-) -> bool:
+def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> bool:
     """Hook after completing a task"""
     print(f"🔧 Post-done hook for {task.id} (success={success})")
 
@@ -423,9 +391,7 @@ def post_done_hook(
     # Auto-commit
     if config.auto_commit:
         try:
-            subprocess.run(
-                ["git", "add", "-A"], cwd=config.project_root
-            )
+            subprocess.run(["git", "add", "-A"], cwd=config.project_root)
             subprocess.run(
                 ["git", "commit", "-m", f"{task.id}: {task.name}"],
                 cwd=config.project_root,
@@ -440,9 +406,7 @@ def post_done_hook(
 # === Task Executor ===
 
 
-def execute_task(
-    task: Task, config: ExecutorConfig, state: ExecutorState
-) -> bool:
+def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool:
     """Execute a single task via Claude CLI"""
 
     task_id = task.id
@@ -464,9 +428,7 @@ def execute_task(
 
     # Save prompt to log
     config.logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = config.logs_dir / (
-        f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    )
+    log_file = config.logs_dir / (f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
 
     with open(log_file, "w") as f:
         f.write(f"=== PROMPT ===\n{prompt}\n\n")
@@ -499,9 +461,7 @@ def execute_task(
             f.write(f"=== RETURN CODE: {result.returncode} ===\n")
 
         # Check result
-        success = (
-            "TASK_COMPLETE" in output and "TASK_FAILED" not in output
-        )
+        success = "TASK_COMPLETE" in output and "TASK_FAILED" not in output
 
         if success:
             print("✅ Claude reports: TASK_COMPLETE")
@@ -510,34 +470,21 @@ def execute_task(
             hook_success = post_done_hook(task, config, True)
 
             if hook_success:
-                state.record_attempt(
-                    task_id, True, duration, output=output
-                )
+                state.record_attempt(task_id, True, duration, output=output)
                 update_task_status(config.tasks_file, task_id, "done")
-                print(
-                    f"✅ {task_id} completed successfully "
-                    f"in {duration:.1f}s"
-                )
+                print(f"✅ {task_id} completed successfully in {duration:.1f}s")
                 return True
             else:
                 # Hook failed (tests did not pass)
                 error = "Post-done hook failed (tests/lint)"
-                state.record_attempt(
-                    task_id, False, duration, error=error, output=output
-                )
+                state.record_attempt(task_id, False, duration, error=error, output=output)
                 print(f"❌ {task_id} failed: {error}")
                 return False
         else:
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
-            error = (
-                error_match.group(1)
-                if error_match
-                else "Unknown error"
-            )
-            state.record_attempt(
-                task_id, False, duration, error=error, output=output
-            )
+            error = error_match.group(1) if error_match else "Unknown error"
+            state.record_attempt(task_id, False, duration, error=error, output=output)
             print(f"❌ {task_id} failed: {error}")
             return False
 
@@ -556,27 +503,19 @@ def execute_task(
         return False
 
 
-def run_with_retries(
-    task: Task, config: ExecutorConfig, state: ExecutorState
-) -> bool:
+def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool:
     """Execute a task with retries"""
 
     task_state = state.get_task_state(task.id)
 
     for attempt in range(task_state.attempt_count, config.max_retries):
-        print(
-            f"\n📍 Attempt {attempt + 1}/{config.max_retries} "
-            f"for {task.id}"
-        )
+        print(f"\n📍 Attempt {attempt + 1}/{config.max_retries} for {task.id}")
 
         if execute_task(task, config, state):
             return True
 
         if attempt < config.max_retries - 1:
-            print(
-                f"⏳ Waiting {config.retry_delay_seconds}s "
-                f"before retry..."
-            )
+            print(f"⏳ Waiting {config.retry_delay_seconds}s before retry...")
             import time
 
             time.sleep(config.retry_delay_seconds)
@@ -597,10 +536,7 @@ def cmd_run(args, config: ExecutorConfig):
 
     # Check failure limit
     if state.should_stop():
-        print(
-            f"⛔ Stopped: {state.consecutive_failures} "
-            f"consecutive failures"
-        )
+        print(f"⛔ Stopped: {state.consecutive_failures} consecutive failures")
         print("   Use 'spec-runner retry <TASK-ID>' to retry")
         return
 
@@ -618,19 +554,13 @@ def cmd_run(args, config: ExecutorConfig):
         tasks_to_run = get_next_tasks(tasks)
         if args.milestone:
             tasks_to_run = [
-                t
-                for t in tasks_to_run
-                if args.milestone.lower() in t.milestone.lower()
+                t for t in tasks_to_run if args.milestone.lower() in t.milestone.lower()
             ]
 
     elif args.milestone:
         # Tasks for a specific milestone
         next_tasks = get_next_tasks(tasks)
-        tasks_to_run = [
-            t
-            for t in next_tasks
-            if args.milestone.lower() in t.milestone.lower()
-        ]
+        tasks_to_run = [t for t in next_tasks if args.milestone.lower() in t.milestone.lower()]
 
     else:
         # Next task
@@ -660,10 +590,7 @@ def cmd_run(args, config: ExecutorConfig):
     print(f"{'=' * 60}")
     print(f"   Completed: {state.total_completed}")
     print(f"   Failed:    {state.total_failed}")
-    print(
-        f"   Remaining: "
-        f"{len([t for t in tasks if t.status == 'todo'])}"
-    )
+    print(f"   Remaining: {len([t for t in tasks if t.status == 'todo'])}")
 
 
 def cmd_status(args, config: ExecutorConfig):
@@ -675,11 +602,7 @@ def cmd_status(args, config: ExecutorConfig):
     print(f"{'=' * 50}")
     print(f"Total completed:       {state.total_completed}")
     print(f"Total failed:          {state.total_failed}")
-    print(
-        f"Consecutive failures:  "
-        f"{state.consecutive_failures}/"
-        f"{config.max_consecutive_failures}"
-    )
+    print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
 
     # Tasks with attempts
     attempted = [ts for ts in state.tasks.values() if ts.attempts]
@@ -692,10 +615,7 @@ def cmd_status(args, config: ExecutorConfig):
                 icon = "❌"
             else:
                 icon = "🔄"
-            print(
-                f"   {icon} {ts.task_id}: {ts.status} "
-                f"({ts.attempt_count} attempts)"
-            )
+            print(f"   {icon} {ts.task_id}: {ts.status} ({ts.attempt_count} attempts)")
             if ts.last_error:
                 print(f"      Last error: {ts.last_error[:50]}...")
 
@@ -797,9 +717,7 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        description=(
-            "ATP Task Executor — automatic task execution via Claude"
-        ),
+        description=("ATP Task Executor — automatic task execution via Claude"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
     )
@@ -807,41 +725,25 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # run
-    run_parser = subparsers.add_parser(
-        "run", parents=[common], help="Execute tasks"
-    )
+    run_parser = subparsers.add_parser("run", parents=[common], help="Execute tasks")
     run_parser.add_argument("--task", "-t", help="Specific task ID")
-    run_parser.add_argument(
-        "--all", "-a", action="store_true", help="Run all ready tasks"
-    )
-    run_parser.add_argument(
-        "--milestone", "-m", help="Filter by milestone"
-    )
+    run_parser.add_argument("--all", "-a", action="store_true", help="Run all ready tasks")
+    run_parser.add_argument("--milestone", "-m", help="Filter by milestone")
 
     # status
-    subparsers.add_parser(
-        "status", parents=[common], help="Show execution status"
-    )
+    subparsers.add_parser("status", parents=[common], help="Show execution status")
 
     # retry
-    retry_parser = subparsers.add_parser(
-        "retry", parents=[common], help="Retry failed task"
-    )
+    retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")
     retry_parser.add_argument("task_id", help="Task ID to retry")
 
     # logs
-    logs_parser = subparsers.add_parser(
-        "logs", parents=[common], help="Show task logs"
-    )
+    logs_parser = subparsers.add_parser("logs", parents=[common], help="Show task logs")
     logs_parser.add_argument("task_id", help="Task ID")
 
     # reset
-    reset_parser = subparsers.add_parser(
-        "reset", parents=[common], help="Reset executor state"
-    )
-    reset_parser.add_argument(
-        "--logs", action="store_true", help="Also clear logs"
-    )
+    reset_parser = subparsers.add_parser("reset", parents=[common], help="Reset executor state")
+    reset_parser.add_argument("--logs", action="store_true", help="Also clear logs")
 
     args = parser.parse_args()
 

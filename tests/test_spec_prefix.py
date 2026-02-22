@@ -3,7 +3,7 @@ project_root resolution, and stop file property."""
 
 from pathlib import Path
 
-from spec_runner.executor import ExecutorConfig
+from spec_runner.config import ExecutorConfig
 from spec_runner.task import history_file_for
 
 # === ExecutorConfig properties ===

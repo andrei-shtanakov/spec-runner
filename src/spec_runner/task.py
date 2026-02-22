@@ -701,9 +701,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # list
-    list_parser = subparsers.add_parser(
-        "list", aliases=["ls"], parents=[common], help="List tasks"
-    )
+    list_parser = subparsers.add_parser("list", aliases=["ls"], parents=[common], help="List tasks")
     list_parser.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
     list_parser.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
     list_parser.add_argument("--milestone", "-m", help="Filter by milestone")
