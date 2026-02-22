@@ -7,10 +7,24 @@ import contextlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 
 from .config import ExecutorConfig
 
 # === State Management ===
+
+
+class ErrorCode(str, Enum):
+    """Structured error classification for task failures."""
+
+    TIMEOUT = "TIMEOUT"
+    RATE_LIMIT = "RATE_LIMIT"
+    SYNTAX = "SYNTAX"
+    TEST_FAILURE = "TEST_FAILURE"
+    LINT_FAILURE = "LINT_FAILURE"
+    TASK_FAILED = "TASK_FAILED"
+    HOOK_FAILURE = "HOOK_FAILURE"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass
@@ -22,6 +36,19 @@ class TaskAttempt:
     duration_seconds: float
     error: str | None = None
     claude_output: str | None = None
+    error_code: ErrorCode | None = None
+
+
+@dataclass
+class RetryContext:
+    """Structured context for retry attempts."""
+
+    attempt_number: int
+    max_attempts: int
+    previous_error_code: ErrorCode
+    previous_error: str
+    what_was_tried: str
+    test_failures: str | None
 
 
 @dataclass

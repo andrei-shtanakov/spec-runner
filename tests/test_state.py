@@ -4,7 +4,9 @@ from pathlib import Path
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import (
+    ErrorCode,
     ExecutorState,
+    RetryContext,
     TaskAttempt,
     TaskState,
     check_stop_requested,
@@ -181,3 +183,72 @@ class TestStopFile:
         # Should not raise
         clear_stop_file(config)
         assert not config.stop_file.exists()
+
+
+# --- ErrorCode ---
+
+
+class TestErrorCode:
+    def test_values_are_strings(self):
+        assert ErrorCode.TIMEOUT == "TIMEOUT"
+        assert ErrorCode.RATE_LIMIT == "RATE_LIMIT"
+        assert ErrorCode.TEST_FAILURE == "TEST_FAILURE"
+        assert ErrorCode.LINT_FAILURE == "LINT_FAILURE"
+        assert ErrorCode.TASK_FAILED == "TASK_FAILED"
+        assert ErrorCode.HOOK_FAILURE == "HOOK_FAILURE"
+        assert ErrorCode.UNKNOWN == "UNKNOWN"
+
+    def test_is_string_enum(self):
+        assert isinstance(ErrorCode.TIMEOUT, str)
+
+
+# --- RetryContext ---
+
+
+class TestRetryContext:
+    def test_creation(self):
+        ctx = RetryContext(
+            attempt_number=2,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TEST_FAILURE,
+            previous_error="tests failed",
+            what_was_tried="Implemented login page",
+            test_failures="FAILED test_login - AssertionError",
+        )
+        assert ctx.attempt_number == 2
+        assert ctx.previous_error_code == ErrorCode.TEST_FAILURE
+        assert ctx.test_failures is not None
+
+    def test_creation_without_test_failures(self):
+        ctx = RetryContext(
+            attempt_number=1,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TIMEOUT,
+            previous_error="Timeout after 30 minutes",
+            what_was_tried="Implementing feature",
+            test_failures=None,
+        )
+        assert ctx.test_failures is None
+
+
+# --- TaskAttempt.error_code ---
+
+
+class TestTaskAttemptErrorCode:
+    def test_error_code_default_none(self):
+        a = TaskAttempt(
+            timestamp="2026-01-01T00:00:00",
+            success=True,
+            duration_seconds=1.5,
+        )
+        assert a.error_code is None
+
+    def test_error_code_set(self):
+        a = TaskAttempt(
+            timestamp="2026-01-01T00:00:00",
+            success=False,
+            duration_seconds=2.0,
+            error="tests failed",
+            error_code=ErrorCode.TEST_FAILURE,
+        )
+        assert a.error_code == ErrorCode.TEST_FAILURE
