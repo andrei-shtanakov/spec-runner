@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task, run_with_retries
-from spec_runner.state import ExecutorState
+from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
 # --- Helpers ---
@@ -33,7 +33,7 @@ def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
     """Create an ExecutorConfig rooted in tmp_path."""
     defaults = {
         "project_root": tmp_path,
-        "state_file": tmp_path / "state.json",
+        "state_file": tmp_path / "state.db",
         "logs_dir": tmp_path / "logs",
         "max_retries": 3,
         "retry_delay_seconds": 0,
@@ -235,20 +235,20 @@ class TestExecuteTask:
 
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.pre_start_hook", return_value=False)
-    def test_pre_hook_failure_returns_false(
+    def test_pre_hook_failure_returns_hook_error(
         self,
         mock_pre,
         mock_log,
         tmp_path,
     ):
-        """When pre_start_hook fails, execute_task returns False immediately."""
+        """When pre_start_hook fails, execute_task returns 'HOOK_ERROR'."""
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)
 
         result = execute_task(task, config, state)
 
-        assert result is False
+        assert result == "HOOK_ERROR"
         mock_pre.assert_called_once()
 
     @patch("spec_runner.executor.update_task_status")
@@ -324,6 +324,25 @@ class TestRunWithRetries:
 
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.execute_task")
+    def test_hook_error_stops_immediately(
+        self,
+        mock_exec,
+        mock_log,
+        tmp_path,
+    ):
+        """HOOK_ERROR stops retries immediately."""
+        mock_exec.return_value = "HOOK_ERROR"
+        task = _make_task()
+        config = _make_config(tmp_path, max_retries=3)
+        state = _make_state(config)
+
+        result = run_with_retries(task, config, state)
+
+        assert result is False
+        assert mock_exec.call_count == 1
+
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
     def test_retries_on_failure_then_succeeds(
         self,
         mock_exec,
@@ -340,3 +359,131 @@ class TestRunWithRetries:
 
         assert result is True
         assert mock_exec.call_count == 3
+
+
+# --- Error classification tests ---
+
+
+class TestErrorClassification:
+    """Tests for error_code classification in execute_task."""
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_timeout_gets_timeout_code(
+        self, mock_run, mock_pre, mock_prompt, mock_cmd, mock_log, mock_status, tmp_path
+    ):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="echo", timeout=1800)
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.TIMEOUT
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_rate_limit_gets_rate_limit_code(
+        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
+        mock_log, mock_status, tmp_path,
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="you've hit your limit", stderr="", returncode=1,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.RATE_LIMIT
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_task_failed_gets_task_failed_code(
+        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
+        mock_log, mock_status, tmp_path,
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="TASK_FAILED: could not compile", stderr="", returncode=1,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.TASK_FAILED
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.executor.post_done_hook",
+        return_value=(False, "Tests failed:\nFAILED test_x"),
+    )
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_test_failure_hook_gets_test_failure_code(
+        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
+        mock_log, mock_status, mock_cl, tmp_path,
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE", stderr="", returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.TEST_FAILURE
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.executor.post_done_hook",
+        return_value=(False, "Lint errors (not auto-fixable):\nerr"),
+    )
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_lint_failure_hook_gets_lint_failure_code(
+        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
+        mock_log, mock_status, mock_cl, tmp_path,
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE", stderr="", returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.LINT_FAILURE
+
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.pre_start_hook", return_value=False)
+    def test_pre_hook_failure_gets_hook_failure_code(
+        self, mock_pre, mock_log, tmp_path,
+    ):
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        execute_task(task, config, state)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].error_code == ErrorCode.HOOK_FAILURE

@@ -110,7 +110,7 @@ class ExecutorConfig:
     # Paths
     project_root: Path = Path(".")
     logs_dir: Path = Path("spec/.executor-logs")
-    state_file: Path = Path("spec/.executor-state.json")
+    state_file: Path = Path("spec/.executor-state.db")
 
     # Callback URL for reporting task progress to orchestrator
     callback_url: str = ""
@@ -130,10 +130,10 @@ class ExecutorConfig:
         self.project_root = self.project_root.resolve()
 
         if self.spec_prefix:
-            default_state = Path("spec/.executor-state.json")
+            default_state = Path("spec/.executor-state.db")
             default_logs = Path("spec/.executor-logs")
             if self.state_file == default_state:
-                self.state_file = Path(f"spec/.executor-{self.spec_prefix}state.json")
+                self.state_file = Path(f"spec/.executor-{self.spec_prefix}state.db")
             if self.logs_dir == default_logs:
                 self.logs_dir = Path(f"spec/.executor-{self.spec_prefix}logs")
 

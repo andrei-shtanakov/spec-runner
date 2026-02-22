@@ -27,7 +27,7 @@ class TestExecutorConfig:
     def test_state_file_resolved_to_absolute(self):
         c = ExecutorConfig()
         assert c.state_file.is_absolute()
-        assert str(c.state_file).endswith("spec/.executor-state.json")
+        assert str(c.state_file).endswith("spec/.executor-state.db")
 
     def test_logs_dir_resolved_to_absolute(self):
         c = ExecutorConfig()
@@ -45,6 +45,16 @@ class TestExecutorConfig:
     def test_stop_file_property(self):
         c = ExecutorConfig()
         assert c.stop_file == c.project_root / "spec" / ".executor-stop"
+
+
+class TestConfigStateFileDefault:
+    def test_default_state_file_is_db(self):
+        c = ExecutorConfig()
+        assert str(c.state_file).endswith(".executor-state.db")
+
+    def test_spec_prefix_state_file_is_db(self):
+        c = ExecutorConfig(spec_prefix="phase2-")
+        assert str(c.state_file).endswith(".executor-phase2-state.db")
 
 
 class TestLoadConfigFromYaml:
