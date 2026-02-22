@@ -110,6 +110,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 test_failures=(
                     extract_test_failures(last.claude_output)
                     if last.claude_output
+                    and last.error_code
+                    in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
                     else None
                 ),
             )

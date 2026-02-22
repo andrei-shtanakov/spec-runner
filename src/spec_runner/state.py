@@ -83,13 +83,31 @@ class ExecutorState:
         self.consecutive_failures = 0
         self.total_completed = 0
         self.total_failed = 0
+        self._conn: sqlite3.Connection | None = None
 
-        # Migration: JSON -> SQLite
-        json_path = self.config.state_file.with_suffix(".json")
-        if not self.config.state_file.exists() and json_path.exists():
+        # Migration: JSON -> SQLite (only for .db state files)
+        json_path = (
+            self.config.state_file.with_suffix(".json")
+            if self.config.state_file.suffix == ".db"
+            else None
+        )
+
+        if json_path and not self.config.state_file.exists() and json_path.exists():
+            # Normal migration path
             self._migrate_from_json(json_path)
+        elif json_path and self.config.state_file.exists() and json_path.exists():
+            # Partial migration recovery: DB was created but JSON wasn't renamed
+            self._init_db()
+            assert self._conn is not None
+            row = self._conn.execute("SELECT COUNT(*) FROM tasks").fetchone()
+            if row[0] == 0:
+                # DB is empty, re-populate from JSON
+                self._conn.close()
+                self._conn = None
+                self._migrate_from_json(json_path)
         else:
             self._init_db()
+
         self._load()
 
     def _init_db(self) -> None:
@@ -374,6 +392,12 @@ class ExecutorState:
     def should_stop(self) -> bool:
         """Check if we should stop"""
         return self.consecutive_failures >= self.config.max_consecutive_failures
+
+    def close(self) -> None:
+        """Close the SQLite connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
 
 def check_stop_requested(config: ExecutorConfig) -> bool:

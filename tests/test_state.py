@@ -395,14 +395,16 @@ class TestJsonToSqliteMigration:
         assert state.consecutive_failures == 1
         assert state.total_completed == 1
 
-    def test_no_migration_if_db_exists(self, tmp_path):
-        """If .db already exists, don't touch .json even if present."""
+    def test_no_migration_if_db_has_data(self, tmp_path):
+        """If .db already has task data, don't re-migrate even if .json exists."""
         json_path = tmp_path / "state.json"
         db_path = tmp_path / "state.db"
 
-        # Create DB first (no JSON present yet)
+        # Create DB and record a task so it is non-empty
         config = _make_config(tmp_path, state_file=db_path)
-        ExecutorState(config)
+        state = ExecutorState(config)
+        state.record_attempt("TASK-001", success=True, duration=1.0)
+        state.close()
         assert db_path.exists()
 
         # Now place JSON alongside the existing DB
@@ -411,9 +413,11 @@ class TestJsonToSqliteMigration:
             '"total_completed":0, "total_failed":0}'
         )
 
-        # Re-open: DB exists, so JSON should NOT be touched
-        ExecutorState(config)
+        # Re-open: DB has data, so JSON should NOT be touched
+        state2 = ExecutorState(config)
         assert json_path.exists()
+        # Original task data preserved
+        assert "TASK-001" in state2.tasks
 
     def test_fresh_db_if_nothing_exists(self, tmp_path):
         """If neither .json nor .db exists, create fresh DB."""
@@ -476,3 +480,86 @@ class TestJsonToSqliteMigration:
         assert state.tasks["TASK-002"].attempt_count == 1
         assert state.total_completed == 1
         assert state.total_failed == 1
+
+    def test_partial_migration_recovery(self, tmp_path):
+        """If .db exists but is empty and .json still exists, re-migrate."""
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+        json_data = {
+            "tasks": {
+                "TASK-001": {
+                    "status": "success",
+                    "attempts": [
+                        {
+                            "timestamp": "t1",
+                            "success": True,
+                            "duration_seconds": 1.0,
+                        }
+                    ],
+                    "started_at": "t0",
+                    "completed_at": "t1",
+                }
+            },
+            "consecutive_failures": 0,
+            "total_completed": 1,
+            "total_failed": 0,
+        }
+        json_path.write_text(json.dumps(json_data))
+
+        # Simulate partial migration: create empty DB with schema
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, "
+            "status TEXT, started_at TEXT, completed_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE attempts (id INTEGER PRIMARY KEY, "
+            "task_id TEXT, timestamp TEXT, success INTEGER, "
+            "duration_seconds REAL, error TEXT, error_code TEXT, "
+            "claude_output TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE executor_meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        conn.commit()
+        conn.close()
+
+        config = _make_config(tmp_path, state_file=db_path)
+        state = ExecutorState(config)
+
+        assert "TASK-001" in state.tasks
+        assert state.tasks["TASK-001"].status == "success"
+        assert not json_path.exists()  # renamed to .bak
+        assert (tmp_path / "state.json.bak").exists()
+
+    def test_no_migration_for_json_suffix_state_file(self, tmp_path):
+        """If state_file has .json suffix, skip migration logic entirely."""
+        json_state = tmp_path / "state.json"
+
+        # state_file IS a .json path — no migration should be attempted
+        # (with_suffix(".json") would return the same path, causing issues)
+        config = _make_config(tmp_path, state_file=json_state)
+        state = ExecutorState(config)
+        assert state.tasks == {}
+        # File should be created as a SQLite DB despite .json extension
+        assert json_state.exists()
+
+
+# --- close() ---
+
+
+class TestExecutorStateClose:
+    def test_close_sets_conn_none(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        assert state._conn is not None
+        state.close()
+        assert state._conn is None
+
+    def test_close_idempotent(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.close()
+        # Second close should not raise
+        state.close()
+        assert state._conn is None
