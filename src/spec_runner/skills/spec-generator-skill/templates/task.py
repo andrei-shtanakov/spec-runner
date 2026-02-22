@@ -125,15 +125,9 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
         if meta_match:
-            priority_emoji, priority, status_emoji, status_text = (
-                meta_match.groups()
-            )
-            current_task.priority = PRIORITY_FROM_EMOJI.get(
-                priority_emoji, "p0"
-            )
-            current_task.status = STATUS_FROM_EMOJI.get(
-                status_emoji, "todo"
-            )
+            priority_emoji, priority, status_emoji, status_text = meta_match.groups()
+            current_task.priority = PRIORITY_FROM_EMOJI.get(priority_emoji, "p0")
+            current_task.status = STATUS_FROM_EMOJI.get(status_emoji, "todo")
 
             est_match = ESTIMATE.search(line)
             if est_match:
@@ -145,9 +139,7 @@ def parse_tasks(filepath: Path) -> list[Task]:
             continue
 
         # Checklist section
-        if line.startswith("**Checklist:**") or line.startswith(
-            "**Tests"
-        ):
+        if line.startswith("**Checklist:**") or line.startswith("**Tests"):
             in_checklist = True
             in_tests = "Tests" in line
             continue
@@ -170,9 +162,7 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # Traces, Dependencies
         traces_match = TRACES_TO.search(line)
         if traces_match:
-            refs = re.findall(
-                r"\[([A-Z]+-\d+)\]", traces_match.group(1)
-            )
+            refs = re.findall(r"\[([A-Z]+-\d+)\]", traces_match.group(1))
             current_task.traces_to = refs
             continue
 
@@ -208,9 +198,7 @@ def history_file_for(tasks_file: Path) -> Path:
     return tasks_file.parent / f".{prefix}task-history.log"
 
 
-def log_change(
-    task_id: str, change: str, history_file: Path = HISTORY_FILE
-):
+def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
     """Log a change to history"""
     history_file.parent.mkdir(exist_ok=True)
     with open(history_file, "a") as f:
@@ -218,9 +206,7 @@ def log_change(
         f.write(f"{timestamp} | {task_id} | {change}\n")
 
 
-def update_task_status(
-    filepath: Path, task_id: str, new_status: str
-) -> bool:
+def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     """Update task status in the file"""
     content = filepath.read_text()
     lines = content.split("\n")
@@ -282,15 +268,12 @@ def update_checklist_item(
         if in_task and CHECKLIST_ITEM.match(line):
             if checklist_count == item_index:
                 mark = "x" if checked else " "
-                new_line = re.sub(
-                    r"- \[[ x]\]", f"- [{mark}]", line
-                )
+                new_line = re.sub(r"- \[[ x]\]", f"- [{mark}]", line)
                 lines[i] = new_line
                 filepath.write_text("\n".join(lines))
                 log_change(
                     task_id,
-                    f"checklist[{item_index}] -> "
-                    f"{'done' if checked else 'undone'}",
+                    f"checklist[{item_index}] -> {'done' if checked else 'undone'}",
                     history_file_for(filepath),
                 )
                 return True
@@ -299,9 +282,7 @@ def update_checklist_item(
     return False
 
 
-def get_task_by_id(
-    tasks: list[Task], task_id: str
-) -> Task | None:
+def get_task_by_id(tasks: list[Task], task_id: str) -> Task | None:
     """Find a task by ID"""
     for task in tasks:
         if task.id == task_id:
@@ -320,9 +301,7 @@ def resolve_dependencies(tasks: list[Task]) -> list[Task]:
     for task in tasks:
         # Remove completed dependencies
         task.depends_on = [
-            dep
-            for dep in task.depends_on
-            if dep in task_map and task_map[dep].status != "done"
+            dep for dep in task.depends_on if dep in task_map and task_map[dep].status != "done"
         ]
         # Auto-promote: blocked → todo when all deps satisfied
         if task.status == "blocked" and not task.depends_on:
@@ -334,9 +313,7 @@ def resolve_dependencies(tasks: list[Task]) -> list[Task]:
 def get_next_tasks(tasks: list[Task]) -> list[Task]:
     """Return tasks ready for execution"""
     tasks = resolve_dependencies(tasks)
-    ready = [
-        t for t in tasks if t.status == "todo" and not t.depends_on
-    ]
+    ready = [t for t in tasks if t.status == "todo" and not t.depends_on]
     # Sort by priority
     priority_order = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
     ready.sort(key=lambda t: priority_order.get(t.priority, 99))
@@ -354,28 +331,17 @@ def cmd_list(args, tasks: list[Task]):
         filtered = [t for t in filtered if t.status == args.status]
 
     if args.priority:
-        filtered = [
-            t
-            for t in filtered
-            if t.priority == args.priority.lower()
-        ]
+        filtered = [t for t in filtered if t.priority == args.priority.lower()]
 
     if args.milestone:
         milestone_lower = args.milestone.lower()
-        filtered = [
-            t
-            for t in filtered
-            if milestone_lower in t.milestone.lower()
-        ]
+        filtered = [t for t in filtered if milestone_lower in t.milestone.lower()]
 
     if not filtered:
         print("No tasks matching the specified criteria")
         return
 
-    header = (
-        f"\n{'ID':<12} {'Status':<4} {'P':<3} "
-        f"{'Name':<40} {'Progress':<10} {'Est':<6}"
-    )
+    header = f"\n{'ID':<12} {'Status':<4} {'P':<3} {'Name':<40} {'Progress':<10} {'Est':<6}"
     print(header)
     print("-" * 85)
 
@@ -385,11 +351,7 @@ def cmd_list(args, tasks: list[Task]):
         status_icon = STATUS_EMOJI.get(task.status, "?")
         priority_icon = PRIORITY_EMOJI.get(task.priority, "?")
 
-        name = (
-            task.name[:38] + ".."
-            if len(task.name) > 40
-            else task.name
-        )
+        name = task.name[:38] + ".." if len(task.name) > 40 else task.name
         print(
             f"{task.id:<12} {status_icon:<4} {priority_icon:<3} "
             f"{name:<40} {progress:<10} {task.estimate:<6}"
@@ -420,9 +382,7 @@ def cmd_show(args, tasks: list[Task]):
     print(f"Progress:   {done}/{total} ({pct}%)")
 
     if task.depends_on:
-        print(
-            f"\n⬅️  Depends on: {', '.join(task.depends_on)}"
-        )
+        print(f"\n⬅️  Depends on: {', '.join(task.depends_on)}")
     if task.blocks:
         print(f"➡️  Blocks:     {', '.join(task.blocks)}")
     if task.traces_to:
@@ -450,10 +410,7 @@ def cmd_start(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
         return
 
     if task.depends_on:
-        print(
-            f"⚠️  Task depends on incomplete: "
-            f"{', '.join(task.depends_on)}"
-        )
+        print(f"⚠️  Task depends on incomplete: {', '.join(task.depends_on)}")
         if not args.force:
             print("   Use --force to start anyway")
             return
@@ -485,11 +442,7 @@ def cmd_done(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
         # Show unblocked tasks
         tasks = parse_tasks(tasks_file)
         tasks = resolve_dependencies(tasks)
-        unblocked = [
-            t
-            for t in tasks
-            if t.status == "todo" and not t.depends_on
-        ]
+        unblocked = [t for t in tasks if t.status == "todo" and not t.depends_on]
         if unblocked:
             print("\n🔓 Unblocked tasks:")
             for t in unblocked[:5]:
@@ -520,18 +473,13 @@ def cmd_check(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
 
     item_index = int(args.item_index)
     if item_index < 0 or item_index >= len(task.checklist):
-        print(
-            f"❌ Invalid index. Available: "
-            f"0-{len(task.checklist) - 1}"
-        )
+        print(f"❌ Invalid index. Available: 0-{len(task.checklist) - 1}")
         return
 
     item_text, was_checked = task.checklist[item_index]
     new_checked = not was_checked  # toggle
 
-    if update_checklist_item(
-        tasks_file, task.id, item_index, new_checked
-    ):
+    if update_checklist_item(tasks_file, task.id, item_index, new_checked):
         mark = "✅" if new_checked else "⬜"
         print(f"{mark} {item_text}")
     else:
@@ -549,12 +497,8 @@ def cmd_stats(args, tasks: list[Task]):
 
     for task in tasks:
         by_status[task.status] = by_status.get(task.status, 0) + 1
-        by_priority[task.priority] = (
-            by_priority.get(task.priority, 0) + 1
-        )
-        by_milestone[task.milestone] = (
-            by_milestone.get(task.milestone, 0) + 1
-        )
+        by_priority[task.priority] = by_priority.get(task.priority, 0) + 1
+        by_milestone[task.milestone] = by_milestone.get(task.milestone, 0) + 1
 
         # Parse estimate
         if task.estimate:
@@ -589,10 +533,7 @@ def cmd_stats(args, tasks: list[Task]):
 
     done_count = by_status.get("done", 0)
     progress = done_count * 100 // len(tasks) if tasks else 0
-    print(
-        f"\n📈 Overall progress: "
-        f"{done_count}/{len(tasks)} ({progress}%)"
-    )
+    print(f"\n📈 Overall progress: {done_count}/{len(tasks)} ({progress}%)")
     print(f"⏱️  Total estimate: ~{total_estimate}d")
 
 
@@ -601,9 +542,7 @@ def cmd_next(args, tasks: list[Task]):
     ready = get_next_tasks(tasks)
 
     if not ready:
-        in_progress = [
-            t for t in tasks if t.status == "in_progress"
-        ]
+        in_progress = [t for t in tasks if t.status == "in_progress"]
         if in_progress:
             print("🔄 Currently in progress:")
             for t in in_progress:
@@ -618,10 +557,7 @@ def cmd_next(args, tasks: list[Task]):
         icon = PRIORITY_EMOJI.get(task.priority, "?")
         deps_done = "✓ deps OK" if not task.depends_on else ""
         print(f"{i}. {icon} {task.id}: {task.name}")
-        print(
-            f"   Est: {task.estimate or '?'} | "
-            f"{task.milestone} {deps_done}"
-        )
+        print(f"   Est: {task.estimate or '?'} | {task.milestone} {deps_done}")
         if task.checklist:
             print(f"   Checklist: {len(task.checklist)} items")
         print()
@@ -634,9 +570,7 @@ def cmd_graph(args, tasks: list[Task]):
     # Find roots (no dependencies)
     roots = [t for t in tasks if not t.depends_on]
 
-    def print_tree(
-        task_id: str, indent: int = 0, visited: set | None = None
-    ):
+    def print_tree(task_id: str, indent: int = 0, visited: set | None = None):
         if visited is None:
             visited = set()
 
@@ -654,9 +588,7 @@ def cmd_graph(args, tasks: list[Task]):
         print(f"{prefix}{status_icon} {task.id}: {task.name[:30]}")
 
         # Find tasks that depend on this one
-        dependents = [
-            t for t in tasks if task_id in t.depends_on
-        ]
+        dependents = [t for t in tasks if task_id in t.depends_on]
         for dep in dependents:
             print_tree(dep.id, indent + 1, visited)
 
@@ -688,13 +620,10 @@ def cmd_export_gh(args, tasks: list[Task]):
                 body += f"- [{mark}] {item}\\n"
 
         if task.depends_on:
-            body += (
-                f"\\n**Depends on:** {', '.join(task.depends_on)}"
-            )
+            body += f"\\n**Depends on:** {', '.join(task.depends_on)}"
 
         print(
-            f'gh issue create --title "{task.id}: {task.name}" '
-            f'--body "{body}" --label "{labels}"'
+            f'gh issue create --title "{task.id}: {task.name}" --body "{body}" --label "{labels}"'
         )
 
     print("```")
@@ -717,38 +646,24 @@ def main():
         parents=[common],
     )
 
-    subparsers = parser.add_subparsers(
-        dest="command", help="Commands"
-    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # list
-    list_parser = subparsers.add_parser(
-        "list", aliases=["ls"], parents=[common], help="List tasks"
-    )
+    list_parser = subparsers.add_parser("list", aliases=["ls"], parents=[common], help="List tasks")
     list_parser.add_argument(
         "--status",
         "-s",
         choices=["todo", "in_progress", "done", "blocked"],
     )
-    list_parser.add_argument(
-        "--priority", "-p", choices=["p0", "p1", "p2", "p3"]
-    )
-    list_parser.add_argument(
-        "--milestone", "-m", help="Filter by milestone"
-    )
+    list_parser.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
+    list_parser.add_argument("--milestone", "-m", help="Filter by milestone")
 
     # show
-    show_parser = subparsers.add_parser(
-        "show", parents=[common], help="Task details"
-    )
-    show_parser.add_argument(
-        "task_id", help="Task ID (e.g., TASK-001)"
-    )
+    show_parser = subparsers.add_parser("show", parents=[common], help="Task details")
+    show_parser.add_argument("task_id", help="Task ID (e.g., TASK-001)")
 
     # start
-    start_parser = subparsers.add_parser(
-        "start", parents=[common], help="Start a task"
-    )
+    start_parser = subparsers.add_parser("start", parents=[common], help="Start a task")
     start_parser.add_argument("task_id", help="Task ID")
     start_parser.add_argument(
         "--force",
@@ -758,9 +673,7 @@ def main():
     )
 
     # done
-    done_parser = subparsers.add_parser(
-        "done", parents=[common], help="Complete a task"
-    )
+    done_parser = subparsers.add_parser("done", parents=[common], help="Complete a task")
     done_parser.add_argument("task_id", help="Task ID")
     done_parser.add_argument(
         "--force",
@@ -770,19 +683,13 @@ def main():
     )
 
     # block
-    block_parser = subparsers.add_parser(
-        "block", parents=[common], help="Block a task"
-    )
+    block_parser = subparsers.add_parser("block", parents=[common], help="Block a task")
     block_parser.add_argument("task_id", help="Task ID")
 
     # check
-    check_parser = subparsers.add_parser(
-        "check", parents=[common], help="Toggle checklist item"
-    )
+    check_parser = subparsers.add_parser("check", parents=[common], help="Toggle checklist item")
     check_parser.add_argument("task_id", help="Task ID")
-    check_parser.add_argument(
-        "item_index", help="Item index (0, 1, 2...)"
-    )
+    check_parser.add_argument("item_index", help="Item index (0, 1, 2...)")
 
     # stats
     subparsers.add_parser("stats", parents=[common], help="Statistics")
@@ -794,9 +701,7 @@ def main():
     subparsers.add_parser("graph", parents=[common], help="Dependency graph")
 
     # export-gh
-    subparsers.add_parser(
-        "export-gh", parents=[common], help="Export to GitHub Issues"
-    )
+    subparsers.add_parser("export-gh", parents=[common], help="Export to GitHub Issues")
 
     args = parser.parse_args()
 
@@ -804,11 +709,7 @@ def main():
         parser.print_help()
         return
 
-    tasks_file = (
-        Path(f"spec/{args.spec_prefix}tasks.md")
-        if args.spec_prefix
-        else TASKS_FILE
-    )
+    tasks_file = Path(f"spec/{args.spec_prefix}tasks.md") if args.spec_prefix else TASKS_FILE
     tasks = parse_tasks(tasks_file)
 
     # Commands that modify the tasks file need tasks_file passed
