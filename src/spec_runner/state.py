@@ -4,10 +4,12 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 """
 
 import contextlib
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 from .config import ExecutorConfig
 
@@ -81,7 +83,13 @@ class ExecutorState:
         self.consecutive_failures = 0
         self.total_completed = 0
         self.total_failed = 0
-        self._init_db()
+
+        # Migration: JSON -> SQLite
+        json_path = self.config.state_file.with_suffix(".json")
+        if not self.config.state_file.exists() and json_path.exists():
+            self._migrate_from_json(json_path)
+        else:
+            self._init_db()
         self._load()
 
     def _init_db(self) -> None:
@@ -116,6 +124,61 @@ class ExecutorState:
             )
         """)
         self._conn.commit()
+
+    def _migrate_from_json(self, json_path: Path) -> None:
+        """Migrate state from JSON file to SQLite."""
+        data = json.loads(json_path.read_text())
+
+        # Init DB first so tables exist
+        self._init_db()
+
+        with self._conn:
+            # Migrate tasks and attempts
+            for task_id, task_data in data.get("tasks", {}).items():
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO tasks "
+                    "(task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        task_id,
+                        task_data.get("status", "pending"),
+                        task_data.get("started_at"),
+                        task_data.get("completed_at"),
+                    ),
+                )
+                for attempt in task_data.get("attempts", []):
+                    self._conn.execute(
+                        "INSERT INTO attempts "
+                        "(task_id, timestamp, success, duration_seconds, "
+                        "error, error_code, claude_output) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            task_id,
+                            attempt["timestamp"],
+                            int(attempt["success"]),
+                            attempt["duration_seconds"],
+                            attempt.get("error"),
+                            attempt.get("error_code"),
+                            attempt.get("claude_output"),
+                        ),
+                    )
+
+            # Migrate meta counters
+            for key in (
+                "consecutive_failures",
+                "total_completed",
+                "total_failed",
+            ):
+                value = data.get(key, 0)
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO executor_meta (key, value) "
+                    "VALUES (?, ?)",
+                    (key, str(value)),
+                )
+
+        # Rename JSON to .bak
+        bak_path = json_path.with_suffix(".json.bak")
+        json_path.rename(bak_path)
 
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""

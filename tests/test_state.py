@@ -1,5 +1,6 @@
 """Tests for spec_runner.state module."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -350,3 +351,128 @@ class TestTaskAttemptErrorCode:
             error_code=ErrorCode.TEST_FAILURE,
         )
         assert a.error_code == ErrorCode.TEST_FAILURE
+
+
+# --- JSON to SQLite Migration ---
+
+
+class TestJsonToSqliteMigration:
+    def test_migrates_json_to_sqlite(self, tmp_path):
+        """If .json exists but no .db, migrate and rename .json to .json.bak."""
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+        json_data = {
+            "tasks": {
+                "TASK-001": {
+                    "status": "success",
+                    "attempts": [
+                        {
+                            "timestamp": "2026-01-01T00:00:00",
+                            "success": True,
+                            "duration_seconds": 5.0,
+                            "error": None,
+                        }
+                    ],
+                    "started_at": "2026-01-01T00:00:00",
+                    "completed_at": "2026-01-01T00:01:00",
+                }
+            },
+            "consecutive_failures": 1,
+            "total_completed": 1,
+            "total_failed": 0,
+        }
+        json_path.write_text(json.dumps(json_data))
+
+        config = _make_config(tmp_path, state_file=db_path)
+        state = ExecutorState(config)
+
+        assert db_path.exists()
+        assert not json_path.exists()
+        assert (tmp_path / "state.json.bak").exists()
+        assert "TASK-001" in state.tasks
+        assert state.tasks["TASK-001"].status == "success"
+        assert state.tasks["TASK-001"].attempt_count == 1
+        assert state.consecutive_failures == 1
+        assert state.total_completed == 1
+
+    def test_no_migration_if_db_exists(self, tmp_path):
+        """If .db already exists, don't touch .json even if present."""
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+
+        # Create DB first (no JSON present yet)
+        config = _make_config(tmp_path, state_file=db_path)
+        ExecutorState(config)
+        assert db_path.exists()
+
+        # Now place JSON alongside the existing DB
+        json_path.write_text(
+            '{"tasks":{}, "consecutive_failures":0, '
+            '"total_completed":0, "total_failed":0}'
+        )
+
+        # Re-open: DB exists, so JSON should NOT be touched
+        ExecutorState(config)
+        assert json_path.exists()
+
+    def test_fresh_db_if_nothing_exists(self, tmp_path):
+        """If neither .json nor .db exists, create fresh DB."""
+        db_path = tmp_path / "state.db"
+        config = _make_config(tmp_path, state_file=db_path)
+        state = ExecutorState(config)
+        assert db_path.exists()
+        assert state.tasks == {}
+
+    def test_migrates_multiple_tasks(self, tmp_path):
+        """Migration handles multiple tasks with multiple attempts."""
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+        json_data = {
+            "tasks": {
+                "TASK-001": {
+                    "status": "success",
+                    "attempts": [
+                        {
+                            "timestamp": "t1",
+                            "success": False,
+                            "duration_seconds": 1.0,
+                            "error": "e1",
+                        },
+                        {
+                            "timestamp": "t2",
+                            "success": True,
+                            "duration_seconds": 2.0,
+                            "error": None,
+                        },
+                    ],
+                    "started_at": "t0",
+                    "completed_at": "t2",
+                },
+                "TASK-002": {
+                    "status": "failed",
+                    "attempts": [
+                        {
+                            "timestamp": "t3",
+                            "success": False,
+                            "duration_seconds": 3.0,
+                            "error": "e2",
+                        },
+                    ],
+                    "started_at": "t3",
+                    "completed_at": None,
+                },
+            },
+            "consecutive_failures": 1,
+            "total_completed": 1,
+            "total_failed": 1,
+        }
+        json_path.write_text(json.dumps(json_data))
+
+        config = _make_config(tmp_path, state_file=db_path)
+        state = ExecutorState(config)
+
+        assert len(state.tasks) == 2
+        assert state.tasks["TASK-001"].attempt_count == 2
+        assert state.tasks["TASK-002"].attempt_count == 1
+        assert state.total_completed == 1
+        assert state.total_failed == 1
