@@ -1,6 +1,6 @@
 # spec-runner
 
-Task automation from markdown specs via Claude CLI. Execute tasks from a structured `tasks.md` file with automatic retries, code review, and Git integration.
+Task automation from markdown specs via Claude CLI. Execute tasks from a structured `tasks.md` file with automatic retries, code review, Git integration, parallel execution, and live TUI dashboard.
 
 ## Installation
 
@@ -17,6 +17,7 @@ Requirements:
 - Python 3.10+
 - Claude CLI (`claude` command available)
 - Git (for branch management)
+- `gh` CLI (optional, for GitHub Issues sync)
 
 ## Quick Start
 
@@ -33,32 +34,34 @@ spec-runner run --task=TASK-001
 # Execute all ready tasks
 spec-runner run --all
 
+# Execute in parallel with live TUI
+spec-runner run --all --parallel --tui
+
 # Create tasks interactively
 spec-runner plan "add user authentication"
-```
 
-## Usage as Library
-
-```python
-from spec_runner import Task, ExecutorConfig, parse_tasks, get_next_tasks
-from pathlib import Path
-
-tasks = parse_tasks(Path("spec/tasks.md"))
-ready = get_next_tasks(tasks)
-
-for task in ready:
-    print(f"{task.id}: {task.name} ({task.priority})")
+# Watch mode — continuously execute ready tasks
+spec-runner watch
 ```
 
 ## Features
 
 - **Task-based execution** — reads tasks from `spec/tasks.md` with priorities, checklists, and dependencies
 - **Specification traceability** — links tasks to requirements (REQ-XXX) and design (DESIGN-XXX)
-- **Automatic retries** — configurable retry policy with error context passed to next attempt
-- **Code review** — multi-agent review after task completion
+- **Automatic retries** — configurable retry policy with exponential backoff and error context forwarding
+- **Code review** — multi-agent review after task completion with enriched diff context
 - **Git integration** — automatic branch creation, commits, and merges
-- **Progress logging** — timestamped progress file for monitoring
-- **Interactive planning** — create tasks through dialogue with Claude
+- **Parallel execution** — run multiple independent tasks concurrently with semaphore-based limiting
+- **TUI dashboard** — live Textual-based terminal UI with progress bars and log panel
+- **Cost tracking** — per-task token usage and cost breakdown
+- **Watch mode** — continuously poll and execute ready tasks
+- **Plugin system** — extend with custom hooks via `spec/plugins/*/plugin.yaml`
+- **MCP server** — read-only Model Context Protocol server for Claude Code integration
+- **GitHub Issues sync** — bidirectional sync between tasks.md and GitHub Issues
+- **Interactive planning** — generate specs (requirements + design + tasks) through dialogue with Claude
+- **Structured logging** — JSON/console output via structlog
+- **SQLite state** — persistent execution state with WAL mode, auto-migration from legacy JSON
+- **HITL review** — optional human-in-the-loop approval gate after code review
 
 ## Task File Format
 
@@ -75,6 +78,7 @@ Tasks are defined in `spec/tasks.md`:
 - [ ] Add JWT token generation
 - [ ] Write unit tests
 
+**Traces to:** [REQ-001], [DESIGN-001]
 **Depends on:** —
 **Blocks:** [TASK-002], [TASK-003]
 ```
@@ -84,46 +88,113 @@ Tasks are defined in `spec/tasks.md`:
 ### spec-runner
 
 ```bash
-spec-runner run                     # Execute next ready task
-spec-runner run --task=TASK-001     # Execute specific task
-spec-runner run --all               # Execute all ready tasks
-spec-runner status                  # Show execution status
-spec-runner retry TASK-001          # Retry failed task
-spec-runner logs TASK-001           # View task logs
-spec-runner reset                   # Reset state
-spec-runner plan "feature"          # Interactive task creation
-```
+# Execution
+spec-runner run                            # Execute next ready task
+spec-runner run --task=TASK-001            # Execute specific task
+spec-runner run --all                      # Execute all ready tasks
+spec-runner run --all --parallel           # Execute ready tasks in parallel
+spec-runner run --all --parallel --max-concurrent=5  # With concurrency limit
+spec-runner run --all --hitl-review        # Interactive HITL approval gate
+spec-runner run --force                    # Skip lock check (stale lock)
+spec-runner run --tui                      # Execute with live TUI dashboard
+spec-runner run --log-level=DEBUG          # Set log verbosity
+spec-runner run --log-json                 # Output logs as JSON
 
-### spec-runner-init
+# Monitoring
+spec-runner status                         # Show execution status
+spec-runner costs                          # Cost breakdown per task
+spec-runner costs --json                   # JSON output for automation
+spec-runner costs --sort=cost              # Sort by cost descending
+spec-runner logs TASK-001                  # View task logs
 
-```bash
-spec-runner-init                    # Install skills to ./.claude/skills
-spec-runner-init --force            # Overwrite existing skills
-spec-runner-init /path/to/project   # Install to specific project
+# Operations
+spec-runner retry TASK-001                 # Retry failed task
+spec-runner reset                          # Reset state
+spec-runner watch                          # Continuously execute ready tasks
+spec-runner watch --tui                    # Watch with live TUI dashboard
+spec-runner tui                            # Launch TUI status dashboard
+spec-runner validate                       # Validate config and tasks
+
+# Planning
+spec-runner plan "description"             # Interactive task planning
+spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
+
+# Integration
+spec-runner mcp                            # Launch read-only MCP server (stdio)
 ```
 
 ### spec-task
 
 ```bash
-spec-task list                      # List all tasks
-spec-task list --status=todo        # Filter by status
-spec-task show TASK-001             # Task details
-spec-task start TASK-001            # Mark as in_progress
-spec-task done TASK-001             # Mark as done
-spec-task stats                     # Statistics
-spec-task next                      # Show next ready tasks
-spec-task graph                     # Dependency graph
+# Task management
+spec-task list                             # List all tasks
+spec-task list --status=todo               # Filter by status
+spec-task list --priority=p0               # Filter by priority
+spec-task list --milestone=mvp             # Filter by milestone
+spec-task show TASK-001                    # Task details
+spec-task start TASK-001                   # Mark as in_progress
+spec-task done TASK-001                    # Mark as done
+spec-task block TASK-001                   # Mark as blocked
+spec-task check TASK-001 2                 # Mark checklist item
+spec-task stats                            # Statistics
+spec-task next                             # Show next ready tasks
+spec-task graph                            # ASCII dependency graph
+
+# GitHub Issues
+spec-task export-gh                        # Export to GitHub Issues format
+spec-task sync-to-gh                       # Sync tasks -> GitHub Issues
+spec-task sync-to-gh --dry-run             # Preview without making changes
+spec-task sync-from-gh                     # Sync GitHub Issues -> tasks.md
 ```
 
-### Multi-phase / Multi-project Options
+### spec-runner-init
+
+```bash
+spec-runner-init                           # Install skills to ./.claude/skills
+spec-runner-init --force                   # Overwrite existing skills
+spec-runner-init /path/to/project          # Install to specific project
+```
+
+### Multi-phase Options
 
 Both `spec-runner` and `spec-task` support `--spec-prefix` for phase-based workflows:
 
 ```bash
 spec-runner run --spec-prefix=phase5-          # Uses spec/phase5-tasks.md
-spec-runner run --project-root=/path/to/proj   # Run against another project
 spec-task list --spec-prefix=phase5-           # List phase 5 tasks
 ```
+
+## Usage as Library
+
+```python
+from spec_runner import Task, ExecutorConfig, parse_tasks, get_next_tasks
+from pathlib import Path
+
+tasks = parse_tasks(Path("spec/tasks.md"))
+ready = get_next_tasks(tasks)
+
+for task in ready:
+    print(f"{task.id}: {task.name} ({task.priority})")
+```
+
+## MCP Server (Claude Code Integration)
+
+spec-runner includes a read-only MCP server for querying project status from Claude Code.
+
+Add to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "spec-runner": {
+      "command": "spec-runner",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Available tools: `spec_runner_status`, `spec_runner_tasks`, `spec_runner_costs`, `spec_runner_logs`.
 
 ## Configuration
 
@@ -136,17 +207,9 @@ executor:
   claude_command: "claude"
   claude_model: "sonnet"
   spec_prefix: ""              # e.g. "phase5-" for phase5-tasks.md
-
-  # Custom CLI template (optional). Placeholders: {cmd}, {model}, {prompt}
-  # command_template: "{cmd} -p {prompt} --model {model}"
-
-  # Review can use different CLI
-  review_command: "codex"
-  review_model: "gpt-4"
-  # review_command_template: "{cmd} -p {prompt}"
-
-  # Git settings
-  main_branch: ""  # Auto-detect (main/master) or set explicitly: "master"
+  max_concurrent: 3            # Parallel task limit
+  budget_usd: 50.0             # Total budget cap
+  task_budget_usd: 10.0        # Per-task budget cap
 
   hooks:
     pre_start:
@@ -162,81 +225,25 @@ executor:
     lint: "ruff check ."
 
   paths:
-    root: "."                        # Project root directory
+    root: "."
     logs: "spec/.executor-logs"
-    state: "spec/.executor-state.json"
 ```
 
 ### Git Branch Workflow
 
-The executor manages git branches automatically:
-
 1. **Branch detection**: Auto-detects `main` or `master`, or use `main_branch` config
-2. **Task branches**: Creates `task/task-001-name` branches for each task
+2. **Task branches**: Creates `task/TASK-001-short-name` branches for each task
 3. **Auto-merge**: Merges task branch to main after completion
-
-**Fresh repository (after `git init`):**
-- TASK-000 (scaffolding) runs on the initial branch without creating a separate task branch
-- First commit is made on `main`
-- Subsequent tasks create their own branches
-
-**Existing repository:**
-- Each task creates a new branch from `main`
-- After task completion, branch is merged back to `main`
-- Task branch is deleted after successful merge
-
-**Interrupted tasks:**
-- Tasks marked as `in_progress` are resumed first on next run
-- Use `--restart` flag to ignore in-progress tasks and start fresh
 
 ### Supported CLIs
 
 | CLI | Auto-detected | Example template |
 |-----|--------------|------------------|
-| Claude | ✅ | `{cmd} -p {prompt} --model {model}` |
-| Codex | ✅ | `{cmd} -p {prompt} --model {model}` |
-| Ollama | ✅ | `{cmd} run {model} {prompt}` |
-| llama-cli | ✅ | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
-| llama-server | ✅ | via curl to localhost:8080 |
+| Claude | Yes | `{cmd} -p {prompt} --model {model}` |
+| Codex | Yes | `{cmd} -p {prompt} --model {model}` |
+| Ollama | Yes | `{cmd} run {model} {prompt}` |
+| llama-cli | Yes | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
 | Custom | Use template | `{cmd} --prompt {prompt}` |
-
-### Custom Prompts
-
-You can customize prompts for different LLMs by creating files in `spec/prompts/`:
-
-```
-spec/prompts/
-├── review.md           # Default review prompt
-├── review.codex.md     # Codex-specific review prompt
-├── review.claude.md    # Claude-specific review prompt
-├── review.ollama.md    # Ollama-specific review prompt
-├── review.llama.md     # llama.cpp-specific review prompt
-└── task.md             # Task execution prompt
-```
-
-The executor automatically selects the prompt based on the CLI being used:
-- `review_command: "codex"` → uses `review.codex.md` if exists, otherwise `review.md`
-- `review_command: "ollama"` → uses `review.ollama.md` if exists, otherwise `review.md`
-
-#### Prompt Variables
-
-Use `${VARIABLE}` or `{{VARIABLE}}` syntax in templates:
-
-| Variable | Description |
-|----------|-------------|
-| `${TASK_ID}` | Task ID (e.g., TASK-001) |
-| `${TASK_NAME}` | Task name |
-| `${CHANGED_FILES}` | List of changed files |
-| `${GIT_DIFF}` | Git diff summary |
-
-#### Response Format
-
-All review prompts should instruct the LLM to end responses with one of:
-- `REVIEW_PASSED` — code is acceptable
-- `REVIEW_FIXED` — issues found and fixed
-- `REVIEW_FAILED` — issues remain
-
-**Tip for smaller models (Ollama, llama):** Use shorter, simpler prompts and emphasize the response format requirement.
 
 ## Project Structure
 
@@ -247,18 +254,29 @@ project/
 ├── src/
 │   └── spec_runner/
 │       ├── __init__.py
-│       ├── executor.py
-│       ├── task.py
-│       ├── init_cmd.py
+│       ├── executor.py          # Re-exports (backward compat)
+│       ├── cli.py               # CLI commands + argparse
+│       ├── execution.py         # Task execution + retry logic
+│       ├── parallel.py          # Async parallel execution
+│       ├── config.py            # ExecutorConfig + YAML loading
+│       ├── state.py             # SQLite state persistence
+│       ├── prompt.py            # Prompt building + templates
+│       ├── hooks.py             # Git ops, code review, plugins
+│       ├── runner.py            # Subprocess execution
+│       ├── task.py              # Task parsing + management
+│       ├── validate.py          # Config + task validation
+│       ├── plugins.py           # Plugin discovery + hooks
+│       ├── logging.py           # Structured logging (structlog)
+│       ├── tui.py               # Textual TUI dashboard
+│       ├── mcp_server.py        # MCP server (FastMCP, stdio)
+│       ├── init_cmd.py          # Skill installer
 │       └── skills/
 │           └── spec-generator-skill/
-│               ├── SKILL.md
-│               └── templates/
 └── spec/
     ├── tasks.md
     ├── requirements.md
     ├── design.md
-    └── prompts/
+    └── plugins/
 ```
 
 ## License
