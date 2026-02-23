@@ -14,6 +14,39 @@ from .task import Task
 
 PROMPTS_DIR = Path("spec/prompts")
 
+SPEC_STAGES: dict[str, dict[str, str]] = {
+    "requirements": {
+        "marker": "SPEC_REQUIREMENTS",
+        "instruction": (
+            "Generate a requirements document based on the project description below. "
+            "Use [REQ-001], [REQ-002], etc. for each requirement. "
+            "When done, output the requirements between markers:\n"
+            "SPEC_REQUIREMENTS_READY\n<your requirements>\nSPEC_REQUIREMENTS_END"
+        ),
+    },
+    "design": {
+        "marker": "SPEC_DESIGN",
+        "instruction": (
+            "Generate a design document based on the requirements below. "
+            "Use [DESIGN-001], [DESIGN-002], etc. and trace back to requirements "
+            "with [REQ-XXX]. "
+            "When done, output the design between markers:\n"
+            "SPEC_DESIGN_READY\n<your design>\nSPEC_DESIGN_END"
+        ),
+    },
+    "tasks": {
+        "marker": "SPEC_TASKS",
+        "instruction": (
+            "Generate a tasks document based on the requirements and design below. "
+            "Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, "
+            "checklists, "
+            "dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. "
+            "When done, output the tasks between markers:\n"
+            "SPEC_TASKS_READY\n<your tasks>\nSPEC_TASKS_END"
+        ),
+    },
+}
+
 
 def load_prompt_template(name: str, cli_name: str = "") -> str | None:
     """Load prompt template from spec/prompts/ directory.
@@ -168,6 +201,56 @@ def extract_test_failures(output: str) -> str:
             result_lines.append(line)
 
     return "\n".join(result_lines[-30:]) if result_lines else output[-500:]
+
+
+def build_generation_prompt(
+    stage: str,
+    description: str,
+    context: dict[str, str] | None = None,
+) -> str:
+    """Build prompt for spec generation stage.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+        description: Project description from user.
+        context: Previous stage outputs (e.g., {'requirements': '...'}).
+    """
+    ctx = context or {}
+    stage_info = SPEC_STAGES[stage]
+    parts: list[str] = [
+        stage_info["instruction"],
+        "",
+        f"Project description: {description}",
+    ]
+
+    if "requirements" in ctx:
+        parts.extend(["", "## Requirements (already generated)", ctx["requirements"]])
+    if "design" in ctx:
+        parts.extend(["", "## Design (already generated)", ctx["design"]])
+
+    return "\n".join(parts)
+
+
+def parse_spec_marker(output: str, marker_name: str) -> str | None:
+    """Extract content between SPEC_{NAME}_READY and SPEC_{NAME}_END markers.
+
+    Args:
+        output: Raw Claude CLI output.
+        marker_name: One of REQUIREMENTS, DESIGN, TASKS.
+
+    Returns:
+        Extracted content or None if markers not found.
+    """
+    start = f"SPEC_{marker_name}_READY"
+    end = f"SPEC_{marker_name}_END"
+    start_idx = output.find(start)
+    if start_idx == -1:
+        return None
+    start_idx += len(start)
+    end_idx = output.find(end, start_idx)
+    if end_idx == -1:
+        return output[start_idx:].strip()
+    return output[start_idx:end_idx].strip()
 
 
 def build_task_prompt(
