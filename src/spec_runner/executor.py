@@ -54,6 +54,7 @@ from .state import (
     RetryContext,
     check_stop_requested,
     clear_stop_file,
+    recover_stale_tasks,
 )
 from .task import (
     Task,
@@ -686,6 +687,13 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
     tasks = parse_tasks(config.tasks_file)
 
     with ExecutorState(config) as state:
+        # Recover tasks stuck in 'running' from previous crash
+        stale_timeout = config.task_timeout_minutes * 2
+        recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
+        if recovered:
+            logger.warning("Recovered stale tasks", task_ids=recovered)
+            tasks = parse_tasks(config.tasks_file)
+
         state_lock = asyncio.Lock()
         sem = asyncio.Semaphore(config.max_concurrent)
         executed_ids: set[str] = set()
@@ -822,6 +830,13 @@ def _run_tasks(args, config: ExecutorConfig):
     tasks = parse_tasks(config.tasks_file)
 
     with ExecutorState(config) as state:
+        # Recover tasks stuck in 'running' from previous crash
+        stale_timeout = config.task_timeout_minutes * 2
+        recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
+        if recovered:
+            logger.warning("Recovered stale tasks", task_ids=recovered)
+            tasks = parse_tasks(config.tasks_file)
+
         # Check failure limit
         if state.should_stop():
             logger.error(

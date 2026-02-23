@@ -1045,3 +1045,32 @@ class TestSignalHandling:
             ts = state.get_task_state("TASK-001")
             assert ts.attempts[-1].error_code == ErrorCode.INTERRUPTED
             assert "Interrupted" in ts.attempts[-1].error
+
+
+class TestCrashRecovery:
+    def test_run_tasks_calls_recover_stale(self, tmp_path, monkeypatch):
+        """_run_tasks calls recover_stale_tasks at startup."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        recover_calls = []
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda state, timeout_minutes, tasks_file: recover_calls.append(True) or [],
+        )
+
+        args = type(
+            "Args",
+            (),
+            {"task": None, "all": False, "milestone": None, "restart": False},
+        )()
+
+        from spec_runner.executor import _run_tasks
+
+        _run_tasks(args, config)
+
+        assert len(recover_calls) == 1
