@@ -11,7 +11,8 @@ import pytest
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task, run_with_retries
 from spec_runner.state import ExecutorState
-from spec_runner.task import parse_tasks
+from spec_runner.task import get_next_tasks, parse_tasks, resolve_dependencies, update_task_status
+from spec_runner.validate import validate_tasks
 
 FAKE_CLI = Path(__file__).parent / "fixtures" / "fake_claude.sh"
 
@@ -190,3 +191,68 @@ class TestE2ERetry:
         ts = state.get_task_state(task.id)
         assert len(ts.attempts) == 2
         assert all(not a.success for a in ts.attempts)
+
+
+# ---------------------------------------------------------------------------
+# Multi-task / dependency / validation E2E data
+# ---------------------------------------------------------------------------
+
+MULTI_TASKS_MD = """\
+# Tasks
+
+### TASK-001: Setup database
+\U0001f534 P0 | \u2b1c TODO | Est: 1h
+
+**Checklist:**
+- [ ] Create schema
+
+### TASK-002: Add API endpoints
+\U0001f7e0 P1 | \u2b1c TODO | Est: 2h
+
+**Depends on:** [TASK-001]
+
+**Checklist:**
+- [ ] Create REST endpoints
+"""
+
+INVALID_TASKS_MD = """\
+# Tasks
+
+### TASK-001: First task
+\U0001f534 P0 | \u2b1c TODO | Est: 1h
+
+**Depends on:** [TASK-999]
+
+**Checklist:**
+- [ ] Do something
+"""
+
+
+@pytest.mark.slow
+class TestE2EMultiTask:
+    """Multi-task and dependency scenarios."""
+
+    def test_dependency_ordering(self, tmp_path: Path):
+        """TASK-002 depends on TASK-001 — only TASK-001 is next."""
+        tasks_file = _write_tasks(tmp_path, MULTI_TASKS_MD)
+        tasks = parse_tasks(tasks_file)
+        resolve_dependencies(tasks)
+
+        next_tasks = get_next_tasks(tasks)
+        assert len(next_tasks) == 1
+        assert next_tasks[0].id == "TASK-001"
+
+        # After TASK-001 done, TASK-002 becomes available
+        update_task_status(tasks_file, "TASK-001", "done")
+        tasks = parse_tasks(tasks_file)
+        resolve_dependencies(tasks)
+        next_tasks = get_next_tasks(tasks)
+        assert len(next_tasks) == 1
+        assert next_tasks[0].id == "TASK-002"
+
+    def test_validation_catches_missing_dependency(self, tmp_path: Path):
+        """Invalid tasks.md with missing dependency ref triggers error."""
+        tasks_file = _write_tasks(tmp_path, INVALID_TASKS_MD)
+        result = validate_tasks(tasks_file)
+        assert not result.ok
+        assert any("TASK-999" in e for e in result.errors)
