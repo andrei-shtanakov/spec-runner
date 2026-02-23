@@ -26,7 +26,19 @@ from .executor import (
     main as executor_main,
 )
 from .logging import get_logger, setup_logging
-from .prompt import build_task_prompt
+from .plugins import (
+    PluginHook,
+    PluginInfo,
+    build_task_env,
+    discover_plugins,
+    run_plugin_hooks,
+)
+from .prompt import (
+    SPEC_STAGES,
+    build_generation_prompt,
+    build_task_prompt,
+    parse_spec_marker,
+)
 from .runner import parse_token_usage, run_claude_async
 from .state import (
     ErrorCode,
@@ -48,6 +60,13 @@ from .task import (
     resolve_dependencies,
     update_checklist_item,
     update_task_status,
+)
+from .validate import (
+    ValidationResult,
+    format_results,
+    validate_all,
+    validate_config,
+    validate_tasks,
 )
 
 try:
@@ -75,7 +94,10 @@ __all__ = [
     "TaskAttempt",
     "TaskState",
     "build_config",
+    "build_generation_prompt",
     "build_task_prompt",
+    "parse_spec_marker",
+    "SPEC_STAGES",
     "execute_task",
     "load_config_from_yaml",
     "parse_token_usage",
@@ -83,6 +105,18 @@ __all__ = [
     "recover_stale_tasks",
     "run_with_retries",
     "executor_main",
+    # Plugins
+    "PluginHook",
+    "PluginInfo",
+    "build_task_env",
+    "discover_plugins",
+    "run_plugin_hooks",
+    # Validation
+    "ValidationResult",
+    "format_results",
+    "validate_all",
+    "validate_config",
+    "validate_tasks",
     # Logging
     "get_logger",
     "setup_logging",

@@ -23,6 +23,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from .config import (
+    CONFIG_FILE,
     ExecutorConfig,
     ExecutorLock,
     build_config,
@@ -694,6 +695,18 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # Pre-run validation
+        from .validate import format_results, validate_all
+
+        pre_result = validate_all(
+            tasks_file=config.tasks_file,
+            config_file=config.project_root / CONFIG_FILE,
+        )
+        if not pre_result.ok:
+            logger.error("Validation failed before execution")
+            print(format_results(pre_result))
+            return
+
         state_lock = asyncio.Lock()
         sem = asyncio.Semaphore(config.max_concurrent)
         executed_ids: set[str] = set()
@@ -854,6 +867,18 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # Pre-run validation
+        from .validate import format_results, validate_all
+
+        pre_result = validate_all(
+            tasks_file=config.tasks_file,
+            config_file=config.project_root / CONFIG_FILE,
+        )
+        if not pre_result.ok:
+            logger.error("Validation failed before execution")
+            print(format_results(pre_result))
+            return
+
         # Check failure limit
         if state.should_stop():
             logger.error(
@@ -884,9 +909,7 @@ def _run_tasks(args, config: ExecutorConfig):
             # Tasks for specific milestone
             include_in_progress = not getattr(args, "restart", False)
             next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
-            tasks_to_run = [
-                t for t in next_tasks if args.milestone.lower() in t.milestone.lower()
-            ]
+            tasks_to_run = [t for t in next_tasks if args.milestone.lower() in t.milestone.lower()]
 
         else:
             # Next task (include in_progress unless --restart)
@@ -922,9 +945,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 # Filter by milestone if specified
                 if args.milestone:
                     ready_tasks = [
-                        t
-                        for t in ready_tasks
-                        if args.milestone.lower() in t.milestone.lower()
+                        t for t in ready_tasks if args.milestone.lower() in t.milestone.lower()
                     ]
 
                 # Filter out already executed tasks
@@ -1046,8 +1067,7 @@ def cmd_status(args, config: ExecutorConfig):
         if failed_attempts > 0:
             print(f"Failed attempts:       {failed_attempts} (retried)")
         print(
-            f"Consecutive failures:  "
-            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
+            f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}"
         )
 
         # Token/cost summary
@@ -1061,8 +1081,7 @@ def cmd_status(args, config: ExecutorConfig):
                 return str(n)
 
             print(
-                f"Tokens:                "
-                f"{_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
+                f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
             )
             print(f"Total cost:            ${total_cost_val:.2f}")
 
@@ -1071,11 +1090,7 @@ def cmd_status(args, config: ExecutorConfig):
         if attempted:
             print("\n📝 Task History:")
             for ts in attempted:
-                icon = (
-                    "✅" if ts.status == "success"
-                    else "❌" if ts.status == "failed"
-                    else "🔄"
-                )
+                icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
                 attempts_info = f"{ts.attempt_count} attempt"
                 if ts.attempt_count > 1:
                     attempts_info += "s"
@@ -1183,9 +1198,78 @@ def cmd_reset(args, config: ExecutorConfig):
 
 
 def cmd_plan(args, config: ExecutorConfig):
-    """Interactive task planning via Claude."""
+    """Interactive task planning via Claude.
+
+    With --full flag, runs a three-stage pipeline to generate
+    requirements, design, and tasks files from a description.
+    """
 
     description = args.description
+
+    if getattr(args, "full", False):
+        from .prompt import build_generation_prompt, parse_spec_marker
+
+        stages = ["requirements", "design", "tasks"]
+        stage_files = {
+            "requirements": config.requirements_file,
+            "design": config.design_file,
+            "tasks": config.tasks_file,
+        }
+        marker_names = {
+            "requirements": "REQUIREMENTS",
+            "design": "DESIGN",
+            "tasks": "TASKS",
+        }
+        context: dict[str, str] = {}
+
+        for stage in stages:
+            logger.info("Generating spec", stage=stage)
+            prompt = build_generation_prompt(stage, description, context)
+
+            cmd = build_cli_command(
+                cmd=config.claude_command,
+                prompt=prompt,
+                model=config.claude_model,
+                template=config.command_template,
+                skip_permissions=config.skip_permissions,
+            )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=config.task_timeout_minutes * 60,
+                cwd=config.project_root,
+            )
+
+            if result.returncode != 0:
+                logger.error(
+                    "Generation failed",
+                    stage=stage,
+                    stderr=result.stderr[:500],
+                )
+                print(f"Failed at stage: {stage}")
+                sys.exit(1)
+
+            content = parse_spec_marker(result.stdout, marker_names[stage])
+            if not content:
+                logger.error("No spec marker found in output", stage=stage)
+                print(f"Claude did not produce {stage} content.")
+                sys.exit(1)
+
+            output_file = stage_files[stage]
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(content + "\n")
+            logger.info("Spec written", stage=stage, file=str(output_file))
+            print(f"Written: {output_file}")
+
+            context[stage] = content
+
+        print("\nSpec generation complete!")
+        print(f"  Requirements: {config.requirements_file}")
+        print(f"  Design:       {config.design_file}")
+        print(f"  Tasks:        {config.tasks_file}")
+        return
+
     print(f"\n📝 Planning: {description}")
     print("=" * 60)
 
@@ -1389,6 +1473,20 @@ When done, respond with: PLAN_READY
             return
 
 
+def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Validate tasks file and config, print results."""
+    from .validate import format_results, validate_all
+
+    result = validate_all(
+        tasks_file=config.tasks_file,
+        config_file=config.project_root / "executor.config.yaml",
+    )
+    output = format_results(result)
+    print(output)
+    if not result.ok:
+        sys.exit(1)
+
+
 def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Launch read-only TUI dashboard."""
     from .logging import setup_logging
@@ -1518,6 +1616,14 @@ def main():
     # plan
     plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
     plan_parser.add_argument("description", help="Feature description")
+    plan_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Generate full spec (requirements + design + tasks)",
+    )
+
+    # validate
+    subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
 
     # tui
     subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
@@ -1553,6 +1659,7 @@ def main():
         "stop": cmd_stop,
         "reset": cmd_reset,
         "plan": cmd_plan,
+        "validate": cmd_validate,
         "tui": cmd_tui,
     }
 

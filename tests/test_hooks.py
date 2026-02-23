@@ -295,9 +295,7 @@ class TestBuildReviewPrompt:
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             with patch("spec_runner.hooks.load_prompt_template", return_value=None):
-                prompt = build_review_prompt(
-                    task, config, previous_error="TypeError: expected str"
-                )
+                prompt = build_review_prompt(task, config, previous_error="TypeError: expected str")
         assert "TypeError" in prompt
 
     def test_includes_lint_output(self):

@@ -9,6 +9,7 @@ from spec_runner.prompt import (
     extract_test_failures,
     format_error_summary,
     load_prompt_template,
+    parse_spec_marker,
     render_template,
 )
 from spec_runner.state import ErrorCode, RetryContext, TaskAttempt
@@ -308,3 +309,37 @@ class TestRetryContextRendering:
         prompt = build_task_prompt(task, config, retry_context=ctx)
         assert "TASK_FAILED" in prompt
         assert "Could not compile" in prompt
+
+
+# === parse_spec_marker ===
+
+
+class TestParseSpecMarker:
+    def test_extracts_content_between_markers(self):
+        output = "prefix SPEC_REQUIREMENTS_READY\nHello World\nSPEC_REQUIREMENTS_END suffix"
+        result = parse_spec_marker(output, "REQUIREMENTS")
+        assert result == "Hello World"
+
+    def test_returns_none_when_start_missing(self):
+        output = "no markers here"
+        result = parse_spec_marker(output, "REQUIREMENTS")
+        assert result is None
+
+    def test_returns_none_when_end_missing(self):
+        """When end marker is missing, return None instead of unbounded content."""
+        output = "SPEC_DESIGN_READY\nSome very long content that goes on and on"
+        result = parse_spec_marker(output, "DESIGN")
+        assert result is None
+
+    def test_strips_whitespace(self):
+        output = "SPEC_TASKS_READY\n  content with spaces  \nSPEC_TASKS_END"
+        result = parse_spec_marker(output, "TASKS")
+        assert result == "content with spaces"
+
+    def test_multiple_markers_takes_first(self):
+        output = (
+            "SPEC_REQUIREMENTS_READY\nFirst\nSPEC_REQUIREMENTS_END\n"
+            "SPEC_REQUIREMENTS_READY\nSecond\nSPEC_REQUIREMENTS_END"
+        )
+        result = parse_spec_marker(output, "REQUIREMENTS")
+        assert result == "First"

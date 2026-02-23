@@ -199,6 +199,18 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
         except FileNotFoundError:
             pass  # git not installed
 
+    # Run plugin pre_start hooks
+    from .plugins import build_task_env, discover_plugins, run_plugin_hooks
+
+    plugins = discover_plugins(config.plugins_dir)
+    if plugins:
+        task_env = build_task_env(task, config, success=None)
+        results = run_plugin_hooks("pre_start", plugins, task_env=task_env)
+        for name, ok, blocking in results:
+            if not ok and blocking:
+                logger.error("Blocking plugin failed in pre_start", plugin=name)
+                return False
+
     return True
 
 
@@ -761,5 +773,22 @@ def post_done_hook(
                 )
         except Exception as e:
             logger.error("Merge failed", error=str(e))
+
+    # Run plugin post_done hooks
+    from .plugins import build_task_env, discover_plugins, run_plugin_hooks
+
+    plugins = discover_plugins(config.plugins_dir)
+    if plugins:
+        task_env = build_task_env(task, config, success=success)
+        results = run_plugin_hooks("post_done", plugins, task_env=task_env)
+        for name, ok, blocking in results:
+            if not ok and blocking:
+                logger.error("Blocking plugin failed in post_done", plugin=name)
+                return (
+                    False,
+                    f"Blocking plugin '{name}' failed",
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
 
     return True, None, review_verdict.value, (review_output or "")[:2048]

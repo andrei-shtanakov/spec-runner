@@ -1030,9 +1030,7 @@ class TestSignalHandling:
         monkeypatch.setattr("spec_runner.executor.pre_start_hook", lambda t, c: True)
         monkeypatch.setattr("spec_runner.executor.update_task_status", lambda *a, **kw: None)
         monkeypatch.setattr("spec_runner.executor.send_callback", lambda *a, **kw: None)
-        monkeypatch.setattr(
-            "spec_runner.executor.build_cli_command", lambda **kw: ["echo", "test"]
-        )
+        monkeypatch.setattr("spec_runner.executor.build_cli_command", lambda **kw: ["echo", "test"])
 
         def raise_interrupt(*a, **kw):
             raise KeyboardInterrupt

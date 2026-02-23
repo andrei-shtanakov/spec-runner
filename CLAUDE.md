@@ -31,6 +31,8 @@ spec-runner plan "description"             # Interactive task planning
 spec-task list --status=todo               # List tasks by status
 spec-task next                             # Show next ready tasks
 spec-task graph                            # ASCII dependency graph
+spec-runner validate                       # Validate config and tasks
+spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
 spec-runner run --all --parallel           # Execute ready tasks in parallel
 spec-runner run --all --parallel --max-concurrent=5  # With concurrency limit
 spec-runner run --tui                      # Execute with live TUI dashboard
@@ -50,13 +52,15 @@ All code is in `src/spec_runner/`:
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `executor.py` | ~1530 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring |
-| `config.py` | ~280 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
+| `executor.py` | ~1665 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring |
+| `config.py` | ~320 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
 | `state.py` | ~560 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()` |
-| `prompt.py` | ~345 | Prompt building, templates, error formatting |
-| `hooks.py` | ~700 | Pre/post hooks, git ops, enriched code review (full diff, checklist, test/lint output), HITL approval gate |
+| `prompt.py` | ~420 | Prompt building, templates, error formatting, `build_generation_prompt()`, `parse_spec_marker()`, `SPEC_STAGES` |
+| `hooks.py` | ~790 | Pre/post hooks, git ops, enriched code review (full diff, checklist, test/lint output), HITL approval gate, plugin hook integration |
 | `runner.py` | ~240 | CLI command building, subprocess exec, progress logging; `parse_token_usage()`, `run_claude_async()` |
 | `task.py` | ~780 | Task parsing, dependency resolution, status management |
+| `validate.py` | ~310 | Config + task validation, CLI command, pre-run checks |
+| `plugins.py` | ~260 | Plugin discovery, hook execution, env var building |
 | `logging.py` | ~100 | Structured logging via structlog: `setup_logging()`, `get_logger()`, JSON/console output |
 | `tui.py` | ~390 | Textual-based TUI: live task dashboard, progress bars, log panel |
 | `init_cmd.py` | ~100 | Install bundled Claude Code skills |
@@ -82,6 +86,8 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - **`ReviewVerdict`** — `str` enum for code review outcomes: PASSED, FIXED, FAILED, SKIPPED, REJECTED. Stored in `attempts.review_status` column.
 - **`RetryContext`** — Structured retry info (attempt number, error code, previous error, test failures) passed to `build_task_prompt()` for focused retry prompts.
 - **`Task`** — Parsed task with id, priority (p0-p3), status (todo/in_progress/done/blocked), checklist, dependency graph, traceability to `[REQ-XXX]`/`[DESIGN-XXX]`.
+- **`ValidationResult`** — Validation outcome with errors and warnings lists, `ok` property.
+- **`PluginInfo`** / **`PluginHook`** — Plugin metadata and hook configuration from `spec/plugins/*/plugin.yaml`.
 
 ### Configuration Precedence
 
@@ -111,8 +117,9 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - **Config**: `executor.config.yaml` at repo root
 - **Runtime state**: `spec/.executor-state.db` (SQLite + WAL), `spec/.executor-logs/`, `spec/.task-history.log`
 - **Bundled skills**: `src/spec_runner/skills/spec-generator-skill/` (templates + review prompts for claude/codex/ollama/llama)
+- **Plugins**: `spec/plugins/` (each plugin is a directory with `plugin.yaml`)
 - **Tests**: `tests/` — group by CLI module, mark slow tests with `@pytest.mark.slow`, mock Claude CLI invocations
 
 ## Testing
 
-Tests use pytest (283 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (335 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`, `test_validate.py`, `test_plugins.py`, `test_plan_full.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.

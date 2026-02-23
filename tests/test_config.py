@@ -98,6 +98,18 @@ class TestLoadConfigFromYaml:
         assert result["test_command"] == "pytest -x"
         assert result["lint_command"] == "ruff check ."
 
+    def test_loads_plugins_dir_from_yaml(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("executor:\n  paths:\n    plugins: custom/plugins\n")
+        result = load_config_from_yaml(cfg)
+        assert result["plugins_dir"] == Path("custom/plugins")
+
+    def test_plugins_dir_none_when_not_set(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("executor:\n  max_retries: 3\n")
+        result = load_config_from_yaml(cfg)
+        assert result.get("plugins_dir") is None
+
 
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:
