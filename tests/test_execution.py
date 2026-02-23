@@ -64,14 +64,14 @@ def _make_state(config: ExecutorConfig) -> ExecutorState:
 class TestExecuteTask:
     """Tests for execute_task."""
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_success_returns_true(
         self,
         mock_run,
@@ -102,14 +102,14 @@ class TestExecuteTask:
         mock_status.assert_called()
         mock_checklist.assert_called_once()
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_implicit_success_returncode_zero(
         self,
         mock_run,
@@ -138,13 +138,13 @@ class TestExecuteTask:
         assert result is True
         mock_post.assert_called_once_with(task, config, True)
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_api_error_returns_api_error(
         self,
         mock_run,
@@ -172,13 +172,13 @@ class TestExecuteTask:
         # post_done_hook should NOT be called on API error
         mock_post.assert_not_called()
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_failure_returns_false(
         self,
         mock_run,
@@ -206,15 +206,15 @@ class TestExecuteTask:
         # post_done_hook should NOT be called on explicit failure
         mock_post.assert_not_called()
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook", return_value=(False, "tests failed", "skipped", "")
+        "spec_runner.execution.post_done_hook", return_value=(False, "tests failed", "skipped", "")
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_hook_failure_returns_false(
         self,
         mock_run,
@@ -241,8 +241,8 @@ class TestExecuteTask:
         assert result is False
         mock_post.assert_called_once()
 
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.pre_start_hook", return_value=False)
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.pre_start_hook", return_value=False)
     def test_pre_hook_failure_returns_hook_error(
         self,
         mock_pre,
@@ -259,12 +259,12 @@ class TestExecuteTask:
         assert result == "HOOK_ERROR"
         mock_pre.assert_called_once()
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_timeout_returns_false(
         self,
         mock_run,
@@ -292,8 +292,8 @@ class TestExecuteTask:
 class TestRunWithRetries:
     """Tests for run_with_retries."""
 
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_returns_true_on_first_success(
         self,
         mock_exec,
@@ -311,10 +311,10 @@ class TestRunWithRetries:
         assert result is True
         assert mock_exec.call_count == 1
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.time.sleep")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.time.sleep")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_api_error_retries_with_backoff(
         self,
         mock_exec,
@@ -352,8 +352,8 @@ class TestRunWithRetries:
         # Should have slept between retries with exponential backoff
         assert mock_sleep.call_count == 2
 
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_hook_error_stops_immediately(
         self,
         mock_exec,
@@ -371,8 +371,8 @@ class TestRunWithRetries:
         assert result is False
         assert mock_exec.call_count == 1
 
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_retries_on_failure_then_succeeds(
         self,
         mock_exec,
@@ -397,12 +397,12 @@ class TestRunWithRetries:
 class TestErrorClassification:
     """Tests for error_code classification in execute_task."""
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_timeout_gets_timeout_code(
         self, mock_run, mock_pre, mock_prompt, mock_cmd, mock_log, mock_status, tmp_path
     ):
@@ -414,13 +414,13 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.TIMEOUT
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_rate_limit_gets_rate_limit_code(
         self,
         mock_run,
@@ -444,13 +444,13 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.RATE_LIMIT
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_task_failed_gets_task_failed_code(
         self,
         mock_run,
@@ -474,17 +474,17 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.TASK_FAILED
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook",
+        "spec_runner.execution.post_done_hook",
         return_value=(False, "Tests failed:\nFAILED test_x", "skipped", ""),
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_test_failure_hook_gets_test_failure_code(
         self,
         mock_run,
@@ -509,17 +509,17 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.TEST_FAILURE
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook",
+        "spec_runner.execution.post_done_hook",
         return_value=(False, "Lint errors (not auto-fixable):\nerr", "skipped", ""),
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_lint_failure_hook_gets_lint_failure_code(
         self,
         mock_run,
@@ -544,8 +544,8 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.LINT_FAILURE
 
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.pre_start_hook", return_value=False)
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.pre_start_hook", return_value=False)
     def test_pre_hook_failure_gets_hook_failure_code(
         self,
         mock_pre,
@@ -566,14 +566,14 @@ class TestErrorClassification:
 class TestTokenTrackingInExecutor:
     """Tests for token/cost tracking in execute_task."""
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_tokens_parsed_from_stderr(
         self,
         mock_run,
@@ -604,13 +604,13 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].output_tokens == 1200
         assert ts.attempts[-1].cost_usd == 0.08
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_tokens_stored_on_failure(
         self,
         mock_run,
@@ -639,14 +639,14 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].output_tokens == 800
         assert ts.attempts[-1].cost_usd == 0.04
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_no_tokens_in_stderr_stores_none(
         self,
         mock_run,
@@ -676,13 +676,13 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].output_tokens is None
         assert ts.attempts[-1].cost_usd is None
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_tokens_stored_on_hook_failure(
         self,
         mock_run,
@@ -712,12 +712,12 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].output_tokens == 900
         assert ts.attempts[-1].cost_usd == 0.06
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_timeout_has_no_tokens(
         self,
         mock_run,
@@ -747,17 +747,17 @@ class TestTokenTrackingInExecutor:
 class TestReviewDataTracking:
     """Tests for review_status and review_findings being passed to record_attempt."""
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook",
+        "spec_runner.execution.post_done_hook",
         return_value=(True, None, "passed", "All checks passed, code looks good"),
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_review_data_stored_on_success(
         self,
         mock_run,
@@ -787,17 +787,17 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "passed"
         assert ts.attempts[-1].review_findings == "All checks passed, code looks good"
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook",
+        "spec_runner.execution.post_done_hook",
         return_value=(False, "Tests failed:\nFAILED test_x", "failed", "Review found issues"),
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_review_data_stored_on_hook_failure(
         self,
         mock_run,
@@ -827,14 +827,14 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "failed"
         assert ts.attempts[-1].review_findings == "Review found issues"
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_empty_review_findings_stored_as_none(
         self,
         mock_run,
@@ -863,17 +863,17 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "skipped"
         assert ts.attempts[-1].review_findings is None
 
-    @patch("spec_runner.executor.mark_all_checklist_done")
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
-    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.executor.post_done_hook",
+        "spec_runner.execution.post_done_hook",
         return_value=(True, None, "passed", "x" * 5000),
     )
-    @patch("spec_runner.executor.pre_start_hook", return_value=True)
-    @patch("spec_runner.executor.subprocess.run")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
     def test_review_findings_truncated_to_2048(
         self,
         mock_run,
@@ -935,9 +935,9 @@ class TestParallelExecution:
 class TestBudgetEnforcement:
     """Tests for budget enforcement in run_with_retries."""
 
-    @patch("spec_runner.executor.update_task_status")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_task_budget_exceeded_stops_retries(
         self,
         mock_exec,
@@ -1054,10 +1054,12 @@ class TestSignalHandling:
 
         task = _make_task()
 
-        monkeypatch.setattr("spec_runner.executor.pre_start_hook", lambda t, c: True)
-        monkeypatch.setattr("spec_runner.executor.update_task_status", lambda *a, **kw: None)
-        monkeypatch.setattr("spec_runner.executor.send_callback", lambda *a, **kw: None)
-        monkeypatch.setattr("spec_runner.executor.build_cli_command", lambda **kw: ["echo", "test"])
+        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.execution.update_task_status", lambda *a, **kw: None)
+        monkeypatch.setattr("spec_runner.execution.send_callback", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "spec_runner.execution.build_cli_command", lambda **kw: ["echo", "test"]
+        )
 
         def raise_interrupt(*a, **kw):
             raise KeyboardInterrupt
@@ -1255,9 +1257,9 @@ class TestComputeRetryDelay:
 class TestSmartRetry:
     """Tests for error-aware retry in run_with_retries."""
 
-    @patch("spec_runner.executor.time.sleep")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.time.sleep")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_rate_limit_retries_with_backoff(self, mock_execute, mock_log, mock_sleep, tmp_path):
         """RATE_LIMIT should retry (not exit immediately) with exponential backoff."""
         config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
@@ -1287,9 +1289,9 @@ class TestSmartRetry:
         assert call_count == 3
         assert mock_sleep.call_count == 2
 
-    @patch("spec_runner.executor.time.sleep")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.time.sleep")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_transient_error_uses_linear_backoff(
         self, mock_execute, mock_log, mock_sleep, tmp_path
     ):
@@ -1322,9 +1324,9 @@ class TestSmartRetry:
         # Linear backoff: base_delay * (attempt + 1) = 5 * 1 = 5.0
         mock_sleep.assert_called_with(5.0)
 
-    @patch("spec_runner.executor.time.sleep")
-    @patch("spec_runner.executor.log_progress")
-    @patch("spec_runner.executor.execute_task")
+    @patch("spec_runner.execution.time.sleep")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
     def test_fatal_error_stops_immediately(self, mock_execute, mock_log, mock_sleep, tmp_path):
         """REVIEW_REJECTED (fatal) stops without retry."""
         config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
