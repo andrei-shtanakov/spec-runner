@@ -431,11 +431,18 @@ def run_code_review(
         elif "REVIEW_FIXED" in output_upper:
             log_progress("✅ Code review: issues fixed", task.id)
             # Commit the fixes
-            subprocess.run(["git", "add", "-A"], cwd=config.project_root)
-            subprocess.run(
+            subprocess.run(["git", "add", "-A"], capture_output=True, cwd=config.project_root)
+            commit_result = subprocess.run(
                 ["git", "commit", "-m", f"{task.id}: code review fixes"],
+                capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
+            if commit_result.returncode != 0:
+                logger.warning(
+                    "Review fix commit failed",
+                    stderr=commit_result.stderr.strip()[:200],
+                )
             return ReviewVerdict.FIXED, None, output
         elif "REVIEW_FAILED" in output_upper:
             log_progress("❌ Code review found unresolved issues", task.id)
@@ -591,6 +598,8 @@ def post_done_hook(
     # Run code review (before commit, so fixes can be included)
     review_verdict = ReviewVerdict.SKIPPED
     review_output: str | None = None
+    if config.hitl_review and not config.run_review:
+        logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
         logger.info("Running code review")
         review_verdict, review_error, review_output = run_code_review(
@@ -602,6 +611,8 @@ def post_done_hook(
         )
         if review_verdict == ReviewVerdict.FAILED:
             logger.warning("Review found issues", error=review_error)
+            # Non-HITL mode: review failures are advisory only (warn but don't block).
+            # HITL mode handles this below via the interactive prompt.
 
     # HITL approval gate
     if config.hitl_review and review_output:

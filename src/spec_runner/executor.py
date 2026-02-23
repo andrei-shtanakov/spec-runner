@@ -259,6 +259,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                         error_code = ErrorCode.TEST_FAILURE
                     elif "Lint errors" in hook_error:
                         error_code = ErrorCode.LINT_FAILURE
+                    elif "Review rejected" in hook_error or "Fix requested" in hook_error:
+                        error_code = ErrorCode.REVIEW_REJECTED
                     else:
                         error_code = ErrorCode.HOOK_FAILURE
                 # Combine Claude output with test failures for context
@@ -383,6 +385,14 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         if result is True:
             return True
+
+        # Review rejection is permanent — no automatic retry
+        ts = state.get_task_state(task.id)
+        if ts and ts.attempts:
+            last = ts.attempts[-1]
+            if last.error_code == ErrorCode.REVIEW_REJECTED:
+                log_progress("Review rejected — no automatic retry", task.id)
+                return False
 
         if attempt < config.max_retries - 1:
             logger.info(
@@ -584,6 +594,8 @@ async def _execute_task_async(
                         error_code = ErrorCode.TEST_FAILURE
                     elif "Lint errors" in hook_error:
                         error_code = ErrorCode.LINT_FAILURE
+                    elif "Review rejected" in hook_error or "Fix requested" in hook_error:
+                        error_code = ErrorCode.REVIEW_REJECTED
                     else:
                         error_code = ErrorCode.HOOK_FAILURE
                 full_output = output
@@ -723,10 +735,10 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
     # HITL review incompatible with parallel/TUI modes
-    if getattr(args, "hitl_review", False) and getattr(args, "parallel", False):
+    if config.hitl_review and getattr(args, "parallel", False):
         logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
         config.hitl_review = False
-    if getattr(args, "hitl_review", False) and getattr(args, "tui", False):
+    if config.hitl_review and getattr(args, "tui", False):
         logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
         config.hitl_review = False
 
