@@ -256,12 +256,12 @@ class TestRunClaudeAsync:
         async def _run():
             with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
                 mock_proc = AsyncMock()
-                mock_proc.communicate.side_effect = asyncio.TimeoutError()
+                mock_proc.communicate.side_effect = TimeoutError()
                 mock_proc.kill = MagicMock()
                 mock_proc.wait = AsyncMock()
                 mock_cse.return_value = mock_proc
 
-                with pytest.raises(asyncio.TimeoutError):
+                with pytest.raises(TimeoutError):
                     await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
                 mock_proc.kill.assert_called_once()
 
