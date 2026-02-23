@@ -1267,6 +1267,18 @@ def main():
         default="",
         help="Project root directory (default: current directory)",
     )
+    common.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        choices=["debug", "info", "warning", "error"],
+        help="Log level (default: info)",
+    )
+    common.add_argument(
+        "--log-json",
+        action="store_true",
+        help="Output logs as JSON lines",
+    )
 
     parser = argparse.ArgumentParser(
         description="spec-runner — task automation from markdown specs via Claude CLI",
@@ -1334,6 +1346,10 @@ def main():
     # Load config from YAML file, then override with CLI args
     yaml_config = load_config_from_yaml()
     config = build_config(yaml_config, args)
+
+    from .logging import setup_logging
+
+    setup_logging(level=config.log_level, json_output=getattr(args, "log_json", False))
 
     # Dispatch
     commands = {
