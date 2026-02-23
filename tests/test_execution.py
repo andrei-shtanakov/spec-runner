@@ -982,3 +982,66 @@ class TestStateCleanup:
             pass
 
         assert state._conn is None
+
+
+class TestSignalHandling:
+    def test_shutdown_flag_initially_false(self):
+        import spec_runner.executor as mod
+
+        mod._shutdown_requested = False
+        assert mod._shutdown_requested is False
+
+    def test_signal_handler_sets_flag(self):
+        import spec_runner.executor as mod
+        from spec_runner.executor import _signal_handler
+
+        mod._shutdown_requested = False
+        _signal_handler(2, None)  # SIGINT = 2
+        assert mod._shutdown_requested is True
+        mod._shutdown_requested = False  # cleanup
+
+    def test_check_stop_includes_shutdown_flag(self, tmp_path):
+        import spec_runner.executor as mod
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.state import check_stop_requested
+
+        config = ExecutorConfig(project_root=tmp_path)
+        (tmp_path / "spec").mkdir()
+
+        mod._shutdown_requested = False
+        assert check_stop_requested(config) is False
+
+        mod._shutdown_requested = True
+        assert check_stop_requested(config) is True
+        mod._shutdown_requested = False  # cleanup
+
+    def test_execute_task_catches_keyboard_interrupt(self, tmp_path, monkeypatch):
+        """KeyboardInterrupt during subprocess.run is caught and recorded."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        task = _make_task()
+
+        monkeypatch.setattr("spec_runner.executor.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.executor.update_task_status", lambda *a, **kw: None)
+        monkeypatch.setattr("spec_runner.executor.send_callback", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "spec_runner.executor.build_cli_command", lambda **kw: ["echo", "test"]
+        )
+
+        def raise_interrupt(*a, **kw):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess, "run", raise_interrupt)
+
+        with ExecutorState(config) as state:
+            result = execute_task(task, config, state)
+            assert result is False
+            ts = state.get_task_state("TASK-001")
+            assert ts.attempts[-1].error_code == ErrorCode.INTERRUPTED
+            assert "Interrupted" in ts.attempts[-1].error

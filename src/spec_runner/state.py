@@ -497,8 +497,10 @@ class ExecutorState:
 
 
 def check_stop_requested(config: ExecutorConfig) -> bool:
-    """Check if graceful shutdown was requested via stop file."""
-    return config.stop_file.exists()
+    """Check if graceful shutdown was requested via stop file or signal."""
+    from .executor import _shutdown_requested
+
+    return config.stop_file.exists() or _shutdown_requested
 
 
 def clear_stop_file(config: ExecutorConfig) -> None:

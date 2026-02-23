@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -64,6 +65,15 @@ from .task import (
 )
 
 logger = get_logger("executor")
+
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    """Handle SIGINT/SIGTERM by setting shutdown flag."""
+    global _shutdown_requested
+    _shutdown_requested = True
+
 
 # === Task Executor ===
 
@@ -332,6 +342,18 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         )
         log_progress(f"⏰ Timeout after {config.task_timeout_minutes}m", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
+        return False
+
+    except KeyboardInterrupt:
+        duration = (datetime.now() - start_time).total_seconds()
+        state.record_attempt(
+            task_id,
+            False,
+            duration,
+            error="Interrupted by signal",
+            error_code=ErrorCode.INTERRUPTED,
+        )
+        log_progress("Interrupted by signal", task_id)
         return False
 
     except Exception as e:
@@ -1480,6 +1502,10 @@ def main():
     import structlog
 
     structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
 
     # Dispatch
     commands = {
