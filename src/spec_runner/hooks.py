@@ -457,6 +457,34 @@ def run_code_review(
         return ReviewVerdict.FAILED, str(e), None
 
 
+def format_review_findings(task_id: str, task_name: str, review_output: str) -> str:
+    """Format review findings for HITL display."""
+    separator = "=" * 50
+    return (
+        f"\n{separator}\nReview: {task_id} — {task_name}\n{separator}\n\n{review_output[:3000]}\n"
+    )
+
+
+def prompt_hitl_verdict() -> str:
+    """Prompt user for HITL review verdict.
+
+    Returns:
+        One of: 'approve', 'reject', 'fix', 'skip'.
+    """
+    print("\n  [a]pprove  [r]eject  [f]ix-and-retry  [s]kip")
+    while True:
+        choice = input("> ").strip().lower()
+        if choice in ("a", "approve"):
+            return "approve"
+        elif choice in ("r", "reject"):
+            return "reject"
+        elif choice in ("f", "fix"):
+            return "fix"
+        elif choice in ("s", "skip"):
+            return "skip"
+        print("  Invalid choice. Use: a, r, f, or s")
+
+
 def post_done_hook(
     task: Task, config: ExecutorConfig, success: bool
 ) -> tuple[bool, str | None, str, str]:
@@ -574,6 +602,31 @@ def post_done_hook(
         )
         if review_verdict == ReviewVerdict.FAILED:
             logger.warning("Review found issues", error=review_error)
+
+    # HITL approval gate
+    if config.hitl_review and review_output:
+        print(format_review_findings(task.id, task.name, review_output))
+        choice = prompt_hitl_verdict()
+        if choice == "reject":
+            logger.info("HITL rejected task", task_id=task.id)
+            return (
+                False,
+                "Review rejected by human",
+                ReviewVerdict.REJECTED.value,
+                (review_output or "")[:2048],
+            )
+        elif choice == "fix":
+            logger.info("HITL requested fix-and-retry", task_id=task.id)
+            return (
+                False,
+                f"Fix requested. Review findings:\n{(review_output or '')[:1024]}",
+                ReviewVerdict.REJECTED.value,
+                (review_output or "")[:2048],
+            )
+        elif choice == "skip":
+            review_verdict = ReviewVerdict.SKIPPED
+            logger.info("HITL skipped review", task_id=task.id)
+        # "approve" falls through to normal commit flow
 
     # Auto-commit
     if config.auto_commit:

@@ -722,6 +722,14 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
 
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
+    # HITL review incompatible with parallel/TUI modes
+    if getattr(args, "hitl_review", False) and getattr(args, "parallel", False):
+        logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
+        config.hitl_review = False
+    if getattr(args, "hitl_review", False) and getattr(args, "tui", False):
+        logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
+        config.hitl_review = False
+
     if getattr(args, "tui", False):
         import threading
 

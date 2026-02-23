@@ -6,10 +6,12 @@ from unittest.mock import MagicMock, call, patch
 from spec_runner.config import ExecutorConfig
 from spec_runner.hooks import (
     build_review_prompt,
+    format_review_findings,
     get_main_branch,
     get_task_branch_name,
     post_done_hook,
     pre_start_hook,
+    prompt_hitl_verdict,
     run_code_review,
 )
 from spec_runner.state import ReviewVerdict
@@ -503,3 +505,99 @@ class TestPostDoneHookReviewWiring:
             success, error, review_status, review_findings = post_done_hook(task, config, True)
         assert success is True
         assert review_status == "passed"
+
+
+class TestHitlReviewGate:
+    """Tests for HITL approval gate functions."""
+
+    def test_format_review_findings(self):
+        output = format_review_findings(
+            "TASK-001", "Add API", "MAJOR: No error handling\nMINOR: Unused import"
+        )
+        assert "TASK-001" in output
+        assert "Add API" in output
+        assert "MAJOR" in output
+
+    def test_prompt_hitl_approve(self):
+        with patch("builtins.input", return_value="a"):
+            result = prompt_hitl_verdict()
+        assert result == "approve"
+
+    def test_prompt_hitl_reject(self):
+        with patch("builtins.input", return_value="r"):
+            result = prompt_hitl_verdict()
+        assert result == "reject"
+
+    def test_prompt_hitl_fix(self):
+        with patch("builtins.input", return_value="f"):
+            result = prompt_hitl_verdict()
+        assert result == "fix"
+
+    def test_prompt_hitl_skip(self):
+        with patch("builtins.input", return_value="s"):
+            result = prompt_hitl_verdict()
+        assert result == "skip"
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_hitl_reject_returns_rejected(self, mock_run, tmp_path):
+        """HITL reject returns failure with REJECTED verdict."""
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+            hitl_review=True,
+            auto_commit=False,
+            create_git_branch=False,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        mock_run.return_value = MagicMock(
+            stdout="REVIEW_PASSED some findings",
+            stderr="",
+            returncode=0,
+        )
+        with (
+            patch("spec_runner.hooks.build_review_prompt", return_value="prompt"),
+            patch("spec_runner.state.ExecutorState") as mock_state_cls,
+            patch("spec_runner.hooks.prompt_hitl_verdict", return_value="reject"),
+        ):
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, status, findings = post_done_hook(task, config, True)
+        assert success is False
+        assert status == "rejected"
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_hitl_approve_proceeds(self, mock_run, tmp_path):
+        """HITL approve proceeds to commit flow."""
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+            hitl_review=True,
+            auto_commit=False,
+            create_git_branch=False,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        mock_run.return_value = MagicMock(
+            stdout="REVIEW_PASSED all good",
+            stderr="",
+            returncode=0,
+        )
+        with (
+            patch("spec_runner.hooks.build_review_prompt", return_value="prompt"),
+            patch("spec_runner.state.ExecutorState") as mock_state_cls,
+            patch("spec_runner.hooks.prompt_hitl_verdict", return_value="approve"),
+        ):
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, status, findings = post_done_hook(task, config, True)
+        assert success is True
+        assert status == "passed"
