@@ -296,6 +296,7 @@ class TestErrorCode:
         assert ErrorCode.TASK_FAILED == "TASK_FAILED"
         assert ErrorCode.HOOK_FAILURE == "HOOK_FAILURE"
         assert ErrorCode.UNKNOWN == "UNKNOWN"
+        assert ErrorCode.BUDGET_EXCEEDED == "BUDGET_EXCEEDED"
 
     def test_is_string_enum(self):
         assert isinstance(ErrorCode.TIMEOUT, str)
@@ -563,3 +564,165 @@ class TestExecutorStateClose:
         # Second close should not raise
         state.close()
         assert state._conn is None
+
+
+# --- Budget should_stop ---
+
+
+class TestBudgetShouldStop:
+    def test_should_stop_on_budget_exceeded(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            budget_usd=0.15,
+        )
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=0.10)
+        state.record_attempt("T2", True, 5.0, cost_usd=0.06)
+        assert state.should_stop() is True
+        state.close()
+
+    def test_should_not_stop_under_budget(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            budget_usd=1.00,
+        )
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=0.10)
+        assert state.should_stop() is False
+        state.close()
+
+    def test_should_not_stop_no_budget(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=100.0)
+        assert state.should_stop() is False
+        state.close()
+
+
+# --- Token/Cost Tracking ---
+
+
+class TestTokenTracking:
+    """Tests for token/cost fields in TaskAttempt and ExecutorState."""
+
+    def test_task_attempt_has_token_fields(self):
+        a = TaskAttempt(
+            timestamp="2025-01-01T00:00:00",
+            success=True,
+            duration_seconds=10.0,
+            input_tokens=1000,
+            output_tokens=500,
+            cost_usd=0.05,
+        )
+        assert a.input_tokens == 1000
+        assert a.output_tokens == 500
+        assert a.cost_usd == 0.05
+
+    def test_task_attempt_token_fields_default_none(self):
+        a = TaskAttempt(
+            timestamp="2025-01-01T00:00:00",
+            success=True,
+            duration_seconds=10.0,
+        )
+        assert a.input_tokens is None
+        assert a.output_tokens is None
+        assert a.cost_usd is None
+
+    def test_record_attempt_stores_tokens(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt(
+            "TASK-001",
+            True,
+            10.0,
+            input_tokens=5000,
+            output_tokens=1200,
+            cost_usd=0.08,
+        )
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 5000
+        assert ts.attempts[-1].output_tokens == 1200
+        assert ts.attempts[-1].cost_usd == 0.08
+        state.close()
+
+    def test_record_attempt_tokens_persist_to_sqlite(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt(
+            "TASK-001",
+            True,
+            10.0,
+            input_tokens=5000,
+            output_tokens=1200,
+            cost_usd=0.08,
+        )
+        state.close()
+        # Re-open and verify persistence
+        state2 = ExecutorState(config)
+        ts = state2.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 5000
+        assert ts.attempts[-1].output_tokens == 1200
+        assert ts.attempts[-1].cost_usd == 0.08
+        state2.close()
+
+    def test_total_cost(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("TASK-001", True, 10.0, cost_usd=0.10)
+        state.record_attempt("TASK-002", False, 5.0, error="err", cost_usd=0.05)
+        state.record_attempt("TASK-002", True, 8.0, cost_usd=0.07)
+        assert abs(state.total_cost() - 0.22) < 0.001
+        state.close()
+
+    def test_task_cost(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("TASK-001", False, 5.0, error="err", cost_usd=0.10)
+        state.record_attempt("TASK-001", True, 10.0, cost_usd=0.15)
+        assert abs(state.task_cost("TASK-001") - 0.25) < 0.001
+        assert state.task_cost("TASK-999") == 0.0
+        state.close()
+
+    def test_total_tokens(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 1.0, input_tokens=100, output_tokens=50)
+        state.record_attempt("T2", True, 1.0, input_tokens=200, output_tokens=80)
+        inp, out = state.total_tokens()
+        assert inp == 300
+        assert out == 130
+        state.close()
+
+    def test_schema_migration_adds_token_columns(self, tmp_path):
+        """DB created before token tracking gets columns added."""
+        db_path = tmp_path / "state.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT, completed_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                duration_seconds REAL NOT NULL,
+                error TEXT, error_code TEXT, claude_output TEXT
+            )
+        """)
+        conn.execute("CREATE TABLE executor_meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+        conn.close()
+
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("TASK-001", True, 10.0, input_tokens=100, cost_usd=0.01)
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 100
+        assert ts.attempts[-1].cost_usd == 0.01
+        state.close()

@@ -1,8 +1,18 @@
 """Tests for spec_runner.runner module."""
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from spec_runner.runner import build_cli_command, check_error_patterns, log_progress
+import pytest
+
+from spec_runner.runner import (
+    build_cli_command,
+    check_error_patterns,
+    log_progress,
+    parse_token_usage,
+    run_claude_async,
+)
 
 
 class TestBuildCliCommand:
@@ -176,3 +186,83 @@ class TestLogProgress:
         import re
 
         assert re.search(r"\[\d{2}:\d{2}:\d{2}\]", content)
+
+
+class TestParseTokenUsage:
+    """Tests for parse_token_usage."""
+
+    def test_parses_standard_format(self):
+        stderr = "input_tokens: 12500\noutput_tokens: 3200\ntotal cost: $0.12"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 12500
+        assert out == 3200
+        assert cost == 0.12
+
+    def test_parses_with_commas(self):
+        stderr = "input_tokens: 1,250\noutput_tokens: 320\ncost: $1.50"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 1250
+        assert out == 320
+        assert cost == 1.50
+
+    def test_parses_underscore_variant(self):
+        stderr = "input tokens: 500\noutput tokens: 100\ntotal_cost: $0.01"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 500
+        assert out == 100
+        assert cost == 0.01
+
+    def test_returns_none_on_empty(self):
+        inp, out, cost = parse_token_usage("")
+        assert inp is None
+        assert out is None
+        assert cost is None
+
+    def test_returns_none_on_garbage(self):
+        inp, out, cost = parse_token_usage("some random text\nwith no tokens")
+        assert inp is None
+        assert out is None
+        assert cost is None
+
+    def test_partial_match_returns_available(self):
+        stderr = "input_tokens: 500\nno output info"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 500
+        assert out is None
+        assert cost is None
+
+
+class TestRunClaudeAsync:
+    """Tests for async subprocess wrapper."""
+
+    def test_returns_stdout_stderr_returncode(self):
+        async def _run():
+            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
+                mock_proc = AsyncMock()
+                mock_proc.communicate.return_value = (b"output text", b"stderr text")
+                mock_proc.returncode = 0
+                mock_cse.return_value = mock_proc
+
+                stdout, stderr, rc = await run_claude_async(
+                    ["echo", "hi"], timeout=60, cwd="/tmp"
+                )
+                assert stdout == "output text"
+                assert stderr == "stderr text"
+                assert rc == 0
+
+        asyncio.run(_run())
+
+    def test_timeout_kills_process(self):
+        async def _run():
+            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
+                mock_proc = AsyncMock()
+                mock_proc.communicate.side_effect = TimeoutError()
+                mock_proc.kill = MagicMock()
+                mock_proc.wait = AsyncMock()
+                mock_cse.return_value = mock_proc
+
+                with pytest.raises(TimeoutError):
+                    await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
+                mock_proc.kill.assert_called_once()
+
+        asyncio.run(_run())

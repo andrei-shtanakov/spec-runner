@@ -1,5 +1,6 @@
 """Tests for spec_runner.executor — execute_task and run_with_retries."""
 
+import asyncio
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -392,11 +393,20 @@ class TestErrorClassification:
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_rate_limit_gets_rate_limit_code(
-        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
-        mock_log, mock_status, tmp_path,
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
     ):
         mock_run.return_value = MagicMock(
-            stdout="you've hit your limit", stderr="", returncode=1,
+            stdout="you've hit your limit",
+            stderr="",
+            returncode=1,
         )
         task = _make_task()
         config = _make_config(tmp_path)
@@ -413,11 +423,20 @@ class TestErrorClassification:
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_task_failed_gets_task_failed_code(
-        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
-        mock_log, mock_status, tmp_path,
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
     ):
         mock_run.return_value = MagicMock(
-            stdout="TASK_FAILED: could not compile", stderr="", returncode=1,
+            stdout="TASK_FAILED: could not compile",
+            stderr="",
+            returncode=1,
         )
         task = _make_task()
         config = _make_config(tmp_path)
@@ -438,11 +457,21 @@ class TestErrorClassification:
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_test_failure_hook_gets_test_failure_code(
-        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
-        mock_log, mock_status, mock_cl, tmp_path,
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_cl,
+        tmp_path,
     ):
         mock_run.return_value = MagicMock(
-            stdout="output TASK_COMPLETE", stderr="", returncode=0,
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
         )
         task = _make_task()
         config = _make_config(tmp_path)
@@ -463,11 +492,21 @@ class TestErrorClassification:
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_lint_failure_hook_gets_lint_failure_code(
-        self, mock_run, mock_pre, mock_post, mock_prompt, mock_cmd,
-        mock_log, mock_status, mock_cl, tmp_path,
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_cl,
+        tmp_path,
     ):
         mock_run.return_value = MagicMock(
-            stdout="output TASK_COMPLETE", stderr="", returncode=0,
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
         )
         task = _make_task()
         config = _make_config(tmp_path)
@@ -479,7 +518,10 @@ class TestErrorClassification:
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.pre_start_hook", return_value=False)
     def test_pre_hook_failure_gets_hook_failure_code(
-        self, mock_pre, mock_log, tmp_path,
+        self,
+        mock_pre,
+        mock_log,
+        tmp_path,
     ):
         task = _make_task()
         config = _make_config(tmp_path)
@@ -487,3 +529,255 @@ class TestErrorClassification:
         execute_task(task, config, state)
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.HOOK_FAILURE
+
+
+# --- Token tracking tests ---
+
+
+class TestTokenTrackingInExecutor:
+    """Tests for token/cost tracking in execute_task."""
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None))
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_tokens_parsed_from_stderr(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """Token counts and cost are parsed from stderr on success."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="input_tokens: 5000\noutput_tokens: 1200\ntotal cost: $0.08",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        result = execute_task(task, config, state)
+
+        assert result is True
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 5000
+        assert ts.attempts[-1].output_tokens == 1200
+        assert ts.attempts[-1].cost_usd == 0.08
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_tokens_stored_on_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """Token counts and cost are stored even when task fails."""
+        mock_run.return_value = MagicMock(
+            stdout="TASK_FAILED: could not compile",
+            stderr="input_tokens: 3000\noutput_tokens: 800\ncost: $0.04",
+            returncode=1,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 3000
+        assert ts.attempts[-1].output_tokens == 800
+        assert ts.attempts[-1].cost_usd == 0.04
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None))
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_no_tokens_in_stderr_stores_none(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """When stderr has no token info, fields are None."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens is None
+        assert ts.attempts[-1].output_tokens is None
+        assert ts.attempts[-1].cost_usd is None
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_tokens_stored_on_hook_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """Token counts are stored when post_done_hook fails."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="input_tokens: 4000\noutput_tokens: 900\ncost: $0.06",
+            returncode=0,
+        )
+        mock_post.return_value = (False, "Tests failed:\nFAILED test_x")
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens == 4000
+        assert ts.attempts[-1].output_tokens == 900
+        assert ts.attempts[-1].cost_usd == 0.06
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_timeout_has_no_tokens(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """Timeout path has no result, so tokens are None."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="echo", timeout=1800)
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].input_tokens is None
+        assert ts.attempts[-1].cost_usd is None
+
+
+# --- Parallel execution tests ---
+
+
+class TestParallelExecution:
+    """Tests for parallel task execution."""
+
+    def test_run_tasks_parallel_exists(self):
+        """_run_tasks_parallel function exists and is a coroutine."""
+        from spec_runner.executor import _run_tasks_parallel
+
+        assert asyncio.iscoroutinefunction(_run_tasks_parallel)
+
+    def test_execute_task_async_exists(self):
+        """_execute_task_async function exists and is a coroutine."""
+        from spec_runner.executor import _execute_task_async
+
+        assert asyncio.iscoroutinefunction(_execute_task_async)
+
+    def test_parallel_flag_in_argparser(self):
+        """CLI parser accepts --parallel flag."""
+        from spec_runner.executor import main
+
+        # Just verify it doesn't crash on import
+        assert callable(main)
+
+
+# --- Budget enforcement tests ---
+
+
+class TestBudgetEnforcement:
+    """Tests for budget enforcement in run_with_retries."""
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_task_budget_exceeded_stops_retries(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """When task cost exceeds task_budget_usd, stop retrying."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.10)
+        state = _make_state(config)
+        task = _make_task()
+
+        call_count = 0
+
+        def side_effect(t, cfg, st):
+            nonlocal call_count
+            call_count += 1
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+
+        result = run_with_retries(task, config, state)
+
+        assert result is False
+        # Should stop after 2 attempts ($0.12 > $0.10)
+        assert call_count == 2

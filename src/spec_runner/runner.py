@@ -4,7 +4,9 @@ Contains logging, error checking, callback, and CLI command building
 functions used by the executor and hooks modules.
 """
 
+import asyncio
 import json
+import re
 import shlex
 from datetime import datetime
 from pathlib import Path
@@ -35,12 +37,43 @@ def check_error_patterns(output: str) -> str | None:
     return None
 
 
+def parse_token_usage(stderr: str) -> tuple[int | None, int | None, float | None]:
+    """Extract (input_tokens, output_tokens, cost_usd) from Claude CLI stderr.
+
+    Parses common patterns like "input_tokens: 12,500" and "cost: $0.12".
+    Returns None for any field that can't be parsed. Never raises.
+    """
+
+    def _parse_int(pattern: str) -> int | None:
+        m = re.search(pattern, stderr, re.IGNORECASE)
+        if m:
+            return int(m.group(1).replace(",", ""))
+        return None
+
+    def _parse_float(pattern: str) -> float | None:
+        m = re.search(pattern, stderr, re.IGNORECASE)
+        if m:
+            try:
+                return float(m.group(1).replace(",", ""))
+            except ValueError:
+                return None
+        return None
+
+    input_tokens = _parse_int(r"input[_ ]tokens?[:\s]+(\d[\d,]*)")
+    output_tokens = _parse_int(r"output[_ ]tokens?[:\s]+(\d[\d,]*)")
+    cost = _parse_float(r"(?:total[_ ])?cost[:\s]+\$?([\d.]+)")
+    return input_tokens, output_tokens, cost
+
+
 def send_callback(
     callback_url: str,
     task_id: str,
     status: str,
     duration: float | None = None,
     error: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     """Send task status callback to orchestrator.
 
@@ -53,13 +86,16 @@ def send_callback(
         status: Task status (started, success, failed).
         duration: Execution duration in seconds.
         error: Error message if failed.
+        input_tokens: Input tokens consumed (if available).
+        output_tokens: Output tokens consumed (if available).
+        cost_usd: Cost in USD (if available).
     """
     if not callback_url:
         return
 
     import urllib.request
 
-    payload: dict[str, str | float] = {
+    payload: dict[str, str | float | int] = {
         "task_id": task_id,
         "status": status,
         "timestamp": datetime.now().isoformat(),
@@ -68,6 +104,12 @@ def send_callback(
         payload["duration_seconds"] = duration
     if error:
         payload["error"] = error
+    if input_tokens is not None:
+        payload["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        payload["output_tokens"] = output_tokens
+    if cost_usd is not None:
+        payload["cost_usd"] = cost_usd
 
     try:
         data = json.dumps(payload).encode("utf-8")
@@ -158,3 +200,38 @@ def build_cli_command(
         if model:
             result.extend(["--model", model])
         return result
+
+
+async def run_claude_async(
+    cmd: list[str],
+    timeout: float,
+    cwd: str,
+) -> tuple[str, str, int]:
+    """Run CLI command asynchronously.
+
+    Args:
+        cmd: Command arguments.
+        timeout: Timeout in seconds.
+        cwd: Working directory.
+
+    Returns:
+        (stdout, stderr, returncode).
+
+    Raises:
+        asyncio.TimeoutError: If command exceeds timeout.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode

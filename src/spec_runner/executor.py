@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import re
 import shutil
 import subprocess
@@ -41,6 +42,8 @@ from .runner import (
     build_cli_command,
     check_error_patterns,
     log_progress,
+    parse_token_usage,
+    run_claude_async,
     send_callback,
 )
 from .state import (
@@ -80,7 +83,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     if not pre_start_hook(task, config):
         print("❌ Pre-start hook failed")
         state.record_attempt(
-            task_id, False, 0.0,
+            task_id,
+            False,
+            0.0,
             error="Pre-start hook failed",
             error_code=ErrorCode.HOOK_FAILURE,
         )
@@ -110,16 +115,13 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 test_failures=(
                     extract_test_failures(last.claude_output)
                     if last.claude_output
-                    and last.error_code
-                    in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
+                    and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
                     else None
                 ),
             )
 
     # Build prompt with RetryContext
-    prompt = build_task_prompt(
-        task, config, previous_attempts, retry_context=retry_context
-    )
+    prompt = build_task_prompt(task, config, previous_attempts, retry_context=retry_context)
 
     # Save prompt to log
     config.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -156,6 +158,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         output = result.stdout
         combined_output = output + "\n" + result.stderr
 
+        # Parse token usage from stderr
+        input_tokens, output_tokens, cost_usd = parse_token_usage(result.stderr)
+
         # Save output
         with open(log_file, "a") as f:
             f.write(f"=== OUTPUT ===\n{output}\n\n")
@@ -170,12 +175,24 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             print("   Check your usage: claude usage")
             print("   Or wait and retry later.")
             state.record_attempt(
-                task_id, False, duration,
+                task_id,
+                False,
+                duration,
                 error=f"API error: {error_pattern}",
                 error_code=ErrorCode.RATE_LIMIT,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             send_callback(
-                config.callback_url, task_id, "failed", duration, f"API error: {error_pattern}"
+                config.callback_url,
+                task_id,
+                "failed",
+                duration,
+                f"API error: {error_pattern}",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             return "API_ERROR"
 
@@ -199,11 +216,27 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             hook_success, hook_error = post_done_hook(task, config, True)
 
             if hook_success:
-                state.record_attempt(task_id, True, duration, output=output)
+                state.record_attempt(
+                    task_id,
+                    True,
+                    duration,
+                    output=output,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
                 log_progress(f"✅ Completed in {duration:.1f}s", task_id)
-                send_callback(config.callback_url, task_id, "success", duration)
+                send_callback(
+                    config.callback_url,
+                    task_id,
+                    "success",
+                    duration,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 return True
             else:
                 # Hook failed (tests didn't pass)
@@ -223,32 +256,65 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 if hook_error:
                     full_output = f"{output}\n\n=== TEST FAILURES ===\n{hook_error}"
                 state.record_attempt(
-                    task_id, False, duration,
-                    error=error, output=full_output,
+                    task_id,
+                    False,
+                    duration,
+                    error=error,
+                    output=full_output,
                     error_code=error_code,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
                 )
                 log_progress("❌ Failed: tests/lint check", task_id)
-                send_callback(config.callback_url, task_id, "failed", duration, error)
+                send_callback(
+                    config.callback_url,
+                    task_id,
+                    "failed",
+                    duration,
+                    error,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 return False
         else:
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
             error = error_match.group(1) if error_match else "Unknown error"
             state.record_attempt(
-                task_id, False, duration,
-                error=error, output=output,
+                task_id,
+                False,
+                duration,
+                error=error,
+                output=output,
                 error_code=ErrorCode.TASK_FAILED,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             log_progress(f"❌ Failed: {error[:50]}", task_id)
-            send_callback(config.callback_url, task_id, "failed", duration, error)
+            send_callback(
+                config.callback_url,
+                task_id,
+                "failed",
+                duration,
+                error,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+            )
             return False
 
     except subprocess.TimeoutExpired:
         duration = config.task_timeout_minutes * 60
         error = f"Timeout after {config.task_timeout_minutes} minutes"
         state.record_attempt(
-            task_id, False, duration,
-            error=error, error_code=ErrorCode.TIMEOUT,
+            task_id,
+            False,
+            duration,
+            error=error,
+            error_code=ErrorCode.TIMEOUT,
         )
         log_progress(f"⏰ Timeout after {config.task_timeout_minutes}m", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
@@ -258,8 +324,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         duration = (datetime.now() - start_time).total_seconds()
         error = str(e)
         state.record_attempt(
-            task_id, False, duration,
-            error=error, error_code=ErrorCode.UNKNOWN,
+            task_id,
+            False,
+            duration,
+            error=error,
+            error_code=ErrorCode.UNKNOWN,
         )
         log_progress(f"💥 Error: {error[:50]}", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
@@ -287,6 +356,17 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         # Hook error - stop immediately, don't retry
         if result == "HOOK_ERROR":
+            return False
+
+        # Check per-task budget
+        if config.task_budget_usd is not None and state.task_cost(task.id) > config.task_budget_usd:
+            log_progress(
+                f"Task budget exceeded "
+                f"(${state.task_cost(task.id):.2f} > "
+                f"${config.task_budget_usd:.2f})",
+                task.id,
+            )
+            update_task_status(config.tasks_file, task.id, "blocked")
             return False
 
         if result is True:
@@ -342,24 +422,301 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         return "SKIP"
 
 
+# === Parallel Execution ===
+
+
+async def _execute_task_async(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    state_lock: asyncio.Lock,
+) -> bool | str:
+    """Async wrapper for task execution with state locking.
+
+    Uses run_claude_async for non-blocking subprocess execution.
+    Protects ExecutorState writes with asyncio.Lock.
+    """
+    task_id = task.id
+    log_progress(f"Starting: {task.name}", task_id)
+
+    # Pre-start hook (sync, but quick)
+    if not pre_start_hook(task, config):
+        async with state_lock:
+            state.record_attempt(
+                task_id,
+                False,
+                0.0,
+                error="Pre-start hook failed",
+                error_code=ErrorCode.HOOK_FAILURE,
+            )
+        return "HOOK_ERROR"
+
+    async with state_lock:
+        state.mark_running(task_id)
+    update_task_status(config.tasks_file, task_id, "in_progress")
+
+    # Build prompt
+    task_state = state.get_task_state(task_id)
+    previous_attempts = task_state.attempts if task_state.attempts else None
+    retry_context = None
+    if previous_attempts:
+        failed = [a for a in previous_attempts if not a.success]
+        if failed:
+            last = failed[-1]
+            retry_context = RetryContext(
+                attempt_number=task_state.attempt_count + 1,
+                max_attempts=config.max_retries,
+                previous_error_code=last.error_code or ErrorCode.UNKNOWN,
+                previous_error=last.error or "Unknown error",
+                what_was_tried=f"Previous attempt for {task.name}",
+                test_failures=(
+                    extract_test_failures(last.claude_output)
+                    if last.claude_output
+                    and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
+                    else None
+                ),
+            )
+
+    prompt = build_task_prompt(task, config, previous_attempts, retry_context=retry_context)
+
+    # Log
+    config.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = config.logs_dir / f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    with open(log_file, "w") as f:
+        f.write(f"=== PROMPT ===\n{prompt}\n\n")
+
+    # Build command
+    cmd = build_cli_command(
+        cmd=config.claude_command,
+        prompt=prompt,
+        model=config.claude_model,
+        template=config.command_template,
+        skip_permissions=config.skip_permissions,
+    )
+
+    start_time = datetime.now()
+
+    try:
+        stdout, stderr, returncode = await run_claude_async(
+            cmd,
+            timeout=config.task_timeout_minutes * 60,
+            cwd=str(config.project_root),
+        )
+
+        duration = (datetime.now() - start_time).total_seconds()
+        output = stdout
+        combined_output = output + "\n" + stderr
+        input_tokens, output_tokens, cost_usd = parse_token_usage(stderr)
+
+        # Save output
+        with open(log_file, "a") as f:
+            f.write(f"=== OUTPUT ===\n{output}\n\n")
+            f.write(f"=== STDERR ===\n{stderr}\n\n")
+            f.write(f"=== RETURN CODE: {returncode} ===\n")
+
+        # Check for API errors
+        error_pattern = check_error_patterns(combined_output)
+        if error_pattern:
+            async with state_lock:
+                state.record_attempt(
+                    task_id,
+                    False,
+                    duration,
+                    error=f"API error: {error_pattern}",
+                    error_code=ErrorCode.RATE_LIMIT,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
+            return "API_ERROR"
+
+        # Check result markers
+        has_complete = "TASK_COMPLETE" in output
+        has_failed = "TASK_FAILED" in output
+        implicit_success = returncode == 0 and not has_failed
+        success = (has_complete and not has_failed) or implicit_success
+
+        if success:
+            hook_success, hook_error = post_done_hook(task, config, True)
+            if hook_success:
+                async with state_lock:
+                    state.record_attempt(
+                        task_id,
+                        True,
+                        duration,
+                        output=output,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                    )
+                update_task_status(config.tasks_file, task_id, "done")
+                mark_all_checklist_done(config.tasks_file, task_id)
+                return True
+            else:
+                error = hook_error or "Post-done hook failed"
+                error_code = ErrorCode.UNKNOWN
+                if hook_error:
+                    if "Tests failed" in hook_error:
+                        error_code = ErrorCode.TEST_FAILURE
+                    elif "Lint errors" in hook_error:
+                        error_code = ErrorCode.LINT_FAILURE
+                    else:
+                        error_code = ErrorCode.HOOK_FAILURE
+                full_output = output
+                if hook_error:
+                    full_output = f"{output}\n\n=== TEST FAILURES ===\n{hook_error}"
+                async with state_lock:
+                    state.record_attempt(
+                        task_id,
+                        False,
+                        duration,
+                        error=error,
+                        output=full_output,
+                        error_code=error_code,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                    )
+                return False
+        else:
+            error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
+            error = error_match.group(1) if error_match else "Unknown error"
+            async with state_lock:
+                state.record_attempt(
+                    task_id,
+                    False,
+                    duration,
+                    error=error,
+                    output=output,
+                    error_code=ErrorCode.TASK_FAILED,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
+            return False
+
+    except TimeoutError:
+        duration = config.task_timeout_minutes * 60
+        async with state_lock:
+            state.record_attempt(
+                task_id,
+                False,
+                duration,
+                error=f"Timeout after {config.task_timeout_minutes} minutes",
+                error_code=ErrorCode.TIMEOUT,
+            )
+        return False
+
+    except Exception as e:
+        duration = (datetime.now() - start_time).total_seconds()
+        async with state_lock:
+            state.record_attempt(
+                task_id,
+                False,
+                duration,
+                error=str(e),
+                error_code=ErrorCode.UNKNOWN,
+            )
+        return False
+
+
+async def _run_tasks_parallel(args, config: ExecutorConfig):
+    """Execute tasks in parallel using asyncio."""
+    clear_stop_file(config)
+    tasks = parse_tasks(config.tasks_file)
+    state = ExecutorState(config)
+    state_lock = asyncio.Lock()
+    sem = asyncio.Semaphore(config.max_concurrent)
+    executed_ids: set[str] = set()
+
+    async def run_one(task: Task) -> tuple[str, bool | str]:
+        async with sem:
+            result = await _execute_task_async(task, config, state, state_lock)
+            return task.id, result
+
+    try:
+        include_in_progress = not getattr(args, "restart", False)
+        while True:
+            if check_stop_requested(config):
+                clear_stop_file(config)
+                print("\nGraceful shutdown requested")
+                break
+
+            tasks = parse_tasks(config.tasks_file)
+            ready = get_next_tasks(tasks, include_in_progress=include_in_progress)
+            if hasattr(args, "milestone") and args.milestone:
+                ready = [t for t in ready if args.milestone.lower() in t.milestone.lower()]
+            ready = [t for t in ready if t.id not in executed_ids]
+
+            if not ready or state.should_stop():
+                break
+
+            print(f"\nDispatching {len(ready)} tasks in parallel...")
+            for t in ready:
+                print(f"   - {t.id}: {t.name}")
+                executed_ids.add(t.id)
+
+            results = await asyncio.gather(
+                *[run_one(t) for t in ready],
+                return_exceptions=True,
+            )
+
+            # Check for API errors
+            api_error = False
+            for r in results:
+                if isinstance(r, tuple) and r[1] == "API_ERROR":
+                    api_error = True
+                    break
+            if api_error:
+                print("\nStopping: API rate limit reached")
+                break
+
+            if state.should_stop():
+                print("\nStopping: failure/budget limit reached")
+                break
+
+        # Summary
+        tasks = parse_tasks(config.tasks_file)
+        remaining = len([t for t in tasks if t.status == "todo"])
+        total_cost_val = state.total_cost()
+
+        print(f"\n{'=' * 60}")
+        print("Execution Summary (parallel)")
+        print(f"{'=' * 60}")
+        print(f"   Tasks completed:    {state.total_completed}")
+        print(f"   Tasks failed:       {state.total_failed}")
+        print(f"   Tasks remaining:    {remaining}")
+        if total_cost_val > 0:
+            print(f"   Total cost:         ${total_cost_val:.2f}")
+    finally:
+        state.close()
+
+
 # === CLI Commands ===
 
 
 def cmd_run(args, config: ExecutorConfig):
     """Execute tasks"""
 
-    # Acquire lock to prevent parallel runs
-    lock = ExecutorLock(config.state_file.with_suffix(".lock"))
-    if not lock.acquire():
-        print("❌ Another executor is already running")
-        print(f"   Lock file: {config.state_file.with_suffix('.lock')}")
-        print("   If this is an error, delete the lock file manually.")
-        sys.exit(1)
+    if getattr(args, "parallel", False):
+        # Parallel mode implies no branch
+        config.create_git_branch = False
+        if getattr(args, "max_concurrent", 0) > 0:
+            config.max_concurrent = args.max_concurrent
+        asyncio.run(_run_tasks_parallel(args, config))
+    else:
+        # Acquire lock to prevent parallel runs
+        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+        if not lock.acquire():
+            print("Another executor is already running")
+            print(f"   Lock file: {config.state_file.with_suffix('.lock')}")
+            print("   If this is an error, delete the lock file manually.")
+            sys.exit(1)
 
-    try:
-        _run_tasks(args, config)
-    finally:
-        lock.release()
+        try:
+            _run_tasks(args, config)
+        finally:
+            lock.release()
 
 
 def _run_tasks(args, config: ExecutorConfig):
@@ -551,6 +908,19 @@ def cmd_status(args, config: ExecutorConfig):
         print(f"Failed attempts:       {failed_attempts} (retried)")
     print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
 
+    # Token/cost summary
+    total_cost_val = state.total_cost()
+    if total_cost_val > 0:
+        total_inp, total_out = state.total_tokens()
+
+        def _fmt_tokens(n: int) -> str:
+            if n >= 1000:
+                return f"{n / 1000:.1f}K"
+            return str(n)
+
+        print(f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out")
+        print(f"Total cost:            ${total_cost_val:.2f}")
+
     # Tasks with attempts
     attempted = [ts for ts in state.tasks.values() if ts.attempts]
     if attempted:
@@ -560,6 +930,9 @@ def cmd_status(args, config: ExecutorConfig):
             attempts_info = f"{ts.attempt_count} attempt"
             if ts.attempt_count > 1:
                 attempts_info += "s"
+            task_cost = state.task_cost(ts.task_id)
+            if task_cost > 0:
+                attempts_info += f", ${task_cost:.2f}"
             print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
             if ts.status == "failed" and ts.last_error:
                 print(f"      Last error: {ts.last_error[:50]}...")
@@ -912,6 +1285,17 @@ def main():
         "--restart",
         action="store_true",
         help="Ignore in-progress tasks, start fresh with TODO tasks only",
+    )
+    run_parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Execute ready tasks in parallel (implies --no-branch)",
+    )
+    run_parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=0,
+        help="Max parallel tasks (default: from config, typically 3)",
     )
 
     # status
