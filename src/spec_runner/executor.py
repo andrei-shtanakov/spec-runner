@@ -884,9 +884,7 @@ def _run_tasks(args, config: ExecutorConfig):
             # Tasks for specific milestone
             include_in_progress = not getattr(args, "restart", False)
             next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
-            tasks_to_run = [
-                t for t in next_tasks if args.milestone.lower() in t.milestone.lower()
-            ]
+            tasks_to_run = [t for t in next_tasks if args.milestone.lower() in t.milestone.lower()]
 
         else:
             # Next task (include in_progress unless --restart)
@@ -922,9 +920,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 # Filter by milestone if specified
                 if args.milestone:
                     ready_tasks = [
-                        t
-                        for t in ready_tasks
-                        if args.milestone.lower() in t.milestone.lower()
+                        t for t in ready_tasks if args.milestone.lower() in t.milestone.lower()
                     ]
 
                 # Filter out already executed tasks
@@ -1046,8 +1042,7 @@ def cmd_status(args, config: ExecutorConfig):
         if failed_attempts > 0:
             print(f"Failed attempts:       {failed_attempts} (retried)")
         print(
-            f"Consecutive failures:  "
-            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
+            f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}"
         )
 
         # Token/cost summary
@@ -1061,8 +1056,7 @@ def cmd_status(args, config: ExecutorConfig):
                 return str(n)
 
             print(
-                f"Tokens:                "
-                f"{_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
+                f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
             )
             print(f"Total cost:            ${total_cost_val:.2f}")
 
@@ -1071,11 +1065,7 @@ def cmd_status(args, config: ExecutorConfig):
         if attempted:
             print("\n📝 Task History:")
             for ts in attempted:
-                icon = (
-                    "✅" if ts.status == "success"
-                    else "❌" if ts.status == "failed"
-                    else "🔄"
-                )
+                icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
                 attempts_info = f"{ts.attempt_count} attempt"
                 if ts.attempt_count > 1:
                     attempts_info += "s"
