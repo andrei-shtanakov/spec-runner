@@ -19,7 +19,9 @@ Usage:
 """
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -681,6 +683,104 @@ def cmd_export_gh(args, tasks: list[Task]):
     print("```")
 
 
+def _gh_run(args: list[str], capture: bool = True) -> subprocess.CompletedProcess:
+    """Run a gh CLI command. Raises FileNotFoundError if gh is missing."""
+    return subprocess.run(
+        ["gh"] + args,
+        capture_output=capture,
+        text=True,
+        check=False,
+    )
+
+
+def _get_existing_issues() -> dict[str, dict]:
+    """Fetch existing [TASK-XXX] issues from GitHub. Returns {task_id: issue_dict}."""
+    result = _gh_run(["issue", "list", "--json", "number,title,state,labels", "--limit", "200"])
+    if result.returncode != 0:
+        return {}
+    issues = json.loads(result.stdout)
+    mapping: dict[str, dict] = {}
+    for issue in issues:
+        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
+        if m:
+            mapping[m.group(1)] = issue
+    return mapping
+
+
+def _task_labels(task: Task) -> list[str]:
+    """Build label list for a task."""
+    return [f"priority:{task.priority}", f"status:{task.status}"]
+
+
+def _task_body(task: Task) -> str:
+    """Build issue body from task."""
+    parts: list[str] = []
+    if task.estimate:
+        parts.append(f"**Estimate:** {task.estimate}")
+    if task.checklist:
+        parts.append("**Checklist:**")
+        for item, checked in task.checklist:
+            mark = "x" if checked else " "
+            parts.append(f"- [{mark}] {item}")
+    if task.depends_on:
+        parts.append(f"\n**Depends on:** {', '.join(task.depends_on)}")
+    if task.traces_to:
+        parts.append(f"**Traces to:** {', '.join(task.traces_to)}")
+    return "\n".join(parts)
+
+
+def cmd_sync_to_gh(args, tasks: list[Task]):
+    """Sync tasks to GitHub Issues. Creates, updates, or closes issues."""
+    dry_run = getattr(args, "dry_run", False)
+
+    try:
+        existing = _get_existing_issues()
+    except FileNotFoundError:
+        print("Error: 'gh' CLI not found. Install from https://cli.github.com/")
+        return
+
+    created, updated, closed = 0, 0, 0
+
+    for task in tasks:
+        issue = existing.get(task.id)
+        labels = _task_labels(task)
+        label_str = ",".join(labels)
+
+        if task.status == "done":
+            if issue and issue["state"] == "OPEN":
+                if not dry_run:
+                    _gh_run(["issue", "close", str(issue["number"])])
+                closed += 1
+            continue
+
+        if issue:
+            if not dry_run:
+                _gh_run(["issue", "edit", str(issue["number"]), "--add-label", label_str])
+                if issue["state"] == "CLOSED":
+                    _gh_run(["issue", "edit", str(issue["number"]), "--state", "open"])
+            updated += 1
+        else:
+            title = f"[{task.id}] {task.name}"
+            body = _task_body(task)
+            if not dry_run:
+                _gh_run(
+                    [
+                        "issue",
+                        "create",
+                        "--title",
+                        title,
+                        "--body",
+                        body,
+                        "--label",
+                        label_str,
+                    ]
+                )
+            created += 1
+
+    action = "Would" if dry_run else "Done"
+    print(f"{action}: created={created}, updated={updated}, closed={closed}")
+
+
 def main():
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
@@ -743,6 +843,14 @@ def main():
     # export-gh
     subparsers.add_parser("export-gh", parents=[common], help="Export to GitHub Issues")
 
+    # sync-to-gh
+    sync_to_parser = subparsers.add_parser(
+        "sync-to-gh", parents=[common], help="Sync tasks to GitHub Issues"
+    )
+    sync_to_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would happen without making changes"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -767,6 +875,7 @@ def main():
         "next": cmd_next,
         "graph": cmd_graph,
         "export-gh": cmd_export_gh,
+        "sync-to-gh": cmd_sync_to_gh,
     }
 
     if args.command in write_commands:
