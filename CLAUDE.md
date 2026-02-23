@@ -33,6 +33,10 @@ spec-task next                             # Show next ready tasks
 spec-task graph                            # ASCII dependency graph
 spec-runner run --all --parallel           # Execute ready tasks in parallel
 spec-runner run --all --parallel --max-concurrent=5  # With concurrency limit
+spec-runner run --tui                      # Execute with live TUI dashboard
+spec-runner tui                            # Launch TUI status dashboard
+spec-runner run --log-level=DEBUG          # Set log verbosity (DEBUG/INFO/WARNING/ERROR)
+spec-runner run --log-json                 # Output logs as JSON (for pipelines)
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
@@ -51,6 +55,8 @@ All code is in `src/spec_runner/`:
 | `hooks.py` | ~580 | Pre/post hooks, git ops, code review |
 | `runner.py` | ~240 | CLI command building, subprocess exec, progress logging; `parse_token_usage()`, `run_claude_async()` |
 | `task.py` | ~780 | Task parsing, dependency resolution, status management |
+| `logging.py` | ~100 | Structured logging via structlog: `setup_logging()`, `get_logger()`, JSON/console output |
+| `tui.py` | ~390 | Textual-based TUI: live task dashboard, progress bars, log panel |
 | `init_cmd.py` | ~100 | Install bundled Claude Code skills |
 
 Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` → `task:main`, `spec-runner-init` → `init_cmd:main`
@@ -90,6 +96,12 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - Git branches follow `task/TASK-###-short-name` pattern
 - Config keys: `lowercase_with_underscores` matching YAML convention
 
+## Key Dependencies
+
+- **PyYAML** — YAML config loading
+- **structlog** — Structured logging (JSON + console renderers)
+- **textual** — Terminal UI dashboard for live task monitoring
+
 ## File Locations
 
 - **Specs**: `spec/` (requirements.md, design.md, tasks.md, WORKFLOW.md)
@@ -100,4 +112,4 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 ## Testing
 
-Tests use pytest (204 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (225 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
