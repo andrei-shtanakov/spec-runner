@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
+from uuid import uuid4
 
 from .config import (
     ExecutorConfig,
@@ -1284,7 +1285,13 @@ When done, respond with: PLAN_READY
 
 def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Launch read-only TUI dashboard."""
+    from .logging import setup_logging
     from .tui import SpecRunnerApp
+
+    # TUI mode: log to file, TUI owns screen
+    log_file = config.logs_dir / f"tui-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    config.logs_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
 
     app = SpecRunnerApp(config=config)
     app.run()
@@ -1412,6 +1419,10 @@ def main():
     from .logging import setup_logging
 
     setup_logging(level=config.log_level, json_output=getattr(args, "log_json", False))
+
+    import structlog
+
+    structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
 
     # Dispatch
     commands = {

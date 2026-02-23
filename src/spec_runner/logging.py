@@ -17,12 +17,12 @@ _SENSITIVE_RE = re.compile(r"(sk-|key-|token-)[a-zA-Z0-9]{6,}", re.IGNORECASE)
 
 def redact_sensitive(
     logger: object, method_name: str, event_dict: dict
-) -> tuple[object, str, dict]:
+) -> dict:
     """Structlog processor that redacts sensitive data."""
     for key, value in event_dict.items():
         if isinstance(value, str):
             event_dict[key] = _SENSITIVE_RE.sub(lambda m: m.group(1) + "***", value)
-    return logger, method_name, event_dict
+    return event_dict
 
 
 def setup_logging(

@@ -42,16 +42,16 @@ class TestRedactSensitive:
     """Tests for redact_sensitive processor."""
 
     def test_redacts_sk_keys(self):
-        _, _, event_dict = redact_sensitive(None, None, {"api_key": "sk-abc123def456"})
+        event_dict = redact_sensitive(None, None, {"api_key": "sk-abc123def456"})
         assert event_dict["api_key"] == "sk-***"
         assert "abc123" not in event_dict["api_key"]
 
     def test_preserves_normal_values(self):
-        _, _, event_dict = redact_sensitive(None, None, {"message": "hello world"})
+        event_dict = redact_sensitive(None, None, {"message": "hello world"})
         assert event_dict["message"] == "hello world"
 
     def test_redacts_in_event_string(self):
-        _, _, event_dict = redact_sensitive(
+        event_dict = redact_sensitive(
             None, None, {"event": "Using key sk-abc123def456ghi"}
         )
         assert "sk-abc123" not in event_dict["event"]
