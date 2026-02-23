@@ -707,8 +707,37 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
 # === CLI Commands ===
 
 
-def cmd_run(args, config: ExecutorConfig):
-    """Execute tasks"""
+def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Execute tasks."""
+    if getattr(args, "tui", False):
+        import threading
+
+        from .logging import setup_logging
+        from .tui import SpecRunnerApp
+
+        # TUI mode: log to file, TUI owns screen
+        log_file = config.logs_dir / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+        config.logs_dir.mkdir(parents=True, exist_ok=True)
+        setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
+
+        app = SpecRunnerApp(config=config)
+
+        def _start_execution() -> None:
+            def run() -> None:
+                if getattr(args, "parallel", False):
+                    config.create_git_branch = False
+                    if getattr(args, "max_concurrent", 0) > 0:
+                        config.max_concurrent = args.max_concurrent
+                    asyncio.run(_run_tasks_parallel(args, config))
+                else:
+                    _run_tasks(args, config)
+
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+
+        app.call_later(_start_execution)
+        app.run()
+        return
 
     if getattr(args, "parallel", False):
         # Parallel mode implies no branch
@@ -1253,6 +1282,14 @@ When done, respond with: PLAN_READY
             return
 
 
+def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Launch read-only TUI dashboard."""
+    from .tui import SpecRunnerApp
+
+    app = SpecRunnerApp(config=config)
+    app.run()
+
+
 # === Main ===
 
 
@@ -1326,6 +1363,11 @@ def main():
         default=0,
         help="Max parallel tasks (default: from config, typically 3)",
     )
+    run_parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Show TUI dashboard during execution",
+    )
 
     # status
     subparsers.add_parser("status", parents=[common], help="Show execution status")
@@ -1354,6 +1396,9 @@ def main():
     plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
     plan_parser.add_argument("description", help="Feature description")
 
+    # tui
+    subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1377,6 +1422,7 @@ def main():
         "stop": cmd_stop,
         "reset": cmd_reset,
         "plan": cmd_plan,
+        "tui": cmd_tui,
     }
 
     cmd_func = commands.get(args.command)
