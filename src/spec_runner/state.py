@@ -507,3 +507,54 @@ def clear_stop_file(config: ExecutorConfig) -> None:
     """Remove stop file if it exists."""
     with contextlib.suppress(FileNotFoundError):
         config.stop_file.unlink()
+
+
+def recover_stale_tasks(
+    state: ExecutorState,
+    timeout_minutes: float,
+    tasks_file: Path,
+) -> list[str]:
+    """Detect and recover tasks stuck in 'running' status.
+
+    A task is considered stale if it has been 'running' for longer
+    than timeout_minutes (typically 2x the task timeout).
+
+    Returns list of recovered task IDs.
+    """
+    recovered: list[str] = []
+    now = datetime.now()
+
+    for task_id, ts in state.tasks.items():
+        if ts.status != "running":
+            continue
+        if not ts.started_at:
+            continue
+
+        started = datetime.fromisoformat(ts.started_at)
+        elapsed_minutes = (now - started).total_seconds() / 60
+
+        if elapsed_minutes <= timeout_minutes:
+            continue
+
+        # Stale task — recover it
+        ts.status = "failed"
+        state.total_failed += 1
+        ts.attempts.append(
+            TaskAttempt(
+                timestamp=now.isoformat(),
+                success=False,
+                duration_seconds=elapsed_minutes * 60,
+                error="Recovered from stale running state",
+                error_code=ErrorCode.INTERRUPTED,
+            )
+        )
+        recovered.append(task_id)
+
+    if recovered:
+        state._save()
+        from .task import update_task_status
+
+        for task_id in recovered:
+            update_task_status(tasks_file, task_id, "todo")
+
+    return recovered
