@@ -162,3 +162,82 @@ class TestSyncToGh:
 
         captured = capsys.readouterr()
         assert "gh" in captured.out.lower() or "gh" in captured.err.lower()
+
+
+# ---------------------------------------------------------------------------
+# sync-from-gh
+# ---------------------------------------------------------------------------
+
+
+class TestSyncFromGh:
+    """Tests for cmd_sync_from_gh."""
+
+    @patch("spec_runner.task.subprocess.run")
+    def test_updates_status_from_closed_issues(self, mock_run, tmp_path):
+        """Closed issues should mark tasks as done."""
+        tasks_file = _write_tasks(tmp_path)
+        tasks = parse_tasks(tasks_file)
+
+        issues = json.dumps([
+            {"number": 1, "title": "[TASK-003] Write docs", "state": "CLOSED",
+             "labels": [{"name": "priority:p2"}, {"name": "status:done"}]},
+        ])
+        mock_run.return_value = MagicMock(returncode=0, stdout=issues)
+
+        from spec_runner.task import cmd_sync_from_gh
+        cmd_sync_from_gh(_make_args(), tasks, tasks_file)
+
+        updated_tasks = parse_tasks(tasks_file)
+        task_003 = next(t for t in updated_tasks if t.id == "TASK-003")
+        assert task_003.status == "done"
+
+    @patch("spec_runner.task.subprocess.run")
+    def test_updates_status_from_labels(self, mock_run, tmp_path):
+        """Should use status:X labels to determine status for open issues."""
+        tasks_file = _write_tasks(tmp_path)
+        tasks = parse_tasks(tasks_file)
+
+        issues = json.dumps([
+            {"number": 2, "title": "[TASK-003] Write docs", "state": "OPEN",
+             "labels": [{"name": "status:in_progress"}, {"name": "priority:p2"}]},
+        ])
+        mock_run.return_value = MagicMock(returncode=0, stdout=issues)
+
+        from spec_runner.task import cmd_sync_from_gh
+        cmd_sync_from_gh(_make_args(), tasks, tasks_file)
+
+        updated_tasks = parse_tasks(tasks_file)
+        task_003 = next(t for t in updated_tasks if t.id == "TASK-003")
+        assert task_003.status == "in_progress"
+
+    @patch("spec_runner.task.subprocess.run")
+    def test_no_change_when_status_matches(self, mock_run, tmp_path):
+        """Should not write file when nothing changed."""
+        tasks_file = _write_tasks(tmp_path)
+        tasks = parse_tasks(tasks_file)
+        original_content = tasks_file.read_text()
+
+        issues = json.dumps([
+            {"number": 2, "title": "[TASK-002] Add authentication", "state": "OPEN",
+             "labels": [{"name": "status:in_progress"}]},
+        ])
+        mock_run.return_value = MagicMock(returncode=0, stdout=issues)
+
+        from spec_runner.task import cmd_sync_from_gh
+        cmd_sync_from_gh(_make_args(), tasks, tasks_file)
+
+        assert tasks_file.read_text() == original_content
+
+    @patch("spec_runner.task.subprocess.run")
+    def test_gh_not_found(self, mock_run, tmp_path, capsys):
+        """Should print error when gh CLI is not available."""
+        tasks_file = _write_tasks(tmp_path)
+        tasks = parse_tasks(tasks_file)
+
+        mock_run.side_effect = FileNotFoundError("gh not found")
+
+        from spec_runner.task import cmd_sync_from_gh
+        cmd_sync_from_gh(_make_args(), tasks, tasks_file)
+
+        captured = capsys.readouterr()
+        assert "gh" in captured.out.lower() or "gh" in captured.err.lower()
