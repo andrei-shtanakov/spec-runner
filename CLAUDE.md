@@ -31,6 +31,9 @@ spec-runner plan "description"             # Interactive task planning
 spec-task list --status=todo               # List tasks by status
 spec-task next                             # Show next ready tasks
 spec-task graph                            # ASCII dependency graph
+spec-task sync-to-gh                       # Sync tasks → GitHub Issues
+spec-task sync-to-gh --dry-run             # Preview without making changes
+spec-task sync-from-gh                     # Sync GitHub Issues → tasks.md
 spec-runner validate                       # Validate config and tasks
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
 spec-runner run --all --parallel           # Execute ready tasks in parallel

@@ -16,6 +16,8 @@ Usage:
     spec-task next                    # Next task (by dependencies)
     spec-task graph                   # ASCII dependency graph
     spec-task export-gh               # Export to GitHub Issues
+    spec-task sync-to-gh              # Sync tasks to GitHub Issues
+    spec-task sync-from-gh            # Sync GitHub Issues to tasks.md
 """
 
 import argparse

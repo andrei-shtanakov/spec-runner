@@ -57,6 +57,8 @@ from .state import (
 from .task import (
     TASKS_FILE,
     Task,
+    cmd_sync_from_gh,
+    cmd_sync_to_gh,
     get_in_progress_tasks,
     get_next_tasks,
     get_task_by_id,
@@ -83,6 +85,8 @@ __all__ = [
     # Task management
     "Task",
     "TASKS_FILE",
+    "cmd_sync_from_gh",
+    "cmd_sync_to_gh",
     "parse_tasks",
     "get_next_tasks",
     "get_in_progress_tasks",
