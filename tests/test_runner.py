@@ -1,12 +1,17 @@
 """Tests for spec_runner.runner module."""
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from spec_runner.runner import (
     build_cli_command,
     check_error_patterns,
     log_progress,
     parse_token_usage,
+    run_claude_async,
 )
 
 
@@ -225,3 +230,39 @@ class TestParseTokenUsage:
         assert inp == 500
         assert out is None
         assert cost is None
+
+
+class TestRunClaudeAsync:
+    """Tests for async subprocess wrapper."""
+
+    def test_returns_stdout_stderr_returncode(self):
+        async def _run():
+            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
+                mock_proc = AsyncMock()
+                mock_proc.communicate.return_value = (b"output text", b"stderr text")
+                mock_proc.returncode = 0
+                mock_cse.return_value = mock_proc
+
+                stdout, stderr, rc = await run_claude_async(
+                    ["echo", "hi"], timeout=60, cwd="/tmp"
+                )
+                assert stdout == "output text"
+                assert stderr == "stderr text"
+                assert rc == 0
+
+        asyncio.run(_run())
+
+    def test_timeout_kills_process(self):
+        async def _run():
+            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
+                mock_proc = AsyncMock()
+                mock_proc.communicate.side_effect = asyncio.TimeoutError()
+                mock_proc.kill = MagicMock()
+                mock_proc.wait = AsyncMock()
+                mock_cse.return_value = mock_proc
+
+                with pytest.raises(asyncio.TimeoutError):
+                    await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
+                mock_proc.kill.assert_called_once()
+
+        asyncio.run(_run())

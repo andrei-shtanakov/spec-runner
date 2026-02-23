@@ -4,6 +4,7 @@ Contains logging, error checking, callback, and CLI command building
 functions used by the executor and hooks modules.
 """
 
+import asyncio
 import json
 import re
 import shlex
@@ -199,3 +200,38 @@ def build_cli_command(
         if model:
             result.extend(["--model", model])
         return result
+
+
+async def run_claude_async(
+    cmd: list[str],
+    timeout: float,
+    cwd: str,
+) -> tuple[str, str, int]:
+    """Run CLI command asynchronously.
+
+    Args:
+        cmd: Command arguments.
+        timeout: Timeout in seconds.
+        cwd: Working directory.
+
+    Returns:
+        (stdout, stderr, returncode).
+
+    Raises:
+        asyncio.TimeoutError: If command exceeds timeout.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode
