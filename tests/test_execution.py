@@ -714,6 +714,168 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].cost_usd is None
 
 
+# --- Review data tracking tests ---
+
+
+class TestReviewDataTracking:
+    """Tests for review_status and review_findings being passed to record_attempt."""
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.executor.post_done_hook",
+        return_value=(True, None, "passed", "All checks passed, code looks good"),
+    )
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_review_data_stored_on_success(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """Review status and findings from post_done_hook are stored in attempt on success."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        result = execute_task(task, config, state)
+
+        assert result is True
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].review_status == "passed"
+        assert ts.attempts[-1].review_findings == "All checks passed, code looks good"
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.executor.post_done_hook",
+        return_value=(False, "Tests failed:\nFAILED test_x", "failed", "Review found issues"),
+    )
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_review_data_stored_on_hook_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """Review status and findings are stored even when post_done_hook fails."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        result = execute_task(task, config, state)
+
+        assert result is False
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].review_status == "failed"
+        assert ts.attempts[-1].review_findings == "Review found issues"
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_empty_review_findings_stored_as_none(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """Empty review_findings string is stored as None."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].review_status == "skipped"
+        assert ts.attempts[-1].review_findings is None
+
+    @patch("spec_runner.executor.mark_all_checklist_done")
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.executor.post_done_hook",
+        return_value=(True, None, "passed", "x" * 5000),
+    )
+    @patch("spec_runner.executor.pre_start_hook", return_value=True)
+    @patch("spec_runner.executor.subprocess.run")
+    def test_review_findings_truncated_to_2048(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        """Long review_findings are truncated to 2048 characters."""
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE",
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+
+        execute_task(task, config, state)
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempts[-1].review_findings is not None
+        assert len(ts.attempts[-1].review_findings) == 2048
+
+
 # --- Parallel execution tests ---
 
 

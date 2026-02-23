@@ -232,6 +232,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
+                    review_status=review_status,
+                    review_findings=(review_findings[:2048] if review_findings else None),
                 )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
@@ -273,6 +275,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
+                    review_status=review_status,
+                    review_findings=(review_findings[:2048] if review_findings else None),
                 )
                 log_progress("❌ Failed: tests/lint check", task_id)
                 send_callback(
@@ -566,6 +570,8 @@ async def _execute_task_async(
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         cost_usd=cost_usd,
+                        review_status=review_status,
+                        review_findings=(review_findings[:2048] if review_findings else None),
                     )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
@@ -594,6 +600,8 @@ async def _execute_task_async(
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         cost_usd=cost_usd,
+                        review_status=review_status,
+                        review_findings=(review_findings[:2048] if review_findings else None),
                     )
                 return False
         else:
@@ -986,6 +994,11 @@ def cmd_status(args, config: ExecutorConfig):
             if task_cost > 0:
                 attempts_info += f", ${task_cost:.2f}"
             print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
+            # Show review verdict from last attempt
+            if ts.attempts:
+                last_attempt = ts.attempts[-1]
+                if last_attempt.review_status and last_attempt.review_status != "skipped":
+                    print(f"      Review: {last_attempt.review_status}")
             if ts.status == "failed" and ts.last_error:
                 print(f"      Last error: {ts.last_error[:50]}...")
             elif ts.status == "running" and ts.last_error:
