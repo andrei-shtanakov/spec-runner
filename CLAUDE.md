@@ -62,7 +62,7 @@ All code is in `src/spec_runner/`:
 | Module | Lines | Purpose |
 |---|---|---|
 | `executor.py` | ~50 | Backward-compatible re-exports, `_shutdown_requested` flag, `_signal_handler()` |
-| `cli.py` | ~1200 | CLI commands (`cmd_run`, `cmd_status`, `cmd_costs`, `cmd_watch`, etc.), `main()` with argparse |
+| `cli.py` | ~1225 | CLI commands (`cmd_run`, `cmd_status`, `cmd_costs`, `cmd_watch`, etc.), `main()` with argparse |
 | `execution.py` | ~480 | `execute_task()`, retry strategy (`classify_retry_strategy`, `compute_retry_delay`, `run_with_retries`) |
 | `parallel.py` | ~315 | `_execute_task_async()`, `_run_tasks_parallel()` — async parallel execution |
 | `mcp_server.py` | ~170 | Read-only MCP server (FastMCP, stdio): status, tasks, costs, logs tools |
@@ -71,11 +71,11 @@ All code is in `src/spec_runner/`:
 | `prompt.py` | ~420 | Prompt building, templates, error formatting, `build_generation_prompt()`, `parse_spec_marker()`, `SPEC_STAGES` |
 | `hooks.py` | ~790 | Pre/post hooks, git ops, enriched code review (full diff, checklist, test/lint output), HITL approval gate, plugin hook integration |
 | `runner.py` | ~240 | CLI command building, subprocess exec, progress logging; `parse_token_usage()`, `run_claude_async()` |
-| `task.py` | ~780 | Task parsing, dependency resolution, status management |
+| `task.py` | ~960 | Task parsing, dependency resolution, status management, GitHub Issues sync |
 | `validate.py` | ~310 | Config + task validation, CLI command, pre-run checks |
 | `plugins.py` | ~260 | Plugin discovery, hook execution, env var building |
 | `logging.py` | ~100 | Structured logging via structlog: `setup_logging()`, `get_logger()`, JSON/console output |
-| `tui.py` | ~490 | Textual-based TUI: live task dashboard, progress bars, log panel |
+| `tui.py` | ~460 | Textual-based TUI: live task dashboard, progress bars, log panel |
 | `init_cmd.py` | ~100 | Install bundled Claude Code skills |
 
 Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` → `task:main`, `spec-runner-init` → `init_cmd:main`
@@ -123,6 +123,7 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - **PyYAML** — YAML config loading
 - **structlog** — Structured logging (JSON + console renderers)
 - **textual** — Terminal UI dashboard for live task monitoring
+- **mcp** — Model Context Protocol server (FastMCP, stdio transport)
 
 ## File Locations
 
@@ -135,4 +136,4 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 ## Testing
 
-Tests use pytest (376 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`, `test_validate.py`, `test_plugins.py`, `test_plan_full.py`, `test_e2e.py`. E2E tests use `tests/fixtures/fake_claude.sh` as a mock Claude CLI and are marked with `@pytest.mark.slow`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (419 tests). Test files: `test_config.py`, `test_costs.py`, `test_e2e.py`, `test_execution.py`, `test_gh_sync.py`, `test_hooks.py`, `test_logging.py`, `test_mcp.py`, `test_plan_full.py`, `test_plugins.py`, `test_prompt.py`, `test_runner.py`, `test_spec_prefix.py`, `test_state.py`, `test_tui.py`, `test_validate.py`, `test_watch.py`. E2E tests use `tests/fixtures/fake_claude.sh` as a mock Claude CLI and are marked with `@pytest.mark.slow`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
