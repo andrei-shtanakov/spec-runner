@@ -781,6 +781,53 @@ def cmd_sync_to_gh(args, tasks: list[Task]):
     print(f"{action}: created={created}, updated={updated}, closed={closed}")
 
 
+def _status_from_issue(issue: dict) -> str:
+    """Derive task status from GitHub issue state + labels."""
+    if issue["state"] == "CLOSED":
+        return "done"
+    for label in issue.get("labels", []):
+        name = label["name"] if isinstance(label, dict) else label
+        if name.startswith("status:"):
+            status = name.split(":", 1)[1]
+            if status in STATUS_EMOJI:
+                return status
+    return "todo"
+
+
+def cmd_sync_from_gh(args, tasks: list[Task], tasks_file: Path):
+    """Sync GitHub Issues state back to tasks.md."""
+    try:
+        result = _gh_run(["issue", "list", "--json", "number,title,state,labels", "--limit", "200"])
+    except FileNotFoundError:
+        print("Error: 'gh' CLI not found. Install from https://cli.github.com/")
+        return
+
+    if result.returncode != 0:
+        print(f"Error: gh issue list failed: {result.stderr}")
+        return
+
+    issues = json.loads(result.stdout)
+
+    status_map: dict[str, str] = {}
+    for issue in issues:
+        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
+        if m:
+            status_map[m.group(1)] = _status_from_issue(issue)
+
+    updated = 0
+    for task in tasks:
+        new_status = status_map.get(task.id)
+        if (
+            new_status
+            and new_status != task.status
+            and update_task_status(tasks_file, task.id, new_status)
+        ):
+            updated += 1
+            print(f"  {task.id}: {task.status} -> {new_status}")
+
+    print(f"Updated {updated} task(s) from GitHub Issues.")
+
+
 def main():
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
@@ -851,6 +898,11 @@ def main():
         "--dry-run", action="store_true", help="Show what would happen without making changes"
     )
 
+    # sync-from-gh
+    subparsers.add_parser(
+        "sync-from-gh", parents=[common], help="Sync GitHub Issues state to tasks.md"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -866,6 +918,7 @@ def main():
         "done": cmd_done,
         "block": cmd_block,
         "check": cmd_check,
+        "sync-from-gh": cmd_sync_from_gh,
     }
     read_commands = {
         "list": cmd_list,
