@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from uuid import uuid4
 
@@ -420,8 +421,7 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
     """Execute task with retries.
 
     Returns:
-        True if successful, False if failed, "API_ERROR" if rate limited,
-        or "SKIP" if task was skipped.
+        True if successful, False if failed, or "SKIP" if task was skipped.
     """
 
     task_state = state.get_task_state(task.id)
@@ -431,11 +431,7 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         result = execute_task(task, config, state)
 
-        # API error - stop immediately, don't retry
-        if result == "API_ERROR":
-            return "API_ERROR"
-
-        # Hook error - stop immediately, don't retry
+        # Hook error — always fatal, stop immediately (no error_code recorded)
         if result == "HOOK_ERROR":
             return False
 
@@ -453,23 +449,29 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         if result is True:
             return True
 
-        # Review rejection is permanent — no automatic retry
+        # Get last error code from state
         ts = state.get_task_state(task.id)
+        last_error_code = ErrorCode.UNKNOWN
         if ts and ts.attempts:
             last = ts.attempts[-1]
-            if last.error_code == ErrorCode.REVIEW_REJECTED:
-                log_progress("Review rejected — no automatic retry", task.id)
-                return False
+            if last.error_code:
+                last_error_code = last.error_code
+
+        # Fatal errors — no retry
+        if classify_retry_strategy(last_error_code) == "fatal":
+            log_progress(f"Fatal error ({last_error_code.value}) — no retry", task.id)
+            return False
 
         if attempt < config.max_retries - 1:
+            delay = compute_retry_delay(last_error_code, attempt, config.retry_delay_seconds)
             logger.info(
                 "Waiting before retry",
                 task_id=task.id,
-                delay_seconds=config.retry_delay_seconds,
+                delay_seconds=delay,
+                error_code=last_error_code.value,
+                strategy=classify_retry_strategy(last_error_code),
             )
-            import time
-
-            time.sleep(config.retry_delay_seconds)
+            time.sleep(delay)
 
     # Task failed after all retries
     log_progress(f"❌ Failed after {config.max_retries} attempts", task.id)
