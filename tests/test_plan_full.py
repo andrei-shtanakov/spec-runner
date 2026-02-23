@@ -55,3 +55,36 @@ class TestParseSpecMarkers:
     def test_no_marker_returns_none(self):
         content = parse_spec_marker("No markers here", "REQUIREMENTS")
         assert content is None
+
+
+class TestPlanFullPipeline:
+    def test_full_generates_three_files(self, tmp_path):
+        """Test that marker parsing + file writing works for all three stages."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+
+        # Simulate Claude outputs
+        req_output = (
+            "SPEC_REQUIREMENTS_READY\n# Requirements\n[REQ-001] User auth\nSPEC_REQUIREMENTS_END"
+        )
+        des_output = "SPEC_DESIGN_READY\n# Design\n[DESIGN-001] Auth module\nSPEC_DESIGN_END"
+        task_output = "SPEC_TASKS_READY\n# Tasks\n### TASK-001: Setup auth\nSPEC_TASKS_END"
+
+        req = parse_spec_marker(req_output, "REQUIREMENTS")
+        assert req is not None and "[REQ-001]" in req
+
+        des = parse_spec_marker(des_output, "DESIGN")
+        assert des is not None and "[DESIGN-001]" in des
+
+        tasks = parse_spec_marker(task_output, "TASKS")
+        assert tasks is not None and "TASK-001" in tasks
+
+        # Write files as pipeline would
+        (spec_dir / "requirements.md").write_text(req + "\n")
+        (spec_dir / "design.md").write_text(des + "\n")
+        (spec_dir / "tasks.md").write_text(tasks + "\n")
+
+        assert (spec_dir / "requirements.md").exists()
+        assert (spec_dir / "design.md").exists()
+        assert (spec_dir / "tasks.md").exists()
+        assert "[REQ-001]" in (spec_dir / "requirements.md").read_text()

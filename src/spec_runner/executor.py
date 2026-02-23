@@ -1191,9 +1191,78 @@ def cmd_reset(args, config: ExecutorConfig):
 
 
 def cmd_plan(args, config: ExecutorConfig):
-    """Interactive task planning via Claude."""
+    """Interactive task planning via Claude.
+
+    With --full flag, runs a three-stage pipeline to generate
+    requirements, design, and tasks files from a description.
+    """
 
     description = args.description
+
+    if getattr(args, "full", False):
+        from .prompt import build_generation_prompt, parse_spec_marker
+
+        stages = ["requirements", "design", "tasks"]
+        stage_files = {
+            "requirements": config.requirements_file,
+            "design": config.design_file,
+            "tasks": config.tasks_file,
+        }
+        marker_names = {
+            "requirements": "REQUIREMENTS",
+            "design": "DESIGN",
+            "tasks": "TASKS",
+        }
+        context: dict[str, str] = {}
+
+        for stage in stages:
+            logger.info("Generating spec", stage=stage)
+            prompt = build_generation_prompt(stage, description, context)
+
+            cmd = build_cli_command(
+                cmd=config.claude_command,
+                prompt=prompt,
+                model=config.claude_model,
+                template=config.command_template,
+                skip_permissions=config.skip_permissions,
+            )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=config.task_timeout_minutes * 60,
+                cwd=config.project_root,
+            )
+
+            if result.returncode != 0:
+                logger.error(
+                    "Generation failed",
+                    stage=stage,
+                    stderr=result.stderr[:500],
+                )
+                print(f"Failed at stage: {stage}")
+                sys.exit(1)
+
+            content = parse_spec_marker(result.stdout, marker_names[stage])
+            if not content:
+                logger.error("No spec marker found in output", stage=stage)
+                print(f"Claude did not produce {stage} content.")
+                sys.exit(1)
+
+            output_file = stage_files[stage]
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(content + "\n")
+            logger.info("Spec written", stage=stage, file=str(output_file))
+            print(f"Written: {output_file}")
+
+            context[stage] = content
+
+        print("\nSpec generation complete!")
+        print(f"  Requirements: {config.requirements_file}")
+        print(f"  Design:       {config.design_file}")
+        print(f"  Tasks:        {config.tasks_file}")
+        return
+
     print(f"\n📝 Planning: {description}")
     print("=" * 60)
 
@@ -1540,6 +1609,11 @@ def main():
     # plan
     plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
     plan_parser.add_argument("description", help="Feature description")
+    plan_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Generate full spec (requirements + design + tasks)",
+    )
 
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
