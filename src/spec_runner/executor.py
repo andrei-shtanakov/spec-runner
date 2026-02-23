@@ -602,6 +602,19 @@ def cmd_status(args, config: ExecutorConfig):
         print(f"Failed attempts:       {failed_attempts} (retried)")
     print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
 
+    # Token/cost summary
+    total_cost_val = state.total_cost()
+    if total_cost_val > 0:
+        total_inp, total_out = state.total_tokens()
+
+        def _fmt_tokens(n: int) -> str:
+            if n >= 1000:
+                return f"{n / 1000:.1f}K"
+            return str(n)
+
+        print(f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out")
+        print(f"Total cost:            ${total_cost_val:.2f}")
+
     # Tasks with attempts
     attempted = [ts for ts in state.tasks.values() if ts.attempts]
     if attempted:
@@ -611,6 +624,9 @@ def cmd_status(args, config: ExecutorConfig):
             attempts_info = f"{ts.attempt_count} attempt"
             if ts.attempt_count > 1:
                 attempts_info += "s"
+            task_cost = state.task_cost(ts.task_id)
+            if task_cost > 0:
+                attempts_info += f", ${task_cost:.2f}"
             print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
             if ts.status == "failed" and ts.last_error:
                 print(f"      Last error: {ts.last_error[:50]}...")
