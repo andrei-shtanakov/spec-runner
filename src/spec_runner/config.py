@@ -81,6 +81,7 @@ class ExecutorConfig:
     max_concurrent: int = 3  # Max parallel tasks
     budget_usd: float | None = None  # Global budget limit (None = unlimited)
     task_budget_usd: float | None = None  # Per-task budget limit (None = unlimited)
+    log_level: str = "info"  # Logging level (debug, info, warning, error)
 
     # Claude CLI
     claude_command: str = "claude"  # Claude CLI command
@@ -220,9 +221,14 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "max_concurrent": executor_config.get("max_concurrent"),
             "budget_usd": executor_config.get("budget_usd"),
             "task_budget_usd": executor_config.get("task_budget_usd"),
+            "log_level": executor_config.get("log_level"),
         }
     except Exception as e:
-        print(f"\u26a0\ufe0f  Warning: Failed to load config from {config_path}: {e}")
+        from .logging import get_logger
+
+        get_logger("config").warning(
+            "Failed to load config", path=str(config_path), error=str(e)
+        )
         return {}
 
 
@@ -271,5 +277,7 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["budget_usd"] = args.budget
     if hasattr(args, "task_budget") and getattr(args, "task_budget", None) is not None:
         config_kwargs["task_budget_usd"] = args.task_budget
+    if hasattr(args, "log_level") and getattr(args, "log_level", None):
+        config_kwargs["log_level"] = args.log_level
 
     return ExecutorConfig(**config_kwargs)

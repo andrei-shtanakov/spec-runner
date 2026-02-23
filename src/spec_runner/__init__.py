@@ -25,6 +25,7 @@ from .executor import (
 from .executor import (
     main as executor_main,
 )
+from .logging import get_logger, setup_logging
 from .prompt import build_task_prompt
 from .runner import parse_token_usage, run_claude_async
 from .state import (
@@ -78,4 +79,7 @@ __all__ = [
     "run_claude_async",
     "run_with_retries",
     "executor_main",
+    # Logging
+    "get_logger",
+    "setup_logging",
 ]

@@ -191,3 +191,13 @@ class TestErrorPatterns:
     def test_is_non_empty_list(self):
         assert isinstance(ERROR_PATTERNS, list)
         assert len(ERROR_PATTERNS) > 0
+
+
+class TestLoggingConfig:
+    def test_log_level_default(self):
+        config = ExecutorConfig()
+        assert config.log_level == "info"
+
+    def test_log_level_from_kwargs(self):
+        config = ExecutorConfig(log_level="debug")
+        assert config.log_level == "debug"

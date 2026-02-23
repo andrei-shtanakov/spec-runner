@@ -28,6 +28,8 @@ classifiers = [
 
 dependencies = [
     "PyYAML>=6.0",
+    "structlog>=24.0",
+    "textual>=1.0",
     "twine>=6.2.0",
 ]
 
