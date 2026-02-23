@@ -4,10 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from spec_runner.task import Task, parse_tasks
-
+from spec_runner.task import parse_tasks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,6 +60,7 @@ def _make_args(**kwargs):
 # sync-to-gh
 # ---------------------------------------------------------------------------
 
+
 class TestSyncToGh:
     """Tests for cmd_sync_to_gh."""
 
@@ -79,6 +77,7 @@ class TestSyncToGh:
         )
 
         from spec_runner.task import cmd_sync_to_gh
+
         cmd_sync_to_gh(_make_args(), tasks)
 
         # Should call gh issue list first, then create for TASK-002 and TASK-003
@@ -94,13 +93,20 @@ class TestSyncToGh:
         tasks = parse_tasks(tasks_file)
 
         # gh issue list returns existing issue for TASK-002
-        existing = json.dumps([
-            {"number": 5, "title": "[TASK-002] Add authentication", "state": "OPEN",
-             "labels": [{"name": "priority:p1"}]},
-        ])
+        existing = json.dumps(
+            [
+                {
+                    "number": 5,
+                    "title": "[TASK-002] Add authentication",
+                    "state": "OPEN",
+                    "labels": [{"name": "priority:p1"}],
+                },
+            ]
+        )
         mock_run.return_value = MagicMock(returncode=0, stdout=existing)
 
         from spec_runner.task import cmd_sync_to_gh
+
         cmd_sync_to_gh(_make_args(), tasks)
 
         calls = mock_run.call_args_list
@@ -117,13 +123,20 @@ class TestSyncToGh:
         tasks = parse_tasks(tasks_file)
 
         # Issue exists for TASK-001 which is done
-        existing = json.dumps([
-            {"number": 1, "title": "[TASK-001] Set up project", "state": "OPEN",
-             "labels": [{"name": "priority:p0"}]},
-        ])
+        existing = json.dumps(
+            [
+                {
+                    "number": 1,
+                    "title": "[TASK-001] Set up project",
+                    "state": "OPEN",
+                    "labels": [{"name": "priority:p0"}],
+                },
+            ]
+        )
         mock_run.return_value = MagicMock(returncode=0, stdout=existing)
 
         from spec_runner.task import cmd_sync_to_gh
+
         cmd_sync_to_gh(_make_args(), tasks)
 
         calls = mock_run.call_args_list
@@ -139,13 +152,13 @@ class TestSyncToGh:
         mock_run.return_value = MagicMock(returncode=0, stdout="[]")
 
         from spec_runner.task import cmd_sync_to_gh
+
         cmd_sync_to_gh(_make_args(dry_run=True), tasks)
 
         calls = mock_run.call_args_list
         # Only the initial list call
         mutation_calls = [
-            c for c in calls
-            if any(word in str(c) for word in ["create", "edit", "close"])
+            c for c in calls if any(word in str(c) for word in ["create", "edit", "close"])
         ]
         assert len(mutation_calls) == 0
 
@@ -158,6 +171,7 @@ class TestSyncToGh:
         mock_run.side_effect = FileNotFoundError("gh not found")
 
         from spec_runner.task import cmd_sync_to_gh
+
         cmd_sync_to_gh(_make_args(), tasks)
 
         captured = capsys.readouterr()
@@ -178,13 +192,20 @@ class TestSyncFromGh:
         tasks_file = _write_tasks(tmp_path)
         tasks = parse_tasks(tasks_file)
 
-        issues = json.dumps([
-            {"number": 1, "title": "[TASK-003] Write docs", "state": "CLOSED",
-             "labels": [{"name": "priority:p2"}, {"name": "status:done"}]},
-        ])
+        issues = json.dumps(
+            [
+                {
+                    "number": 1,
+                    "title": "[TASK-003] Write docs",
+                    "state": "CLOSED",
+                    "labels": [{"name": "priority:p2"}, {"name": "status:done"}],
+                },
+            ]
+        )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
         from spec_runner.task import cmd_sync_from_gh
+
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
         updated_tasks = parse_tasks(tasks_file)
@@ -197,13 +218,20 @@ class TestSyncFromGh:
         tasks_file = _write_tasks(tmp_path)
         tasks = parse_tasks(tasks_file)
 
-        issues = json.dumps([
-            {"number": 2, "title": "[TASK-003] Write docs", "state": "OPEN",
-             "labels": [{"name": "status:in_progress"}, {"name": "priority:p2"}]},
-        ])
+        issues = json.dumps(
+            [
+                {
+                    "number": 2,
+                    "title": "[TASK-003] Write docs",
+                    "state": "OPEN",
+                    "labels": [{"name": "status:in_progress"}, {"name": "priority:p2"}],
+                },
+            ]
+        )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
         from spec_runner.task import cmd_sync_from_gh
+
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
         updated_tasks = parse_tasks(tasks_file)
@@ -217,13 +245,20 @@ class TestSyncFromGh:
         tasks = parse_tasks(tasks_file)
         original_content = tasks_file.read_text()
 
-        issues = json.dumps([
-            {"number": 2, "title": "[TASK-002] Add authentication", "state": "OPEN",
-             "labels": [{"name": "status:in_progress"}]},
-        ])
+        issues = json.dumps(
+            [
+                {
+                    "number": 2,
+                    "title": "[TASK-002] Add authentication",
+                    "state": "OPEN",
+                    "labels": [{"name": "status:in_progress"}],
+                },
+            ]
+        )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
         from spec_runner.task import cmd_sync_from_gh
+
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
         assert tasks_file.read_text() == original_content
@@ -237,6 +272,7 @@ class TestSyncFromGh:
         mock_run.side_effect = FileNotFoundError("gh not found")
 
         from spec_runner.task import cmd_sync_from_gh
+
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
         captured = capsys.readouterr()

@@ -697,7 +697,9 @@ def _gh_run(args: list[str], capture: bool = True) -> subprocess.CompletedProces
 
 def _get_existing_issues() -> dict[str, dict]:
     """Fetch existing [TASK-XXX] issues from GitHub. Returns {task_id: issue_dict}."""
-    result = _gh_run(["issue", "list", "--json", "number,title,state,labels", "--limit", "200"])
+    result = _gh_run(
+        ["issue", "list", "--state", "all", "--json", "number,title,state,labels", "--limit", "200"]
+    )
     if result.returncode != 0:
         return {}
     issues = json.loads(result.stdout)
@@ -759,7 +761,7 @@ def cmd_sync_to_gh(args, tasks: list[Task]):
             if not dry_run:
                 _gh_run(["issue", "edit", str(issue["number"]), "--add-label", label_str])
                 if issue["state"] == "CLOSED":
-                    _gh_run(["issue", "edit", str(issue["number"]), "--state", "open"])
+                    _gh_run(["issue", "reopen", str(issue["number"])])
             updated += 1
         else:
             title = f"[{task.id}] {task.name}"
@@ -799,7 +801,18 @@ def _status_from_issue(issue: dict) -> str:
 def cmd_sync_from_gh(args, tasks: list[Task], tasks_file: Path):
     """Sync GitHub Issues state back to tasks.md."""
     try:
-        result = _gh_run(["issue", "list", "--json", "number,title,state,labels", "--limit", "200"])
+        result = _gh_run(
+            [
+                "issue",
+                "list",
+                "--state",
+                "all",
+                "--json",
+                "number,title,state,labels",
+                "--limit",
+                "200",
+            ]
+        )
     except FileNotFoundError:
         print("Error: 'gh' CLI not found. Install from https://cli.github.com/")
         return
