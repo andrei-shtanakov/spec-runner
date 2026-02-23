@@ -4,7 +4,10 @@ from pathlib import Path
 
 from spec_runner.task import Task
 from spec_runner.validate import (
+    ValidationResult,
     _detect_cycle,
+    format_results,
+    validate_all,
     validate_config,
     validate_task_fields,
     validate_tasks,
@@ -263,3 +266,110 @@ class TestValidateConfig:
         result = validate_config(tmp_path / "nonexistent.yaml")
         assert result.ok
         assert result.errors == []
+
+
+class TestValidateAll:
+    """Tests for validate_all orchestrator function."""
+
+    def test_validate_all_clean(self, tmp_path: Path) -> None:
+        """Clean tasks file with no config should pass."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text(
+            "# Tasks\n\n"
+            "### TASK-001: Setup\n"
+            "🔴 P0 | ⬜ todo | Est: 1d\n\n"
+            "**Traces to:** [REQ-001]\n"
+        )
+        result = validate_all(tasks_file=tasks_file)
+        assert result.ok
+
+    def test_validate_all_with_bad_config(self, tmp_path: Path) -> None:
+        """Tasks file + config with unknown key should fail."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text("# Tasks\n\n### TASK-001: Setup\n🔴 P0 | ⬜ todo | Est: 1d\n\n")
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text("executor:\n  max_retry: 5\n")
+        result = validate_all(tasks_file=tasks_file, config_file=config_file)
+        assert not result.ok
+
+    def test_validate_all_tasks_only(self, tmp_path: Path) -> None:
+        """Only tasks_file provided, no config."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text(VALID_TASKS_MD)
+        result = validate_all(tasks_file=tasks_file)
+        assert result.ok
+
+    def test_validate_all_config_only(self, tmp_path: Path) -> None:
+        """Only config_file provided, no tasks."""
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text("executor:\n  max_retries: 5\n")
+        result = validate_all(config_file=config_file)
+        assert result.ok
+
+    def test_validate_all_nothing(self) -> None:
+        """No files provided returns clean result."""
+        result = validate_all()
+        assert result.ok
+
+
+class TestFormatResults:
+    """Tests for format_results terminal formatting."""
+
+    def test_format_clean(self) -> None:
+        """Clean result shows 0 errors, 0 warnings."""
+        result = ValidationResult()
+        output = format_results(result)
+        assert "0 errors" in output
+        assert "0 warnings" in output
+
+    def test_format_with_errors_and_warnings(self) -> None:
+        """Result with errors and warnings formats correctly."""
+        result = ValidationResult(
+            errors=["TASK-001: depends on TASK-999 which does not exist"],
+            warnings=["TASK-002: missing estimate"],
+        )
+        output = format_results(result)
+        assert "1 error" in output
+        assert "1 warning" in output
+        assert "TASK-999" in output
+
+    def test_format_singular_words(self) -> None:
+        """Singular error/warning when count is 1."""
+        result = ValidationResult(
+            errors=["one error"],
+            warnings=["one warning"],
+        )
+        output = format_results(result)
+        assert "1 error," in output
+        assert "1 warning" in output
+        # Must NOT say "errors" (plural) for count 1
+        assert "1 errors" not in output
+        assert "1 warnings" not in output
+
+    def test_format_plural_words(self) -> None:
+        """Plural errors/warnings when count > 1."""
+        result = ValidationResult(
+            errors=["err1", "err2"],
+            warnings=["w1", "w2", "w3"],
+        )
+        output = format_results(result)
+        assert "2 errors" in output
+        assert "3 warnings" in output
+
+    def test_format_errors_prefixed_with_x(self) -> None:
+        """Errors are prefixed with 'x'."""
+        result = ValidationResult(errors=["some error"])
+        output = format_results(result)
+        assert "  x some error" in output
+
+    def test_format_warnings_prefixed_with_bang(self) -> None:
+        """Warnings are prefixed with '!'."""
+        result = ValidationResult(warnings=["some warning"])
+        output = format_results(result)
+        assert "  ! some warning" in output

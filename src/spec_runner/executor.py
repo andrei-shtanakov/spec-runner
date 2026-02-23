@@ -694,6 +694,15 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # Pre-run validation
+        from .validate import format_results, validate_all
+
+        pre_result = validate_all(tasks_file=config.tasks_file)
+        if not pre_result.ok:
+            logger.error("Validation failed before execution")
+            print(format_results(pre_result))
+            return
+
         state_lock = asyncio.Lock()
         sem = asyncio.Semaphore(config.max_concurrent)
         executed_ids: set[str] = set()
@@ -853,6 +862,15 @@ def _run_tasks(args, config: ExecutorConfig):
         if recovered:
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
+
+        # Pre-run validation
+        from .validate import format_results, validate_all
+
+        pre_result = validate_all(tasks_file=config.tasks_file)
+        if not pre_result.ok:
+            logger.error("Validation failed before execution")
+            print(format_results(pre_result))
+            return
 
         # Check failure limit
         if state.should_stop():
@@ -1379,6 +1397,20 @@ When done, respond with: PLAN_READY
             return
 
 
+def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Validate tasks file and config, print results."""
+    from .validate import format_results, validate_all
+
+    result = validate_all(
+        tasks_file=config.tasks_file,
+        config_file=config.project_root / "executor.config.yaml",
+    )
+    output = format_results(result)
+    print(output)
+    if not result.ok:
+        sys.exit(1)
+
+
 def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Launch read-only TUI dashboard."""
     from .logging import setup_logging
@@ -1509,6 +1541,9 @@ def main():
     plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
     plan_parser.add_argument("description", help="Feature description")
 
+    # validate
+    subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
+
     # tui
     subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
 
@@ -1543,6 +1578,7 @@ def main():
         "stop": cmd_stop,
         "reset": cmd_reset,
         "plan": cmd_plan,
+        "validate": cmd_validate,
         "tui": cmd_tui,
     }
 

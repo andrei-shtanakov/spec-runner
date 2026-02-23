@@ -49,6 +49,13 @@ from .task import (
     update_checklist_item,
     update_task_status,
 )
+from .validate import (
+    ValidationResult,
+    format_results,
+    validate_all,
+    validate_config,
+    validate_tasks,
+)
 
 try:
     __version__ = version("spec-runner")
@@ -83,6 +90,12 @@ __all__ = [
     "recover_stale_tasks",
     "run_with_retries",
     "executor_main",
+    # Validation
+    "ValidationResult",
+    "format_results",
+    "validate_all",
+    "validate_config",
+    "validate_tasks",
     # Logging
     "get_logger",
     "setup_logging",

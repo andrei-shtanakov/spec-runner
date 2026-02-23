@@ -258,3 +258,50 @@ def validate_tasks(tasks_file: Path) -> ValidationResult:
     )
 
     return result
+
+
+def validate_all(
+    tasks_file: Path | None = None,
+    config_file: Path | None = None,
+) -> ValidationResult:
+    """Run all validation checks.
+
+    Args:
+        tasks_file: Path to tasks.md (optional).
+        config_file: Path to executor config YAML (optional).
+
+    Returns:
+        Merged ValidationResult from all checks.
+    """
+    result = ValidationResult()
+    if tasks_file:
+        result.merge(validate_tasks(tasks_file))
+    if config_file:
+        result.merge(validate_config(config_file))
+    return result
+
+
+def format_results(result: ValidationResult) -> str:
+    """Format validation results for terminal output.
+
+    Args:
+        result: ValidationResult to format.
+
+    Returns:
+        Human-readable string with errors, warnings, and summary.
+    """
+    lines: list[str] = []
+    if result.errors:
+        for e in result.errors:
+            lines.append(f"  x {e}")
+    if result.warnings:
+        if lines:
+            lines.append("")
+        for w in result.warnings:
+            lines.append(f"  ! {w}")
+    n_err = len(result.errors)
+    n_warn = len(result.warnings)
+    err_word = "error" if n_err == 1 else "errors"
+    warn_word = "warning" if n_warn == 1 else "warnings"
+    lines.append(f"\n{n_err} {err_word}, {n_warn} {warn_word}")
+    return "\n".join(lines)
