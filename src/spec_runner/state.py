@@ -29,6 +29,7 @@ class ErrorCode(str, Enum):
     UNKNOWN = "UNKNOWN"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     REVIEW_REJECTED = "REVIEW_REJECTED"
+    INTERRUPTED = "INTERRUPTED"
 
 
 class ReviewVerdict(str, Enum):
@@ -486,6 +487,13 @@ class ExecutorState:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False  # Don't suppress exceptions
 
 
 def check_stop_requested(config: ExecutorConfig) -> bool:

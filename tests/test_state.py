@@ -781,3 +781,53 @@ class TestReviewFieldsInTaskAttempt:
         assert task.attempts[0].review_status == "fixed"
         assert task.attempts[0].review_findings == "Auto-fixed 1 issue"
         state2.close()
+
+
+# --- INTERRUPTED error code ---
+
+
+class TestInterruptedErrorCode:
+    def test_interrupted_exists(self):
+        assert ErrorCode.INTERRUPTED == "INTERRUPTED"
+
+    def test_interrupted_is_string_enum(self):
+        assert isinstance(ErrorCode.INTERRUPTED, str)
+        assert ErrorCode.INTERRUPTED.value == "INTERRUPTED"
+
+
+# --- ExecutorState context manager ---
+
+
+class TestExecutorStateContextManager:
+    def test_enter_returns_self(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        result = state.__enter__()
+        assert result is state
+        state.close()
+
+    def test_exit_closes_connection(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            assert state._conn is not None
+        assert state._conn is None
+
+    def test_exit_on_exception(self, tmp_path):
+        import pytest
+
+        config = _make_config(tmp_path)
+        with pytest.raises(ValueError):
+            with ExecutorState(config) as state:
+                raise ValueError("test error")
+        assert state._conn is None
+
+    def test_with_block_usage(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            ts = state.get_task_state("TASK-001")
+            assert ts.status == "running"
+        # Verify data persisted before close
+        state2 = ExecutorState(config)
+        assert state2.get_task_state("TASK-001").status == "running"
+        state2.close()
