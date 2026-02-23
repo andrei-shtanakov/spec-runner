@@ -233,3 +233,34 @@ class TestLoggingConfig:
     def test_log_level_from_kwargs(self):
         config = ExecutorConfig(log_level="debug")
         assert config.log_level == "debug"
+
+
+class TestLockDiagnostics:
+    def test_read_lock_info_returns_pid_and_started(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        lock = ExecutorLock(lock_path)
+        lock_path.write_text("PID: 12345\nStarted: 2026-02-23T10:00:00\n")
+        info = lock._read_lock_info()
+        assert info["pid"] == "12345"
+        assert info["started"] == "2026-02-23T10:00:00"
+
+    def test_read_lock_info_empty_file(self, tmp_path):
+        lock_path = tmp_path / "test.lock"
+        lock = ExecutorLock(lock_path)
+        lock_path.write_text("")
+        info = lock._read_lock_info()
+        assert info == {}
+
+    def test_read_lock_info_missing_file(self, tmp_path):
+        lock_path = tmp_path / "nonexistent.lock"
+        lock = ExecutorLock(lock_path)
+        info = lock._read_lock_info()
+        assert info == {}
+
+    def test_is_pid_alive_current_process(self):
+        import os
+
+        assert ExecutorLock._is_pid_alive(os.getpid()) is True
+
+    def test_is_pid_alive_dead_process(self):
+        assert ExecutorLock._is_pid_alive(99999999) is False

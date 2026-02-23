@@ -24,6 +24,7 @@ class ExecutorLock:
     def __init__(self, lock_path: Path):
         self.lock_path = lock_path
         self.lock_file: TextIO | None = None
+        self._held_by: dict[str, str] = {}
 
     def acquire(self) -> bool:
         """Try to acquire lock. Returns True if successful."""
@@ -35,8 +36,14 @@ class ExecutorLock:
             self.lock_file.flush()
             return True
         except BlockingIOError:
+            held_by = self._read_lock_info()
             self.lock_file.close()
             self.lock_file = None
+            if held_by:
+                pid_str = held_by.get("pid")
+                if pid_str and not self._is_pid_alive(int(pid_str)):
+                    held_by["alive"] = "false"
+            self._held_by = held_by
             return False
 
     def release(self):
@@ -47,6 +54,29 @@ class ExecutorLock:
             self.lock_file = None
             with contextlib.suppress(FileNotFoundError):
                 self.lock_path.unlink()
+
+    def _read_lock_info(self) -> dict[str, str]:
+        """Read PID and start time from existing lock file."""
+        try:
+            content = self.lock_path.read_text()
+            info: dict[str, str] = {}
+            for line in content.splitlines():
+                if line.startswith("PID:"):
+                    info["pid"] = line.split(":", 1)[1].strip()
+                elif line.startswith("Started:"):
+                    info["started"] = line.split(":", 1)[1].strip()
+            return info
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        """Check if a process with the given PID is alive."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
 
 
 # === Constants ===
