@@ -52,7 +52,10 @@ def parse_token_usage(stderr: str) -> tuple[int | None, int | None, float | None
     def _parse_float(pattern: str) -> float | None:
         m = re.search(pattern, stderr, re.IGNORECASE)
         if m:
-            return float(m.group(1).replace(",", ""))
+            try:
+                return float(m.group(1).replace(",", ""))
+            except ValueError:
+                return None
         return None
 
     input_tokens = _parse_int(r"input[_ ]tokens?[:\s]+(\d[\d,]*)")
