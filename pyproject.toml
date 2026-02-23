@@ -31,7 +31,6 @@ dependencies = [
     "PyYAML>=6.0",
     "structlog>=24.0",
     "textual>=1.0",
-    "twine>=6.2.0",
 ]
 
 [project.optional-dependencies]
@@ -85,5 +84,6 @@ dev = [
     "pyrefly>=0.51.1",
     "pytest>=9.0.2",
     "ruff>=0.14.14",
+    "twine>=6.2.0",
     "types-pyyaml>=6.0.12.20250915",
 ]
