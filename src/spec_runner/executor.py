@@ -31,10 +31,10 @@ from .hooks import (
     post_done_hook,
     pre_start_hook,
 )
+from .logging import get_logger
 from .prompt import (
     build_task_prompt,
     extract_test_failures,
-    format_error_summary,
     load_prompt_template,
     render_template,
 )
@@ -62,6 +62,8 @@ from .task import (
     update_task_status,
 )
 
+logger = get_logger("executor")
+
 # === Task Executor ===
 
 
@@ -75,13 +77,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
     task_id = task.id
     log_progress(f"🚀 Starting: {task.name}", task_id)
-    print(f"\n{'=' * 60}")
-    print(f"🚀 Executing {task_id}: {task.name}")
-    print(f"{'=' * 60}")
+    logger.info("Executing task", task_id=task_id, name=task.name)
 
     # Pre-start hook
     if not pre_start_hook(task, config):
-        print("❌ Pre-start hook failed")
+        logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
             False,
@@ -143,8 +143,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             skip_permissions=config.skip_permissions,
         )
 
-        flags = " --dangerously-skip-permissions" if config.skip_permissions else ""
-        print(f"🤖 Running: {config.claude_command} -p ...{flags}")
+        logger.info(
+            "Running CLI command",
+            command=config.claude_command,
+            skip_permissions=config.skip_permissions,
+        )
 
         result = subprocess.run(
             cmd,
@@ -171,9 +174,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         error_pattern = check_error_patterns(combined_output)
         if error_pattern:
             log_progress(f"⚠️ API error detected: {error_pattern}", task_id)
-            print(f"\n⚠️  API error detected: '{error_pattern}'")
-            print("   Check your usage: claude usage")
-            print("   Or wait and retry later.")
+            logger.warning(
+                "API error detected",
+                task_id=task_id,
+                error_pattern=error_pattern,
+            )
             state.record_attempt(
                 task_id,
                 False,
@@ -208,9 +213,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
         if success:
             if has_complete_marker:
-                print("✅ Claude reports: TASK_COMPLETE")
+                logger.info("Task completed by Claude", task_id=task_id)
             else:
-                print("✅ Implicit success (return code 0, no TASK_FAILED)")
+                logger.info("Implicit success (return code 0)", task_id=task_id)
 
             # Post-done hook (tests, lint)
             hook_success, hook_error = post_done_hook(task, config, True)
@@ -373,7 +378,11 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
             return True
 
         if attempt < config.max_retries - 1:
-            print(f"⏳ Waiting {config.retry_delay_seconds}s before retry...")
+            logger.info(
+                "Waiting before retry",
+                task_id=task.id,
+                delay_seconds=config.retry_delay_seconds,
+            )
             import time
 
             time.sleep(config.retry_delay_seconds)
@@ -381,14 +390,17 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
     # Task failed after all retries
     log_progress(f"❌ Failed after {config.max_retries} attempts", task.id)
 
-    # Show concise error summary
+    # Log concise error summary
     if task_state.last_error:
         last_attempt = task_state.attempts[-1] if task_state.attempts else None
-        output = last_attempt.claude_output if last_attempt else None
-        print(f"\n{'─' * 60}")
-        print(f"📛 {task.id} FAILED")
-        print(format_error_summary(task_state.last_error, output))
-        print(f"{'─' * 60}")
+        error_code = last_attempt.error_code if last_attempt else None
+        logger.error(
+            "Task failed",
+            task_id=task.id,
+            error=task_state.last_error,
+            error_code=error_code,
+            attempts=config.max_retries,
+        )
 
     # Handle based on on_task_failure setting
     if config.on_task_failure == "stop":
@@ -396,7 +408,8 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         return False
 
     elif config.on_task_failure == "ask":
-        print(f"\n❓ Task {task.id} failed. What to do?")
+        # Interactive prompt — keep print() for user-facing menu
+        print(f"\nTask {task.id} failed. What to do?")
         print("   [s] Skip and continue to next task")
         print("   [r] Retry this task")
         print("   [q] Quit executor")
@@ -639,7 +652,7 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
         while True:
             if check_stop_requested(config):
                 clear_stop_file(config)
-                print("\nGraceful shutdown requested")
+                logger.info("Graceful shutdown requested")
                 break
 
             tasks = parse_tasks(config.tasks_file)
@@ -651,9 +664,9 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
             if not ready or state.should_stop():
                 break
 
-            print(f"\nDispatching {len(ready)} tasks in parallel...")
+            logger.info("Dispatching tasks in parallel", count=len(ready))
             for t in ready:
-                print(f"   - {t.id}: {t.name}")
+                logger.info("Dispatching task", task_id=t.id, name=t.name)
                 executed_ids.add(t.id)
 
             results = await asyncio.gather(
@@ -668,11 +681,11 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
                     api_error = True
                     break
             if api_error:
-                print("\nStopping: API rate limit reached")
+                logger.warning("Stopping: API rate limit reached")
                 break
 
             if state.should_stop():
-                print("\nStopping: failure/budget limit reached")
+                logger.warning("Stopping: failure/budget limit reached")
                 break
 
         # Summary
@@ -680,14 +693,13 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
         remaining = len([t for t in tasks if t.status == "todo"])
         total_cost_val = state.total_cost()
 
-        print(f"\n{'=' * 60}")
-        print("Execution Summary (parallel)")
-        print(f"{'=' * 60}")
-        print(f"   Tasks completed:    {state.total_completed}")
-        print(f"   Tasks failed:       {state.total_failed}")
-        print(f"   Tasks remaining:    {remaining}")
-        if total_cost_val > 0:
-            print(f"   Total cost:         ${total_cost_val:.2f}")
+        logger.info(
+            "Execution summary (parallel)",
+            completed=state.total_completed,
+            failed=state.total_failed,
+            remaining=remaining,
+            total_cost_usd=total_cost_val if total_cost_val > 0 else None,
+        )
     finally:
         state.close()
 
@@ -708,9 +720,10 @@ def cmd_run(args, config: ExecutorConfig):
         # Acquire lock to prevent parallel runs
         lock = ExecutorLock(config.state_file.with_suffix(".lock"))
         if not lock.acquire():
-            print("Another executor is already running")
-            print(f"   Lock file: {config.state_file.with_suffix('.lock')}")
-            print("   If this is an error, delete the lock file manually.")
+            logger.error(
+                "Another executor is already running",
+                lock_file=str(config.state_file.with_suffix(".lock")),
+            )
             sys.exit(1)
 
         try:
@@ -729,8 +742,10 @@ def _run_tasks(args, config: ExecutorConfig):
 
     # Check failure limit
     if state.should_stop():
-        print(f"⛔ Stopped: {state.consecutive_failures} consecutive failures")
-        print("   Use 'spec-runner retry <TASK-ID>' to retry specific task")
+        logger.error(
+            "Stopped due to consecutive failures",
+            consecutive_failures=state.consecutive_failures,
+        )
         return
 
     # Determine which tasks to execute
@@ -738,7 +753,7 @@ def _run_tasks(args, config: ExecutorConfig):
         # Specific task
         task = get_task_by_id(tasks, args.task.upper())
         if not task:
-            print(f"❌ Task {args.task} not found")
+            logger.error("Task not found", task_id=args.task)
             return
         tasks_to_run = [task]
 
@@ -764,13 +779,12 @@ def _run_tasks(args, config: ExecutorConfig):
         tasks_to_run = next_tasks[:1] if next_tasks else []
 
     if not tasks_to_run:
-        print("✅ No tasks ready to execute")
-        print("   All dependencies might be incomplete, or all tasks done")
+        logger.info("No tasks ready to execute")
         return
 
-    print(f"📋 Tasks to execute: {len(tasks_to_run)}")
+    logger.info("Tasks to execute", count=len(tasks_to_run))
     for t in tasks_to_run:
-        print(f"   - {t.id}: {t.name}")
+        logger.info("Queued task", task_id=t.id, name=t.name)
 
     # Execute
     if args.all:
@@ -781,7 +795,7 @@ def _run_tasks(args, config: ExecutorConfig):
             # Check for graceful shutdown request
             if check_stop_requested(config):
                 clear_stop_file(config)
-                print("\n🛑 Graceful shutdown requested (spec/.executor-stop)")
+                logger.info("Graceful shutdown requested")
                 log_progress("🛑 Graceful shutdown requested")
                 break
 
@@ -803,12 +817,17 @@ def _run_tasks(args, config: ExecutorConfig):
                 all_tasks = parse_tasks(config.tasks_file)
                 todo_tasks = [t for t in all_tasks if t.status == "todo"]
                 if todo_tasks:
-                    print(f"\n⏸️  No more ready tasks. {len(todo_tasks)} tasks blocked:")
-                    for t in todo_tasks:
-                        deps = ", ".join(t.depends_on) if t.depends_on else "none"
-                        print(f"   - {t.id}: waiting on [{deps}]")
+                    blocked_info = {
+                        t.id: ", ".join(t.depends_on) if t.depends_on else "none"
+                        for t in todo_tasks
+                    }
+                    logger.info(
+                        "No more ready tasks",
+                        blocked_count=len(todo_tasks),
+                        blocked_tasks=blocked_info,
+                    )
                 else:
-                    print("\n✅ All tasks completed!")
+                    logger.info("All tasks completed")
                     # Ensure we're on main branch at the end
                     ensure_on_main_branch(config)
                 break
@@ -816,12 +835,12 @@ def _run_tasks(args, config: ExecutorConfig):
             task = ready_tasks[0]
             executed_ids.add(task.id)
 
-            print(f"\n📋 Next ready task: {task.id}: {task.name}")
+            logger.info("Next ready task", task_id=task.id, name=task.name)
 
             result = run_with_retries(task, config, state)
 
             if result == "API_ERROR":
-                print("\n⛔ Stopping: API rate limit reached")
+                logger.warning("Stopping: API rate limit reached")
                 log_progress("⛔ Stopped: API rate limit")
                 break
 
@@ -830,7 +849,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 continue
 
             if result is False and state.should_stop():
-                print("\n⛔ Stopping: too many consecutive failures")
+                logger.warning("Stopping: too many consecutive failures")
                 break
     else:
         # For single task or milestone mode, execute the fixed list
@@ -838,14 +857,14 @@ def _run_tasks(args, config: ExecutorConfig):
             # Check for graceful shutdown request
             if check_stop_requested(config):
                 clear_stop_file(config)
-                print("\n🛑 Graceful shutdown requested (spec/.executor-stop)")
+                logger.info("Graceful shutdown requested")
                 log_progress("🛑 Graceful shutdown requested")
                 break
 
             result = run_with_retries(task, config, state)
 
             if result == "API_ERROR":
-                print("\n⛔ Stopping: API rate limit reached")
+                logger.warning("Stopping: API rate limit reached")
                 log_progress("⛔ Stopped: API rate limit")
                 break
 
@@ -853,7 +872,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 continue
 
             if result is False and state.should_stop():
-                print("\n⛔ Stopping: too many consecutive failures")
+                logger.warning("Stopping: too many consecutive failures")
                 break
 
     # Summary
@@ -864,14 +883,13 @@ def _run_tasks(args, config: ExecutorConfig):
     failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
     remaining = len([t for t in tasks if t.status == "todo"])
 
-    print(f"\n{'=' * 60}")
-    print("📊 Execution Summary")
-    print(f"{'=' * 60}")
-    print(f"   Tasks completed:    {state.total_completed}")
-    print(f"   Tasks failed:       {state.total_failed}")
-    print(f"   Tasks remaining:    {remaining}")
-    if failed_attempts > 0:
-        print(f"   Failed attempts:    {failed_attempts} (retried successfully)")
+    logger.info(
+        "Execution summary",
+        completed=state.total_completed,
+        failed=state.total_failed,
+        remaining=remaining,
+        failed_attempts=failed_attempts if failed_attempts > 0 else None,
+    )
 
 
 def cmd_status(args, config: ExecutorConfig):
@@ -954,31 +972,32 @@ def cmd_retry(args, config: ExecutorConfig):
 
     task = get_task_by_id(tasks, args.task_id.upper())
     if not task:
-        print(f"❌ Task {args.task_id} not found")
+        logger.error("Task not found", task_id=args.task_id)
         return
 
     task_state = state.get_task_state(task.id)
 
     # Handle --fresh flag
     if hasattr(args, "fresh") and args.fresh:
-        print("🧹 Fresh start: clearing previous attempts")
+        logger.info("Fresh start: clearing previous attempts", task_id=task.id)
         task_state.attempts = []
     else:
         # Keep previous attempts for context (Claude will see past errors)
         previous_attempts = len(task_state.attempts)
         if previous_attempts > 0:
-            print(f"📋 Preserving {previous_attempts} previous attempt(s) for context")
-            # Show last error for reference
-            if task_state.last_error:
-                error_preview = task_state.last_error[:100]
-                print(f"   Last error: {error_preview}...")
+            logger.info(
+                "Preserving previous attempts for context",
+                task_id=task.id,
+                previous_attempts=previous_attempts,
+                last_error=task_state.last_error[:100] if task_state.last_error else None,
+            )
 
     # Only reset status and failure counter
     task_state.status = "pending"
     state.consecutive_failures = 0
     state._save()
 
-    print(f"🔄 Retrying {task.id}...")
+    logger.info("Retrying task", task_id=task.id)
 
     # Execute single attempt (not run_with_retries which has max_retries limit)
     success = execute_task(task, config, state)
@@ -997,13 +1016,12 @@ def cmd_logs(args, config: ExecutorConfig):
     log_files = sorted(config.logs_dir.glob(f"{task_id}-*.log"))
 
     if not log_files:
-        print(f"No logs found for {task_id}")
+        logger.info("No logs found", task_id=task_id)
         return
 
     latest = log_files[-1]
-    print(f"📄 Latest log: {latest}")
-    print("=" * 50)
-    print(latest.read_text()[:5000])  # Limit output
+    logger.info("Showing latest log", task_id=task_id, log_file=str(latest))
+    print(latest.read_text()[:5000])  # Limit output — raw log content to stdout
 
 
 def cmd_stop(args, config: ExecutorConfig):
@@ -1011,8 +1029,7 @@ def cmd_stop(args, config: ExecutorConfig):
     stop_file = config.stop_file
     stop_file.parent.mkdir(parents=True, exist_ok=True)
     stop_file.write_text(f"Stop requested at {datetime.now().isoformat()}\n")
-    print("🛑 Stop requested — executor will finish current task and exit")
-    print(f"   Created {stop_file}")
+    logger.info("Stop requested", stop_file=str(stop_file))
 
 
 def cmd_reset(args, config: ExecutorConfig):
@@ -1020,13 +1037,13 @@ def cmd_reset(args, config: ExecutorConfig):
 
     if config.state_file.exists():
         config.state_file.unlink()
-        print("✅ State reset")
+        logger.info("State reset", state_file=str(config.state_file))
 
     clear_stop_file(config)
 
     if args.logs and config.logs_dir.exists():
         shutil.rmtree(config.logs_dir)
-        print("✅ Logs cleared")
+        logger.info("Logs cleared", logs_dir=str(config.logs_dir))
 
 
 def cmd_plan(args, config: ExecutorConfig):
