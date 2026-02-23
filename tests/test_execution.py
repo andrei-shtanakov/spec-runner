@@ -6,7 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.executor import execute_task, run_with_retries
+from spec_runner.executor import (
+    classify_retry_strategy,
+    compute_retry_delay,
+    execute_task,
+    run_with_retries,
+)
 from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
@@ -1156,3 +1161,67 @@ class TestForceFlag:
         )()
         cmd_run(args, config)
         assert len(lock_acquired) == 1
+
+
+# --- Retry strategy tests ---
+
+
+class TestRetryStrategy:
+    def test_rate_limit_is_exponential(self):
+        assert classify_retry_strategy(ErrorCode.RATE_LIMIT) == "backoff_exponential"
+
+    def test_test_failure_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TEST_FAILURE) == "backoff_linear"
+
+    def test_lint_failure_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.LINT_FAILURE) == "backoff_linear"
+
+    def test_task_failed_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TASK_FAILED) == "backoff_linear"
+
+    def test_timeout_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TIMEOUT) == "backoff_linear"
+
+    def test_unknown_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.UNKNOWN) == "backoff_linear"
+
+    def test_hook_failure_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.HOOK_FAILURE) == "fatal"
+
+    def test_review_rejected_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.REVIEW_REJECTED) == "fatal"
+
+    def test_budget_exceeded_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.BUDGET_EXCEEDED) == "fatal"
+
+    def test_interrupted_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.INTERRUPTED) == "fatal"
+
+    def test_string_error_code(self):
+        assert classify_retry_strategy("RATE_LIMIT") == "backoff_exponential"
+
+
+class TestComputeRetryDelay:
+    def test_exponential_attempt_0(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=0) == 30.0
+
+    def test_exponential_attempt_1(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=1) == 60.0
+
+    def test_exponential_attempt_2(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=2) == 120.0
+
+    def test_exponential_caps_at_300(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=10) == 300.0
+
+    def test_linear_attempt_0(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=0, base_delay=5) == 5.0
+
+    def test_linear_attempt_1(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=1, base_delay=5) == 10.0
+
+    def test_linear_attempt_2(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=2, base_delay=5) == 15.0
+
+    def test_fatal_returns_zero(self):
+        assert compute_retry_delay(ErrorCode.HOOK_FAILURE, attempt=0) == 0.0

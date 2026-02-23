@@ -373,6 +373,49 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         return False
 
 
+# === Retry Strategy ===
+
+_FATAL_ERRORS = frozenset(
+    {
+        ErrorCode.HOOK_FAILURE,
+        ErrorCode.REVIEW_REJECTED,
+        ErrorCode.BUDGET_EXCEEDED,
+        ErrorCode.INTERRUPTED,
+    }
+)
+
+_EXPONENTIAL_ERRORS = frozenset(
+    {
+        ErrorCode.RATE_LIMIT,
+    }
+)
+
+
+def classify_retry_strategy(error_code: ErrorCode | str) -> str:
+    """Classify error into retry strategy.
+
+    Returns:
+        "fatal" — no retry, "backoff_exponential" — long increasing delays,
+        "backoff_linear" — short increasing delays.
+    """
+    code = ErrorCode(error_code) if isinstance(error_code, str) else error_code
+    if code in _FATAL_ERRORS:
+        return "fatal"
+    if code in _EXPONENTIAL_ERRORS:
+        return "backoff_exponential"
+    return "backoff_linear"
+
+
+def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: int = 5) -> float:
+    """Compute delay before next retry based on error type and attempt number."""
+    strategy = classify_retry_strategy(error_code)
+    if strategy == "fatal":
+        return 0.0
+    if strategy == "backoff_exponential":
+        return min(30.0 * (2**attempt), 300.0)
+    return float(base_delay * (attempt + 1))
+
+
 def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:
     """Execute task with retries.
 
