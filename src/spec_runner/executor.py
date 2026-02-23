@@ -1258,6 +1258,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         # Summary section
         print(f"\n{'=' * 40}")
         print(f"Total cost:           ${total_cost:.2f}")
+        if total_inp > 0 or total_out > 0:
+            def _fmt_tok(n: int) -> str:
+                return f"{n / 1000:.1f}K" if n >= 1000 else str(n)
+
+            print(f"Total tokens:         {_fmt_tok(total_inp)} input, {_fmt_tok(total_out)} output")
         if config.budget_usd is not None:
             pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
             print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f}")
