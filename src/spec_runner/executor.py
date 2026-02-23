@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import re
 import shutil
 import signal
@@ -1147,6 +1148,128 @@ def cmd_status(args, config: ExecutorConfig):
                 print(f"   ⬜ {t.id}: {t.name}")
 
 
+def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Show cost breakdown per task with optional JSON output."""
+    tasks = parse_tasks(config.tasks_file)
+
+    if not tasks:
+        print("No tasks found")
+        return
+
+    with ExecutorState(config) as state:
+        # Build per-task cost info
+        task_rows: list[dict] = []
+        for t in tasks:
+            ts = state.tasks.get(t.id)
+            cost = state.task_cost(t.id)
+            if ts:
+                inp_tokens = sum(
+                    a.input_tokens for a in ts.attempts if a.input_tokens is not None
+                )
+                out_tokens = sum(
+                    a.output_tokens for a in ts.attempts if a.output_tokens is not None
+                )
+                task_rows.append({
+                    "task_id": t.id,
+                    "name": t.name,
+                    "status": ts.status,
+                    "cost": cost,
+                    "attempts": ts.attempt_count,
+                    "input_tokens": inp_tokens,
+                    "output_tokens": out_tokens,
+                    "total_tokens": inp_tokens + out_tokens,
+                })
+            else:
+                task_rows.append({
+                    "task_id": t.id,
+                    "name": t.name,
+                    "status": t.status,
+                    "cost": 0.0,
+                    "attempts": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "no_state": True,
+                })
+
+        # Sort
+        sort_key = getattr(args, "sort", "id")
+        if sort_key == "cost":
+            task_rows.sort(key=lambda r: r["cost"], reverse=True)
+        elif sort_key == "tokens":
+            task_rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+        elif sort_key == "name":
+            task_rows.sort(key=lambda r: r["name"])
+        # default "id" — already in parse order (task id order)
+
+        # Summary
+        total_cost = state.total_cost()
+        total_inp, total_out = state.total_tokens()
+        completed_costs = [r["cost"] for r in task_rows if r["cost"] > 0]
+        avg_cost = sum(completed_costs) / len(completed_costs) if completed_costs else 0.0
+        most_expensive = max(task_rows, key=lambda r: r["cost"]) if task_rows else None
+
+        summary = {
+            "total_cost": round(total_cost, 2),
+            "total_input_tokens": total_inp,
+            "total_output_tokens": total_out,
+            "avg_cost_per_completed": round(avg_cost, 2),
+            "most_expensive_task": most_expensive["task_id"] if most_expensive else None,
+        }
+        if config.budget_usd is not None:
+            pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
+            summary["budget_usd"] = config.budget_usd
+            summary["budget_used_pct"] = round(pct, 1)
+
+        if getattr(args, "json", False):
+            # JSON output
+            json_tasks = []
+            for r in task_rows:
+                json_tasks.append({
+                    "task_id": r["task_id"],
+                    "name": r["name"],
+                    "status": r["status"],
+                    "cost": r["cost"],
+                    "attempts": r["attempts"],
+                    "input_tokens": r["input_tokens"],
+                    "output_tokens": r["output_tokens"],
+                })
+            print(json.dumps({"tasks": json_tasks, "summary": summary}, indent=2))
+            return
+
+        # Text table output
+        print(f"\n{'Task':<12} {'Name':<30} {'Status':<10} {'Cost':>8} {'Att':>4} {'Tokens':>10}")
+        print("-" * 78)
+        for r in task_rows:
+            if r.get("no_state"):
+                cost_str = "--"
+                att_str = "--"
+                tok_str = "--"
+            else:
+                cost_str = f"${r['cost']:.2f}"
+                att_str = str(r["attempts"])
+                tok_str = f"{r['total_tokens']}"
+            name = r["name"][:28]
+            print(
+                f"{r['task_id']:<12} {name:<30} {r['status']:<10} "
+                f"{cost_str:>8} {att_str:>4} {tok_str:>10}"
+            )
+
+        # Summary section
+        print(f"\n{'=' * 40}")
+        print(f"Total cost:           ${total_cost:.2f}")
+        if config.budget_usd is not None:
+            pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
+            print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f}")
+        if completed_costs:
+            print(f"Avg per completed:    ${avg_cost:.2f}")
+        if most_expensive and most_expensive["cost"] > 0:
+            print(
+                f"Most expensive:       {most_expensive['task_id']} "
+                f"(${most_expensive['cost']:.2f})"
+            )
+
+
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
 
@@ -1660,6 +1783,18 @@ def main():
     # tui
     subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
 
+    # costs
+    costs_parser = subparsers.add_parser(
+        "costs", parents=[common], help="Show cost breakdown per task"
+    )
+    costs_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    costs_parser.add_argument(
+        "--sort",
+        choices=["id", "cost", "tokens", "name"],
+        default="id",
+        help="Sort order (default: task id)",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1686,6 +1821,7 @@ def main():
     commands = {
         "run": cmd_run,
         "status": cmd_status,
+        "costs": cmd_costs,
         "retry": cmd_retry,
         "logs": cmd_logs,
         "stop": cmd_stop,
