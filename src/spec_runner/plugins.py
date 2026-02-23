@@ -2,8 +2,11 @@
 
 Scans a plugins directory for subdirectories containing plugin.yaml
 manifests, parses them into PluginInfo/PluginHook dataclasses.
+Executes plugin hooks as subprocesses with env vars and run_on filtering.
 """
 
+import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -132,3 +135,94 @@ def discover_plugins(plugins_dir: Path) -> list[PluginInfo]:
             log.debug("discovered plugin", name=plugin.name, hooks=list(plugin.hooks.keys()))
 
     return sorted(plugins, key=lambda p: p.name)
+
+
+def _should_run(hook: PluginHook, task_status: str) -> bool:
+    """Check if hook should run based on run_on filter and task status.
+
+    Args:
+        hook: The plugin hook to evaluate.
+        task_status: Current task status ("success" or "failed").
+
+    Returns:
+        True if the hook should execute.
+    """
+    if hook.run_on == "always":
+        return True
+    if hook.run_on == "on_success" and task_status == "success":
+        return True
+    return hook.run_on == "on_failure" and task_status == "failed"
+
+
+def run_plugin_hooks(
+    event: str,
+    plugins: list[PluginInfo],
+    task_env: dict[str, str] | None = None,
+    timeout_seconds: int = 60,
+) -> list[tuple[str, bool, bool]]:
+    """Run all plugin hooks for given event.
+
+    Args:
+        event: Hook event name (pre_start, post_done).
+        plugins: Discovered plugins.
+        task_env: Environment variables (SR_TASK_ID, etc.).
+        timeout_seconds: Per-plugin timeout.
+
+    Returns:
+        List of (plugin_name, success, is_blocking) tuples.
+        Only includes plugins that actually ran (not skipped by run_on filter).
+    """
+    results: list[tuple[str, bool, bool]] = []
+    env = {**os.environ, **(task_env or {})}
+    task_status = (task_env or {}).get("SR_TASK_STATUS", "success")
+
+    for plugin in plugins:
+        hook = plugin.hooks.get(event)
+        if not hook:
+            continue
+        if not _should_run(hook, task_status):
+            continue
+
+        try:
+            result = subprocess.run(
+                hook.command,
+                shell=True,
+                env=env,
+                cwd=str(plugin.path),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            success = result.returncode == 0
+            if not success:
+                level = "error" if hook.blocking else "warning"
+                getattr(log, level)(
+                    "Plugin hook failed",
+                    plugin=plugin.name,
+                    hook_event=event,
+                    returncode=result.returncode,
+                    stderr=result.stderr[:500],
+                )
+            else:
+                log.info(
+                    "Plugin hook succeeded",
+                    plugin=plugin.name,
+                    hook_event=event,
+                )
+            results.append((plugin.name, success, hook.blocking))
+        except subprocess.TimeoutExpired:
+            log.error(
+                "Plugin hook timed out",
+                plugin=plugin.name,
+                hook_event=event,
+            )
+            results.append((plugin.name, False, hook.blocking))
+        except Exception as e:
+            log.error(
+                "Plugin hook error",
+                plugin=plugin.name,
+                error=str(e),
+            )
+            results.append((plugin.name, False, hook.blocking))
+
+    return results

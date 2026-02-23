@@ -1,10 +1,11 @@
 """Tests for spec_runner.plugins module."""
 
+import stat
 from pathlib import Path
 
 import yaml
 
-from spec_runner.plugins import PluginHook, discover_plugins
+from spec_runner.plugins import PluginHook, discover_plugins, run_plugin_hooks
 
 
 def _create_plugin(plugins_dir: Path, name: str, hooks: dict) -> Path:
@@ -114,3 +115,85 @@ class TestDiscoverPlugins:
         hook = result[0].hooks["post_done"]
         assert hook.run_on == "always"
         assert hook.blocking is False
+
+
+class TestRunPluginHooks:
+    """Tests for run_plugin_hooks()."""
+
+    def _make_script(self, plugin_dir: Path, name: str, content: str) -> Path:
+        script = plugin_dir / name
+        script.write_text(content)
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        return script
+
+    def test_run_post_done_hook(self, tmp_path: Path) -> None:
+        """Hook command is executed and success is reported."""
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "test-plugin",
+            {"post_done": {"command": "./done.sh"}},
+        )
+        self._make_script(plugin_dir, "done.sh", "#!/bin/bash\necho OK")
+        plugins = discover_plugins(plugins_dir)
+
+        results = run_plugin_hooks("post_done", plugins, task_env={"SR_TASK_ID": "TASK-001"})
+
+        assert len(results) == 1
+        assert results[0][0] == "test-plugin"
+        assert results[0][1] is True
+
+    def test_skip_on_run_on_filter(self, tmp_path: Path) -> None:
+        """Hook with run_on=on_success is skipped when status is failed."""
+        plugins_dir = tmp_path / "spec" / "plugins"
+        _create_plugin(
+            plugins_dir,
+            "success-only",
+            {"post_done": {"command": "./done.sh", "run_on": "on_success"}},
+        )
+        plugins = discover_plugins(plugins_dir)
+
+        results = run_plugin_hooks(
+            "post_done",
+            plugins,
+            task_env={"SR_TASK_ID": "TASK-001", "SR_TASK_STATUS": "failed"},
+        )
+
+        assert len(results) == 0  # skipped
+
+    def test_env_vars_passed(self, tmp_path: Path) -> None:
+        """Environment variables from task_env are passed to hook subprocess."""
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "env-check",
+            {"post_done": {"command": "./check_env.sh"}},
+        )
+        marker = tmp_path / "env_marker.txt"
+        self._make_script(
+            plugin_dir,
+            "check_env.sh",
+            f"#!/bin/bash\necho $SR_TASK_ID > {marker}",
+        )
+        plugins = discover_plugins(plugins_dir)
+
+        run_plugin_hooks("post_done", plugins, task_env={"SR_TASK_ID": "TASK-042"})
+
+        assert marker.read_text().strip() == "TASK-042"
+
+    def test_blocking_failure_reported(self, tmp_path: Path) -> None:
+        """Blocking hook failure is reported with blocking=True."""
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "blocker",
+            {"post_done": {"command": "./fail.sh", "blocking": True}},
+        )
+        self._make_script(plugin_dir, "fail.sh", "#!/bin/bash\nexit 1")
+        plugins = discover_plugins(plugins_dir)
+
+        results = run_plugin_hooks("post_done", plugins, task_env={"SR_TASK_ID": "TASK-001"})
+
+        assert len(results) == 1
+        assert results[0][1] is False  # failure
+        assert results[0][2] is True  # blocking
