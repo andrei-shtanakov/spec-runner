@@ -26,6 +26,7 @@ from .executor import (
     main as executor_main,
 )
 from .prompt import build_task_prompt
+from .runner import parse_token_usage, run_claude_async
 from .state import (
     ErrorCode,
     ExecutorState,
@@ -73,6 +74,8 @@ __all__ = [
     "build_task_prompt",
     "execute_task",
     "load_config_from_yaml",
+    "parse_token_usage",
+    "run_claude_async",
     "run_with_retries",
     "executor_main",
 ]
