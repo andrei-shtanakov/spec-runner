@@ -807,19 +807,36 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
             config.max_concurrent = args.max_concurrent
         asyncio.run(_run_tasks_parallel(args, config))
     else:
-        # Acquire lock to prevent parallel runs
-        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
-        if not lock.acquire():
-            logger.error(
-                "Another executor is already running",
-                lock_file=str(config.state_file.with_suffix(".lock")),
-            )
-            sys.exit(1)
-
-        try:
+        if getattr(args, "force", False):
+            logger.warning("Skipping lock check (--force)")
             _run_tasks(args, config)
-        finally:
-            lock.release()
+        else:
+            # Acquire lock to prevent parallel runs
+            lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+            if not lock.acquire():
+                held_by = getattr(lock, "_held_by", {})
+                pid = held_by.get("pid", "unknown")
+                started = held_by.get("started", "unknown")
+                alive = held_by.get("alive", "true")
+
+                logger.error(
+                    "Another executor is already running",
+                    lock_file=str(config.state_file.with_suffix(".lock")),
+                    held_by_pid=pid,
+                    started=started,
+                    process_alive=alive,
+                )
+                if alive == "false":
+                    logger.error(
+                        "Lock holder is dead. Use --force to override, "
+                        "or delete the lock file manually."
+                    )
+                sys.exit(1)
+
+            try:
+                _run_tasks(args, config)
+            finally:
+                lock.release()
 
 
 def _run_tasks(args, config: ExecutorConfig):
@@ -1468,6 +1485,11 @@ def main():
         "--tui",
         action="store_true",
         help="Show TUI dashboard during execution",
+    )
+    run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip lock check (use when lock is stale)",
     )
 
     # status

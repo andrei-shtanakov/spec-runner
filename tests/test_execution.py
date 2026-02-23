@@ -1074,3 +1074,87 @@ class TestCrashRecovery:
         _run_tasks(args, config)
 
         assert len(recover_calls) == 1
+
+
+class TestForceFlag:
+    def test_force_flag_skips_lock(self, tmp_path, monkeypatch):
+        """--force skips lock check entirely."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        lock_acquired = []
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.acquire",
+            lambda self: lock_acquired.append(True) or True,
+        )
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.release",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda *a, **kw: [],
+        )
+
+        from spec_runner.executor import cmd_run
+
+        args = type(
+            "Args",
+            (),
+            {
+                "task": None,
+                "all": False,
+                "milestone": None,
+                "restart": False,
+                "parallel": False,
+                "tui": False,
+                "force": True,
+            },
+        )()
+        cmd_run(args, config)
+        assert len(lock_acquired) == 0
+
+    def test_no_force_acquires_lock(self, tmp_path, monkeypatch):
+        """Without --force, lock is acquired."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        lock_acquired = []
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.acquire",
+            lambda self: lock_acquired.append(True) or True,
+        )
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.release",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda *a, **kw: [],
+        )
+
+        from spec_runner.executor import cmd_run
+
+        args = type(
+            "Args",
+            (),
+            {
+                "task": None,
+                "all": False,
+                "milestone": None,
+                "restart": False,
+                "parallel": False,
+                "tui": False,
+                "force": False,
+            },
+        )()
+        cmd_run(args, config)
+        assert len(lock_acquired) == 1
