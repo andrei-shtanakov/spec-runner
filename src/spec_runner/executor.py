@@ -1218,7 +1218,9 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             "total_input_tokens": total_inp,
             "total_output_tokens": total_out,
             "avg_cost_per_completed": round(avg_cost, 2),
-            "most_expensive_task": most_expensive["task_id"] if most_expensive else None,
+            "most_expensive_task": (
+                most_expensive["task_id"] if most_expensive and most_expensive["cost"] > 0 else None
+            ),
         }
         if config.budget_usd is not None:
             pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0

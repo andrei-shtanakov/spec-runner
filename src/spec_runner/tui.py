@@ -306,119 +306,120 @@ class SpecRunnerApp(App[None]):
         tasks = resolve_dependencies(tasks)
 
         state: ExecutorState | None = None
-        with contextlib.suppress(Exception):
-            state = ExecutorState(config)
+        try:
+            with contextlib.suppress(Exception):
+                state = ExecutorState(config)
 
-        # Categorise tasks
-        columns: dict[str, list[str]] = {
-            "blocked": [],
-            "todo": [],
-            "running": [],
-            "done": [],
-        }
+            # Categorise tasks
+            columns: dict[str, list[str]] = {
+                "blocked": [],
+                "todo": [],
+                "running": [],
+                "done": [],
+            }
 
-        for task in tasks:
-            ts = state.tasks.get(task.id) if state else None
+            for task in tasks:
+                ts = state.tasks.get(task.id) if state else None
 
-            # Determine effective status
-            if ts and ts.status == "running":
-                elapsed = self._calc_elapsed(ts.started_at)
-                card = TaskCard.format_card(
-                    task_id=task.id,
-                    name=task.name,
-                    priority=task.priority,
-                    status="running",
-                    elapsed=elapsed,
-                )
-                columns["running"].append(card)
-            elif ts and ts.status == "failed":
-                card = TaskCard.format_card(
-                    task_id=task.id,
-                    name=task.name,
-                    priority=task.priority,
-                    status="failed",
-                    error=ts.last_error,
-                )
-                columns["done"].append(card)
-            elif ts and ts.status == "success":
-                cost = state.task_cost(task.id) if state else 0.0
-                duration = self._calc_duration(ts)
-                card = TaskCard.format_card(
-                    task_id=task.id,
-                    name=task.name,
-                    priority=task.priority,
-                    status="done",
-                    cost=cost,
-                    duration=duration,
-                )
-                columns["done"].append(card)
-            elif task.status == "blocked":
-                blocked_by = task.depends_on[0] if task.depends_on else None
-                card = TaskCard.format_card(
-                    task_id=task.id,
-                    name=task.name,
-                    priority=task.priority,
-                    status="blocked",
-                    blocked_by=blocked_by,
-                )
-                columns["blocked"].append(card)
-            else:
-                card = TaskCard.format_card(
-                    task_id=task.id,
-                    name=task.name,
-                    priority=task.priority,
-                    status="todo",
-                )
-                columns["todo"].append(card)
+                # Determine effective status
+                if ts and ts.status == "running":
+                    elapsed = self._calc_elapsed(ts.started_at)
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="running",
+                        elapsed=elapsed,
+                    )
+                    columns["running"].append(card)
+                elif ts and ts.status == "failed":
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="failed",
+                        error=ts.last_error,
+                    )
+                    columns["done"].append(card)
+                elif ts and ts.status == "success":
+                    cost = state.task_cost(task.id) if state else 0.0
+                    duration = self._calc_duration(ts)
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="done",
+                        cost=cost,
+                        duration=duration,
+                    )
+                    columns["done"].append(card)
+                elif task.status == "blocked":
+                    blocked_by = task.depends_on[0] if task.depends_on else None
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="blocked",
+                        blocked_by=blocked_by,
+                    )
+                    columns["blocked"].append(card)
+                else:
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="todo",
+                    )
+                    columns["todo"].append(card)
 
-        # Update column widgets
-        col_map = {
-            "blocked": self.query_one("#col-blocked", KanbanColumn),
-            "todo": self.query_one("#col-todo", KanbanColumn),
-            "running": self.query_one("#col-running", KanbanColumn),
-            "done": self.query_one("#col-done", KanbanColumn),
-        }
+            # Update column widgets
+            col_map = {
+                "blocked": self.query_one("#col-blocked", KanbanColumn),
+                "todo": self.query_one("#col-todo", KanbanColumn),
+                "running": self.query_one("#col-running", KanbanColumn),
+                "done": self.query_one("#col-done", KanbanColumn),
+            }
 
-        for key, col in col_map.items():
-            col.remove_children()
-            for card_text in columns[key]:
-                col.mount(TaskCard(card_text))
+            for key, col in col_map.items():
+                col.remove_children()
+                for card_text in columns[key]:
+                    col.mount(TaskCard(card_text))
 
-        # Update stats bar
-        total = len(tasks)
-        completed = sum(
-            1
-            for t in tasks
-            if state and state.tasks.get(t.id) and state.tasks[t.id].status == "success"
-        )
-        failed = sum(
-            1
-            for t in tasks
-            if state and state.tasks.get(t.id) and state.tasks[t.id].status == "failed"
-        )
-        input_tokens, output_tokens = state.total_tokens() if state else (0, 0)
-        cost = state.total_cost() if state else 0.0
-
-        stats_bar = self.query_one("#stats-bar", StatsBar)
-        stats_bar.update(
-            StatsBar.format_stats(
-                total=total,
-                completed=completed,
-                failed=failed,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost=cost,
+            # Update stats bar
+            total = len(tasks)
+            completed = sum(
+                1
+                for t in tasks
+                if state and state.tasks.get(t.id) and state.tasks[t.id].status == "success"
             )
-        )
+            failed = sum(
+                1
+                for t in tasks
+                if state and state.tasks.get(t.id) and state.tasks[t.id].status == "failed"
+            )
+            input_tokens, output_tokens = state.total_tokens() if state else (0, 0)
+            cost = state.total_cost() if state else 0.0
 
-        # Update log panel
-        log_panel = self.query_one("#log-panel", LogPanel)
-        progress_file = config.spec_dir / ".executor-progress.txt"
-        log_panel.read_new_lines(progress_file)
-        log_panel.update(log_panel.render_log())
+            stats_bar = self.query_one("#stats-bar", StatsBar)
+            stats_bar.update(
+                StatsBar.format_stats(
+                    total=total,
+                    completed=completed,
+                    failed=failed,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                )
+            )
 
-        if state:
-            state.close()
+            # Update log panel
+            log_panel = self.query_one("#log-panel", LogPanel)
+            progress_file = config.project_root / "spec" / ".executor-progress.txt"
+            log_panel.read_new_lines(progress_file)
+            log_panel.update(log_panel.render_log())
+        finally:
+            if state:
+                state.close()
 
     @staticmethod
     def _calc_elapsed(started_at: str | None) -> float:
