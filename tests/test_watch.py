@@ -277,3 +277,24 @@ class TestCmdWatch:
 
         mock_run.assert_not_called()
         assert mock_time.sleep.call_count >= 2
+
+
+class TestWatchTui:
+    """Tests for watch --tui integration."""
+
+    @patch("spec_runner.executor.validate_all")
+    def test_tui_flag_launches_app(self, mock_validate, tmp_path: Path) -> None:
+        """--tui flag launches SpecRunnerApp with watch loop in background."""
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Task", "p0", "todo")])
+        mock_validate.return_value = MagicMock(ok=True)
+
+        with patch("spec_runner.tui.SpecRunnerApp") as mock_app_cls:
+            mock_app = MagicMock()
+            mock_app_cls.return_value = mock_app
+
+            args = _make_args(tui=True)
+            cmd_watch(args, config)
+
+            mock_app.run.assert_called_once()
+            mock_app.call_later.assert_called_once()

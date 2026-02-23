@@ -1667,10 +1667,48 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         print(format_results(pre_result))
         return
 
-    # TUI mode (stub for Task 7)
+    # TUI mode
     if getattr(args, "tui", False):
-        # Will be implemented in Task 7
-        pass
+        import threading
+
+        from .logging import setup_logging
+        from .tui import SpecRunnerApp
+
+        log_file = config.logs_dir / f"watch-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+        config.logs_dir.mkdir(parents=True, exist_ok=True)
+        setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
+
+        app = SpecRunnerApp(config=config)
+
+        def _start_watch() -> None:
+            def watch_loop() -> None:
+                consecutive_failures = 0
+                while True:
+                    if check_stop_requested(config):
+                        break
+                    if consecutive_failures >= config.max_consecutive_failures:
+                        break
+                    tasks = parse_tasks(config.tasks_file)
+                    tasks = resolve_dependencies(tasks)
+                    ready = get_next_tasks(tasks)
+                    if not ready:
+                        time.sleep(5)
+                        continue
+                    task = ready[0]
+                    with ExecutorState(config) as state:
+                        result = run_with_retries(task, config, state)
+                    if result is True:
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                    time.sleep(1)
+
+            t = threading.Thread(target=watch_loop, daemon=True)
+            t.start()
+
+        app.call_later(_start_watch)
+        app.run()
+        return
 
     print(f"Watching {config.tasks_file} for changes...")
     print(f"Polling every 5s | Stop: Ctrl+C or touch {config.stop_file}")
