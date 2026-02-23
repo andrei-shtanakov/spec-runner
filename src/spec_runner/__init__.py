@@ -20,6 +20,8 @@ from importlib.metadata import PackageNotFoundError, version
 from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .executor import (
     classify_retry_strategy,
+    cmd_costs,
+    cmd_watch,
     compute_retry_delay,
     execute_task,
     run_with_retries,
@@ -63,6 +65,7 @@ from .task import (
     update_checklist_item,
     update_task_status,
 )
+from .tui import LogPanel
 from .validate import (
     ValidationResult,
     format_results,
@@ -89,6 +92,8 @@ __all__ = [
     "mark_all_checklist_done",
     # Executor
     "classify_retry_strategy",
+    "cmd_costs",
+    "cmd_watch",
     "compute_retry_delay",
     "ErrorCode",
     "ExecutorConfig",
@@ -121,6 +126,8 @@ __all__ = [
     "validate_all",
     "validate_config",
     "validate_tasks",
+    # TUI
+    "LogPanel",
     # Logging
     "get_logger",
     "setup_logging",
