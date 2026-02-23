@@ -78,6 +78,9 @@ class ExecutorConfig:
     task_timeout_minutes: int = 30  # Task timeout
     max_consecutive_failures: int = 2  # Stop after N consecutive failures
     on_task_failure: str = "skip"  # What to do when task fails: skip | stop | ask
+    max_concurrent: int = 3  # Max parallel tasks
+    budget_usd: float | None = None  # Global budget limit (None = unlimited)
+    task_budget_usd: float | None = None  # Per-task budget limit (None = unlimited)
 
     # Claude CLI
     claude_command: str = "claude"  # Claude CLI command
@@ -214,6 +217,9 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "state_file": Path(paths["state"]) if paths.get("state") else None,
             "callback_url": executor_config.get("callback_url"),
             "spec_prefix": executor_config.get("spec_prefix"),
+            "max_concurrent": executor_config.get("max_concurrent"),
+            "budget_usd": executor_config.get("budget_usd"),
+            "task_budget_usd": executor_config.get("task_budget_usd"),
         }
     except Exception as e:
         print(f"\u26a0\ufe0f  Warning: Failed to load config from {config_path}: {e}")
@@ -259,5 +265,11 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["spec_prefix"] = args.spec_prefix
     if hasattr(args, "project_root") and args.project_root:
         config_kwargs["project_root"] = Path(args.project_root)
+    if hasattr(args, "max_concurrent") and getattr(args, "max_concurrent", 0) > 0:
+        config_kwargs["max_concurrent"] = args.max_concurrent
+    if hasattr(args, "budget") and getattr(args, "budget", None) is not None:
+        config_kwargs["budget_usd"] = args.budget
+    if hasattr(args, "task_budget") and getattr(args, "task_budget", None) is not None:
+        config_kwargs["task_budget_usd"] = args.task_budget
 
     return ExecutorConfig(**config_kwargs)

@@ -326,6 +326,20 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         if result == "HOOK_ERROR":
             return False
 
+        # Check per-task budget
+        if (
+            config.task_budget_usd is not None
+            and state.task_cost(task.id) > config.task_budget_usd
+        ):
+                log_progress(
+                    f"Task budget exceeded "
+                    f"(${state.task_cost(task.id):.2f} > "
+                    f"${config.task_budget_usd:.2f})",
+                    task.id,
+                )
+                update_task_status(config.tasks_file, task.id, "blocked")
+                return False
+
         if result is True:
             return True
 

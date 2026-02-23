@@ -424,8 +424,13 @@ class ExecutorState:
             self._save_meta()
 
     def should_stop(self) -> bool:
-        """Check if we should stop"""
-        return self.consecutive_failures >= self.config.max_consecutive_failures
+        """Check if we should stop (consecutive failures or budget exceeded)."""
+        if self.consecutive_failures >= self.config.max_consecutive_failures:
+            return True
+        return (
+            self.config.budget_usd is not None
+            and self.total_cost() > self.config.budget_usd
+        )
 
     def total_cost(self) -> float:
         """Sum of cost_usd across all attempts."""

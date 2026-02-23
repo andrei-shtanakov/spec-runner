@@ -632,3 +632,48 @@ class TestTokenTrackingInExecutor:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].input_tokens is None
         assert ts.attempts[-1].cost_usd is None
+
+
+# --- Budget enforcement tests ---
+
+
+class TestBudgetEnforcement:
+    """Tests for budget enforcement in run_with_retries."""
+
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_task_budget_exceeded_stops_retries(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """When task cost exceeds task_budget_usd, stop retrying."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.10)
+        state = _make_state(config)
+        task = _make_task()
+
+        call_count = 0
+
+        def side_effect(t, cfg, st):
+            nonlocal call_count
+            call_count += 1
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+
+        result = run_with_retries(task, config, state)
+
+        assert result is False
+        # Should stop after 2 attempts ($0.12 > $0.10)
+        assert call_count == 2

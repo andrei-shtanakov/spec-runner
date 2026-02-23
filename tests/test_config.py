@@ -165,6 +165,22 @@ class TestExecutorLock:
         lock1.release()
 
 
+class TestBudgetConfig:
+    def test_budget_defaults_none(self):
+        config = ExecutorConfig()
+        assert config.budget_usd is None
+        assert config.task_budget_usd is None
+
+    def test_budget_from_kwargs(self):
+        config = ExecutorConfig(budget_usd=10.0, task_budget_usd=2.0)
+        assert config.budget_usd == 10.0
+        assert config.task_budget_usd == 2.0
+
+    def test_max_concurrent_default(self):
+        config = ExecutorConfig()
+        assert config.max_concurrent == 3
+
+
 class TestErrorPatterns:
     def test_contains_rate_limit(self):
         assert any("rate limit" in p.lower() for p in ERROR_PATTERNS)

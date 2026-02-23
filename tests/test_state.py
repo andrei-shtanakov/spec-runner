@@ -566,6 +566,39 @@ class TestExecutorStateClose:
         assert state._conn is None
 
 
+# --- Budget should_stop ---
+
+
+class TestBudgetShouldStop:
+    def test_should_stop_on_budget_exceeded(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            budget_usd=0.15,
+        )
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=0.10)
+        state.record_attempt("T2", True, 5.0, cost_usd=0.06)
+        assert state.should_stop() is True
+        state.close()
+
+    def test_should_not_stop_under_budget(self, tmp_path):
+        config = _make_config(
+            tmp_path,
+            budget_usd=1.00,
+        )
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=0.10)
+        assert state.should_stop() is False
+        state.close()
+
+    def test_should_not_stop_no_budget(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt("T1", True, 5.0, cost_usd=100.0)
+        assert state.should_stop() is False
+        state.close()
+
+
 # --- Token/Cost Tracking ---
 
 
