@@ -15,7 +15,9 @@ from .config import ERROR_PATTERNS, PROGRESS_FILE
 
 
 def log_progress(message: str, task_id: str | None = None):
-    """Log progress message with timestamp to progress file."""
+    """Log progress message with timestamp to progress file and structlog."""
+    from .logging import get_logger
+
     timestamp = datetime.now().strftime("%H:%M:%S")
     prefix = f"[{task_id}] " if task_id else ""
     line = f"[{timestamp}] {prefix}{message}\n"
@@ -24,8 +26,12 @@ def log_progress(message: str, task_id: str | None = None):
     with open(PROGRESS_FILE, "a") as f:
         f.write(line)
 
-    # Also print to stdout
-    print(line.rstrip())
+    # Structured log (replaces print)
+    logger = get_logger("runner")
+    if task_id:
+        logger.info(message, task_id=task_id)
+    else:
+        logger.info(message)
 
 
 def check_error_patterns(output: str) -> str | None:

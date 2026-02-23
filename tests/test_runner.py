@@ -146,14 +146,23 @@ class TestLogProgress:
         assert "[TASK-001]" in content
         assert "doing work" in content
 
-    def test_prints_to_stdout(self, tmp_path, monkeypatch, capsys):
+    def test_logs_via_structlog(self, tmp_path, monkeypatch):
         progress_file = tmp_path / "progress.txt"
         monkeypatch.setattr("spec_runner.runner.PROGRESS_FILE", progress_file)
 
-        log_progress("hello stdout")
+        mock_logger = MagicMock()
+        with patch("spec_runner.logging.get_logger", return_value=mock_logger):
+            log_progress("hello structlog")
+        mock_logger.info.assert_called_once_with("hello structlog")
 
-        captured = capsys.readouterr()
-        assert "hello stdout" in captured.out
+    def test_logs_via_structlog_with_task_id(self, tmp_path, monkeypatch):
+        progress_file = tmp_path / "progress.txt"
+        monkeypatch.setattr("spec_runner.runner.PROGRESS_FILE", progress_file)
+
+        mock_logger = MagicMock()
+        with patch("spec_runner.logging.get_logger", return_value=mock_logger):
+            log_progress("doing work", task_id="TASK-001")
+        mock_logger.info.assert_called_once_with("doing work", task_id="TASK-001")
 
     def test_appends_to_file(self, tmp_path, monkeypatch):
         progress_file = tmp_path / "progress.txt"
