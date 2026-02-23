@@ -201,13 +201,23 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
     return True
 
 
-def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") -> str:
+def build_review_prompt(
+    task: Task,
+    config: ExecutorConfig,
+    cli_name: str = "",
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> str:
     """Build code review prompt for the specified CLI.
 
     Args:
         task: Task that was completed
         config: Executor configuration
         cli_name: CLI name for CLI-specific prompt template (e.g., 'codex', 'claude')
+        test_output: Test run output to include in review context
+        lint_output: Lint check output to include in review context
+        previous_error: Error from previous attempt (retry context)
     """
     # Get changed files from git
     result = subprocess.run(
@@ -220,7 +230,7 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
     )
 
-    # Get git diff
+    # Get git diff stat
     result = subprocess.run(
         ["git", "diff", "HEAD~1", "--stat"],
         capture_output=True,
@@ -228,6 +238,17 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         cwd=config.project_root,
     )
     git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
+
+    # Full diff for review context (truncated to 30KB)
+    diff_p_result = subprocess.run(
+        ["git", "diff", "-p", "HEAD~1"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    full_diff = diff_p_result.stdout[:30_000]
+    if len(diff_p_result.stdout) > 30_000:
+        full_diff += "\n... (diff truncated)"
 
     # Try to load CLI-specific or custom template
     template = load_prompt_template("review", cli_name=cli_name)
@@ -241,6 +262,28 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         }
         return render_template(template, variables)
 
+    # Build additional context sections for fallback prompt
+    # Task checklist
+    checklist_section = ""
+    if task.checklist:
+        items = "\n".join(f"- {item}" for item, _checked in task.checklist)
+        checklist_section = f"\n## Task Checklist\n{items}\n"
+
+    # Test results
+    test_section = ""
+    if test_output:
+        test_section = f"\n## Test Results\n{test_output[:2048]}\n"
+
+    # Lint status
+    lint_section = ""
+    if lint_output:
+        lint_section = f"\n## Lint Status\n{lint_output[:200]}\n"
+
+    # Previous errors
+    error_section = ""
+    if previous_error:
+        error_section = f"\n## Previous Errors (from retry)\n{previous_error[:1024]}\n"
+
     # Fallback to built-in prompt
     return f"""# Code Review Request
 
@@ -249,9 +292,12 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
 ## Changed Files:
 {changed_files}
 
+## Full Diff:
+{full_diff}
+
 ## Diff Summary:
 {git_diff_stat}
-
+{checklist_section}{test_section}{lint_section}{error_section}
 ## Review Instructions:
 
 Launch the following review agents in parallel using the Task tool:

@@ -4,7 +4,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.hooks import get_main_branch, get_task_branch_name, post_done_hook, pre_start_hook
+from spec_runner.hooks import (
+    build_review_prompt,
+    get_main_branch,
+    get_task_branch_name,
+    post_done_hook,
+    pre_start_hook,
+)
 from spec_runner.task import Task
 
 
@@ -247,3 +253,74 @@ class TestNoBranchMode:
         assert success is True
         call_args = [str(c) for c in mock_run.call_args_list]
         assert not any("merge" in c for c in call_args)
+
+
+class TestBuildReviewPrompt:
+    """Tests for build_review_prompt with enriched context."""
+
+    def test_includes_task_checklist(self):
+        task = _make_task()
+        task.checklist = [
+            ("Implement API endpoint", True),
+            ("Add error handling", False),
+            ("Write tests", False),
+        ]
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            prompt = build_review_prompt(task, config)
+        assert "Implement API endpoint" in prompt
+        assert "Add error handling" in prompt
+
+    def test_includes_test_output(self):
+        task = _make_task()
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            prompt = build_review_prompt(
+                task, config, test_output="15 passed, 0 failed in 2.1s"
+            )
+        assert "15 passed" in prompt
+
+    def test_includes_previous_error(self):
+        task = _make_task()
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            prompt = build_review_prompt(
+                task, config, previous_error="TypeError: expected str"
+            )
+        assert "TypeError" in prompt
+
+    def test_includes_lint_output(self):
+        task = _make_task()
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            prompt = build_review_prompt(
+                task, config, lint_output="All checks passed"
+            )
+        assert "All checks passed" in prompt
+
+    def test_includes_full_diff(self):
+        task = _make_task()
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="diff --git a/foo.py b/foo.py\n+new line",
+                stderr="",
+                returncode=0,
+            )
+            prompt = build_review_prompt(task, config)
+        assert "Full Diff" in prompt
+
+    def test_no_extra_sections_when_no_context(self):
+        task = _make_task()
+        config = _make_config()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            prompt = build_review_prompt(task, config)
+        assert "Task Checklist" not in prompt
+        assert "Test Results" not in prompt
+        assert "Lint Status" not in prompt
+        assert "Previous Errors" not in prompt
