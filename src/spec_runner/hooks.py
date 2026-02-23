@@ -11,6 +11,7 @@ from .config import ExecutorConfig
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
 from .runner import build_cli_command, check_error_patterns, log_progress
+from .state import ReviewVerdict
 from .task import Task
 
 logger = get_logger("hooks")
@@ -201,13 +202,23 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
     return True
 
 
-def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") -> str:
+def build_review_prompt(
+    task: Task,
+    config: ExecutorConfig,
+    cli_name: str = "",
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> str:
     """Build code review prompt for the specified CLI.
 
     Args:
         task: Task that was completed
         config: Executor configuration
         cli_name: CLI name for CLI-specific prompt template (e.g., 'codex', 'claude')
+        test_output: Test run output to include in review context
+        lint_output: Lint check output to include in review context
+        previous_error: Error from previous attempt (retry context)
     """
     # Get changed files from git
     result = subprocess.run(
@@ -220,7 +231,7 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
     )
 
-    # Get git diff
+    # Get git diff stat
     result = subprocess.run(
         ["git", "diff", "HEAD~1", "--stat"],
         capture_output=True,
@@ -228,6 +239,17 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         cwd=config.project_root,
     )
     git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
+
+    # Full diff for review context (truncated to 30KB)
+    diff_p_result = subprocess.run(
+        ["git", "diff", "-p", "HEAD~1"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    full_diff = diff_p_result.stdout[:30_000]
+    if len(diff_p_result.stdout) > 30_000:
+        full_diff += "\n... (diff truncated)"
 
     # Try to load CLI-specific or custom template
     template = load_prompt_template("review", cli_name=cli_name)
@@ -241,6 +263,28 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
         }
         return render_template(template, variables)
 
+    # Build additional context sections for fallback prompt
+    # Task checklist
+    checklist_section = ""
+    if task.checklist:
+        items = "\n".join(f"- {item}" for item, _checked in task.checklist)
+        checklist_section = f"\n## Task Checklist\n{items}\n"
+
+    # Test results
+    test_section = ""
+    if test_output:
+        test_section = f"\n## Test Results\n{test_output[:2048]}\n"
+
+    # Lint status
+    lint_section = ""
+    if lint_output:
+        lint_section = f"\n## Lint Status\n{lint_output[:200]}\n"
+
+    # Previous errors
+    error_section = ""
+    if previous_error:
+        error_section = f"\n## Previous Errors (from retry)\n{previous_error[:1024]}\n"
+
     # Fallback to built-in prompt
     return f"""# Code Review Request
 
@@ -249,9 +293,12 @@ def build_review_prompt(task: Task, config: ExecutorConfig, cli_name: str = "") 
 ## Changed Files:
 {changed_files}
 
+## Full Diff:
+{full_diff}
+
 ## Diff Summary:
 {git_diff_stat}
-
+{checklist_section}{test_section}{lint_section}{error_section}
 ## Review Instructions:
 
 Launch the following review agents in parallel using the Task tool:
@@ -281,11 +328,24 @@ If no issues found, respond with: "REVIEW_PASSED"
 """
 
 
-def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | None]:
+def run_code_review(
+    task: Task,
+    config: ExecutorConfig,
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> tuple[ReviewVerdict, str | None, str | None]:
     """Run code review on completed task.
 
+    Args:
+        task: Task that was completed
+        config: Executor configuration
+        test_output: Test run output to include in review context
+        lint_output: Lint check output to include in review context
+        previous_error: Error from previous attempt (retry context)
+
     Returns:
-        Tuple of (success, error_message).
+        Tuple of (verdict, error_message, review_output).
     """
     log_progress("🔍 Starting code review", task.id)
 
@@ -295,7 +355,14 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
     review_template = config.review_command_template or config.command_template
 
     # Build prompt with CLI-specific template
-    prompt = build_review_prompt(task, config, cli_name=review_cmd)
+    prompt = build_review_prompt(
+        task,
+        config,
+        cli_name=review_cmd,
+        test_output=test_output,
+        lint_output=lint_output,
+        previous_error=previous_error,
+    )
 
     # Save review prompt to log
     log_file = config.logs_dir / f"{task.id}-review-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -339,7 +406,7 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
         error_pattern = check_error_patterns(combined_output)
         if error_pattern:
             log_progress(f"⚠️ Review API error: {error_pattern}", task.id)
-            return False, f"API error: {error_pattern}"
+            return ReviewVerdict.FAILED, f"API error: {error_pattern}", output
 
         # Check for empty or failed response
         if result.returncode != 0 and not output.strip():
@@ -349,59 +416,100 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
             )
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
-            return False, f"Review process exited with code {result.returncode}"
+            error_msg = f"Review process exited with code {result.returncode}"
+            return ReviewVerdict.FAILED, error_msg, None
 
         if not output.strip():
             log_progress("⚠️ Review returned empty response", task.id)
-            return False, "Review returned empty response"
+            return ReviewVerdict.FAILED, "Review returned empty response", None
 
         # Check review result (case-insensitive, check both stdout and stderr)
         output_upper = combined_output.upper()
         if "REVIEW_PASSED" in output_upper:
             log_progress("✅ Code review passed", task.id)
-            return True, None
+            return ReviewVerdict.PASSED, None, output
         elif "REVIEW_FIXED" in output_upper:
             log_progress("✅ Code review: issues fixed", task.id)
             # Commit the fixes
-            subprocess.run(["git", "add", "-A"], cwd=config.project_root)
-            subprocess.run(
+            subprocess.run(["git", "add", "-A"], capture_output=True, cwd=config.project_root)
+            commit_result = subprocess.run(
                 ["git", "commit", "-m", f"{task.id}: code review fixes"],
+                capture_output=True,
+                text=True,
                 cwd=config.project_root,
             )
-            return True, None
+            if commit_result.returncode != 0:
+                logger.warning(
+                    "Review fix commit failed",
+                    stderr=commit_result.stderr.strip()[:200],
+                )
+            return ReviewVerdict.FIXED, None, output
         elif "REVIEW_FAILED" in output_upper:
             log_progress("❌ Code review found unresolved issues", task.id)
             preview = output.strip()[-300:]
             log_progress(f"   Review output (last 300 chars): {preview}", task.id)
-            return False, "Code review found unresolved issues"
+            return ReviewVerdict.FAILED, "Review found issues", output
         else:
             # No explicit marker — treat as passed but log for visibility
             preview = output.strip()[-200:] if output.strip() else "(empty)"
             log_progress("✅ Code review completed (no explicit status marker)", task.id)
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
-            return True, None
+            return ReviewVerdict.PASSED, None, output
 
     except subprocess.TimeoutExpired:
         log_progress(f"⏰ Review timeout after {config.review_timeout_minutes}m", task.id)
-        return False, "Review timeout"
+        return ReviewVerdict.FAILED, "Review timed out", None
     except Exception as e:
         log_progress(f"💥 Review error: {e}", task.id)
-        return False, str(e)
+        return ReviewVerdict.FAILED, str(e), None
 
 
-def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[bool, str | None]:
+def format_review_findings(task_id: str, task_name: str, review_output: str) -> str:
+    """Format review findings for HITL display."""
+    separator = "=" * 50
+    return (
+        f"\n{separator}\nReview: {task_id} — {task_name}\n{separator}\n\n{review_output[:3000]}\n"
+    )
+
+
+def prompt_hitl_verdict() -> str:
+    """Prompt user for HITL review verdict.
+
+    Returns:
+        One of: 'approve', 'reject', 'fix', 'skip'.
+    """
+    print("\n  [a]pprove  [r]eject  [f]ix-and-retry  [s]kip")
+    while True:
+        choice = input("> ").strip().lower()
+        if choice in ("a", "approve"):
+            return "approve"
+        elif choice in ("r", "reject"):
+            return "reject"
+        elif choice in ("f", "fix"):
+            return "fix"
+        elif choice in ("s", "skip"):
+            return "skip"
+        print("  Invalid choice. Use: a, r, f, or s")
+
+
+def post_done_hook(
+    task: Task, config: ExecutorConfig, success: bool
+) -> tuple[bool, str | None, str, str]:
     """Hook after task completion.
 
     Returns:
-        Tuple of (success, error_details).
+        Tuple of (success, error_details, review_status, review_findings).
         error_details contains test/lint output on failure.
+        review_status is the ReviewVerdict value string (e.g. "passed", "skipped").
+        review_findings is the truncated review output (up to 2048 chars).
     """
     logger.info("Post-done hook", task_id=task.id, success=success)
 
     if not success:
-        return False, None
+        return False, None, ReviewVerdict.SKIPPED.value, ""
 
-    # Run tests
+    # Run tests — capture output for review context
+    test_output_str: str | None = None
     if config.run_tests_on_done:
         logger.info("Running tests")
         result = subprocess.run(
@@ -411,15 +519,20 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             text=True,
             cwd=config.project_root,
         )
+        test_output_str = (result.stdout + result.stderr)[:2048]
         if result.returncode != 0:
             logger.error("Tests failed")
-            # Combine stdout and stderr for full picture
-            test_output = result.stdout + "\n" + result.stderr
             logger.error("Test stderr", stderr=result.stderr[:500])
-            return False, f"Tests failed:\n{test_output}"
+            return (
+                False,
+                f"Tests failed:\n{result.stdout + result.stderr}",
+                ReviewVerdict.SKIPPED.value,
+                "",
+            )
         logger.info("Tests passed")
 
-    # Run lint
+    # Run lint — capture output for review context
+    lint_output_str: str | None = None
     if config.run_lint_on_done and config.lint_command:
         logger.info("Running lint")
         result = subprocess.run(
@@ -455,21 +568,76 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 if config.lint_blocking:
                     lint_output = recheck.stdout + "\n" + recheck.stderr
                     logger.error("Lint errors remain after auto-fix")
-                    return False, f"Lint errors (not auto-fixable):\n{lint_output}"
+                    return (
+                        False,
+                        f"Lint errors (not auto-fixable):\n{lint_output}",
+                        ReviewVerdict.SKIPPED.value,
+                        "",
+                    )
                 else:
                     logger.warning("Lint warnings (non-blocking)")
             else:
+                lint_output_str = "auto-fixed"
                 logger.info("Lint auto-fixed")
         else:
+            lint_output_str = "clean"
             logger.info("Lint passed")
 
+    # Get previous error for review context (local import to avoid circular dependency)
+    from .state import ExecutorState
+
+    previous_error: str | None = None
+    state = ExecutorState(config)
+    ts = state.tasks.get(task.id)
+    if ts and ts.attempts:
+        last = ts.attempts[-1]
+        if not last.success and last.error:
+            previous_error = last.error[:1024]
+    state.close()
+
     # Run code review (before commit, so fixes can be included)
+    review_verdict = ReviewVerdict.SKIPPED
+    review_output: str | None = None
+    if config.hitl_review and not config.run_review:
+        logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
         logger.info("Running code review")
-        review_ok, review_error = run_code_review(task, config)
-        if not review_ok:
-            logger.warning("Review issue", error=review_error)
-            # Don't block on review failures, just warn
+        review_verdict, review_error, review_output = run_code_review(
+            task,
+            config,
+            test_output=test_output_str,
+            lint_output=lint_output_str,
+            previous_error=previous_error,
+        )
+        if review_verdict == ReviewVerdict.FAILED:
+            logger.warning("Review found issues", error=review_error)
+            # Non-HITL mode: review failures are advisory only (warn but don't block).
+            # HITL mode handles this below via the interactive prompt.
+
+    # HITL approval gate
+    if config.hitl_review and review_output:
+        print(format_review_findings(task.id, task.name, review_output))
+        choice = prompt_hitl_verdict()
+        if choice == "reject":
+            logger.info("HITL rejected task", task_id=task.id)
+            return (
+                False,
+                "Review rejected by human",
+                ReviewVerdict.REJECTED.value,
+                (review_output or "")[:2048],
+            )
+        elif choice == "fix":
+            logger.info("HITL requested fix-and-retry", task_id=task.id)
+            return (
+                False,
+                f"Fix requested. Review findings:\n{(review_output or '')[:1024]}",
+                ReviewVerdict.REJECTED.value,
+                (review_output or "")[:2048],
+            )
+        elif choice == "skip":
+            review_verdict = ReviewVerdict.SKIPPED
+            logger.info("HITL skipped review", task_id=task.id)
+        # "approve" falls through to normal commit flow
 
     # Auto-commit
     if config.auto_commit:
@@ -522,7 +690,12 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             current_branch = result.stdout.strip()
             if current_branch == main_branch:
                 # Already on main, no merge needed
-                return True, None
+                return (
+                    True,
+                    None,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
 
             # Switch to main
             result = subprocess.run(
@@ -554,7 +727,12 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                         branch=main_branch,
                         stderr=error_msg,
                     )
-                    return True, None
+                    return (
+                        True,
+                        None,
+                        review_verdict.value,
+                        (review_output or "")[:2048],
+                    )
 
             # Merge task branch
             result = subprocess.run(
@@ -584,4 +762,4 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
         except Exception as e:
             logger.error("Merge failed", error=str(e))
 
-    return True, None
+    return True, None, review_verdict.value, (review_output or "")[:2048]

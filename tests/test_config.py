@@ -193,6 +193,38 @@ class TestErrorPatterns:
         assert len(ERROR_PATTERNS) > 0
 
 
+class TestHitlReviewConfig:
+    def test_hitl_review_default_false(self):
+        config = ExecutorConfig()
+        assert config.hitl_review is False
+
+    def test_hitl_review_from_kwargs(self):
+        config = ExecutorConfig(hitl_review=True)
+        assert config.hitl_review is True
+
+    def test_hitl_review_from_yaml(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("executor:\n  hitl_review: true\n")
+        result = load_config_from_yaml(cfg)
+        assert result["hitl_review"] is True
+
+    def test_hitl_review_cli_override(self):
+        args = Namespace(
+            max_retries=3,
+            timeout=30,
+            no_tests=False,
+            no_branch=False,
+            no_commit=False,
+            no_review=False,
+            hitl_review=True,
+            callback_url="",
+            spec_prefix="",
+            project_root=None,
+        )
+        config = build_config({}, args)
+        assert config.hitl_review is True
+
+
 class TestLoggingConfig:
     def test_log_level_default(self):
         config = ExecutorConfig()

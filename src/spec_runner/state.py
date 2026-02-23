@@ -28,6 +28,17 @@ class ErrorCode(str, Enum):
     HOOK_FAILURE = "HOOK_FAILURE"
     UNKNOWN = "UNKNOWN"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    REVIEW_REJECTED = "REVIEW_REJECTED"
+
+
+class ReviewVerdict(str, Enum):
+    """Verdict from code review step."""
+
+    PASSED = "passed"
+    FIXED = "fixed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    REJECTED = "rejected"
 
 
 @dataclass
@@ -43,6 +54,8 @@ class TaskAttempt:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    review_status: str | None = None
+    review_findings: str | None = None
 
 
 @dataclass
@@ -152,6 +165,8 @@ class ExecutorState:
             ("input_tokens", "INTEGER"),
             ("output_tokens", "INTEGER"),
             ("cost_usd", "REAL"),
+            ("review_status", "TEXT"),
+            ("review_findings", "TEXT"),
         ]:
             if col not in columns:
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
@@ -203,8 +218,7 @@ class ExecutorState:
             ):
                 value = data.get(key, 0)
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO executor_meta (key, value) "
-                    "VALUES (?, ?)",
+                    "INSERT OR REPLACE INTO executor_meta (key, value) VALUES (?, ?)",
                     (key, str(value)),
                 )
 
@@ -215,9 +229,7 @@ class ExecutorState:
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""
         # Load tasks
-        cursor = self._conn.execute(
-            "SELECT task_id, status, started_at, completed_at FROM tasks"
-        )
+        cursor = self._conn.execute("SELECT task_id, status, started_at, completed_at FROM tasks")
         for row in cursor.fetchall():
             task_id, status, started_at, completed_at = row
             self.tasks[task_id] = TaskState(
@@ -230,7 +242,8 @@ class ExecutorState:
         # Load attempts for each task
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
-            "error, error_code, claude_output, input_tokens, output_tokens, cost_usd "
+            "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
+            "review_status, review_findings "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -245,6 +258,8 @@ class ExecutorState:
                 input_tokens,
                 output_tokens,
                 cost_usd,
+                review_status,
+                review_findings,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -259,14 +274,14 @@ class ExecutorState:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                review_status=review_status,
+                review_findings=review_findings,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
 
         # Load meta counters
-        cursor = self._conn.execute(
-            "SELECT key, value FROM executor_meta"
-        )
+        cursor = self._conn.execute("SELECT key, value FROM executor_meta")
         meta = {row[0]: row[1] for row in cursor.fetchall()}
         self.consecutive_failures = int(meta.get("consecutive_failures", "0"))
         self.total_completed = int(meta.get("total_completed", "0"))
@@ -304,16 +319,15 @@ class ExecutorState:
                     (task_id, ts.status, ts.started_at, ts.completed_at),
                 )
                 # Re-sync attempts: delete and re-insert
-                self._conn.execute(
-                    "DELETE FROM attempts WHERE task_id = ?", (task_id,)
-                )
+                self._conn.execute("DELETE FROM attempts WHERE task_id = ?", (task_id,))
                 for a in ts.attempts:
                     self._conn.execute(
                         "INSERT INTO attempts "
                         "(task_id, timestamp, success, duration_seconds, "
                         "error, error_code, claude_output, "
-                        "input_tokens, output_tokens, cost_usd) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "input_tokens, output_tokens, cost_usd, "
+                        "review_status, review_findings) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -325,6 +339,8 @@ class ExecutorState:
                             a.input_tokens,
                             a.output_tokens,
                             a.cost_usd,
+                            a.review_status,
+                            a.review_findings,
                         ),
                     )
             self._save_meta()
@@ -345,6 +361,8 @@ class ExecutorState:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_usd: float | None = None,
+        review_status: str | None = None,
+        review_findings: str | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -359,6 +377,8 @@ class ExecutorState:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_usd=cost_usd,
+            review_status=review_status,
+            review_findings=review_findings,
         )
         state.attempts.append(attempt)
 
@@ -388,8 +408,9 @@ class ExecutorState:
                 "INSERT INTO attempts "
                 "(task_id, timestamp, success, duration_seconds, "
                 "error, error_code, claude_output, "
-                "input_tokens, output_tokens, cost_usd) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "input_tokens, output_tokens, cost_usd, "
+                "review_status, review_findings) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     attempt.timestamp,
@@ -401,6 +422,8 @@ class ExecutorState:
                     attempt.input_tokens,
                     attempt.output_tokens,
                     attempt.cost_usd,
+                    attempt.review_status,
+                    attempt.review_findings,
                 ),
             )
             self._save_meta()
@@ -427,18 +450,12 @@ class ExecutorState:
         """Check if we should stop (consecutive failures or budget exceeded)."""
         if self.consecutive_failures >= self.config.max_consecutive_failures:
             return True
-        return (
-            self.config.budget_usd is not None
-            and self.total_cost() > self.config.budget_usd
-        )
+        return self.config.budget_usd is not None and self.total_cost() > self.config.budget_usd
 
     def total_cost(self) -> float:
         """Sum of cost_usd across all attempts."""
         return sum(
-            a.cost_usd
-            for ts in self.tasks.values()
-            for a in ts.attempts
-            if a.cost_usd is not None
+            a.cost_usd for ts in self.tasks.values() for a in ts.attempts if a.cost_usd is not None
         )
 
     def task_cost(self, task_id: str) -> float:

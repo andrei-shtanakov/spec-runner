@@ -15,9 +15,7 @@ import structlog
 _SENSITIVE_RE = re.compile(r"(sk-|key-|token-)[a-zA-Z0-9]{6,}", re.IGNORECASE)
 
 
-def redact_sensitive(
-    logger: object, method_name: str, event_dict: dict
-) -> dict:
+def redact_sensitive(logger: object, method_name: str, event_dict: dict) -> dict:
     """Structlog processor that redacts sensitive data."""
     for key, value in event_dict.items():
         if isinstance(value, str):

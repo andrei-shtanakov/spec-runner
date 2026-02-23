@@ -218,8 +218,10 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             else:
                 logger.info("Implicit success (return code 0)", task_id=task_id)
 
-            # Post-done hook (tests, lint)
-            hook_success, hook_error = post_done_hook(task, config, True)
+            # Post-done hook (tests, lint, review)
+            hook_success, hook_error, review_status, review_findings = post_done_hook(
+                task, config, True
+            )
 
             if hook_success:
                 state.record_attempt(
@@ -230,6 +232,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
+                    review_status=review_status,
+                    review_findings=(review_findings[:2048] if review_findings else None),
                 )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
@@ -255,6 +259,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                         error_code = ErrorCode.TEST_FAILURE
                     elif "Lint errors" in hook_error:
                         error_code = ErrorCode.LINT_FAILURE
+                    elif "Review rejected" in hook_error or "Fix requested" in hook_error:
+                        error_code = ErrorCode.REVIEW_REJECTED
                     else:
                         error_code = ErrorCode.HOOK_FAILURE
                 # Combine Claude output with test failures for context
@@ -271,6 +277,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
+                    review_status=review_status,
+                    review_findings=(review_findings[:2048] if review_findings else None),
                 )
                 log_progress("❌ Failed: tests/lint check", task_id)
                 send_callback(
@@ -377,6 +385,14 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         if result is True:
             return True
+
+        # Review rejection is permanent — no automatic retry
+        ts = state.get_task_state(task.id)
+        if ts and ts.attempts:
+            last = ts.attempts[-1]
+            if last.error_code == ErrorCode.REVIEW_REJECTED:
+                log_progress("Review rejected — no automatic retry", task.id)
+                return False
 
         if attempt < config.max_retries - 1:
             logger.info(
@@ -551,7 +567,9 @@ async def _execute_task_async(
         success = (has_complete and not has_failed) or implicit_success
 
         if success:
-            hook_success, hook_error = post_done_hook(task, config, True)
+            hook_success, hook_error, review_status, review_findings = post_done_hook(
+                task, config, True
+            )
             if hook_success:
                 async with state_lock:
                     state.record_attempt(
@@ -562,6 +580,8 @@ async def _execute_task_async(
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         cost_usd=cost_usd,
+                        review_status=review_status,
+                        review_findings=(review_findings[:2048] if review_findings else None),
                     )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
@@ -574,6 +594,8 @@ async def _execute_task_async(
                         error_code = ErrorCode.TEST_FAILURE
                     elif "Lint errors" in hook_error:
                         error_code = ErrorCode.LINT_FAILURE
+                    elif "Review rejected" in hook_error or "Fix requested" in hook_error:
+                        error_code = ErrorCode.REVIEW_REJECTED
                     else:
                         error_code = ErrorCode.HOOK_FAILURE
                 full_output = output
@@ -590,6 +612,8 @@ async def _execute_task_async(
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         cost_usd=cost_usd,
+                        review_status=review_status,
+                        review_findings=(review_findings[:2048] if review_findings else None),
                     )
                 return False
         else:
@@ -710,6 +734,14 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
 
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
+    # HITL review incompatible with parallel/TUI modes
+    if config.hitl_review and getattr(args, "parallel", False):
+        logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
+        config.hitl_review = False
+    if config.hitl_review and getattr(args, "tui", False):
+        logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
+        config.hitl_review = False
+
     if getattr(args, "tui", False):
         import threading
 
@@ -982,6 +1014,11 @@ def cmd_status(args, config: ExecutorConfig):
             if task_cost > 0:
                 attempts_info += f", ${task_cost:.2f}"
             print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
+            # Show review verdict from last attempt
+            if ts.attempts:
+                last_attempt = ts.attempts[-1]
+                if last_attempt.review_status and last_attempt.review_status != "skipped":
+                    print(f"      Review: {last_attempt.review_status}")
             if ts.status == "failed" and ts.last_error:
                 print(f"      Last error: {ts.last_error[:50]}...")
             elif ts.status == "running" and ts.last_error:
@@ -1313,6 +1350,11 @@ def main():
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
     common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
     common.add_argument("--no-review", action="store_true", help="Skip code review after task")
+    common.add_argument(
+        "--hitl-review",
+        action="store_true",
+        help="Enable interactive approval gate after code review",
+    )
     common.add_argument(
         "--callback-url", type=str, default="", help="URL to POST task status updates to"
     )

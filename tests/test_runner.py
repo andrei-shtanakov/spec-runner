@@ -252,9 +252,7 @@ class TestRunClaudeAsync:
                 mock_proc.returncode = 0
                 mock_cse.return_value = mock_proc
 
-                stdout, stderr, rc = await run_claude_async(
-                    ["echo", "hi"], timeout=60, cwd="/tmp"
-                )
+                stdout, stderr, rc = await run_claude_async(["echo", "hi"], timeout=60, cwd="/tmp")
                 assert stdout == "output text"
                 assert stderr == "stderr text"
                 assert rc == 0

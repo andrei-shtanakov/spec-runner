@@ -222,9 +222,7 @@ def build_task_prompt(
             f"**Error:** {retry_context.previous_error}\n"
         )
         if retry_context.test_failures:
-            attempts_section += (
-                f"\n**Test failures:**\n```\n{retry_context.test_failures}\n```\n"
-            )
+            attempts_section += f"\n**Test failures:**\n```\n{retry_context.test_failures}\n```\n"
         attempts_section += (
             "\n**IMPORTANT:** Review the error above and fix the issue. "
             "Do not repeat the same mistake.\n\n"
@@ -241,9 +239,7 @@ def build_task_prompt(
                 f"({len(failed_attempts)} total, showing last "
                 f"{len(recent)}):\n\n"
             )
-            for i, attempt in enumerate(
-                recent, len(failed_attempts) - len(recent) + 1
-            ):
+            for i, attempt in enumerate(recent, len(failed_attempts) - len(recent) + 1):
                 attempts_section += f"### Attempt {i} (failed):\n"
                 if attempt.error:
                     error_text = attempt.error[:2000]
@@ -251,14 +247,10 @@ def build_task_prompt(
                 if attempt.claude_output:
                     failures = extract_test_failures(attempt.claude_output)
                     if failures:
-                        attempts_section += (
-                            f"**Test failures:**\n```\n{failures}\n```\n\n"
-                        )
+                        attempts_section += f"**Test failures:**\n```\n{failures}\n```\n\n"
 
             if len(attempts_section) > max_attempts_chars:
-                attempts_section = (
-                    attempts_section[:max_attempts_chars] + "\n...(truncated)\n"
-                )
+                attempts_section = attempts_section[:max_attempts_chars] + "\n...(truncated)\n"
 
             attempts_section += (
                 "**IMPORTANT:** Review the errors above and fix the issues. "
