@@ -35,6 +35,7 @@ from .state import (
     ReviewVerdict,
     TaskAttempt,
     TaskState,
+    recover_stale_tasks,
 )
 from .task import (
     TASKS_FILE,
@@ -79,6 +80,7 @@ __all__ = [
     "load_config_from_yaml",
     "parse_token_usage",
     "run_claude_async",
+    "recover_stale_tasks",
     "run_with_retries",
     "executor_main",
     # Logging
