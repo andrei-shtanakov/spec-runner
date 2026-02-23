@@ -249,7 +249,7 @@ def parse_spec_marker(output: str, marker_name: str) -> str | None:
     start_idx += len(start)
     end_idx = output.find(end, start_idx)
     if end_idx == -1:
-        return output[start_idx:].strip()
+        return None
     return output[start_idx:end_idx].strip()
 
 

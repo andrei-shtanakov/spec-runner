@@ -251,6 +251,7 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "project_root": Path(paths["root"]) if paths.get("root") else None,
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
             "state_file": Path(paths["state"]) if paths.get("state") else None,
+            "plugins_dir": Path(paths["plugins"]) if paths.get("plugins") else None,
             "callback_url": executor_config.get("callback_url"),
             "spec_prefix": executor_config.get("spec_prefix"),
             "max_concurrent": executor_config.get("max_concurrent"),

@@ -784,5 +784,11 @@ def post_done_hook(
         for name, ok, blocking in results:
             if not ok and blocking:
                 logger.error("Blocking plugin failed in post_done", plugin=name)
+                return (
+                    False,
+                    f"Blocking plugin '{name}' failed",
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
 
     return True, None, review_verdict.value, (review_output or "")[:2048]

@@ -23,6 +23,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from .config import (
+    CONFIG_FILE,
     ExecutorConfig,
     ExecutorLock,
     build_config,
@@ -697,7 +698,10 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
         # Pre-run validation
         from .validate import format_results, validate_all
 
-        pre_result = validate_all(tasks_file=config.tasks_file)
+        pre_result = validate_all(
+            tasks_file=config.tasks_file,
+            config_file=config.project_root / CONFIG_FILE,
+        )
         if not pre_result.ok:
             logger.error("Validation failed before execution")
             print(format_results(pre_result))
@@ -866,7 +870,10 @@ def _run_tasks(args, config: ExecutorConfig):
         # Pre-run validation
         from .validate import format_results, validate_all
 
-        pre_result = validate_all(tasks_file=config.tasks_file)
+        pre_result = validate_all(
+            tasks_file=config.tasks_file,
+            config_file=config.project_root / CONFIG_FILE,
+        )
         if not pre_result.ok:
             logger.error("Validation failed before execution")
             print(format_results(pre_result))

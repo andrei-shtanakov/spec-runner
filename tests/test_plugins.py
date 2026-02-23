@@ -242,6 +242,56 @@ class TestBuildTaskEnv:
         env = build_task_env(task, config, success=None)
         assert env["SR_TASK_STATUS"] == "pending"
 
+    def test_attempt_number_env_var(self) -> None:
+        """SR_ATTEMPT_NUMBER is included in env."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-020", name="Retry", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=True, attempt_number=3)
+        assert env["SR_ATTEMPT_NUMBER"] == "3"
+
+    def test_duration_seconds_env_var(self) -> None:
+        """SR_DURATION_SECONDS is formatted with one decimal."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-021", name="Timed", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=True, duration_seconds=45.678)
+        assert env["SR_DURATION_SECONDS"] == "45.7"
+
+    def test_error_env_vars(self) -> None:
+        """SR_ERROR and SR_ERROR_CODE are included in env."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-022", name="Failed", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(
+            task,
+            config,
+            success=False,
+            error="Tests failed",
+            error_code="TEST_FAILURE",
+        )
+        assert env["SR_ERROR"] == "Tests failed"
+        assert env["SR_ERROR_CODE"] == "TEST_FAILURE"
+
+    def test_default_env_vars(self) -> None:
+        """Default values for new env vars are empty/zero."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-023", name="Default", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=True)
+        assert env["SR_ATTEMPT_NUMBER"] == "0"
+        assert env["SR_DURATION_SECONDS"] == "0.0"
+        assert env["SR_ERROR"] == ""
+        assert env["SR_ERROR_CODE"] == ""
+
 
 class TestPluginIntegration:
     """Integration tests: plugins wired through pre_start_hook and post_done_hook."""
@@ -357,3 +407,75 @@ class TestPluginIntegration:
             result = pre_start_hook(task, config)
 
         assert result is False
+
+    def test_post_done_blocking_plugin_returns_false(self, tmp_path: Path) -> None:
+        """post_done_hook returns failure when a blocking plugin fails."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import post_done_hook
+        from spec_runner.task import Task
+
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "blocker",
+            {"post_done": {"command": "./fail.sh", "blocking": True}},
+        )
+        self._make_script(plugin_dir, "fail.sh", "#!/bin/bash\nexit 1")
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, review_status, review_findings = post_done_hook(
+                task, config, success=True
+            )
+
+        assert success is False
+        assert error is not None
+        assert "blocker" in error.lower()
+
+    def test_post_done_nonblocking_plugin_still_returns_true(self, tmp_path: Path) -> None:
+        """post_done_hook returns success when a non-blocking plugin fails."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import post_done_hook
+        from spec_runner.task import Task
+
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "nonblocker",
+            {"post_done": {"command": "./fail.sh", "blocking": False}},
+        )
+        self._make_script(plugin_dir, "fail.sh", "#!/bin/bash\nexit 1")
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, review_status, review_findings = post_done_hook(
+                task, config, success=True
+            )
+
+        assert success is True

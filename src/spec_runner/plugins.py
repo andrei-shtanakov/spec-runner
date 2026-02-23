@@ -239,6 +239,10 @@ def build_task_env(
     task: Task,
     config: ExecutorConfig,
     success: bool | None = None,
+    attempt_number: int = 0,
+    duration_seconds: float = 0.0,
+    error: str = "",
+    error_code: str = "",
 ) -> dict[str, str]:
     """Build environment variables dict for plugin hooks.
 
@@ -246,6 +250,10 @@ def build_task_env(
         task: Current task being executed.
         config: Executor configuration.
         success: Task outcome (True=success, False=failed, None=pending).
+        attempt_number: Current attempt number (1-based).
+        duration_seconds: Task execution duration in seconds.
+        error: Error message from task execution (if any).
+        error_code: Error code classification (if any).
 
     Returns:
         Dict of SR_* environment variables for subprocess env.
@@ -257,4 +265,8 @@ def build_task_env(
         "SR_TASK_STATUS": status,
         "SR_TASK_PRIORITY": task.priority,
         "SR_PROJECT_ROOT": str(config.project_root),
+        "SR_ATTEMPT_NUMBER": str(attempt_number),
+        "SR_DURATION_SECONDS": f"{duration_seconds:.1f}",
+        "SR_ERROR": error,
+        "SR_ERROR_CODE": error_code,
     }
