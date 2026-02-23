@@ -30,6 +30,7 @@ from .executor import (
     main as executor_main,
 )
 from .logging import get_logger, setup_logging
+from .mcp_server import run_server as mcp_run_server
 from .plugins import (
     PluginHook,
     PluginInfo,
@@ -128,6 +129,8 @@ __all__ = [
     "validate_tasks",
     # TUI
     "LogPanel",
+    # MCP
+    "mcp_run_server",
     # Logging
     "get_logger",
     "setup_logging",

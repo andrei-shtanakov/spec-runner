@@ -46,6 +46,7 @@ spec-runner costs --json                   # JSON output for automation
 spec-runner costs --sort=cost              # Sort by cost descending
 spec-runner watch                          # Continuously execute ready tasks
 spec-runner watch --tui                    # Watch with live TUI dashboard
+spec-runner mcp                            # Launch read-only MCP server (stdio)
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
@@ -57,7 +58,11 @@ All code is in `src/spec_runner/`:
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `executor.py` | ~1850 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring, `classify_retry_strategy()`, `compute_retry_delay()`, `cmd_costs()`, `cmd_watch()` |
+| `executor.py` | ~50 | Backward-compatible re-exports, `_shutdown_requested` flag, `_signal_handler()` |
+| `cli.py` | ~1200 | CLI commands (`cmd_run`, `cmd_status`, `cmd_costs`, `cmd_watch`, etc.), `main()` with argparse |
+| `execution.py` | ~480 | `execute_task()`, retry strategy (`classify_retry_strategy`, `compute_retry_delay`, `run_with_retries`) |
+| `parallel.py` | ~315 | `_execute_task_async()`, `_run_tasks_parallel()` — async parallel execution |
+| `mcp_server.py` | ~170 | Read-only MCP server (FastMCP, stdio): status, tasks, costs, logs tools |
 | `config.py` | ~320 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
 | `state.py` | ~560 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()` |
 | `prompt.py` | ~420 | Prompt building, templates, error formatting, `build_generation_prompt()`, `parse_spec_marker()`, `SPEC_STAGES` |
@@ -78,10 +83,10 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 2. `task.py:resolve_dependencies()` — Resolves dependency graph, auto-promotes blocked→todo
 3. `task.py:get_next_tasks()` — Returns ready tasks (in_progress first, then todo by priority)
 4. `prompt.py:build_task_prompt()` — Generates prompt with task context, requirements, design refs, previous errors
-5. `executor.py:execute_task()` — Runs Claude CLI as subprocess, detects `TASK_COMPLETE`/`TASK_FAILED` markers
-6. `executor.py:run_with_retries()` — Retry loop with error context forwarding between attempts
+5. `execution.py:execute_task()` — Runs Claude CLI as subprocess, detects `TASK_COMPLETE`/`TASK_FAILED` markers
+6. `execution.py:run_with_retries()` — Retry loop with error context forwarding between attempts
 7. `hooks.py`: `pre_start_hook()` (git branch, uv sync) → execution → `post_done_hook()` (tests, lint, review, commit, merge)
-8. `executor.py:_run_tasks_parallel()` — Parallel execution path: runs multiple ready tasks concurrently via `asyncio` with semaphore-based concurrency limiting and budget checks
+8. `parallel.py:_run_tasks_parallel()` — Parallel execution path: runs multiple ready tasks concurrently via `asyncio` with semaphore-based concurrency limiting and budget checks
 
 ### Key Classes
 
