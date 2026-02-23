@@ -8,9 +8,12 @@ import subprocess
 from datetime import datetime
 
 from .config import ExecutorConfig
+from .logging import get_logger
 from .prompt import load_prompt_template, render_template
 from .runner import build_cli_command, check_error_patterns, log_progress
 from .task import Task
+
+logger = get_logger("hooks")
 
 
 def get_task_branch_name(task: Task) -> str:
@@ -84,7 +87,7 @@ def ensure_on_main_branch(config: ExecutorConfig) -> None:
         current_branch = result.stdout.strip()
 
         if current_branch != main_branch:
-            print(f"   Switching to {main_branch}...")
+            logger.info("Switching to main branch", branch=main_branch)
             result = subprocess.run(
                 ["git", "checkout", main_branch],
                 capture_output=True,
@@ -92,24 +95,28 @@ def ensure_on_main_branch(config: ExecutorConfig) -> None:
                 cwd=config.project_root,
             )
             if result.returncode == 0:
-                print(f"   ✅ On {main_branch}")
+                logger.info("On main branch", branch=main_branch)
             else:
-                print(f"   ⚠️  Could not switch to {main_branch}: {result.stderr.strip()}")
+                logger.warning(
+                    "Could not switch to main branch",
+                    branch=main_branch,
+                    stderr=result.stderr.strip(),
+                )
     except Exception:
         pass  # Ignore git errors
 
 
 def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
     """Hook before starting task"""
-    print(f"🔧 Pre-start hook for {task.id}")
+    logger.info("Pre-start hook", task_id=task.id)
 
     # Sync dependencies
-    print("   Syncing dependencies...")
+    logger.info("Syncing dependencies")
     result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
     if result.returncode == 0:
-        print("   ✅ Dependencies synced")
+        logger.info("Dependencies synced")
     else:
-        print(f"   ⚠️  uv sync warning: {result.stderr[:200]}")
+        logger.warning("uv sync warning", stderr=result.stderr[:200])
 
     # Create git branch
     if config.create_git_branch:
@@ -135,7 +142,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
             if result.returncode != 0:
                 # Fresh repo without commits — skip branching for now
                 # TASK-000 typically does git init, first commit will be on main
-                print("   ⚠️  No commits yet, skipping branch creation")
+                logger.warning("No commits yet, skipping branch creation")
                 return True
 
             # Switch to main
@@ -174,7 +181,7 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
                     capture_output=True,
                     cwd=config.project_root,
                 )
-                print(f"   Switched to existing branch: {branch_name}")
+                logger.info("Switched to existing branch", branch=branch_name)
             else:
                 # Create new branch
                 result = subprocess.run(
@@ -184,9 +191,9 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
                     cwd=config.project_root,
                 )
                 if result.returncode == 0:
-                    print(f"   Created branch: {branch_name}")
+                    logger.info("Created branch", branch=branch_name)
                 else:
-                    print(f"   ⚠️  Failed to create branch: {result.stderr}")
+                    logger.warning("Failed to create branch", stderr=result.stderr)
 
         except FileNotFoundError:
             pass  # git not installed
@@ -389,14 +396,14 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
         Tuple of (success, error_details).
         error_details contains test/lint output on failure.
     """
-    print(f"🔧 Post-done hook for {task.id} (success={success})")
+    logger.info("Post-done hook", task_id=task.id, success=success)
 
     if not success:
         return False, None
 
     # Run tests
     if config.run_tests_on_done:
-        print("   Running tests...")
+        logger.info("Running tests")
         result = subprocess.run(
             config.test_command,
             shell=True,
@@ -405,16 +412,16 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             cwd=config.project_root,
         )
         if result.returncode != 0:
-            print("   ❌ Tests failed!")
+            logger.error("Tests failed")
             # Combine stdout and stderr for full picture
             test_output = result.stdout + "\n" + result.stderr
-            print(result.stderr[:500])
+            logger.error("Test stderr", stderr=result.stderr[:500])
             return False, f"Tests failed:\n{test_output}"
-        print("   ✅ Tests passed")
+        logger.info("Tests passed")
 
     # Run lint
     if config.run_lint_on_done and config.lint_command:
-        print("   Running lint...")
+        logger.info("Running lint")
         result = subprocess.run(
             config.lint_command,
             shell=True,
@@ -425,7 +432,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
 
         if result.returncode != 0:
             # Step 1: Attempt auto-fix
-            print("   🔧 Attempting auto-fix...")
+            logger.info("Attempting lint auto-fix")
             subprocess.run(
                 config.lint_fix_command,
                 shell=True,
@@ -447,21 +454,21 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 # Step 3: Still failing — block or warn
                 if config.lint_blocking:
                     lint_output = recheck.stdout + "\n" + recheck.stderr
-                    print("   ❌ Lint errors remain after auto-fix!")
+                    logger.error("Lint errors remain after auto-fix")
                     return False, f"Lint errors (not auto-fixable):\n{lint_output}"
                 else:
-                    print("   ⚠️  Lint warnings (non-blocking)")
+                    logger.warning("Lint warnings (non-blocking)")
             else:
-                print("   ✅ Lint auto-fixed")
+                logger.info("Lint auto-fixed")
         else:
-            print("   ✅ Lint passed")
+            logger.info("Lint passed")
 
     # Run code review (before commit, so fixes can be included)
     if config.run_review:
-        print("   Running code review...")
+        logger.info("Running code review")
         review_ok, review_error = run_code_review(task, config)
         if not review_ok:
-            print(f"   ⚠️  Review issue: {review_error}")
+            logger.warning("Review issue", error=review_error)
             # Don't block on review failures, just warn
 
     # Auto-commit
@@ -475,7 +482,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 cwd=config.project_root,
             )
             if not status_result.stdout.strip():
-                print("   No changes to commit")
+                logger.info("No changes to commit")
             else:
                 subprocess.run(["git", "add", "-A"], cwd=config.project_root)
                 # Build commit message with task details
@@ -494,9 +501,9 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                     commit_msg += "\n\n" + "\n".join(commit_body_lines)
 
                 subprocess.run(["git", "commit", "-m", commit_msg], cwd=config.project_root)
-                print("   Committed changes")
+                logger.info("Committed changes")
         except Exception as e:
-            print(f"   Commit failed: {e}")
+            logger.error("Commit failed", error=str(e))
 
     # Merge branch to main
     if config.create_git_branch:
@@ -542,7 +549,11 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                     )
 
                 if result.returncode != 0:
-                    print(f"   ⚠️  Failed to switch to {main_branch}: {error_msg}")
+                    logger.warning(
+                        "Failed to switch to main branch",
+                        branch=main_branch,
+                        stderr=error_msg,
+                    )
                     return True, None
 
             # Merge task branch
@@ -553,7 +564,7 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 cwd=config.project_root,
             )
             if result.returncode == 0:
-                print(f"   Merged {branch_name} → {main_branch}")
+                logger.info("Merged branch", source=branch_name, target=main_branch)
 
                 # Delete task branch
                 subprocess.run(
@@ -561,9 +572,9 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                     capture_output=True,
                     cwd=config.project_root,
                 )
-                print(f"   Deleted branch: {branch_name}")
+                logger.info("Deleted branch", branch=branch_name)
             else:
-                print(f"   ⚠️  Merge failed: {result.stderr}")
+                logger.warning("Merge failed", stderr=result.stderr)
                 # Return to task branch on failure
                 subprocess.run(
                     ["git", "checkout", branch_name],
@@ -571,6 +582,6 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                     cwd=config.project_root,
                 )
         except Exception as e:
-            print(f"   Merge failed: {e}")
+            logger.error("Merge failed", error=str(e))
 
     return True, None
