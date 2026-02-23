@@ -105,6 +105,7 @@ class ExecutorConfig:
 
     # Code review
     run_review: bool = True  # Run code review after task completion
+    hitl_review: bool = False  # Interactive approval gate after code review
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
     review_model: str = ""  # Review model (empty = use claude_model)
@@ -205,6 +206,7 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "lint_blocking": post_done.get("lint_blocking"),
             "auto_commit": post_done.get("auto_commit"),
             "run_review": post_done.get("run_review"),
+            "hitl_review": executor_config.get("hitl_review"),
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),
             "review_model": executor_config.get("review_model"),
@@ -277,6 +279,8 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["budget_usd"] = args.budget
     if hasattr(args, "task_budget") and getattr(args, "task_budget", None) is not None:
         config_kwargs["task_budget_usd"] = args.task_budget
+    if hasattr(args, "hitl_review") and getattr(args, "hitl_review", False):
+        config_kwargs["hitl_review"] = True
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 

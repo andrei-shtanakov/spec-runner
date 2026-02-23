@@ -1314,6 +1314,11 @@ def main():
     common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
     common.add_argument("--no-review", action="store_true", help="Skip code review after task")
     common.add_argument(
+        "--hitl-review",
+        action="store_true",
+        help="Enable interactive approval gate after code review",
+    )
+    common.add_argument(
         "--callback-url", type=str, default="", help="URL to POST task status updates to"
     )
     common.add_argument(
