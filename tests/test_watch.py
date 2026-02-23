@@ -99,9 +99,9 @@ def _make_args(**overrides) -> Namespace:
 class TestCmdWatch:
     """Tests for the cmd_watch polling loop."""
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_executes_ready_task_then_stops(
         self,
         mock_time,
@@ -130,9 +130,9 @@ class TestCmdWatch:
 
         assert mock_run.call_count == 1
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_stops_on_stop_file(
         self,
         mock_time,
@@ -156,9 +156,9 @@ class TestCmdWatch:
 
         mock_run.assert_not_called()
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_stops_on_consecutive_failures(
         self,
         mock_time,
@@ -184,9 +184,9 @@ class TestCmdWatch:
 
         assert mock_run.call_count == 2
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_resets_failures_on_success(
         self,
         mock_time,
@@ -217,9 +217,9 @@ class TestCmdWatch:
 
         assert mock_run.call_count == 4
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_validation_failure_stops(
         self,
         mock_time,
@@ -240,9 +240,9 @@ class TestCmdWatch:
 
         mock_run.assert_not_called()
 
-    @patch("spec_runner.executor.run_with_retries")
-    @patch("spec_runner.executor.validate_all")
-    @patch("spec_runner.executor.time")
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    @patch("spec_runner.cli.time")
     def test_polls_when_no_tasks_ready(
         self,
         mock_time,
@@ -282,7 +282,7 @@ class TestCmdWatch:
 class TestWatchTui:
     """Tests for watch --tui integration."""
 
-    @patch("spec_runner.executor.validate_all")
+    @patch("spec_runner.cli.validate_all")
     def test_tui_flag_launches_app(self, mock_validate, tmp_path: Path) -> None:
         """--tui flag launches SpecRunnerApp with watch loop in background."""
         config = _make_config(tmp_path)

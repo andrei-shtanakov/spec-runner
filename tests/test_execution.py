@@ -1086,7 +1086,7 @@ class TestCrashRecovery:
 
         recover_calls = []
         monkeypatch.setattr(
-            "spec_runner.executor.recover_stale_tasks",
+            "spec_runner.cli.recover_stale_tasks",
             lambda state, timeout_minutes, tasks_file: recover_calls.append(True) or [],
         )
 
@@ -1123,7 +1123,7 @@ class TestForceFlag:
             lambda self: None,
         )
         monkeypatch.setattr(
-            "spec_runner.executor.recover_stale_tasks",
+            "spec_runner.cli.recover_stale_tasks",
             lambda *a, **kw: [],
         )
 
@@ -1164,7 +1164,7 @@ class TestForceFlag:
             lambda self: None,
         )
         monkeypatch.setattr(
-            "spec_runner.executor.recover_stale_tasks",
+            "spec_runner.cli.recover_stale_tasks",
             lambda *a, **kw: [],
         )
 
