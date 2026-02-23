@@ -85,7 +85,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     """Execute a single task via Claude CLI.
 
     Returns:
-        True if successful, False if failed, "API_ERROR" if rate limited,
+        True if successful, False if failed (including rate limits),
         or "HOOK_ERROR" if pre-start hook failed (fail fast, no retries).
     """
 
@@ -408,7 +408,14 @@ def classify_retry_strategy(error_code: ErrorCode | str) -> str:
 
 
 def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: int = 5) -> float:
-    """Compute delay before next retry based on error type and attempt number."""
+    """Compute delay before next retry based on error type and attempt number.
+
+    Args:
+        error_code: The error that caused the failure.
+        attempt: Zero-based attempt index.
+        base_delay: Base delay in seconds for linear backoff (not used for exponential).
+            Exponential backoff uses a fixed 30s base since rate limits need longer waits.
+    """
     strategy = classify_retry_strategy(error_code)
     if strategy == "fatal":
         return 0.0
@@ -627,7 +634,7 @@ async def _execute_task_async(
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
                 )
-            return "API_ERROR"
+            return False
 
         # Check result markers
         has_complete = "TASK_COMPLETE" in output
@@ -782,20 +789,10 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
                 logger.info("Dispatching task", task_id=t.id, name=t.name)
                 executed_ids.add(t.id)
 
-            results = await asyncio.gather(
+            await asyncio.gather(
                 *[run_one(t) for t in ready],
                 return_exceptions=True,
             )
-
-            # Check for API errors
-            api_error = False
-            for r in results:
-                if isinstance(r, tuple) and r[1] == "API_ERROR":
-                    api_error = True
-                    break
-            if api_error:
-                logger.warning("Stopping: API rate limit reached")
-                break
 
             if state.should_stop():
                 logger.warning("Stopping: failure/budget limit reached")
@@ -1023,11 +1020,6 @@ def _run_tasks(args, config: ExecutorConfig):
 
                 result = run_with_retries(task, config, state)
 
-                if result == "API_ERROR":
-                    logger.warning("Stopping: API rate limit reached")
-                    log_progress("⛔ Stopped: API rate limit")
-                    break
-
                 # "SKIP" means continue to next task
                 if result == "SKIP":
                     continue
@@ -1046,11 +1038,6 @@ def _run_tasks(args, config: ExecutorConfig):
                     break
 
                 result = run_with_retries(task, config, state)
-
-                if result == "API_ERROR":
-                    logger.warning("Stopping: API rate limit reached")
-                    log_progress("⛔ Stopped: API rate limit")
-                    break
 
                 if result == "SKIP":
                     continue

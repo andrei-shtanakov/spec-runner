@@ -78,7 +78,6 @@ class TestE2ESingleTask:
     def test_single_task_success(self, tmp_path: Path, monkeypatch):
         """Full cycle: tasks.md -> parse -> execute -> state.db shows success."""
         config = _make_e2e_config(tmp_path)
-        state = ExecutorState(config)
 
         tasks_file = _write_tasks(tmp_path)
         tasks = parse_tasks(tasks_file)
@@ -95,13 +94,14 @@ class TestE2ESingleTask:
         monkeypatch.delenv("FAKE_STDERR", raising=False)
         monkeypatch.delenv("FAKE_DELAY", raising=False)
 
-        result = execute_task(task, config, state)
-        assert result is True
+        with ExecutorState(config) as state:
+            result = execute_task(task, config, state)
+            assert result is True
 
-        ts = state.get_task_state(task.id)
-        assert ts is not None
-        assert len(ts.attempts) == 1
-        assert ts.attempts[0].success is True
+            ts = state.get_task_state(task.id)
+            assert ts is not None
+            assert len(ts.attempts) == 1
+            assert ts.attempts[0].success is True
 
 
 @pytest.mark.slow
@@ -111,7 +111,6 @@ class TestE2ERetry:
     def test_failure_then_success(self, tmp_path: Path, monkeypatch):
         """First attempt TASK_FAILED, second succeeds."""
         config = _make_e2e_config(tmp_path, max_retries=3)
-        state = ExecutorState(config)
         _write_tasks(tmp_path)
         tasks = parse_tasks(tmp_path / "spec" / "tasks.md")
         task = tasks[0]
@@ -129,18 +128,18 @@ class TestE2ERetry:
         monkeypatch.delenv("FAKE_STDERR", raising=False)
         monkeypatch.delenv("FAKE_DELAY", raising=False)
 
-        result = run_with_retries(task, config, state)
-        assert result is True
+        with ExecutorState(config) as state:
+            result = run_with_retries(task, config, state)
+            assert result is True
 
-        ts = state.get_task_state(task.id)
-        assert len(ts.attempts) == 2
-        assert ts.attempts[0].success is False
-        assert ts.attempts[1].success is True
+            ts = state.get_task_state(task.id)
+            assert len(ts.attempts) == 2
+            assert ts.attempts[0].success is False
+            assert ts.attempts[1].success is True
 
     def test_rate_limit_retries_and_succeeds(self, tmp_path: Path, monkeypatch):
         """Rate limit triggers backoff retry, then succeeds."""
         config = _make_e2e_config(tmp_path, max_retries=3)
-        state = ExecutorState(config)
         _write_tasks(tmp_path)
         tasks = parse_tasks(tmp_path / "spec" / "tasks.md")
         task = tasks[0]
@@ -158,19 +157,19 @@ class TestE2ERetry:
         monkeypatch.delenv("FAKE_STDERR", raising=False)
         monkeypatch.delenv("FAKE_DELAY", raising=False)
 
-        result = run_with_retries(task, config, state)
-        assert result is True
+        with ExecutorState(config) as state:
+            result = run_with_retries(task, config, state)
+            assert result is True
 
-        ts = state.get_task_state(task.id)
-        assert len(ts.attempts) == 2
-        assert ts.attempts[0].success is False
-        assert ts.attempts[0].error_code is not None
-        assert ts.attempts[0].error_code.value == "RATE_LIMIT"
+            ts = state.get_task_state(task.id)
+            assert len(ts.attempts) == 2
+            assert ts.attempts[0].success is False
+            assert ts.attempts[0].error_code is not None
+            assert ts.attempts[0].error_code.value == "RATE_LIMIT"
 
     def test_all_attempts_fail(self, tmp_path: Path, monkeypatch):
         """All attempts fail — task gets skipped (default on_task_failure=skip)."""
         config = _make_e2e_config(tmp_path, max_retries=2)
-        state = ExecutorState(config)
         tasks_file = _write_tasks(tmp_path)
         tasks = parse_tasks(tasks_file)
         task = tasks[0]
@@ -185,12 +184,13 @@ class TestE2ERetry:
         monkeypatch.delenv("FAKE_STDERR", raising=False)
         monkeypatch.delenv("FAKE_DELAY", raising=False)
 
-        result = run_with_retries(task, config, state)
-        assert result == "SKIP"
+        with ExecutorState(config) as state:
+            result = run_with_retries(task, config, state)
+            assert result == "SKIP"
 
-        ts = state.get_task_state(task.id)
-        assert len(ts.attempts) == 2
-        assert all(not a.success for a in ts.attempts)
+            ts = state.get_task_state(task.id)
+            assert len(ts.attempts) == 2
+            assert all(not a.success for a in ts.attempts)
 
 
 # ---------------------------------------------------------------------------
