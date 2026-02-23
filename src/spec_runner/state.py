@@ -28,6 +28,17 @@ class ErrorCode(str, Enum):
     HOOK_FAILURE = "HOOK_FAILURE"
     UNKNOWN = "UNKNOWN"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    REVIEW_REJECTED = "REVIEW_REJECTED"
+
+
+class ReviewVerdict(str, Enum):
+    """Verdict from code review step."""
+
+    PASSED = "passed"
+    FIXED = "fixed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    REJECTED = "rejected"
 
 
 @dataclass
@@ -43,6 +54,8 @@ class TaskAttempt:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    review_status: str | None = None
+    review_findings: str | None = None
 
 
 @dataclass
@@ -152,6 +165,8 @@ class ExecutorState:
             ("input_tokens", "INTEGER"),
             ("output_tokens", "INTEGER"),
             ("cost_usd", "REAL"),
+            ("review_status", "TEXT"),
+            ("review_findings", "TEXT"),
         ]:
             if col not in columns:
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
@@ -230,7 +245,8 @@ class ExecutorState:
         # Load attempts for each task
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
-            "error, error_code, claude_output, input_tokens, output_tokens, cost_usd "
+            "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
+            "review_status, review_findings "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -245,6 +261,8 @@ class ExecutorState:
                 input_tokens,
                 output_tokens,
                 cost_usd,
+                review_status,
+                review_findings,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -259,6 +277,8 @@ class ExecutorState:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                review_status=review_status,
+                review_findings=review_findings,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -312,8 +332,9 @@ class ExecutorState:
                         "INSERT INTO attempts "
                         "(task_id, timestamp, success, duration_seconds, "
                         "error, error_code, claude_output, "
-                        "input_tokens, output_tokens, cost_usd) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "input_tokens, output_tokens, cost_usd, "
+                        "review_status, review_findings) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -325,6 +346,8 @@ class ExecutorState:
                             a.input_tokens,
                             a.output_tokens,
                             a.cost_usd,
+                            a.review_status,
+                            a.review_findings,
                         ),
                     )
             self._save_meta()
@@ -345,6 +368,8 @@ class ExecutorState:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_usd: float | None = None,
+        review_status: str | None = None,
+        review_findings: str | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -359,6 +384,8 @@ class ExecutorState:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_usd=cost_usd,
+            review_status=review_status,
+            review_findings=review_findings,
         )
         state.attempts.append(attempt)
 
@@ -388,8 +415,9 @@ class ExecutorState:
                 "INSERT INTO attempts "
                 "(task_id, timestamp, success, duration_seconds, "
                 "error, error_code, claude_output, "
-                "input_tokens, output_tokens, cost_usd) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "input_tokens, output_tokens, cost_usd, "
+                "review_status, review_findings) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     attempt.timestamp,
@@ -401,6 +429,8 @@ class ExecutorState:
                     attempt.input_tokens,
                     attempt.output_tokens,
                     attempt.cost_usd,
+                    attempt.review_status,
+                    attempt.review_findings,
                 ),
             )
             self._save_meta()

@@ -9,6 +9,7 @@ from spec_runner.state import (
     ErrorCode,
     ExecutorState,
     RetryContext,
+    ReviewVerdict,
     TaskAttempt,
     TaskState,
     check_stop_requested,
@@ -726,3 +727,62 @@ class TestTokenTracking:
         assert ts.attempts[-1].input_tokens == 100
         assert ts.attempts[-1].cost_usd == 0.01
         state.close()
+
+
+# --- ReviewVerdict ---
+
+
+class TestReviewVerdict:
+    def test_review_verdict_values(self):
+        assert ReviewVerdict.PASSED == "passed"
+        assert ReviewVerdict.FIXED == "fixed"
+        assert ReviewVerdict.FAILED == "failed"
+        assert ReviewVerdict.SKIPPED == "skipped"
+        assert ReviewVerdict.REJECTED == "rejected"
+
+    def test_review_verdict_is_string(self):
+        assert isinstance(ReviewVerdict.PASSED, str)
+
+
+# --- Review Fields in TaskAttempt ---
+
+
+class TestReviewFieldsInTaskAttempt:
+    def test_review_fields_default_none(self):
+        attempt = TaskAttempt(
+            timestamp="2026-01-01T00:00:00",
+            success=True,
+            duration_seconds=10.0,
+        )
+        assert attempt.review_status is None
+        assert attempt.review_findings is None
+
+    def test_review_fields_from_kwargs(self):
+        attempt = TaskAttempt(
+            timestamp="2026-01-01T00:00:00",
+            success=True,
+            duration_seconds=10.0,
+            review_status="passed",
+            review_findings="No issues found",
+        )
+        assert attempt.review_status == "passed"
+        assert attempt.review_findings == "No issues found"
+
+    def test_review_fields_persist_to_sqlite(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        state.record_attempt(
+            task_id="TASK-001",
+            success=True,
+            duration=10.0,
+            review_status="fixed",
+            review_findings="Auto-fixed 1 issue",
+        )
+        state.close()
+
+        # Re-open and verify persistence
+        state2 = ExecutorState(config)
+        task = state2.tasks["TASK-001"]
+        assert task.attempts[0].review_status == "fixed"
+        assert task.attempts[0].review_findings == "Auto-fixed 1 issue"
+        state2.close()
