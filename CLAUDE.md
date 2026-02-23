@@ -38,6 +38,7 @@ spec-runner tui                            # Launch TUI status dashboard
 spec-runner run --log-level=DEBUG          # Set log verbosity (DEBUG/INFO/WARNING/ERROR)
 spec-runner run --log-json                 # Output logs as JSON (for pipelines)
 spec-runner run --all --hitl-review        # Interactive HITL approval gate after code review
+spec-runner run --force                    # Skip lock check (use when lock is stale)
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
@@ -49,9 +50,9 @@ All code is in `src/spec_runner/`:
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `executor.py` | ~1350 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks |
-| `config.py` | ~275 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields |
-| `state.py` | ~480 | ExecutorState, TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `BUDGET_EXCEEDED` |
+| `executor.py` | ~1530 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring |
+| `config.py` | ~280 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
+| `state.py` | ~560 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()` |
 | `prompt.py` | ~345 | Prompt building, templates, error formatting |
 | `hooks.py` | ~700 | Pre/post hooks, git ops, enriched code review (full diff, checklist, test/lint output), HITL approval gate |
 | `runner.py` | ~240 | CLI command building, subprocess exec, progress logging; `parse_token_usage()`, `run_claude_async()` |
@@ -76,8 +77,8 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 ### Key Classes
 
 - **`ExecutorConfig`** — Dataclass merging YAML config + CLI args. Handles `spec_prefix` path resolution for multi-phase projects.
-- **`ExecutorState`** / **`TaskState`** / **`TaskAttempt`** — Execution state persisted to SQLite (`spec/.executor-state.db`) with WAL mode. Auto-migrates from legacy JSON on first run.
-- **`ErrorCode`** — `str` enum classifying failures: TIMEOUT, RATE_LIMIT, SYNTAX, TEST_FAILURE, LINT_FAILURE, TASK_FAILED, HOOK_FAILURE, BUDGET_EXCEEDED, REVIEW_REJECTED, UNKNOWN. Stored in `attempts.error_code` column.
+- **`ExecutorState`** / **`TaskState`** / **`TaskAttempt`** — Execution state persisted to SQLite (`spec/.executor-state.db`) with WAL mode. Auto-migrates from legacy JSON on first run. `ExecutorState` is a context manager (`with ExecutorState(config) as state:`) for guaranteed cleanup. `recover_stale_tasks()` detects and recovers tasks stuck in 'running' from previous crashes.
+- **`ErrorCode`** — `str` enum classifying failures: TIMEOUT, RATE_LIMIT, SYNTAX, TEST_FAILURE, LINT_FAILURE, TASK_FAILED, HOOK_FAILURE, BUDGET_EXCEEDED, REVIEW_REJECTED, INTERRUPTED, UNKNOWN. Stored in `attempts.error_code` column.
 - **`ReviewVerdict`** — `str` enum for code review outcomes: PASSED, FIXED, FAILED, SKIPPED, REJECTED. Stored in `attempts.review_status` column.
 - **`RetryContext`** — Structured retry info (attempt number, error code, previous error, test failures) passed to `build_task_prompt()` for focused retry prompts.
 - **`Task`** — Parsed task with id, priority (p0-p3), status (todo/in_progress/done/blocked), checklist, dependency graph, traceability to `[REQ-XXX]`/`[DESIGN-XXX]`.
@@ -114,4 +115,4 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 ## Testing
 
-Tests use pytest (258 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (283 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.

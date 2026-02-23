@@ -945,3 +945,216 @@ class TestBudgetEnforcement:
         assert result is False
         # Should stop after 2 attempts ($0.12 > $0.10)
         assert call_count == 2
+
+
+class TestStateCleanup:
+    """Verify ExecutorState is always closed after executor functions."""
+
+    def test_run_tasks_closes_state(self, tmp_path):
+        """_run_tasks uses context manager, so state is closed even on exception."""
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        state = ExecutorState(config)
+        assert state._conn is not None
+        state.close()
+        assert state._conn is None
+
+    def test_context_manager_closes_on_normal_exit(self, tmp_path):
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+
+        with ExecutorState(config) as state:
+            assert state._conn is not None
+
+        assert state._conn is None
+
+    def test_context_manager_closes_on_exception(self, tmp_path):
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+
+        try:
+            with ExecutorState(config) as state:
+                assert state._conn is not None
+                raise RuntimeError("simulated crash")
+        except RuntimeError:
+            pass
+
+        assert state._conn is None
+
+
+class TestSignalHandling:
+    def test_shutdown_flag_initially_false(self):
+        import spec_runner.executor as mod
+
+        mod._shutdown_requested = False
+        assert mod._shutdown_requested is False
+
+    def test_signal_handler_sets_flag(self):
+        import spec_runner.executor as mod
+        from spec_runner.executor import _signal_handler
+
+        mod._shutdown_requested = False
+        _signal_handler(2, None)  # SIGINT = 2
+        assert mod._shutdown_requested is True
+        mod._shutdown_requested = False  # cleanup
+
+    def test_check_stop_includes_shutdown_flag(self, tmp_path):
+        import spec_runner.executor as mod
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.state import check_stop_requested
+
+        config = ExecutorConfig(project_root=tmp_path)
+        (tmp_path / "spec").mkdir()
+
+        mod._shutdown_requested = False
+        assert check_stop_requested(config) is False
+
+        mod._shutdown_requested = True
+        assert check_stop_requested(config) is True
+        mod._shutdown_requested = False  # cleanup
+
+    def test_execute_task_catches_keyboard_interrupt(self, tmp_path, monkeypatch):
+        """KeyboardInterrupt during subprocess.run is caught and recorded."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        task = _make_task()
+
+        monkeypatch.setattr("spec_runner.executor.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.executor.update_task_status", lambda *a, **kw: None)
+        monkeypatch.setattr("spec_runner.executor.send_callback", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "spec_runner.executor.build_cli_command", lambda **kw: ["echo", "test"]
+        )
+
+        def raise_interrupt(*a, **kw):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess, "run", raise_interrupt)
+
+        with ExecutorState(config) as state:
+            result = execute_task(task, config, state)
+            assert result is False
+            ts = state.get_task_state("TASK-001")
+            assert ts.attempts[-1].error_code == ErrorCode.INTERRUPTED
+            assert "Interrupted" in ts.attempts[-1].error
+
+
+class TestCrashRecovery:
+    def test_run_tasks_calls_recover_stale(self, tmp_path, monkeypatch):
+        """_run_tasks calls recover_stale_tasks at startup."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        recover_calls = []
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda state, timeout_minutes, tasks_file: recover_calls.append(True) or [],
+        )
+
+        args = type(
+            "Args",
+            (),
+            {"task": None, "all": False, "milestone": None, "restart": False},
+        )()
+
+        from spec_runner.executor import _run_tasks
+
+        _run_tasks(args, config)
+
+        assert len(recover_calls) == 1
+
+
+class TestForceFlag:
+    def test_force_flag_skips_lock(self, tmp_path, monkeypatch):
+        """--force skips lock check entirely."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        lock_acquired = []
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.acquire",
+            lambda self: lock_acquired.append(True) or True,
+        )
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.release",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda *a, **kw: [],
+        )
+
+        from spec_runner.executor import cmd_run
+
+        args = type(
+            "Args",
+            (),
+            {
+                "task": None,
+                "all": False,
+                "milestone": None,
+                "restart": False,
+                "parallel": False,
+                "tui": False,
+                "force": True,
+            },
+        )()
+        cmd_run(args, config)
+        assert len(lock_acquired) == 0
+
+    def test_no_force_acquires_lock(self, tmp_path, monkeypatch):
+        """Without --force, lock is acquired."""
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+        )
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        lock_acquired = []
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.acquire",
+            lambda self: lock_acquired.append(True) or True,
+        )
+        monkeypatch.setattr(
+            "spec_runner.config.ExecutorLock.release",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "spec_runner.executor.recover_stale_tasks",
+            lambda *a, **kw: [],
+        )
+
+        from spec_runner.executor import cmd_run
+
+        args = type(
+            "Args",
+            (),
+            {
+                "task": None,
+                "all": False,
+                "milestone": None,
+                "restart": False,
+                "parallel": False,
+                "tui": False,
+                "force": False,
+            },
+        )()
+        cmd_run(args, config)
+        assert len(lock_acquired) == 1

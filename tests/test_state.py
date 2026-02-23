@@ -781,3 +781,121 @@ class TestReviewFieldsInTaskAttempt:
         assert task.attempts[0].review_status == "fixed"
         assert task.attempts[0].review_findings == "Auto-fixed 1 issue"
         state2.close()
+
+
+# --- INTERRUPTED error code ---
+
+
+class TestInterruptedErrorCode:
+    def test_interrupted_exists(self):
+        assert ErrorCode.INTERRUPTED == "INTERRUPTED"
+
+    def test_interrupted_is_string_enum(self):
+        assert isinstance(ErrorCode.INTERRUPTED, str)
+        assert ErrorCode.INTERRUPTED.value == "INTERRUPTED"
+
+
+# --- ExecutorState context manager ---
+
+
+class TestExecutorStateContextManager:
+    def test_enter_returns_self(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        result = state.__enter__()
+        assert result is state
+        state.close()
+
+    def test_exit_closes_connection(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            assert state._conn is not None
+        assert state._conn is None
+
+    def test_exit_on_exception(self, tmp_path):
+        import pytest
+
+        config = _make_config(tmp_path)
+        with pytest.raises(ValueError), ExecutorState(config) as state:
+            raise ValueError("test error")
+        assert state._conn is None
+
+    def test_with_block_usage(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            ts = state.get_task_state("TASK-001")
+            assert ts.status == "running"
+        # Verify data persisted before close
+        state2 = ExecutorState(config)
+        assert state2.get_task_state("TASK-001").status == "running"
+        state2.close()
+
+
+# --- Crash Recovery ---
+
+
+class TestRecoverStaleTasks:
+    def test_no_stale_tasks(self, tmp_path):
+        from spec_runner.state import recover_stale_tasks
+
+        config = _make_config(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        tasks_file = tmp_path / "spec" / "tasks.md"
+        tasks_file.write_text("# Tasks\n")
+
+        with ExecutorState(config) as state:
+            recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
+            assert recovered == []
+
+    def test_recovers_stale_running_task(self, tmp_path):
+        from datetime import datetime, timedelta
+
+        from spec_runner.state import recover_stale_tasks
+
+        config = _make_config(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        tasks_file = tmp_path / "spec" / "tasks.md"
+        tasks_file.write_text(
+            "# Tasks\n\n## TASK-001 [P1] Test task\n- Status: in_progress\n\nDescription\n"
+        )
+
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            ts = state.get_task_state("TASK-001")
+            ts.started_at = (datetime.now() - timedelta(hours=2)).isoformat()
+            state._save()
+
+            recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
+            assert recovered == ["TASK-001"]
+
+            ts = state.get_task_state("TASK-001")
+            assert ts.status == "failed"
+            assert ts.attempts[-1].error_code == ErrorCode.INTERRUPTED
+            assert "stale" in ts.attempts[-1].error.lower()
+
+    def test_does_not_recover_recent_running_task(self, tmp_path):
+        from spec_runner.state import recover_stale_tasks
+
+        config = _make_config(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        tasks_file = tmp_path / "spec" / "tasks.md"
+        tasks_file.write_text("# Tasks\n")
+
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
+            assert recovered == []
+
+    def test_does_not_recover_completed_tasks(self, tmp_path):
+        from spec_runner.state import recover_stale_tasks
+
+        config = _make_config(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        tasks_file = tmp_path / "spec" / "tasks.md"
+        tasks_file.write_text("# Tasks\n")
+
+        with ExecutorState(config) as state:
+            state.record_attempt("TASK-001", True, 10.0)
+            recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
+            assert recovered == []
