@@ -218,8 +218,10 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             else:
                 logger.info("Implicit success (return code 0)", task_id=task_id)
 
-            # Post-done hook (tests, lint)
-            hook_success, hook_error = post_done_hook(task, config, True)
+            # Post-done hook (tests, lint, review)
+            hook_success, hook_error, review_status, review_findings = post_done_hook(
+                task, config, True
+            )
 
             if hook_success:
                 state.record_attempt(
@@ -551,7 +553,9 @@ async def _execute_task_async(
         success = (has_complete and not has_failed) or implicit_success
 
         if success:
-            hook_success, hook_error = post_done_hook(task, config, True)
+            hook_success, hook_error, review_status, review_findings = post_done_hook(
+                task, config, True
+            )
             if hook_success:
                 async with state_lock:
                     state.record_attempt(

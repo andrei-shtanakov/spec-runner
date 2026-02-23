@@ -64,7 +64,7 @@ class TestExecuteTask:
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None))
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_success_returns_true(
@@ -123,7 +123,7 @@ class TestExecuteTask:
             stderr="",
             returncode=0,
         )
-        mock_post.return_value = (True, None)
+        mock_post.return_value = (True, None, "skipped", "")
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)
@@ -205,7 +205,9 @@ class TestExecuteTask:
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(False, "tests failed"))
+    @patch(
+        "spec_runner.executor.post_done_hook", return_value=(False, "tests failed", "skipped", "")
+    )
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_hook_failure_returns_false(
@@ -452,7 +454,7 @@ class TestErrorClassification:
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.executor.post_done_hook",
-        return_value=(False, "Tests failed:\nFAILED test_x"),
+        return_value=(False, "Tests failed:\nFAILED test_x", "skipped", ""),
     )
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
@@ -487,7 +489,7 @@ class TestErrorClassification:
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.executor.post_done_hook",
-        return_value=(False, "Lint errors (not auto-fixable):\nerr"),
+        return_value=(False, "Lint errors (not auto-fixable):\nerr", "skipped", ""),
     )
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
@@ -542,7 +544,7 @@ class TestTokenTrackingInExecutor:
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None))
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_tokens_parsed_from_stderr(
@@ -615,7 +617,7 @@ class TestTokenTrackingInExecutor:
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.build_cli_command", return_value=["echo", "hi"])
     @patch("spec_runner.executor.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.executor.post_done_hook", return_value=(True, None))
+    @patch("spec_runner.executor.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.executor.pre_start_hook", return_value=True)
     @patch("spec_runner.executor.subprocess.run")
     def test_no_tokens_in_stderr_stores_none(
@@ -671,7 +673,7 @@ class TestTokenTrackingInExecutor:
             stderr="input_tokens: 4000\noutput_tokens: 900\ncost: $0.06",
             returncode=0,
         )
-        mock_post.return_value = (False, "Tests failed:\nFAILED test_x")
+        mock_post.return_value = (False, "Tests failed:\nFAILED test_x", "skipped", "")
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)

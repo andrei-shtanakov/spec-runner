@@ -457,19 +457,24 @@ def run_code_review(
         return ReviewVerdict.FAILED, str(e), None
 
 
-def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[bool, str | None]:
+def post_done_hook(
+    task: Task, config: ExecutorConfig, success: bool
+) -> tuple[bool, str | None, str, str]:
     """Hook after task completion.
 
     Returns:
-        Tuple of (success, error_details).
+        Tuple of (success, error_details, review_status, review_findings).
         error_details contains test/lint output on failure.
+        review_status is the ReviewVerdict value string (e.g. "passed", "skipped").
+        review_findings is the truncated review output (up to 2048 chars).
     """
     logger.info("Post-done hook", task_id=task.id, success=success)
 
     if not success:
-        return False, None
+        return False, None, ReviewVerdict.SKIPPED.value, ""
 
-    # Run tests
+    # Run tests — capture output for review context
+    test_output_str: str | None = None
     if config.run_tests_on_done:
         logger.info("Running tests")
         result = subprocess.run(
@@ -479,15 +484,20 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             text=True,
             cwd=config.project_root,
         )
+        test_output_str = (result.stdout + result.stderr)[:2048]
         if result.returncode != 0:
             logger.error("Tests failed")
-            # Combine stdout and stderr for full picture
-            test_output = result.stdout + "\n" + result.stderr
             logger.error("Test stderr", stderr=result.stderr[:500])
-            return False, f"Tests failed:\n{test_output}"
+            return (
+                False,
+                f"Tests failed:\n{result.stdout + result.stderr}",
+                ReviewVerdict.SKIPPED.value,
+                "",
+            )
         logger.info("Tests passed")
 
-    # Run lint
+    # Run lint — capture output for review context
+    lint_output_str: str | None = None
     if config.run_lint_on_done and config.lint_command:
         logger.info("Running lint")
         result = subprocess.run(
@@ -523,21 +533,47 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                 if config.lint_blocking:
                     lint_output = recheck.stdout + "\n" + recheck.stderr
                     logger.error("Lint errors remain after auto-fix")
-                    return False, f"Lint errors (not auto-fixable):\n{lint_output}"
+                    return (
+                        False,
+                        f"Lint errors (not auto-fixable):\n{lint_output}",
+                        ReviewVerdict.SKIPPED.value,
+                        "",
+                    )
                 else:
                     logger.warning("Lint warnings (non-blocking)")
             else:
+                lint_output_str = "auto-fixed"
                 logger.info("Lint auto-fixed")
         else:
+            lint_output_str = "clean"
             logger.info("Lint passed")
 
+    # Get previous error for review context (local import to avoid circular dependency)
+    from .state import ExecutorState
+
+    previous_error: str | None = None
+    state = ExecutorState(config)
+    ts = state.tasks.get(task.id)
+    if ts and ts.attempts:
+        last = ts.attempts[-1]
+        if not last.success and last.error:
+            previous_error = last.error[:1024]
+    state.close()
+
     # Run code review (before commit, so fixes can be included)
+    review_verdict = ReviewVerdict.SKIPPED
+    review_output: str | None = None
     if config.run_review:
         logger.info("Running code review")
-        review_ok, review_error = run_code_review(task, config)
-        if not review_ok:
-            logger.warning("Review issue", error=review_error)
-            # Don't block on review failures, just warn
+        review_verdict, review_error, review_output = run_code_review(
+            task,
+            config,
+            test_output=test_output_str,
+            lint_output=lint_output_str,
+            previous_error=previous_error,
+        )
+        if review_verdict == ReviewVerdict.FAILED:
+            logger.warning("Review found issues", error=review_error)
 
     # Auto-commit
     if config.auto_commit:
@@ -590,7 +626,12 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
             current_branch = result.stdout.strip()
             if current_branch == main_branch:
                 # Already on main, no merge needed
-                return True, None
+                return (
+                    True,
+                    None,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
 
             # Switch to main
             result = subprocess.run(
@@ -622,7 +663,12 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
                         branch=main_branch,
                         stderr=error_msg,
                     )
-                    return True, None
+                    return (
+                        True,
+                        None,
+                        review_verdict.value,
+                        (review_output or "")[:2048],
+                    )
 
             # Merge task branch
             result = subprocess.run(
@@ -652,4 +698,4 @@ def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[b
         except Exception as e:
             logger.error("Merge failed", error=str(e))
 
-    return True, None
+    return True, None, review_verdict.value, (review_output or "")[:2048]

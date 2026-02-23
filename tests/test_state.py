@@ -179,9 +179,7 @@ class TestExecutorStateSQLite:
         conn = sqlite3.connect(str(config.state_file))
         tables = {
             r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         conn.close()
         assert "tasks" in tables
@@ -411,8 +409,7 @@ class TestJsonToSqliteMigration:
 
         # Now place JSON alongside the existing DB
         json_path.write_text(
-            '{"tasks":{}, "consecutive_failures":0, '
-            '"total_completed":0, "total_failed":0}'
+            '{"tasks":{}, "consecutive_failures":0, "total_completed":0, "total_failed":0}'
         )
 
         # Re-open: DB has data, so JSON should NOT be touched
@@ -520,9 +517,7 @@ class TestJsonToSqliteMigration:
             "duration_seconds REAL, error TEXT, error_code TEXT, "
             "claude_output TEXT)"
         )
-        conn.execute(
-            "CREATE TABLE executor_meta (key TEXT PRIMARY KEY, value TEXT)"
-        )
+        conn.execute("CREATE TABLE executor_meta (key TEXT PRIMARY KEY, value TEXT)")
         conn.commit()
         conn.close()
 

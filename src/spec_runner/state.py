@@ -218,8 +218,7 @@ class ExecutorState:
             ):
                 value = data.get(key, 0)
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO executor_meta (key, value) "
-                    "VALUES (?, ?)",
+                    "INSERT OR REPLACE INTO executor_meta (key, value) VALUES (?, ?)",
                     (key, str(value)),
                 )
 
@@ -230,9 +229,7 @@ class ExecutorState:
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""
         # Load tasks
-        cursor = self._conn.execute(
-            "SELECT task_id, status, started_at, completed_at FROM tasks"
-        )
+        cursor = self._conn.execute("SELECT task_id, status, started_at, completed_at FROM tasks")
         for row in cursor.fetchall():
             task_id, status, started_at, completed_at = row
             self.tasks[task_id] = TaskState(
@@ -284,9 +281,7 @@ class ExecutorState:
                 self.tasks[task_id].attempts.append(attempt)
 
         # Load meta counters
-        cursor = self._conn.execute(
-            "SELECT key, value FROM executor_meta"
-        )
+        cursor = self._conn.execute("SELECT key, value FROM executor_meta")
         meta = {row[0]: row[1] for row in cursor.fetchall()}
         self.consecutive_failures = int(meta.get("consecutive_failures", "0"))
         self.total_completed = int(meta.get("total_completed", "0"))
@@ -324,9 +319,7 @@ class ExecutorState:
                     (task_id, ts.status, ts.started_at, ts.completed_at),
                 )
                 # Re-sync attempts: delete and re-insert
-                self._conn.execute(
-                    "DELETE FROM attempts WHERE task_id = ?", (task_id,)
-                )
+                self._conn.execute("DELETE FROM attempts WHERE task_id = ?", (task_id,))
                 for a in ts.attempts:
                     self._conn.execute(
                         "INSERT INTO attempts "
@@ -457,18 +450,12 @@ class ExecutorState:
         """Check if we should stop (consecutive failures or budget exceeded)."""
         if self.consecutive_failures >= self.config.max_consecutive_failures:
             return True
-        return (
-            self.config.budget_usd is not None
-            and self.total_cost() > self.config.budget_usd
-        )
+        return self.config.budget_usd is not None and self.total_cost() > self.config.budget_usd
 
     def total_cost(self) -> float:
         """Sum of cost_usd across all attempts."""
         return sum(
-            a.cost_usd
-            for ts in self.tasks.values()
-            for a in ts.attempts
-            if a.cost_usd is not None
+            a.cost_usd for ts in self.tasks.values() for a in ts.attempts if a.cost_usd is not None
         )
 
     def task_cost(self, task_id: str) -> float:

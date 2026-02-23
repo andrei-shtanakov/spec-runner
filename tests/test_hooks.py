@@ -250,9 +250,10 @@ class TestNoBranchMode:
         )
         task = Task(id="TASK-001", name="Test", priority="p1", status="todo", estimate="1d")
 
-        success, error = post_done_hook(task, config, True)
+        success, error, review_status, review_findings = post_done_hook(task, config, True)
 
         assert success is True
+        assert review_status == "skipped"
         call_args = [str(c) for c in mock_run.call_args_list]
         assert not any("merge" in c for c in call_args)
 
@@ -279,9 +280,7 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(
-                task, config, test_output="15 passed, 0 failed in 2.1s"
-            )
+            prompt = build_review_prompt(task, config, test_output="15 passed, 0 failed in 2.1s")
         assert "15 passed" in prompt
 
     def test_includes_previous_error(self):
@@ -289,9 +288,7 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(
-                task, config, previous_error="TypeError: expected str"
-            )
+            prompt = build_review_prompt(task, config, previous_error="TypeError: expected str")
         assert "TypeError" in prompt
 
     def test_includes_lint_output(self):
@@ -299,9 +296,7 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(
-                task, config, lint_output="All checks passed"
-            )
+            prompt = build_review_prompt(task, config, lint_output="All checks passed")
         assert "All checks passed" in prompt
 
     def test_includes_full_diff(self):
@@ -410,7 +405,101 @@ class TestRunCodeReview:
                 )
         mock_build.assert_called_once()
         call_kwargs = mock_build.call_args
-        assert (
-            call_kwargs.kwargs.get("test_output") == "15 passed"
-            or "15 passed" in str(call_kwargs)
+        assert call_kwargs.kwargs.get("test_output") == "15 passed" or "15 passed" in str(
+            call_kwargs
         )
+
+
+class TestPostDoneHookReviewWiring:
+    """Tests for post_done_hook passing context to review and returning review data."""
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_returns_review_data_when_review_enabled(self, mock_run, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+            auto_commit=False,
+            create_git_branch=False,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        mock_run.return_value = MagicMock(
+            stdout="REVIEW_PASSED",
+            stderr="",
+            returncode=0,
+        )
+        with (
+            patch("spec_runner.hooks.build_review_prompt", return_value="prompt"),
+            patch("spec_runner.state.ExecutorState") as mock_state_cls,
+        ):
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, review_status, review_findings = post_done_hook(task, config, True)
+        assert success is True
+        assert review_status == "passed"
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_returns_skipped_when_review_disabled(self, mock_run, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+        )
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, review_status, review_findings = post_done_hook(task, config, True)
+        assert success is True
+        assert review_status == "skipped"
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_captures_test_output_for_review(self, mock_run, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=True,
+            test_command="pytest",
+            run_lint_on_done=False,
+            run_review=True,
+            auto_commit=False,
+            create_git_branch=False,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+
+        call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0] if args else kwargs.get("args")
+            m = MagicMock()
+            if isinstance(cmd, str) and "pytest" in cmd:
+                m.stdout = "15 passed"
+                m.stderr = ""
+                m.returncode = 0
+            else:
+                m.stdout = "REVIEW_PASSED"
+                m.stderr = ""
+                m.returncode = 0
+            return m
+
+        mock_run.side_effect = side_effect
+        with (
+            patch("spec_runner.hooks.build_review_prompt", return_value="prompt"),
+            patch("spec_runner.state.ExecutorState") as mock_state_cls,
+        ):
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, review_status, review_findings = post_done_hook(task, config, True)
+        assert success is True
+        assert review_status == "passed"

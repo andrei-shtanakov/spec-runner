@@ -51,7 +51,5 @@ class TestRedactSensitive:
         assert event_dict["message"] == "hello world"
 
     def test_redacts_in_event_string(self):
-        event_dict = redact_sensitive(
-            None, None, {"event": "Using key sk-abc123def456ghi"}
-        )
+        event_dict = redact_sensitive(None, None, {"event": "Using key sk-abc123def456ghi"})
         assert "sk-abc123" not in event_dict["event"]
