@@ -5,14 +5,21 @@ manifests, parses them into PluginInfo/PluginHook dataclasses.
 Executes plugin hooks as subprocesses with env vars and run_on filtering.
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from .logging import get_logger
+
+if TYPE_CHECKING:
+    from .config import ExecutorConfig
+    from .task import Task
 
 log = get_logger("plugins")
 
@@ -226,3 +233,28 @@ def run_plugin_hooks(
             results.append((plugin.name, False, hook.blocking))
 
     return results
+
+
+def build_task_env(
+    task: Task,
+    config: ExecutorConfig,
+    success: bool | None = None,
+) -> dict[str, str]:
+    """Build environment variables dict for plugin hooks.
+
+    Args:
+        task: Current task being executed.
+        config: Executor configuration.
+        success: Task outcome (True=success, False=failed, None=pending).
+
+    Returns:
+        Dict of SR_* environment variables for subprocess env.
+    """
+    status = "success" if success else ("failed" if success is False else "pending")
+    return {
+        "SR_TASK_ID": task.id,
+        "SR_TASK_NAME": task.name,
+        "SR_TASK_STATUS": status,
+        "SR_TASK_PRIORITY": task.priority,
+        "SR_PROJECT_ROOT": str(config.project_root),
+    }

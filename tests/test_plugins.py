@@ -2,10 +2,16 @@
 
 import stat
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import yaml
 
-from spec_runner.plugins import PluginHook, discover_plugins, run_plugin_hooks
+from spec_runner.plugins import (
+    PluginHook,
+    build_task_env,
+    discover_plugins,
+    run_plugin_hooks,
+)
 
 
 def _create_plugin(plugins_dir: Path, name: str, hooks: dict) -> Path:
@@ -197,3 +203,157 @@ class TestRunPluginHooks:
         assert len(results) == 1
         assert results[0][1] is False  # failure
         assert results[0][2] is True  # blocking
+
+
+class TestBuildTaskEnv:
+    """Tests for build_task_env()."""
+
+    def test_success_status(self) -> None:
+        """success=True produces SR_TASK_STATUS=success."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-010", name="My Task", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=True)
+        assert env["SR_TASK_ID"] == "TASK-010"
+        assert env["SR_TASK_NAME"] == "My Task"
+        assert env["SR_TASK_STATUS"] == "success"
+        assert env["SR_TASK_PRIORITY"] == "p1"
+        assert env["SR_PROJECT_ROOT"] == str(config.project_root)
+
+    def test_failure_status(self) -> None:
+        """success=False produces SR_TASK_STATUS=failed."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-011", name="Broken", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=False)
+        assert env["SR_TASK_STATUS"] == "failed"
+
+    def test_pending_status(self) -> None:
+        """success=None produces SR_TASK_STATUS=pending."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-012", name="Pending", priority="p2", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=Path("/tmp/proj"))
+        env = build_task_env(task, config, success=None)
+        assert env["SR_TASK_STATUS"] == "pending"
+
+
+class TestPluginIntegration:
+    """Integration tests: plugins wired through pre_start_hook and post_done_hook."""
+
+    def _make_script(self, plugin_dir: Path, name: str, content: str) -> Path:
+        script = plugin_dir / name
+        script.write_text(content)
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        return script
+
+    def test_pre_start_runs_plugins(self, tmp_path: Path) -> None:
+        """pre_start_hook discovers and runs pre_start plugin hooks."""
+        import subprocess as real_subprocess
+
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import pre_start_hook
+        from spec_runner.task import Task
+
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "pre-test",
+            {"pre_start": {"command": "./start.sh"}},
+        )
+        marker = tmp_path / "pre_marker.txt"
+        self._make_script(plugin_dir, "start.sh", f"#!/bin/bash\ntouch {marker}")
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        original_run = real_subprocess.run
+
+        def selective_mock(cmd, *args, **kwargs):
+            """Mock only uv/git calls, let plugin scripts run for real."""
+            if isinstance(cmd, list) and cmd[0] in ("uv", "git"):
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=selective_mock):
+            pre_start_hook(task, config)
+
+        assert marker.exists()
+
+    def test_post_done_runs_plugins(self, tmp_path: Path) -> None:
+        """post_done_hook discovers and runs post_done plugin hooks."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import post_done_hook
+        from spec_runner.task import Task
+
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "post-test",
+            {"post_done": {"command": "./done.sh"}},
+        )
+        marker = tmp_path / "post_marker.txt"
+        self._make_script(plugin_dir, "done.sh", f"#!/bin/bash\ntouch {marker}")
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            post_done_hook(task, config, success=True)
+
+        assert marker.exists()
+
+    def test_pre_start_blocking_plugin_returns_false(self, tmp_path: Path) -> None:
+        """pre_start_hook returns False when a blocking plugin fails."""
+        import subprocess as real_subprocess
+
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import pre_start_hook
+        from spec_runner.task import Task
+
+        plugins_dir = tmp_path / "spec" / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "blocker",
+            {"pre_start": {"command": "./fail.sh", "blocking": True}},
+        )
+        self._make_script(plugin_dir, "fail.sh", "#!/bin/bash\nexit 1")
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        original_run = real_subprocess.run
+
+        def selective_mock(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd[0] in ("uv", "git"):
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=selective_mock):
+            result = pre_start_hook(task, config)
+
+        assert result is False

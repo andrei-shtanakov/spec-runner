@@ -159,6 +159,7 @@ class ExecutorConfig:
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
+    plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory
 
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
@@ -176,6 +177,8 @@ class ExecutorConfig:
             self.state_file = self.project_root / self.state_file
         if not self.logs_dir.is_absolute():
             self.logs_dir = self.project_root / self.logs_dir
+        if not self.plugins_dir.is_absolute():
+            self.plugins_dir = self.project_root / self.plugins_dir
 
     @property
     def stop_file(self) -> Path:

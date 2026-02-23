@@ -26,6 +26,13 @@ from .executor import (
     main as executor_main,
 )
 from .logging import get_logger, setup_logging
+from .plugins import (
+    PluginHook,
+    PluginInfo,
+    build_task_env,
+    discover_plugins,
+    run_plugin_hooks,
+)
 from .prompt import build_task_prompt
 from .runner import parse_token_usage, run_claude_async
 from .state import (
@@ -90,6 +97,12 @@ __all__ = [
     "recover_stale_tasks",
     "run_with_retries",
     "executor_main",
+    # Plugins
+    "PluginHook",
+    "PluginInfo",
+    "build_task_env",
+    "discover_plugins",
+    "run_plugin_hooks",
     # Validation
     "ValidationResult",
     "format_results",
