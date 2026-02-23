@@ -27,6 +27,7 @@ class ErrorCode(str, Enum):
     TASK_FAILED = "TASK_FAILED"
     HOOK_FAILURE = "HOOK_FAILURE"
     UNKNOWN = "UNKNOWN"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 
 
 @dataclass
@@ -39,6 +40,9 @@ class TaskAttempt:
     error: str | None = None
     claude_output: str | None = None
     error_code: ErrorCode | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 @dataclass
@@ -141,6 +145,16 @@ class ExecutorState:
                 value TEXT
             )
         """)
+        # Migrate: add token columns if missing (for DBs created before Phase 2)
+        cursor = self._conn.execute("PRAGMA table_info(attempts)")
+        columns = {row[1] for row in cursor.fetchall()}
+        for col, col_type in [
+            ("input_tokens", "INTEGER"),
+            ("output_tokens", "INTEGER"),
+            ("cost_usd", "REAL"),
+        ]:
+            if col not in columns:
+                self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -216,7 +230,7 @@ class ExecutorState:
         # Load attempts for each task
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
-            "error, error_code, claude_output "
+            "error, error_code, claude_output, input_tokens, output_tokens, cost_usd "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -228,6 +242,9 @@ class ExecutorState:
                 error,
                 error_code_str,
                 claude_output,
+                input_tokens,
+                output_tokens,
+                cost_usd,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -239,6 +256,9 @@ class ExecutorState:
                 error=error,
                 claude_output=claude_output,
                 error_code=error_code,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -291,8 +311,9 @@ class ExecutorState:
                     self._conn.execute(
                         "INSERT INTO attempts "
                         "(task_id, timestamp, success, duration_seconds, "
-                        "error, error_code, claude_output) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "error, error_code, claude_output, "
+                        "input_tokens, output_tokens, cost_usd) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -301,6 +322,9 @@ class ExecutorState:
                             a.error,
                             a.error_code.value if a.error_code else None,
                             a.claude_output,
+                            a.input_tokens,
+                            a.output_tokens,
+                            a.cost_usd,
                         ),
                     )
             self._save_meta()
@@ -318,6 +342,9 @@ class ExecutorState:
         error: str | None = None,
         output: str | None = None,
         error_code: ErrorCode | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_usd: float | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -329,6 +356,9 @@ class ExecutorState:
             error=error,
             claude_output=output,
             error_code=error_code,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
         )
         state.attempts.append(attempt)
 
@@ -357,8 +387,9 @@ class ExecutorState:
             self._conn.execute(
                 "INSERT INTO attempts "
                 "(task_id, timestamp, success, duration_seconds, "
-                "error, error_code, claude_output) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "error, error_code, claude_output, "
+                "input_tokens, output_tokens, cost_usd) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     attempt.timestamp,
@@ -367,6 +398,9 @@ class ExecutorState:
                     attempt.error,
                     attempt.error_code.value if attempt.error_code else None,
                     attempt.claude_output,
+                    attempt.input_tokens,
+                    attempt.output_tokens,
+                    attempt.cost_usd,
                 ),
             )
             self._save_meta()
@@ -392,6 +426,38 @@ class ExecutorState:
     def should_stop(self) -> bool:
         """Check if we should stop"""
         return self.consecutive_failures >= self.config.max_consecutive_failures
+
+    def total_cost(self) -> float:
+        """Sum of cost_usd across all attempts."""
+        return sum(
+            a.cost_usd
+            for ts in self.tasks.values()
+            for a in ts.attempts
+            if a.cost_usd is not None
+        )
+
+    def task_cost(self, task_id: str) -> float:
+        """Sum of cost_usd for a specific task."""
+        ts = self.tasks.get(task_id)
+        if not ts:
+            return 0.0
+        return sum(a.cost_usd for a in ts.attempts if a.cost_usd is not None)
+
+    def total_tokens(self) -> tuple[int, int]:
+        """(total_input_tokens, total_output_tokens) across all attempts."""
+        inp = sum(
+            a.input_tokens
+            for ts in self.tasks.values()
+            for a in ts.attempts
+            if a.input_tokens is not None
+        )
+        out = sum(
+            a.output_tokens
+            for ts in self.tasks.values()
+            for a in ts.attempts
+            if a.output_tokens is not None
+        )
+        return inp, out
 
     def close(self) -> None:
         """Close the SQLite connection."""
