@@ -11,9 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import cmd_watch
-from spec_runner.state import ExecutorState
 from spec_runner.task import Task
-
 
 # --- Helpers ---
 
@@ -78,9 +76,7 @@ def _write_tasks(
         p_emoji = priority_emoji.get(priority, "\U0001f534")
         s_emoji = status_emoji.get(status, "\u2b1c")
         lines.append(f"### {task_id}: {name}")
-        lines.append(
-            f"{p_emoji} {priority.upper()} | {s_emoji} {status.upper()} | Est: 1d"
-        )
+        lines.append(f"{p_emoji} {priority.upper()} | {s_emoji} {status.upper()} | Est: 1d")
         lines.append("")
     tasks_file.parent.mkdir(parents=True, exist_ok=True)
     tasks_file.write_text("\n".join(lines))

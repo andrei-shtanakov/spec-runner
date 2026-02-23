@@ -13,7 +13,6 @@ from spec_runner.config import ExecutorConfig
 from spec_runner.executor import cmd_costs
 from spec_runner.state import ExecutorState
 
-
 # --- Helpers ---
 
 
@@ -41,17 +40,25 @@ def _write_tasks(
 
     Generates the full markdown format expected by parse_tasks().
     """
-    priority_emoji = {"p0": "\U0001f534", "p1": "\U0001f7e0", "p2": "\U0001f7e1", "p3": "\U0001f7e2"}
-    status_emoji = {"todo": "\u2b1c", "in_progress": "\U0001f504", "done": "\u2705", "blocked": "\u23f8\ufe0f"}
+    priority_emoji = {
+        "p0": "\U0001f534",
+        "p1": "\U0001f7e0",
+        "p2": "\U0001f7e1",
+        "p3": "\U0001f7e2",
+    }
+    status_emoji = {
+        "todo": "\u2b1c",
+        "in_progress": "\U0001f504",
+        "done": "\u2705",
+        "blocked": "\u23f8\ufe0f",
+    }
 
     lines = ["# Tasks\n"]
     for task_id, name, priority, status in tasks:
         p_emoji = priority_emoji.get(priority, "\U0001f534")
         s_emoji = status_emoji.get(status, "\u2b1c")
         lines.append(f"### {task_id}: {name}")
-        lines.append(
-            f"{p_emoji} {priority.upper()} | {s_emoji} {status.upper()} | Est: 1d"
-        )
+        lines.append(f"{p_emoji} {priority.upper()} | {s_emoji} {status.upper()} | Est: 1d")
         lines.append("")
 
     tasks_file.parent.mkdir(parents=True, exist_ok=True)

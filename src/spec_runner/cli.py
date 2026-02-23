@@ -1002,6 +1002,13 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         time.sleep(1)
 
 
+def cmd_mcp(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Launch MCP server (stdio transport)."""
+    from .mcp_server import run_server
+
+    run_server()
+
+
 def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Launch read-only TUI dashboard."""
     from .logging import setup_logging
@@ -1165,6 +1172,9 @@ def main():
         help="Sort order (default: task id)",
     )
 
+    # mcp
+    subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1202,6 +1212,7 @@ def main():
         "validate": cmd_validate,
         "tui": cmd_tui,
         "watch": cmd_watch,
+        "mcp": cmd_mcp,
     }
 
     cmd_func = commands.get(args.command)

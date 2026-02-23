@@ -23,6 +23,7 @@ from .cli import (  # noqa: E402, F401
     _run_tasks,
     cmd_costs,
     cmd_logs,
+    cmd_mcp,
     cmd_plan,
     cmd_reset,
     cmd_retry,
