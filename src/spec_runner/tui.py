@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 from datetime import datetime
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -155,6 +156,50 @@ class KanbanColumn(Vertical):
         self.border_title = title
 
 
+class LogPanel(Static):
+    """Panel showing execution progress log, tailing a progress file."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._file_pos: int = 0
+        self._lines: list[str] = []
+
+    @staticmethod
+    def format_line(line: str) -> str:
+        """Format a progress log line for display."""
+        return line.rstrip()
+
+    def read_new_lines(self, path: Path) -> list[str]:
+        """Read new lines from progress file since last read.
+
+        Returns list of new lines read.
+        """
+        if not path.exists():
+            return []
+        try:
+            with open(path) as f:
+                f.seek(self._file_pos)
+                new_data = f.read()
+                self._file_pos = f.tell()
+            if new_data:
+                new_lines = [self.format_line(ln) for ln in new_data.splitlines() if ln.strip()]
+                self._lines.extend(new_lines)
+                # Keep last 100 lines
+                if len(self._lines) > 100:
+                    self._lines = self._lines[-100:]
+                return new_lines
+        except OSError:
+            pass
+        return []
+
+    def render_log(self) -> str:
+        """Render last N lines as text."""
+        visible = self._lines[-10:]
+        if not visible:
+            return "[dim]No log entries yet[/]"
+        return "\n".join(visible)
+
+
 class SpecRunnerApp(App[None]):
     """Textual TUI app showing a live Kanban dashboard for spec-runner."""
 
@@ -197,6 +242,13 @@ class SpecRunnerApp(App[None]):
         padding: 0 1;
     }
 
+    #log-panel {
+        height: 12;
+        border: solid $secondary;
+        padding: 0 1;
+        overflow-y: auto;
+    }
+
     #stats-bar {
         dock: bottom;
         height: 1;
@@ -208,6 +260,7 @@ class SpecRunnerApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "stop", "Stop execution"),
+        Binding("r", "refresh", "Refresh"),
     ]
 
     def __init__(self, config: ExecutorConfig | None = None) -> None:
@@ -222,6 +275,7 @@ class SpecRunnerApp(App[None]):
             yield KanbanColumn("Todo", id="col-todo")
             yield KanbanColumn("Running", id="col-running")
             yield KanbanColumn("Done", id="col-done")
+        yield LogPanel(id="log-panel")
         yield StatsBar(id="stats-bar")
         yield Footer()
 
@@ -357,6 +411,12 @@ class SpecRunnerApp(App[None]):
             )
         )
 
+        # Update log panel
+        log_panel = self.query_one("#log-panel", LogPanel)
+        progress_file = config.spec_dir / ".executor-progress.txt"
+        log_panel.read_new_lines(progress_file)
+        log_panel.update(log_panel.render_log())
+
         if state:
             state.close()
 
@@ -379,6 +439,10 @@ class SpecRunnerApp(App[None]):
         if not isinstance(ts, TaskState):
             return 0.0
         return sum(a.duration_seconds for a in ts.attempts)
+
+    def action_refresh(self) -> None:
+        """Force refresh the board."""
+        self.refresh_board()
 
     def action_stop(self) -> None:
         """Create the stop file to request graceful shutdown."""

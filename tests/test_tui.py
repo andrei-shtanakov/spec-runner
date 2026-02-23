@@ -1,6 +1,8 @@
 """Tests for spec_runner.tui module."""
 
-from spec_runner.tui import SpecRunnerApp, StatsBar, TaskCard
+from pathlib import Path
+
+from spec_runner.tui import LogPanel, SpecRunnerApp, StatsBar, TaskCard
 
 
 class TestSpecRunnerApp:
@@ -75,3 +77,84 @@ class TestStatsBar:
         )
         assert "10" in text
         assert "$0.84" in text
+
+
+class TestLogPanel:
+    """Tests for the LogPanel widget."""
+
+    def test_format_line_strips_whitespace(self) -> None:
+        """format_line strips trailing whitespace."""
+        assert LogPanel.format_line("hello world  \n") == "hello world"
+
+    def test_format_line_preserves_content(self) -> None:
+        """format_line preserves message content."""
+        line = "[14:23:01] TASK-003 Attempt 1/3 started"
+        result = LogPanel.format_line(line)
+        assert "TASK-003" in result
+        assert "Attempt 1/3" in result
+
+    def test_read_new_lines_empty_file(self, tmp_path: Path) -> None:
+        """Empty file returns no lines."""
+        progress = tmp_path / "progress.txt"
+        progress.write_text("")
+        panel = LogPanel()
+        lines = panel.read_new_lines(progress)
+        assert lines == []
+
+    def test_read_new_lines_reads_content(self, tmp_path: Path) -> None:
+        """Reads lines from progress file."""
+        progress = tmp_path / "progress.txt"
+        progress.write_text("[14:23] Line 1\n[14:24] Line 2\n")
+        panel = LogPanel()
+        lines = panel.read_new_lines(progress)
+        assert len(lines) == 2
+        assert "Line 1" in lines[0]
+        assert "Line 2" in lines[1]
+
+    def test_read_new_lines_incremental(self, tmp_path: Path) -> None:
+        """Only reads new lines on subsequent calls."""
+        progress = tmp_path / "progress.txt"
+        progress.write_text("[14:23] Line 1\n")
+        panel = LogPanel()
+
+        lines1 = panel.read_new_lines(progress)
+        assert len(lines1) == 1
+
+        # Append more content
+        with open(progress, "a") as f:
+            f.write("[14:24] Line 2\n[14:25] Line 3\n")
+
+        lines2 = panel.read_new_lines(progress)
+        assert len(lines2) == 2
+        assert "Line 2" in lines2[0]
+
+    def test_read_new_lines_nonexistent_file(self, tmp_path: Path) -> None:
+        """Nonexistent file returns empty list."""
+        panel = LogPanel()
+        lines = panel.read_new_lines(tmp_path / "nonexistent.txt")
+        assert lines == []
+
+    def test_read_new_lines_caps_at_100(self, tmp_path: Path) -> None:
+        """Internal buffer caps at 100 lines."""
+        progress = tmp_path / "progress.txt"
+        content = "\n".join(f"[14:00] Line {i}" for i in range(150)) + "\n"
+        progress.write_text(content)
+        panel = LogPanel()
+        panel.read_new_lines(progress)
+        assert len(panel._lines) == 100
+
+    def test_render_log_empty(self) -> None:
+        """Render with no lines shows placeholder."""
+        panel = LogPanel()
+        text = panel.render_log()
+        assert "No log entries" in text
+
+    def test_render_log_shows_lines(self, tmp_path: Path) -> None:
+        """Render shows the last lines."""
+        progress = tmp_path / "progress.txt"
+        progress.write_text("[14:23] Line 1\n[14:24] Line 2\n")
+        panel = LogPanel()
+        panel.read_new_lines(progress)
+        text = panel.render_log()
+        assert "Line 1" in text
+        assert "Line 2" in text
