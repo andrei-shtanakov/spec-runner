@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.hooks import get_main_branch, get_task_branch_name, pre_start_hook
+from spec_runner.hooks import get_main_branch, get_task_branch_name, post_done_hook, pre_start_hook
 from spec_runner.task import Task
 
 
@@ -208,3 +208,42 @@ class TestPreStartHook:
 
         result = pre_start_hook(task, config)
         assert result is True
+
+
+class TestNoBranchMode:
+    """Verify hooks skip git ops when create_git_branch=False (parallel mode)."""
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_pre_start_skips_branch_when_no_branch(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            create_git_branch=False,
+        )
+        task = Task(id="TASK-001", name="Test", priority="p1", status="todo", estimate="1d")
+
+        result = pre_start_hook(task, config)
+
+        assert result is True
+        # Git checkout/branch should not be called
+        call_args = [str(c) for c in mock_run.call_args_list]
+        assert not any("checkout" in c for c in call_args)
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_post_done_skips_merge_when_no_branch(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            create_git_branch=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+        )
+        task = Task(id="TASK-001", name="Test", priority="p1", status="todo", estimate="1d")
+
+        success, error = post_done_hook(task, config, True)
+
+        assert success is True
+        call_args = [str(c) for c in mock_run.call_args_list]
+        assert not any("merge" in c for c in call_args)
