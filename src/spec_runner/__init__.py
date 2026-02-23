@@ -19,6 +19,8 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .executor import (
+    classify_retry_strategy,
+    compute_retry_delay,
     execute_task,
     run_with_retries,
 )
@@ -86,6 +88,8 @@ __all__ = [
     "update_checklist_item",
     "mark_all_checklist_done",
     # Executor
+    "classify_retry_strategy",
+    "compute_retry_delay",
     "ErrorCode",
     "ExecutorConfig",
     "ExecutorState",

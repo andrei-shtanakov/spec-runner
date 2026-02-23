@@ -6,7 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.executor import execute_task, run_with_retries
+from spec_runner.executor import (
+    classify_retry_strategy,
+    compute_retry_delay,
+    execute_task,
+    run_with_retries,
+)
 from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
@@ -306,24 +311,46 @@ class TestRunWithRetries:
         assert result is True
         assert mock_exec.call_count == 1
 
+    @patch("spec_runner.executor.update_task_status")
+    @patch("spec_runner.executor.time.sleep")
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.execute_task")
-    def test_api_error_stops_immediately(
+    def test_api_error_retries_with_backoff(
         self,
         mock_exec,
         mock_log,
+        mock_sleep,
+        mock_status,
         tmp_path,
     ):
-        """API_ERROR stops retries immediately; call count is 1."""
-        mock_exec.return_value = "API_ERROR"
+        """API_ERROR (rate limit) retries with backoff instead of stopping."""
         task = _make_task()
-        config = _make_config(tmp_path, max_retries=3)
+        config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
         state = _make_state(config)
+
+        call_count = 0
+
+        def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            state.record_attempt(
+                task.id,
+                False,
+                1.0,
+                error="rate limit",
+                error_code=ErrorCode.RATE_LIMIT,
+            )
+            return "API_ERROR"
+
+        mock_exec.side_effect = side_effect
 
         result = run_with_retries(task, config, state)
 
-        assert result == "API_ERROR"
-        assert mock_exec.call_count == 1
+        # Should exhaust all retries, not stop at 1
+        assert result is not True
+        assert call_count == 3
+        # Should have slept between retries with exponential backoff
+        assert mock_sleep.call_count == 2
 
     @patch("spec_runner.executor.log_progress")
     @patch("spec_runner.executor.execute_task")
@@ -1156,3 +1183,167 @@ class TestForceFlag:
         )()
         cmd_run(args, config)
         assert len(lock_acquired) == 1
+
+
+# --- Retry strategy tests ---
+
+
+class TestRetryStrategy:
+    def test_rate_limit_is_exponential(self):
+        assert classify_retry_strategy(ErrorCode.RATE_LIMIT) == "backoff_exponential"
+
+    def test_test_failure_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TEST_FAILURE) == "backoff_linear"
+
+    def test_lint_failure_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.LINT_FAILURE) == "backoff_linear"
+
+    def test_task_failed_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TASK_FAILED) == "backoff_linear"
+
+    def test_timeout_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.TIMEOUT) == "backoff_linear"
+
+    def test_unknown_is_linear(self):
+        assert classify_retry_strategy(ErrorCode.UNKNOWN) == "backoff_linear"
+
+    def test_hook_failure_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.HOOK_FAILURE) == "fatal"
+
+    def test_review_rejected_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.REVIEW_REJECTED) == "fatal"
+
+    def test_budget_exceeded_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.BUDGET_EXCEEDED) == "fatal"
+
+    def test_interrupted_is_fatal(self):
+        assert classify_retry_strategy(ErrorCode.INTERRUPTED) == "fatal"
+
+    def test_string_error_code(self):
+        assert classify_retry_strategy("RATE_LIMIT") == "backoff_exponential"
+
+
+class TestComputeRetryDelay:
+    def test_exponential_attempt_0(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=0) == 30.0
+
+    def test_exponential_attempt_1(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=1) == 60.0
+
+    def test_exponential_attempt_2(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=2) == 120.0
+
+    def test_exponential_caps_at_300(self):
+        assert compute_retry_delay(ErrorCode.RATE_LIMIT, attempt=10) == 300.0
+
+    def test_linear_attempt_0(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=0, base_delay=5) == 5.0
+
+    def test_linear_attempt_1(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=1, base_delay=5) == 10.0
+
+    def test_linear_attempt_2(self):
+        assert compute_retry_delay(ErrorCode.TEST_FAILURE, attempt=2, base_delay=5) == 15.0
+
+    def test_fatal_returns_zero(self):
+        assert compute_retry_delay(ErrorCode.HOOK_FAILURE, attempt=0) == 0.0
+
+
+# --- Smart retry integration tests ---
+
+
+class TestSmartRetry:
+    """Tests for error-aware retry in run_with_retries."""
+
+    @patch("spec_runner.executor.time.sleep")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_rate_limit_retries_with_backoff(self, mock_execute, mock_log, mock_sleep, tmp_path):
+        """RATE_LIMIT should retry (not exit immediately) with exponential backoff."""
+        config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
+        state = _make_state(config)
+        task = _make_task()
+
+        call_count = 0
+
+        def execute_side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                state.record_attempt(
+                    task.id,
+                    False,
+                    1.0,
+                    error="rate limit",
+                    error_code=ErrorCode.RATE_LIMIT,
+                )
+                return "API_ERROR"
+            return True
+
+        mock_execute.side_effect = execute_side_effect
+
+        result = run_with_retries(task, config, state)
+        assert result is True
+        assert call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch("spec_runner.executor.time.sleep")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_transient_error_uses_linear_backoff(
+        self, mock_execute, mock_log, mock_sleep, tmp_path
+    ):
+        """TEST_FAILURE uses linear backoff."""
+        config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
+        state = _make_state(config)
+        task = _make_task()
+
+        call_count = 0
+
+        def execute_side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                state.record_attempt(
+                    task.id,
+                    False,
+                    1.0,
+                    error="tests failed",
+                    error_code=ErrorCode.TEST_FAILURE,
+                )
+                return False
+            return True
+
+        mock_execute.side_effect = execute_side_effect
+
+        result = run_with_retries(task, config, state)
+        assert result is True
+        assert mock_sleep.call_count == 1
+        # Linear backoff: base_delay * (attempt + 1) = 5 * 1 = 5.0
+        mock_sleep.assert_called_with(5.0)
+
+    @patch("spec_runner.executor.time.sleep")
+    @patch("spec_runner.executor.log_progress")
+    @patch("spec_runner.executor.execute_task")
+    def test_fatal_error_stops_immediately(self, mock_execute, mock_log, mock_sleep, tmp_path):
+        """REVIEW_REJECTED (fatal) stops without retry."""
+        config = _make_config(tmp_path, max_retries=3, retry_delay_seconds=5)
+        state = _make_state(config)
+        task = _make_task()
+
+        def execute_side_effect(*a, **kw):
+            state.record_attempt(
+                task.id,
+                False,
+                1.0,
+                error="rejected",
+                error_code=ErrorCode.REVIEW_REJECTED,
+            )
+            return False
+
+        mock_execute.side_effect = execute_side_effect
+
+        result = run_with_retries(task, config, state)
+        assert result is False
+        assert mock_execute.call_count == 1
+        assert mock_sleep.call_count == 0

@@ -52,7 +52,7 @@ All code is in `src/spec_runner/`:
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `executor.py` | ~1665 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring |
+| `executor.py` | ~1665 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring, `classify_retry_strategy()`, `compute_retry_delay()` |
 | `config.py` | ~320 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
 | `state.py` | ~560 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()` |
 | `prompt.py` | ~420 | Prompt building, templates, error formatting, `build_generation_prompt()`, `parse_spec_marker()`, `SPEC_STAGES` |
@@ -122,4 +122,4 @@ Entry points (pyproject.toml): `spec-runner` â†’ `executor:main`, `spec-task` â†
 
 ## Testing
 
-Tests use pytest (335 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`, `test_validate.py`, `test_plugins.py`, `test_plan_full.py`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
+Tests use pytest (376 tests). Test files: `test_config.py`, `test_state.py`, `test_runner.py`, `test_prompt.py`, `test_hooks.py`, `test_execution.py`, `test_spec_prefix.py`, `test_logging.py`, `test_tui.py`, `test_validate.py`, `test_plugins.py`, `test_plan_full.py`, `test_e2e.py`. E2E tests use `tests/fixtures/fake_claude.sh` as a mock Claude CLI and are marked with `@pytest.mark.slow`. Mock subprocess/CLI calls to keep runs fast. Regression tests required for bug fixes.
