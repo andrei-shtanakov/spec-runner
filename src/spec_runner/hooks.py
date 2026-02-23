@@ -11,6 +11,7 @@ from .config import ExecutorConfig
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
 from .runner import build_cli_command, check_error_patterns, log_progress
+from .state import ReviewVerdict
 from .task import Task
 
 logger = get_logger("hooks")
@@ -327,11 +328,24 @@ If no issues found, respond with: "REVIEW_PASSED"
 """
 
 
-def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | None]:
+def run_code_review(
+    task: Task,
+    config: ExecutorConfig,
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> tuple[ReviewVerdict, str | None, str | None]:
     """Run code review on completed task.
 
+    Args:
+        task: Task that was completed
+        config: Executor configuration
+        test_output: Test run output to include in review context
+        lint_output: Lint check output to include in review context
+        previous_error: Error from previous attempt (retry context)
+
     Returns:
-        Tuple of (success, error_message).
+        Tuple of (verdict, error_message, review_output).
     """
     log_progress("🔍 Starting code review", task.id)
 
@@ -341,7 +355,14 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
     review_template = config.review_command_template or config.command_template
 
     # Build prompt with CLI-specific template
-    prompt = build_review_prompt(task, config, cli_name=review_cmd)
+    prompt = build_review_prompt(
+        task,
+        config,
+        cli_name=review_cmd,
+        test_output=test_output,
+        lint_output=lint_output,
+        previous_error=previous_error,
+    )
 
     # Save review prompt to log
     log_file = config.logs_dir / f"{task.id}-review-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -385,7 +406,7 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
         error_pattern = check_error_patterns(combined_output)
         if error_pattern:
             log_progress(f"⚠️ Review API error: {error_pattern}", task.id)
-            return False, f"API error: {error_pattern}"
+            return ReviewVerdict.FAILED, f"API error: {error_pattern}", output
 
         # Check for empty or failed response
         if result.returncode != 0 and not output.strip():
@@ -395,17 +416,18 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
             )
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
-            return False, f"Review process exited with code {result.returncode}"
+            error_msg = f"Review process exited with code {result.returncode}"
+            return ReviewVerdict.FAILED, error_msg, None
 
         if not output.strip():
             log_progress("⚠️ Review returned empty response", task.id)
-            return False, "Review returned empty response"
+            return ReviewVerdict.FAILED, "Review returned empty response", None
 
         # Check review result (case-insensitive, check both stdout and stderr)
         output_upper = combined_output.upper()
         if "REVIEW_PASSED" in output_upper:
             log_progress("✅ Code review passed", task.id)
-            return True, None
+            return ReviewVerdict.PASSED, None, output
         elif "REVIEW_FIXED" in output_upper:
             log_progress("✅ Code review: issues fixed", task.id)
             # Commit the fixes
@@ -414,25 +436,25 @@ def run_code_review(task: Task, config: ExecutorConfig) -> tuple[bool, str | Non
                 ["git", "commit", "-m", f"{task.id}: code review fixes"],
                 cwd=config.project_root,
             )
-            return True, None
+            return ReviewVerdict.FIXED, None, output
         elif "REVIEW_FAILED" in output_upper:
             log_progress("❌ Code review found unresolved issues", task.id)
             preview = output.strip()[-300:]
             log_progress(f"   Review output (last 300 chars): {preview}", task.id)
-            return False, "Code review found unresolved issues"
+            return ReviewVerdict.FAILED, "Review found issues", output
         else:
             # No explicit marker — treat as passed but log for visibility
             preview = output.strip()[-200:] if output.strip() else "(empty)"
             log_progress("✅ Code review completed (no explicit status marker)", task.id)
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
-            return True, None
+            return ReviewVerdict.PASSED, None, output
 
     except subprocess.TimeoutExpired:
         log_progress(f"⏰ Review timeout after {config.review_timeout_minutes}m", task.id)
-        return False, "Review timeout"
+        return ReviewVerdict.FAILED, "Review timed out", None
     except Exception as e:
         log_progress(f"💥 Review error: {e}", task.id)
-        return False, str(e)
+        return ReviewVerdict.FAILED, str(e), None
 
 
 def post_done_hook(task: Task, config: ExecutorConfig, success: bool) -> tuple[bool, str | None]:

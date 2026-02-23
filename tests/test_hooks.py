@@ -10,7 +10,9 @@ from spec_runner.hooks import (
     get_task_branch_name,
     post_done_hook,
     pre_start_hook,
+    run_code_review,
 )
+from spec_runner.state import ReviewVerdict
 from spec_runner.task import Task
 
 
@@ -324,3 +326,91 @@ class TestBuildReviewPrompt:
         assert "Test Results" not in prompt
         assert "Lint Status" not in prompt
         assert "Previous Errors" not in prompt
+
+
+class TestRunCodeReview:
+    """Tests for run_code_review returning ReviewVerdict."""
+
+    def test_returns_passed_verdict(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="All good. REVIEW_PASSED",
+                stderr="",
+                returncode=0,
+            )
+            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+                verdict, error, output = run_code_review(task, config)
+        assert verdict == ReviewVerdict.PASSED
+        assert error is None
+        assert "REVIEW_PASSED" in output
+
+    def test_returns_fixed_verdict(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="Fixed issue. REVIEW_FIXED",
+                stderr="",
+                returncode=0,
+            )
+            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+                verdict, error, output = run_code_review(task, config)
+        assert verdict == ReviewVerdict.FIXED
+
+    def test_returns_failed_verdict(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="MAJOR issue. REVIEW_FAILED",
+                stderr="",
+                returncode=0,
+            )
+            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+                verdict, error, output = run_code_review(task, config)
+        assert verdict == ReviewVerdict.FAILED
+        assert error is not None
+
+    def test_passes_context_to_build_prompt(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            logs_dir=tmp_path / "logs",
+        )
+        (tmp_path / "logs").mkdir()
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="REVIEW_PASSED",
+                stderr="",
+                returncode=0,
+            )
+            with patch(
+                "spec_runner.hooks.build_review_prompt", return_value="prompt"
+            ) as mock_build:
+                run_code_review(
+                    task,
+                    config,
+                    test_output="15 passed",
+                    lint_output="clean",
+                    previous_error="SyntaxError",
+                )
+        mock_build.assert_called_once()
+        call_kwargs = mock_build.call_args
+        assert (
+            call_kwargs.kwargs.get("test_output") == "15 passed"
+            or "15 passed" in str(call_kwargs)
+        )
