@@ -945,3 +945,40 @@ class TestBudgetEnforcement:
         assert result is False
         # Should stop after 2 attempts ($0.12 > $0.10)
         assert call_count == 2
+
+
+class TestStateCleanup:
+    """Verify ExecutorState is always closed after executor functions."""
+
+    def test_run_tasks_closes_state(self, tmp_path):
+        """_run_tasks uses context manager, so state is closed even on exception."""
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")
+
+        state = ExecutorState(config)
+        assert state._conn is not None
+        state.close()
+        assert state._conn is None
+
+    def test_context_manager_closes_on_normal_exit(self, tmp_path):
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+
+        with ExecutorState(config) as state:
+            assert state._conn is not None
+
+        assert state._conn is None
+
+    def test_context_manager_closes_on_exception(self, tmp_path):
+        config = ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+        (tmp_path / "spec").mkdir(exist_ok=True)
+
+        try:
+            with ExecutorState(config) as state:
+                assert state._conn is not None
+                raise RuntimeError("simulated crash")
+        except RuntimeError:
+            pass
+
+        assert state._conn is None

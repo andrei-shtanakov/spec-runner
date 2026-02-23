@@ -662,17 +662,17 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
     """Execute tasks in parallel using asyncio."""
     clear_stop_file(config)
     tasks = parse_tasks(config.tasks_file)
-    state = ExecutorState(config)
-    state_lock = asyncio.Lock()
-    sem = asyncio.Semaphore(config.max_concurrent)
-    executed_ids: set[str] = set()
 
-    async def run_one(task: Task) -> tuple[str, bool | str]:
-        async with sem:
-            result = await _execute_task_async(task, config, state, state_lock)
-            return task.id, result
+    with ExecutorState(config) as state:
+        state_lock = asyncio.Lock()
+        sem = asyncio.Semaphore(config.max_concurrent)
+        executed_ids: set[str] = set()
 
-    try:
+        async def run_one(task: Task) -> tuple[str, bool | str]:
+            async with sem:
+                result = await _execute_task_async(task, config, state, state_lock)
+                return task.id, result
+
         include_in_progress = not getattr(args, "restart", False)
         while True:
             if check_stop_requested(config):
@@ -725,8 +725,6 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
             remaining=remaining,
             total_cost_usd=total_cost_val if total_cost_val > 0 else None,
         )
-    finally:
-        state.close()
 
 
 # === CLI Commands ===
@@ -800,280 +798,297 @@ def _run_tasks(args, config: ExecutorConfig):
     clear_stop_file(config)
 
     tasks = parse_tasks(config.tasks_file)
-    state = ExecutorState(config)
 
-    # Check failure limit
-    if state.should_stop():
-        logger.error(
-            "Stopped due to consecutive failures",
-            consecutive_failures=state.consecutive_failures,
-        )
-        return
-
-    # Determine which tasks to execute
-    if args.task:
-        # Specific task
-        task = get_task_by_id(tasks, args.task.upper())
-        if not task:
-            logger.error("Task not found", task_id=args.task)
+    with ExecutorState(config) as state:
+        # Check failure limit
+        if state.should_stop():
+            logger.error(
+                "Stopped due to consecutive failures",
+                consecutive_failures=state.consecutive_failures,
+            )
             return
-        tasks_to_run = [task]
 
-    elif args.all:
-        # All ready tasks (include in_progress unless --restart)
-        include_in_progress = not getattr(args, "restart", False)
-        tasks_to_run = get_next_tasks(tasks, include_in_progress=include_in_progress)
-        if args.milestone:
-            tasks_to_run = [
-                t for t in tasks_to_run if args.milestone.lower() in t.milestone.lower()
-            ]
+        # Determine which tasks to execute
+        if args.task:
+            # Specific task
+            task = get_task_by_id(tasks, args.task.upper())
+            if not task:
+                logger.error("Task not found", task_id=args.task)
+                return
+            tasks_to_run = [task]
 
-    elif args.milestone:
-        # Tasks for specific milestone
-        include_in_progress = not getattr(args, "restart", False)
-        next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
-        tasks_to_run = [t for t in next_tasks if args.milestone.lower() in t.milestone.lower()]
-
-    else:
-        # Next task (include in_progress unless --restart)
-        include_in_progress = not getattr(args, "restart", False)
-        next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
-        tasks_to_run = next_tasks[:1] if next_tasks else []
-
-    if not tasks_to_run:
-        logger.info("No tasks ready to execute")
-        return
-
-    logger.info("Tasks to execute", count=len(tasks_to_run))
-    for t in tasks_to_run:
-        logger.info("Queued task", task_id=t.id, name=t.name)
-
-    # Execute
-    if args.all:
-        # For --all mode, continuously re-evaluate ready tasks after each completion
-        executed_ids: set[str] = set()
-        include_in_progress = not getattr(args, "restart", False)
-        while True:
-            # Check for graceful shutdown request
-            if check_stop_requested(config):
-                clear_stop_file(config)
-                logger.info("Graceful shutdown requested")
-                log_progress("🛑 Graceful shutdown requested")
-                break
-
-            # Re-parse tasks to get updated statuses
-            tasks = parse_tasks(config.tasks_file)
-            ready_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
-
-            # Filter by milestone if specified
+        elif args.all:
+            # All ready tasks (include in_progress unless --restart)
+            include_in_progress = not getattr(args, "restart", False)
+            tasks_to_run = get_next_tasks(tasks, include_in_progress=include_in_progress)
             if args.milestone:
-                ready_tasks = [
-                    t for t in ready_tasks if args.milestone.lower() in t.milestone.lower()
+                tasks_to_run = [
+                    t for t in tasks_to_run if args.milestone.lower() in t.milestone.lower()
                 ]
 
-            # Filter out already executed tasks
-            ready_tasks = [t for t in ready_tasks if t.id not in executed_ids]
+        elif args.milestone:
+            # Tasks for specific milestone
+            include_in_progress = not getattr(args, "restart", False)
+            next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
+            tasks_to_run = [
+                t for t in next_tasks if args.milestone.lower() in t.milestone.lower()
+            ]
 
-            if not ready_tasks:
-                # Show why we're stopping
-                all_tasks = parse_tasks(config.tasks_file)
-                todo_tasks = [t for t in all_tasks if t.status == "todo"]
-                if todo_tasks:
-                    blocked_info = {
-                        t.id: ", ".join(t.depends_on) if t.depends_on else "none"
-                        for t in todo_tasks
-                    }
-                    logger.info(
-                        "No more ready tasks",
-                        blocked_count=len(todo_tasks),
-                        blocked_tasks=blocked_info,
-                    )
-                else:
-                    logger.info("All tasks completed")
-                    # Ensure we're on main branch at the end
-                    ensure_on_main_branch(config)
-                break
+        else:
+            # Next task (include in_progress unless --restart)
+            include_in_progress = not getattr(args, "restart", False)
+            next_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
+            tasks_to_run = next_tasks[:1] if next_tasks else []
 
-            task = ready_tasks[0]
-            executed_ids.add(task.id)
+        if not tasks_to_run:
+            logger.info("No tasks ready to execute")
+            return
 
-            logger.info("Next ready task", task_id=task.id, name=task.name)
+        logger.info("Tasks to execute", count=len(tasks_to_run))
+        for t in tasks_to_run:
+            logger.info("Queued task", task_id=t.id, name=t.name)
 
-            result = run_with_retries(task, config, state)
+        # Execute
+        if args.all:
+            # For --all mode, continuously re-evaluate ready tasks after each completion
+            executed_ids: set[str] = set()
+            include_in_progress = not getattr(args, "restart", False)
+            while True:
+                # Check for graceful shutdown request
+                if check_stop_requested(config):
+                    clear_stop_file(config)
+                    logger.info("Graceful shutdown requested")
+                    log_progress("🛑 Graceful shutdown requested")
+                    break
 
-            if result == "API_ERROR":
-                logger.warning("Stopping: API rate limit reached")
-                log_progress("⛔ Stopped: API rate limit")
-                break
+                # Re-parse tasks to get updated statuses
+                tasks = parse_tasks(config.tasks_file)
+                ready_tasks = get_next_tasks(tasks, include_in_progress=include_in_progress)
 
-            # "SKIP" means continue to next task (don't count as consecutive failure)
-            if result == "SKIP":
-                continue
+                # Filter by milestone if specified
+                if args.milestone:
+                    ready_tasks = [
+                        t
+                        for t in ready_tasks
+                        if args.milestone.lower() in t.milestone.lower()
+                    ]
 
-            if result is False and state.should_stop():
-                logger.warning("Stopping: too many consecutive failures")
-                break
-    else:
-        # For single task or milestone mode, execute the fixed list
-        for task in tasks_to_run:
-            # Check for graceful shutdown request
-            if check_stop_requested(config):
-                clear_stop_file(config)
-                logger.info("Graceful shutdown requested")
-                log_progress("🛑 Graceful shutdown requested")
-                break
+                # Filter out already executed tasks
+                ready_tasks = [t for t in ready_tasks if t.id not in executed_ids]
 
-            result = run_with_retries(task, config, state)
+                if not ready_tasks:
+                    # Show why we're stopping
+                    all_tasks = parse_tasks(config.tasks_file)
+                    todo_tasks = [t for t in all_tasks if t.status == "todo"]
+                    if todo_tasks:
+                        blocked_info = {
+                            t.id: ", ".join(t.depends_on) if t.depends_on else "none"
+                            for t in todo_tasks
+                        }
+                        logger.info(
+                            "No more ready tasks",
+                            blocked_count=len(todo_tasks),
+                            blocked_tasks=blocked_info,
+                        )
+                    else:
+                        logger.info("All tasks completed")
+                        # Ensure we're on main branch at the end
+                        ensure_on_main_branch(config)
+                    break
 
-            if result == "API_ERROR":
-                logger.warning("Stopping: API rate limit reached")
-                log_progress("⛔ Stopped: API rate limit")
-                break
+                task = ready_tasks[0]
+                executed_ids.add(task.id)
 
-            if result == "SKIP":
-                continue
+                logger.info("Next ready task", task_id=task.id, name=task.name)
 
-            if result is False and state.should_stop():
-                logger.warning("Stopping: too many consecutive failures")
-                break
+                result = run_with_retries(task, config, state)
 
-    # Summary
-    # Re-read tasks to get updated statuses after execution
-    tasks = parse_tasks(config.tasks_file)
+                if result == "API_ERROR":
+                    logger.warning("Stopping: API rate limit reached")
+                    log_progress("⛔ Stopped: API rate limit")
+                    break
 
-    # Calculate statistics
-    failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
-    remaining = len([t for t in tasks if t.status == "todo"])
+                # "SKIP" means continue to next task
+                if result == "SKIP":
+                    continue
 
-    logger.info(
-        "Execution summary",
-        completed=state.total_completed,
-        failed=state.total_failed,
-        remaining=remaining,
-        failed_attempts=failed_attempts if failed_attempts > 0 else None,
-    )
+                if result is False and state.should_stop():
+                    logger.warning("Stopping: too many consecutive failures")
+                    break
+        else:
+            # For single task or milestone mode, execute the fixed list
+            for task in tasks_to_run:
+                # Check for graceful shutdown request
+                if check_stop_requested(config):
+                    clear_stop_file(config)
+                    logger.info("Graceful shutdown requested")
+                    log_progress("🛑 Graceful shutdown requested")
+                    break
+
+                result = run_with_retries(task, config, state)
+
+                if result == "API_ERROR":
+                    logger.warning("Stopping: API rate limit reached")
+                    log_progress("⛔ Stopped: API rate limit")
+                    break
+
+                if result == "SKIP":
+                    continue
+
+                if result is False and state.should_stop():
+                    logger.warning("Stopping: too many consecutive failures")
+                    break
+
+        # Summary
+        # Re-read tasks to get updated statuses after execution
+        tasks = parse_tasks(config.tasks_file)
+
+        # Calculate statistics
+        failed_attempts = sum(
+            1 for ts in state.tasks.values() for a in ts.attempts if not a.success
+        )
+        remaining = len([t for t in tasks if t.status == "todo"])
+
+        logger.info(
+            "Execution summary",
+            completed=state.total_completed,
+            failed=state.total_failed,
+            remaining=remaining,
+            failed_attempts=failed_attempts if failed_attempts > 0 else None,
+        )
 
 
 def cmd_status(args, config: ExecutorConfig):
     """Execution status"""
 
-    state = ExecutorState(config)
+    with ExecutorState(config) as state:
+        # Parse tasks from tasks.md to cross-reference
+        all_tasks: list[Task] = []
+        if config.tasks_file.exists():
+            all_tasks = parse_tasks(config.tasks_file)
+        total_in_spec = len(all_tasks)
 
-    # Parse tasks from tasks.md to cross-reference
-    all_tasks: list[Task] = []
-    if config.tasks_file.exists():
-        all_tasks = parse_tasks(config.tasks_file)
-    total_in_spec = len(all_tasks)
+        # Calculate statistics from actual task state
+        completed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "success")
+        failed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "failed")
+        running_tasks = [ts for ts in state.tasks.values() if ts.status == "running"]
+        failed_attempts = sum(
+            1 for ts in state.tasks.values() for a in ts.attempts if not a.success
+        )
 
-    # Calculate statistics from actual task state
-    completed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "success")
-    failed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "failed")
-    running_tasks = [ts for ts in state.tasks.values() if ts.status == "running"]
-    failed_attempts = sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
+        # Find tasks in spec but not in state (pending / never started)
+        state_ids = set(state.tasks.keys())
+        not_started = [t for t in all_tasks if t.id not in state_ids]
 
-    # Find tasks in spec but not in state (pending / never started)
-    state_ids = set(state.tasks.keys())
-    not_started = [t for t in all_tasks if t.id not in state_ids]
+        print("\n📊 Executor Status")
+        print(f"{'=' * 50}")
+        print(f"Tasks in spec:         {total_in_spec}")
+        print(f"Tasks completed:       {completed_tasks}")
+        print(f"Tasks failed:          {failed_tasks}")
+        if running_tasks:
+            print(f"Tasks in progress:     {len(running_tasks)}")
+        if not_started:
+            print(f"Tasks not started:     {len(not_started)}")
+        if failed_attempts > 0:
+            print(f"Failed attempts:       {failed_attempts} (retried)")
+        print(
+            f"Consecutive failures:  "
+            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
+        )
 
-    print("\n📊 Executor Status")
-    print(f"{'=' * 50}")
-    print(f"Tasks in spec:         {total_in_spec}")
-    print(f"Tasks completed:       {completed_tasks}")
-    print(f"Tasks failed:          {failed_tasks}")
-    if running_tasks:
-        print(f"Tasks in progress:     {len(running_tasks)}")
-    if not_started:
-        print(f"Tasks not started:     {len(not_started)}")
-    if failed_attempts > 0:
-        print(f"Failed attempts:       {failed_attempts} (retried)")
-    print(f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}")
+        # Token/cost summary
+        total_cost_val = state.total_cost()
+        if total_cost_val > 0:
+            total_inp, total_out = state.total_tokens()
 
-    # Token/cost summary
-    total_cost_val = state.total_cost()
-    if total_cost_val > 0:
-        total_inp, total_out = state.total_tokens()
+            def _fmt_tokens(n: int) -> str:
+                if n >= 1000:
+                    return f"{n / 1000:.1f}K"
+                return str(n)
 
-        def _fmt_tokens(n: int) -> str:
-            if n >= 1000:
-                return f"{n / 1000:.1f}K"
-            return str(n)
+            print(
+                f"Tokens:                "
+                f"{_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
+            )
+            print(f"Total cost:            ${total_cost_val:.2f}")
 
-        print(f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out")
-        print(f"Total cost:            ${total_cost_val:.2f}")
+        # Tasks with attempts
+        attempted = [ts for ts in state.tasks.values() if ts.attempts]
+        if attempted:
+            print("\n📝 Task History:")
+            for ts in attempted:
+                icon = (
+                    "✅" if ts.status == "success"
+                    else "❌" if ts.status == "failed"
+                    else "🔄"
+                )
+                attempts_info = f"{ts.attempt_count} attempt"
+                if ts.attempt_count > 1:
+                    attempts_info += "s"
+                task_cost = state.task_cost(ts.task_id)
+                if task_cost > 0:
+                    attempts_info += f", ${task_cost:.2f}"
+                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
+                # Show review verdict from last attempt
+                if ts.attempts:
+                    last_attempt = ts.attempts[-1]
+                    if last_attempt.review_status and last_attempt.review_status != "skipped":
+                        print(f"      Review: {last_attempt.review_status}")
+                if ts.status == "failed" and ts.last_error:
+                    print(f"      Last error: {ts.last_error[:50]}...")
+                elif ts.status == "running" and ts.last_error:
+                    print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
 
-    # Tasks with attempts
-    attempted = [ts for ts in state.tasks.values() if ts.attempts]
-    if attempted:
-        print("\n📝 Task History:")
-        for ts in attempted:
-            icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
-            attempts_info = f"{ts.attempt_count} attempt"
-            if ts.attempt_count > 1:
-                attempts_info += "s"
-            task_cost = state.task_cost(ts.task_id)
-            if task_cost > 0:
-                attempts_info += f", ${task_cost:.2f}"
-            print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
-            # Show review verdict from last attempt
-            if ts.attempts:
-                last_attempt = ts.attempts[-1]
-                if last_attempt.review_status and last_attempt.review_status != "skipped":
-                    print(f"      Review: {last_attempt.review_status}")
-            if ts.status == "failed" and ts.last_error:
-                print(f"      Last error: {ts.last_error[:50]}...")
-            elif ts.status == "running" and ts.last_error:
-                print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
-
-    # Show tasks not yet in executor state
-    if not_started:
-        print(f"\n⏳ Not started ({len(not_started)}):")
-        for t in not_started:
-            print(f"   ⬜ {t.id}: {t.name}")
+        # Show tasks not yet in executor state
+        if not_started:
+            print(f"\n⏳ Not started ({len(not_started)}):")
+            for t in not_started:
+                print(f"   ⬜ {t.id}: {t.name}")
 
 
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
 
     tasks = parse_tasks(config.tasks_file)
-    state = ExecutorState(config)
 
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        logger.error("Task not found", task_id=args.task_id)
-        return
+    with ExecutorState(config) as state:
+        task = get_task_by_id(tasks, args.task_id.upper())
+        if not task:
+            logger.error("Task not found", task_id=args.task_id)
+            return
 
-    task_state = state.get_task_state(task.id)
+        task_state = state.get_task_state(task.id)
 
-    # Handle --fresh flag
-    if hasattr(args, "fresh") and args.fresh:
-        logger.info("Fresh start: clearing previous attempts", task_id=task.id)
-        task_state.attempts = []
-    else:
-        # Keep previous attempts for context (Claude will see past errors)
-        previous_attempts = len(task_state.attempts)
-        if previous_attempts > 0:
-            logger.info(
-                "Preserving previous attempts for context",
-                task_id=task.id,
-                previous_attempts=previous_attempts,
-                last_error=task_state.last_error[:100] if task_state.last_error else None,
-            )
+        # Handle --fresh flag
+        if hasattr(args, "fresh") and args.fresh:
+            logger.info("Fresh start: clearing previous attempts", task_id=task.id)
+            task_state.attempts = []
+        else:
+            # Keep previous attempts for context (Claude will see past errors)
+            previous_attempts = len(task_state.attempts)
+            if previous_attempts > 0:
+                logger.info(
+                    "Preserving previous attempts for context",
+                    task_id=task.id,
+                    previous_attempts=previous_attempts,
+                    last_error=task_state.last_error[:100] if task_state.last_error else None,
+                )
 
-    # Only reset status and failure counter
-    task_state.status = "pending"
-    state.consecutive_failures = 0
-    state._save()
+        # Only reset status and failure counter
+        task_state.status = "pending"
+        state.consecutive_failures = 0
+        state._save()
 
-    logger.info("Retrying task", task_id=task.id)
+        logger.info("Retrying task", task_id=task.id)
 
-    # Execute single attempt (not run_with_retries which has max_retries limit)
-    success = execute_task(task, config, state)
+        # Execute single attempt (not run_with_retries which has max_retries limit)
+        success = execute_task(task, config, state)
 
-    if success:
-        update_task_status(config.tasks_file, task.id, "done")
-        mark_all_checklist_done(config.tasks_file, task.id)
-    else:
-        update_task_status(config.tasks_file, task.id, "blocked")
+        if success:
+            update_task_status(config.tasks_file, task.id, "done")
+            mark_all_checklist_done(config.tasks_file, task.id)
+        else:
+            update_task_status(config.tasks_file, task.id, "blocked")
 
 
 def cmd_logs(args, config: ExecutorConfig):
