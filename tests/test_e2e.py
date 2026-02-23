@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.executor import execute_task
+from spec_runner.executor import execute_task, run_with_retries
 from spec_runner.state import ExecutorState
 from spec_runner.task import parse_tasks
 
@@ -101,3 +101,92 @@ class TestE2ESingleTask:
         assert ts is not None
         assert len(ts.attempts) == 1
         assert ts.attempts[0].success is True
+
+
+@pytest.mark.slow
+class TestE2ERetry:
+    """Retry scenarios through the full pipeline."""
+
+    def test_failure_then_success(self, tmp_path: Path, monkeypatch):
+        """First attempt TASK_FAILED, second succeeds."""
+        config = _make_e2e_config(tmp_path, max_retries=3)
+        state = ExecutorState(config)
+        _write_tasks(tmp_path)
+        tasks = parse_tasks(tmp_path / "spec" / "tasks.md")
+        task = tasks[0]
+
+        resp_dir = tmp_path / "responses"
+        resp_dir.mkdir(exist_ok=True)
+        base = resp_dir / "retry"
+        (resp_dir / "retry.0").write_text("Could not complete.\nTASK_FAILED: syntax error")
+        (resp_dir / "retry.1").write_text("Fixed and done.\nTASK_COMPLETE")
+
+        counter = tmp_path / "counter.txt"
+        monkeypatch.setenv("FAKE_RESPONSE_FILE", str(base))
+        monkeypatch.setenv("FAKE_COUNTER_FILE", str(counter))
+        monkeypatch.delenv("FAKE_EXIT_CODE", raising=False)
+        monkeypatch.delenv("FAKE_STDERR", raising=False)
+        monkeypatch.delenv("FAKE_DELAY", raising=False)
+
+        result = run_with_retries(task, config, state)
+        assert result is True
+
+        ts = state.get_task_state(task.id)
+        assert len(ts.attempts) == 2
+        assert ts.attempts[0].success is False
+        assert ts.attempts[1].success is True
+
+    def test_rate_limit_retries_and_succeeds(self, tmp_path: Path, monkeypatch):
+        """Rate limit triggers backoff retry, then succeeds."""
+        config = _make_e2e_config(tmp_path, max_retries=3)
+        state = ExecutorState(config)
+        _write_tasks(tmp_path)
+        tasks = parse_tasks(tmp_path / "spec" / "tasks.md")
+        task = tasks[0]
+
+        resp_dir = tmp_path / "responses"
+        resp_dir.mkdir(exist_ok=True)
+        base = resp_dir / "ratelimit"
+        (resp_dir / "ratelimit.0").write_text("you've hit your limit")
+        (resp_dir / "ratelimit.1").write_text("Done!\nTASK_COMPLETE")
+
+        counter = tmp_path / "counter.txt"
+        monkeypatch.setenv("FAKE_RESPONSE_FILE", str(base))
+        monkeypatch.setenv("FAKE_COUNTER_FILE", str(counter))
+        monkeypatch.delenv("FAKE_EXIT_CODE", raising=False)
+        monkeypatch.delenv("FAKE_STDERR", raising=False)
+        monkeypatch.delenv("FAKE_DELAY", raising=False)
+
+        result = run_with_retries(task, config, state)
+        assert result is True
+
+        ts = state.get_task_state(task.id)
+        assert len(ts.attempts) == 2
+        assert ts.attempts[0].success is False
+        assert ts.attempts[0].error_code is not None
+        assert ts.attempts[0].error_code.value == "RATE_LIMIT"
+
+    def test_all_attempts_fail(self, tmp_path: Path, monkeypatch):
+        """All attempts fail — task gets skipped (default on_task_failure=skip)."""
+        config = _make_e2e_config(tmp_path, max_retries=2)
+        state = ExecutorState(config)
+        tasks_file = _write_tasks(tmp_path)
+        tasks = parse_tasks(tasks_file)
+        task = tasks[0]
+
+        response_file = _write_response(
+            tmp_path, "fail.txt", "Cannot do this.\nTASK_FAILED: impossible"
+        )
+
+        monkeypatch.setenv("FAKE_RESPONSE_FILE", str(response_file))
+        monkeypatch.delenv("FAKE_COUNTER_FILE", raising=False)
+        monkeypatch.delenv("FAKE_EXIT_CODE", raising=False)
+        monkeypatch.delenv("FAKE_STDERR", raising=False)
+        monkeypatch.delenv("FAKE_DELAY", raising=False)
+
+        result = run_with_retries(task, config, state)
+        assert result == "SKIP"
+
+        ts = state.get_task_state(task.id)
+        assert len(ts.attempts) == 2
+        assert all(not a.success for a in ts.attempts)
