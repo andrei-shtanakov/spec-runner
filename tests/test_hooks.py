@@ -273,7 +273,8 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(task, config)
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config)
         assert "Implement API endpoint" in prompt
         assert "Add error handling" in prompt
 
@@ -282,7 +283,10 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(task, config, test_output="15 passed, 0 failed in 2.1s")
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(
+                    task, config, test_output="15 passed, 0 failed in 2.1s"
+                )
         assert "15 passed" in prompt
 
     def test_includes_previous_error(self):
@@ -290,7 +294,10 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(task, config, previous_error="TypeError: expected str")
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(
+                    task, config, previous_error="TypeError: expected str"
+                )
         assert "TypeError" in prompt
 
     def test_includes_lint_output(self):
@@ -298,7 +305,8 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(task, config, lint_output="All checks passed")
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config, lint_output="All checks passed")
         assert "All checks passed" in prompt
 
     def test_includes_full_diff(self):
@@ -310,7 +318,8 @@ class TestBuildReviewPrompt:
                 stderr="",
                 returncode=0,
             )
-            prompt = build_review_prompt(task, config)
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config)
         assert "Full Diff" in prompt
 
     def test_no_extra_sections_when_no_context(self):
@@ -318,7 +327,8 @@ class TestBuildReviewPrompt:
         config = _make_config()
         with patch("spec_runner.hooks.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            prompt = build_review_prompt(task, config)
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config)
         assert "Task Checklist" not in prompt
         assert "Test Results" not in prompt
         assert "Lint Status" not in prompt
