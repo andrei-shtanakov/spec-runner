@@ -224,7 +224,11 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "log_level": executor_config.get("log_level"),
         }
     except Exception as e:
-        print(f"\u26a0\ufe0f  Warning: Failed to load config from {config_path}: {e}")
+        from .logging import get_logger
+
+        get_logger("config").warning(
+            "Failed to load config", path=str(config_path), error=str(e)
+        )
         return {}
 
 
