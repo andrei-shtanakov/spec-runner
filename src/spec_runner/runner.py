@@ -70,6 +70,9 @@ def send_callback(
     status: str,
     duration: float | None = None,
     error: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     """Send task status callback to orchestrator.
 
@@ -82,13 +85,16 @@ def send_callback(
         status: Task status (started, success, failed).
         duration: Execution duration in seconds.
         error: Error message if failed.
+        input_tokens: Input tokens consumed (if available).
+        output_tokens: Output tokens consumed (if available).
+        cost_usd: Cost in USD (if available).
     """
     if not callback_url:
         return
 
     import urllib.request
 
-    payload: dict[str, str | float] = {
+    payload: dict[str, str | float | int] = {
         "task_id": task_id,
         "status": status,
         "timestamp": datetime.now().isoformat(),
@@ -97,6 +103,12 @@ def send_callback(
         payload["duration_seconds"] = duration
     if error:
         payload["error"] = error
+    if input_tokens is not None:
+        payload["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        payload["output_tokens"] = output_tokens
+    if cost_usd is not None:
+        payload["cost_usd"] = cost_usd
 
     try:
         data = json.dumps(payload).encode("utf-8")

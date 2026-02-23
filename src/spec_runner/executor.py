@@ -41,6 +41,7 @@ from .runner import (
     build_cli_command,
     check_error_patterns,
     log_progress,
+    parse_token_usage,
     send_callback,
 )
 from .state import (
@@ -156,6 +157,9 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         output = result.stdout
         combined_output = output + "\n" + result.stderr
 
+        # Parse token usage from stderr
+        input_tokens, output_tokens, cost_usd = parse_token_usage(result.stderr)
+
         # Save output
         with open(log_file, "a") as f:
             f.write(f"=== OUTPUT ===\n{output}\n\n")
@@ -173,9 +177,16 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 task_id, False, duration,
                 error=f"API error: {error_pattern}",
                 error_code=ErrorCode.RATE_LIMIT,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             send_callback(
-                config.callback_url, task_id, "failed", duration, f"API error: {error_pattern}"
+                config.callback_url, task_id, "failed", duration,
+                f"API error: {error_pattern}",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             return "API_ERROR"
 
@@ -199,11 +210,21 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             hook_success, hook_error = post_done_hook(task, config, True)
 
             if hook_success:
-                state.record_attempt(task_id, True, duration, output=output)
+                state.record_attempt(
+                    task_id, True, duration, output=output,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 update_task_status(config.tasks_file, task_id, "done")
                 mark_all_checklist_done(config.tasks_file, task_id)
                 log_progress(f"✅ Completed in {duration:.1f}s", task_id)
-                send_callback(config.callback_url, task_id, "success", duration)
+                send_callback(
+                    config.callback_url, task_id, "success", duration,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 return True
             else:
                 # Hook failed (tests didn't pass)
@@ -226,9 +247,17 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     task_id, False, duration,
                     error=error, output=full_output,
                     error_code=error_code,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
                 )
                 log_progress("❌ Failed: tests/lint check", task_id)
-                send_callback(config.callback_url, task_id, "failed", duration, error)
+                send_callback(
+                    config.callback_url, task_id, "failed", duration, error,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                )
                 return False
         else:
             # Claude reported failure
@@ -238,9 +267,17 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 task_id, False, duration,
                 error=error, output=output,
                 error_code=ErrorCode.TASK_FAILED,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             log_progress(f"❌ Failed: {error[:50]}", task_id)
-            send_callback(config.callback_url, task_id, "failed", duration, error)
+            send_callback(
+                config.callback_url, task_id, "failed", duration, error,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+            )
             return False
 
     except subprocess.TimeoutExpired:
