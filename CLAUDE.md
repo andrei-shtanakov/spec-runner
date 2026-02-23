@@ -41,6 +41,11 @@ spec-runner run --log-level=DEBUG          # Set log verbosity (DEBUG/INFO/WARNI
 spec-runner run --log-json                 # Output logs as JSON (for pipelines)
 spec-runner run --all --hitl-review        # Interactive HITL approval gate after code review
 spec-runner run --force                    # Skip lock check (use when lock is stale)
+spec-runner costs                          # Cost breakdown per task
+spec-runner costs --json                   # JSON output for automation
+spec-runner costs --sort=cost              # Sort by cost descending
+spec-runner watch                          # Continuously execute ready tasks
+spec-runner watch --tui                    # Watch with live TUI dashboard
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
@@ -52,7 +57,7 @@ All code is in `src/spec_runner/`:
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `executor.py` | ~1665 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring, `classify_retry_strategy()`, `compute_retry_delay()` |
+| `executor.py` | ~1850 | CLI entry point, main loop, retry orchestration, `_run_tasks_parallel()`, `_execute_task_async()`, budget checks, signal handling, crash recovery wiring, `classify_retry_strategy()`, `compute_retry_delay()`, `cmd_costs()`, `cmd_watch()` |
 | `config.py` | ~320 | ExecutorConfig, YAML loading, build_config; `max_concurrent`, `budget_usd`, `task_budget_usd` fields; `ExecutorLock` with PID diagnostics |
 | `state.py` | ~560 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, RetryContext, SQLite persistence; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()` |
 | `prompt.py` | ~420 | Prompt building, templates, error formatting, `build_generation_prompt()`, `parse_spec_marker()`, `SPEC_STAGES` |
@@ -62,7 +67,7 @@ All code is in `src/spec_runner/`:
 | `validate.py` | ~310 | Config + task validation, CLI command, pre-run checks |
 | `plugins.py` | ~260 | Plugin discovery, hook execution, env var building |
 | `logging.py` | ~100 | Structured logging via structlog: `setup_logging()`, `get_logger()`, JSON/console output |
-| `tui.py` | ~390 | Textual-based TUI: live task dashboard, progress bars, log panel |
+| `tui.py` | ~490 | Textual-based TUI: live task dashboard, progress bars, log panel |
 | `init_cmd.py` | ~100 | Install bundled Claude Code skills |
 
 Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` → `task:main`, `spec-runner-init` → `init_cmd:main`
