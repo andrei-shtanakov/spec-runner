@@ -5,6 +5,7 @@ functions used by the executor and hooks modules.
 """
 
 import json
+import re
 import shlex
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,31 @@ def check_error_patterns(output: str) -> str | None:
         if pattern.lower() in output_lower:
             return pattern
     return None
+
+
+def parse_token_usage(stderr: str) -> tuple[int | None, int | None, float | None]:
+    """Extract (input_tokens, output_tokens, cost_usd) from Claude CLI stderr.
+
+    Parses common patterns like "input_tokens: 12,500" and "cost: $0.12".
+    Returns None for any field that can't be parsed. Never raises.
+    """
+
+    def _parse_int(pattern: str) -> int | None:
+        m = re.search(pattern, stderr, re.IGNORECASE)
+        if m:
+            return int(m.group(1).replace(",", ""))
+        return None
+
+    def _parse_float(pattern: str) -> float | None:
+        m = re.search(pattern, stderr, re.IGNORECASE)
+        if m:
+            return float(m.group(1).replace(",", ""))
+        return None
+
+    input_tokens = _parse_int(r"input[_ ]tokens?[:\s]+(\d[\d,]*)")
+    output_tokens = _parse_int(r"output[_ ]tokens?[:\s]+(\d[\d,]*)")
+    cost = _parse_float(r"(?:total[_ ])?cost[:\s]+\$?([\d.]+)")
+    return input_tokens, output_tokens, cost
 
 
 def send_callback(

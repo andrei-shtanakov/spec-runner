@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from spec_runner.runner import build_cli_command, check_error_patterns, log_progress
+from spec_runner.runner import (
+    build_cli_command,
+    check_error_patterns,
+    log_progress,
+    parse_token_usage,
+)
 
 
 class TestBuildCliCommand:
@@ -176,3 +181,47 @@ class TestLogProgress:
         import re
 
         assert re.search(r"\[\d{2}:\d{2}:\d{2}\]", content)
+
+
+class TestParseTokenUsage:
+    """Tests for parse_token_usage."""
+
+    def test_parses_standard_format(self):
+        stderr = "input_tokens: 12500\noutput_tokens: 3200\ntotal cost: $0.12"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 12500
+        assert out == 3200
+        assert cost == 0.12
+
+    def test_parses_with_commas(self):
+        stderr = "input_tokens: 1,250\noutput_tokens: 320\ncost: $1.50"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 1250
+        assert out == 320
+        assert cost == 1.50
+
+    def test_parses_underscore_variant(self):
+        stderr = "input tokens: 500\noutput tokens: 100\ntotal_cost: $0.01"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 500
+        assert out == 100
+        assert cost == 0.01
+
+    def test_returns_none_on_empty(self):
+        inp, out, cost = parse_token_usage("")
+        assert inp is None
+        assert out is None
+        assert cost is None
+
+    def test_returns_none_on_garbage(self):
+        inp, out, cost = parse_token_usage("some random text\nwith no tokens")
+        assert inp is None
+        assert out is None
+        assert cost is None
+
+    def test_partial_match_returns_available(self):
+        stderr = "input_tokens: 500\nno output info"
+        inp, out, cost = parse_token_usage(stderr)
+        assert inp == 500
+        assert out is None
+        assert cost is None
