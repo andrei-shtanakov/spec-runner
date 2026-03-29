@@ -55,13 +55,17 @@ def notify(config: ExecutorConfig, event: str, message: str) -> bool:
     Returns:
         True if sent, False if skipped or failed.
     """
-    if not config.telegram_bot_token or not config.telegram_chat_id:
+    import os
+
+    token = config.telegram_bot_token or os.environ.get("SPEC_RUNNER_TELEGRAM_TOKEN", "")
+    chat_id = config.telegram_chat_id or os.environ.get("SPEC_RUNNER_TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
         return False
 
     if event not in config.notify_on:
         return False
 
-    return send_telegram(config.telegram_bot_token, config.telegram_chat_id, message)
+    return send_telegram(token, chat_id, message)
 
 
 def notify_task_failed(config: ExecutorConfig, task_id: str, error: str) -> bool:

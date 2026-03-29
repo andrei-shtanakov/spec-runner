@@ -35,7 +35,8 @@ HISTORY_FILE = Path("spec/.task-history.log")
 
 # Patterns
 TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
-TASK_META = re.compile(r"^(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) (\w+)")
+# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
+TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|✅|⏸️)\s+)?(\w+)")
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
@@ -124,9 +125,9 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
         if meta_match:
-            priority_emoji, priority, status_emoji, status_text = meta_match.groups()
-            current_task.priority = PRIORITY_FROM_EMOJI.get(priority_emoji, "p0")
-            current_task.status = STATUS_FROM_EMOJI.get(status_emoji, "todo")
+            priority, status_text = meta_match.groups()
+            current_task.priority = priority.lower()
+            current_task.status = status_text.lower()
 
             est_match = ESTIMATE.search(line)
             if est_match:
@@ -217,7 +218,8 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
             continue
 
         if found and TASK_META.match(line):
-            # Replace status
+            # Replace status — supports both emoji and plain format
+            new_emoji = STATUS_EMOJI[new_status]
             old_emoji = None
             for emoji in STATUS_EMOJI.values():
                 if emoji in line:
@@ -225,22 +227,31 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
                     break
 
             if old_emoji:
-                new_emoji = STATUS_EMOJI[new_status]
+                # Emoji format: replace emoji and status text
                 new_line = line.replace(old_emoji, new_emoji)
                 new_line = re.sub(
                     r"\| (⬜|🔄|✅|⏸️) \w+",
                     f"| {new_emoji} {new_status.upper()}",
                     new_line,
                 )
-                lines[i] = new_line
-
-                filepath.write_text("\n".join(lines))
-                log_change(
-                    task_id,
-                    f"status -> {new_status}",
-                    history_file_for(filepath),
+            else:
+                # Plain format (no emoji): inject emoji and update status text
+                new_line = re.sub(
+                    r"\|\s*(TODO|IN_PROGRESS|DONE|BLOCKED)",
+                    f"| {new_emoji} {new_status.upper()}",
+                    line,
+                    count=1,
+                    flags=re.IGNORECASE,
                 )
-                return True
+            lines[i] = new_line
+
+            filepath.write_text("\n".join(lines))
+            log_change(
+                task_id,
+                f"status -> {new_status}",
+                history_file_for(filepath),
+            )
+            return True
 
     return False
 

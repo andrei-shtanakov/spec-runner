@@ -1349,3 +1349,139 @@ class TestSmartRetry:
         assert result is False
         assert mock_execute.call_count == 1
         assert mock_sleep.call_count == 0
+
+
+# --- Parallel execution fixes ---
+
+
+class TestExecuteTaskAsyncStatusReset:
+    """Fix 1: _execute_task_async resets status to 'todo' on failure."""
+
+    def _run_async(self, coro):
+        """Run async coroutine in a new event loop."""
+        return asyncio.run(coro)
+
+    @patch("spec_runner.parallel.run_claude_async")
+    @patch("spec_runner.parallel.pre_start_hook", return_value=True)
+    @patch("spec_runner.parallel.update_task_status")
+    @patch("spec_runner.parallel.build_task_prompt", return_value="prompt")
+    @patch("spec_runner.parallel.build_cli_command", return_value=["echo"])
+    @patch("spec_runner.parallel.check_error_patterns", return_value="rate_limit")
+    def test_api_error_resets_to_todo(
+        self,
+        mock_check,
+        mock_cmd,
+        mock_prompt,
+        mock_update_status,
+        mock_hook,
+        mock_run,
+        tmp_path,
+    ):
+        """API error path resets task status to todo."""
+        from spec_runner.parallel import _execute_task_async
+
+        config = _make_config(tmp_path)
+        (tmp_path / "logs").mkdir()
+        state = _make_state(config)
+        state_lock = asyncio.Lock()
+        task = _make_task()
+
+        mock_run.return_value = ("output", "stderr", 0)
+
+        result = self._run_async(_execute_task_async(task, config, state, state_lock))
+        assert result is False
+
+        # Should have called update_task_status with "in_progress" then "todo"
+        status_calls = list(mock_update_status.call_args_list)
+        statuses = [c[0][2] for c in status_calls]
+        assert "in_progress" in statuses
+        assert "todo" in statuses
+        assert statuses[-1] == "todo"
+
+    @patch("spec_runner.parallel.run_claude_async")
+    @patch("spec_runner.parallel.pre_start_hook", return_value=True)
+    @patch("spec_runner.parallel.update_task_status")
+    @patch("spec_runner.parallel.build_task_prompt", return_value="prompt")
+    @patch("spec_runner.parallel.build_cli_command", return_value=["echo"])
+    @patch("spec_runner.parallel.check_error_patterns", return_value=None)
+    def test_task_failed_resets_to_todo(
+        self,
+        mock_check,
+        mock_cmd,
+        mock_prompt,
+        mock_update_status,
+        mock_hook,
+        mock_run,
+        tmp_path,
+    ):
+        """TASK_FAILED marker resets status to todo."""
+        from spec_runner.parallel import _execute_task_async
+
+        config = _make_config(tmp_path)
+        (tmp_path / "logs").mkdir()
+        state = _make_state(config)
+        state_lock = asyncio.Lock()
+        task = _make_task()
+
+        mock_run.return_value = (
+            "TASK_FAILED: compilation error",
+            "stderr",
+            1,
+        )
+
+        result = self._run_async(_execute_task_async(task, config, state, state_lock))
+        assert result is False
+
+        statuses = [c[0][2] for c in mock_update_status.call_args_list]
+        assert statuses[-1] == "todo"
+
+    @patch("spec_runner.parallel.run_claude_async")
+    @patch("spec_runner.parallel.pre_start_hook", return_value=True)
+    @patch("spec_runner.parallel.update_task_status")
+    @patch("spec_runner.parallel.build_task_prompt", return_value="prompt")
+    @patch("spec_runner.parallel.build_cli_command", return_value=["echo"])
+    def test_timeout_resets_to_todo(
+        self,
+        mock_cmd,
+        mock_prompt,
+        mock_update_status,
+        mock_hook,
+        mock_run,
+        tmp_path,
+    ):
+        """Timeout resets status to todo."""
+        from spec_runner.parallel import _execute_task_async
+
+        config = _make_config(tmp_path)
+        (tmp_path / "logs").mkdir()
+        state = _make_state(config)
+        state_lock = asyncio.Lock()
+        task = _make_task()
+
+        mock_run.side_effect = TimeoutError("timeout")
+
+        result = self._run_async(_execute_task_async(task, config, state, state_lock))
+        assert result is False
+
+        statuses = [c[0][2] for c in mock_update_status.call_args_list]
+        assert statuses[-1] == "todo"
+
+
+class TestBatchTestGate:
+    """Fix 3: _run_batch_test_gate runs full suite after batch."""
+
+    @patch("spec_runner.parallel.subprocess.run")
+    def test_returns_true_on_pass(self, mock_run, tmp_path):
+        from spec_runner.parallel import _run_batch_test_gate
+
+        config = _make_config(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0, stdout="passed", stderr="")
+        assert _run_batch_test_gate(config) is True
+
+    @patch("spec_runner.parallel.subprocess.run")
+    def test_returns_false_on_failure(self, mock_run, tmp_path):
+        from spec_runner.parallel import _run_batch_test_gate
+
+        config = _make_config(tmp_path)
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="FAILED")
+        assert _run_batch_test_gate(config) is False
