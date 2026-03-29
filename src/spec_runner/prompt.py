@@ -340,6 +340,17 @@ def build_task_prompt(
                 "Do not repeat the same mistakes.\n\n"
             )
 
+    # Load constitution guardrails (if present)
+    constitution = ""
+    if config.constitution_file.exists():
+        constitution = config.constitution_file.read_text().strip()
+
+    # Load implementer persona system prompt (if configured)
+    persona_prompt = ""
+    implementer = config.get_persona("implementer")
+    if implementer and implementer.system_prompt:
+        persona_prompt = implementer.system_prompt.strip()
+
     # Try to load custom template
     template = load_prompt_template("task")
 
@@ -359,11 +370,13 @@ def build_task_prompt(
             if related_design
             else f"See {config.design_file}",
             "PREVIOUS_ATTEMPTS": attempts_section,
+            "CONSTITUTION": constitution,
+            "PERSONA_PROMPT": persona_prompt,
         }
         return render_template(template, variables)
 
     # Fallback to built-in prompt
-    prompt = f"""# Task Execution Request
+    prompt = f"""{persona_prompt + chr(10) + chr(10) if persona_prompt else ""}# Task Execution Request
 
 ## Task: {task.id} — {task.name}
 
@@ -383,7 +396,7 @@ def build_task_prompt(
 
 {chr(10).join(related_design) if related_design else f"See {config.design_file}"}
 
-## Instructions:
+{"## Constitution (Inviolable Rules):" + chr(10) + chr(10) + constitution + chr(10) + chr(10) if constitution else ""}## Instructions:
 
 1. Implement ALL checklist items for this task
 2. Write unit tests for new code (coverage ≥80%)

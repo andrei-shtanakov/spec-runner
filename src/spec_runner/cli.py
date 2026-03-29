@@ -81,13 +81,16 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
         app = SpecRunnerApp(config=config)
 
+        # Get event bus from TUI for streaming output
+        tui_event_bus = app.event_bus
+
         def _start_execution() -> None:
             def run() -> None:
                 if getattr(args, "parallel", False):
                     config.create_git_branch = False
                     if getattr(args, "max_concurrent", 0) > 0:
                         config.max_concurrent = args.max_concurrent
-                    asyncio.run(_run_tasks_parallel(args, config))
+                    asyncio.run(_run_tasks_parallel(args, config, event_bus=tui_event_bus))
                 else:
                     _run_tasks(args, config)
 
@@ -215,13 +218,55 @@ def _run_tasks(args, config: ExecutorConfig):
             # For --all mode, continuously re-evaluate ready tasks after each completion
             executed_ids: set[str] = set()
             include_in_progress = not getattr(args, "restart", False)
+            session_start = time.monotonic()
+            last_activity = time.monotonic()
             while True:
+                # Check for pause request (SIGQUIT / Ctrl+\)
+                from .executor import _pause_requested
+
+                if _pause_requested:
+                    import spec_runner.executor as _executor_mod
+
+                    _executor_mod._pause_requested = False
+                    log_progress(
+                        "⏸️ Paused. Edit spec/tasks.md, then press Enter to resume (q to quit)."
+                    )
+                    choice = input("> ").strip().lower()
+                    if choice == "q":
+                        break
+                    # Re-parse tasks to pick up edits
+                    tasks = parse_tasks(config.tasks_file)
+                    executed_ids.clear()
+                    logger.info("Resumed after pause, tasks re-read")
+
                 # Check for graceful shutdown request
                 if check_stop_requested(config):
                     clear_stop_file(config)
                     logger.info("Graceful shutdown requested")
                     log_progress("🛑 Graceful shutdown requested")
                     break
+
+                # Session timeout check
+                if config.session_timeout_minutes > 0:
+                    elapsed = (time.monotonic() - session_start) / 60
+                    if elapsed >= config.session_timeout_minutes:
+                        logger.warning(
+                            "Session timeout reached",
+                            elapsed_minutes=round(elapsed, 1),
+                            limit_minutes=config.session_timeout_minutes,
+                        )
+                        break
+
+                # Idle timeout check
+                if config.idle_timeout_minutes > 0:
+                    idle = (time.monotonic() - last_activity) / 60
+                    if idle >= config.idle_timeout_minutes:
+                        logger.warning(
+                            "Idle timeout reached",
+                            idle_minutes=round(idle, 1),
+                            limit_minutes=config.idle_timeout_minutes,
+                        )
+                        break
 
                 # Re-parse tasks to get updated statuses
                 tasks = parse_tasks(config.tasks_file)
@@ -262,6 +307,7 @@ def _run_tasks(args, config: ExecutorConfig):
                 logger.info("Next ready task", task_id=task.id, name=task.name)
 
                 result = run_with_retries(task, config, state)
+                last_activity = time.monotonic()
 
                 # "SKIP" means continue to next task
                 if result == "SKIP":
@@ -305,6 +351,17 @@ def _run_tasks(args, config: ExecutorConfig):
             failed=state.total_failed,
             remaining=remaining,
             failed_attempts=failed_attempts if failed_attempts > 0 else None,
+        )
+
+        # Notify run completion
+        from .notifications import notify_run_complete
+
+        total_cost_val = state.total_cost()
+        notify_run_complete(
+            config,
+            completed=state.total_completed,
+            failed=state.total_failed,
+            total_cost=total_cost_val if total_cost_val > 0 else None,
         )
 
 
@@ -1194,10 +1251,11 @@ def main():
     structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
 
     # Register signal handlers for graceful shutdown (late import to avoid circular)
-    from .executor import _signal_handler
+    from .executor import _pause_handler, _signal_handler
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGQUIT, _pause_handler)
 
     # Dispatch
     commands = {

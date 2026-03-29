@@ -16,6 +16,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Static
 
 from .config import ExecutorConfig
+from .events import EventBus
 from .state import ExecutorState
 from .task import parse_tasks, resolve_dependencies
 
@@ -260,12 +261,23 @@ class SpecRunnerApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "stop", "Stop execution"),
+        Binding("p", "pause", "Pause/Resume"),
         Binding("r", "refresh", "Refresh"),
     ]
 
     def __init__(self, config: ExecutorConfig | None = None) -> None:
         super().__init__()
         self._config = config
+        self._event_bus: EventBus | None = None
+
+    @property
+    def event_bus(self) -> EventBus:
+        """Get or create the event bus for streaming task output."""
+        if self._event_bus is None:
+            from .events import EventBus
+
+            self._event_bus = EventBus()
+        return self._event_bus
 
     def compose(self) -> ComposeResult:
         """Build the widget tree."""
@@ -288,6 +300,15 @@ class SpecRunnerApp(App[None]):
         """Re-read state from SQLite + tasks file and update all columns."""
         if self._config is None:
             return
+
+        # Drain streaming events from EventBus
+        if self._event_bus is not None:
+            events = self._event_bus.drain_recent()
+            if events:
+                log_panel = self.query_one("#log-panel", LogPanel)
+                for event in events:
+                    prefix = f"[dim]{event.task_id}[/dim] " if event.task_id else ""
+                    log_panel.add_line(f"{prefix}{event.data}")
 
         with contextlib.suppress(Exception):
             # State DB may be locked by executor — silently skip this tick
@@ -351,6 +372,15 @@ class SpecRunnerApp(App[None]):
                         status="done",
                         cost=cost,
                         duration=duration,
+                    )
+                    columns["done"].append(card)
+                elif task.status == "done":
+                    # Task marked done in tasks.md but missing from state.db
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="done",
                     )
                     columns["done"].append(card)
                 elif task.status == "blocked":
@@ -452,6 +482,15 @@ class SpecRunnerApp(App[None]):
         stop_file = self._config.stop_file
         stop_file.parent.mkdir(parents=True, exist_ok=True)
         stop_file.write_text("stop requested from TUI")
+
+    def action_pause(self) -> None:
+        """Toggle pause — sets _pause_requested flag for execution loop."""
+        import spec_runner.executor as _executor_mod
+
+        _executor_mod._pause_requested = not _executor_mod._pause_requested
+        status = "paused" if _executor_mod._pause_requested else "resumed"
+        log_panel = self.query_one("#log-panel", LogPanel)
+        log_panel.add_line(f"[bold yellow]Execution {status}[/bold yellow]")
 
     def action_quit(self) -> None:
         """Quit the TUI."""

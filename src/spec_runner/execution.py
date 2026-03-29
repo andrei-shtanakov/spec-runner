@@ -101,10 +101,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
     try:
         # Build command using template or auto-detect
+        # Use implementer persona model if configured
+        task_model = config.get_model_for_role("implementer")
         cmd = build_cli_command(
             cmd=config.claude_command,
             prompt=prompt,
-            model=config.claude_model,
+            model=task_model,
             template=config.command_template,
             skip_permissions=config.skip_permissions,
         )
@@ -112,6 +114,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         logger.info(
             "Running CLI command",
             command=config.claude_command,
+            model=task_model or "(default)",
             skip_permissions=config.skip_permissions,
         )
 
@@ -434,6 +437,11 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
     # Task failed after all retries
     log_progress(f"\u274c Failed after {config.max_retries} attempts", task.id)
+
+    # Notify on task failure
+    from .notifications import notify_task_failed
+
+    notify_task_failed(config, task.id, task_state.last_error or "Retries exhausted")
 
     # Log concise error summary
     if task_state.last_error:

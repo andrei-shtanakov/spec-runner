@@ -11,11 +11,20 @@ logger = get_logger("executor")
 # Global shutdown flag — kept here because state.py imports it from .executor
 _shutdown_requested = False
 
+# Global pause flag for pause/resume mid-run (triggered by SIGQUIT)
+_pause_requested = False
+
 
 def _signal_handler(signum, frame):
     """Handle SIGINT/SIGTERM by setting shutdown flag."""
     global _shutdown_requested
     _shutdown_requested = True
+
+
+def _pause_handler(signum, frame):
+    """Handle SIGQUIT (Ctrl+\\) by setting pause flag."""
+    global _pause_requested
+    _pause_requested = True
 
 
 # Re-exports from cli.py

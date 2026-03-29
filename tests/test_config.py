@@ -276,3 +276,113 @@ class TestLockDiagnostics:
 
     def test_is_pid_alive_dead_process(self):
         assert ExecutorLock._is_pid_alive(99999999) is False
+
+
+class TestTimeoutConfig:
+    def test_session_timeout_default_disabled(self):
+        config = ExecutorConfig()
+        assert config.session_timeout_minutes == 0
+
+    def test_idle_timeout_default_disabled(self):
+        config = ExecutorConfig()
+        assert config.idle_timeout_minutes == 0
+
+    def test_session_timeout_from_kwargs(self):
+        config = ExecutorConfig(session_timeout_minutes=60)
+        assert config.session_timeout_minutes == 60
+
+    def test_idle_timeout_from_kwargs(self):
+        config = ExecutorConfig(idle_timeout_minutes=15)
+        assert config.idle_timeout_minutes == 15
+
+    def test_timeouts_from_yaml(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "executor:\n  session_timeout_minutes: 120\n  idle_timeout_minutes: 30\n"
+        )
+        data = load_config_from_yaml(config_path)
+        assert data["session_timeout_minutes"] == 120
+        assert data["idle_timeout_minutes"] == 30
+
+
+class TestConstitutionConfig:
+    def test_constitution_file_property(self):
+        config = ExecutorConfig()
+        assert str(config.constitution_file).endswith("spec/constitution.md")
+
+    def test_constitution_file_with_prefix(self):
+        config = ExecutorConfig(spec_prefix="phase2-")
+        assert str(config.constitution_file).endswith("spec/phase2-constitution.md")
+
+
+class TestPersonaConfig:
+    def test_personas_default_empty(self):
+        config = ExecutorConfig()
+        assert config.personas == {}
+
+    def test_personas_from_kwargs(self):
+        from spec_runner.config import Persona
+
+        personas = {
+            "implementer": Persona(system_prompt="You are a focused implementer", model="sonnet"),
+            "reviewer": Persona(system_prompt="You are a code reviewer", model="haiku"),
+        }
+        config = ExecutorConfig(personas=personas)
+        assert config.personas["implementer"].model == "sonnet"
+        assert config.personas["reviewer"].system_prompt == "You are a code reviewer"
+
+    def test_get_persona_returns_none_when_missing(self):
+        config = ExecutorConfig()
+        assert config.get_persona("implementer") is None
+
+    def test_get_persona_returns_persona(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            personas={"implementer": Persona(system_prompt="test", model="opus")}
+        )
+        p = config.get_persona("implementer")
+        assert p is not None
+        assert p.model == "opus"
+
+    def test_get_model_for_role_uses_persona(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            claude_model="default-model",
+            personas={"implementer": Persona(model="persona-model")},
+        )
+        assert config.get_model_for_role("implementer") == "persona-model"
+
+    def test_get_model_for_role_falls_back_to_claude_model(self):
+        config = ExecutorConfig(claude_model="default-model")
+        assert config.get_model_for_role("implementer") == "default-model"
+
+    def test_get_model_for_role_persona_empty_model_falls_back(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            claude_model="default-model",
+            personas={"implementer": Persona(system_prompt="test", model="")},
+        )
+        assert config.get_model_for_role("implementer") == "default-model"
+
+    def test_personas_from_yaml(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "executor:\n"
+            "  personas:\n"
+            "    implementer:\n"
+            "      system_prompt: 'You are a focused implementer'\n"
+            "      model: sonnet\n"
+            "      focus: ['src/', 'tasks.md']\n"
+            "    reviewer:\n"
+            "      system_prompt: 'You are a code reviewer'\n"
+            "      model: haiku\n"
+        )
+        data = load_config_from_yaml(config_path)
+        personas = data["personas"]
+        assert "implementer" in personas
+        assert personas["implementer"].model == "sonnet"
+        assert personas["implementer"].focus == ["src/", "tasks.md"]
+        assert personas["reviewer"].model == "haiku"

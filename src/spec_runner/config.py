@@ -8,12 +8,24 @@ import argparse
 import contextlib
 import fcntl
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
 import yaml
+
+# === Persona ===
+
+
+@dataclass
+class Persona:
+    """Agent persona for phase-specific prompt customization."""
+
+    system_prompt: str = ""
+    model: str = ""
+    focus: list[str] = field(default_factory=list)
+
 
 # === File Lock ===
 
@@ -161,6 +173,24 @@ class ExecutorConfig:
     lint_blocking: bool = True  # Lint errors block task completion
     plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory
 
+    # Timeouts
+    session_timeout_minutes: int = 0  # Global session timeout (0 = disabled)
+    idle_timeout_minutes: int = 0  # Idle timeout between tasks (0 = disabled)
+
+    # Agent personas (role-specific prompts and models)
+    personas: dict[str, Persona] = field(default_factory=dict)
+
+    # Parallel review (multiple specialized review agents)
+    review_parallel: bool = False  # Run review agents in parallel
+    review_roles: list[str] = field(
+        default_factory=lambda: ["quality", "implementation", "testing"]
+    )
+
+    # Telegram notifications
+    telegram_bot_token: str = ""  # Telegram bot token (empty = disabled)
+    telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
+    notify_on: list[str] = field(default_factory=lambda: ["run_complete", "task_failed"])
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -196,8 +226,38 @@ class ExecutorConfig:
     def design_file(self) -> Path:
         return self.project_root / "spec" / f"{self.spec_prefix}design.md"
 
+    @property
+    def constitution_file(self) -> Path:
+        return self.project_root / "spec" / f"{self.spec_prefix}constitution.md"
+
+    def get_persona(self, role: str) -> Persona | None:
+        """Get persona by role name (e.g., 'implementer', 'reviewer', 'architect')."""
+        return self.personas.get(role)
+
+    def get_model_for_role(self, role: str) -> str:
+        """Get model for a given role, falling back to claude_model."""
+        persona = self.get_persona(role)
+        if persona and persona.model:
+            return persona.model
+        return self.claude_model
+
 
 # === Config Loading ===
+
+
+def _parse_personas(raw: dict) -> dict[str, Persona] | None:
+    """Parse personas section from YAML config into Persona objects."""
+    if not raw:
+        return None
+    personas: dict[str, Persona] = {}
+    for name, data in raw.items():
+        if isinstance(data, dict):
+            personas[name] = Persona(
+                system_prompt=data.get("system_prompt", ""),
+                model=data.get("model", ""),
+                focus=data.get("focus", []),
+            )
+    return personas if personas else None
 
 
 def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
@@ -258,6 +318,14 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "budget_usd": executor_config.get("budget_usd"),
             "task_budget_usd": executor_config.get("task_budget_usd"),
             "log_level": executor_config.get("log_level"),
+            "session_timeout_minutes": executor_config.get("session_timeout_minutes"),
+            "idle_timeout_minutes": executor_config.get("idle_timeout_minutes"),
+            "personas": _parse_personas(executor_config.get("personas", {})),
+            "review_parallel": post_done.get("review_parallel"),
+            "review_roles": post_done.get("review_roles"),
+            "telegram_bot_token": executor_config.get("telegram_bot_token"),
+            "telegram_chat_id": executor_config.get("telegram_chat_id"),
+            "notify_on": executor_config.get("notify_on"),
         }
     except Exception as e:
         from .logging import get_logger

@@ -310,6 +310,73 @@ class TestRetryContextRendering:
         assert "TASK_FAILED" in prompt
         assert "Could not compile" in prompt
 
+    def test_constitution_included_when_file_exists(self, tmp_path, monkeypatch):
+        """Constitution guardrails injected into prompt when file exists."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        constitution_file = config.constitution_file
+        constitution_file.write_text("Never delete migrations\nAll endpoints must have auth")
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert "Constitution" in prompt
+        assert "Never delete migrations" in prompt
+        assert "All endpoints must have auth" in prompt
+
+    def test_constitution_absent_when_no_file(self, tmp_path, monkeypatch):
+        """No constitution section when file does not exist."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert "Constitution" not in prompt
+
+    def test_constitution_in_custom_template(self, tmp_path, monkeypatch):
+        """Constitution available as {{CONSTITUTION}} in custom templates."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "task.md").write_text("Rules: {{CONSTITUTION}}")
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", prompts_dir)
+        config = self._make_config(tmp_path)
+        config.constitution_file.write_text("No force push")
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert prompt == "Rules: No force push"
+
+    def test_persona_prompt_included_when_configured(self, tmp_path, monkeypatch):
+        """Implementer persona system_prompt injected into built-in prompt."""
+        from spec_runner.config import Persona
+
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        config.personas = {
+            "implementer": Persona(system_prompt="You are a senior Python developer")
+        }
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert "You are a senior Python developer" in prompt
+
+    def test_persona_prompt_absent_when_not_configured(self, tmp_path, monkeypatch):
+        """No persona section when personas not configured."""
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
+        config = self._make_config(tmp_path)
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert "senior Python developer" not in prompt
+
+    def test_persona_in_custom_template(self, tmp_path, monkeypatch):
+        """Persona available as {{PERSONA_PROMPT}} in custom templates."""
+        from spec_runner.config import Persona
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "task.md").write_text("Role: {{PERSONA_PROMPT}}")
+        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", prompts_dir)
+        config = self._make_config(tmp_path)
+        config.personas = {"implementer": Persona(system_prompt="Be concise")}
+        task = self._make_task()
+        prompt = build_task_prompt(task, config)
+        assert prompt == "Role: Be concise"
+
 
 # === parse_spec_marker ===
 

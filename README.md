@@ -62,6 +62,13 @@ spec-runner watch
 - **Structured logging** — JSON/console output via structlog
 - **SQLite state** — persistent execution state with WAL mode, auto-migration from legacy JSON
 - **HITL review** — optional human-in-the-loop approval gate after code review
+- **Parallel review** — 5 specialized review agents (quality, implementation, testing, simplification, docs) running concurrently
+- **Agent personas** — role-specific prompt templates and model selection (architect, implementer, reviewer)
+- **Constitution guardrails** — inviolable project rules from `spec/constitution.md` injected into every prompt
+- **Telegram notifications** — alerts on task failure and run completion via Telegram Bot API
+- **Pause/resume** — pause mid-run with Ctrl+\, edit tasks, resume; TUI keybinding `p`
+- **Streaming events** — live stdout streaming from Claude CLI to TUI via EventBus
+- **Session/idle timeouts** — automatic stop after configurable session or idle duration
 
 ## Task File Format
 
@@ -210,6 +217,22 @@ executor:
   max_concurrent: 3            # Parallel task limit
   budget_usd: 50.0             # Total budget cap
   task_budget_usd: 10.0        # Per-task budget cap
+  session_timeout_minutes: 0   # Global session timeout (0 = disabled)
+  idle_timeout_minutes: 0      # Idle timeout between tasks (0 = disabled)
+
+  # Telegram notifications (optional)
+  telegram_bot_token: ""       # Bot token from @BotFather
+  telegram_chat_id: ""         # Chat ID to send notifications to
+  notify_on: [run_complete, task_failed]
+
+  # Agent personas (optional)
+  personas:
+    implementer:
+      system_prompt: "You are a focused Python developer"
+      model: "sonnet"
+    reviewer:
+      system_prompt: "You are a senior code reviewer"
+      model: "haiku"
 
   hooks:
     pre_start:
@@ -219,10 +242,12 @@ executor:
       run_lint: true
       auto_commit: true
       run_review: true
+      review_parallel: false   # Run 5 review agents in parallel
+      review_roles: [quality, implementation, testing]
 
   commands:
-    test: "pytest tests/ -v"
-    lint: "ruff check ."
+    test: "uv run pytest tests/ -v"
+    lint: "uv run ruff check ."
 
   paths:
     root: "."
@@ -261,13 +286,15 @@ project/
 │       ├── config.py            # ExecutorConfig + YAML loading
 │       ├── state.py             # SQLite state persistence
 │       ├── prompt.py            # Prompt building + templates
-│       ├── hooks.py             # Git ops, code review, plugins
-│       ├── runner.py            # Subprocess execution
+│       ├── hooks.py             # Git ops, code review (parallel 5-role), plugins
+│       ├── runner.py            # Subprocess execution + event streaming
 │       ├── task.py              # Task parsing + management
 │       ├── validate.py          # Config + task validation
 │       ├── plugins.py           # Plugin discovery + hooks
 │       ├── logging.py           # Structured logging (structlog)
-│       ├── tui.py               # Textual TUI dashboard
+│       ├── events.py            # EventBus for streaming to TUI
+│       ├── notifications.py     # Telegram notifications
+│       ├── tui.py               # Textual TUI dashboard + live streaming
 │       ├── mcp_server.py        # MCP server (FastMCP, stdio)
 │       ├── init_cmd.py          # Skill installer
 │       └── skills/

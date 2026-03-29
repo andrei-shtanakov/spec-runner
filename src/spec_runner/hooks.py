@@ -5,7 +5,9 @@ functions used before and after task execution.
 """
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 
 from .config import ExecutorConfig
 from .logging import get_logger
@@ -15,6 +17,40 @@ from .state import ReviewVerdict
 from .task import Task
 
 logger = get_logger("hooks")
+
+# Review role definitions for parallel review agents
+REVIEW_ROLES: dict[str, str] = {
+    "quality": (
+        "You are a Quality Review Agent. Focus exclusively on:\n"
+        "- Bugs and logic errors\n"
+        "- Security vulnerabilities (injection, auth bypass, data leaks)\n"
+        "- Error handling gaps and uncaught exceptions"
+    ),
+    "implementation": (
+        "You are an Implementation Review Agent. Focus exclusively on:\n"
+        "- Whether the code achieves the stated task goals\n"
+        "- Whether all checklist items are properly implemented\n"
+        "- Edge cases and boundary conditions"
+    ),
+    "testing": (
+        "You are a Testing Review Agent. Focus exclusively on:\n"
+        "- Whether new code has adequate test coverage\n"
+        "- Whether tests are meaningful (not trivial pass-through)\n"
+        "- Missing test scenarios and edge case tests"
+    ),
+    "simplification": (
+        "You are a Simplification Review Agent. Focus exclusively on:\n"
+        "- Unnecessary complexity that can be simplified\n"
+        "- Dead code or unused imports\n"
+        "- Opportunities for clearer, more concise implementations"
+    ),
+    "docs": (
+        "You are a Documentation Review Agent. Focus exclusively on:\n"
+        "- Missing or outdated docstrings on public APIs\n"
+        "- Misleading comments or variable names\n"
+        "- README or changelog updates needed"
+    ),
+}
 
 
 def get_task_branch_name(task: Task) -> str:
@@ -297,8 +333,21 @@ def build_review_prompt(
     if previous_error:
         error_section = f"\n## Previous Errors (from retry)\n{previous_error[:1024]}\n"
 
+    # Reviewer persona system prompt
+    persona_section = ""
+    reviewer_persona = config.get_persona("reviewer")
+    if reviewer_persona and reviewer_persona.system_prompt:
+        persona_section = f"\n## Reviewer Role\n{reviewer_persona.system_prompt.strip()}\n"
+
+    # Constitution guardrails
+    constitution_section = ""
+    if config.constitution_file.exists():
+        constitution_text = config.constitution_file.read_text().strip()
+        if constitution_text:
+            constitution_section = f"\n## Constitution (Inviolable Rules)\n{constitution_text}\n"
+
     # Fallback to built-in prompt
-    return f"""# Code Review Request
+    return f"""{persona_section}# Code Review Request
 
 ## Task Completed: {task.id} — {task.name}
 
@@ -310,7 +359,7 @@ def build_review_prompt(
 
 ## Diff Summary:
 {git_diff_stat}
-{checklist_section}{test_section}{lint_section}{error_section}
+{checklist_section}{test_section}{lint_section}{error_section}{constitution_section}
 ## Review Instructions:
 
 Launch the following review agents in parallel using the Task tool:
@@ -361,9 +410,9 @@ def run_code_review(
     """
     log_progress("🔍 Starting code review", task.id)
 
-    # Use review-specific command/model if configured, otherwise fall back to main settings
+    # Use review-specific command/model if configured, then persona, then main settings
     review_cmd = config.review_command or config.claude_command
-    review_model = config.review_model or config.claude_model
+    review_model = config.review_model or config.get_model_for_role("reviewer")
     review_template = config.review_command_template or config.command_template
 
     # Build prompt with CLI-specific template
@@ -476,6 +525,132 @@ def run_code_review(
         return ReviewVerdict.FAILED, str(e), None
 
 
+def _run_single_role_review(
+    role: str,
+    role_prompt: str,
+    base_prompt: str,
+    review_cmd: str,
+    review_model: str,
+    review_template: str,
+    config: ExecutorConfig,
+    task_id: str,
+) -> tuple[str, ReviewVerdict, str]:
+    """Run a single role-specific review. Returns (role, verdict, output)."""
+    full_prompt = f"{role_prompt}\n\n{base_prompt}"
+    cmd = build_cli_command(
+        cmd=review_cmd,
+        prompt=full_prompt,
+        model=review_model,
+        template=review_template,
+        skip_permissions=config.skip_permissions,
+    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=config.review_timeout_minutes * 60,
+            cwd=config.project_root,
+        )
+        output = result.stdout + "\n" + result.stderr
+        output_upper = output.upper()
+        if "REVIEW_FAILED" in output_upper:
+            return role, ReviewVerdict.FAILED, output
+        elif "REVIEW_FIXED" in output_upper:
+            return role, ReviewVerdict.FIXED, output
+        return role, ReviewVerdict.PASSED, output
+    except subprocess.TimeoutExpired:
+        return role, ReviewVerdict.FAILED, f"Review timeout ({role})"
+    except Exception as e:
+        return role, ReviewVerdict.FAILED, str(e)
+
+
+def run_parallel_review(
+    task: Task,
+    config: ExecutorConfig,
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> tuple[ReviewVerdict, str | None, str | None]:
+    """Run multiple review agents in parallel, one per role.
+
+    Each role gets a specialized focus prompt prepended to the base review prompt.
+    Verdicts are aggregated: any FAILED → overall FAILED.
+    """
+    log_progress(f"🔍 Starting parallel review ({len(config.review_roles)} roles)", task.id)
+
+    review_cmd = config.review_command or config.claude_command
+    review_model = config.review_model or config.get_model_for_role("reviewer")
+    review_template = config.review_command_template or config.command_template
+
+    base_prompt = build_review_prompt(
+        task,
+        config,
+        cli_name=review_cmd,
+        test_output=test_output,
+        lint_output=lint_output,
+        previous_error=previous_error,
+    )
+
+    # Get role prompts for configured roles
+    roles_to_run = [
+        (role, REVIEW_ROLES[role]) for role in config.review_roles if role in REVIEW_ROLES
+    ]
+
+    if not roles_to_run:
+        log_progress("⚠️ No valid review roles configured, falling back to single review", task.id)
+        return run_code_review(task, config, test_output, lint_output, previous_error)
+
+    # Run reviews in parallel using threads (each is a subprocess call)
+    results: list[tuple[str, ReviewVerdict, str]] = []
+    with ThreadPoolExecutor(max_workers=len(roles_to_run)) as pool:
+        futures = [
+            pool.submit(
+                _run_single_role_review,
+                role,
+                role_prompt,
+                base_prompt,
+                review_cmd,
+                review_model,
+                review_template,
+                config,
+                task.id,
+            )
+            for role, role_prompt in roles_to_run
+        ]
+        for future in futures:
+            results.append(future.result())
+
+    # Aggregate verdicts
+    all_outputs: list[str] = []
+    overall_verdict = ReviewVerdict.PASSED
+    has_fixed = False
+    for role, verdict, output in results:
+        log_progress(f"  📋 {role}: {verdict.value}", task.id)
+        all_outputs.append(f"=== {role.upper()} REVIEW ===\n{output[:2000]}")
+        if verdict == ReviewVerdict.FAILED:
+            overall_verdict = ReviewVerdict.FAILED
+        elif verdict == ReviewVerdict.FIXED:
+            has_fixed = True
+
+    if overall_verdict != ReviewVerdict.FAILED and has_fixed:
+        overall_verdict = ReviewVerdict.FIXED
+        # Commit fixes from any review agent
+        subprocess.run(["git", "add", "-A"], capture_output=True, cwd=config.project_root)
+        subprocess.run(
+            ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+
+    combined_output = "\n\n".join(all_outputs)
+    log_progress(f"🔍 Parallel review result: {overall_verdict.value}", task.id)
+
+    error = "Review found issues" if overall_verdict == ReviewVerdict.FAILED else None
+    return overall_verdict, error, combined_output
+
+
 def format_review_findings(task_id: str, task_name: str, review_output: str) -> str:
     """Format review findings for HITL display."""
     separator = "=" * 50
@@ -504,8 +679,55 @@ def prompt_hitl_verdict() -> str:
         print("  Invalid choice. Use: a, r, f, or s")
 
 
+def find_changed_source_files(project_root: Path, changed_since: float) -> list[Path]:
+    """Find .py files in src/ with mtime > changed_since."""
+    src_dir = project_root / "src"
+    if not src_dir.exists():
+        return []
+    changed: list[Path] = []
+    for p in src_dir.rglob("*.py"):
+        if p.stat().st_mtime > changed_since:
+            changed.append(p)
+    return changed
+
+
+def map_source_to_test_files(source_files: list[Path], project_root: Path) -> list[Path]:
+    """Map src/pkg/module/file.py -> tests/test_file.py by convention."""
+    tests_dir = project_root / "tests"
+    if not tests_dir.exists():
+        return []
+    mapped: list[Path] = []
+    for src in source_files:
+        test_name = f"test_{src.name}"
+        # Search tests/ for matching test file
+        for candidate in tests_dir.rglob(test_name):
+            if candidate not in mapped:
+                mapped.append(candidate)
+    return mapped
+
+
+def build_scoped_test_command(
+    base_command: str,
+    test_files: list[Path],
+    project_root: Path,
+) -> str:
+    """Replace generic test path with specific file paths."""
+    if not test_files:
+        return base_command
+    rel_paths = " ".join(str(f.relative_to(project_root)) for f in test_files)
+    # Replace common patterns: "tests/" or "tests" at end of command
+    for pattern in ["tests/ ", "tests/", "tests "]:
+        if pattern in base_command:
+            return base_command.replace(pattern, rel_paths + " ", 1)
+    # Append test files if no pattern matched
+    return f"{base_command} {rel_paths}"
+
+
 def post_done_hook(
-    task: Task, config: ExecutorConfig, success: bool
+    task: Task,
+    config: ExecutorConfig,
+    success: bool,
+    changed_since: float | None = None,
 ) -> tuple[bool, str | None, str, str]:
     """Hook after task completion.
 
@@ -523,9 +745,31 @@ def post_done_hook(
     # Run tests — capture output for review context
     test_output_str: str | None = None
     if config.run_tests_on_done:
-        logger.info("Running tests")
+        test_cmd = config.test_command
+
+        # Scope tests to changed files when running in parallel mode
+        if changed_since is not None:
+            changed_files = find_changed_source_files(config.project_root, changed_since)
+            if changed_files:
+                test_files = map_source_to_test_files(changed_files, config.project_root)
+                if test_files:
+                    test_cmd = build_scoped_test_command(
+                        config.test_command,
+                        test_files,
+                        config.project_root,
+                    )
+                    logger.info(
+                        "Running scoped tests",
+                        test_files=[str(f) for f in test_files],
+                    )
+                else:
+                    logger.info("No matching test files, running full suite")
+            else:
+                logger.info("No changed source files, running full suite")
+
+        logger.info("Running tests", command=test_cmd)
         result = subprocess.run(
-            config.test_command,
+            test_cmd,
             shell=True,
             capture_output=True,
             text=True,
@@ -613,8 +857,13 @@ def post_done_hook(
     if config.hitl_review and not config.run_review:
         logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
-        logger.info("Running code review")
-        review_verdict, review_error, review_output = run_code_review(
+        review_fn = run_parallel_review if config.review_parallel else run_code_review
+        logger.info(
+            "Running code review",
+            parallel=config.review_parallel,
+            roles=config.review_roles if config.review_parallel else None,
+        )
+        review_verdict, review_error, review_output = review_fn(
             task,
             config,
             test_output=test_output_str,

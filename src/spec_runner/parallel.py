@@ -1,8 +1,16 @@
 """Parallel task execution — async wrappers with semaphore control."""
 
+from __future__ import annotations
+
 import asyncio
 import re
+import subprocess
+import time
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .events import EventBus
 
 from .config import CONFIG_FILE, ExecutorConfig
 from .hooks import post_done_hook, pre_start_hook
@@ -39,11 +47,13 @@ async def _execute_task_async(
     config: ExecutorConfig,
     state: ExecutorState,
     state_lock: asyncio.Lock,
+    event_bus: EventBus | None = None,
 ) -> bool | str:
     """Async wrapper for task execution with state locking.
 
     Uses run_claude_async for non-blocking subprocess execution.
     Protects ExecutorState writes with asyncio.Lock.
+    When event_bus is provided, streams stdout lines as events.
     """
     task_id = task.id
     log_progress(f"Starting: {task.name}", task_id)
@@ -94,15 +104,17 @@ async def _execute_task_async(
     with open(log_file, "w") as f:
         f.write(f"=== PROMPT ===\n{prompt}\n\n")
 
-    # Build command
+    # Build command — use implementer persona model if configured
+    task_model = config.get_model_for_role("implementer")
     cmd = build_cli_command(
         cmd=config.claude_command,
         prompt=prompt,
-        model=config.claude_model,
+        model=task_model,
         template=config.command_template,
         skip_permissions=config.skip_permissions,
     )
 
+    task_start_ts = time.time()
     start_time = datetime.now()
 
     try:
@@ -110,6 +122,8 @@ async def _execute_task_async(
             cmd,
             timeout=config.task_timeout_minutes * 60,
             cwd=str(config.project_root),
+            event_bus=event_bus,
+            task_id=task_id,
         )
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -137,6 +151,7 @@ async def _execute_task_async(
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
                 )
+            update_task_status(config.tasks_file, task_id, "todo")
             return False
 
         # Check result markers
@@ -147,7 +162,7 @@ async def _execute_task_async(
 
         if success:
             hook_success, hook_error, review_status, review_findings = post_done_hook(
-                task, config, True
+                task, config, True, changed_since=task_start_ts
             )
             if hook_success:
                 async with state_lock:
@@ -194,6 +209,7 @@ async def _execute_task_async(
                         review_status=review_status,
                         review_findings=(review_findings[:2048] if review_findings else None),
                     )
+                update_task_status(config.tasks_file, task_id, "todo")
                 return False
         else:
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
@@ -210,6 +226,7 @@ async def _execute_task_async(
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
                 )
+            update_task_status(config.tasks_file, task_id, "todo")
             return False
 
     except TimeoutError:
@@ -222,6 +239,7 @@ async def _execute_task_async(
                 error=f"Timeout after {config.task_timeout_minutes} minutes",
                 error_code=ErrorCode.TIMEOUT,
             )
+        update_task_status(config.tasks_file, task_id, "todo")
         return False
 
     except Exception as e:
@@ -234,10 +252,31 @@ async def _execute_task_async(
                 error=str(e),
                 error_code=ErrorCode.UNKNOWN,
             )
+        update_task_status(config.tasks_file, task_id, "todo")
         return False
 
 
-async def _run_tasks_parallel(args, config: ExecutorConfig):
+def _run_batch_test_gate(config: ExecutorConfig) -> bool:
+    """Run full test suite after parallel batch. Advisory — logs on failure."""
+    logger.info("Running batch test gate (full suite)")
+    result = subprocess.run(
+        config.test_command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Batch test gate failed (advisory)",
+            stderr=result.stderr[:500],
+        )
+        return False
+    logger.info("Batch test gate passed")
+    return True
+
+
+async def _run_tasks_parallel(args, config: ExecutorConfig, event_bus: EventBus | None = None):
     """Execute tasks in parallel using asyncio."""
     clear_stop_file(config)
     tasks = parse_tasks(config.tasks_file)
@@ -265,24 +304,64 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
         state_lock = asyncio.Lock()
         sem = asyncio.Semaphore(config.max_concurrent)
         executed_ids: set[str] = set()
+        exhausted_ids: set[str] = set()
 
         async def run_one(task: Task) -> tuple[str, bool | str]:
             async with sem:
-                result = await _execute_task_async(task, config, state, state_lock)
+                result = await _execute_task_async(
+                    task, config, state, state_lock, event_bus=event_bus
+                )
                 return task.id, result
+
+        session_start = time.monotonic()
+        last_activity = time.monotonic()
 
         include_in_progress = not getattr(args, "restart", False)
         while True:
+            # Check for pause request (SIGQUIT / Ctrl+\)
+            from .executor import _pause_requested
+
+            if _pause_requested:
+                import spec_runner.executor as _executor_mod
+
+                _executor_mod._pause_requested = False
+                logger.info("Paused. Re-reading tasks file on resume.")
+                # Re-parse tasks to pick up any edits made during pause
+                tasks = parse_tasks(config.tasks_file)
+                executed_ids.clear()
+
             if check_stop_requested(config):
                 clear_stop_file(config)
                 logger.info("Graceful shutdown requested")
                 break
 
+            # Session timeout check
+            if config.session_timeout_minutes > 0:
+                elapsed = (time.monotonic() - session_start) / 60
+                if elapsed >= config.session_timeout_minutes:
+                    logger.warning(
+                        "Session timeout reached",
+                        elapsed_minutes=round(elapsed, 1),
+                        limit_minutes=config.session_timeout_minutes,
+                    )
+                    break
+
+            # Idle timeout check
+            if config.idle_timeout_minutes > 0:
+                idle = (time.monotonic() - last_activity) / 60
+                if idle >= config.idle_timeout_minutes:
+                    logger.warning(
+                        "Idle timeout reached",
+                        idle_minutes=round(idle, 1),
+                        limit_minutes=config.idle_timeout_minutes,
+                    )
+                    break
+
             tasks = parse_tasks(config.tasks_file)
             ready = get_next_tasks(tasks, include_in_progress=include_in_progress)
             if hasattr(args, "milestone") and args.milestone:
                 ready = [t for t in ready if args.milestone.lower() in t.milestone.lower()]
-            ready = [t for t in ready if t.id not in executed_ids]
+            ready = [t for t in ready if t.id not in executed_ids and t.id not in exhausted_ids]
 
             if not ready or state.should_stop():
                 break
@@ -292,10 +371,52 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
                 logger.info("Dispatching task", task_id=t.id, name=t.name)
                 executed_ids.add(t.id)
 
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[run_one(t) for t in ready],
                 return_exceptions=True,
             )
+            last_activity = time.monotonic()
+
+            # Process results: enable retries or mark exhausted
+            for item in results:
+                if isinstance(item, BaseException):
+                    logger.error("Task raised exception in gather", error=str(item))
+                    continue
+                tid, success = item
+                if success is True:
+                    # Leave in executed_ids — won't be re-dispatched
+                    continue
+                # Failed — check retries remaining
+                task_state = state.get_task_state(tid)
+                attempts = task_state.attempt_count if task_state else 0
+                if attempts < config.max_retries:
+                    # Allow retry next loop iteration
+                    executed_ids.discard(tid)
+                    logger.info(
+                        "Task will retry",
+                        task_id=tid,
+                        attempt=attempts,
+                        max_retries=config.max_retries,
+                    )
+                else:
+                    # Retries exhausted
+                    exhausted_ids.add(tid)
+                    update_task_status(config.tasks_file, tid, "blocked")
+                    logger.warning(
+                        "Task retries exhausted",
+                        task_id=tid,
+                        attempts=attempts,
+                    )
+                    # Notify on task failure
+                    from .notifications import notify_task_failed
+
+                    ts = state.get_task_state(tid)
+                    error_msg = ts.last_error if ts else "Unknown error"
+                    notify_task_failed(config, tid, error_msg or "Retries exhausted")
+
+            # Batch test gate: run full suite after parallel batch
+            if config.run_tests_on_done:
+                _run_batch_test_gate(config)
 
             if state.should_stop():
                 logger.warning("Stopping: failure/budget limit reached")
@@ -312,4 +433,14 @@ async def _run_tasks_parallel(args, config: ExecutorConfig):
             failed=state.total_failed,
             remaining=remaining,
             total_cost_usd=total_cost_val if total_cost_val > 0 else None,
+        )
+
+        # Notify run completion
+        from .notifications import notify_run_complete
+
+        notify_run_complete(
+            config,
+            completed=state.total_completed,
+            failed=state.total_failed,
+            total_cost=total_cost_val if total_cost_val > 0 else None,
         )

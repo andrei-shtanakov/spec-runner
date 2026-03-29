@@ -1,18 +1,24 @@
 """Tests for spec_runner.hooks module."""
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.hooks import (
+    REVIEW_ROLES,
     build_review_prompt,
+    build_scoped_test_command,
+    find_changed_source_files,
     format_review_findings,
     get_main_branch,
     get_task_branch_name,
+    map_source_to_test_files,
     post_done_hook,
     pre_start_hook,
     prompt_hitl_verdict,
     run_code_review,
+    run_parallel_review,
 )
 from spec_runner.state import ReviewVerdict
 from spec_runner.task import Task
@@ -332,6 +338,29 @@ class TestBuildReviewPrompt:
         assert "Lint Status" not in prompt
         assert "Previous Errors" not in prompt
 
+    def test_includes_constitution_when_file_exists(self, tmp_path):
+        task = _make_task()
+        config = _make_config(project_root=tmp_path)
+        constitution = tmp_path / "spec" / "constitution.md"
+        constitution.parent.mkdir(parents=True, exist_ok=True)
+        constitution.write_text("Never delete migrations")
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config)
+        assert "Constitution" in prompt
+        assert "Never delete migrations" in prompt
+
+    def test_no_constitution_when_file_absent(self, tmp_path):
+        task = _make_task()
+        config = _make_config(project_root=tmp_path)
+        (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+                prompt = build_review_prompt(task, config)
+        assert "Constitution" not in prompt
+
 
 class TestRunCodeReview:
     """Tests for run_code_review returning ReviewVerdict."""
@@ -609,3 +638,266 @@ class TestHitlReviewGate:
             success, error, status, findings = post_done_hook(task, config, True)
         assert success is True
         assert status == "passed"
+
+
+class TestFindChangedSourceFiles:
+    """Tests for find_changed_source_files."""
+
+    def test_finds_recently_changed_files(self, tmp_path):
+        src = tmp_path / "src" / "pkg"
+        src.mkdir(parents=True)
+        before = time.time() - 10
+        (src / "old.py").write_text("old")
+        # Set old mtime
+        import os
+
+        os.utime(src / "old.py", (before - 20, before - 20))
+
+        (src / "new.py").write_text("new")
+
+        result = find_changed_source_files(tmp_path, before)
+        names = [p.name for p in result]
+        assert "new.py" in names
+        assert "old.py" not in names
+
+    def test_returns_empty_when_no_src(self, tmp_path):
+        result = find_changed_source_files(tmp_path, time.time() - 100)
+        assert result == []
+
+    def test_ignores_non_python_files(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        before = time.time() - 10
+        (src / "data.json").write_text("{}")
+        result = find_changed_source_files(tmp_path, before)
+        assert result == []
+
+
+class TestMapSourceToTestFiles:
+    """Tests for map_source_to_test_files."""
+
+    def test_maps_source_to_test(self, tmp_path):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_foo.py"
+        test_file.write_text("test")
+
+        src_file = tmp_path / "src" / "pkg" / "foo.py"
+        result = map_source_to_test_files([src_file], tmp_path)
+        assert len(result) == 1
+        assert result[0].name == "test_foo.py"
+
+    def test_returns_empty_when_no_match(self, tmp_path):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_bar.py").write_text("test")
+
+        src_file = tmp_path / "src" / "pkg" / "foo.py"
+        result = map_source_to_test_files([src_file], tmp_path)
+        assert result == []
+
+    def test_returns_empty_when_no_tests_dir(self, tmp_path):
+        src_file = tmp_path / "src" / "pkg" / "foo.py"
+        result = map_source_to_test_files([src_file], tmp_path)
+        assert result == []
+
+
+class TestBuildScopedTestCommand:
+    """Tests for build_scoped_test_command."""
+
+    def test_replaces_tests_dir_with_files(self, tmp_path):
+        test_file = tmp_path / "tests" / "test_foo.py"
+        cmd = build_scoped_test_command("uv run pytest tests/ -v", [test_file], tmp_path)
+        assert "test_foo.py" in cmd
+        # The generic "tests/ " pattern is replaced with specific file path
+        assert cmd.count("tests/") == 1  # only the relative path, not the glob
+
+    def test_returns_base_when_no_files(self):
+        cmd = build_scoped_test_command("uv run pytest tests/ -v", [], Path("/project"))
+        assert cmd == "uv run pytest tests/ -v"
+
+    def test_appends_when_no_pattern_match(self, tmp_path):
+        test_file = tmp_path / "tests" / "test_foo.py"
+        cmd = build_scoped_test_command("uv run pytest", [test_file], tmp_path)
+        assert "test_foo.py" in cmd
+
+
+class TestPostDoneHookScopedTests:
+    """Tests for post_done_hook with changed_since parameter."""
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_scoped_tests_when_changed_since_provided(self, mock_run, tmp_path):
+        """When changed_since is set, post_done_hook scopes test command."""
+        # Create source and test files
+        src_dir = tmp_path / "src" / "pkg"
+        src_dir.mkdir(parents=True)
+        (src_dir / "auth.py").write_text("def login(): pass")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_auth.py").write_text("def test_login(): pass")
+
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=True,
+            test_command="uv run pytest tests/ -v",
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+        )
+
+        mock_run.return_value = MagicMock(stdout="1 passed", stderr="", returncode=0)
+        changed_since = time.time() - 5  # Recent enough
+
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, status, findings = post_done_hook(
+                task, config, True, changed_since=changed_since
+            )
+
+        assert success is True
+        # Verify test command was called with scoped path
+        test_calls = [
+            c for c in mock_run.call_args_list if isinstance(c[0][0], str) and "pytest" in c[0][0]
+        ]
+        assert len(test_calls) == 1
+        assert "test_auth.py" in test_calls[0][0][0]
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_full_suite_when_no_changed_since(self, mock_run, tmp_path):
+        """Without changed_since, post_done_hook runs full test suite."""
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=True,
+            test_command="uv run pytest tests/ -v",
+            run_lint_on_done=False,
+            run_review=False,
+            auto_commit=False,
+            create_git_branch=False,
+        )
+        mock_run.return_value = MagicMock(stdout="15 passed", stderr="", returncode=0)
+
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            success, error, status, findings = post_done_hook(task, config, True)
+
+        assert success is True
+        test_calls = [
+            c for c in mock_run.call_args_list if isinstance(c[0][0], str) and "pytest" in c[0][0]
+        ]
+        assert len(test_calls) == 1
+        # Should use original command unchanged
+        assert test_calls[0][0][0] == "uv run pytest tests/ -v"
+
+
+class TestReviewRoles:
+    """Tests for review role definitions."""
+
+    def test_all_standard_roles_defined(self):
+        for role in ["quality", "implementation", "testing", "simplification", "docs"]:
+            assert role in REVIEW_ROLES
+            assert len(REVIEW_ROLES[role]) > 20  # non-trivial prompt
+
+    def test_default_review_roles(self):
+        config = ExecutorConfig()
+        assert config.review_roles == ["quality", "implementation", "testing"]
+
+    def test_review_parallel_default_false(self):
+        config = ExecutorConfig()
+        assert config.review_parallel is False
+
+
+class TestRunParallelReview:
+    """Tests for run_parallel_review with mocked subprocess."""
+
+    def test_all_passed_returns_passed(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            review_parallel=True,
+            review_roles=["quality", "implementation"],
+        )
+        (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
+
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
+            verdict, error, output = run_parallel_review(task, config)
+
+        assert verdict == ReviewVerdict.PASSED
+        assert error is None
+        assert "QUALITY REVIEW" in output
+        assert "IMPLEMENTATION REVIEW" in output
+
+    def test_any_failed_returns_failed(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            review_parallel=True,
+            review_roles=["quality", "testing"],
+        )
+        (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 3:
+                # git diff calls
+                return MagicMock(stdout="", stderr="", returncode=0)
+            # quality passes, testing fails
+            if call_count == 4:
+                return MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
+            return MagicMock(stdout="REVIEW_FAILED: missing tests", stderr="", returncode=0)
+
+        with patch("spec_runner.hooks.subprocess.run", side_effect=side_effect):
+            verdict, error, output = run_parallel_review(task, config)
+
+        assert verdict == ReviewVerdict.FAILED
+        assert error is not None
+
+    def test_fixed_returns_fixed(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            review_parallel=True,
+            review_roles=["quality"],
+        )
+        (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 3:
+                return MagicMock(stdout="", stderr="", returncode=0)
+            return MagicMock(stdout="REVIEW_FIXED", stderr="", returncode=0)
+
+        with patch("spec_runner.hooks.subprocess.run", side_effect=side_effect):
+            verdict, error, output = run_parallel_review(task, config)
+
+        assert verdict == ReviewVerdict.FIXED
+
+    def test_empty_roles_falls_back_to_single(self, tmp_path):
+        task = _make_task()
+        config = _make_config(
+            project_root=tmp_path,
+            review_parallel=True,
+            review_roles=["nonexistent_role"],
+        )
+        (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "spec" / ".executor-logs").mkdir(parents=True, exist_ok=True)
+
+        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
+            verdict, error, output = run_parallel_review(task, config)
+
+        # Falls back to run_code_review
+        assert verdict == ReviewVerdict.PASSED

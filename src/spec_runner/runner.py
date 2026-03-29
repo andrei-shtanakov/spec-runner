@@ -4,12 +4,18 @@ Contains logging, error checking, callback, and CLI command building
 functions used by the executor and hooks modules.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import re
 import shlex
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .events import EventBus
 
 from .config import ERROR_PATTERNS, PROGRESS_FILE
 
@@ -212,13 +218,20 @@ async def run_claude_async(
     cmd: list[str],
     timeout: float,
     cwd: str,
+    event_bus: EventBus | None = None,
+    task_id: str = "",
 ) -> tuple[str, str, int]:
-    """Run CLI command asynchronously.
+    """Run CLI command asynchronously with optional event streaming.
+
+    When event_bus is provided, stdout is streamed line-by-line as TaskEvents
+    for live TUI updates. Otherwise, stdout is collected in bulk (original behavior).
 
     Args:
         cmd: Command arguments.
         timeout: Timeout in seconds.
         cwd: Working directory.
+        event_bus: Optional EventBus for streaming stdout lines as events.
+        task_id: Task ID for event attribution (required if event_bus is set).
 
     Returns:
         (stdout, stderr, returncode).
@@ -232,6 +245,42 @@ async def run_claude_async(
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
     )
+
+    if event_bus is not None and proc.stdout is not None:
+        # Stream stdout line-by-line while collecting full output
+        from .events import TaskEvent
+
+        stdout_lines: list[str] = []
+
+        async def _stream_stdout():
+            assert proc.stdout is not None
+            async for line_bytes in proc.stdout:
+                line = line_bytes.decode(errors="replace")
+                stdout_lines.append(line)
+                event_bus.publish(
+                    TaskEvent(task_id=task_id, event_type="output_line", data=line.rstrip())
+                )
+
+        async def _collect_stderr():
+            assert proc.stderr is not None
+            return await proc.stderr.read()
+
+        try:
+            _, stderr_bytes = await asyncio.wait_for(
+                asyncio.gather(_stream_stdout(), _collect_stderr()),
+                timeout=timeout,
+            )
+            await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+
+        stdout = "".join(stdout_lines)
+        stderr = stderr_bytes.decode(errors="replace") if isinstance(stderr_bytes, bytes) else ""
+        return stdout, stderr, proc.returncode or 0
+
+    # Non-streaming path (original behavior)
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
