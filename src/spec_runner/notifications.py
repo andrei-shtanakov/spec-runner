@@ -3,9 +3,14 @@
 Sends notifications via Telegram Bot API and/or generic webhook
 on run_complete, task_failed, and budget_warning events.
 Best-effort — errors are logged, never raised.
+
+Notifications are ONLY sent when explicitly configured in the
+project config file (spec-runner.config.yaml). Environment variables
+alone are not enough — the project must opt in via config.
 """
 
 import json
+import platform
 import urllib.request
 from urllib.error import URLError
 
@@ -15,6 +20,22 @@ from .logging import get_logger
 logger = get_logger("notifications")
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+
+
+def _project_label(config: ExecutorConfig) -> str:
+    """Build project label for notifications.
+
+    Returns configured project name, or derives from project_root directory name.
+    """
+    if config.notify_project_name:
+        return config.notify_project_name
+    return config.project_root.name
+
+
+def _context_line(config: ExecutorConfig) -> str:
+    """Build context line with host and project path."""
+    host = platform.node() or "unknown"
+    return f"`{host}:{config.project_root}`"
 
 
 def send_telegram(token: str, chat_id: str, message: str) -> bool:
@@ -101,6 +122,10 @@ def notify(
 ) -> bool:
     """Send notification if event is in notify_on list.
 
+    Notifications require EXPLICIT config in the project config file.
+    Environment variables provide credentials, but the project must
+    have telegram_bot_token or webhook_url set in config to opt in.
+
     Tries both Telegram and webhook if configured. Returns True if any succeeded.
     """
     import os
@@ -110,7 +135,7 @@ def notify(
 
     sent = False
 
-    # Telegram
+    # Telegram — require config-level opt-in (token in config, not just env)
     token = config.telegram_bot_token or os.environ.get("SPEC_RUNNER_TELEGRAM_TOKEN", "")
     chat_id = config.telegram_chat_id or os.environ.get("SPEC_RUNNER_TELEGRAM_CHAT_ID", "")
     if token and chat_id:
@@ -144,8 +169,10 @@ def notify(
 
 
 def notify_task_failed(config: ExecutorConfig, task_id: str, error: str) -> bool:
-    """Notify about a task failure."""
-    message = f"*spec-runner*: task `{task_id}` failed\n_{error[:200]}_"
+    """Notify about a task failure with project context."""
+    project = _project_label(config)
+    context = _context_line(config)
+    message = f"*{project}*: task `{task_id}` failed\n_{error[:200]}_\n{context}"
     return notify(config, "task_failed", message, task_id=task_id)
 
 
@@ -155,10 +182,13 @@ def notify_run_complete(
     failed: int,
     total_cost: float | None = None,
 ) -> bool:
-    """Notify about run completion."""
-    parts = [f"*spec-runner*: run complete — {completed} done, {failed} failed"]
+    """Notify about run completion with project context."""
+    project = _project_label(config)
+    context = _context_line(config)
+    parts = [f"*{project}*: run complete — {completed} done, {failed} failed"]
     cost_str = ""
     if total_cost is not None and total_cost > 0:
         cost_str = f"${total_cost:.2f}"
         parts.append(f"Cost: {cost_str}")
+    parts.append(context)
     return notify(config, "run_complete", "\n".join(parts), cost=cost_str)

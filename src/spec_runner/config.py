@@ -187,7 +187,8 @@ class ExecutorConfig:
         default_factory=lambda: ["quality", "implementation", "testing"]
     )
 
-    # Telegram notifications
+    # Notifications
+    notify_project_name: str = ""  # Project name in notifications (default: directory name)
     telegram_bot_token: str = ""  # Telegram bot token (empty = disabled)
     telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
     notify_on: list[str] = field(default_factory=lambda: ["run_complete", "task_failed"])
