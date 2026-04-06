@@ -1,7 +1,7 @@
 # spec-runner Development Roadmap
 
 **Date**: 2026-04-06
-**Status**: Approved
+**Status**: Approved (revised after review)
 **Strategy**: Variant C (Specialize) — spec-driven development pipeline
 
 ## Context
@@ -17,9 +17,10 @@ spec-runner v1.1.0 is a CLI tool that reads structured markdown task files and e
 ## Design Principles
 
 1. **Spec-driven identity**: spec-runner's value is the full pipeline `requirements.md -> design.md -> tasks.md -> code -> review -> verify -> report`. Everything serves this pipeline.
-2. **Sequential-first**: Sequential execution is the primary mode. Parallel is experimental — Maestro handles production parallel execution.
+2. **Sequential-first**: Sequential execution is the primary mode. Parallel mode will be removed — Maestro handles parallel execution.
 3. **Markdown-first**: Human-readable specs that render in GitHub without tooling. This is the core differentiator.
 4. **Milestone releases**: Each release is a working product with clear value. Tech debt is embedded in milestones, not separated.
+5. **Fast feedback**: Ship small, ship often. v1.2.0 is a 1-day bugfix, not a kitchen-sink stabilization.
 
 ## Audit Sources
 
@@ -34,13 +35,19 @@ All findings referenced below come from `_cowork_output/` audit reports:
 | `05-testing-reliability.md` | Testing: 488 tests, parallel untested, crash resilience |
 | `06-positioning-roadmap.md` | Strategy: spec-runner vs Maestro, variant analysis |
 
+## Effort Estimation Policy
+
+All effort estimates assume implementation + unit tests only. Integration testing, code review (including self-review via spec-runner's own pipeline), and edge case exploration add ~30-50% overhead. Estimates are optimistic lower bounds, not commitments.
+
+When implementing: spec-runner's own code should go through its review pipeline where practical. This is both a quality gate and a dogfooding opportunity.
+
 ---
 
-## v1.2 "Stable"
+## v1.2.0 "Bugfix"
 
-**Goal**: Close all known bugs, stabilize CLI, make sequential path fully production-ready. After v1.2 the user can confidently use spec-runner for real projects.
+**Goal**: Close all known bugs. Fast release — ship in 1 day. After v1.2.0 there are zero known crashers or dead code paths.
 
-**Estimated effort**: ~18 hours (2-3 working days)
+**Estimated effort**: ~3 hours
 
 ### QW-1: Fix TUI crash — LogPanel.add_line()
 
@@ -113,53 +120,59 @@ All findings referenced below come from `_cowork_output/` audit reports:
 - **Effort**: 15 min
 - **Tests**: Add test for budget exceeded attempt recording
 
-### STABLE-1: Parallel mode -> experimental
+### QW-9: Parallel mode -> experimental with deprecation notice
 
 - **Problem**: Parallel mode has 3 critical bugs: race condition in tasks.md writes (task.py:209-250), blocking hooks in async context (parallel.py:62,164), git clean destroys files of other parallel tasks (hooks.py:186-204). Zero concurrent execution tests.
 - **Source**: 03-execution-engine.md sections 5.1-5.3, 05-testing-reliability.md section 1.3
-- **Fix**: Add warning on `--parallel` flag: "Warning: parallel mode is experimental. Known limitations: shared worktree conflicts, blocking hooks. For production parallel execution, consider using Maestro." Document in README under Limitations section.
+- **Fix**: Add deprecation warning on `--parallel` flag: "Deprecated: parallel mode will be removed in v1.3. For parallel execution, use Maestro." Document in README under Limitations section.
+- **Architectural decision**: Parallel does not add value that Maestro doesn't cover. Architecture analysis (06-positioning-roadmap.md) confirms this. Parallel.py (~450 lines) will be removed in v1.3. This is an architectural decision based on positioning analysis, not a usage-based one — waiting for usage metrics is a self-fulfilling prophecy since deprecation discourages use.
 - **Files**: `src/spec_runner/cli.py`, `README.md`
-- **Effort**: 2 hours
+- **Effort**: 1 hour
 
-### STABLE-2: FORMAT.md — formal task format specification
+---
 
-- **Problem**: Task format defined only by 6 regex patterns in task.py:37-44. No formal spec. Invalid markdown silently ignored. Duplicate TASK IDs silently overwritten.
-- **Source**: 02-task-format.md sections 1.1-1.4
-- **Fix**:
-  - Create `spec/FORMAT.md` documenting all fields, regex patterns, optionality, defaults, edge cases
-  - Add duplicate TASK ID validation in `validate.py`
-  - Add blocks/depends_on symmetry validation (warning level)
-- **Files**: `spec/FORMAT.md` (new), `src/spec_runner/validate.py`
-- **Effort**: 4 hours
-- **Tests**: Add validation tests for duplicate IDs and symmetry
+## v1.2.1 "CLI Contracts"
 
-### STABLE-3: CLI stabilization
+**Goal**: Unified JSON output contract across all commands + CI quality gates. After v1.2.1, spec-runner can be integrated with Maestro and any JSON-consuming tool. This establishes the JSON contract early because spec-runner is positioned as a Maestro execution backend (COWORK_CONTEXT.md) — the interop contract is an integration requirement, not polish.
+
+**Estimated effort**: ~3-4 days
+
+### STABLE-1: CLI stabilization + JSON contract
 
 - **Problem (--dry-run)**: No way to preview which tasks will execute without actually running them. Critical for `--all`.
 - **Problem (--json status)**: `costs` has `--json` but `status` does not. Inconsistent.
+- **Problem (--json-result)**: No formal JSON output for Maestro interop. Return type is `bool | str` — not an API.
 - **Problem (build_config)**: Argparse default values conflated with explicit user values. `--max-retries=3` (default) does not override YAML `max_retries: 5`.
 - **Source**: 04-cli-ux.md sections 1.2, 1.3, 5.4
 - **Fix**:
   - Add `--dry-run` flag to `cmd_run`: parse tasks, resolve deps, print plan, exit
   - Add `--json` flag to `cmd_status`: output JSON matching MCP status format
+  - Add `--json-result` flag to `cmd_run`: structured JSON output per task (see JSON Result Contract below)
   - Fix `build_config`: use `default=None` for numeric args, check `is not None`
-- **Files**: `src/spec_runner/cli.py`
-- **Effort**: 4 hours
-- **Tests**: Tests for dry-run output, JSON status format, config precedence
+- **Files**: `src/spec_runner/cli.py`, `src/spec_runner/execution.py`
+- **Effort**: 2 days
+- **Tests**: Tests for dry-run output, JSON status format, JSON result format, config precedence
 
-### STABLE-4: Crash resilience — disk full / corrupted DB
+#### JSON Result Contract
 
-- **Problem**: `record_attempt()`, `mark_running()`, `_save()` have no try-except for `sqlite3.OperationalError`. Disk full or corrupted DB causes unhandled crash.
-- **Source**: 05-testing-reliability.md section 3.3
-- **Fix**:
-  - Wrap SQLite write operations in try-except for `sqlite3.OperationalError`
-  - Log error, set task to failed state in-memory, continue execution
-  - Narrow `contextlib.suppress(Exception)` in tui.py to `sqlite3.OperationalError`
-- **Files**: `src/spec_runner/state.py:397,432,304`, `src/spec_runner/tui.py:313`
-- **Effort**: 3 hours
-- **Tests**: Add tests for OperationalError handling
+`spec-runner run --task=TASK-001 --json-result` outputs:
 
-### STABLE-5: CI and developer experience
+```json
+{
+  "task_id": "TASK-001",
+  "status": "done",
+  "duration_seconds": 151,
+  "cost_usd": 0.12,
+  "tokens": {"input": 12500, "output": 5000},
+  "review": "PASSED",
+  "attempts": 1,
+  "exit_code": 0
+}
+```
+
+Error cases return same structure with `status: "failed"` and `error` field. This is a stable API contract — Maestro and other tools can rely on it. Documented in README.
+
+### STABLE-2: CI and developer experience
 
 - **Problem**: mypy strict mode declared in CLAUDE.md but not in CI. No pre-commit config. No Makefile.
 - **Source**: 05-testing-reliability.md section 4.4
@@ -170,18 +183,15 @@ All findings referenced below come from `_cowork_output/` audit reports:
 - **Files**: `.github/workflows/ci.yml`, `.pre-commit-config.yaml` (new), `Makefile` (new)
 - **Effort**: 2 hours
 
-### v1.2 Deferred Items
+### v1.2.x Deferred Items
 
 Items identified in audits but intentionally deferred to later releases:
 
 | Item | Why deferred | Target |
 |------|-------------|--------|
-| Race condition tasks.md parallel writes | Parallel is experimental | v2.0 |
-| Blocking hooks in async context | Parallel is experimental | v2.0 |
-| Git clean destroys parallel task files | Parallel is experimental | v2.0 |
-| Per-task budget check in parallel path | Parallel is experimental | v2.0 |
+| Parallel mode removal | Deprecated in v1.2.0, remove code in v1.3 | v1.3 |
 | Return type annotations (35+ functions) | Volume; needs mypy in CI first | v1.3 |
-| Module decomposition (cli.py, hooks.py, task.py) | Refactoring risk, no user value | v2.0 |
+| Module decomposition (cli.py, hooks.py, task.py) | Refactoring risk, no user value yet | v2.0 |
 | Unified CLI (merge spec-runner + spec-task) | Breaking change | v2.0 |
 | Config migration (executor -> spec-runner naming) | Breaking change | v2.0 |
 | MCP write operations | Needs stable sequential first | v1.3 |
@@ -189,18 +199,44 @@ Items identified in audits but intentionally deferred to later releases:
 | Description parsing in tasks.md | Depends on FORMAT.md | v1.3 |
 | Graceful subprocess termination | Not a blocker | v1.3 |
 | spec-runner verify / report | New features, not stabilization | v1.3 |
-| Maestro interop contract | Depends on --json | v2.0 |
 | Dead config sections (execution_order, skip_tasks, environment) | Decision needed | v1.3 |
+| Crash resilience (disk full, corrupted DB) | Requires serious testing; better on decomposed modules | v2.0 |
 
 ---
 
 ## v1.3 "Spec Pipeline"
 
-**Goal**: Implement features that differentiate spec-runner from all competitors — the full spec -> code -> verify -> report pipeline. Plus close deferred tech debt from v1.2.
+**Goal**: Implement features that differentiate spec-runner from all competitors — the full spec -> code -> verify -> report pipeline. Remove parallel mode. Close deferred tech debt from v1.2.x.
 
 **Estimated effort**: ~2 weeks
 
-### PIPE-1: `spec-runner verify` — post-execution compliance check
+### PIPE-0: Remove parallel mode
+
+- **Rationale**: Decided in v1.2.0 (QW-9). Parallel does not add value that Maestro doesn't cover. Removing ~450 lines of code with 3 critical bugs and 0 tests simplifies maintenance and eliminates a class of issues.
+- **Scope**:
+  - Delete `src/spec_runner/parallel.py` (~450 lines)
+  - Remove `--parallel`, `--max-concurrent` from argparse
+  - Remove parallel-specific code paths in cli.py
+  - Update tests: remove parallel test stubs, update any mocks
+  - Update README, CLAUDE.md
+- **Files**: `src/spec_runner/parallel.py` (delete), `src/spec_runner/cli.py`, `tests/test_execution.py`, `README.md`, `CLAUDE.md`
+- **Effort**: 1 day
+- **Tests**: Verify all remaining tests pass. Remove parallel-specific tests.
+
+### PIPE-1: FORMAT.md — formal task format specification
+
+- **Problem**: Task format defined only by 6 regex patterns in task.py:37-44. No formal spec. Invalid markdown silently ignored. Duplicate TASK IDs silently overwritten.
+- **Source**: 02-task-format.md sections 1.1-1.4
+- **Fix**:
+  - Create `spec/FORMAT.md` documenting all fields, regex patterns, optionality, defaults, edge cases
+  - Add duplicate TASK ID validation in `validate.py`
+  - Add blocks/depends_on symmetry validation (warning level)
+- **Backward compatibility**: FORMAT.md documents the existing format as-is. New validations (duplicate IDs, symmetry) are **warnings by default**, not errors. Existing tasks.md files that worked before will continue to work. A future `--strict-format` flag can promote warnings to errors for new projects.
+- **Files**: `spec/FORMAT.md` (new), `src/spec_runner/validate.py`
+- **Effort**: 4 hours
+- **Tests**: Add validation tests for duplicate IDs and symmetry
+
+### PIPE-2: `spec-runner verify` — post-execution compliance check
 
 - **Motivation**: No tool in the ecosystem checks whether executed code actually satisfies the original spec. This is spec-runner's unique opportunity.
 - **Design**:
@@ -219,10 +255,10 @@ Items identified in audits but intentionally deferred to later releases:
 - **New module**: `src/spec_runner/verify.py` (~200-300 lines)
 - **Files**: `src/spec_runner/verify.py` (new), `src/spec_runner/cli.py`
 - **Effort**: 3 days
-- **Dependencies**: STABLE-2 (FORMAT.md)
+- **Dependencies**: PIPE-1 (FORMAT.md)
 - **Tests**: Verify with full traceability, partial coverage, no traceability, JSON output
 
-### PIPE-2: `spec-runner report` — traceability matrix
+### PIPE-3: `spec-runner report` — traceability matrix
 
 - **Motivation**: Enterprise/audit use case. Show the complete chain from requirement to deployed code with review evidence.
 - **Design**:
@@ -243,10 +279,12 @@ Items identified in audits but intentionally deferred to later releases:
 - **New module**: `src/spec_runner/report.py` (~200-300 lines)
 - **Files**: `src/spec_runner/report.py` (new), `src/spec_runner/cli.py`
 - **Effort**: 3 days
-- **Dependencies**: PIPE-1 (verify)
+- **Dependencies**: PIPE-1 (FORMAT.md) — needs to parse REQ/DESIGN identifiers. No dependency on PIPE-2 (verify).
 - **Tests**: Report with full matrix, empty project, uncovered filter, JSON output
 
-### PIPE-3: MCP write operations
+**Note on PIPE-2 / PIPE-3 independence**: Report (traceability matrix) is a read-only visualization of links: parse specs, query SQLite, render table. Verify (compliance check) adds pass/fail logic on top. These are orthogonal — report doesn't need verify's compliance logic, and verify doesn't need report's rendering. **PIPE-2 and PIPE-3 can be implemented in parallel.**
+
+### PIPE-4: MCP write operations
 
 - **Motivation**: Read-only MCP is just `spec-runner status --json` with extra steps. Write operations enable IDE workflows: trigger task execution from Claude Code / Cursor.
 - **Design**: Add 4 tools to `mcp_server.py`:
@@ -263,13 +301,13 @@ Items identified in audits but intentionally deferred to later releases:
 - **Effort**: 4 hours
 - **Tests**: Handler tests for each new tool, error cases (unknown task, already running)
 
-### PIPE-4: Quality improvements
+### PIPE-5: Quality improvements
 
 #### Return type annotations (35+ functions)
 
 - **Source**: 01-code-quality.md section 4.2
-- **Scope**: Add return type annotations to all public functions in hooks.py, execution.py, cli.py, parallel.py, state.py, task.py
-- **Priority order**: hooks.py (6 missing) -> execution.py (3) -> state.py (2) -> cli.py (9) -> task.py (6+) -> parallel.py (1)
+- **Scope**: Add return type annotations to all public functions in hooks.py, execution.py, cli.py, state.py, task.py
+- **Priority order**: hooks.py (6 missing) -> execution.py (3) -> state.py (2) -> cli.py (9) -> task.py (6+)
 - **Files**: All source modules
 - **Effort**: 4 hours
 
@@ -307,8 +345,7 @@ Items identified in audits but intentionally deferred to later releases:
 | Unified CLI | Breaking change | v2.0 |
 | Config rename | Breaking change | v2.0 |
 | Generic webhook | Telegram sufficient | v2.0 |
-| Maestro interop | Depends on unified CLI | v2.0 |
-| Parallel mode fixes | Experimental, deferred by design | v2.0 |
+| Crash resilience (disk full, corrupted DB) | Requires serious testing on decomposed modules | v2.0 |
 
 ---
 
@@ -316,7 +353,7 @@ Items identified in audits but intentionally deferred to later releases:
 
 **Goal**: Accumulated breaking changes in one release. Clean API, unified CLI, proper naming. After v2.0 spec-runner is a mature tool with clear identity.
 
-**Estimated effort**: ~3 weeks
+**Estimated effort**: ~2-3 weeks
 
 ### POLISH-1: Unified CLI
 
@@ -353,47 +390,60 @@ Items identified in audits but intentionally deferred to later releases:
 
 - **Problem**: 3 modules exceed 900 lines. cli.py (1280), hooks.py (1040), task.py (970). High cyclomatic complexity: post_done_hook CC=38, _run_tasks CC=29, cmd_plan CC=26.
 - **Source**: 01-code-quality.md sections 2.1-2.4
-- **Design**: Zero new code — pure relocation.
+- **Decomposition order**: Start with hooks.py (clearest boundaries, fewest external dependents), then task.py, then cli.py (highest risk — defines public API and argparse entry point).
 
-  **cli.py (1280 lines) ->**
+  **Phase 1: hooks.py (1040 lines) ->** Start here: clear responsibility boundaries, no external imports depend on internal functions.
+  - `hooks.py` — pre_start_hook, post_done_hook orchestration (~250 lines)
+  - `review.py` — build_review_prompt, run_code_review, run_parallel_review, HITL gate (~400 lines)
+  - `git_ops.py` — branch/commit/merge helpers (~200 lines)
+
+  **Phase 2: task.py (970 lines) ->** Medium risk: Task dataclass is widely imported, but cmd_* functions are only called from main().
+  - `task.py` — Task dataclass, parse_tasks, resolve_dependencies, get_next_tasks (~350 lines)
+  - `task_commands.py` — cmd_list, cmd_show, cmd_start, cmd_done, cmd_graph, main (~350 lines)
+  - `github_sync.py` — sync_to_gh, sync_from_gh, _get_existing_issues (~250 lines)
+
+  **Phase 3: cli.py (1280 lines) ->** Highest risk: defines argparse (public API), shared state, entry point. Watch for circular imports, shared `args` namespace, re-exports.
   - `cli.py` — main(), dispatch, global args (~300 lines)
   - `cli_run.py` — cmd_run, _run_tasks, cmd_watch (~400 lines)
   - `cli_info.py` — cmd_status, cmd_costs, cmd_logs, cmd_validate (~300 lines)
   - `cli_plan.py` — cmd_plan (~280 lines)
 
-  **hooks.py (1040 lines) ->**
-  - `hooks.py` — pre_start_hook, post_done_hook orchestration (~250 lines)
-  - `review.py` — build_review_prompt, run_code_review, run_parallel_review, HITL gate (~400 lines)
-  - `git_ops.py` — branch/commit/merge helpers (~200 lines)
-
-  **task.py (970 lines) ->**
-  - `task.py` — Task dataclass, parse_tasks, resolve_dependencies, get_next_tasks (~350 lines)
-  - `task_commands.py` — cmd_list, cmd_show, cmd_start, cmd_done, cmd_graph, main (~350 lines)
-  - `github_sync.py` — sync_to_gh, sync_from_gh, _get_existing_issues (~250 lines)
-
+- **Risk mitigation**: Each phase is a separate PR. Re-export from original module for backward compat if any external code imports internals. Run full test suite after each phase.
 - **Post-decomposition**: Max module ~400 lines. ~20 test files need import path updates.
 - **Files**: All modules >500 lines, all test files
-- **Effort**: 5 days
+- **Effort**: 5-7 days (with integration testing overhead)
 - **Tests**: All existing tests must pass after relocation. No behavioral changes.
 
-### POLISH-4: Generic webhook notifications
+### POLISH-4: Crash resilience — disk full / corrupted DB
+
+- **Problem**: `record_attempt()`, `mark_running()`, `_save()` have no try-except for `sqlite3.OperationalError`. Disk full or corrupted DB causes unhandled crash.
+- **Source**: 05-testing-reliability.md section 3.3
+- **Rationale for v2.0 placement**: This requires serious testing (mock disk full, corrupt SQLite files, verify recovery paths). Better to do on decomposed modules (POLISH-3) where state.py is cleaner and test surface is isolated.
+- **Fix**:
+  - Wrap SQLite write operations in try-except for `sqlite3.OperationalError`
+  - Log error, set task to failed state in-memory, continue execution
+  - Narrow `contextlib.suppress(Exception)` in tui.py to `sqlite3.OperationalError`
+- **Files**: `src/spec_runner/state.py`, `src/spec_runner/tui.py`
+- **Effort**: 3 hours (implementation) + 3 hours (thorough testing)
+- **Tests**: Mock disk full, corrupted DB open, mid-write failure, verify graceful degradation
+
+### POLISH-5: Generic webhook notifications
 
 - **Problem**: Only Telegram supported. No Slack/Discord/generic webhook.
 - **Source**: 04-cli-ux.md section 4.3
-- **Design**:
+- **Design**: Uses v2.0 flat config format (depends on POLISH-2).
   ```yaml
-  spec-runner:
-    notifications:
-      telegram:
-        bot_token: "..."
-        chat_id: "..."
-      webhook:
-        url: "https://hooks.slack.com/services/..."
-        method: POST
-        headers:
-          Content-Type: "application/json"
-        template: '{"text": "{{event}}: {{message}}"}'
-      events: ["task_failed", "run_complete", "budget_warning"]
+  notifications:
+    telegram:
+      bot_token: "..."
+      chat_id: "..."
+    webhook:
+      url: "https://hooks.slack.com/services/..."
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      template: '{"text": "{{event}}: {{message}}"}'
+    events: ["task_failed", "run_complete", "budget_warning"]
   ```
   - Telegram remains first-class citizen
   - Webhook is generic: covers Slack, Discord, ntfy.sh, PagerDuty
@@ -401,42 +451,8 @@ Items identified in audits but intentionally deferred to later releases:
   - New event: `budget_warning` (triggered at 80% of budget threshold)
 - **Files**: `src/spec_runner/notifications.py`, `src/spec_runner/config.py`
 - **Effort**: 2 days
+- **Dependencies**: POLISH-2 (new config format)
 - **Tests**: Webhook delivery, template rendering, budget_warning event
-
-### POLISH-5: Maestro interop contract
-
-- **Problem**: No formal JSON output for using spec-runner as Maestro spawner. Current return type is `bool | str` — not an API.
-- **Design**:
-  ```bash
-  spec-runner run --task=TASK-001 --json-result
-  ```
-  Output:
-  ```json
-  {
-    "task_id": "TASK-001",
-    "status": "done",
-    "duration_seconds": 151,
-    "cost_usd": 0.12,
-    "tokens": {"input": 12500, "output": 5000},
-    "review": "PASSED",
-    "attempts": 1,
-    "exit_code": 0
-  }
-  ```
-  - Document as stable API contract in README
-  - Maestro calls `spec-runner run --task=X --json-result` as subprocess
-  - Error cases return same structure with `status: "failed"` and `error` field
-- **Files**: `src/spec_runner/cli.py`, `src/spec_runner/execution.py`
-- **Effort**: 2 days
-- **Tests**: JSON result format for success, failure, timeout, budget exceeded
-
-### POLISH-6: Parallel mode decision
-
-- **Context**: Parallel mode marked experimental in v1.2. By v2.0, usage data determines final decision.
-- **Option A (keep)**: Leave as experimental with documented limitations. Useful for small-scale (2-3 tasks without git branches).
-- **Option B (remove)**: Delete parallel.py, recommend Maestro. Simplifies codebase by ~450 lines.
-- **Recommendation**: Option A. If parallel has not been used by v2.0 release, switch to Option B.
-- **Effort**: 1 day (documentation + decision)
 
 ### v2.0 Out of Scope
 
@@ -446,60 +462,66 @@ Items identified in audits but intentionally deferred to later releases:
 | Docker isolation | Maestro territory |
 | Multi-user auth | spec-runner is a single-developer tool |
 | TUI redesign (diff-based refresh, detail view) | Nice-to-have, not a blocker |
-| Git worktree isolation for parallel | Only if parallel returns from experimental |
 
 ---
 
 ## Timeline
 
 ```
-v1.2 "Stable"       v1.3 "Spec Pipeline"      v2.0 "Polish"
-  Week 1-2               Week 3-4                Week 5-7
+v1.2.0 "Bugfix"    v1.2.1 "Contracts"   v1.3 "Spec Pipeline"     v2.0 "Polish"
+  Day 1               Day 2-5              Week 2-4                Week 5-7
 
-  QW-1..QW-8             PIPE-1: verify          POLISH-1: Unified CLI
-  STABLE-1: parallel     PIPE-2: report          POLISH-2: Config migration
-  STABLE-2: FORMAT.md    PIPE-3: MCP write       POLISH-3: Decomposition
-  STABLE-3: CLI fixes    PIPE-4: Quality         POLISH-4: Webhook
-  STABLE-4: Crash res.                           POLISH-5: Interop
-  STABLE-5: CI/DX                                POLISH-6: Parallel decision
+  QW-1..QW-9          STABLE-1: JSON       PIPE-0: rm parallel     POLISH-1: Unified CLI
+                       STABLE-2: CI/DX      PIPE-1: FORMAT.md       POLISH-2: Config v2
+                                            PIPE-2: verify    }     POLISH-3: Decomposition
+                                            PIPE-3: report    } ||  POLISH-4: Crash resilience
+                                            PIPE-4: MCP write       POLISH-5: Webhook
+                                            PIPE-5: Quality
 ```
 
 ## Dependency Graph
 
 ```
-QW-1..QW-8 (independent, can be parallelized)
+QW-1..QW-9 (independent, can be parallelized)
     |
-STABLE-1 (parallel experimental) -- no deps
-STABLE-2 (FORMAT.md) -- no deps
-    |           \
-STABLE-3        PIPE-1 (verify) -- depends on STABLE-2
-    |               |
-STABLE-4        PIPE-2 (report) -- depends on PIPE-1
+STABLE-1 (JSON contract: --dry-run, --json, --json-result) -- no deps
+STABLE-2 (CI/DX) -- no deps
     |
-STABLE-5 (CI)
+PIPE-0 (remove parallel) -- depends on QW-9 (deprecation notice)
+PIPE-1 (FORMAT.md) -- no deps
+    |       \           \
+PIPE-2 (verify)    PIPE-3 (report)     -- both depend on PIPE-1, independent of each other
     |
-PIPE-4 (type annotations) -- depends on STABLE-5 (mypy in CI)
+PIPE-4 (MCP write) -- no deps
+PIPE-5 (quality) -- depends on STABLE-2 (mypy in CI)
     |
-POLISH-1 (unified CLI) -- depends on PIPE-4
+POLISH-1 (unified CLI) -- depends on PIPE-5
     |
-POLISH-2 (config migration) -- no deps, but after POLISH-1
-POLISH-3 (decomposition) -- depends on POLISH-1
-POLISH-4 (webhook) -- depends on POLISH-2 (new config format)
-POLISH-5 (interop) -- depends on STABLE-3 (--json)
+POLISH-2 (config migration) -- after POLISH-1
+    |
+POLISH-3 (decomposition: hooks -> task -> cli) -- after POLISH-1
+POLISH-4 (crash resilience) -- after POLISH-3
+POLISH-5 (webhook) -- depends on POLISH-2 (new config format)
 ```
 
 ## Success Criteria
 
-### v1.2
-- All 8 QW bugs fixed, tests pass
+### v1.2.0
+- All 9 QW bugs fixed, tests pass
 - `spec-runner validate` works correctly
+- `--parallel` shows deprecation warning
+- Zero known crashers
+
+### v1.2.1
 - `spec-runner run --dry-run` shows execution plan
 - `spec-runner status --json` returns valid JSON
-- `--parallel` shows experimental warning
+- `spec-runner run --task=X --json-result` returns stable JSON contract
 - mypy passes in CI
-- 0 known crash scenarios (disk full handled gracefully)
+- Makefile with standard targets
 
 ### v1.3
+- parallel.py removed (~450 lines deleted)
+- `spec/FORMAT.md` documents task format; new validations are warnings (backward-compatible)
 - `spec-runner verify` produces compliance report
 - `spec-runner report` produces traceability matrix with coverage %
 - MCP server supports run_task and stop from IDE
@@ -509,6 +531,6 @@ POLISH-5 (interop) -- depends on STABLE-3 (--json)
 ### v2.0
 - Single `spec-runner` binary with `task` subcommand group
 - Config at `spec-runner.config.yaml` with migration helper
-- No module exceeds 400 lines
+- No module exceeds 400 lines (decomposition: hooks.py first, then task.py, then cli.py)
+- Crash resilience: disk full and corrupted DB handled gracefully
 - Generic webhook notifications work with Slack/Discord
-- `--json-result` provides stable API for Maestro integration
