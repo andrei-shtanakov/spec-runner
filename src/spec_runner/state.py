@@ -395,39 +395,48 @@ class ExecutorState:
             self.consecutive_failures += 1
 
         # Atomic SQL transaction
-        with self._conn:
-            self._conn.execute(
-                "INSERT INTO tasks (task_id, status, started_at, completed_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_id) DO UPDATE SET "
-                "status = excluded.status, "
-                "started_at = excluded.started_at, "
-                "completed_at = excluded.completed_at",
-                (task_id, state.status, state.started_at, state.completed_at),
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = excluded.started_at, "
+                    "completed_at = excluded.completed_at",
+                    (task_id, state.status, state.started_at, state.completed_at),
+                )
+                self._conn.execute(
+                    "INSERT INTO attempts "
+                    "(task_id, timestamp, success, duration_seconds, "
+                    "error, error_code, claude_output, "
+                    "input_tokens, output_tokens, cost_usd, "
+                    "review_status, review_findings) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        attempt.timestamp,
+                        int(attempt.success),
+                        attempt.duration_seconds,
+                        attempt.error,
+                        attempt.error_code.value if attempt.error_code else None,
+                        attempt.claude_output,
+                        attempt.input_tokens,
+                        attempt.output_tokens,
+                        attempt.cost_usd,
+                        attempt.review_status,
+                        attempt.review_findings,
+                    ),
+                )
+                self._save_meta()
+        except sqlite3.OperationalError as e:
+            from .logging import get_logger
+
+            get_logger("state").error(
+                "Failed to persist attempt (disk full or DB corruption?)",
+                task_id=task_id,
+                error=str(e),
             )
-            self._conn.execute(
-                "INSERT INTO attempts "
-                "(task_id, timestamp, success, duration_seconds, "
-                "error, error_code, claude_output, "
-                "input_tokens, output_tokens, cost_usd, "
-                "review_status, review_findings) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    task_id,
-                    attempt.timestamp,
-                    int(attempt.success),
-                    attempt.duration_seconds,
-                    attempt.error,
-                    attempt.error_code.value if attempt.error_code else None,
-                    attempt.claude_output,
-                    attempt.input_tokens,
-                    attempt.output_tokens,
-                    attempt.cost_usd,
-                    attempt.review_status,
-                    attempt.review_findings,
-                ),
-            )
-            self._save_meta()
 
     def mark_running(self, task_id: str) -> None:
         """Mark task as running with atomic SQLite persistence."""
@@ -435,17 +444,26 @@ class ExecutorState:
         state.status = "running"
         state.started_at = datetime.now().isoformat()
 
-        with self._conn:
-            self._conn.execute(
-                "INSERT INTO tasks (task_id, status, started_at, completed_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_id) DO UPDATE SET "
-                "status = excluded.status, "
-                "started_at = excluded.started_at, "
-                "completed_at = excluded.completed_at",
-                (task_id, state.status, state.started_at, state.completed_at),
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = excluded.started_at, "
+                    "completed_at = excluded.completed_at",
+                    (task_id, state.status, state.started_at, state.completed_at),
+                )
+                self._save_meta()
+        except sqlite3.OperationalError as e:
+            from .logging import get_logger
+
+            get_logger("state").error(
+                "Failed to persist running state (disk full or DB corruption?)",
+                task_id=task_id,
+                error=str(e),
             )
-            self._save_meta()
 
     def should_stop(self) -> bool:
         """Check if we should stop (consecutive failures or budget exceeded)."""

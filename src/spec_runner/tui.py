@@ -7,6 +7,7 @@ Provides a live terminal UI showing task status across Kanban columns
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -317,7 +318,7 @@ class SpecRunnerApp(App[None]):
                     prefix = f"[dim]{event.task_id}[/dim] " if event.task_id else ""
                     log_panel.add_line(f"{prefix}{event.data}")
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(sqlite3.OperationalError, OSError):
             # State DB may be locked by executor — silently skip this tick
             self._do_refresh()
 
@@ -335,7 +336,7 @@ class SpecRunnerApp(App[None]):
 
         state: ExecutorState | None = None
         try:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(sqlite3.OperationalError, OSError):
                 state = ExecutorState(config)
 
             # Categorise tasks
