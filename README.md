@@ -56,7 +56,7 @@ spec-runner watch
 - **Cost tracking** — per-task token usage and cost breakdown
 - **Watch mode** — continuously poll and execute ready tasks
 - **Plugin system** — extend with custom hooks via `spec/plugins/*/plugin.yaml`
-- **MCP server** — read-only Model Context Protocol server for Claude Code integration
+- **MCP server** — Model Context Protocol server for Claude Code integration (read + write operations)
 - **GitHub Issues sync** — bidirectional sync between tasks.md and GitHub Issues
 - **Interactive planning** — generate specs (requirements + design + tasks) through dialogue with Claude
 - **Structured logging** — JSON/console output via structlog
@@ -198,7 +198,7 @@ for task in ready:
 
 ## MCP Server (Claude Code Integration)
 
-spec-runner includes a read-only MCP server for querying project status from Claude Code.
+spec-runner includes an MCP server for querying status and executing tasks from Claude Code.
 
 Add to `.mcp.json`:
 
