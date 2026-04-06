@@ -1,7 +1,6 @@
 """CLI commands and argument parsing for spec-runner."""
 
 import argparse
-import asyncio
 import json
 import re
 import shutil
@@ -25,7 +24,6 @@ from .execution import (
 )
 from .hooks import ensure_on_main_branch
 from .logging import get_logger
-from .parallel import _run_tasks_parallel
 from .prompt import (
     load_prompt_template,
     render_template,
@@ -82,25 +80,7 @@ def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: Exec
 
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
-    # Parallel mode deprecation warning
-    if getattr(args, "parallel", False):
-        import warnings
-
-        warnings.warn(
-            "Parallel mode is deprecated and will be removed in v1.3. "
-            "For parallel execution, use Maestro.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        logger.warning(
-            "parallel_deprecated",
-            message="Parallel mode will be removed in v1.3",
-        )
-
-    # HITL review incompatible with parallel/TUI modes
-    if config.hitl_review and getattr(args, "parallel", False):
-        logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
-        config.hitl_review = False
+    # HITL review incompatible with TUI mode
     if config.hitl_review and getattr(args, "tui", False):
         logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
         config.hitl_review = False
@@ -118,63 +98,44 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
         app = SpecRunnerApp(config=config)
 
-        # Get event bus from TUI for streaming output
-        tui_event_bus = app.event_bus
-
         def _start_execution() -> None:
-            def run() -> None:
-                if getattr(args, "parallel", False):
-                    config.create_git_branch = False
-                    if getattr(args, "max_concurrent", 0) > 0:
-                        config.max_concurrent = args.max_concurrent
-                    asyncio.run(_run_tasks_parallel(args, config, event_bus=tui_event_bus))
-                else:
-                    _run_tasks(args, config)
-
-            t = threading.Thread(target=run, daemon=True)
+            t = threading.Thread(target=lambda: _run_tasks(args, config), daemon=True)
             t.start()
 
         app.call_later(_start_execution)
         app.run()
         return
 
-    if getattr(args, "parallel", False):
-        # Parallel mode implies no branch
-        config.create_git_branch = False
-        if getattr(args, "max_concurrent", 0) > 0:
-            config.max_concurrent = args.max_concurrent
-        asyncio.run(_run_tasks_parallel(args, config))
+    if getattr(args, "force", False):
+        logger.warning("Skipping lock check (--force)")
+        _run_tasks(args, config)
     else:
-        if getattr(args, "force", False):
-            logger.warning("Skipping lock check (--force)")
-            _run_tasks(args, config)
-        else:
-            # Acquire lock to prevent parallel runs
-            lock = ExecutorLock(config.state_file.with_suffix(".lock"))
-            if not lock.acquire():
-                held_by = getattr(lock, "_held_by", {})
-                pid = held_by.get("pid", "unknown")
-                started = held_by.get("started", "unknown")
-                alive = held_by.get("alive", "true")
+        # Acquire lock to prevent concurrent runs
+        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+        if not lock.acquire():
+            held_by = getattr(lock, "_held_by", {})
+            pid = held_by.get("pid", "unknown")
+            started = held_by.get("started", "unknown")
+            alive = held_by.get("alive", "true")
 
+            logger.error(
+                "Another executor is already running",
+                lock_file=str(config.state_file.with_suffix(".lock")),
+                held_by_pid=pid,
+                started=started,
+                process_alive=alive,
+            )
+            if alive == "false":
                 logger.error(
-                    "Another executor is already running",
-                    lock_file=str(config.state_file.with_suffix(".lock")),
-                    held_by_pid=pid,
-                    started=started,
-                    process_alive=alive,
+                    "Lock holder is dead. Use --force to override, "
+                    "or delete the lock file manually."
                 )
-                if alive == "false":
-                    logger.error(
-                        "Lock holder is dead. Use --force to override, "
-                        "or delete the lock file manually."
-                    )
-                sys.exit(1)
+            sys.exit(1)
 
-            try:
-                _run_tasks(args, config)
-            finally:
-                lock.release()
+        try:
+            _run_tasks(args, config)
+        finally:
+            lock.release()
 
 
 def _run_tasks(args, config: ExecutorConfig):
@@ -1250,17 +1211,6 @@ def main():
         "--restart",
         action="store_true",
         help="Ignore in-progress tasks, start fresh with TODO tasks only",
-    )
-    run_parser.add_argument(
-        "--parallel",
-        action="store_true",
-        help="[DEPRECATED] Execute tasks in parallel (will be removed in v1.3)",
-    )
-    run_parser.add_argument(
-        "--max-concurrent",
-        type=int,
-        default=0,
-        help="Max parallel tasks (default: from config, typically 3)",
     )
     run_parser.add_argument(
         "--tui",

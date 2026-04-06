@@ -1,7 +1,7 @@
 """Backward-compatible re-exports.
 
 All public API is available from this module for existing imports.
-Implementation moved to execution.py, parallel.py, cli.py.
+Implementation moved to execution.py, cli.py.
 """
 
 from .logging import get_logger
@@ -54,6 +54,3 @@ from .execution import (  # noqa: E402, F401
     execute_task,
     run_with_retries,
 )
-
-# Re-exports from parallel.py
-from .parallel import _execute_task_async, _run_tasks_parallel  # noqa: E402, F401
