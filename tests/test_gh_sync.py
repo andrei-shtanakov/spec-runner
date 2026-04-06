@@ -64,7 +64,7 @@ def _make_args(**kwargs):
 class TestSyncToGh:
     """Tests for cmd_sync_to_gh."""
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_creates_issues_for_open_tasks(self, mock_run, tmp_path):
         """Should create issues for todo/in_progress tasks, skip done."""
         tasks_file = _write_tasks(tmp_path)
@@ -76,7 +76,7 @@ class TestSyncToGh:
             stdout="[]",
         )
 
-        from spec_runner.task import cmd_sync_to_gh
+        from spec_runner.github_sync import cmd_sync_to_gh
 
         cmd_sync_to_gh(_make_args(), tasks)
 
@@ -86,7 +86,7 @@ class TestSyncToGh:
         create_calls = [c for c in calls if "create" in str(c)]
         assert len(create_calls) == 2
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_updates_existing_issues(self, mock_run, tmp_path):
         """Should update labels on existing issues instead of creating duplicates."""
         tasks_file = _write_tasks(tmp_path)
@@ -105,7 +105,7 @@ class TestSyncToGh:
         )
         mock_run.return_value = MagicMock(returncode=0, stdout=existing)
 
-        from spec_runner.task import cmd_sync_to_gh
+        from spec_runner.github_sync import cmd_sync_to_gh
 
         cmd_sync_to_gh(_make_args(), tasks)
 
@@ -116,7 +116,7 @@ class TestSyncToGh:
         assert len(edit_calls) >= 1
         assert len(create_calls) == 1
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_closes_done_issues(self, mock_run, tmp_path):
         """Should close issues for done tasks."""
         tasks_file = _write_tasks(tmp_path)
@@ -135,7 +135,7 @@ class TestSyncToGh:
         )
         mock_run.return_value = MagicMock(returncode=0, stdout=existing)
 
-        from spec_runner.task import cmd_sync_to_gh
+        from spec_runner.github_sync import cmd_sync_to_gh
 
         cmd_sync_to_gh(_make_args(), tasks)
 
@@ -143,7 +143,7 @@ class TestSyncToGh:
         close_calls = [c for c in calls if "close" in str(c)]
         assert len(close_calls) >= 1
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_dry_run_no_mutations(self, mock_run, tmp_path):
         """Dry run should only list issues, never create/edit/close."""
         tasks_file = _write_tasks(tmp_path)
@@ -151,7 +151,7 @@ class TestSyncToGh:
 
         mock_run.return_value = MagicMock(returncode=0, stdout="[]")
 
-        from spec_runner.task import cmd_sync_to_gh
+        from spec_runner.github_sync import cmd_sync_to_gh
 
         cmd_sync_to_gh(_make_args(dry_run=True), tasks)
 
@@ -162,7 +162,7 @@ class TestSyncToGh:
         ]
         assert len(mutation_calls) == 0
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_gh_not_found(self, mock_run, tmp_path, capsys):
         """Should print error when gh CLI is not available."""
         tasks_file = _write_tasks(tmp_path)
@@ -170,7 +170,7 @@ class TestSyncToGh:
 
         mock_run.side_effect = FileNotFoundError("gh not found")
 
-        from spec_runner.task import cmd_sync_to_gh
+        from spec_runner.github_sync import cmd_sync_to_gh
 
         cmd_sync_to_gh(_make_args(), tasks)
 
@@ -186,7 +186,7 @@ class TestSyncToGh:
 class TestSyncFromGh:
     """Tests for cmd_sync_from_gh."""
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_updates_status_from_closed_issues(self, mock_run, tmp_path):
         """Closed issues should mark tasks as done."""
         tasks_file = _write_tasks(tmp_path)
@@ -204,7 +204,7 @@ class TestSyncFromGh:
         )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
-        from spec_runner.task import cmd_sync_from_gh
+        from spec_runner.github_sync import cmd_sync_from_gh
 
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
@@ -212,7 +212,7 @@ class TestSyncFromGh:
         task_003 = next(t for t in updated_tasks if t.id == "TASK-003")
         assert task_003.status == "done"
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_updates_status_from_labels(self, mock_run, tmp_path):
         """Should use status:X labels to determine status for open issues."""
         tasks_file = _write_tasks(tmp_path)
@@ -230,7 +230,7 @@ class TestSyncFromGh:
         )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
-        from spec_runner.task import cmd_sync_from_gh
+        from spec_runner.github_sync import cmd_sync_from_gh
 
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
@@ -238,7 +238,7 @@ class TestSyncFromGh:
         task_003 = next(t for t in updated_tasks if t.id == "TASK-003")
         assert task_003.status == "in_progress"
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_no_change_when_status_matches(self, mock_run, tmp_path):
         """Should not write file when nothing changed."""
         tasks_file = _write_tasks(tmp_path)
@@ -257,13 +257,13 @@ class TestSyncFromGh:
         )
         mock_run.return_value = MagicMock(returncode=0, stdout=issues)
 
-        from spec_runner.task import cmd_sync_from_gh
+        from spec_runner.github_sync import cmd_sync_from_gh
 
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 
         assert tasks_file.read_text() == original_content
 
-    @patch("spec_runner.task.subprocess.run")
+    @patch("spec_runner.github_sync.subprocess.run")
     def test_gh_not_found(self, mock_run, tmp_path, capsys):
         """Should print error when gh CLI is not available."""
         tasks_file = _write_tasks(tmp_path)
@@ -271,7 +271,7 @@ class TestSyncFromGh:
 
         mock_run.side_effect = FileNotFoundError("gh not found")
 
-        from spec_runner.task import cmd_sync_from_gh
+        from spec_runner.github_sync import cmd_sync_from_gh
 
         cmd_sync_from_gh(_make_args(), tasks, tasks_file)
 

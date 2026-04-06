@@ -44,7 +44,7 @@ dev = [
 
 [project.scripts]
 spec-runner = "spec_runner.executor:main"
-spec-task = "spec_runner.task:main"
+spec-task = "spec_runner.task_commands:main"
 spec-runner-init = "spec_runner.init_cmd:main"
 
 [project.urls]
