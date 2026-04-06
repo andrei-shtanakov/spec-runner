@@ -24,9 +24,9 @@ from .cli_info import (  # noqa: E402, F401
 )
 from .cli_plan import cmd_plan  # noqa: E402, F401
 from .config import (
-    CONFIG_FILE,
     ExecutorConfig,
     ExecutorLock,
+    _resolve_config_path,
     build_config,
     load_config_from_yaml,
 )
@@ -164,7 +164,7 @@ def _run_tasks(args, config: ExecutorConfig):
 
         pre_result = validate_all(
             tasks_file=config.tasks_file,
-            config_file=config.project_root / CONFIG_FILE,
+            config_file=_resolve_config_path(),
         )
         if not pre_result.ok:
             logger.error("Validation failed before execution")
@@ -450,7 +450,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # Pre-run validation
     pre_result = validate_all(
         tasks_file=config.tasks_file,
-        config_file=config.project_root / CONFIG_FILE,
+        config_file=_resolve_config_path(),
     )
     if not pre_result.ok:
         logger.error("Validation failed before watch")

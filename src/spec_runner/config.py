@@ -93,8 +93,9 @@ class ExecutorLock:
 
 # === Constants ===
 
-# Configuration file path
-CONFIG_FILE = Path("spec/executor.config.yaml")
+# Configuration file paths (new and legacy)
+CONFIG_FILE = Path("spec-runner.config.yaml")  # v2.0 location (project root)
+LEGACY_CONFIG_FILE = Path("spec/executor.config.yaml")  # v1.x location
 PROGRESS_FILE = Path("spec/.executor-progress.txt")
 
 # Error patterns for graceful exit (rate limits, context window, etc.)
@@ -266,15 +267,50 @@ def _parse_personas(raw: dict) -> dict[str, Persona] | None:
     return personas if personas else None
 
 
-def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
+def _resolve_config_path() -> Path:
+    """Find the config file, preferring new location over legacy.
+
+    Returns the path to use. Emits deprecation warning for legacy path.
+    """
+    if CONFIG_FILE.exists():
+        if LEGACY_CONFIG_FILE.exists():
+            from .logging import get_logger
+
+            get_logger("config").error(
+                "Both config files exist — remove the legacy one",
+                new=str(CONFIG_FILE),
+                legacy=str(LEGACY_CONFIG_FILE),
+            )
+        return CONFIG_FILE
+
+    if LEGACY_CONFIG_FILE.exists():
+        import sys
+
+        print(
+            f"WARNING: {LEGACY_CONFIG_FILE} is deprecated. "
+            f"Move it to {CONFIG_FILE} (project root).",
+            file=sys.stderr,
+        )
+        return LEGACY_CONFIG_FILE
+
+    return CONFIG_FILE  # default (won't exist, returns empty config)
+
+
+def load_config_from_yaml(config_path: Path | None = None) -> dict:
     """Load configuration from YAML file.
 
+    Supports both v2.0 flat format (spec-runner.config.yaml at project root)
+    and legacy format (spec/executor.config.yaml with executor: wrapper).
+
     Args:
-        config_path: Path to the configuration file.
+        config_path: Explicit path, or None to auto-detect.
 
     Returns:
         Dictionary with configuration values.
     """
+    if config_path is None:
+        config_path = _resolve_config_path()
+
     if not config_path.exists():
         return {}
 
@@ -282,7 +318,8 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
 
-        executor_config = data.get("executor", {})
+        # Support both v2.0 flat format and v1.x legacy (executor: wrapper)
+        executor_config = data.get("executor", {}) if "executor" in data else data
         hooks = executor_config.get("hooks", {})
         pre_start = hooks.get("pre_start", {})
         post_done = hooks.get("post_done", {})

@@ -7,8 +7,8 @@ import sys
 from datetime import datetime
 
 from .config import (
-    CONFIG_FILE,
     ExecutorConfig,
+    _resolve_config_path,
 )
 from .logging import get_logger
 from .state import (
@@ -307,7 +307,7 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
     result = validate_all(
         tasks_file=config.tasks_file,
-        config_file=config.project_root / CONFIG_FILE,
+        config_file=_resolve_config_path(),
     )
     output = format_results(result)
     print(output)
