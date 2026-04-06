@@ -140,7 +140,7 @@ def ensure_on_main_branch(config: ExecutorConfig) -> None:
                     stderr=result.stderr.strip(),
                 )
     except Exception:
-        pass  # Ignore git errors
+        logger.debug("git_switch_failed", exc_info=True)
 
 
 def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:

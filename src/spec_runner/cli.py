@@ -52,7 +52,7 @@ from .task import (
 )
 from .validate import format_results, validate_all
 
-logger = get_logger("executor")
+logger = get_logger("cli")
 
 
 # === CLI Commands ===
@@ -60,6 +60,21 @@ logger = get_logger("executor")
 
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
+    # Parallel mode deprecation warning
+    if getattr(args, "parallel", False):
+        import warnings
+
+        warnings.warn(
+            "Parallel mode is deprecated and will be removed in v1.3. "
+            "For parallel execution, use Maestro.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "parallel_deprecated",
+            message="Parallel mode will be removed in v1.3",
+        )
+
     # HITL review incompatible with parallel/TUI modes
     if config.hitl_review and getattr(args, "parallel", False):
         logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
@@ -946,7 +961,7 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
     result = validate_all(
         tasks_file=config.tasks_file,
-        config_file=config.project_root / "executor.config.yaml",
+        config_file=config.project_root / CONFIG_FILE,
     )
     output = format_results(result)
     print(output)
@@ -1128,6 +1143,18 @@ def main():
         action="store_true",
         help="Output logs as JSON lines",
     )
+    common.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="Global budget in USD (stop when exceeded)",
+    )
+    common.add_argument(
+        "--task-budget",
+        type=float,
+        default=None,
+        help="Per-task budget in USD (block task when exceeded)",
+    )
 
     parser = argparse.ArgumentParser(
         description="spec-runner — task automation from markdown specs via Claude CLI",
@@ -1150,7 +1177,7 @@ def main():
     run_parser.add_argument(
         "--parallel",
         action="store_true",
-        help="Execute ready tasks in parallel (implies --no-branch)",
+        help="[DEPRECATED] Execute tasks in parallel (will be removed in v1.3)",
     )
     run_parser.add_argument(
         "--max-concurrent",

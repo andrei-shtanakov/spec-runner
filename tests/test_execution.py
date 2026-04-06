@@ -973,6 +973,42 @@ class TestBudgetEnforcement:
         # Should stop after 2 attempts ($0.12 > $0.10)
         assert call_count == 2
 
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_task_budget_exceeded_records_attempt(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """Budget exceeded records a BUDGET_EXCEEDED attempt in state."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+
+        run_with_retries(task, config, state)
+
+        ts = state.get_task_state(task.id)
+        assert ts is not None
+        budget_attempts = [a for a in ts.attempts if a.error_code == ErrorCode.BUDGET_EXCEEDED]
+        assert len(budget_attempts) == 1
+        assert "budget exceeded" in budget_attempts[0].error.lower()
+
 
 class TestStateCleanup:
     """Verify ExecutorState is always closed after executor functions."""

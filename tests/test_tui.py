@@ -143,6 +143,29 @@ class TestLogPanel:
         panel.read_new_lines(progress)
         assert len(panel._lines) == 100
 
+    def test_add_line_appends(self) -> None:
+        """add_line appends a formatted line to the buffer."""
+        panel = LogPanel()
+        panel.add_line("Hello world  ")
+        assert len(panel._lines) == 1
+        assert panel._lines[0] == "Hello world"
+
+    def test_add_line_caps_at_100(self) -> None:
+        """add_line caps internal buffer at 100 lines."""
+        panel = LogPanel()
+        for i in range(105):
+            panel.add_line(f"Line {i}")
+        assert len(panel._lines) == 100
+        assert "Line 104" in panel._lines[-1]
+        assert "Line 4" not in panel._lines[0]  # first 5 trimmed
+
+    def test_add_line_updates_render(self) -> None:
+        """add_line includes new line in render output."""
+        panel = LogPanel()
+        panel.add_line("Test message")
+        text = panel.render_log()
+        assert "Test message" in text
+
     def test_render_log_empty(self) -> None:
         """Render with no lines shows placeholder."""
         panel = LogPanel()

@@ -39,7 +39,7 @@ from .task import (
     update_task_status,
 )
 
-logger = get_logger("executor")
+logger = get_logger("parallel")
 
 
 async def _execute_task_async(

@@ -399,11 +399,18 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         # Check per-task budget
         if config.task_budget_usd is not None and state.task_cost(task.id) > config.task_budget_usd:
-            log_progress(
+            budget_error = (
                 f"Task budget exceeded "
                 f"(${state.task_cost(task.id):.2f} > "
-                f"${config.task_budget_usd:.2f})",
+                f"${config.task_budget_usd:.2f})"
+            )
+            log_progress(budget_error, task.id)
+            state.record_attempt(
                 task.id,
+                False,
+                0.0,
+                error=budget_error,
+                error_code=ErrorCode.BUDGET_EXCEEDED,
             )
             update_task_status(config.tasks_file, task.id, "blocked")
             return False

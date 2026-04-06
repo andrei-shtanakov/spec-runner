@@ -21,7 +21,6 @@ class ErrorCode(str, Enum):
 
     TIMEOUT = "TIMEOUT"
     RATE_LIMIT = "RATE_LIMIT"
-    SYNTAX = "SYNTAX"
     TEST_FAILURE = "TEST_FAILURE"
     LINT_FAILURE = "LINT_FAILURE"
     TASK_FAILED = "TASK_FAILED"
@@ -133,6 +132,7 @@ class ExecutorState:
         self.config.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.config.state_file))
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY,

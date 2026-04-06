@@ -193,6 +193,13 @@ class LogPanel(Static):
             pass
         return []
 
+    def add_line(self, text: str) -> None:
+        """Add a line programmatically (for event streaming / status messages)."""
+        self._lines.append(self.format_line(text))
+        if len(self._lines) > 100:
+            self._lines = self._lines[-100:]
+        self.update(self.render_log())
+
     def render_log(self) -> str:
         """Render last N lines as text."""
         visible = self._lines[-10:]

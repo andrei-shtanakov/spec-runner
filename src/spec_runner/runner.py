@@ -133,7 +133,9 @@ def send_callback(
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception:
-        pass  # Best-effort, state file is the fallback
+        from .logging import get_logger
+
+        get_logger("runner").debug("callback_failed", url=callback_url, exc_info=True)
 
 
 def build_cli_command(
