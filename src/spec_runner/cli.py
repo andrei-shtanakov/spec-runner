@@ -1007,6 +1007,40 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
         sys.exit(1)
 
 
+def cmd_verify(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Verify post-execution compliance against spec."""
+    from .verify import format_verify_json, format_verify_text, verify_all
+
+    task_id = getattr(args, "task", None)
+    strict = getattr(args, "strict", False)
+    report = verify_all(config, task_id=task_id, strict=strict)
+
+    if getattr(args, "json_output", False):
+        print(format_verify_json(report))
+    else:
+        print(format_verify_text(report))
+
+    if not report.ok:
+        sys.exit(1)
+
+
+def cmd_report(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Generate traceability matrix report."""
+    from .report import build_report, format_report_json, format_report_markdown
+
+    milestone = getattr(args, "milestone", None)
+    status_filter = getattr(args, "status", None)
+    uncovered = getattr(args, "uncovered_only", False)
+    report = build_report(
+        config, milestone=milestone, status_filter=status_filter, uncovered_only=uncovered
+    )
+
+    if getattr(args, "json_output", False):
+        print(format_report_json(report))
+    else:
+        print(format_report_markdown(report))
+
+
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Continuously watch tasks.md and execute ready tasks."""
     # Pre-run validation
@@ -1271,6 +1305,31 @@ def main():
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
 
+    # verify
+    verify_parser = subparsers.add_parser(
+        "verify", parents=[common], help="Verify post-execution compliance"
+    )
+    verify_parser.add_argument("--task", "-t", help="Verify specific task ID")
+    verify_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output as JSON"
+    )
+    verify_parser.add_argument(
+        "--strict", action="store_true", help="Fail on warnings (missing traceability)"
+    )
+
+    # report
+    report_parser = subparsers.add_parser(
+        "report", parents=[common], help="Generate traceability matrix"
+    )
+    report_parser.add_argument("--milestone", "-m", help="Filter by milestone")
+    report_parser.add_argument("--status", help="Filter by status (done/failed/todo/not covered)")
+    report_parser.add_argument(
+        "--uncovered-only", action="store_true", help="Show only uncovered requirements"
+    )
+    report_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output as JSON"
+    )
+
     # tui
     subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
 
@@ -1335,6 +1394,8 @@ def main():
         "reset": cmd_reset,
         "plan": cmd_plan,
         "validate": cmd_validate,
+        "verify": cmd_verify,
+        "report": cmd_report,
         "tui": cmd_tui,
         "watch": cmd_watch,
         "mcp": cmd_mcp,
