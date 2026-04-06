@@ -56,6 +56,20 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
     result = ValidationResult()
     task_ids = {t.id for t in tasks}
 
+    # Check for duplicate task IDs
+    seen_ids: set[str] = set()
+    for task in tasks:
+        if task.id in seen_ids:
+            result.errors.append(f"{task.id}: duplicate task ID")
+        seen_ids.add(task.id)
+
+    # Build blocks/depends_on maps for symmetry check
+    blocks_map: dict[str, set[str]] = {}
+    depends_map: dict[str, set[str]] = {}
+    for task in tasks:
+        blocks_map[task.id] = set(task.blocks) if hasattr(task, "blocks") and task.blocks else set()
+        depends_map[task.id] = set(task.depends_on)
+
     for task in tasks:
         # --- Errors ---
         if task.status not in VALID_STATUSES:
@@ -83,6 +97,14 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
 
         if not task.traces_to:
             result.warnings.append(f"{task.id}: no traceability references")
+
+    # Symmetry check: if A blocks B, then B should depend on A
+    for tid, blocked_ids in blocks_map.items():
+        for blocked in blocked_ids:
+            if blocked in depends_map and tid not in depends_map[blocked]:
+                result.warnings.append(
+                    f"{tid} blocks {blocked}, but {blocked} does not list {tid} in depends_on"
+                )
 
     return result
 
