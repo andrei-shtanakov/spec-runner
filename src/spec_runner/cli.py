@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 # Re-exports from submodules for backward compatibility
@@ -552,6 +553,58 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
 # === Main ===
 
 
+def _dispatch_task_command(args: argparse.Namespace) -> None:
+    """Dispatch `spec-runner task <subcommand>` to task_commands functions."""
+    from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh, export_gh
+    from .task import parse_tasks
+    from .task_commands import (
+        TASKS_FILE,
+        cmd_block,
+        cmd_check,
+        cmd_done,
+        cmd_graph,
+        cmd_list,
+        cmd_next,
+        cmd_show,
+        cmd_start,
+        cmd_stats,
+    )
+
+    task_cmd = getattr(args, "task_command", None)
+    if not task_cmd:
+        print("Usage: spec-runner task <command>\n")
+        print("Commands: list, show, start, done, block, check, stats, next, graph,")
+        print("          export-gh, sync-to-gh, sync-from-gh")
+        return
+
+    prefix = getattr(args, "spec_prefix", "")
+    tasks_file = Path(f"spec/{prefix}tasks.md") if prefix else TASKS_FILE
+    tasks = parse_tasks(tasks_file)
+
+    write_commands = {
+        "start": cmd_start,
+        "done": cmd_done,
+        "block": cmd_block,
+        "check": cmd_check,
+        "sync-from-gh": cmd_sync_from_gh,
+    }
+    read_commands = {
+        "list": cmd_list,
+        "ls": cmd_list,
+        "show": cmd_show,
+        "stats": cmd_stats,
+        "next": cmd_next,
+        "graph": cmd_graph,
+        "export-gh": export_gh,
+        "sync-to-gh": cmd_sync_to_gh,
+    }
+
+    if task_cmd in write_commands:
+        write_commands[task_cmd](args, tasks, tasks_file)
+    elif task_cmd in read_commands:
+        read_commands[task_cmd](args, tasks)
+
+
 def main():
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
@@ -740,6 +793,54 @@ def main():
     # mcp
     subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
 
+    # task (unified: replaces spec-task binary)
+    task_parser = subparsers.add_parser(
+        "task", help="Task management (list, show, start, done, graph, sync)"
+    )
+    task_sub = task_parser.add_subparsers(dest="task_command", help="Task commands")
+
+    task_common = argparse.ArgumentParser(add_help=False)
+    task_common.add_argument(
+        "--spec-prefix", type=str, default="", help='Spec file prefix (e.g. "phase5-")'
+    )
+
+    t_list = task_sub.add_parser("list", aliases=["ls"], parents=[task_common], help="List tasks")
+    t_list.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
+    t_list.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
+    t_list.add_argument("--milestone", "-m", help="Filter by milestone")
+
+    t_show = task_sub.add_parser("show", parents=[task_common], help="Task details")
+    t_show.add_argument("task_id", help="Task ID (e.g., TASK-001)")
+
+    t_start = task_sub.add_parser("start", parents=[task_common], help="Start task")
+    t_start.add_argument("task_id", help="Task ID")
+    t_start.add_argument("--force", "-f", action="store_true", help="Ignore dependencies")
+
+    t_done = task_sub.add_parser("done", parents=[task_common], help="Complete task")
+    t_done.add_argument("task_id", help="Task ID")
+    t_done.add_argument("--force", "-f", action="store_true", help="Ignore incomplete checklist")
+
+    t_block = task_sub.add_parser("block", parents=[task_common], help="Block task")
+    t_block.add_argument("task_id", help="Task ID")
+
+    t_check = task_sub.add_parser("check", parents=[task_common], help="Mark checklist item")
+    t_check.add_argument("task_id", help="Task ID")
+    t_check.add_argument("item_index", help="Item index (0, 1, 2...)")
+
+    task_sub.add_parser("stats", parents=[task_common], help="Statistics")
+    task_sub.add_parser("next", parents=[task_common], help="Next ready tasks")
+    task_sub.add_parser("graph", parents=[task_common], help="Dependency graph")
+    task_sub.add_parser("export-gh", parents=[task_common], help="Export to GitHub Issues")
+
+    t_sync_to = task_sub.add_parser(
+        "sync-to-gh", parents=[task_common], help="Sync tasks to GitHub Issues"
+    )
+    t_sync_to.add_argument("--dry-run", action="store_true", help="Preview without changes")
+
+    task_sub.add_parser(
+        "sync-from-gh", parents=[task_common], help="Sync GitHub Issues to tasks.md"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -782,6 +883,11 @@ def main():
         "watch": cmd_watch,
         "mcp": cmd_mcp,
     }
+
+    # Handle unified task subcommand
+    if args.command == "task":
+        _dispatch_task_command(args)
+        return
 
     cmd_func = commands.get(args.command)
     if cmd_func:

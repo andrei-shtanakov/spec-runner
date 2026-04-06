@@ -316,6 +316,20 @@ def cmd_graph(args, tasks: list[Task]):
 
 
 def main():
+    import warnings
+
+    warnings.warn(
+        "spec-task is deprecated. Use 'spec-runner task <command>' instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    import sys
+
+    print(
+        "WARNING: spec-task is deprecated. Use 'spec-runner task <command>' instead.",
+        file=sys.stderr,
+    )
+
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(

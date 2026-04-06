@@ -69,7 +69,7 @@ def cmd_status(args, config: ExecutorConfig):
         state_ids = set(state.tasks.keys())
         not_started = [t for t in all_tasks if t.id not in state_ids]
 
-        print("\n📊 Executor Status")
+        print("\n📊 spec-runner Status")
         print(f"{'=' * 50}")
         print(f"Tasks in spec:         {total_in_spec}")
         print(f"Tasks completed:       {completed_tasks}")
