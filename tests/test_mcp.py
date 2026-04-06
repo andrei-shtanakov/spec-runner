@@ -227,3 +227,79 @@ class TestMCPLogs:
         config.logs_dir.mkdir(parents=True, exist_ok=True)
         result = _handle_logs(config, task_id="TASK-999")
         assert "No logs" in result
+
+
+class TestMCPStop:
+    """Tests for spec_runner_stop tool."""
+
+    def test_stop_creates_stop_file(self, tmp_path: Path) -> None:
+        from spec_runner.mcp_server import spec_runner_stop
+
+        config = _make_config(tmp_path)
+        stop_file = config.state_file.with_suffix(".stop")
+        # Ensure state dir exists
+        stop_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Call the tool function directly with a mock config
+        from unittest.mock import patch
+
+        with patch("spec_runner.mcp_server._build_config", return_value=config):
+            result = json.loads(spec_runner_stop())
+        assert result["status"] == "stop_requested"
+        assert stop_file.exists()
+
+
+class TestMCPNextTasks:
+    """Tests for spec_runner_next_tasks tool."""
+
+    def test_returns_ready_tasks(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from spec_runner.mcp_server import spec_runner_next_tasks
+
+        config = _make_config(tmp_path)
+        _write_tasks(
+            config.tasks_file,
+            [
+                ("TASK-001", "Done task", "p0", "done"),
+                ("TASK-002", "Ready task", "p1", "todo"),
+            ],
+        )
+        with patch("spec_runner.mcp_server._build_config", return_value=config):
+            result = json.loads(spec_runner_next_tasks())
+        assert len(result) == 1
+        assert result[0]["id"] == "TASK-002"
+
+
+class TestMCPTaskDetail:
+    """Tests for spec_runner_task_detail tool."""
+
+    def test_returns_task_detail(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from spec_runner.mcp_server import spec_runner_task_detail
+
+        config = _make_config(tmp_path)
+        _write_tasks(
+            config.tasks_file,
+            [("TASK-001", "Login", "p0", "done")],
+        )
+        _seed_state(config, {"TASK-001": [(True, 0.10, 500, 200)]})
+
+        with patch("spec_runner.mcp_server._build_config", return_value=config):
+            result = json.loads(spec_runner_task_detail("TASK-001"))
+        assert result["id"] == "TASK-001"
+        assert result["execution"]["cost_usd"] == 0.10
+        assert result["execution"]["attempts"] == 1
+
+    def test_task_not_found(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from spec_runner.mcp_server import spec_runner_task_detail
+
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [])
+
+        with patch("spec_runner.mcp_server._build_config", return_value=config):
+            result = json.loads(spec_runner_task_detail("TASK-999"))
+        assert "error" in result
