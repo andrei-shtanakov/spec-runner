@@ -128,16 +128,15 @@ def notify(
 
     Tries both Telegram and webhook if configured. Returns True if any succeeded.
     """
-    import os
-
     if event not in config.notify_on:
         return False
 
     sent = False
 
-    # Telegram — require config-level opt-in (token in config, not just env)
-    token = config.telegram_bot_token or os.environ.get("SPEC_RUNNER_TELEGRAM_TOKEN", "")
-    chat_id = config.telegram_chat_id or os.environ.get("SPEC_RUNNER_TELEGRAM_CHAT_ID", "")
+    # Telegram — config-only, no env var fallback.
+    # Projects must explicitly opt in via config file.
+    token = config.telegram_bot_token
+    chat_id = config.telegram_chat_id
     if token and chat_id:
         sent = send_telegram(token, chat_id, message) or sent
 
