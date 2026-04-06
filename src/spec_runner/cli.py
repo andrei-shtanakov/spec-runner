@@ -22,7 +22,7 @@ from .execution import (
     execute_task,
     run_with_retries,
 )
-from .hooks import ensure_on_main_branch
+from .git_ops import ensure_on_main_branch
 from .logging import get_logger
 from .prompt import (
     load_prompt_template,

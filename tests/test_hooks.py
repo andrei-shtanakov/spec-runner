@@ -88,7 +88,7 @@ class TestGetMainBranch:
         result = get_main_branch(config)
         assert result == "develop"
 
-    @patch("spec_runner.hooks.subprocess.run")
+    @patch("spec_runner.git_ops.subprocess.run")
     def test_detects_from_remote_head(self, mock_run):
         config = _make_config(main_branch="")
         mock_run.return_value = MagicMock(
@@ -104,7 +104,7 @@ class TestGetMainBranch:
             cwd=config.project_root,
         )
 
-    @patch("spec_runner.hooks.subprocess.run")
+    @patch("spec_runner.git_ops.subprocess.run")
     def test_detects_remote_head_master(self, mock_run):
         config = _make_config(main_branch="")
         mock_run.return_value = MagicMock(
@@ -114,7 +114,7 @@ class TestGetMainBranch:
         result = get_main_branch(config)
         assert result == "master"
 
-    @patch("spec_runner.hooks.subprocess.run")
+    @patch("spec_runner.git_ops.subprocess.run")
     def test_fallback_when_no_git(self, mock_run):
         config = _make_config(main_branch="")
         # All subprocess calls fail (no git, no branches, no current branch)
@@ -277,9 +277,9 @@ class TestBuildReviewPrompt:
             ("Write tests", False),
         ]
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config)
         assert "Implement API endpoint" in prompt
         assert "Add error handling" in prompt
@@ -287,9 +287,9 @@ class TestBuildReviewPrompt:
     def test_includes_test_output(self):
         task = _make_task()
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(
                     task, config, test_output="15 passed, 0 failed in 2.1s"
                 )
@@ -298,40 +298,40 @@ class TestBuildReviewPrompt:
     def test_includes_previous_error(self):
         task = _make_task()
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config, previous_error="TypeError: expected str")
         assert "TypeError" in prompt
 
     def test_includes_lint_output(self):
         task = _make_task()
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config, lint_output="All checks passed")
         assert "All checks passed" in prompt
 
     def test_includes_full_diff(self):
         task = _make_task()
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="diff --git a/foo.py b/foo.py\n+new line",
                 stderr="",
                 returncode=0,
             )
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config)
         assert "Full Diff" in prompt
 
     def test_no_extra_sections_when_no_context(self):
         task = _make_task()
         config = _make_config()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config)
         assert "Task Checklist" not in prompt
         assert "Test Results" not in prompt
@@ -344,9 +344,9 @@ class TestBuildReviewPrompt:
         constitution = tmp_path / "spec" / "constitution.md"
         constitution.parent.mkdir(parents=True, exist_ok=True)
         constitution.write_text("Never delete migrations")
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config)
         assert "Constitution" in prompt
         assert "Never delete migrations" in prompt
@@ -355,9 +355,9 @@ class TestBuildReviewPrompt:
         task = _make_task()
         config = _make_config(project_root=tmp_path)
         (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            with patch("spec_runner.hooks.load_prompt_template", return_value=None):
+            with patch("spec_runner.review.load_prompt_template", return_value=None):
                 prompt = build_review_prompt(task, config)
         assert "Constitution" not in prompt
 
@@ -372,13 +372,13 @@ class TestRunCodeReview:
             logs_dir=tmp_path / "logs",
         )
         (tmp_path / "logs").mkdir()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="All good. REVIEW_PASSED",
                 stderr="",
                 returncode=0,
             )
-            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+            with patch("spec_runner.review.build_review_prompt", return_value="prompt"):
                 verdict, error, output = run_code_review(task, config)
         assert verdict == ReviewVerdict.PASSED
         assert error is None
@@ -391,13 +391,13 @@ class TestRunCodeReview:
             logs_dir=tmp_path / "logs",
         )
         (tmp_path / "logs").mkdir()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="Fixed issue. REVIEW_FIXED",
                 stderr="",
                 returncode=0,
             )
-            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+            with patch("spec_runner.review.build_review_prompt", return_value="prompt"):
                 verdict, error, output = run_code_review(task, config)
         assert verdict == ReviewVerdict.FIXED
 
@@ -408,13 +408,13 @@ class TestRunCodeReview:
             logs_dir=tmp_path / "logs",
         )
         (tmp_path / "logs").mkdir()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="MAJOR issue. REVIEW_FAILED",
                 stderr="",
                 returncode=0,
             )
-            with patch("spec_runner.hooks.build_review_prompt", return_value="prompt"):
+            with patch("spec_runner.review.build_review_prompt", return_value="prompt"):
                 verdict, error, output = run_code_review(task, config)
         assert verdict == ReviewVerdict.FAILED
         assert error is not None
@@ -426,14 +426,14 @@ class TestRunCodeReview:
             logs_dir=tmp_path / "logs",
         )
         (tmp_path / "logs").mkdir()
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="REVIEW_PASSED",
                 stderr="",
                 returncode=0,
             )
             with patch(
-                "spec_runner.hooks.build_review_prompt", return_value="prompt"
+                "spec_runner.review.build_review_prompt", return_value="prompt"
             ) as mock_build:
                 run_code_review(
                     task,
@@ -825,7 +825,7 @@ class TestRunParallelReview:
         )
         (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
 
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
             verdict, error, output = run_parallel_review(task, config)
 
@@ -856,7 +856,7 @@ class TestRunParallelReview:
                 return MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
             return MagicMock(stdout="REVIEW_FAILED: missing tests", stderr="", returncode=0)
 
-        with patch("spec_runner.hooks.subprocess.run", side_effect=side_effect):
+        with patch("spec_runner.review.subprocess.run", side_effect=side_effect):
             verdict, error, output = run_parallel_review(task, config)
 
         assert verdict == ReviewVerdict.FAILED
@@ -880,7 +880,7 @@ class TestRunParallelReview:
                 return MagicMock(stdout="", stderr="", returncode=0)
             return MagicMock(stdout="REVIEW_FIXED", stderr="", returncode=0)
 
-        with patch("spec_runner.hooks.subprocess.run", side_effect=side_effect):
+        with patch("spec_runner.review.subprocess.run", side_effect=side_effect):
             verdict, error, output = run_parallel_review(task, config)
 
         assert verdict == ReviewVerdict.FIXED
@@ -895,7 +895,7 @@ class TestRunParallelReview:
         (tmp_path / "spec").mkdir(parents=True, exist_ok=True)
         (tmp_path / "spec" / ".executor-logs").mkdir(parents=True, exist_ok=True)
 
-        with patch("spec_runner.hooks.subprocess.run") as mock_run:
+        with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="REVIEW_PASSED", stderr="", returncode=0)
             verdict, error, output = run_parallel_review(task, config)
 
