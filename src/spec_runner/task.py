@@ -134,8 +134,22 @@ def parse_tasks(filepath: Path) -> list[Task]:
                 current_task.estimate = est_match.group(1)
             continue
 
-        # Description
+        # Description header (skip the label itself)
         if line.startswith("**Description:**"):
+            continue
+
+        # Capture description: plain text before any bold field or checklist
+        if (
+            line.strip()
+            and not line.startswith("**")
+            and not line.startswith("- [")
+            and not in_checklist
+            and not TASK_META.match(line)
+        ):
+            if current_task.description:
+                current_task.description += "\n" + line.strip()
+            else:
+                current_task.description = line.strip()
             continue
 
         # Checklist section

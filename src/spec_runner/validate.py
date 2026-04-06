@@ -233,6 +233,12 @@ def validate_config(config_path: Path) -> ValidationResult:
                 msg += f" — did you mean '{suggestion}'?"
             result.errors.append(msg)
 
+    # Warn about top-level sections that are not processed
+    _DEAD_SECTIONS = {"execution_order", "skip_tasks", "environment"}
+    for key in data:
+        if key in _DEAD_SECTIONS:
+            result.warnings.append(f"Top-level key '{key}' is not supported and will be ignored")
+
     return result
 
 

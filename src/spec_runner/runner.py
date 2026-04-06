@@ -274,8 +274,12 @@ async def run_claude_async(
             )
             await proc.wait()
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
             raise
 
         stdout = "".join(stdout_lines)
@@ -286,7 +290,11 @@ async def run_claude_async(
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
         raise
     return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode

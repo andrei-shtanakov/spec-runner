@@ -259,17 +259,20 @@ class TestRunClaudeAsync:
 
         asyncio.run(_run())
 
-    def test_timeout_kills_process(self):
+    def test_timeout_terminates_then_kills_process(self):
         async def _run():
             with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
                 mock_proc = AsyncMock()
                 mock_proc.communicate.side_effect = TimeoutError()
+                mock_proc.terminate = MagicMock()
                 mock_proc.kill = MagicMock()
-                mock_proc.wait = AsyncMock()
+                # wait() after terminate times out, triggering kill fallback
+                mock_proc.wait = AsyncMock(side_effect=TimeoutError())
                 mock_cse.return_value = mock_proc
 
                 with pytest.raises(TimeoutError):
                     await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
+                mock_proc.terminate.assert_called_once()
                 mock_proc.kill.assert_called_once()
 
         asyncio.run(_run())
