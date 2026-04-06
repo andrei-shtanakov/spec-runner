@@ -58,6 +58,28 @@ logger = get_logger("cli")
 # === CLI Commands ===
 
 
+def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: ExecutorState) -> None:
+    """Print what tasks would execute without running them."""
+    data = []
+    for t in tasks_to_run:
+        entry = {
+            "task_id": t.id,
+            "name": t.name,
+            "priority": t.priority,
+            "status": t.status,
+            "depends_on": t.depends_on,
+            "checklist_total": len(t.checklist),
+            "checklist_done": sum(1 for done, _ in t.checklist if done),
+        }
+        ts = state.get_task_state(t.id)
+        if ts:
+            entry["previous_attempts"] = ts.attempt_count
+            entry["previous_cost_usd"] = round(state.task_cost(t.id), 2)
+        data.append(entry)
+
+    print(json.dumps({"dry_run": True, "tasks": data}, indent=2))
+
+
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
     # Parallel mode deprecation warning
@@ -222,6 +244,13 @@ def _run_tasks(args, config: ExecutorConfig):
 
         if not tasks_to_run:
             logger.info("No tasks ready to execute")
+            if getattr(args, "json_result", False):
+                print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
+            return
+
+        # --dry-run: show what would execute and exit
+        if getattr(args, "dry_run", False):
+            _print_dry_run(tasks_to_run, config, state)
             return
 
         logger.info("Tasks to execute", count=len(tasks_to_run))
@@ -379,6 +408,30 @@ def _run_tasks(args, config: ExecutorConfig):
             total_cost=total_cost_val if total_cost_val > 0 else None,
         )
 
+        # --json-result: structured JSON output for Maestro interop
+        if getattr(args, "json_result", False):
+            results = []
+            for t in tasks_to_run:
+                ts = state.get_task_state(t.id)
+                entry: dict = {"task_id": t.id, "status": "unknown", "attempts": 0}
+                if ts:
+                    entry["status"] = "done" if ts.status == "success" else "failed"
+                    entry["attempts"] = ts.attempt_count
+                    entry["cost_usd"] = round(state.task_cost(t.id), 2)
+                    inp_t = sum(a.input_tokens or 0 for a in ts.attempts)
+                    out_t = sum(a.output_tokens or 0 for a in ts.attempts)
+                    entry["tokens"] = {"input": inp_t, "output": out_t}
+                    total_dur = sum(a.duration_seconds for a in ts.attempts)
+                    entry["duration_seconds"] = round(total_dur, 1)
+                    if ts.attempts:
+                        last = ts.attempts[-1]
+                        entry["review"] = last.review_status or "skipped"
+                        if last.error:
+                            entry["error"] = last.error[:200]
+                    entry["exit_code"] = 0 if ts.status == "success" else 1
+                results.append(entry)
+            print(json.dumps(results if len(results) > 1 else results[0], indent=2))
+
 
 def cmd_status(args, config: ExecutorConfig):
     """Execution status"""
@@ -388,6 +441,30 @@ def cmd_status(args, config: ExecutorConfig):
         all_tasks: list[Task] = []
         if config.tasks_file.exists():
             all_tasks = parse_tasks(config.tasks_file)
+
+        # --json: output matching MCP server format
+        if getattr(args, "json_output", False):
+            completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
+            failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
+            running = sum(1 for ts in state.tasks.values() if ts.status == "running")
+            cost = state.total_cost()
+            inp, out = state.total_tokens()
+            print(
+                json.dumps(
+                    {
+                        "total_tasks": len(all_tasks),
+                        "completed": completed,
+                        "failed": failed,
+                        "running": running,
+                        "not_started": len(all_tasks) - completed - failed - running,
+                        "total_cost": round(cost, 2),
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "budget_usd": config.budget_usd,
+                    }
+                )
+            )
+            return
         total_in_spec = len(all_tasks)
 
         # Calculate statistics from actual task state
@@ -1102,10 +1179,10 @@ def main():
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--max-retries", type=int, default=3, help="Max retries per task (default: 3)"
+        "--max-retries", type=int, default=None, help="Max retries per task (default: 3)"
     )
     common.add_argument(
-        "--timeout", type=int, default=30, help="Task timeout in minutes (default: 30)"
+        "--timeout", type=int, default=None, help="Task timeout in minutes (default: 30)"
     )
     common.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
@@ -1195,9 +1272,22 @@ def main():
         action="store_true",
         help="Skip lock check (use when lock is stale)",
     )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show which tasks would execute without running them",
+    )
+    run_parser.add_argument(
+        "--json-result",
+        action="store_true",
+        help="Output structured JSON result per task (for Maestro interop)",
+    )
 
     # status
-    subparsers.add_parser("status", parents=[common], help="Show execution status")
+    status_parser = subparsers.add_parser("status", parents=[common], help="Show execution status")
+    status_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output status as JSON"
+    )
 
     # retry
     retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")

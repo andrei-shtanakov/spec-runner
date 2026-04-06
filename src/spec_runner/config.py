@@ -355,9 +355,9 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
             config_kwargs[key] = value
 
     # Override with CLI arguments
-    if hasattr(args, "max_retries") and args.max_retries != 3:
+    if hasattr(args, "max_retries") and args.max_retries is not None:
         config_kwargs["max_retries"] = args.max_retries
-    if hasattr(args, "timeout") and args.timeout != 30:
+    if hasattr(args, "timeout") and args.timeout is not None:
         config_kwargs["task_timeout_minutes"] = args.timeout
     if hasattr(args, "no_tests") and args.no_tests:
         config_kwargs["run_tests_on_done"] = False

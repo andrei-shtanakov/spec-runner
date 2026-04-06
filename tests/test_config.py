@@ -113,10 +113,10 @@ class TestLoadConfigFromYaml:
 
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:
-        """Create a Namespace with default CLI arg values."""
+        """Create a Namespace with default CLI arg values (None = not passed)."""
         defaults = {
-            "max_retries": 3,
-            "timeout": 30,
+            "max_retries": None,
+            "timeout": None,
             "no_tests": False,
             "no_branch": False,
             "no_commit": False,
@@ -124,6 +124,8 @@ class TestBuildConfig:
             "callback_url": "",
             "spec_prefix": "",
             "project_root": None,
+            "budget": None,
+            "task_budget": None,
         }
         defaults.update(overrides)
         return Namespace(**defaults)
@@ -160,6 +162,28 @@ class TestBuildConfig:
         config = build_config({}, args)
         assert config.spec_prefix == "phase3-"
         assert config.tasks_file.name == "phase3-tasks.md"
+
+    def test_yaml_not_overridden_by_default_args(self):
+        """When CLI args are None (not passed), YAML values take precedence."""
+        yaml_config = {"max_retries": 7, "task_timeout_minutes": 45}
+        args = self._default_args()  # max_retries=None, timeout=None
+        config = build_config(yaml_config, args)
+        assert config.max_retries == 7
+        assert config.task_timeout_minutes == 45
+
+    def test_budget_args_from_cli(self):
+        """--budget and --task-budget are passed through to config."""
+        args = self._default_args(budget=10.0, task_budget=2.5)
+        config = build_config({}, args)
+        assert config.budget_usd == 10.0
+        assert config.task_budget_usd == 2.5
+
+    def test_budget_args_none_uses_yaml(self):
+        """When budget args are None, YAML values are used."""
+        yaml_config = {"budget_usd": 50.0}
+        args = self._default_args()
+        config = build_config(yaml_config, args)
+        assert config.budget_usd == 50.0
 
 
 class TestExecutorLock:
