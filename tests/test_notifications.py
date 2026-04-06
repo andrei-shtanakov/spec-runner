@@ -118,3 +118,39 @@ class TestNotifyRunComplete:
         config = ExecutorConfig()
         result = notify_run_complete(config, completed=1, failed=0)
         assert result is False
+
+
+class TestWebhookNotifications:
+    @patch("spec_runner.notifications.send_webhook", return_value=True)
+    def test_webhook_sends_with_template(self, mock_send):
+        config = ExecutorConfig(
+            webhook_url="https://hooks.example.com/test",
+            webhook_template='{"text": "{{event}}: {{message}}"}',
+        )
+        result = notify(config, "task_failed", "test error", task_id="TASK-001")
+        assert result is True
+        mock_send.assert_called_once()
+        body = mock_send.call_args[0][3]
+        assert "task_failed" in body
+        assert "test error" in body
+
+    @patch("spec_runner.notifications.send_webhook", return_value=True)
+    def test_webhook_default_json_without_template(self, mock_send):
+        config = ExecutorConfig(
+            webhook_url="https://hooks.example.com/test",
+        )
+        result = notify(config, "run_complete", "done")
+        assert result is True
+        mock_send.assert_called_once()
+
+    def test_render_template_substitutes_variables(self):
+        from spec_runner.notifications import _render_webhook_template
+
+        result = _render_webhook_template(
+            '{"event": "{{event}}", "task": "{{task_id}}"}',
+            event="task_failed",
+            message="err",
+            task_id="TASK-001",
+        )
+        assert '"task_failed"' in result
+        assert '"TASK-001"' in result

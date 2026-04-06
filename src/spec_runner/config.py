@@ -191,6 +191,12 @@ class ExecutorConfig:
     telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
     notify_on: list[str] = field(default_factory=lambda: ["run_complete", "task_failed"])
 
+    # Generic webhook notifications
+    webhook_url: str = ""  # Webhook URL (empty = disabled)
+    webhook_method: str = "POST"  # HTTP method
+    webhook_headers: dict[str, str] = field(default_factory=dict)
+    webhook_template: str = ""  # Template with {{event}}, {{task_id}}, {{message}}, etc.
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -326,6 +332,10 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "telegram_bot_token": executor_config.get("telegram_bot_token"),
             "telegram_chat_id": executor_config.get("telegram_chat_id"),
             "notify_on": executor_config.get("notify_on"),
+            "webhook_url": executor_config.get("webhook_url"),
+            "webhook_method": executor_config.get("webhook_method"),
+            "webhook_headers": executor_config.get("webhook_headers"),
+            "webhook_template": executor_config.get("webhook_template"),
         }
     except Exception as e:
         from .logging import get_logger
