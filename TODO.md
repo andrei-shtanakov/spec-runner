@@ -22,6 +22,8 @@
 
 Maestro-сторона формализации описана в `../Maestro/TODO.md` (создаёт `ExecutorState` Pydantic-модель). Наша задача — дать Maestro **стабильный контракт, к которому можно прицепиться**.
 
+> Коммит: `273ef00`
+
 - [x] **Документировать схему `.executor-state.json`** (2026-04-17)
   - Текущий источник истины: `src/spec_runner/state.py` (`ExecutorState`, `TaskState`, `TaskAttempt`)
   - `docs/state-schema.md` — покрыты SQLite (canonical), legacy JSON, `--json-result`, `status --json`

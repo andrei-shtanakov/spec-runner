@@ -899,3 +899,100 @@ class TestRecoverStaleTasks:
             state.record_attempt("TASK-001", True, 10.0)
             recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
             assert recovered == []
+
+
+# --- Degraded mode (LABS-36): disk-full / DB corruption graceful fallback ---
+
+
+class TestDegradedMode:
+    @staticmethod
+    def _install_failing_conn(state: ExecutorState, message: str) -> None:
+        """Replace the sqlite3 connection with a mock that raises on execute().
+
+        `sqlite3.Connection.execute` is a read-only C attribute, so we swap the
+        whole connection object. The mock's context manager (`with conn:`) is a
+        no-op, which is fine — we only care that execute raises the way a real
+        failing DB would.
+        """
+        from unittest.mock import MagicMock
+
+        fake = MagicMock()
+        fake.execute.side_effect = sqlite3.OperationalError(message)
+        fake.__enter__.return_value = fake
+        fake.__exit__.return_value = False
+        state._conn = fake
+
+    def test_degraded_false_by_default(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            assert state.degraded is False
+            assert state.degraded_reason is None
+
+    def test_record_attempt_disk_full_enters_degraded_mode(self, tmp_path, caplog):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            self._install_failing_conn(state, "database or disk is full")
+
+            import logging
+
+            with caplog.at_level(logging.CRITICAL):
+                state.record_attempt("TASK-001", success=True, duration=1.0)
+
+            assert state.degraded is True
+            assert "disk full" in (state.degraded_reason or "")
+            # In-memory state still tracks the attempt
+            ts = state.get_task_state("TASK-001")
+            assert ts.attempt_count == 1
+            assert ts.status == "success"
+
+    def test_degraded_notification_fires_only_once(self, tmp_path):
+        """Repeated DB failures must not spam the notification channel."""
+        config = _make_config(tmp_path)
+        calls: list[tuple] = []
+
+        with ExecutorState(config) as state:
+            # Stub the notification pathway to observe calls
+            state._notify_degraded = lambda reason: calls.append(("notified", reason))  # type: ignore[method-assign]
+            self._install_failing_conn(state, "disk I/O error")
+
+            state.record_attempt("TASK-001", success=False, duration=0.5)
+            state.record_attempt("TASK-002", success=False, duration=0.5)
+            state.mark_running("TASK-003")
+
+            assert len(calls) == 1, f"Expected one notification, got: {calls}"
+            assert state.degraded is True
+
+    def test_mark_running_disk_full_enters_degraded_mode(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            self._install_failing_conn(state, "no space left on device")
+
+            state.mark_running("TASK-001")
+            assert state.degraded is True
+
+    def test_non_disk_full_error_also_degrades_but_labeled_differently(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            self._install_failing_conn(state, "database is locked")
+
+            state.record_attempt("TASK-001", success=True, duration=1.0)
+            assert state.degraded is True
+            reason = state.degraded_reason or ""
+            # "DB write failed" prefix means a non-disk-full classification
+            assert "disk full" not in reason
+            assert "DB write failed" in reason
+
+    def test_is_disk_full_error_detects_common_phrases(self):
+        from spec_runner.state import _is_disk_full_error
+
+        for msg in [
+            "disk I/O error",
+            "database or disk is full",
+            "disk full",
+            "no space left on device",
+            "OUT OF MEMORY",  # case-insensitive
+        ]:
+            assert _is_disk_full_error(sqlite3.OperationalError(msg)), msg
+
+        assert _is_disk_full_error(sqlite3.OperationalError("database is locked")) is False
+        assert _is_disk_full_error(sqlite3.OperationalError("no such table")) is False

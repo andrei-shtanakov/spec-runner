@@ -1,4 +1,11 @@
-"""MCP server for spec-runner -- exposes status, tasks, costs, logs, and execution tools."""
+"""MCP server for spec-runner -- exposes status, tasks, costs, logs, and execution tools.
+
+Security: the stdio transport inherits the trust boundary of the process that
+launched it (typically a developer's terminal or Claude Code). There is no
+built-in authentication. Write tools (`run_task`, `stop`) spawn subprocesses
+with full filesystem access. See README.md#security-model for deployment
+guidance.
+"""
 
 import json
 
@@ -170,8 +177,11 @@ def spec_runner_logs(task_id: str, lines: int = 50, spec_prefix: str = "") -> st
 def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     """Start execution of a specific task. Returns immediately with status.
 
-    NOTE: This spawns a subprocess — it executes code via Claude CLI.
-    Only safe for local stdio transport (same trust boundary as terminal).
+    WRITE tool. Spawns `spec-runner run --task {task_id}` as a subprocess,
+    which runs the Claude CLI with full filesystem access to the workspace:
+    the task can edit files, create git branches, run hooks (tests/lint),
+    auto-commit, and spend API budget. Do not expose this MCP server over
+    the network — it has no authentication. See README.md#security-model.
     """
     import subprocess
 
@@ -198,7 +208,12 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
 
 @mcp_app.tool()
 def spec_runner_stop(spec_prefix: str = "") -> str:
-    """Request graceful shutdown of running execution."""
+    """Request graceful shutdown of running execution.
+
+    WRITE tool. Writes a stop-file that asks any running executor on the
+    same workspace to finish the current task and exit. Does not kill
+    processes. See README.md#security-model.
+    """
     config = _build_config(spec_prefix)
     stop_file = config.state_file.with_suffix(".stop")
     stop_file.write_text("stop")

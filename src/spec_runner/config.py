@@ -191,7 +191,9 @@ class ExecutorConfig:
     notify_project_name: str = ""  # Project name in notifications (default: directory name)
     telegram_bot_token: str = ""  # Telegram bot token (empty = disabled)
     telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
-    notify_on: list[str] = field(default_factory=lambda: ["run_complete", "task_failed"])
+    notify_on: list[str] = field(
+        default_factory=lambda: ["run_complete", "task_failed", "state_degraded"]
+    )
 
     # Generic webhook notifications
     webhook_url: str = ""  # Webhook URL (empty = disabled)

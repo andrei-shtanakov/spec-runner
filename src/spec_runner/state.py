@@ -91,6 +91,25 @@ class TaskState:
         return None
 
 
+_DISK_FULL_MARKERS = (
+    "disk i/o error",
+    "database or disk is full",
+    "disk full",
+    "out of memory",  # SQLite raises this when mmap-backed writes can't extend
+    "no space left on device",
+)
+
+
+def _is_disk_full_error(exc: sqlite3.OperationalError) -> bool:
+    """Classify an OperationalError as disk-full vs another failure.
+
+    SQLite does not expose a stable error code for disk-full via sqlite3, so we
+    match on the textual message. Covers the common POSIX and SQLite phrases.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _DISK_FULL_MARKERS)
+
+
 class ExecutorState:
     """Global executor state backed by SQLite."""
 
@@ -101,6 +120,13 @@ class ExecutorState:
         self.total_completed = 0
         self.total_failed = 0
         self._conn: sqlite3.Connection | None = None
+        # Degraded mode: SQLite writes are failing (typically disk-full or
+        # corruption). In-memory state keeps working so the current run can
+        # finish, but on-disk persistence is lost until the operator fixes the
+        # underlying issue.
+        self._degraded: bool = False
+        self._degraded_reason: str | None = None
+        self._degraded_notified: bool = False
 
         # Migration: JSON -> SQLite (only for .db state files)
         json_path = (
@@ -430,13 +456,7 @@ class ExecutorState:
                 )
                 self._save_meta()
         except sqlite3.OperationalError as e:
-            from .logging import get_logger
-
-            get_logger("state").error(
-                "Failed to persist attempt (disk full or DB corruption?)",
-                task_id=task_id,
-                error=str(e),
-            )
+            self._enter_degraded_mode("record_attempt", e, task_id=task_id)
 
     def mark_running(self, task_id: str) -> None:
         """Mark task as running with atomic SQLite persistence."""
@@ -457,13 +477,79 @@ class ExecutorState:
                 )
                 self._save_meta()
         except sqlite3.OperationalError as e:
+            self._enter_degraded_mode("mark_running", e, task_id=task_id)
+
+    @property
+    def degraded(self) -> bool:
+        """True if SQLite persistence has failed; in-memory state is still live."""
+        return self._degraded
+
+    @property
+    def degraded_reason(self) -> str | None:
+        """Human-readable description of why we're degraded, or None."""
+        return self._degraded_reason
+
+    def _enter_degraded_mode(
+        self,
+        action: str,
+        exc: sqlite3.OperationalError,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        """Record that SQLite persistence failed and notify the operator once.
+
+        The in-memory state remains authoritative for the rest of the run so the
+        executor can finish gracefully. Once the underlying issue is fixed,
+        restarting the process will reload whatever was last persisted and
+        replay from there.
+        """
+        from .logging import get_logger
+
+        disk_full = _is_disk_full_error(exc)
+        kind = "disk full" if disk_full else "DB write failed"
+        reason = f"{kind} during {action}: {exc}"
+        self._degraded = True
+        self._degraded_reason = reason
+
+        logger = get_logger("state")
+        if not self._degraded_notified:
+            logger.critical(
+                "Executor state degraded — continuing in memory only",
+                action=action,
+                task_id=task_id,
+                disk_full=disk_full,
+                error=str(exc),
+                hint=(
+                    "Free disk space or repair DB at "
+                    f"{self.config.state_file}; restart to resume persistence."
+                ),
+            )
+            self._notify_degraded(reason)
+            self._degraded_notified = True
+        else:
+            logger.warning(
+                "Persistence still failing (already degraded)",
+                action=action,
+                task_id=task_id,
+                error=str(exc),
+            )
+
+    def _notify_degraded(self, reason: str) -> None:
+        """Best-effort notification that the executor is running in degraded mode.
+
+        Sent via whichever notifier the project has opted into (Telegram,
+        webhook). Failures to send are logged but never raised — a broken
+        notifier must not turn into a crash loop on top of an already-broken
+        state file.
+        """
+        try:
+            from .notifications import notify
+
+            notify(self.config, "state_degraded", f"⚠️ spec-runner degraded: {reason}")
+        except Exception as exc:  # pragma: no cover - defensive
             from .logging import get_logger
 
-            get_logger("state").error(
-                "Failed to persist running state (disk full or DB corruption?)",
-                task_id=task_id,
-                error=str(e),
-            )
+            get_logger("state").debug("Degraded-mode notification failed", error=str(exc))
 
     def should_stop(self) -> bool:
         """Check if we should stop (consecutive failures or budget exceeded)."""

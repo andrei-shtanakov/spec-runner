@@ -213,7 +213,47 @@ Add to `.mcp.json`:
 }
 ```
 
-Available tools: `spec_runner_status`, `spec_runner_tasks`, `spec_runner_costs`, `spec_runner_logs`, `spec_runner_run_task`, `spec_runner_stop`, `spec_runner_next_tasks`, `spec_runner_task_detail`.
+Available tools:
+
+| Tool | Kind | Effect |
+|---|---|---|
+| `spec_runner_status` | read | Returns aggregate status (completed/failed/running, cost, tokens) |
+| `spec_runner_tasks` | read | Lists tasks with id/name/priority/status/deps |
+| `spec_runner_next_tasks` | read | Lists ready-to-run tasks |
+| `spec_runner_task_detail` | read | Returns per-task checklist, attempts, last review, cost |
+| `spec_runner_costs` | read | Per-task cost/token breakdown |
+| `spec_runner_logs` | read | Tail of a task's execution log |
+| `spec_runner_run_task` | **write** | **Spawns a subprocess that runs Claude CLI** against the workspace. Can modify files, create git branches, run hooks (tests/lint/commit) |
+| `spec_runner_stop` | **write** | Writes a stop-file that asks a running executor to shut down gracefully |
+
+### Security model
+
+**Authentication.** The MCP server has **no built-in authentication**. It uses `stdio` transport and inherits the trust boundary of whatever started it (typically your terminal or Claude Code). Whoever can run the server can call any of its tools.
+
+**Safe deployment patterns:**
+
+- ✅ **Local stdio only** (default). Run via `spec-runner mcp` from `.mcp.json` on a single developer machine. Same trust boundary as your shell.
+- ✅ **Claude Code inside your own workspace.** The MCP server operates on the workspace it's invoked in; tools like `spec_runner_run_task` will modify files in that workspace.
+- ❌ **Do NOT expose over TCP, HTTP, or a shared socket** without adding authentication and audit logging — the write tools execute subprocesses that run Claude CLI with full filesystem access.
+- ❌ **Do NOT run under a shared service account** that multiple users or agents share. There is no per-caller identity, so audit logs cannot attribute actions.
+
+**Write-tool blast radius.** `spec_runner_run_task` does not sandbox execution: the spawned `spec-runner run --task TASK-XXX` can:
+
+- edit any file in the project root
+- create git branches and auto-commit (if `hooks.post_done.auto_commit: true`)
+- run tests, linters, and any configured hook command
+- spend budget (Claude API cost) up to `budget_usd` / `task_budget_usd`
+
+Treat the MCP server as equivalent to giving the caller shell access to the workspace.
+
+**Hardening options** (if you need tighter limits):
+
+- Run in a disposable container or Maestro worktree so writes are isolated
+- Set `budget_usd` low to cap accidental cost spend
+- Disable `hooks.post_done.auto_commit` if you want manual review before commits
+- Restrict `commands.test`/`commands.lint` to safe allow-listed shell commands — they run verbatim
+
+See also: `docs/state-schema.md` for the read contract, and `src/spec_runner/mcp_server.py` for tool implementations.
 
 ## Configuration
 
