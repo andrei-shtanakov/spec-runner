@@ -66,6 +66,7 @@ spec-runner watch
 - **Constitution guardrails** — inviolable project rules from `spec/constitution.md` injected into every prompt
 - **Telegram / webhook notifications** — alerts on task failure, run completion, and degraded-mode persistence failures (Telegram Bot API + generic webhook)
 - **Degraded-mode resilience** — SQLite write failures (disk-full, DB corruption) are caught, the run continues in memory, and operators are notified once
+- **Compliance audit trail** — opt-in JSON-Lines log of every task lifecycle event (started, attempt, completed/failed, state_degraded, run start/end) with operator + run-id attribution
 - **Pause/resume** — pause mid-run with Ctrl+\, edit tasks, resume; TUI keybinding `p`
 - **Streaming events** — live stdout streaming from Claude CLI to TUI via EventBus
 - **Session/idle timeouts** — automatic stop after configurable session or idle duration
@@ -287,6 +288,10 @@ notify_on: [run_complete, task_failed, state_degraded]
 webhook_url: ""                # Webhook URL (empty = disabled)
 webhook_template: '{"text": "{{event}}: {{message}}"}'
 
+# Compliance audit trail (optional — JSON Lines, opt-in)
+audit_log_path: ""             # e.g. "spec/.executor-audit.jsonl"; empty = disabled
+audit_log_operator: ""         # Override the auto-detected "user@host" tag
+
 # Agent personas (optional)
 personas:
   implementer:
@@ -359,6 +364,7 @@ project/
 │       ├── task_commands.py     # Task CLI commands (list, show, start, etc.)
 │       ├── github_sync.py       # GitHub Issues sync (to/from)
 │       ├── audit.py             # Pre-execution static audit (LABS-37)
+│       ├── audit_log.py         # JSON Lines compliance audit trail (LABS-40)
 │       ├── verify.py            # Post-execution compliance verification
 │       ├── report.py            # Traceability matrix generation
 │       ├── validate.py          # Config + task validation

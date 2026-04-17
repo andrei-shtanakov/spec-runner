@@ -107,6 +107,7 @@ All code is in `src/spec_runner/`:
 | `task_commands.py` | ~440 | Task CLI commands: list, show, start, done, block, check, stats, next, graph |
 | `github_sync.py` | ~200 | GitHub Issues sync: `cmd_sync_to_gh` (local wins), `cmd_sync_from_gh` (remote wins), `export_gh` |
 | `audit.py` | ~280 | Pre-execution static audit: orphan tasks, dangling/uncovered refs, dead designs; text/JSON/CSV output |
+| `audit_log.py` | ~210 | Opt-in compliance audit-trail writer: JSON-Lines appender, `AuditLogger` + `NoOpAuditLogger`, thread-safe, `run_id` + operator attribution |
 | `verify.py` | ~230 | Post-execution compliance verification: traceability check, coverage, review verdicts |
 | `report.py` | ~220 | Traceability matrix: REQ → DESIGN → TASK → execution state mapping |
 | `validate.py` | ~335 | Config + task validation: duplicate IDs, symmetry checks, cycle detection, dead config warnings |

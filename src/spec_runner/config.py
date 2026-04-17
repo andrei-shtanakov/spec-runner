@@ -201,6 +201,10 @@ class ExecutorConfig:
     webhook_headers: dict[str, str] = field(default_factory=dict)
     webhook_template: str = ""  # Template with {{event}}, {{task_id}}, {{message}}, etc.
 
+    # Compliance audit trail (JSON Lines; LABS-40). Empty path = disabled.
+    audit_log_path: str = ""
+    audit_log_operator: str = ""  # Override auto-detected "user@host"
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -376,6 +380,8 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "webhook_method": executor_config.get("webhook_method"),
             "webhook_headers": executor_config.get("webhook_headers"),
             "webhook_template": executor_config.get("webhook_template"),
+            "audit_log_path": executor_config.get("audit_log_path"),
+            "audit_log_operator": executor_config.get("audit_log_operator"),
         }
     except Exception as e:
         from .logging import get_logger

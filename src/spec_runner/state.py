@@ -127,6 +127,13 @@ class ExecutorState:
         self._degraded: bool = False
         self._degraded_reason: str | None = None
         self._degraded_notified: bool = False
+        # Optional compliance audit trail. Opt-in via `audit_log_path` in the
+        # project config; otherwise a no-op logger. Created lazily so tests
+        # that construct ExecutorState with tmp state files don't
+        # accidentally create audit files in the CWD.
+        from .audit_log import build_audit_logger
+
+        self.audit_logger = build_audit_logger(config)
 
         # Migration: JSON -> SQLite (only for .db state files)
         json_path = (
@@ -458,6 +465,55 @@ class ExecutorState:
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("record_attempt", e, task_id=task_id)
 
+        self._audit_attempt(task_id, attempt, state)
+
+    def _audit_attempt(
+        self,
+        task_id: str,
+        attempt: TaskAttempt,
+        state: TaskState,
+    ) -> None:
+        """Record one attempt to the compliance audit log (never raises)."""
+        from .audit_log import (
+            EVENT_TASK_ATTEMPT,
+            EVENT_TASK_COMPLETED,
+            EVENT_TASK_FAILED,
+        )
+
+        details: dict = {
+            "attempt_number": state.attempt_count,
+            "success": attempt.success,
+            "duration_seconds": attempt.duration_seconds,
+            "input_tokens": attempt.input_tokens,
+            "output_tokens": attempt.output_tokens,
+            "cost_usd": attempt.cost_usd,
+            "review_status": attempt.review_status,
+            "error_code": (attempt.error_code.value if attempt.error_code else None),
+            "error": attempt.error,
+            "task_total_cost_usd": round(self.task_cost(task_id), 4),
+            "run_total_cost_usd": round(self.total_cost(), 4),
+        }
+        self.audit_logger.record(EVENT_TASK_ATTEMPT, task_id=task_id, **details)
+
+        # Emit terminal transitions separately so compliance readers can
+        # filter on "this is where the task finally succeeded/failed".
+        if state.status == "success":
+            self.audit_logger.record(
+                EVENT_TASK_COMPLETED,
+                task_id=task_id,
+                attempts=state.attempt_count,
+                cost_usd=round(self.task_cost(task_id), 4),
+            )
+        elif state.status == "failed":
+            self.audit_logger.record(
+                EVENT_TASK_FAILED,
+                task_id=task_id,
+                attempts=state.attempt_count,
+                cost_usd=round(self.task_cost(task_id), 4),
+                last_error=attempt.error,
+                error_code=attempt.error_code.value if attempt.error_code else None,
+            )
+
     def mark_running(self, task_id: str) -> None:
         """Mark task as running with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -478,6 +534,14 @@ class ExecutorState:
                 self._save_meta()
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("mark_running", e, task_id=task_id)
+
+        from .audit_log import EVENT_TASK_STARTED
+
+        self.audit_logger.record(
+            EVENT_TASK_STARTED,
+            task_id=task_id,
+            started_at=state.started_at,
+        )
 
     @property
     def degraded(self) -> bool:
@@ -525,6 +589,15 @@ class ExecutorState:
                 ),
             )
             self._notify_degraded(reason)
+            from .audit_log import EVENT_STATE_DEGRADED
+
+            self.audit_logger.record(
+                EVENT_STATE_DEGRADED,
+                task_id=task_id,
+                action=action,
+                disk_full=disk_full,
+                reason=reason,
+            )
             self._degraded_notified = True
         else:
             logger.warning(

@@ -184,6 +184,15 @@ def _run_tasks(args, config: ExecutorConfig):
     tasks = parse_tasks(config.tasks_file)
 
     with ExecutorState(config) as state:
+        from .audit_log import EVENT_RUN_ENDED, EVENT_RUN_STARTED
+
+        state.audit_logger.record(
+            EVENT_RUN_STARTED,
+            total_tasks=len(tasks),
+            mode="all" if getattr(args, "all", False) else "single",
+            task_filter=getattr(args, "task", None),
+        )
+
         # Recover tasks stuck in 'running' from previous crash
         stale_timeout = config.task_timeout_minutes * 2
         recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
@@ -416,6 +425,14 @@ def _run_tasks(args, config: ExecutorConfig):
             completed=state.total_completed,
             failed=state.total_failed,
             total_cost=total_cost_val if total_cost_val > 0 else None,
+        )
+
+        state.audit_logger.record(
+            EVENT_RUN_ENDED,
+            completed=state.total_completed,
+            failed=state.total_failed,
+            remaining=remaining,
+            total_cost_usd=round(total_cost_val, 4),
         )
 
         # --json-result: structured JSON result per task (for Maestro interop)
