@@ -11,6 +11,7 @@ from uuid import uuid4
 
 # Re-exports from submodules for backward compatibility
 from .cli_info import (  # noqa: E402, F401
+    cmd_audit,
     cmd_costs,
     cmd_logs,
     cmd_mcp,
@@ -761,6 +762,33 @@ def main():
         "--strict", action="store_true", help="Fail on warnings (missing traceability)"
     )
 
+    # audit (pre-execution compliance)
+    audit_parser = subparsers.add_parser(
+        "audit",
+        parents=[common],
+        help="Static pre-execution audit of the spec triangle",
+    )
+    audit_group = audit_parser.add_mutually_exclusive_group()
+    audit_group.add_argument(
+        "--json",
+        action="store_const",
+        dest="output_format",
+        const="json",
+        help="Output as JSON",
+    )
+    audit_group.add_argument(
+        "--csv",
+        action="store_const",
+        dest="output_format",
+        const="csv",
+        help="Output as CSV",
+    )
+    audit_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat warnings (orphans, uncovered) as failures",
+    )
+
     # report
     report_parser = subparsers.add_parser(
         "report", parents=[common], help="Generate traceability matrix"
@@ -887,6 +915,7 @@ def main():
         "plan": cmd_plan,
         "validate": cmd_validate,
         "verify": cmd_verify,
+        "audit": cmd_audit,
         "report": cmd_report,
         "tui": cmd_tui,
         "watch": cmd_watch,

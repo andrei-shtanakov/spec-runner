@@ -332,6 +332,30 @@ def cmd_verify(args: argparse.Namespace, config: ExecutorConfig) -> None:
         sys.exit(1)
 
 
+def cmd_audit(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Run pre-execution static audit of the spec triangle."""
+    from .audit import (
+        audit_all,
+        format_audit_csv,
+        format_audit_json,
+        format_audit_text,
+    )
+
+    strict = getattr(args, "strict", False)
+    report = audit_all(config, strict=strict)
+
+    output_format = getattr(args, "output_format", "text")
+    if output_format == "json":
+        print(format_audit_json(report))
+    elif output_format == "csv":
+        print(format_audit_csv(report), end="")
+    else:
+        print(format_audit_text(report))
+
+    if not report.ok:
+        sys.exit(1)
+
+
 def cmd_report(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Generate traceability matrix report."""
     from .report import build_report, format_report_json, format_report_markdown

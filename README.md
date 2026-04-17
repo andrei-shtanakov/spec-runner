@@ -125,6 +125,10 @@ spec-runner tui                            # Launch TUI status dashboard
 spec-runner validate                       # Validate config and tasks
 
 # Verification & Reporting (v2.0)
+spec-runner audit                          # Static pre-execution spec check
+spec-runner audit --strict                 # Fail on warnings (orphans, uncovered)
+spec-runner audit --json                   # JSON findings output (for CI)
+spec-runner audit --csv                    # CSV for spreadsheet review
 spec-runner verify                         # Verify post-execution compliance
 spec-runner verify --task=TASK-001         # Verify specific task
 spec-runner verify --json                  # JSON compliance output
@@ -354,6 +358,7 @@ project/
 │       ├── task.py              # Task parsing + dependency resolution
 │       ├── task_commands.py     # Task CLI commands (list, show, start, etc.)
 │       ├── github_sync.py       # GitHub Issues sync (to/from)
+│       ├── audit.py             # Pre-execution static audit (LABS-37)
 │       ├── verify.py            # Post-execution compliance verification
 │       ├── report.py            # Traceability matrix generation
 │       ├── validate.py          # Config + task validation
