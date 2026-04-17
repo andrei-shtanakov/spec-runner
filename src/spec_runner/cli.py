@@ -48,11 +48,14 @@ from .state import (
 )
 from .task import (
     Task,
+    diff_task_statuses,
+    format_task_status_diff,
     get_next_tasks,
     get_task_by_id,
     mark_all_checklist_done,
     parse_tasks,
     resolve_dependencies,
+    snapshot_task_statuses,
     update_task_status,
 )
 from .validate import format_results, validate_all
@@ -268,16 +271,27 @@ def _run_tasks(args, config: ExecutorConfig):
                     import spec_runner.executor as _executor_mod
 
                     _executor_mod._pause_requested = False
+                    pause_snapshot = snapshot_task_statuses(tasks)
                     log_progress(
                         "⏸️ Paused. Edit spec/tasks.md, then press Enter to resume (q to quit)."
                     )
                     choice = input("> ").strip().lower()
                     if choice == "q":
                         break
-                    # Re-parse tasks to pick up edits
+                    # Re-parse tasks to pick up edits AND external changes made
+                    # while we were paused (another session, Maestro, manual
+                    # edits). Diff against the pre-pause snapshot so the
+                    # operator can see newly-completed parents and downstream
+                    # tasks that just became ready — LABS-38.
                     tasks = parse_tasks(config.tasks_file)
+                    diff = diff_task_statuses(pause_snapshot, tasks)
                     executed_ids.clear()
-                    logger.info("Resumed after pause, tasks re-read")
+                    logger.info(
+                        "Resumed after pause, tasks re-read",
+                        changes=format_task_status_diff(diff),
+                    )
+                    if not diff.is_empty:
+                        log_progress(f"▶️ {format_task_status_diff(diff)}")
 
                 # Check for graceful shutdown request
                 if check_stop_requested(config):

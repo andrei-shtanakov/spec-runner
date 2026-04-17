@@ -321,6 +321,118 @@ def get_task_by_id(tasks: list[Task], task_id: str) -> Task | None:
     return None
 
 
+@dataclass
+class TaskStatusDiff:
+    """What changed between two task-status snapshots.
+
+    Used by the pause/resume handlers (CLI and TUI) to tell the operator
+    which parents finished while they were paused and which downstream
+    tasks became runnable as a result. Empty diff = no visible change.
+    """
+
+    completed_parents: list[str] = field(default_factory=list)
+    newly_ready: list[str] = field(default_factory=list)
+    other_transitions: list[tuple[str, str, str]] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.completed_parents
+            or self.newly_ready
+            or self.other_transitions
+            or self.added
+            or self.removed
+        )
+
+
+def snapshot_task_statuses(tasks: list[Task]) -> dict[str, str]:
+    """Return `{task_id: status}` — the minimal shape diffing needs."""
+    return {task.id: task.status for task in tasks}
+
+
+def diff_task_statuses(
+    before: dict[str, str],
+    after_tasks: list[Task],
+) -> TaskStatusDiff:
+    """Compare a pre-pause snapshot to the current task list.
+
+    A "completed parent" is any id that went `* → done` and is listed in
+    another current task's `depends_on`. A "newly ready" task is one that
+    previously had unfinished deps (was `blocked` or had non-empty
+    `depends_on`) but now has all deps satisfied.
+
+    The caller should pass `after_tasks` **before** `resolve_dependencies`
+    has mutated statuses, so the diff reflects the literal on-disk state.
+    """
+    diff = TaskStatusDiff()
+    after_map = {t.id: t for t in after_tasks}
+
+    # Index: task id → set of ids that depend on it (reverse edges).
+    reverse_deps: dict[str, set[str]] = {}
+    for task in after_tasks:
+        for dep in task.depends_on:
+            reverse_deps.setdefault(dep, set()).add(task.id)
+
+    for task_id, before_status in before.items():
+        if task_id not in after_map:
+            diff.removed.append(task_id)
+            continue
+        after_status = after_map[task_id].status
+        if before_status == after_status:
+            continue
+        if after_status == "done" and task_id in reverse_deps:
+            diff.completed_parents.append(task_id)
+        else:
+            diff.other_transitions.append((task_id, before_status, after_status))
+
+    for task_id in after_map:
+        if task_id not in before:
+            diff.added.append(task_id)
+
+    # Newly-ready: task whose deps are now all satisfied (either because a
+    # parent completed or a dep was removed from tasks.md).
+    for task in after_tasks:
+        if task.id not in before:
+            continue
+        was_blocked = before[task.id] in {"blocked", "todo"}
+        unfinished_deps = [
+            d for d in task.depends_on if d in after_map and after_map[d].status != "done"
+        ]
+        if was_blocked and not unfinished_deps and task.depends_on:
+            # Had deps, now all satisfied (but `status` may still say blocked —
+            # `resolve_dependencies` hasn't run yet).
+            diff.newly_ready.append(task.id)
+
+    diff.completed_parents.sort()
+    diff.newly_ready.sort()
+    diff.other_transitions.sort()
+    diff.added.sort()
+    diff.removed.sort()
+    return diff
+
+
+def format_task_status_diff(diff: TaskStatusDiff) -> str:
+    """One-line (or short multi-line) human summary for CLI/TUI logs."""
+    if diff.is_empty:
+        return "no task changes while paused"
+
+    parts: list[str] = []
+    if diff.completed_parents:
+        parts.append(f"completed: {', '.join(diff.completed_parents)}")
+    if diff.newly_ready:
+        parts.append(f"unblocked: {', '.join(diff.newly_ready)}")
+    if diff.other_transitions:
+        moves = ", ".join(f"{tid}({a}→{b})" for tid, a, b in diff.other_transitions)
+        parts.append(f"moved: {moves}")
+    if diff.added:
+        parts.append(f"added: {', '.join(diff.added)}")
+    if diff.removed:
+        parts.append(f"removed: {', '.join(diff.removed)}")
+    return " | ".join(parts)
+
+
 def resolve_dependencies(tasks: list[Task]) -> list[Task]:
     """Update depends_on based on dependency status.
 

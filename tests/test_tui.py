@@ -1,7 +1,9 @@
 """Tests for spec_runner.tui module."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
+from spec_runner.config import ExecutorConfig
 from spec_runner.tui import LogPanel, SpecRunnerApp, StatsBar, TaskCard
 
 
@@ -181,3 +183,98 @@ class TestLogPanel:
         text = panel.render_log()
         assert "Line 1" in text
         assert "Line 2" in text
+
+
+# --- LABS-38: pause/resume dependency diff ---------------------------
+
+
+TASKS_BEFORE = """\
+### TASK-001: Parent
+🔴 P0 | 🔄 IN_PROGRESS
+
+### TASK-002: Dependent
+🟠 P1 | ⏸️ BLOCKED
+**Depends on:** [TASK-001]
+"""
+
+TASKS_AFTER_PARENT_DONE = """\
+### TASK-001: Parent
+🔴 P0 | ✅ DONE
+
+### TASK-002: Dependent
+🟠 P1 | ⏸️ BLOCKED
+**Depends on:** [TASK-001]
+"""
+
+
+def _make_config(tmp_path: Path, tasks_md: str) -> ExecutorConfig:
+    spec = tmp_path / "spec"
+    spec.mkdir(parents=True, exist_ok=True)
+    (spec / "tasks.md").write_text(tasks_md)
+    return ExecutorConfig(project_root=tmp_path)
+
+
+class TestTuiPauseResumeDiff:
+    """Pause/resume must surface parent completion + newly-ready children."""
+
+    def _build_app(self, config: ExecutorConfig) -> tuple[SpecRunnerApp, LogPanel]:
+        app = SpecRunnerApp(config=config)
+        # SpecRunnerApp.query_one would normally require a running app. Swap
+        # it for a stub that returns a LogPanel we can inspect, and swap
+        # refresh_board so the action does not try to hit the real widgets.
+        log_panel = LogPanel()
+        app.query_one = MagicMock(return_value=log_panel)  # type: ignore[method-assign]
+        app.refresh_board = MagicMock()  # type: ignore[method-assign]
+        return app, log_panel
+
+    @staticmethod
+    def _reset_pause_flag(monkeypatch) -> None:
+        import spec_runner.executor as real_executor
+
+        monkeypatch.setattr(real_executor, "_pause_requested", False)
+
+    def test_pause_snapshot_is_captured_and_cleared(self, tmp_path, monkeypatch):
+        self._reset_pause_flag(monkeypatch)
+        config = _make_config(tmp_path, TASKS_BEFORE)
+        app, _ = self._build_app(config)
+
+        import spec_runner.executor as real_executor
+
+        # First press → pause, snapshot must be taken
+        app.action_pause()
+        assert real_executor._pause_requested is True
+        assert app._pause_snapshot == {"TASK-001": "in_progress", "TASK-002": "blocked"}
+
+        # Second press → resume, snapshot cleared, refresh_board called
+        app.action_pause()
+        assert real_executor._pause_requested is False
+        assert app._pause_snapshot is None
+        assert app.refresh_board.called
+
+    def test_resume_reports_completed_parent(self, tmp_path, monkeypatch):
+        self._reset_pause_flag(monkeypatch)
+        config = _make_config(tmp_path, TASKS_BEFORE)
+        app, log_panel = self._build_app(config)
+
+        app.action_pause()  # pause
+
+        # Simulate another session completing TASK-001
+        (tmp_path / "spec" / "tasks.md").write_text(TASKS_AFTER_PARENT_DONE)
+
+        app.action_pause()  # resume
+
+        combined = "\n".join(log_panel._lines)
+        assert "While paused" in combined
+        assert "TASK-001" in combined  # completed parent
+        assert "TASK-002" in combined  # newly-ready child
+
+    def test_resume_with_no_changes_logs_empty_diff(self, tmp_path, monkeypatch):
+        self._reset_pause_flag(monkeypatch)
+        config = _make_config(tmp_path, TASKS_BEFORE)
+        app, log_panel = self._build_app(config)
+
+        app.action_pause()  # pause
+        app.action_pause()  # resume (tasks.md untouched)
+
+        combined = "\n".join(log_panel._lines)
+        assert "no task changes while paused" in combined
