@@ -51,7 +51,6 @@ spec-runner watch
 - **Automatic retries** — configurable retry policy with exponential backoff and error context forwarding
 - **Code review** — multi-agent review after task completion with enriched diff context
 - **Git integration** — automatic branch creation, commits, and merges
-- **Parallel execution** — run multiple independent tasks concurrently with semaphore-based limiting
 - **TUI dashboard** — live Textual-based terminal UI with progress bars and log panel
 - **Cost tracking** — per-task token usage and cost breakdown
 - **Watch mode** — continuously poll and execute ready tasks
@@ -65,7 +64,8 @@ spec-runner watch
 - **Parallel review** — 5 specialized review agents (quality, implementation, testing, simplification, docs) running concurrently
 - **Agent personas** — role-specific prompt templates and model selection (architect, implementer, reviewer)
 - **Constitution guardrails** — inviolable project rules from `spec/constitution.md` injected into every prompt
-- **Telegram notifications** — alerts on task failure and run completion via Telegram Bot API
+- **Telegram / webhook notifications** — alerts on task failure, run completion, and degraded-mode persistence failures (Telegram Bot API + generic webhook)
+- **Degraded-mode resilience** — SQLite write failures (disk-full, DB corruption) are caught, the run continues in memory, and operators are notified once
 - **Pause/resume** — pause mid-run with Ctrl+\, edit tasks, resume; TUI keybinding `p`
 - **Streaming events** — live stdout streaming from Claude CLI to TUI via EventBus
 - **Session/idle timeouts** — automatic stop after configurable session or idle duration
@@ -176,12 +176,14 @@ spec-runner-init /path/to/project          # Install to specific project
 
 ### Multi-phase Options
 
-Both `spec-runner` and `spec-task` support `--spec-prefix` for phase-based workflows:
+`--spec-prefix` namespaces tasks, state, logs, and history for phase-based workflows:
 
 ```bash
 spec-runner run --spec-prefix=phase5-          # Uses spec/phase5-tasks.md
-spec-task list --spec-prefix=phase5-           # List phase 5 tasks
+spec-runner task list --spec-prefix=phase5-    # List phase 5 tasks
 ```
+
+Phase-scoped paths: `spec/phase5-{tasks,requirements,design}.md`, `spec/.executor-phase5-state.db`, `spec/.executor-phase5-logs/`, `spec/.phase5-task-history.log`. Multiple phases coexist without state bleed.
 
 ## Usage as Library
 
@@ -275,7 +277,7 @@ task_budget_usd: 10.0          # Per-task budget cap
 # Telegram notifications (optional)
 telegram_bot_token: ""         # Bot token from @BotFather
 telegram_chat_id: ""           # Chat ID to send notifications to
-notify_on: [run_complete, task_failed]
+notify_on: [run_complete, task_failed, state_degraded]
 
 # Generic webhook (optional — works with Slack, Discord, ntfy.sh, etc.)
 webhook_url: ""                # Webhook URL (empty = disabled)
@@ -343,7 +345,7 @@ project/
 │       ├── cli_plan.py          # Interactive planning command
 │       ├── execution.py         # Task execution + retry logic
 │       ├── config.py            # ExecutorConfig + YAML loading
-│       ├── state.py             # SQLite state persistence
+│       ├── state.py             # SQLite state persistence + degraded-mode fallback
 │       ├── prompt.py            # Prompt building + templates
 │       ├── hooks.py             # Pre/post hook orchestration
 │       ├── git_ops.py           # Git branch/commit/merge operations
@@ -364,12 +366,19 @@ project/
 │       ├── init_cmd.py          # Skill installer
 │       └── skills/
 │           └── spec-generator-skill/
+├── docs/
+│   └── state-schema.md          # Maestro interop contract (SQLite + --json-result)
+├── schemas/
+│   ├── executor-state.schema.json   # JSON Schema for .executor-state.db contents
+│   └── json-result.schema.json      # JSON Schema for `run --json-result` stdout
+├── tests/
+│   └── fixtures/maestro-interop/    # Golden fixtures copied by Maestro contract tests
 └── spec/
     ├── tasks.md
     ├── requirements.md
     ├── design.md
     ├── FORMAT.md                # Task format specification
-    └── plugins/
+    └── plugins/                 # Optional: per-plugin subdirectories with plugin.yaml
 ```
 
 ## License
