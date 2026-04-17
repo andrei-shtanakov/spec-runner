@@ -34,12 +34,27 @@ class TraceabilityReport:
 
     rows: list[TraceRow] = field(default_factory=list)
     orphan_tasks: list[str] = field(default_factory=list)  # Tasks with no traceability
+    # Requirements with no matching task (status == "not covered"); cached
+    # alongside the matrix so CI can check gaps without re-scanning rows.
+    uncovered_requirements: list[str] = field(default_factory=list)
+    # DESIGN-XXX identifiers that are defined in design.md but no task
+    # traces to them — dead documentation.
+    unreferenced_designs: list[str] = field(default_factory=list)
 
     @property
     def coverage(self) -> tuple[int, int]:
         total = len(self.rows)
         covered = sum(1 for r in self.rows if r.status != "not covered")
         return covered, total
+
+    @property
+    def has_gaps(self) -> bool:
+        """True when CI should flag this report as incomplete."""
+        return bool(
+            self.orphan_tasks
+            or self.uncovered_requirements
+            or self.unreferenced_designs
+        )
 
 
 def _extract_section_ids(text: str, prefix: str) -> list[str]:
@@ -116,6 +131,20 @@ def build_report(
 
     # Find orphan tasks (no traceability)
     report.orphan_tasks = [t.id for t in tasks if not t.traces_to]
+
+    # Gap warnings (LABS-42): identifiers defined in spec files that no
+    # task references. Useful for CI integration — CI can fail if the
+    # report has gaps, surfacing drift between specs and implementation.
+    report.uncovered_requirements = sorted(
+        req for req in all_reqs if req not in req_to_tasks
+    )
+    if design_to_req:
+        referenced_designs = {
+            ref for task in tasks for ref in task.traces_to if ref.startswith("DESIGN-")
+        }
+        report.unreferenced_designs = sorted(
+            set(design_to_req) - referenced_designs
+        )
 
     # Build rows
     with ExecutorState(config) as state:
@@ -197,6 +226,18 @@ def format_report_markdown(report: TraceabilityReport) -> str:
     if report.orphan_tasks:
         lines.append(f"\n**Orphan tasks** (no traceability): {', '.join(report.orphan_tasks)}")
 
+    if report.uncovered_requirements:
+        lines.append(
+            "\n**Uncovered requirements** (no task traces to them): "
+            + ", ".join(report.uncovered_requirements)
+        )
+
+    if report.unreferenced_designs:
+        lines.append(
+            "\n**Unreferenced designs** (no task traces to them): "
+            + ", ".join(report.unreferenced_designs)
+        )
+
     return "\n".join(lines)
 
 
@@ -217,6 +258,10 @@ def format_report_json(report: TraceabilityReport) -> str:
             }
             for r in report.rows
         ],
+        # Gap warnings (LABS-42) — CI can assert `has_gaps == false`.
+        "has_gaps": report.has_gaps,
         "orphan_tasks": report.orphan_tasks,
+        "uncovered_requirements": report.uncovered_requirements,
+        "unreferenced_designs": report.unreferenced_designs,
     }
     return json.dumps(data, indent=2)

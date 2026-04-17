@@ -154,3 +154,73 @@ class TestFormatReport:
         assert data["coverage"]["covered"] == 1
         assert data["rows"][0]["requirement"] == "REQ-001"
         assert "TASK-003" in data["orphan_tasks"]
+
+
+class TestGapWarnings:
+    """LABS-42: TraceabilityReport must flag uncovered requirements,
+    unreferenced designs, and orphan tasks for CI consumption."""
+
+    def test_uncovered_requirement_tracked(self, tmp_path: Path):
+        config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+
+        # REQ-003 (Audit logging) is defined but no task traces to it
+        assert "REQ-003" in report.uncovered_requirements
+        # REQ-001/002 are covered
+        assert "REQ-001" not in report.uncovered_requirements
+        assert "REQ-002" not in report.uncovered_requirements
+
+    def test_unreferenced_design_tracked(self, tmp_path: Path):
+        tasks_md = """\
+### TASK-001: Login
+🔴 P0 | ⬜ TODO
+**Traces to:** [REQ-001], [DESIGN-001]
+
+### TASK-002: Rate limit
+🟠 P1 | ⬜ TODO
+**Traces to:** [REQ-002]
+"""
+        config = _setup_project(tmp_path, tasks_md, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+
+        # DESIGN-002 is defined in design.md but no task traces to it
+        assert "DESIGN-002" in report.unreferenced_designs
+        assert "DESIGN-001" not in report.unreferenced_designs
+
+    def test_has_gaps_flag_set_when_any_gap_present(self, tmp_path: Path):
+        config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+        assert report.has_gaps is True
+
+    def test_has_gaps_false_when_spec_is_clean(self, tmp_path: Path):
+        clean_tasks = """\
+### TASK-001: Cover everything
+🔴 P0 | ⬜ TODO
+**Traces to:** [REQ-001], [REQ-002], [REQ-003], [DESIGN-001], [DESIGN-002]
+"""
+        config = _setup_project(tmp_path, clean_tasks, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+        assert report.has_gaps is False
+        assert report.orphan_tasks == []
+        assert report.uncovered_requirements == []
+        assert report.unreferenced_designs == []
+
+    def test_markdown_renders_gap_sections(self, tmp_path: Path):
+        config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+        md = format_report_markdown(report)
+
+        assert "Orphan tasks" in md
+        assert "TASK-003" in md
+        assert "Uncovered requirements" in md
+        assert "REQ-003" in md
+
+    def test_json_exposes_has_gaps_and_lists(self, tmp_path: Path):
+        config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD, DESIGN_MD)
+        report = build_report(config)
+        data = json.loads(format_report_json(report))
+
+        assert data["has_gaps"] is True
+        assert "TASK-003" in data["orphan_tasks"]
+        assert "REQ-003" in data["uncovered_requirements"]
+        assert isinstance(data["unreferenced_designs"], list)
