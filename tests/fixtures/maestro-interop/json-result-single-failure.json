@@ -1,0 +1,14 @@
+{
+  "attempts": 2,
+  "cost_usd": 0.18,
+  "duration_seconds": 45.6,
+  "error": "Tests failed: 3 assertions mismatched in module foo",
+  "exit_code": 1,
+  "review": "failed",
+  "status": "failed",
+  "task_id": "TASK-002",
+  "tokens": {
+    "input": 500,
+    "output": 200
+  }
+}

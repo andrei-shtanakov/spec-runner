@@ -62,6 +62,34 @@ logger = get_logger("cli")
 # === CLI Commands ===
 
 
+def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
+    """Build a single task's `--json-result` entry.
+
+    Stable contract: see docs/state-schema.md and schemas/json-result.schema.json.
+    Golden-fixed by tests/test_json_result_contract.py. Any change here is a
+    breaking change requiring a major version bump.
+    """
+    ts = state.get_task_state(task_id)
+    entry: dict = {"task_id": task_id, "status": "unknown", "attempts": 0}
+    if not ts:
+        return entry
+    entry["status"] = "done" if ts.status == "success" else "failed"
+    entry["attempts"] = ts.attempt_count
+    entry["cost_usd"] = round(state.task_cost(task_id), 2)
+    inp_t = sum(a.input_tokens or 0 for a in ts.attempts)
+    out_t = sum(a.output_tokens or 0 for a in ts.attempts)
+    entry["tokens"] = {"input": inp_t, "output": out_t}
+    total_dur = sum(a.duration_seconds for a in ts.attempts)
+    entry["duration_seconds"] = round(total_dur, 1)
+    if ts.attempts:
+        last = ts.attempts[-1]
+        entry["review"] = last.review_status or "skipped"
+        if last.error:
+            entry["error"] = last.error[:200]
+    entry["exit_code"] = 0 if ts.status == "success" else 1
+    return entry
+
+
 def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: ExecutorState) -> None:
     """Print what tasks would execute without running them."""
     data = []
@@ -377,26 +405,7 @@ def _run_tasks(args, config: ExecutorConfig):
 
         # --json-result: structured JSON result per task (for Maestro interop)
         if getattr(args, "json_result", False):
-            results = []
-            for t in tasks_to_run:
-                ts = state.get_task_state(t.id)
-                entry: dict = {"task_id": t.id, "status": "unknown", "attempts": 0}
-                if ts:
-                    entry["status"] = "done" if ts.status == "success" else "failed"
-                    entry["attempts"] = ts.attempt_count
-                    entry["cost_usd"] = round(state.task_cost(t.id), 2)
-                    inp_t = sum(a.input_tokens or 0 for a in ts.attempts)
-                    out_t = sum(a.output_tokens or 0 for a in ts.attempts)
-                    entry["tokens"] = {"input": inp_t, "output": out_t}
-                    total_dur = sum(a.duration_seconds for a in ts.attempts)
-                    entry["duration_seconds"] = round(total_dur, 1)
-                    if ts.attempts:
-                        last = ts.attempts[-1]
-                        entry["review"] = last.review_status or "skipped"
-                        if last.error:
-                            entry["error"] = last.error[:200]
-                    entry["exit_code"] = 0 if ts.status == "success" else 1
-                results.append(entry)
+            results = [build_task_json_result(t.id, state) for t in tasks_to_run]
             print(json.dumps(results if len(results) > 1 else results[0], indent=2))
 
 

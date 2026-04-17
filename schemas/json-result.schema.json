@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/json-result.schema.json",
+  "title": "SpecRunnerJsonResult",
+  "description": "Output of `spec-runner run --json-result`. Single task emits one object; multiple tasks emit an array of objects. See docs/state-schema.md.",
+  "oneOf": [
+    { "$ref": "#/definitions/TaskResult" },
+    {
+      "type": "array",
+      "items": { "$ref": "#/definitions/TaskResult" }
+    },
+    { "$ref": "#/definitions/EmptyResult" }
+  ],
+  "definitions": {
+    "TaskResult": {
+      "title": "TaskResult",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "description": "Task identifier (e.g. TASK-001)",
+          "type": "string"
+        },
+        "status": {
+          "description": "Final task outcome",
+          "type": "string",
+          "enum": ["done", "failed", "unknown"]
+        },
+        "attempts": {
+          "description": "Total attempt count",
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "description": "Sum of attempt cost, rounded to 2 decimals",
+          "type": "number",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input": { "type": "integer", "minimum": 0 },
+            "output": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["input", "output"]
+        },
+        "duration_seconds": {
+          "description": "Sum of attempt duration, rounded to 1 decimal",
+          "type": "number",
+          "minimum": 0
+        },
+        "review": {
+          "description": "Review verdict on the last attempt",
+          "type": "string",
+          "enum": ["passed", "fixed", "failed", "skipped", "rejected"]
+        },
+        "error": {
+          "description": "Truncated error message (only present on failure)",
+          "type": "string",
+          "maxLength": 200
+        },
+        "exit_code": {
+          "type": "integer",
+          "enum": [0, 1]
+        }
+      },
+      "required": ["task_id", "status", "attempts"]
+    },
+    "EmptyResult": {
+      "title": "EmptyResult",
+      "description": "Emitted when no tasks were ready to run.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "message": { "type": "string" }
+      },
+      "required": ["tasks"]
+    }
+  }
+}

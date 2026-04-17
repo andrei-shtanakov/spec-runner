@@ -1,0 +1,13 @@
+{
+  "attempts": 1,
+  "cost_usd": 0.42,
+  "duration_seconds": 123.5,
+  "exit_code": 0,
+  "review": "passed",
+  "status": "done",
+  "task_id": "TASK-001",
+  "tokens": {
+    "input": 1500,
+    "output": 800
+  }
+}

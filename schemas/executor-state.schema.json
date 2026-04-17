@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/executor-state.schema.json",
+  "title": "ExecutorState",
+  "description": "Typed view of spec-runner's executor state. See docs/state-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tasks": {
+      "description": "Task id \u2192 state mapping",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/TaskEntry" }
+    },
+    "consecutive_failures": {
+      "description": "Current consecutive failure count (resets on success)",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "total_completed": {
+      "description": "Monotonic counter of successfully completed tasks",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "total_failed": {
+      "description": "Monotonic counter of permanently failed tasks",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    }
+  },
+  "required": ["tasks"],
+  "definitions": {
+    "TaskEntry": {
+      "title": "TaskState",
+      "description": "Per-task entry. Mirrors spec_runner.state.TaskState.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "description": "Current task status",
+          "type": "string",
+          "enum": ["pending", "running", "success", "failed", "skipped"]
+        },
+        "started_at": {
+          "description": "ISO 8601 start timestamp",
+          "type": ["string", "null"]
+        },
+        "completed_at": {
+          "description": "ISO 8601 completion timestamp",
+          "type": ["string", "null"]
+        },
+        "attempts": {
+          "description": "Ordered list of execution attempts",
+          "type": "array",
+          "items": { "$ref": "#/definitions/TaskAttempt" },
+          "default": []
+        }
+      },
+      "required": ["status"]
+    },
+    "TaskAttempt": {
+      "title": "TaskAttempt",
+      "description": "One attempt record. Mirrors spec_runner.state.TaskAttempt.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": {
+          "description": "ISO 8601 timestamp of the attempt",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the attempt succeeded",
+          "type": "boolean"
+        },
+        "duration_seconds": {
+          "description": "Wall-clock duration of the attempt",
+          "type": "number",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Error message if failed",
+          "type": ["string", "null"]
+        },
+        "error_code": {
+          "description": "Structured error classification (ErrorCode)",
+          "type": ["string", "null"],
+          "enum": [
+            "TIMEOUT",
+            "RATE_LIMIT",
+            "TEST_FAILURE",
+            "LINT_FAILURE",
+            "TASK_FAILED",
+            "HOOK_FAILURE",
+            "BUDGET_EXCEEDED",
+            "REVIEW_REJECTED",
+            "INTERRUPTED",
+            "UNKNOWN",
+            null
+          ]
+        },
+        "claude_output": {
+          "description": "Captured Claude CLI output (experimental \u2014 format may change)",
+          "type": ["string", "null"]
+        },
+        "input_tokens": {
+          "description": "Prompt tokens; null if unavailable",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Completion tokens; null if unavailable",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "cost_usd": {
+          "description": "Attempt cost in USD",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "review_status": {
+          "description": "Last review verdict (ReviewVerdict)",
+          "type": ["string", "null"],
+          "enum": ["passed", "fixed", "failed", "skipped", "rejected", null]
+        },
+        "review_findings": {
+          "description": "Free-text review notes (experimental)",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["timestamp", "success", "duration_seconds"]
+    }
+  }
+}

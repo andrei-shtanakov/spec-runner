@@ -1,0 +1,45 @@
+{
+  "tasks": {
+    "TASK-001": {
+      "status": "success",
+      "started_at": "2026-04-17T10:00:00",
+      "completed_at": "2026-04-17T10:02:03",
+      "attempts": [
+        {
+          "timestamp": "2026-04-17T10:00:00",
+          "success": true,
+          "duration_seconds": 123.456,
+          "error": null,
+          "error_code": null,
+          "claude_output": "stub"
+        }
+      ]
+    },
+    "TASK-002": {
+      "status": "failed",
+      "started_at": "2026-04-17T10:02:10",
+      "completed_at": null,
+      "attempts": [
+        {
+          "timestamp": "2026-04-17T10:02:10",
+          "success": false,
+          "duration_seconds": 22.8,
+          "error": "Tests failed: 3 assertions mismatched in module foo",
+          "error_code": "TEST_FAILURE",
+          "claude_output": "stub"
+        },
+        {
+          "timestamp": "2026-04-17T10:02:40",
+          "success": false,
+          "duration_seconds": 22.8,
+          "error": "Tests failed: still 3 assertions mismatched after retry",
+          "error_code": "TEST_FAILURE",
+          "claude_output": "stub"
+        }
+      ]
+    }
+  },
+  "consecutive_failures": 2,
+  "total_completed": 1,
+  "total_failed": 1
+}
