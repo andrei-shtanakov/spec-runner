@@ -982,6 +982,192 @@ class TestBudgetEnforcement:
         assert len(budget_attempts) == 1
         assert "budget exceeded" in budget_attempts[0].error.lower()
 
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_budget_failure_marks_task_failed_not_blocked(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: budget exhaustion must mark the task `failed` in tasks.md,
+        not `blocked` (blocked implies dependency wait, which is misleading)."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Verify update_task_status was called with "failed", never "blocked"
+        statuses = [c.args[2] for c in mock_status.call_args_list]
+        assert "failed" in statuses
+        assert "blocked" not in statuses
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_pre_attempt_budget_check_skips_next_attempt(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: once task_budget_usd is spent, we do NOT launch another
+        retry — the pre-attempt check short-circuits the loop."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+        # Pre-populate one attempt already over the cap
+        state.record_attempt(
+            task.id,
+            False,
+            5.0,
+            error="flake",
+            error_code=ErrorCode.TASK_FAILED,
+            cost_usd=0.08,
+        )
+
+        run_with_retries(task, config, state)
+
+        # execute_task must NOT have been called — the loop ended before it
+        assert mock_exec.call_count == 0
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_max_retry_cost_lets_first_attempt_run(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: `max_retry_cost_usd` caps retries only — the first
+        attempt runs regardless of the retry cap."""
+        config = _make_config(
+            tmp_path,
+            max_retries=5,
+            task_budget_usd=None,
+            max_retry_cost_usd=0.01,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                2.0,
+                error="flaky",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.50,  # far over the retry cap, but it's attempt 1
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # First attempt ran even though its cost dwarfs max_retry_cost_usd.
+        # Second attempt also starts (pre-check sees retry_spent=0), then
+        # post-attempt check fires because retry_spent is now > 0.01.
+        assert mock_exec.call_count == 2
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_max_retry_cost_stops_further_retries(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: once retries have spent > max_retry_cost_usd, no more
+        retries. The first attempt's cost is not counted."""
+        config = _make_config(
+            tmp_path,
+            max_retries=5,
+            task_budget_usd=None,
+            max_retry_cost_usd=0.10,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        attempt_costs = iter([0.50, 0.06, 0.07])  # attempt 1, retry 1, retry 2
+
+        def side_effect(t, cfg, st):
+            cost = next(attempt_costs)
+            st.record_attempt(
+                t.id,
+                False,
+                1.0,
+                error="flake",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=cost,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Attempt 1 (0.50, not counted) + retry 1 (0.06) + retry 2 (0.07)
+        # = retry_total 0.13 > 0.10 → stop before attempt 4.
+        assert mock_exec.call_count == 3
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_both_caps_independent(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: whichever cap fires first wins. Here max_retry_cost_usd
+        is tighter than task_budget_usd."""
+        config = _make_config(
+            tmp_path,
+            max_retries=10,
+            task_budget_usd=10.0,
+            max_retry_cost_usd=0.05,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                1.0,
+                error="flake",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Attempt 1 (0.06, first — not counted) + retry 1 (0.06) → retry_total
+        # 0.06 > 0.05 → block retry 2. Call count = 2.
+        assert mock_exec.call_count == 2
+
 
 class TestStateCleanup:
     """Verify ExecutorState is always closed after executor functions."""

@@ -123,7 +123,11 @@ class ExecutorConfig:
     on_task_failure: str = "skip"  # What to do when task fails: skip | stop | ask
     max_concurrent: int = 3  # Max parallel tasks
     budget_usd: float | None = None  # Global budget limit (None = unlimited)
-    task_budget_usd: float | None = None  # Per-task budget limit (None = unlimited)
+    task_budget_usd: float | None = None  # Total per-task budget (includes attempt 1)
+    # Cap on cumulative cost of retry attempts only (attempt 2+). None = unlimited.
+    # Use when you want the initial attempt to always run but want to stop a
+    # flaky task from burning budget on repeated retries. LABS-41.
+    max_retry_cost_usd: float | None = None
     log_level: str = "info"  # Logging level (debug, info, warning, error)
 
     # Claude CLI
@@ -367,6 +371,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "max_concurrent": executor_config.get("max_concurrent"),
             "budget_usd": executor_config.get("budget_usd"),
             "task_budget_usd": executor_config.get("task_budget_usd"),
+            "max_retry_cost_usd": executor_config.get("max_retry_cost_usd"),
             "log_level": executor_config.get("log_level"),
             "session_timeout_minutes": executor_config.get("session_timeout_minutes"),
             "idle_timeout_minutes": executor_config.get("idle_timeout_minutes"),

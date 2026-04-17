@@ -276,8 +276,9 @@ task_timeout_minutes: 30
 claude_command: "claude"
 claude_model: "sonnet"
 spec_prefix: ""                # e.g. "phase5-" for phase5-tasks.md
-budget_usd: 50.0               # Total budget cap
-task_budget_usd: 10.0          # Per-task budget cap
+budget_usd: 50.0               # Total budget cap (whole run)
+task_budget_usd: 10.0          # Per-task cap incl. first attempt
+max_retry_cost_usd: 2.0        # Cap on retry cost only (attempts 2+)
 
 # Telegram notifications (optional)
 telegram_bot_token: ""         # Bot token from @BotFather

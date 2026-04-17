@@ -379,6 +379,63 @@ def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: i
     return float(base_delay * (attempt + 1))
 
 
+def _check_task_budget(
+    task_id: str,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    attempt_index: int,
+) -> str | None:
+    """Return a budget-exceeded error message, or None if OK to proceed.
+
+    Two independent caps (LABS-41):
+    - `task_budget_usd` — hard ceiling on total task cost (all attempts).
+    - `max_retry_cost_usd` — cap on cumulative cost of retries only,
+      i.e. attempts 2..N. The initial attempt (`attempt_index == 0`)
+      always runs regardless of this key so flaky tasks can fail fast
+      rather than never getting a chance.
+    """
+    spent = state.task_cost(task_id)
+    if config.task_budget_usd is not None and spent >= config.task_budget_usd:
+        return (
+            f"Task budget exceeded "
+            f"(${spent:.2f} >= ${config.task_budget_usd:.2f})"
+        )
+
+    if (
+        config.max_retry_cost_usd is not None
+        and attempt_index > 0
+    ):
+        ts = state.get_task_state(task_id)
+        retry_spent = (
+            sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
+        )
+        if retry_spent >= config.max_retry_cost_usd:
+            return (
+                f"Retry budget exceeded "
+                f"(${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
+            )
+    return None
+
+
+def _fail_for_budget(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    message: str,
+) -> None:
+    """Record a BUDGET_EXCEEDED attempt and mark the task failed."""
+    log_progress(message, task.id)
+    state.record_attempt(
+        task.id,
+        False,
+        0.0,
+        error=message,
+        error_code=ErrorCode.BUDGET_EXCEEDED,
+    )
+    # LABS-41: budget exhaustion is terminal, not a dependency wait.
+    update_task_status(config.tasks_file, task.id, "failed")
+
+
 def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:
     """Execute task with retries.
 
@@ -389,6 +446,13 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
     task_state = state.get_task_state(task.id)
 
     for attempt in range(task_state.attempt_count, config.max_retries):
+        # Pre-attempt budget check (LABS-41): stop BEFORE burning another
+        # attempt if the caps are already exhausted.
+        pre_msg = _check_task_budget(task.id, config, state, attempt)
+        if pre_msg is not None:
+            _fail_for_budget(task, config, state, pre_msg)
+            return False
+
         log_progress(f"\U0001f4cd Attempt {attempt + 1}/{config.max_retries}", task.id)
 
         result = execute_task(task, config, state)
@@ -397,22 +461,11 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         if result == "HOOK_ERROR":
             return False
 
-        # Check per-task budget
-        if config.task_budget_usd is not None and state.task_cost(task.id) > config.task_budget_usd:
-            budget_error = (
-                f"Task budget exceeded "
-                f"(${state.task_cost(task.id):.2f} > "
-                f"${config.task_budget_usd:.2f})"
-            )
-            log_progress(budget_error, task.id)
-            state.record_attempt(
-                task.id,
-                False,
-                0.0,
-                error=budget_error,
-                error_code=ErrorCode.BUDGET_EXCEEDED,
-            )
-            update_task_status(config.tasks_file, task.id, "blocked")
+        # Post-attempt budget check: catches cases where a single expensive
+        # attempt pushed us over the cap.
+        post_msg = _check_task_budget(task.id, config, state, attempt + 1)
+        if post_msg is not None:
+            _fail_for_budget(task, config, state, post_msg)
             return False
 
         if result is True:
