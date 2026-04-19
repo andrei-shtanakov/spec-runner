@@ -5,28 +5,38 @@ Produces OpenTelemetry Logs Data Model JSONL, one file per PID.
 
 Contract: see _cowork_output/observability-contract/log-schema.json
 """
+
 from __future__ import annotations
 
-import json
 import logging as _stdlib_logging
 import os
 import re
 import secrets
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import structlog
 import ulid
 
 _SEVERITY_NUMBER = {
-    "debug": 5, "info": 9, "warning": 13, "warn": 13,
-    "error": 17, "critical": 21, "fatal": 21,
+    "debug": 5,
+    "info": 9,
+    "warning": 13,
+    "warn": 13,
+    "error": 17,
+    "critical": 21,
+    "fatal": 21,
 }
 _SEVERITY_TEXT = {
-    5: "DEBUG", 9: "INFO", 13: "WARN", 17: "ERROR", 21: "FATAL",
+    5: "DEBUG",
+    9: "INFO",
+    13: "WARN",
+    17: "ERROR",
+    21: "FATAL",
 }
 
 _initialized = False
@@ -58,38 +68,42 @@ def _parse_traceparent() -> tuple[str, str | None]:
     return m.group(1), m.group(2)
 
 
-_DEFAULT_REDACT_KEYS = frozenset({
-    "api_key", "apikey", "token", "password", "secret",
-    "authorization", "cookie", "private_key",
-})
+_DEFAULT_REDACT_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "token",
+        "password",
+        "secret",
+        "authorization",
+        "cookie",
+        "private_key",
+    }
+)
 
 
 def _redact(keys: frozenset[str]):
     def _walk(value: Any) -> Any:
         if isinstance(value, dict):
-            return {
-                k: ("<redacted>" if k.lower() in keys else _walk(v))
-                for k, v in value.items()
-            }
+            return {k: ("<redacted>" if k.lower() in keys else _walk(v)) for k, v in value.items()}
         if isinstance(value, list):
             return [_walk(v) for v in value]
         return value
 
     def processor(logger, method_name, event_dict):
-        return {
-            k: ("<redacted>" if k.lower() in keys else _walk(v))
-            for k, v in event_dict.items()
-        }
+        return {k: ("<redacted>" if k.lower() in keys else _walk(v)) for k, v in event_dict.items()}
+
     return processor
 
 
 def _reshape_to_otel(project: str):
     """Final processor: rearrange structlog dict into OTel Logs DM shape."""
+
     def processor(logger, method_name, event_dict):
         ns = event_dict.pop("_ts_ns", _now_ns())
         # structlog passes method_name: "info", "error", etc. Use it, not event_dict.
         sev_num = _SEVERITY_NUMBER.get(method_name.lower(), 9)
-        event_dict.pop("level", None)   # drop if present; method_name is authoritative
+        event_dict.pop("level", None)  # drop if present; method_name is authoritative
         event_name = event_dict.pop("event")
 
         attrs = {"event": event_name}
@@ -110,6 +124,7 @@ def _reshape_to_otel(project: str):
             "Resource": {"service.name": project},
             "Attributes": attrs,
         }
+
     return processor
 
 

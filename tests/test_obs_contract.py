@@ -1,4 +1,5 @@
 """Validates obs.py output against _cowork_output/observability-contract/."""
+
 from __future__ import annotations
 
 import importlib
@@ -23,6 +24,7 @@ def obs_env(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("ORCHESTRA_PIPELINE_ID", "01HZKX3P9M7Q2VFGR8BNDAW5YT")
     import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     return mod, tmp_path

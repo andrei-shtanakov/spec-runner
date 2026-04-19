@@ -1,4 +1,5 @@
 """Unit tests for spec_runner.obs."""
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,10 @@ def test_traceparent_valid_inherited(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_PIPELINE_ID", "01HZKX3P9M7Q2VFGR8BNDAW5YT")
 
     # Re-import fresh to reset module state
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("child.started")
@@ -52,7 +56,10 @@ def test_traceparent_empty_means_root(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("TRACEPARENT", "")
 
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("root.started")
@@ -66,7 +73,10 @@ def test_traceparent_malformed_warns_and_roots(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("TRACEPARENT", "garbage")
 
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("recovered")
@@ -79,7 +89,10 @@ def test_traceparent_malformed_warns_and_roots(tmp_path, monkeypatch, caplog):
 def test_timestamp_formats(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("ts.check")
@@ -89,13 +102,16 @@ def test_timestamp_formats(tmp_path, monkeypatch):
     assert rec["Timestamp"].isdigit() and 18 <= len(rec["Timestamp"]) <= 20
     # ts_iso: microseconds, Z suffix
     assert rec["ts_iso"].endswith("Z")
-    assert len(rec["ts_iso"].split(".")[1]) == 7   # "NNNNNNZ" = 6 digits + Z
+    assert len(rec["ts_iso"].split(".")[1]) == 7  # "NNNNNNZ" = 6 digits + Z
 
 
 def test_span_nesting_linkage(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     log = mod.get_logger()
@@ -106,8 +122,7 @@ def test_span_nesting_linkage(tmp_path, monkeypatch):
             log.info("inside.inner")
             assert inner.parent_span_id == outer.span_id
 
-    lines = [json.loads(l)
-             for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    lines = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
     inner_records = [r for r in lines if r["Body"] in ("inside.inner", "inner.op.started")]
     for r in inner_records:
         assert r["Attributes"].get("parent_span_id") == outer.span_id
@@ -116,13 +131,18 @@ def test_span_nesting_linkage(tmp_path, monkeypatch):
 def test_span_emits_started_and_ended(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     with mod.span("op.do", x=1):
         pass
-    events = [json.loads(l)["Attributes"]["event"]
-              for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    events = [
+        json.loads(line)["Attributes"]["event"]
+        for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()
+    ]
     assert "op.do.started" in events
     assert "op.do.ended" in events
 
@@ -130,14 +150,15 @@ def test_span_emits_started_and_ended(tmp_path, monkeypatch):
 def test_span_failure_emits_failed_and_reraises(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
-    with pytest.raises(RuntimeError):
-        with mod.span("op.do"):
-            raise RuntimeError("boom")
-    lines = [json.loads(l)
-             for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    with pytest.raises(RuntimeError), mod.span("op.do"):
+        raise RuntimeError("boom")
+    lines = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
     failed = [r for r in lines if r["Attributes"]["event"] == "op.do.failed"]
     assert len(failed) == 1
     assert failed[0]["Attributes"]["error"]["type"] == "RuntimeError"
@@ -147,12 +168,13 @@ def test_span_failure_emits_failed_and_reraises(tmp_path, monkeypatch):
 def test_redaction_default_blocklist(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
-    mod.get_logger().info(
-        "http.request", api_key="sk-secret", password="p", url="https://x"
-    )
+    mod.get_logger().info("http.request", api_key="sk-secret", password="p", url="https://x")
     rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
     assert rec["Attributes"]["api_key"] == "<redacted>"
     assert rec["Attributes"]["password"] == "<redacted>"
@@ -162,7 +184,10 @@ def test_redaction_default_blocklist(tmp_path, monkeypatch):
 def test_redaction_nested(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("ctx", headers={"Authorization": "Bearer t", "X-Req": "1"})
@@ -175,7 +200,10 @@ def test_redaction_extended_via_env(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
     monkeypatch.setenv("ORCHESTRA_REDACT_KEYS", "ssn,pin")
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     mod.get_logger().info("pii", ssn="123", pin="1234", name="Alice")
@@ -188,7 +216,10 @@ def test_redaction_extended_via_env(tmp_path, monkeypatch):
 def test_child_env_contains_traceparent(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
     monkeypatch.delenv("TRACEPARENT", raising=False)
-    import importlib, spec_runner.obs as mod
+    import importlib
+
+    import spec_runner.obs as mod
+
     importlib.reload(mod)
     mod.init_logging("spec-runner")
     with mod.span("outer") as s:
@@ -196,7 +227,7 @@ def test_child_env_contains_traceparent(tmp_path, monkeypatch):
     tp = env["TRACEPARENT"]
     assert tp.startswith("00-")
     parts = tp.split("-")
-    assert len(parts[1]) == 32   # trace_id
+    assert len(parts[1]) == 32  # trace_id
     assert parts[2] == s.span_id  # parent for the child = current span
     assert parts[3] == "01"
     assert "ORCHESTRA_PIPELINE_ID" in env
