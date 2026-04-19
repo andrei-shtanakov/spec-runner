@@ -90,3 +90,55 @@ def test_timestamp_formats(tmp_path, monkeypatch):
     # ts_iso: microseconds, Z suffix
     assert rec["ts_iso"].endswith("Z")
     assert len(rec["ts_iso"].split(".")[1]) == 7   # "NNNNNNZ" = 6 digits + Z
+
+
+def test_span_nesting_linkage(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    log = mod.get_logger()
+
+    with mod.span("outer.op") as outer:
+        log.info("inside.outer")
+        with mod.span("inner.op") as inner:
+            log.info("inside.inner")
+            assert inner.parent_span_id == outer.span_id
+
+    lines = [json.loads(l)
+             for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    inner_records = [r for r in lines if r["Body"] in ("inside.inner", "inner.op.started")]
+    for r in inner_records:
+        assert r["Attributes"].get("parent_span_id") == outer.span_id
+
+
+def test_span_emits_started_and_ended(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    with mod.span("op.do", x=1):
+        pass
+    events = [json.loads(l)["Attributes"]["event"]
+              for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    assert "op.do.started" in events
+    assert "op.do.ended" in events
+
+
+def test_span_failure_emits_failed_and_reraises(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    with pytest.raises(RuntimeError):
+        with mod.span("op.do"):
+            raise RuntimeError("boom")
+    lines = [json.loads(l)
+             for l in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    failed = [r for r in lines if r["Attributes"]["event"] == "op.do.failed"]
+    assert len(failed) == 1
+    assert failed[0]["Attributes"]["error"]["type"] == "RuntimeError"
+    assert failed[0]["Attributes"]["error"]["message"] == "boom"

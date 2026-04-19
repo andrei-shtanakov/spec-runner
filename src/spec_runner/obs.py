@@ -143,3 +143,52 @@ def init_logging(
 
 def get_logger(module: str | None = None) -> structlog.BoundLogger:
     return structlog.get_logger(module=module) if module else structlog.get_logger()
+
+
+class Span:
+    def __init__(self, span_id: str, parent_span_id: str | None, trace_id: str):
+        self.span_id = span_id
+        self.parent_span_id = parent_span_id
+        self.trace_id = trace_id
+        self._attrs: dict[str, Any] = {}
+
+    def set_attrs(self, **attrs: Any) -> None:
+        self._attrs.update(attrs)
+
+
+def _exc_to_dict(exc: BaseException) -> dict[str, Any]:
+    d: dict[str, Any] = {"type": type(exc).__name__, "message": str(exc)}
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        d["caused_by"] = _exc_to_dict(cause)
+    return d
+
+
+@contextmanager
+def span(event: str, **attrs: Any) -> Iterator[Span]:
+    log = get_logger()
+    ctx = structlog.contextvars.get_contextvars()
+    parent_span_id = ctx.get("_span_id")
+    trace_id = ctx.get("_trace_id", "0" * 32)
+
+    new_span_id = secrets.token_hex(8)
+    sp = Span(new_span_id, parent_span_id, trace_id)
+
+    # push new span, parent_span_id
+    structlog.contextvars.bind_contextvars(
+        _span_id=new_span_id,
+        parent_span_id=parent_span_id,
+    )
+    log.info(f"{event}.started", **attrs)
+    try:
+        yield sp
+    except BaseException as exc:
+        log.error(f"{event}.failed", error=_exc_to_dict(exc), **sp._attrs)
+        raise
+    else:
+        log.info(f"{event}.ended", **sp._attrs)
+    finally:
+        # restore previous span context
+        structlog.contextvars.unbind_contextvars("_span_id", "parent_span_id")
+        if parent_span_id is not None:
+            structlog.contextvars.bind_contextvars(_span_id=parent_span_id)
