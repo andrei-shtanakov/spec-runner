@@ -74,3 +74,19 @@ def test_traceparent_malformed_warns_and_roots(tmp_path, monkeypatch, caplog):
     rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
     assert len(rec["TraceId"]) == 32
     assert "parent_span_id" not in rec["Attributes"]
+
+
+def test_timestamp_formats(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    mod.get_logger().info("ts.check")
+
+    rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
+    # Timestamp: ns since epoch, string, ~19 digits in 2026
+    assert rec["Timestamp"].isdigit() and 18 <= len(rec["Timestamp"]) <= 20
+    # ts_iso: microseconds, Z suffix
+    assert rec["ts_iso"].endswith("Z")
+    assert len(rec["ts_iso"].split(".")[1]) == 7   # "NNNNNNZ" = 6 digits + Z
