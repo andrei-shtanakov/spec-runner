@@ -221,3 +221,31 @@ def span(event: str, **attrs: Any) -> Iterator[Span]:
         structlog.contextvars.unbind_contextvars("_span_id", "parent_span_id")
         if parent_span_id is not None:
             structlog.contextvars.bind_contextvars(_span_id=parent_span_id)
+
+
+def child_env() -> dict[str, str]:
+    """Env-var dict to merge into subprocess env= for trace propagation."""
+    ctx = structlog.contextvars.get_contextvars()
+    trace_id = ctx.get("_trace_id", "0" * 32)
+    span_id = ctx.get("_span_id", "0" * 16)
+    pipeline_id = ctx.get("pipeline_id", "")
+    env = {
+        "TRACEPARENT": f"00-{trace_id}-{span_id}-01",
+        "ORCHESTRA_PIPELINE_ID": pipeline_id,
+    }
+    log_dir = os.environ.get("ORCHESTRA_LOG_DIR")
+    if log_dir:
+        env["ORCHESTRA_LOG_DIR"] = str(Path(log_dir).resolve())
+    return env
+
+
+def current_trace_id() -> str | None:
+    return structlog.contextvars.get_contextvars().get("_trace_id")
+
+
+def current_span_id() -> str | None:
+    return structlog.contextvars.get_contextvars().get("_span_id")
+
+
+def current_pipeline_id() -> str | None:
+    return structlog.contextvars.get_contextvars().get("pipeline_id")

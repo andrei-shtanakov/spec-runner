@@ -183,3 +183,21 @@ def test_redaction_extended_via_env(tmp_path, monkeypatch):
     assert rec["Attributes"]["ssn"] == "<redacted>"
     assert rec["Attributes"]["pin"] == "<redacted>"
     assert rec["Attributes"]["name"] == "Alice"
+
+
+def test_child_env_contains_traceparent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    with mod.span("outer") as s:
+        env = mod.child_env()
+    tp = env["TRACEPARENT"]
+    assert tp.startswith("00-")
+    parts = tp.split("-")
+    assert len(parts[1]) == 32   # trace_id
+    assert parts[2] == s.span_id  # parent for the child = current span
+    assert parts[3] == "01"
+    assert "ORCHESTRA_PIPELINE_ID" in env
+    assert env["ORCHESTRA_LOG_DIR"] == str(tmp_path)
