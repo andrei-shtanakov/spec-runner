@@ -81,6 +81,7 @@ markers = [
 [dependency-groups]
 dev = [
     "build>=1.4.0",
+    "jsonschema>=4.26.0",
     "mypy>=1.19.1",
     "pyrefly>=0.51.1",
     "pytest>=9.0.2",

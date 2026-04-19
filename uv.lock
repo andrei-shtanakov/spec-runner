@@ -1518,6 +1518,7 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "build" },
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pyrefly" },
     { name = "pytest" },
@@ -1544,6 +1545,7 @@ provides-extras = ["dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "build", specifier = ">=1.4.0" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "mypy", specifier = ">=1.19.1" },
     { name = "pyrefly", specifier = ">=0.51.1" },
     { name = "pytest", specifier = ">=9.0.2" },
