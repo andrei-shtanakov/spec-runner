@@ -49,7 +49,10 @@ def test_traceparent_valid_inherited(tmp_path, monkeypatch):
     assert rec["TraceId"] == tid
     assert rec["Attributes"]["parent_span_id"] == pid_span
     assert rec["Attributes"]["pipeline_id"] == "01HZKX3P9M7Q2VFGR8BNDAW5YT"
-    assert rec["SpanId"] != pid_span  # fresh span for this process
+    # After the fix: init sets _span_id = parent_span_id so that the first
+    # obs.span() child correctly links back to the remote caller's span.
+    # A bare get_logger().info() (no span) therefore emits SpanId == pid_span.
+    assert rec["SpanId"] == pid_span  # init-level span IS the external parent's span
 
 
 def test_traceparent_empty_means_root(tmp_path, monkeypatch):
@@ -122,7 +125,9 @@ def test_span_nesting_linkage(tmp_path, monkeypatch):
             log.info("inside.inner")
             assert inner.parent_span_id == outer.span_id
 
-    lines = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    lines = [
+        json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()
+    ]
     inner_records = [r for r in lines if r["Body"] in ("inside.inner", "inner.op.started")]
     for r in inner_records:
         assert r["Attributes"].get("parent_span_id") == outer.span_id
@@ -158,7 +163,9 @@ def test_span_failure_emits_failed_and_reraises(tmp_path, monkeypatch):
     mod.init_logging("spec-runner")
     with pytest.raises(RuntimeError), mod.span("op.do"):
         raise RuntimeError("boom")
-    lines = [json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()]
+    lines = [
+        json.loads(line) for line in list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()
+    ]
     failed = [r for r in lines if r["Attributes"]["event"] == "op.do.failed"]
     assert len(failed) == 1
     assert failed[0]["Attributes"]["error"]["type"] == "RuntimeError"
@@ -211,6 +218,27 @@ def test_redaction_extended_via_env(tmp_path, monkeypatch):
     assert rec["Attributes"]["ssn"] == "<redacted>"
     assert rec["Attributes"]["pin"] == "<redacted>"
     assert rec["Attributes"]["name"] == "Alice"
+
+
+def test_traceparent_makes_first_span_child_of_external_parent(tmp_path, monkeypatch):
+    """When TRACEPARENT has a parent span, the first obs.span() in the child
+    must set parent_span_id to that external parent (not to a random init span)."""
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    tid = "3f2e8c1a9b7d450f6e2c8a1b9f4d730e"
+    external_parent_span = "9f2e4a1b6c0d3387"
+    monkeypatch.setenv("TRACEPARENT", f"00-{tid}-{external_parent_span}-01")
+
+    import importlib
+
+    import spec_runner.obs as mod
+
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+
+    with mod.span("first.child.op") as first_span:
+        assert first_span.parent_span_id == external_parent_span, (
+            f"expected parent_span_id={external_parent_span!r}, got {first_span.parent_span_id!r}"
+        )
 
 
 def test_child_env_contains_traceparent(tmp_path, monkeypatch):
