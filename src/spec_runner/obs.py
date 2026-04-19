@@ -8,7 +8,9 @@ Contract: see _cowork_output/observability-contract/log-schema.json
 from __future__ import annotations
 
 import json
+import logging as _stdlib_logging
 import os
+import re
 import secrets
 import time
 from contextlib import contextmanager
@@ -37,6 +39,23 @@ def _now_ns() -> int:
 def _iso_micros(ns: int) -> str:
     dt = datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+_TRACEPARENT_RE = re.compile(r"^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$")
+
+
+def _parse_traceparent() -> tuple[str, str | None]:
+    """Return (trace_id, parent_span_id). parent_span_id is None at root."""
+    raw = os.environ.get("TRACEPARENT", "").strip()
+    if not raw:
+        return secrets.token_hex(16), None
+    m = _TRACEPARENT_RE.match(raw)
+    if not m:
+        _stdlib_logging.getLogger(__name__).warning(
+            "malformed TRACEPARENT=%r, treating as root", raw
+        )
+        return secrets.token_hex(16), None
+    return m.group(1), m.group(2)
 
 
 def _reshape_to_otel(project: str):
@@ -84,6 +103,9 @@ def init_logging(
     log_dir: Path | None = None,
 ) -> None:
     global _initialized
+    _initialized = False
+    structlog.contextvars.clear_contextvars()
+
     if _initialized:
         return
     _initialized = True
@@ -93,11 +115,15 @@ def init_logging(
     output_path = log_dir / f"{project}-{os.getpid()}.jsonl"
 
     pipeline_id = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
-    structlog.contextvars.bind_contextvars(
-        pipeline_id=pipeline_id,
-        _trace_id=secrets.token_hex(16),
-        _span_id=secrets.token_hex(8),
-    )
+    trace_id, parent_span_id = _parse_traceparent()
+    bind_kwargs: dict[str, Any] = {
+        "pipeline_id": pipeline_id,
+        "_trace_id": trace_id,
+        "_span_id": secrets.token_hex(8),
+    }
+    if parent_span_id is not None:
+        bind_kwargs["parent_span_id"] = parent_span_id
+    structlog.contextvars.bind_contextvars(**bind_kwargs)
 
     structlog.configure(
         processors=[
