@@ -58,6 +58,31 @@ def _parse_traceparent() -> tuple[str, str | None]:
     return m.group(1), m.group(2)
 
 
+_DEFAULT_REDACT_KEYS = frozenset({
+    "api_key", "apikey", "token", "password", "secret",
+    "authorization", "cookie", "private_key",
+})
+
+
+def _redact(keys: frozenset[str]):
+    def _walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                k: ("<redacted>" if k.lower() in keys else _walk(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_walk(v) for v in value]
+        return value
+
+    def processor(logger, method_name, event_dict):
+        return {
+            k: ("<redacted>" if k.lower() in keys else _walk(v))
+            for k, v in event_dict.items()
+        }
+    return processor
+
+
 def _reshape_to_otel(project: str):
     """Final processor: rearrange structlog dict into OTel Logs DM shape."""
     def processor(logger, method_name, event_dict):
@@ -101,13 +126,11 @@ def init_logging(
     *,
     level: str | None = None,
     log_dir: Path | None = None,
+    redact_keys: list[str] | None = None,
 ) -> None:
     global _initialized
     _initialized = False
     structlog.contextvars.clear_contextvars()
-
-    if _initialized:
-        return
     _initialized = True
 
     log_dir = log_dir or _default_log_dir()
@@ -116,6 +139,7 @@ def init_logging(
 
     pipeline_id = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
     trace_id, parent_span_id = _parse_traceparent()
+
     bind_kwargs: dict[str, Any] = {
         "pipeline_id": pipeline_id,
         "_trace_id": trace_id,
@@ -125,17 +149,22 @@ def init_logging(
         bind_kwargs["parent_span_id"] = parent_span_id
     structlog.contextvars.bind_contextvars(**bind_kwargs)
 
+    env_extra = os.environ.get("ORCHESTRA_REDACT_KEYS", "")
+    env_keys = {k.strip().lower() for k in env_extra.split(",") if k.strip()}
+    param_keys = {k.lower() for k in (redact_keys or [])}
+    all_redact = frozenset(_DEFAULT_REDACT_KEYS | env_keys | param_keys)
+
+    level_name = (level or os.environ.get("ORCHESTRA_LOG_LEVEL") or "info").lower()
+    min_level = {"debug": 10, "info": 20, "warning": 30, "error": 40}.get(level_name, 20)
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            _redact(all_redact),
             _reshape_to_otel(project),
             structlog.processors.JSONRenderer(sort_keys=False),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            {"debug": 10, "info": 20, "warning": 30, "error": 40}.get(
-                (level or os.environ.get("ORCHESTRA_LOG_LEVEL") or "info").lower(), 20
-            )
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(min_level),
         logger_factory=structlog.WriteLoggerFactory(file=output_path.open("a")),
         cache_logger_on_first_use=True,
     )

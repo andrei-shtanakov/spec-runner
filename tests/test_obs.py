@@ -142,3 +142,44 @@ def test_span_failure_emits_failed_and_reraises(tmp_path, monkeypatch):
     assert len(failed) == 1
     assert failed[0]["Attributes"]["error"]["type"] == "RuntimeError"
     assert failed[0]["Attributes"]["error"]["message"] == "boom"
+
+
+def test_redaction_default_blocklist(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    mod.get_logger().info(
+        "http.request", api_key="sk-secret", password="p", url="https://x"
+    )
+    rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
+    assert rec["Attributes"]["api_key"] == "<redacted>"
+    assert rec["Attributes"]["password"] == "<redacted>"
+    assert rec["Attributes"]["url"] == "https://x"
+
+
+def test_redaction_nested(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    mod.get_logger().info("ctx", headers={"Authorization": "Bearer t", "X-Req": "1"})
+    rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
+    assert rec["Attributes"]["headers"]["Authorization"] == "<redacted>"
+    assert rec["Attributes"]["headers"]["X-Req"] == "1"
+
+
+def test_redaction_extended_via_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+    monkeypatch.setenv("ORCHESTRA_REDACT_KEYS", "ssn,pin")
+    import importlib, spec_runner.obs as mod
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    mod.get_logger().info("pii", ssn="123", pin="1234", name="Alice")
+    rec = json.loads(list(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
+    assert rec["Attributes"]["ssn"] == "<redacted>"
+    assert rec["Attributes"]["pin"] == "<redacted>"
+    assert rec["Attributes"]["name"] == "Alice"
