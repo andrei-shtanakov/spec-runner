@@ -29,6 +29,7 @@ from .executor import (
 from .executor import (
     main as executor_main,
 )
+from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh
 from .logging import get_logger, setup_logging
 from .mcp_server import run_server as mcp_run_server
 from .plugins import (
@@ -57,8 +58,6 @@ from .state import (
 from .task import (
     TASKS_FILE,
     Task,
-    cmd_sync_from_gh,
-    cmd_sync_to_gh,
     get_in_progress_tasks,
     get_next_tasks,
     get_task_by_id,
