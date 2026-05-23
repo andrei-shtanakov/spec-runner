@@ -8,7 +8,8 @@
 - ✅ v2.0.0 зарелижен (PIPE-0…5, POLISH-1…5, `spec-runner task`, webhook, crash resilience)
 - ✅ CI/CD работает (`.github/workflows/ci.yml`) — единственный проект помимо ATP с CI
 - ✅ `--json-result` флаг для Maestro interop
-- ⚠️ Контракт с Maestro держится на неформальном парсинге `.executor-state.json`
+- ✅ R-04 (контракт с Maestro) заморожен 2026-04-17 — см. `docs/state-schema.md`, `schemas/`, `tests/test_json_result_contract.py`
+- 🚧 **Ecosystem-поток observability** в работе (см. ниже) — обновляет общий контракт `_cowork_output/observability-contract/log-schema.json`
 
 ## Правила ведения
 - После каждой выполненной задачи проставь `[x]` и добавь хеш коммита
@@ -17,6 +18,26 @@
 ---
 
 ## Активные задачи
+
+### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
+
+Контракт: `_cowork_output/observability-contract/log-schema.json` (OTel Logs Data Model JSONL).
+`spec-runner` — reference, файл `obs.py` затем вендорится в другие проекты.
+
+- [x] **`init_logging` + `get_logger` скелет** (`ead7070`)
+- [x] **Парсинг `TRACEPARENT` с graceful fallback** (`788b77f`)
+- [x] **Формат timestamps: ns-string + ISO micros** (`208938c`)
+- [x] **Span context manager с error chains** (`31e4cdd`)
+- [x] **Redaction processor (default + env-extended blocklist)** (`b07153b`)
+- [x] **`child_env()` для пропагации трейсов в subprocess** (`1cd18f9`)
+- [x] **Contract-тесты против shared schema/fixtures** (`1bcf9eb`)
+- [x] **Cutover `logging.py` → back-compat shim над `obs.py`** (`641b9b8`)
+- [x] **Использовать `TRACEPARENT` parent span_id как initial `_span_id`** (`fa6b106`)
+
+Дальнейшие шаги (open):
+- [ ] Вендорить `obs.py` в Maestro / arbiter / ATP (координировать через `_cowork_output/`)
+- [ ] Прописать в CHANGELOG версию следующего релиза (вероятно `v2.1.0`, minor — additive feature)
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans), если этого требует контракт
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
