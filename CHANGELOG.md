@@ -10,6 +10,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+(no changes yet)
+
+## [2.1.0] — 2026-05-23
+
 ### Added — observability module (`spec_runner.obs`)
 
 New canonical observability emitter shared across the ecosystem. Reference
@@ -44,8 +48,16 @@ Features:
 
 - No changes to the Maestro interop contract (`.executor-state.db`,
   `--json-result`) — observability is additive and does not affect R-04.
-- Version bump will be decided at next release cut (likely `v2.1.0`, minor —
-  additive feature, fully back-compatible).
+- Minor bump (additive feature, fully back-compatible). Already vendored
+  into Maestro (M1+M2), arbiter (Rust `arbiter-core::obs`), and ATP.
+
+### Also
+
+- Dependabot: patched 5 alerts (urllib3 2.6.3→2.7.0, python-multipart
+  0.0.26→0.0.29, idna 3.11→3.16, python-dotenv 1.2.1→1.2.2). Transitive
+  bumps only — no direct dependency changes.
+- `.gitignore`: ignore `COWORK_CONTEXT.md`, `_cowork_output/`, and obs
+  runtime output under `logs/`.
 
 ## [2.0.0] — 2026-04-17
 
@@ -53,4 +65,5 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.0.0...v2.1.0
