@@ -10,7 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-(no changes yet)
+### Added
+
+- **CLI auto-detection for OpenCode and Pi Agent.** `runner.build_cli_command()`
+  now recognizes two more coding agents alongside Claude / Codex / Ollama /
+  llama-cli:
+  - **[OpenCode](https://opencode.ai)** (sst/opencode) — `opencode run [--model provider/id] <prompt>`
+  - **[Pi Agent](https://pi.dev)** (earendil-works/pi) — `pi -p [--model X] <prompt>` (non-interactive mode)
+  Pi uses basename matching (not substring) to avoid false positives on
+  command names containing the literal "pi" (e.g. `pipe-cli`). Bundled review
+  prompts added under `skills/spec-generator-skill/templates/prompts/`.
+  Either CLI can be wired to either role (executor / reviewer / persona) via
+  `claude_command` / `review_command` / `personas` in the config — same as
+  any other supported CLI.
 
 ## [2.1.0] — 2026-05-23
 

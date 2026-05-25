@@ -138,10 +138,13 @@ class ExecutorConfig:
     # Examples:
     #   claude: "{cmd} -p {prompt}" or "{cmd} -p {prompt} --model {model}"
     #   codex: "{cmd} -p {prompt}"
+    #   opencode: "{cmd} run --model {model} {prompt}"
+    #   pi: "{cmd} -p --model {model} {prompt}"
     #   ollama: "{cmd} run {model} {prompt}"
     #   llama-cli: "{cmd} -m {model} -p {prompt} --no-display-prompt"
     #   llama-server: "curl -s http://localhost:8080/completion -d '{{\"prompt\": {prompt}}}'"
-    # If empty, auto-detects based on command name
+    # If empty, auto-detects based on command name (claude, codex, opencode, pi,
+    # ollama, llama-cli, llama-server)
     command_template: str = ""
 
     # Hooks

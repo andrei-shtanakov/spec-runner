@@ -50,6 +50,42 @@ class TestBuildCliCommand:
         assert "--model" in result
         assert "gpt-4" in result
 
+    def test_opencode_auto_detect(self):
+        result = build_cli_command("opencode", "hello")
+        assert result == ["opencode", "run", "hello"]
+
+    def test_opencode_with_model(self):
+        result = build_cli_command("opencode", "hello", model="anthropic/claude-sonnet-4-6")
+        assert result == [
+            "opencode",
+            "run",
+            "--model",
+            "anthropic/claude-sonnet-4-6",
+            "hello",
+        ]
+
+    def test_pi_auto_detect(self):
+        result = build_cli_command("pi", "hello")
+        assert result == ["pi", "-p", "hello"]
+
+    def test_pi_with_model(self):
+        result = build_cli_command("pi", "hello", model="openai/gpt-4o")
+        assert result == ["pi", "-p", "--model", "openai/gpt-4o", "hello"]
+
+    def test_pi_path_basename_match(self):
+        # Absolute path with pi as the basename should still auto-detect.
+        result = build_cli_command("/usr/local/bin/pi", "hello")
+        assert result == ["/usr/local/bin/pi", "-p", "hello"]
+
+    def test_pi_no_false_positive_substring(self):
+        # "pipe-cli" or anything containing "pi" should NOT be treated as Pi —
+        # it must fall through to the Claude default.
+        result = build_cli_command("pipe-cli", "hello")
+        assert result[0] == "pipe-cli"
+        # Claude default uses -p too, but key signal: prompt is the third
+        # arg ("-p hello"), not the fourth ("-p" + appended prompt).
+        assert result == ["pipe-cli", "-p", "hello"]
+
     def test_ollama_auto_detect(self):
         result = build_cli_command("ollama", "hello", model="llama3")
         assert result == ["ollama", "run", "llama3", "hello"]

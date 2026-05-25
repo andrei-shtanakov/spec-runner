@@ -334,6 +334,8 @@ paths:
 |-----|--------------|------------------|
 | Claude | Yes | `{cmd} -p {prompt} --model {model}` |
 | Codex | Yes | `{cmd} -p {prompt} --model {model}` |
+| OpenCode ([sst/opencode](https://opencode.ai)) | Yes | `{cmd} run --model {model} {prompt}` |
+| Pi Agent ([pi.dev](https://pi.dev)) | Yes (basename match) | `{cmd} -p --model {model} {prompt}` |
 | Ollama | Yes | `{cmd} run {model} {prompt}` |
 | llama-cli | Yes | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
 | Custom | Use template | `{cmd} --prompt {prompt}` |
