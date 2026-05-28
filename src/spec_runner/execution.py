@@ -375,7 +375,7 @@ def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: i
     if strategy == "fatal":
         return 0.0
     if strategy == "backoff_exponential":
-        return min(30.0 * (2**attempt), 300.0)
+        return float(min(30.0 * (2**attempt), 300.0))
     return float(base_delay * (attempt + 1))
 
 
@@ -396,24 +396,13 @@ def _check_task_budget(
     """
     spent = state.task_cost(task_id)
     if config.task_budget_usd is not None and spent >= config.task_budget_usd:
-        return (
-            f"Task budget exceeded "
-            f"(${spent:.2f} >= ${config.task_budget_usd:.2f})"
-        )
+        return f"Task budget exceeded (${spent:.2f} >= ${config.task_budget_usd:.2f})"
 
-    if (
-        config.max_retry_cost_usd is not None
-        and attempt_index > 0
-    ):
+    if config.max_retry_cost_usd is not None and attempt_index > 0:
         ts = state.get_task_state(task_id)
-        retry_spent = (
-            sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
-        )
+        retry_spent = sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
         if retry_spent >= config.max_retry_cost_usd:
-            return (
-                f"Retry budget exceeded "
-                f"(${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
-            )
+            return f"Retry budget exceeded (${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
     return None
 
 

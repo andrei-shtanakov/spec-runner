@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 import ulid
@@ -190,7 +190,8 @@ def init_logging(
 
 
 def get_logger(module: str | None = None) -> structlog.BoundLogger:
-    return structlog.get_logger(module=module) if module else structlog.get_logger()
+    logger = structlog.get_logger(module=module) if module else structlog.get_logger()
+    return cast("structlog.BoundLogger", logger)
 
 
 class Span:

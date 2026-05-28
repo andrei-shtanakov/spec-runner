@@ -155,9 +155,7 @@ class TestBuildAuditLogger:
         assert logger.operator == "maestro"
 
     def test_spec_prefix_flows_through(self, tmp_path: Path) -> None:
-        config = _make_config(
-            tmp_path, audit_log_path="audit.jsonl", spec_prefix="phase5-"
-        )
+        config = _make_config(tmp_path, audit_log_path="audit.jsonl", spec_prefix="phase5-")
         logger = build_audit_logger(config)
         logger.record(EVENT_RUN_STARTED)
         entry = _read_audit(logger.path)[0]
@@ -236,9 +234,7 @@ class TestExecutorStateAuditIntegration:
         assert failed["details"]["last_error"] == "boom"
         assert failed["details"]["error_code"] == "TASK_FAILED"
 
-    def test_degraded_mode_emits_state_degraded_event(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_degraded_mode_emits_state_degraded_event(self, tmp_path: Path, monkeypatch) -> None:
         import sqlite3
         from unittest.mock import MagicMock
 

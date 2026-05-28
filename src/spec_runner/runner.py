@@ -322,4 +322,4 @@ async def run_claude_async(
             proc.kill()
             await proc.wait()
         raise
-    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode
+    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode or 0

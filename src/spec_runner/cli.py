@@ -5,6 +5,7 @@ import json
 import signal
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -622,7 +623,7 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
     tasks_file = Path(f"spec/{prefix}tasks.md") if prefix else TASKS_FILE
     tasks = parse_tasks(tasks_file)
 
-    write_commands = {
+    write_commands: dict[str, Callable[..., object]] = {
         "start": cmd_start,
         "done": cmd_done,
         "block": cmd_block,

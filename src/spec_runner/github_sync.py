@@ -117,7 +117,7 @@ def _status_from_issue(issue: dict) -> str:
     if issue["state"] == "CLOSED":
         return "done"
     for label in issue.get("labels", []):
-        name = label["name"] if isinstance(label, dict) else label
+        name = str(label["name"]) if isinstance(label, dict) else str(label)
         if name.startswith("status:"):
             status = name.split(":", 1)[1]
             if status in STATUS_EMOJI:

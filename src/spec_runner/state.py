@@ -213,6 +213,7 @@ class ExecutorState:
         # Init DB first so tables exist
         self._init_db()
 
+        assert self._conn is not None
         with self._conn:
             # Migrate tasks and attempts
             for task_id, task_data in data.get("tasks", {}).items():
@@ -262,6 +263,7 @@ class ExecutorState:
 
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""
+        assert self._conn is not None
         # Load tasks
         cursor = self._conn.execute("SELECT task_id, status, started_at, completed_at FROM tasks")
         for row in cursor.fetchall():
@@ -323,6 +325,7 @@ class ExecutorState:
 
     def _save_meta(self) -> None:
         """Persist meta counters to SQLite."""
+        assert self._conn is not None
         for key, value in [
             ("consecutive_failures", str(self.consecutive_failures)),
             ("total_completed", str(self.total_completed)),
@@ -340,6 +343,7 @@ class ExecutorState:
         Called by external code (e.g. executor.py) when direct
         mutations are made to in-memory state outside record_attempt/mark_running.
         """
+        assert self._conn is not None
         with self._conn:
             # Upsert all tasks
             for task_id, ts in self.tasks.items():
@@ -415,6 +419,7 @@ class ExecutorState:
             review_findings=review_findings,
         )
         state.attempts.append(attempt)
+        assert self._conn is not None
 
         if success:
             state.status = "success"
@@ -519,6 +524,7 @@ class ExecutorState:
         state = self.get_task_state(task_id)
         state.status = "running"
         state.started_at = datetime.now().isoformat()
+        assert self._conn is not None
 
         try:
             with self._conn:

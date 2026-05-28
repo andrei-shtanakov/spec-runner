@@ -177,9 +177,7 @@ class TestUncoveredSpec:
         config = _write_specs(tmp_path, tasks, REQS_CLEAN, DESIGN_CLEAN)
         report = audit_all(config)
 
-        uncovered_designs = [
-            f for f in report.findings if f.category == CAT_UNCOVERED_DESIGN
-        ]
+        uncovered_designs = [f for f in report.findings if f.category == CAT_UNCOVERED_DESIGN]
         assert {f.subject for f in uncovered_designs} == {"DESIGN-002"}
 
 
