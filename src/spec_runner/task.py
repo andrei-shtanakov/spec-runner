@@ -18,7 +18,7 @@ CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
 BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
-ESTIMATE = re.compile(r"Est: (\d+(?:-\d+)?[dh])")
+ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 
 STATUS_EMOJI = {"todo": "⬜", "in_progress": "🔄", "done": "✅", "blocked": "⏸️"}
 
