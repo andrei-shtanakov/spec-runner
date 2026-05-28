@@ -12,7 +12,14 @@ import pytest
 _SPEC_RUNNER_ROOT = Path(__file__).resolve().parents[1]
 _UMBRELLA = _SPEC_RUNNER_ROOT.parent  # all_ai_orchestrators/
 _CONTRACT = _UMBRELLA / "Maestro" / "_cowork_output" / "observability-contract"
-_SCHEMA = json.loads((_CONTRACT / "log-schema.json").read_text())
+_SCHEMA_PATH = _CONTRACT / "log-schema.json"
+if not _SCHEMA_PATH.exists():
+    pytest.skip(
+        "observability-contract unavailable (external cowork workspace, "
+        "not checked out in standalone CI)",
+        allow_module_level=True,
+    )
+_SCHEMA = json.loads(_SCHEMA_PATH.read_text())
 
 
 @pytest.fixture
