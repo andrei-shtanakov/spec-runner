@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-05-28
+
 ### Added
 
 - **CLI auto-detection for OpenCode and Pi Agent.** `runner.build_cli_command()`
@@ -23,6 +25,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
   Either CLI can be wired to either role (executor / reviewer / persona) via
   `claude_command` / `review_command` / `personas` in the config — same as
   any other supported CLI.
+
+### Docs
+
+- Architecture diagrams (4 Mermaid views: system context, module map,
+  task-execution sequence, storage) under `docs/architecture.{md,html}`.
+
+### Fixed
+
+- Green CI: resolved `ruff format --check` drift and all `mypy` errors
+  (red since v2.1.0). No behavior change — Optional narrowing, type casts,
+  and supertype-compatible TUI signatures.
+
+### Notes
+
+- No changes to the Maestro interop contract (`.executor-state.db`,
+  `--json-result`) — additive feature + docs + type fixes only.
 
 ## [2.1.0] — 2026-05-23
 
@@ -77,5 +95,6 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.0.0...v2.1.0
