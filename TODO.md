@@ -5,6 +5,7 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
+- ✅ v2.2.1 зарелижен 2026-05-28 (CI off Node 20 → Node 24, obs contract test skip-guard)
 - ✅ v2.2.0 зарелижен 2026-05-28 (auto-detect OpenCode/Pi CLI, architecture diagrams, green CI)
 - ✅ v2.1.0 зарелижен 2026-05-23 (observability reference impl + Dependabot patches)
 - ✅ v2.0.0 зарелижен 2026-04-17 (PIPE-0…5, POLISH-1…5, `spec-runner task`, webhook, crash resilience)
