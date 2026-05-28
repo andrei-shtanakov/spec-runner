@@ -10,6 +10,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: bump GitHub Actions off the deprecated Node 20 runtime** (forced to
+  Node 24 on 2026-06-02): `actions/checkout` v4→v6, `actions/setup-python`
+  v5→v6, `astral-sh/setup-uv` v4→v8.1.0 (pinned exactly — setup-uv has no
+  floating `v8` major tag). All three now run on `node24`.
+
+### Fixed
+
+- `tests/test_obs_contract.py` no longer crashes pytest collection in
+  standalone CI checkouts: it read the shared `log-schema.json` from the
+  external cowork workspace at module load. Guarded with a module-level
+  `pytest.skip` when the contract file is absent; full coverage still runs
+  locally where the workspace is present.
+
 ## [2.2.0] — 2026-05-28
 
 ### Added
