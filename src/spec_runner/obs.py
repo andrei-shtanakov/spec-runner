@@ -12,6 +12,7 @@ import logging as _stdlib_logging
 import os
 import re
 import secrets
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -128,6 +129,33 @@ def _reshape_to_otel(project: str):
     return processor
 
 
+def _console_progress():
+    """Side-effect processor: emit a compact human line to the current stderr.
+
+    Resolves ``sys.stderr`` at call time (not at bind time) so it never writes
+    to a stream that was swapped out or closed — e.g. under pytest capture, or
+    if the host reassigns stderr mid-run. Returns ``event_dict`` unchanged so
+    the JSON file sink still receives the full OTel record; the console copy is
+    trimmed of trace/transport plumbing (``pipeline_id``, span/trace ids). Must
+    run after ``_redact`` (secrets masked) and before ``_reshape_to_otel``.
+    """
+    renderer = structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
+
+    def processor(logger, method_name, event_dict):
+        line = {
+            k: v
+            for k, v in event_dict.items()
+            if not k.startswith("_") and k not in ("pipeline_id", "parent_span_id")
+        }
+        line["level"] = method_name
+        line.setdefault("timestamp", datetime.now().strftime("%H:%M:%S"))
+        sys.stderr.write(renderer(logger, method_name, line) + "\n")
+        sys.stderr.flush()
+        return event_dict
+
+    return processor
+
+
 def _default_log_dir() -> Path:
     env_dir = os.environ.get("ORCHESTRA_LOG_DIR")
     if env_dir:
@@ -142,6 +170,7 @@ def init_logging(
     level: str | None = None,
     log_dir: Path | None = None,
     redact_keys: list[str] | None = None,
+    console: bool = False,
 ) -> None:
     global _initialized
     _initialized = False
@@ -176,13 +205,19 @@ def init_logging(
     level_name = (level or os.environ.get("ORCHESTRA_LOG_LEVEL") or "info").lower()
     min_level = {"debug": 10, "info": 20, "warning": 30, "error": 40}.get(level_name, 20)
 
+    processors: list[Any] = [
+        structlog.contextvars.merge_contextvars,
+        _redact(all_redact),
+    ]
+    if console:
+        processors.append(_console_progress())
+    processors += [
+        _reshape_to_otel(project),
+        structlog.processors.JSONRenderer(sort_keys=False),
+    ]
+
     structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            _redact(all_redact),
-            _reshape_to_otel(project),
-            structlog.processors.JSONRenderer(sort_keys=False),
-        ],
+        processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(min_level),
         logger_factory=structlog.WriteLoggerFactory(file=output_path.open("a")),
         cache_logger_on_first_use=True,

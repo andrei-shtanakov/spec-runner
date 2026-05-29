@@ -28,13 +28,18 @@ def redact_sensitive(logger: object, method_name: object, event_dict: dict) -> d
 
 def setup_logging(
     level: str = "info",
-    json_output: bool = True,  # ignored — obs always emits JSON
+    json_output: bool = True,  # ignored — obs always emits JSON to the file sink
     log_file: Path | None = None,
-    tui_mode: bool = False,  # ignored — obs writes to file; stdout stays free
+    tui_mode: bool = False,  # True → no console sink (the TUI owns the screen)
 ) -> None:
-    """Delegate to obs.init_logging; preserved signature for back-compat."""
+    """Delegate to obs.init_logging; preserved signature for back-compat.
+
+    Outside TUI mode a compact progress sink is mirrored to stderr so plain
+    ``run``/``watch`` invocations aren't silent; the JSON file sink is always
+    written. In TUI mode stderr stays free so it doesn't corrupt the display.
+    """
     log_dir = log_file.parent if log_file else None
-    obs.init_logging("spec-runner", level=level, log_dir=log_dir)
+    obs.init_logging("spec-runner", level=level, log_dir=log_dir, console=not tui_mode)
 
 
 def get_logger(module: str) -> structlog.BoundLogger:
