@@ -10,6 +10,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.2.2] — 2026-05-29
+
+### Added
+
+- **Console progress for non-TUI runs.** Plain `spec-runner run` / `watch`
+  were silent because `obs` routed all structlog output to the per-PID JSONL
+  file only. A compact, human-readable progress line is now mirrored to
+  **stderr** (opt-in `obs.init_logging(..., console=True)`, wired through
+  `setup_logging`'s existing `tui_mode` flag — on for normal runs, off in
+  TUI mode so the dashboard isn't corrupted). Trace/transport fields
+  (`pipeline_id`, span/trace ids) are stripped from the console line and
+  secrets are redacted upstream. The JSON file sink is byte-identical, so the
+  vendored OTel observability contract is unchanged.
+
 ## [2.2.1] — 2026-05-28
 
 ### Changed
@@ -112,7 +126,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.0.0...v2.1.0
