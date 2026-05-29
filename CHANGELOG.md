@@ -24,6 +24,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
   secrets are redacted upstream. The JSON file sink is byte-identical, so the
   vendored OTel observability contract is unchanged.
 
+### Fixed
+
+- **Task estimate parsing for decimals and en-dash ranges.** The `ESTIMATE`
+  regex only accepted integer day/hour values with ASCII-hyphen ranges, so
+  estimates like `1.5d` or `1–1.5d` (en-dash, U+2013) were silently dropped
+  and surfaced as spurious "missing estimate" validation warnings. The pattern
+  now accepts decimals and en-dash ranges (backward-compatible superset).
+
 ## [2.2.1] — 2026-05-28
 
 ### Changed
