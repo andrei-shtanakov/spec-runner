@@ -1544,6 +1544,47 @@ class TestSmartRetry:
         assert mock_sleep.call_count == 0
 
 
+class TestStageReporterWiring:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_codex_and_parse_stages_emitted(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_post,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+        monkeypatch,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=0, stdout="TASK_COMPLETE\n", stderr="",
+        )
+        captured: list[str] = []
+
+        def _capture(*args: object) -> None:
+            if args:
+                captured.append(str(args[0]))
+
+        monkeypatch.setattr("spec_runner.execution.log_progress", _capture)
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+        joined = "\n".join(captured)
+        assert "stage: codex" in joined
+        assert "stage: parse" in joined
+        assert joined.index("stage: codex") < joined.index("stage: parse")
+
+
 class TestErrorClassificationInExecution:
     @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")

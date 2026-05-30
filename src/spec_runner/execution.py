@@ -17,6 +17,7 @@ from .runner import (
     parse_token_usage,
     send_callback,
 )
+from .stages import StageReporter
 from .state import (
     ErrorCode,
     ExecutorState,
@@ -43,6 +44,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     """
 
     task_id = task.id
+    reporter = StageReporter(task.id, lambda line: log_progress(line))
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
@@ -119,6 +121,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             skip_permissions=config.skip_permissions,
         )
 
+        reporter.enter("codex")
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -182,6 +185,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         success = (has_complete_marker and not has_failed_marker) or implicit_success
 
         if success:
+            reporter.enter("parse")
             if has_complete_marker:
                 logger.info("Task completed by Claude", task_id=task_id)
             else:
