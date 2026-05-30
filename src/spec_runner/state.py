@@ -742,6 +742,34 @@ class ExecutorState:
                 )
         return flipped
 
+    def most_recent_failed_attempt(self) -> "TaskAttempt | None":
+        """Return the most recently recorded failing attempt, or None."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT timestamp, success, duration_seconds, error, error_code, "
+            "claude_output, input_tokens, output_tokens, cost_usd, "
+            "review_status, review_findings, error_kind, error_stage "
+            "FROM attempts WHERE success = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        error_code = ErrorCode(row[4]) if row[4] is not None else None
+        return TaskAttempt(
+            timestamp=row[0],
+            success=bool(row[1]),
+            duration_seconds=row[2],
+            error=row[3],
+            error_code=error_code,
+            claude_output=row[5],
+            input_tokens=row[6],
+            output_tokens=row[7],
+            cost_usd=row[8],
+            review_status=row[9],
+            review_findings=row[10],
+            error_kind=row[11],
+            error_stage=row[12],
+        )
+
     def close(self) -> None:
         """Close the SQLite connection."""
         if self._conn is not None:
