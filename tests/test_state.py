@@ -1045,3 +1045,45 @@ class TestMetaHelpers:
             state.set_meta("k", "v1")
             state.set_meta("k", "v2")
             assert state.get_meta("k") == "v2"
+
+
+class TestResetFailedToPending:
+    """Tests for ExecutorState.reset_failed_to_pending()."""
+
+    def _seed_tasks(self, state: ExecutorState) -> None:
+        """Seed T1=pending, T2=failed, T3=success, T4=failed."""
+        # T1: stay pending (just ensure it exists in DB)
+        ts = state.get_task_state("T1")
+        assert ts.status == "pending"
+        # Persist T1 so it survives the context-manager close
+        assert state._conn is not None
+        with state._conn:
+            state._conn.execute(
+                "INSERT INTO tasks (task_id, status) VALUES (?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET status = excluded.status",
+                ("T1", "pending"),
+            )
+        # T2: one failed attempt with max_retries=1 → status becomes "failed"
+        state.record_attempt("T2", success=False, duration=1.0, error="boom")
+        # T3: success
+        state.record_attempt("T3", success=True, duration=1.0)
+        # T4: one failed attempt → status becomes "failed"
+        state.record_attempt("T4", success=False, duration=1.0, error="oops")
+
+    def test_resets_only_failed_and_returns_their_ids(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            self._seed_tasks(state)
+            flipped = state.reset_failed_to_pending()
+        assert flipped == {"T2", "T4"}
+        with ExecutorState(cfg) as state:
+            assert state.get_task_state("T2").status == "pending"
+            assert state.get_task_state("T4").status == "pending"
+            assert state.get_task_state("T1").status == "pending"
+            assert state.get_task_state("T3").status == "success"
+
+    def test_no_failed_returns_empty_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("T1", success=True, duration=1.0)
+            assert state.reset_failed_to_pending() == set()

@@ -687,6 +687,28 @@ class ExecutorState:
         ).fetchone()
         return row[0] if row else default
 
+    def reset_failed_to_pending(self) -> set[str]:
+        """Flip every task with status='failed' to 'pending'.
+
+        Updates both the in-memory cache and SQLite atomically so the change
+        survives connection close.  Returns the set of task IDs that were
+        flipped (used by second-pass detection in cli.py).
+        """
+        assert self._conn is not None
+        flipped = {
+            task_id
+            for task_id, ts in self.tasks.items()
+            if ts.status == "failed"
+        }
+        if flipped:
+            for task_id in flipped:
+                self.tasks[task_id].status = "pending"
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET status = 'pending' WHERE status = 'failed'"
+                )
+        return flipped
+
     def close(self) -> None:
         """Close the SQLite connection."""
         if self._conn is not None:
