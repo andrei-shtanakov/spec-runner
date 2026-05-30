@@ -23,6 +23,7 @@ from .review import (
     run_code_review,
     run_parallel_review,
 )
+from .stages import StageReporter
 from .state import ReviewVerdict
 from .task import Task
 
@@ -46,11 +47,13 @@ __all__ = [
 ]
 
 
-def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
+def pre_start_hook(task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None) -> bool:
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 
     # Sync dependencies
+    if reporter:
+        reporter.enter("sync_deps")
     logger.info("Syncing dependencies")
     result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
     if result.returncode == 0:
@@ -60,6 +63,8 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
 
     # Create git branch
     if config.create_git_branch:
+        if reporter:
+            reporter.enter("branch")
         branch_name = get_task_branch_name(task)
         try:
             # Check if git exists
@@ -158,6 +163,8 @@ def post_done_hook(
     config: ExecutorConfig,
     success: bool,
     changed_since: float | None = None,
+    *,
+    reporter: StageReporter | None = None,
 ) -> tuple[bool, str | None, str, str]:
     """Hook after task completion.
 
@@ -175,6 +182,8 @@ def post_done_hook(
     # Run tests — capture output for review context
     test_output_str: str | None = None
     if config.run_tests_on_done:
+        if reporter:
+            reporter.enter("tests")
         test_cmd = config.test_command
 
         # Scope tests to changed files when running in parallel mode
@@ -220,6 +229,8 @@ def post_done_hook(
     # Run lint — capture output for review context
     lint_output_str: str | None = None
     if config.run_lint_on_done and config.lint_command:
+        if reporter:
+            reporter.enter("lint")
         logger.info("Running lint")
         result = subprocess.run(
             config.lint_command,
@@ -287,6 +298,8 @@ def post_done_hook(
     if config.hitl_review and not config.run_review:
         logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
+        if reporter:
+            reporter.enter("review")
         review_fn = run_parallel_review if config.review_parallel else run_code_review
         logger.info(
             "Running code review",
@@ -332,6 +345,8 @@ def post_done_hook(
 
     # Auto-commit
     if config.auto_commit:
+        if reporter:
+            reporter.enter("commit")
         try:
             # Check if there are changes to commit
             status_result = subprocess.run(
@@ -366,6 +381,8 @@ def post_done_hook(
 
     # Merge branch to main
     if config.create_git_branch:
+        if reporter:
+            reporter.enter("merge")
         try:
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)

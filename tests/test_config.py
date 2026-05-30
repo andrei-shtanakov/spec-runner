@@ -12,6 +12,34 @@ from spec_runner.config import (
 )
 
 
+def _build_args(**overrides) -> Namespace:
+    """Return a minimal Namespace that satisfies all build_config attribute reads.
+
+    All attributes are set to their "not passed" values (None/False/0/"") so
+    that build_config applies only YAML overrides and dataclass defaults.
+    The subdir-detection tests rely on project_root=None so that ExecutorConfig
+    defaults to Path(".") which resolves to cwd (the monkeypatched directory).
+    """
+    defaults = {
+        "max_retries": None,
+        "timeout": None,
+        "no_tests": False,
+        "no_branch": False,
+        "no_commit": False,
+        "no_review": False,
+        "callback_url": "",
+        "spec_prefix": "",
+        "project_root": None,
+        "max_concurrent": 0,
+        "budget": None,
+        "task_budget": None,
+        "hitl_review": False,
+        "log_level": None,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
+
+
 class TestExecutorConfig:
     def test_defaults(self):
         c = ExecutorConfig()
@@ -410,3 +438,36 @@ class TestPersonaConfig:
         assert personas["implementer"].model == "sonnet"
         assert personas["implementer"].focus == ["src/", "tasks.md"]
         assert personas["reviewer"].model == "haiku"
+
+
+class TestSubdirAutoDefaultV230:
+    def _make_subdir_repo(self, tmp_path):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        return sub
+
+    def test_subdir_flips_git_branch_and_commit_off(self, tmp_path, monkeypatch):
+        sub = self._make_subdir_repo(tmp_path)
+        monkeypatch.chdir(sub)
+        cfg = build_config({}, _build_args())
+        assert cfg.create_git_branch is False
+        assert cfg.auto_commit is False
+
+    def test_explicit_true_in_yaml_respected(self, tmp_path, monkeypatch):
+        sub = self._make_subdir_repo(tmp_path)
+        monkeypatch.chdir(sub)
+        cfg = build_config({"create_git_branch": True, "auto_commit": True}, _build_args())
+        assert cfg.create_git_branch is True
+        assert cfg.auto_commit is True
+
+    def test_non_subdir_keeps_defaults_true(self, tmp_path, monkeypatch):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        monkeypatch.chdir(tmp_path)
+        cfg = build_config({}, _build_args())
+        assert cfg.create_git_branch is True
+        assert cfg.auto_commit is True

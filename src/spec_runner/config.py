@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import fcntl
 import os
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -137,11 +138,14 @@ class ExecutorConfig:
     # Command template for custom CLIs. Placeholders: {cmd}, {model}, {prompt}, {prompt_file}
     # Examples:
     #   claude: "{cmd} -p {prompt}" or "{cmd} -p {prompt} --model {model}"
-    #   codex: "{cmd} -p {prompt}"
+    #   codex: "{cmd} exec {prompt}"   # -p is --profile in codex, not the prompt
+    #   opencode: "{cmd} run --model {model} {prompt}"
+    #   pi: "{cmd} -p --model {model} {prompt}"
     #   ollama: "{cmd} run {model} {prompt}"
     #   llama-cli: "{cmd} -m {model} -p {prompt} --no-display-prompt"
     #   llama-server: "curl -s http://localhost:8080/completion -d '{{\"prompt\": {prompt}}}'"
-    # If empty, auto-detects based on command name
+    # If empty, auto-detects based on command name (claude, codex, opencode, pi,
+    # ollama, llama-cli, llama-server)
     command_template: str = ""
 
     # Hooks
@@ -276,6 +280,32 @@ def _parse_personas(raw: dict) -> dict[str, Persona] | None:
                 focus=data.get("focus", []),
             )
     return personas if personas else None
+
+
+def _detect_subdir_repo(project_root: Path) -> Path | None:
+    """Return the git repo toplevel if `project_root` is a strict subdir of
+    a git repo. Return None when project_root IS the toplevel, when no git
+    repo wraps it, or when git is not installed.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    toplevel = Path(result.stdout.strip()).resolve()
+    return toplevel if toplevel != project_root.resolve() else None
+
+
+def _user_set(yaml_config: dict, args: argparse.Namespace, key: str) -> bool:
+    """True if user explicitly set this key in YAML or CLI."""
+    if yaml_config.get(key) is not None:
+        return True
+    val = getattr(args, key, None)
+    return val not in (None, False)
 
 
 def _resolve_config_path() -> Path:
@@ -445,4 +475,26 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 
-    return ExecutorConfig(**config_kwargs)
+    config = ExecutorConfig(**config_kwargs)
+
+    git_root = _detect_subdir_repo(config.project_root)
+    if git_root is not None:
+        flipped = []
+        if not _user_set(yaml_config, args, "create_git_branch"):
+            config.create_git_branch = False
+            flipped.append("create_git_branch")
+        if not _user_set(yaml_config, args, "auto_commit"):
+            config.auto_commit = False
+            flipped.append("auto_commit")
+        if flipped:
+            from .logging import get_logger
+
+            get_logger("config").warning(
+                "subdir_project_detected",
+                project_root=str(config.project_root),
+                git_root=str(git_root),
+                defaulted_off=flipped,
+                override_hint="set create_git_branch/auto_commit=true in YAML to opt-in",
+            )
+
+    return config

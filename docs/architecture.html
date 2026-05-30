@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mermaid Diagram</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: { htmlLabels: true, curve: 'basis' },
+            sequence: { showSequenceNumbers: false },
+            er: { useMaxWidth: true }
+        });
+    </script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --card-bg: #ffffff;
+            --border-color: #e0e0e0;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-weight: 600;
+        }
+        .diagram-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .diagram-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            overflow-x: auto;
+            padding: 20px 0;
+        }
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+        .controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .controls button {
+            background: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 0 5px;
+            font-size: 14px;
+        }
+        .controls button:hover {
+            background: #3d5d8c;
+        }
+        .zoom-controls {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .zoom-controls button {
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: var(--bg-color);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+            margin: 2px;
+        }
+        .zoom-controls button:hover {
+            background: var(--border-color);
+        }
+        @media print {
+            .controls, .zoom-controls { display: none; }
+            .diagram-card { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Mermaid Diagram</h1>
+        
+        
+        <div class="diagram-card">
+            <div class="diagram-title">spec-runner — architecture
+
+Layered view of `spec-runner` v2.1.0. Generated 2026-05-25.
+
+## System context
+
+External actors, integrations, and where they touch spec-runner.</div>
+            <pre class="mermaid">
+flowchart LR
+    operator([Operator / CI])
+    maestro[Maestro&lt;br/&gt;orchestrator]
+    mcp_client[MCP client&lt;br/&gt;e.g. Claude Desktop]
+    gh_api[GitHub&lt;br/&gt;Issues API]
+    telegram[Telegram&lt;br/&gt;bot]
+    webhook_rx[Webhook&lt;br/&gt;receiver]
+    claude_cli[claude CLI]
+    codex_cli[codex CLI]
+    other_cli[ollama / llama-cli&lt;br/&gt;llama-server / custom]
+    gh_cli[gh CLI]
+    git_bin[git]
+
+    subgraph sr[&quot;spec-runner&quot;]
+        direction TB
+        sr_cli[CLI&lt;br/&gt;spec-runner ...]
+        sr_mcp[MCP server&lt;br/&gt;stdio]
+        sr_tui[TUI dashboard]
+        sr_state[(.executor-state.db&lt;br/&gt;SQLite + WAL)]
+        sr_obs[(logs/PID.jsonl&lt;br/&gt;OTel)]
+        sr_audit[(audit.jsonl)]
+    end
+
+    operator --&gt; sr_cli
+    operator --&gt; sr_tui
+    maestro -- --json-result&lt;br/&gt;+ reads --&gt; sr_cli
+    maestro -. SQLite read .-&gt; sr_state
+    mcp_client -- stdio --&gt; sr_mcp
+
+    sr_cli --&gt; claude_cli &amp; codex_cli &amp; other_cli
+    sr_cli --&gt; git_bin
+    sr_cli --&gt; gh_cli --&gt; gh_api
+    sr_cli -. task_failed&lt;br/&gt;run_complete&lt;br/&gt;state_degraded .-&gt; telegram &amp; webhook_rx
+    sr_cli --&gt; sr_state &amp; sr_obs &amp; sr_audit
+    sr_tui --&gt; sr_state
+
+    classDef ext fill:#eef,stroke:#446
+    classDef cli fill:#ffe,stroke:#a82
+    classDef store fill:#efe,stroke:#484
+    class operator,maestro,mcp_client,gh_api,telegram,webhook_rx ext
+    class claude_cli,codex_cli,other_cli,gh_cli,git_bin cli
+    class sr_state,sr_obs,sr_audit store
+            </pre>
+        </div>
+
+        <div class="diagram-card">
+            <div class="diagram-title">Module map
+
+Layered view of the modules in `src/spec_runner/`.</div>
+            <pre class="mermaid">
+flowchart TB
+    subgraph entry[&quot;Entry points&quot;]
+        direction LR
+        cli[&quot;cli.py&lt;br/&gt;argparse dispatcher&lt;br/&gt;cmd_run / cmd_watch&lt;br/&gt;build_task_json_result&quot;]
+        mcp_server[&quot;mcp_server.py&lt;br/&gt;FastMCP, stdio&quot;]
+        tui[&quot;tui.py&lt;br/&gt;Textual dashboard&quot;]
+        executor_mod[&quot;executor.py&lt;br/&gt;signal handlers&lt;br/&gt;re-exports&quot;]
+    end
+
+    subgraph commands[&quot;Command modules&quot;]
+        direction LR
+        cli_info[&quot;cli_info.py&lt;br/&gt;status / verify&lt;br/&gt;report / costs / logs&quot;]
+        cli_plan[&quot;cli_plan.py&lt;br/&gt;plan (interactive + --full)&quot;]
+        task_cmds[&quot;task_commands.py&lt;br/&gt;list / show / next&lt;br/&gt;graph / stats&quot;]
+        github_sync[&quot;github_sync.py&lt;br/&gt;sync-to-gh&lt;br/&gt;sync-from-gh&quot;]
+        init_cmd[&quot;init_cmd.py&lt;br/&gt;install skills&quot;]
+    end
+
+    subgraph core[&quot;Orchestration core&quot;]
+        direction LR
+        execution[&quot;execution.py&lt;br/&gt;execute_task&lt;br/&gt;retry strategy&lt;br/&gt;RetryContext&quot;]
+        hooks[&quot;hooks.py&lt;br/&gt;pre_start_hook&lt;br/&gt;post_done_hook&quot;]
+        review[&quot;review.py&lt;br/&gt;5 REVIEW_ROLES&lt;br/&gt;parallel review&lt;br/&gt;HITL gate&quot;]
+        verify_m[&quot;verify.py&lt;br/&gt;compliance check&quot;]
+        audit_m[&quot;audit.py&lt;br/&gt;static spec audit&quot;]
+        validate_m[&quot;validate.py&lt;br/&gt;config + task validation&quot;]
+        report_m[&quot;report.py&lt;br/&gt;REQ→DESIGN→TASK matrix&quot;]
+    end
+
+    subgraph domain[&quot;Domain&quot;]
+        direction LR
+        task[&quot;task.py&lt;br/&gt;Task dataclass&lt;br/&gt;dep graph&lt;br/&gt;parse_tasks&quot;]
+        state[&quot;state.py&lt;br/&gt;ExecutorState ctx mgr&lt;br/&gt;SQLite + WAL&lt;br/&gt;ErrorCode / ReviewVerdict&lt;br/&gt;degraded-mode&quot;]
+        config[&quot;config.py&lt;br/&gt;ExecutorConfig&lt;br/&gt;Persona / ExecutorLock&lt;br/&gt;YAML loader&quot;]
+        prompt[&quot;prompt.py&lt;br/&gt;build_task_prompt&lt;br/&gt;SPEC_STAGES&lt;br/&gt;constitution&quot;]
+    end
+
+    subgraph adapters[&quot;Infra adapters&quot;]
+        direction LR
+        runner[&quot;runner.py&lt;br/&gt;build_cli_command&lt;br/&gt;run_claude_async&lt;br/&gt;parse_token_usage&quot;]
+        git_ops[&quot;git_ops.py&lt;br/&gt;branch / main&lt;br/&gt;test file mapping&quot;]
+        plugins[&quot;plugins.py&lt;br/&gt;plugin discovery&lt;br/&gt;hook execution&quot;]
+        notifications_m[&quot;notifications.py&lt;br/&gt;Telegram + webhook&lt;br/&gt;template render&quot;]
+        obs[&quot;obs.py&lt;br/&gt;init_logging&lt;br/&gt;span / child_env&lt;br/&gt;OTel JSONL&quot;]
+        logging_m[&quot;logging.py&lt;br/&gt;back-compat shim&quot;]
+        audit_log[&quot;audit_log.py&lt;br/&gt;compliance JSONL&quot;]
+        events[&quot;events.py&lt;br/&gt;EventBus&lt;br/&gt;TaskEvent&quot;]
+    end
+
+    entry --&gt; commands
+    commands --&gt; core
+    core --&gt; domain
+    core --&gt; adapters
+    domain --&gt; adapters
+    logging_m --&gt; obs
+
+    classDef entryC fill:#ffe7b3,stroke:#a76d00
+    classDef cmdC fill:#fff3cc,stroke:#a8920a
+    classDef coreC fill:#cfe8ff,stroke:#1f6fb3
+    classDef domainC fill:#d6f0d6,stroke:#2f7a2f
+    classDef adapterC fill:#f0d6f0,stroke:#7a2f7a
+    class cli,mcp_server,tui,executor_mod entryC
+    class cli_info,cli_plan,task_cmds,github_sync,init_cmd cmdC
+    class execution,hooks,review,verify_m,audit_m,validate_m,report_m coreC
+    class task,state,config,prompt domainC
+    class runner,git_ops,plugins,notifications_m,obs,logging_m,audit_log,events adapterC
+            </pre>
+        </div>
+
+        <div class="diagram-card">
+            <div class="diagram-title">Key data flow — task execution
+
+How a single task moves through the system.</div>
+            <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as Operator / Maestro
+    participant CLI as cli.py
+    participant T as task.py
+    participant E as execution.py
+    participant P as prompt.py
+    participant H as hooks.py
+    participant R as runner.py
+    participant CC as claude / codex / ollama CLI
+    participant Rev as review.py
+    participant St as state.py + SQLite
+    participant N as notifications.py
+    participant O as obs.py
+
+    U-&gt;&gt;CLI: spec-runner run --task=TASK-001
+    CLI-&gt;&gt;T: parse_tasks(spec/tasks.md)
+    T-&gt;&gt;T: resolve_dependencies
+    T--&gt;&gt;CLI: ready tasks
+    CLI-&gt;&gt;E: execute_task(task)
+    E-&gt;&gt;St: load attempt history
+    E-&gt;&gt;H: pre_start_hook (branch, uv sync)
+    E-&gt;&gt;P: build_task_prompt(task, RetryContext)
+    P--&gt;&gt;E: prompt text
+
+    loop run_with_retries
+        E-&gt;&gt;R: build_cli_command + run_claude_async
+        R-&gt;&gt;CC: subprocess
+        CC--&gt;&gt;R: stdout (TASK_COMPLETE / TASK_FAILED)
+        R-&gt;&gt;O: stream span / tokens
+        R--&gt;&gt;E: result
+        E-&gt;&gt;St: persist TaskAttempt
+    end
+
+    E-&gt;&gt;H: post_done_hook
+    H-&gt;&gt;R: tests + lint
+    H-&gt;&gt;Rev: run_code_review (5 roles, parallel)
+    Rev-&gt;&gt;R: subprocess review CLI(s)
+    Rev--&gt;&gt;H: ReviewVerdict
+    H-&gt;&gt;R: git commit + merge to main
+
+    alt failure
+        E-&gt;&gt;N: notify(task_failed)
+        N--&gt;&gt;U: Telegram / webhook
+    end
+
+    E-&gt;&gt;St: mark task done
+    CLI--&gt;&gt;U: --json-result (Maestro interop)
+            </pre>
+        </div>
+
+        <div class="diagram-card">
+            <div class="diagram-title">Storage and persistence</div>
+            <pre class="mermaid">
+flowchart LR
+    subgraph runtime[&quot;Runtime&quot;]
+        execution[&quot;execution.py&quot;]
+        state[&quot;state.py&lt;br/&gt;ExecutorState&quot;]
+        obs[&quot;obs.py&quot;]
+        audit_log[&quot;audit_log.py&quot;]
+        notifications[&quot;notifications.py&quot;]
+    end
+
+    subgraph specdir[&quot;spec/ directory&quot;]
+        db[(&quot;&lt;b&gt;.executor-state.db&lt;/b&gt;&lt;br/&gt;SQLite + WAL&lt;br/&gt;tasks, attempts&lt;br/&gt;tokens, costs&quot;)]
+        logs_dir[(&quot;&lt;b&gt;.executor-logs/&lt;/b&gt;&lt;br/&gt;per-task subprocess logs&quot;)]
+        task_hist[(&quot;.task-history.log&lt;br/&gt;append-only audit&quot;)]
+    end
+
+    subgraph rootdir[&quot;Project root&quot;]
+        obs_dir[(&quot;&lt;b&gt;logs/PID/&lt;/b&gt;&lt;br/&gt;OTel JSONL&lt;br/&gt;spans, errors&quot;)]
+        audit_file[(&quot;audit.jsonl&lt;br/&gt;opt-in compliance trail&quot;)]
+    end
+
+    subgraph degraded[&quot;Degraded mode&quot;]
+        mem[(In-memory state&lt;br/&gt;SQLite write failed&lt;br/&gt;state.degraded=true)]
+    end
+
+    execution --&gt; state --&gt; db
+    execution --&gt; logs_dir
+    execution --&gt; task_hist
+    obs --&gt; obs_dir
+    audit_log --&gt; audit_file
+    state -. disk-full / corruption .-&gt; mem
+    state -.-&gt; notifications
+
+    classDef store fill:#efe,stroke:#484
+    classDef degraded fill:#fee,stroke:#a44
+    class db,logs_dir,task_hist,obs_dir,audit_file store
+    class mem degraded
+            </pre>
+        </div>
+    </div>
+    <div class="zoom-controls">
+        <button onclick="zoom(1.2)" title="Zoom In">+</button>
+        <button onclick="zoom(0.8)" title="Zoom Out">−</button>
+        <button onclick="zoom(1, true)" title="Reset">⟲</button>
+    </div>
+    <script>
+        let currentZoom = 1;
+        function zoom(factor, reset = false) {
+            currentZoom = reset ? 1 : currentZoom * factor;
+            document.querySelectorAll('.mermaid svg').forEach(svg => {
+                svg.style.transform = `scale(${currentZoom})`;
+                svg.style.transformOrigin = 'center top';
+            });
+        }
+        function downloadSVG(index) {
+            const svg = document.querySelectorAll('.mermaid svg')[index || 0];
+            if (!svg) return;
+            const svgData = new XMLSerializer().serializeToString(svg);
+            const blob = new Blob([svgData], {type: 'image/svg+xml'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'diagram.svg';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>

@@ -41,7 +41,11 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Claude templates
 .claude/
 spec/
+
+COWORK_CONTEXT.md
+_cowork_output/

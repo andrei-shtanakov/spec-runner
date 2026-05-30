@@ -10,6 +10,7 @@ import contextlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -159,7 +160,7 @@ class StatsBar(Static):
 class KanbanColumn(Vertical):
     """A single column in the Kanban board."""
 
-    def __init__(self, title: str, **kwargs: object) -> None:
+    def __init__(self, title: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.border_title = title
 
@@ -167,7 +168,7 @@ class KanbanColumn(Vertical):
 class LogPanel(Static):
     """Panel showing execution progress log, tailing a progress file."""
 
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._file_pos: int = 0
         self._lines: list[str] = []
@@ -553,6 +554,6 @@ class SpecRunnerApp(App[None]):
         else:
             log_panel.add_line(f"[bold cyan]While paused: {summary}[/bold cyan]")
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Quit the TUI."""
         self.exit()

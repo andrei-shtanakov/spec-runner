@@ -50,11 +50,7 @@ class TraceabilityReport:
     @property
     def has_gaps(self) -> bool:
         """True when CI should flag this report as incomplete."""
-        return bool(
-            self.orphan_tasks
-            or self.uncovered_requirements
-            or self.unreferenced_designs
-        )
+        return bool(self.orphan_tasks or self.uncovered_requirements or self.unreferenced_designs)
 
 
 def _extract_section_ids(text: str, prefix: str) -> list[str]:
@@ -135,16 +131,12 @@ def build_report(
     # Gap warnings (LABS-42): identifiers defined in spec files that no
     # task references. Useful for CI integration — CI can fail if the
     # report has gaps, surfacing drift between specs and implementation.
-    report.uncovered_requirements = sorted(
-        req for req in all_reqs if req not in req_to_tasks
-    )
+    report.uncovered_requirements = sorted(req for req in all_reqs if req not in req_to_tasks)
     if design_to_req:
         referenced_designs = {
             ref for task in tasks for ref in task.traces_to if ref.startswith("DESIGN-")
         }
-        report.unreferenced_designs = sorted(
-            set(design_to_req) - referenced_designs
-        )
+        report.unreferenced_designs = sorted(set(design_to_req) - referenced_designs)
 
     # Build rows
     with ExecutorState(config) as state:

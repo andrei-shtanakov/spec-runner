@@ -49,7 +49,10 @@ CREATE TABLE attempts (
     output_tokens    INTEGER,
     cost_usd         REAL,
     review_status    TEXT,               -- ReviewVerdict enum string
-    review_findings  TEXT
+    review_findings  TEXT,
+    -- Added in v2.3.0 (detect via PRAGMA table_info):
+    error_kind       TEXT,               -- classified failure kind (see errors.classify)
+    error_stage      TEXT                -- sub-stage when failure occurred
 );
 
 CREATE TABLE executor_meta (
@@ -84,8 +87,10 @@ CREATE TABLE executor_meta (
 | `cost_usd` | REAL | stable | Attempt cost in USD |
 | `review_status` | TEXT | stable | See `ReviewVerdict` values below |
 | `review_findings` | TEXT | experimental | Free-text review notes |
+| `error_kind` | TEXT | experimental | Added v2.3.0. Classified failure kind: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`; nullable |
+| `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `codex`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable |
 
-**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
+**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
 
 ### `executor_meta` key-value pairs
 
@@ -94,6 +99,9 @@ CREATE TABLE executor_meta (
 | `consecutive_failures` | int (stored as TEXT) | stable | Resets to 0 on any task success |
 | `total_completed` | int (stored as TEXT) | stable | Monotonic counter |
 | `total_failed` | int (stored as TEXT) | stable | Monotonic counter |
+| `second_pass_fail_tasks` | comma-joined TEXT | experimental | Added v2.3.0. Task IDs that failed again across runs; empty string when none |
+| `last_run_stop_reason` | TEXT | experimental | Added v2.3.0. One of `completed`, `max_consecutive_failures`, `error_<kind>` |
+| `last_run_stop_detail` | TEXT | experimental | Added v2.3.0. Free-text detail for the stop reason (e.g. `12/2`, or an error message) |
 
 ### `ErrorCode` enum values
 

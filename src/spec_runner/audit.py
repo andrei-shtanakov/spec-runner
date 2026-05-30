@@ -116,9 +116,7 @@ def audit_all(config: ExecutorConfig, *, strict: bool = False) -> AuditReport:
     """
     report = AuditReport(strict=strict)
 
-    tasks: list[Task] = (
-        parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
-    )
+    tasks: list[Task] = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
 
     req_ids: set[str] = set()
     if config.requirements_file.exists():
@@ -168,8 +166,7 @@ def audit_all(config: ExecutorConfig, *, strict: bool = False) -> AuditReport:
                             category=CAT_DANGLING_DESIGN_REF,
                             subject=ref,
                             message=(
-                                f"{task.id} references {ref} but it is not "
-                                "defined in design.md"
+                                f"{task.id} references {ref} but it is not defined in design.md"
                             ),
                             location=task.id,
                         )
@@ -177,9 +174,7 @@ def audit_all(config: ExecutorConfig, *, strict: bool = False) -> AuditReport:
 
     # 4. Uncovered requirements — REQ defined but no task references it
     if req_ids:
-        covered_reqs = {
-            ref for task in tasks for ref in task.traces_to if ref.startswith("REQ-")
-        }
+        covered_reqs = {ref for task in tasks for ref in task.traces_to if ref.startswith("REQ-")}
         for req in sorted(req_ids - covered_reqs):
             report.findings.append(
                 AuditFinding(
@@ -194,10 +189,7 @@ def audit_all(config: ExecutorConfig, *, strict: bool = False) -> AuditReport:
     # 5. Uncovered designs — DESIGN defined but no task references it
     if design_ids:
         covered_designs = {
-            ref
-            for task in tasks
-            for ref in task.traces_to
-            if ref.startswith("DESIGN-")
+            ref for task in tasks for ref in task.traces_to if ref.startswith("DESIGN-")
         }
         for design in sorted(design_ids - covered_designs):
             report.findings.append(

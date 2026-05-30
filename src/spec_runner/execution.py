@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 from .config import ExecutorConfig
+from .errors import classify
 from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
@@ -16,6 +17,7 @@ from .runner import (
     parse_token_usage,
     send_callback,
 )
+from .stages import StageReporter
 from .state import (
     ErrorCode,
     ExecutorState,
@@ -42,11 +44,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     """
 
     task_id = task.id
+    reporter = StageReporter(task.id, lambda line: log_progress(line))
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
     # Pre-start hook
-    if not pre_start_hook(task, config):
+    if not pre_start_hook(task, config, reporter=reporter):
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -118,6 +121,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             skip_permissions=config.skip_permissions,
         )
 
+        reporter.enter("codex")
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -181,6 +185,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         success = (has_complete_marker and not has_failed_marker) or implicit_success
 
         if success:
+            reporter.enter("parse")
             if has_complete_marker:
                 logger.info("Task completed by Claude", task_id=task_id)
             else:
@@ -188,7 +193,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
             # Post-done hook (tests, lint, review)
             hook_success, hook_error, review_status, review_findings = post_done_hook(
-                task, config, True
+                task, config, True, reporter=reporter
             )
 
             if hook_success:
@@ -263,7 +268,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         else:
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
-            error = error_match.group(1) if error_match else "Unknown error"
+            if error_match:
+                error = error_match.group(1)
+                error_kind = "cli_error"
+            else:
+                error_kind, error = classify(result.stderr, result.returncode)
             state.record_attempt(
                 task_id,
                 False,
@@ -274,6 +283,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                error_kind=error_kind,
+                error_stage=reporter.current,
             )
             log_progress(f"\u274c Failed: {error[:50]}", task_id)
             send_callback(
@@ -375,7 +386,7 @@ def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: i
     if strategy == "fatal":
         return 0.0
     if strategy == "backoff_exponential":
-        return min(30.0 * (2**attempt), 300.0)
+        return float(min(30.0 * (2**attempt), 300.0))
     return float(base_delay * (attempt + 1))
 
 
@@ -396,24 +407,13 @@ def _check_task_budget(
     """
     spent = state.task_cost(task_id)
     if config.task_budget_usd is not None and spent >= config.task_budget_usd:
-        return (
-            f"Task budget exceeded "
-            f"(${spent:.2f} >= ${config.task_budget_usd:.2f})"
-        )
+        return f"Task budget exceeded (${spent:.2f} >= ${config.task_budget_usd:.2f})"
 
-    if (
-        config.max_retry_cost_usd is not None
-        and attempt_index > 0
-    ):
+    if config.max_retry_cost_usd is not None and attempt_index > 0:
         ts = state.get_task_state(task_id)
-        retry_spent = (
-            sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
-        )
+        retry_spent = sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
         if retry_spent >= config.max_retry_cost_usd:
-            return (
-                f"Retry budget exceeded "
-                f"(${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
-            )
+            return f"Retry budget exceeded (${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
     return None
 
 

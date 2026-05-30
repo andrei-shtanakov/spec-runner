@@ -149,7 +149,8 @@ def build_cli_command(
     """Build CLI command from template or auto-detect based on command name.
 
     Args:
-        cmd: CLI command name (e.g., "claude", "codex", "llama-cli")
+        cmd: CLI command name (e.g., "claude", "codex", "opencode", "pi",
+            "ollama", "llama-cli")
         prompt: The prompt text
         model: Model name (optional)
         template: Command template with placeholders (optional)
@@ -182,6 +183,9 @@ def build_cli_command(
 
     # Auto-detect based on command name
     cmd_lower = cmd.lower()
+    # "pi" is too short for substring matching — match on basename only to
+    # avoid false positives like "/usr/local/bin/anti-pi" or "opencode-pi-cli".
+    cmd_basename = Path(cmd).name.lower()
 
     if "llama-cli" in cmd_lower or "llama.cpp" in cmd_lower:
         # llama.cpp CLI
@@ -199,11 +203,34 @@ def build_cli_command(
         # Ollama CLI
         return [cmd, "run", model or "llama3", prompt]
 
-    elif "codex" in cmd_lower:
-        # Codex CLI
-        result = [cmd, "-p", prompt]
+    elif "opencode" in cmd_lower:
+        # sst/opencode: `opencode run [--model provider/id] <prompt>`
+        # Prompt is positional, model accepts "provider/model" form
+        # (e.g. "anthropic/claude-3-5-sonnet").
+        result = [cmd, "run"]
         if model:
             result.extend(["--model", model])
+        result.append(prompt)
+        return result
+
+    elif "codex" in cmd_lower:
+        # codex: `codex exec [-m MODEL] [PROMPT]`
+        # NOTE: codex's `-p` is `--profile`, not the prompt — DO NOT use it here.
+        result = [cmd, "exec"]
+        if model:
+            result.extend(["-m", model])
+        result.append(prompt)
+        return result
+
+    elif cmd_basename == "pi" or cmd_basename.startswith("pi."):
+        # earendil-works/pi: `pi -p [--model X] <prompt>` (non-interactive mode)
+        # Model accepts "provider/id" or bare model name; defaults driven by
+        # `~/.config/pi/config.yaml`. Match on basename to avoid short-name
+        # collisions (see cmd_basename comment above).
+        result = [cmd, "-p"]
+        if model:
+            result.extend(["--model", model])
+        result.append(prompt)
         return result
 
     else:
@@ -297,4 +324,4 @@ async def run_claude_async(
             proc.kill()
             await proc.wait()
         raise
-    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode
+    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode or 0

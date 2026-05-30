@@ -1,14 +1,20 @@
-# TODO — spec-runner (план от 2026-04-16)
+# TODO — spec-runner (план от 2026-04-16, обновлено 2026-05-23)
 
 > Роль в экосистеме: единственная **работающая** кросс-проектная связка Maestro→spec-runner.
 > Стратегический контекст: `../_cowork_output/roadmap/ecosystem-roadmap.md`
-> Актуальный статус: `../_cowork_output/status/2026-04-10-status.md`
+> Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
-- ✅ v2.0.0 зарелижен (PIPE-0…5, POLISH-1…5, `spec-runner task`, webhook, crash resilience)
+- ✅ v2.2.2 зарелижен 2026-05-29 (console-прогресс в stderr для non-TUI run/watch)
+- ✅ v2.2.1 зарелижен 2026-05-28 (CI off Node 20 → Node 24, obs contract test skip-guard)
+- ✅ v2.2.0 зарелижен 2026-05-28 (auto-detect OpenCode/Pi CLI, architecture diagrams, green CI)
+- ✅ v2.1.0 зарелижен 2026-05-23 (observability reference impl + Dependabot patches)
+- ✅ v2.0.0 зарелижен 2026-04-17 (PIPE-0…5, POLISH-1…5, `spec-runner task`, webhook, crash resilience)
 - ✅ CI/CD работает (`.github/workflows/ci.yml`) — единственный проект помимо ATP с CI
 - ✅ `--json-result` флаг для Maestro interop
-- ⚠️ Контракт с Maestro держится на неформальном парсинге `.executor-state.json`
+- ✅ R-04 (контракт с Maestro) заморожен 2026-04-17 — см. `docs/state-schema.md`, `schemas/`, `tests/test_json_result_contract.py`
+- ✅ **Cross-project observability v1 shipped** — spec-runner reference + Maestro M1/M2 + arbiter Rust + ATP (см. `_cowork_output/status/2026-05-22-status.md`)
+- ⏸️ **Статус по weekly: `frozen by design`** — нет открытых задач на спринт, ждём Maestro M4
 
 ## Правила ведения
 - После каждой выполненной задачи проставь `[x]` и добавь хеш коммита
@@ -17,6 +23,26 @@
 ---
 
 ## Активные задачи
+
+### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
+
+Контракт: `_cowork_output/observability-contract/log-schema.json` (OTel Logs Data Model JSONL).
+`spec-runner` — reference, файл `obs.py` затем вендорится в другие проекты.
+
+- [x] **`init_logging` + `get_logger` скелет** (`ead7070`)
+- [x] **Парсинг `TRACEPARENT` с graceful fallback** (`788b77f`)
+- [x] **Формат timestamps: ns-string + ISO micros** (`208938c`)
+- [x] **Span context manager с error chains** (`31e4cdd`)
+- [x] **Redaction processor (default + env-extended blocklist)** (`b07153b`)
+- [x] **`child_env()` для пропагации трейсов в subprocess** (`1cd18f9`)
+- [x] **Contract-тесты против shared schema/fixtures** (`1bcf9eb`)
+- [x] **Cutover `logging.py` → back-compat shim над `obs.py`** (`641b9b8`)
+- [x] **Использовать `TRACEPARENT` parent span_id как initial `_span_id`** (`fa6b106`)
+
+Дальнейшие шаги:
+- [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `_cowork_output/status/2026-05-22-status.md`.
+- [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
