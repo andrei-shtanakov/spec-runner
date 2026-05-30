@@ -374,8 +374,9 @@ class ExecutorState:
                         "(task_id, timestamp, success, duration_seconds, "
                         "error, error_code, claude_output, "
                         "input_tokens, output_tokens, cost_usd, "
-                        "review_status, review_findings) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "review_status, review_findings, "
+                        "error_kind, error_stage) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -389,6 +390,8 @@ class ExecutorState:
                             a.cost_usd,
                             a.review_status,
                             a.review_findings,
+                            a.error_kind,
+                            a.error_stage,
                         ),
                     )
             self._save_meta()

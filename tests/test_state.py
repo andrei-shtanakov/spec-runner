@@ -1155,3 +1155,17 @@ class TestAttemptErrorKindStage:
                 "SELECT error_kind, error_stage FROM attempts WHERE task_id='T1'"
             ).fetchone()
         assert row == (None, None)
+
+    def test_save_preserves_kind_and_stage(self, tmp_path):
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "T1", success=False, duration=1.0, error="x",
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind="rate_limit", error_stage="codex",
+            )
+            state._save()  # must NOT drop the columns
+        with ExecutorState(cfg) as state:
+            a = state.get_task_state("T1").attempts[-1]
+            assert a.error_kind == "rate_limit"
+            assert a.error_stage == "codex"
