@@ -99,7 +99,8 @@ Tasks are defined in `spec/tasks.md`:
 # Execution
 spec-runner run                            # Execute next ready task
 spec-runner run --task=TASK-001            # Execute specific task
-spec-runner run --all                      # Execute all ready tasks
+spec-runner run --all                      # Execute all ready tasks (resets failed→pending by default)
+spec-runner run --all --no-reset-failed    # Keep failed tasks sticky (skip the default reset)
 spec-runner run --all --hitl-review        # Interactive HITL approval gate
 spec-runner run --force                    # Skip lock check (stale lock)
 spec-runner run --tui                      # Execute with live TUI dashboard
