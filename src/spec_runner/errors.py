@@ -34,6 +34,33 @@ PATTERNS: list[ErrorPattern] = [
         ),
         template="OpenAI usage limit — try again at {0}",
     ),
+    # generic rate-limit (claude, generic providers)
+    ErrorPattern(
+        kind="rate_limit",
+        regex=re.compile(r"rate[_\s-]?limit", re.I),
+        template="Rate limit hit",
+    ),
+    # auth failures
+    ErrorPattern(
+        kind="auth",
+        regex=re.compile(r"unauthor|invalid api key|forbidden", re.I),
+        template="Authentication failed",
+    ),
+    # network failures
+    ErrorPattern(
+        kind="network",
+        regex=re.compile(
+            r"ECONNREFUSED|timed out|name or service not known|dns",
+            re.I,
+        ),
+        template="Network error",
+    ),
+    # generic CLI error line (last resort before unknown fallback)
+    ErrorPattern(
+        kind="cli_error",
+        regex=re.compile(r"^error:\s*(.+)$", re.M),
+        template="{0}",
+    ),
 ]
 
 
