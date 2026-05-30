@@ -23,6 +23,7 @@ from .review import (
     run_code_review,
     run_parallel_review,
 )
+from .stages import StageReporter
 from .state import ReviewVerdict
 from .task import Task
 
@@ -46,11 +47,13 @@ __all__ = [
 ]
 
 
-def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
+def pre_start_hook(task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None) -> bool:
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 
     # Sync dependencies
+    if reporter:
+        reporter.enter("sync_deps")
     logger.info("Syncing dependencies")
     result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
     if result.returncode == 0:
@@ -60,6 +63,8 @@ def pre_start_hook(task: Task, config: ExecutorConfig) -> bool:
 
     # Create git branch
     if config.create_git_branch:
+        if reporter:
+            reporter.enter("branch")
         branch_name = get_task_branch_name(task)
         try:
             # Check if git exists

@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import (
@@ -96,8 +96,8 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_pre.assert_called_once_with(task, config)
-        mock_post.assert_called_once_with(task, config, True)
+        mock_pre.assert_called_once_with(task, config, reporter=ANY)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
         mock_status.assert_called()
         mock_checklist.assert_called_once()
 
@@ -135,7 +135,7 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_post.assert_called_once_with(task, config, True)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
@@ -1249,7 +1249,7 @@ class TestSignalHandling:
 
         task = _make_task()
 
-        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c, **kw: True)
         monkeypatch.setattr("spec_runner.execution.update_task_status", lambda *a, **kw: None)
         monkeypatch.setattr("spec_runner.execution.send_callback", lambda *a, **kw: None)
         monkeypatch.setattr(

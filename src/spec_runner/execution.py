@@ -49,7 +49,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     logger.info("Executing task", task_id=task_id, name=task.name)
 
     # Pre-start hook
-    if not pre_start_hook(task, config):
+    if not pre_start_hook(task, config, reporter=reporter):
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -193,7 +193,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
             # Post-done hook (tests, lint, review)
             hook_success, hook_error, review_status, review_findings = post_done_hook(
-                task, config, True
+                task, config, True, reporter=reporter
             )
 
             if hook_success:

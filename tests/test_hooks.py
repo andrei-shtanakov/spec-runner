@@ -901,3 +901,30 @@ class TestRunParallelReview:
 
         # Falls back to run_code_review
         assert verdict == ReviewVerdict.PASSED
+
+
+class TestStageEmissionPreStart:
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_sync_deps_always_emitted(self, mock_run):
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(create_git_branch=False)
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        pre_start_hook(_make_task("T1"), cfg, reporter=rep)
+        assert any("stage: sync_deps" in e for e in events)
+        assert not any("stage: branch" in e for e in events)
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_branch_emitted_when_enabled(self, mock_run):
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(create_git_branch=True)
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        pre_start_hook(_make_task("T1"), cfg, reporter=rep)
+        assert any("stage: branch" in e for e in events)
+
+
