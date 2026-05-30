@@ -669,6 +669,24 @@ class ExecutorState:
         )
         return inp, out
 
+    def set_meta(self, key: str, value: str) -> None:
+        """Insert or replace a key in executor_meta."""
+        assert self._conn is not None
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO executor_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, str(value)),
+            )
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        """Read a key from executor_meta; return default if missing."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM executor_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else default
+
     def close(self) -> None:
         """Close the SQLite connection."""
         if self._conn is not None:

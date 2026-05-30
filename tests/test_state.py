@@ -1021,3 +1021,27 @@ class TestSchemaMigrationV230:
         with sqlite3.connect(cfg.state_file) as conn:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
         assert "error_kind" in cols and "error_stage" in cols
+
+
+# --- set_meta / get_meta ---
+
+
+class TestMetaHelpers:
+    def test_set_meta_then_get_meta_round_trip(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.set_meta("foo", "bar")
+            assert state.get_meta("foo") == "bar"
+
+    def test_get_meta_missing_returns_default(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            assert state.get_meta("nope") is None
+            assert state.get_meta("nope", "fallback") == "fallback"
+
+    def test_set_meta_overwrites(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.set_meta("k", "v1")
+            state.set_meta("k", "v2")
+            assert state.get_meta("k") == "v2"
