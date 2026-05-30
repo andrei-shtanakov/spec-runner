@@ -388,17 +388,25 @@ def _run_tasks(args, config: ExecutorConfig):
                 result = run_with_retries(task, config, state)
                 last_activity = time.monotonic()
 
-                # "SKIP" means continue to next task
-                if result == "SKIP":
-                    continue
-
                 # v2.3.0: detect tasks that fail again on a second pass.
-                if task.id in previously_failed and result is False:
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
                     log_progress(
                         f"💡 [{task.id}] repeated failure — review logs at "
                         f"{config.logs_dir}/{task.id}-*.log"
                     )
                     state.add_second_pass_fail(task.id)
+
+                # "SKIP" means continue to next task
+                if result == "SKIP":
+                    continue
 
                 if result is False and state.should_stop():
                     last = state.most_recent_failed_attempt()
@@ -425,16 +433,24 @@ def _run_tasks(args, config: ExecutorConfig):
 
                 result = run_with_retries(task, config, state)
 
-                if result == "SKIP":
-                    continue
-
                 # v2.3.0: detect tasks that fail again on a second pass.
-                if task.id in previously_failed and result is False:
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
                     log_progress(
                         f"💡 [{task.id}] repeated failure — review logs at "
                         f"{config.logs_dir}/{task.id}-*.log"
                     )
                     state.add_second_pass_fail(task.id)
+
+                if result == "SKIP":
+                    continue
 
                 if result is False and state.should_stop():
                     last = state.most_recent_failed_attempt()
