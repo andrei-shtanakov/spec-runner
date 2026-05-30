@@ -268,6 +268,8 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.info("No tasks ready to execute")
             if getattr(args, "json_result", False):
                 print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
+            state.set_meta("last_run_stop_reason", stop_reason)
+            state.set_meta("last_run_stop_detail", stop_detail)
             return
 
         # --dry-run: show what would execute and exit
@@ -390,7 +392,25 @@ def _run_tasks(args, config: ExecutorConfig):
                 if result == "SKIP":
                     continue
 
+                # v2.3.0: detect tasks that fail again on a second pass.
+                if task.id in previously_failed and result is False:
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
+
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
         else:
@@ -408,9 +428,31 @@ def _run_tasks(args, config: ExecutorConfig):
                 if result == "SKIP":
                     continue
 
+                # v2.3.0: detect tasks that fail again on a second pass.
+                if task.id in previously_failed and result is False:
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
+
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
+
+        # v2.3.0: persist stop-reason for this run
+        state.set_meta("last_run_stop_reason", stop_reason)
+        state.set_meta("last_run_stop_detail", stop_detail)
 
         # Summary
         # Re-read tasks to get updated statuses after execution
