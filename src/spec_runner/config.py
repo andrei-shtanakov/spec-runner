@@ -300,6 +300,14 @@ def _detect_subdir_repo(project_root: Path) -> Path | None:
     return toplevel if toplevel != project_root.resolve() else None
 
 
+def _user_set(yaml_config: dict, args: argparse.Namespace, key: str) -> bool:
+    """True if user explicitly set this key in YAML or CLI."""
+    if yaml_config.get(key) is not None:
+        return True
+    val = getattr(args, key, None)
+    return val not in (None, False)
+
+
 def _resolve_config_path() -> Path:
     """Find the config file, preferring new location over legacy.
 
@@ -467,4 +475,26 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 
-    return ExecutorConfig(**config_kwargs)
+    config = ExecutorConfig(**config_kwargs)
+
+    git_root = _detect_subdir_repo(config.project_root)
+    if git_root is not None:
+        flipped = []
+        if not _user_set(yaml_config, args, "create_git_branch"):
+            config.create_git_branch = False
+            flipped.append("create_git_branch")
+        if not _user_set(yaml_config, args, "auto_commit"):
+            config.auto_commit = False
+            flipped.append("auto_commit")
+        if flipped:
+            from .logging import get_logger
+
+            get_logger("config").warning(
+                "subdir_project_detected",
+                project_root=str(config.project_root),
+                git_root=str(git_root),
+                defaulted_off=flipped,
+                override_hint="set create_git_branch/auto_commit=true in YAML to opt-in",
+            )
+
+    return config
