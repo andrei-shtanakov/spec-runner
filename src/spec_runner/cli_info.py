@@ -93,6 +93,7 @@ def print_status(config: ExecutorConfig) -> None:
 
         # Tasks with attempts
         attempted = [ts for ts in state.tasks.values() if ts.attempts]
+        second_pass = state.get_second_pass_fails()
         if attempted:
             print("\n📝 Task History:")
             for ts in attempted:
@@ -120,6 +121,10 @@ def print_status(config: ExecutorConfig) -> None:
                     print(f"      Last error: {kind_tag}{ts.last_error[:50]}...")
                 elif ts.status == "running" and ts.last_error:
                     print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
+                # Second-pass hint
+                if ts.status == "failed" and ts.task_id in second_pass:
+                    print("      💡 Repeated failure across runs — review:")
+                    print(f"         {config.logs_dir}/{ts.task_id}-*.log")
 
         # Show tasks not yet in executor state
         if not_started:

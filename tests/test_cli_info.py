@@ -99,3 +99,36 @@ class TestStopReasonLine:
         print_status(cfg)
         out = capsys.readouterr().out
         assert "⚠️ Last run stopped" not in out
+
+
+class TestSecondPassHint:
+    def _seed_failed(self, cfg, **kw):
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "TASK-001",
+                success=False,
+                duration=1.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind=kw.get("kind"),
+                error_stage=kw.get("stage"),
+            )
+            if kw.get("second_pass"):
+                state.add_second_pass_fail("TASK-001")
+
+    def test_hint_rendered_for_listed_task(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path, max_retries=1)
+        cfg.logs_dir.mkdir()
+        self._seed_failed(cfg, kind="rate_limit", stage="codex", second_pass=True)
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "💡 Repeated failure across runs" in out
+        assert f"{cfg.logs_dir}/TASK-001-*.log" in out
+
+    def test_no_hint_for_first_time_failure(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path, max_retries=1)
+        cfg.logs_dir.mkdir()
+        self._seed_failed(cfg, second_pass=False)
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "💡 Repeated failure" not in out
