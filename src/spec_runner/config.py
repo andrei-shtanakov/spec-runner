@@ -137,7 +137,7 @@ class ExecutorConfig:
     # Command template for custom CLIs. Placeholders: {cmd}, {model}, {prompt}, {prompt_file}
     # Examples:
     #   claude: "{cmd} -p {prompt}" or "{cmd} -p {prompt} --model {model}"
-    #   codex: "{cmd} -p {prompt}"
+    #   codex: "{cmd} exec {prompt}"   # -p is --profile in codex, not the prompt
     #   opencode: "{cmd} run --model {model} {prompt}"
     #   pi: "{cmd} -p --model {model} {prompt}"
     #   ollama: "{cmd} run {model} {prompt}"
