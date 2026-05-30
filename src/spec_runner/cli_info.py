@@ -23,8 +23,9 @@ from .task import (
 logger = get_logger("cli")
 
 
-def cmd_status(args, config: ExecutorConfig):
-    """Execution status"""
+def print_status(config: ExecutorConfig) -> None:
+    """Print human-readable status to stdout."""
+    from . import __version__
 
     with ExecutorState(config) as state:
         # Parse tasks from tasks.md to cross-reference
@@ -32,29 +33,6 @@ def cmd_status(args, config: ExecutorConfig):
         if config.tasks_file.exists():
             all_tasks = parse_tasks(config.tasks_file)
 
-        # --json: output matching MCP server format
-        if getattr(args, "json_output", False):
-            completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
-            failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
-            running = sum(1 for ts in state.tasks.values() if ts.status == "running")
-            cost = state.total_cost()
-            inp, out = state.total_tokens()
-            print(
-                json.dumps(
-                    {
-                        "total_tasks": len(all_tasks),
-                        "completed": completed,
-                        "failed": failed,
-                        "running": running,
-                        "not_started": len(all_tasks) - completed - failed - running,
-                        "total_cost": round(cost, 2),
-                        "input_tokens": inp,
-                        "output_tokens": out,
-                        "budget_usd": config.budget_usd,
-                    }
-                )
-            )
-            return
         total_in_spec = len(all_tasks)
 
         # Calculate statistics from actual task state
@@ -69,7 +47,7 @@ def cmd_status(args, config: ExecutorConfig):
         state_ids = set(state.tasks.keys())
         not_started = [t for t in all_tasks if t.id not in state_ids]
 
-        print("\n📊 spec-runner Status")
+        print(f"\n📊 spec-runner v{__version__}")
         print(f"{'=' * 50}")
         print(f"Tasks in spec:         {total_in_spec}")
         print(f"Tasks completed:       {completed_tasks}")
@@ -127,6 +105,40 @@ def cmd_status(args, config: ExecutorConfig):
             print(f"\n⏳ Not started ({len(not_started)}):")
             for t in not_started:
                 print(f"   ⬜ {t.id}: {t.name}")
+
+
+def cmd_status(args, config: ExecutorConfig):
+    """Execution status"""
+
+    if getattr(args, "json_output", False):
+        with ExecutorState(config) as state:
+            # Parse tasks from tasks.md to cross-reference
+            all_tasks: list[Task] = []
+            if config.tasks_file.exists():
+                all_tasks = parse_tasks(config.tasks_file)
+
+            completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
+            failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
+            running = sum(1 for ts in state.tasks.values() if ts.status == "running")
+            cost = state.total_cost()
+            inp, out = state.total_tokens()
+            print(
+                json.dumps(
+                    {
+                        "total_tasks": len(all_tasks),
+                        "completed": completed,
+                        "failed": failed,
+                        "running": running,
+                        "not_started": len(all_tasks) - completed - failed - running,
+                        "total_cost": round(cost, 2),
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "budget_usd": config.budget_usd,
+                    }
+                )
+            )
+        return
+    print_status(config)
 
 
 def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
