@@ -204,6 +204,10 @@ class ExecutorState:
         ]:
             if col not in columns:
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
+        # v2.3.0: add error_kind and error_stage to attempts (idempotent)
+        for col in ("error_kind", "error_stage"):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} TEXT")
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:

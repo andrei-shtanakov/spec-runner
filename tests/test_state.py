@@ -996,3 +996,28 @@ class TestDegradedMode:
 
         assert _is_disk_full_error(sqlite3.OperationalError("database is locked")) is False
         assert _is_disk_full_error(sqlite3.OperationalError("no such table")) is False
+
+
+# --- v2.3.0 schema migration ---
+
+
+class TestSchemaMigrationV230:
+    def test_error_kind_and_stage_columns_added(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg):
+            pass  # init runs migrations
+        with sqlite3.connect(cfg.state_file) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+        assert "error_kind" in cols
+        assert "error_stage" in cols
+
+    def test_migration_is_idempotent(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        # Open and close twice — second pass must not raise OperationalError
+        with ExecutorState(cfg):
+            pass
+        with ExecutorState(cfg):
+            pass
+        with sqlite3.connect(cfg.state_file) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+        assert "error_kind" in cols and "error_stage" in cols
