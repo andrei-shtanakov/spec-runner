@@ -89,14 +89,21 @@ def print_status(config: ExecutorConfig) -> None:
                 task_cost = state.task_cost(ts.task_id)
                 if task_cost > 0:
                     attempts_info += f", ${task_cost:.2f}"
-                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
+                # Stage tag on the task header line
+                stage_tag = ""
+                if ts.status == "failed" and ts.attempts and ts.attempts[-1].error_stage:
+                    stage_tag = f" [at: {ts.attempts[-1].error_stage}]"
+                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info}){stage_tag}")
                 # Show review verdict from last attempt
                 if ts.attempts:
                     last_attempt = ts.attempts[-1]
                     if last_attempt.review_status and last_attempt.review_status != "skipped":
                         print(f"      Review: {last_attempt.review_status}")
+                # Kind tag on the error line
                 if ts.status == "failed" and ts.last_error:
-                    print(f"      Last error: {ts.last_error[:50]}...")
+                    kind = ts.attempts[-1].error_kind if ts.attempts else None
+                    kind_tag = f"[{kind}] " if kind else ""
+                    print(f"      Last error: {kind_tag}{ts.last_error[:50]}...")
                 elif ts.status == "running" and ts.last_error:
                     print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
 

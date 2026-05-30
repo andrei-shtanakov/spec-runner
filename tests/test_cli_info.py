@@ -5,6 +5,7 @@ from pathlib import Path
 from spec_runner import __version__
 from spec_runner.cli_info import print_status
 from spec_runner.config import ExecutorConfig
+from spec_runner.state import ErrorCode, ExecutorState
 
 
 def _cfg(tmp_path: Path, **overrides) -> ExecutorConfig:
@@ -27,3 +28,42 @@ class TestStatusVersionHeader:
         first = out.strip().splitlines()[0]
         assert __version__ in first
         assert "spec-runner" in first
+
+
+class TestErrorDisplay:
+    def _seed_failed(self, cfg, *, kind, stage, msg):
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "TASK-001",
+                success=False,
+                duration=1.0,
+                error=msg,
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind=kind,
+                error_stage=stage,
+            )
+
+    def test_new_format_with_kind_and_stage(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path, max_retries=1)
+        cfg.logs_dir.mkdir()
+        self._seed_failed(
+            cfg,
+            kind="rate_limit",
+            stage="codex",
+            msg="OpenAI usage limit — try again at 9:54 AM",
+        )
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "[at: codex]" in out
+        assert "[rate_limit]" in out
+        assert "9:54 AM" in out
+
+    def test_legacy_row_without_kind_falls_back(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path, max_retries=1)
+        cfg.logs_dir.mkdir()
+        self._seed_failed(cfg, kind=None, stage=None, msg="old-style error")
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "[at:" not in out
+        assert "[rate_limit]" not in out
+        assert "old-style error" in out
