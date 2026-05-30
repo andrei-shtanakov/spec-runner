@@ -67,3 +67,35 @@ class TestErrorDisplay:
         assert "[at:" not in out
         assert "[rate_limit]" not in out
         assert "old-style error" in out
+
+
+class TestStopReasonLine:
+    def test_max_failures_renders_warning(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path)
+        cfg.logs_dir.mkdir()
+        with ExecutorState(cfg) as state:
+            state.set_meta("last_run_stop_reason", "max_consecutive_failures")
+            state.set_meta("last_run_stop_detail", "12/2")
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "⚠️ Last run stopped: max_consecutive_failures reached (12/2)" in out
+
+    def test_rate_limit_renders_warning(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path)
+        cfg.logs_dir.mkdir()
+        with ExecutorState(cfg) as state:
+            state.set_meta("last_run_stop_reason", "error_rate_limit")
+            state.set_meta("last_run_stop_detail", "OpenAI usage limit — try again at 9:54 AM")
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "⚠️ Last run stopped: rate_limit" in out
+        assert "9:54 AM" in out
+
+    def test_completed_omits_warning_line(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path)
+        cfg.logs_dir.mkdir()
+        with ExecutorState(cfg) as state:
+            state.set_meta("last_run_stop_reason", "completed")
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "⚠️ Last run stopped" not in out

@@ -48,6 +48,20 @@ def print_status(config: ExecutorConfig) -> None:
         not_started = [t for t in all_tasks if t.id not in state_ids]
 
         print(f"\n📊 spec-runner v{__version__}")
+
+        # Stop-reason warning from executor_meta
+        reason = state.get_meta("last_run_stop_reason")
+        detail = state.get_meta("last_run_stop_detail") or ""
+        if reason and reason != "completed":
+            if reason == "max_consecutive_failures":
+                human = f"max_consecutive_failures reached ({detail})"
+            elif reason.startswith("error_"):
+                kind = reason.removeprefix("error_")
+                human = f"{kind} — {detail}" if detail else kind
+            else:
+                human = reason
+            print(f"⚠️ Last run stopped: {human}")
+
         print(f"{'=' * 50}")
         print(f"Tasks in spec:         {total_in_spec}")
         print(f"Tasks completed:       {completed_tasks}")
