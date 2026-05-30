@@ -1088,6 +1088,27 @@ class TestResetFailedToPending:
             state.record_attempt("T1", success=True, duration=1.0)
             assert state.reset_failed_to_pending() == set()
 
+    def test_reset_clears_attempts_so_retry_budget_is_restored(self, tmp_path):
+        """A task failed by exhausting retries must get a fresh retry budget
+        (cleared attempts) after reset, else run_with_retries re-runs 0 times."""
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            # Exhaust retries: one failed attempt with max_retries=1 → status "failed"
+            state.record_attempt("T1", success=False, duration=1.0, error="x")
+            assert state.get_task_state("T1").status == "failed"
+            assert state.get_task_state("T1").attempt_count == 1
+            flipped = state.reset_failed_to_pending()
+            assert flipped == {"T1"}
+            ts = state.get_task_state("T1")
+            assert ts.status == "pending"
+            assert ts.attempt_count == 0  # retry budget restored
+            assert ts.attempts == []
+        # survives reopen
+        with ExecutorState(cfg) as state:
+            ts = state.get_task_state("T1")
+            assert ts.status == "pending"
+            assert ts.attempt_count == 0
+
 
 class TestSecondPassMeta:
     META_KEY = "second_pass_fail_tasks"

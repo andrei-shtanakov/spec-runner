@@ -111,20 +111,20 @@ class TestSecondPassDetection:
             auto_commit=False,
             run_tests_on_done=False,
             run_review=False,
-            max_retries=2,
+            max_retries=1,
             retry_delay_seconds=0,
             # Run under DEFAULT on_task_failure="skip" to prove the status-based
             # second-pass detection fires even when run_with_retries returns "SKIP".
         )
         cfg.logs_dir.mkdir()
-        # Seed TASK-001 as a prior-run failure: one failed attempt, status
-        # forced to "failed" (as if a previous run with fewer retries exhausted
-        # it). This run has retry headroom (max_retries=2) so it executes one
-        # more attempt, fails, and lands back at status="failed" — exercising
-        # the second-pass path under DEFAULT skip mode.
+        # Seed TASK-001 as a prior-run failure: one failed attempt with
+        # max_retries=1 exhausts the retry budget → status automatically
+        # becomes "failed".  reset_failed_to_pending() (called by run --all)
+        # clears attempts so the task gets a fresh budget, executes once,
+        # fails again, and the second-pass hint fires.
         with ExecutorState(cfg) as state:
             state.record_attempt("TASK-001", success=False, duration=1.0, error="x")
-            state.get_task_state("TASK-001").status = "failed"
+            assert state.get_task_state("TASK-001").status == "failed"
             state._save()
         # Isolate execution: pre_start ok, subprocess always fails with usage limit
         from spec_runner import execution
@@ -142,7 +142,7 @@ class TestSecondPassDetection:
                 stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
             ),
         )
-        _run_tasks(_run_args(), cfg)
+        _run_tasks(_run_args(max_retries=1), cfg)
         with ExecutorState(cfg) as state:
             assert "TASK-001" in state.get_second_pass_fails()
         # log_progress writes to the structlog "runner" logger via logger.info().

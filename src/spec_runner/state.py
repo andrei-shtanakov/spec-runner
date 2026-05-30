@@ -736,9 +736,15 @@ class ExecutorState:
         if flipped:
             for task_id in flipped:
                 self.tasks[task_id].status = "pending"
+                self.tasks[task_id].attempts = []
             with self._conn:
                 self._conn.execute(
                     "UPDATE tasks SET status = 'pending' WHERE status = 'failed'"
+                )
+                placeholders = ",".join("?" for _ in flipped)
+                self._conn.execute(
+                    f"DELETE FROM attempts WHERE task_id IN ({placeholders})",
+                    tuple(flipped),
                 )
         return flipped
 
