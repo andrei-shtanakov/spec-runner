@@ -201,6 +201,19 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # v2.3.0: reset failed-task state on `run --all` unless opted out.
+        reset_enabled = getattr(args, "all", False) and not getattr(
+            args, "no_reset_failed", False
+        )
+        previously_failed: set[str] = set()  # used by T17 second-pass detection
+        if reset_enabled:
+            previously_failed = state.reset_failed_to_pending()
+            state.consecutive_failures = 0
+            state.clear_second_pass_fails()
+            state._save()
+        stop_reason: str = "completed"  # used by T18 stop-reason capture
+        stop_detail: str = ""  # used by T18 stop-reason capture
+
         # Pre-run validation
         from .validate import format_results, validate_all
 
