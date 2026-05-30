@@ -647,7 +647,11 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         read_commands[task_cmd](args, tasks)
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Extracted from main() to allow programmatic use and testing.
+    """
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -742,6 +746,12 @@ def main():
         "--json-result",
         action="store_true",
         help="Output structured JSON result per task (for Maestro interop)",
+    )
+    run_parser.add_argument(
+        "--no-reset-failed",
+        action="store_true",
+        help="Do not reset failed→pending or clear consecutive_failures "
+        "at the start of `run --all` (default: reset enabled).",
     )
 
     # status
@@ -910,6 +920,11 @@ def main():
         "sync-from-gh", parents=[task_common], help="Sync GitHub Issues to tasks.md"
     )
 
+    return parser
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.command:
