@@ -8,12 +8,25 @@ import argparse
 import contextlib
 import fcntl
 import os
-from dataclasses import dataclass
+import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
 import yaml
+
+# === Persona ===
+
+
+@dataclass
+class Persona:
+    """Agent persona for phase-specific prompt customization."""
+
+    system_prompt: str = ""
+    model: str = ""
+    focus: list[str] = field(default_factory=list)
+
 
 # === File Lock ===
 
@@ -81,8 +94,9 @@ class ExecutorLock:
 
 # === Constants ===
 
-# Configuration file path
-CONFIG_FILE = Path("spec/executor.config.yaml")
+# Configuration file paths (new and legacy)
+CONFIG_FILE = Path("spec-runner.config.yaml")  # v2.0 location (project root)
+LEGACY_CONFIG_FILE = Path("spec/executor.config.yaml")  # v1.x location
 PROGRESS_FILE = Path("spec/.executor-progress.txt")
 
 # Error patterns for graceful exit (rate limits, context window, etc.)
@@ -110,7 +124,11 @@ class ExecutorConfig:
     on_task_failure: str = "skip"  # What to do when task fails: skip | stop | ask
     max_concurrent: int = 3  # Max parallel tasks
     budget_usd: float | None = None  # Global budget limit (None = unlimited)
-    task_budget_usd: float | None = None  # Per-task budget limit (None = unlimited)
+    task_budget_usd: float | None = None  # Total per-task budget (includes attempt 1)
+    # Cap on cumulative cost of retry attempts only (attempt 2+). None = unlimited.
+    # Use when you want the initial attempt to always run but want to stop a
+    # flaky task from burning budget on repeated retries. LABS-41.
+    max_retry_cost_usd: float | None = None
     log_level: str = "info"  # Logging level (debug, info, warning, error)
 
     # Claude CLI
@@ -120,11 +138,14 @@ class ExecutorConfig:
     # Command template for custom CLIs. Placeholders: {cmd}, {model}, {prompt}, {prompt_file}
     # Examples:
     #   claude: "{cmd} -p {prompt}" or "{cmd} -p {prompt} --model {model}"
-    #   codex: "{cmd} -p {prompt}"
+    #   codex: "{cmd} exec {prompt}"   # -p is --profile in codex, not the prompt
+    #   opencode: "{cmd} run --model {model} {prompt}"
+    #   pi: "{cmd} -p --model {model} {prompt}"
     #   ollama: "{cmd} run {model} {prompt}"
     #   llama-cli: "{cmd} -m {model} -p {prompt} --no-display-prompt"
     #   llama-server: "curl -s http://localhost:8080/completion -d '{{\"prompt\": {prompt}}}'"
-    # If empty, auto-detects based on command name
+    # If empty, auto-detects based on command name (claude, codex, opencode, pi,
+    # ollama, llama-cli, llama-server)
     command_template: str = ""
 
     # Hooks
@@ -161,6 +182,37 @@ class ExecutorConfig:
     lint_blocking: bool = True  # Lint errors block task completion
     plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory
 
+    # Timeouts
+    session_timeout_minutes: int = 0  # Global session timeout (0 = disabled)
+    idle_timeout_minutes: int = 0  # Idle timeout between tasks (0 = disabled)
+
+    # Agent personas (role-specific prompts and models)
+    personas: dict[str, Persona] = field(default_factory=dict)
+
+    # Parallel review (multiple specialized review agents)
+    review_parallel: bool = False  # Run review agents in parallel
+    review_roles: list[str] = field(
+        default_factory=lambda: ["quality", "implementation", "testing"]
+    )
+
+    # Notifications
+    notify_project_name: str = ""  # Project name in notifications (default: directory name)
+    telegram_bot_token: str = ""  # Telegram bot token (empty = disabled)
+    telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
+    notify_on: list[str] = field(
+        default_factory=lambda: ["run_complete", "task_failed", "state_degraded"]
+    )
+
+    # Generic webhook notifications
+    webhook_url: str = ""  # Webhook URL (empty = disabled)
+    webhook_method: str = "POST"  # HTTP method
+    webhook_headers: dict[str, str] = field(default_factory=dict)
+    webhook_template: str = ""  # Template with {{event}}, {{task_id}}, {{message}}, etc.
+
+    # Compliance audit trail (JSON Lines; LABS-40). Empty path = disabled.
+    audit_log_path: str = ""
+    audit_log_operator: str = ""  # Override auto-detected "user@host"
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -196,19 +248,110 @@ class ExecutorConfig:
     def design_file(self) -> Path:
         return self.project_root / "spec" / f"{self.spec_prefix}design.md"
 
+    @property
+    def constitution_file(self) -> Path:
+        return self.project_root / "spec" / f"{self.spec_prefix}constitution.md"
+
+    def get_persona(self, role: str) -> Persona | None:
+        """Get persona by role name (e.g., 'implementer', 'reviewer', 'architect')."""
+        return self.personas.get(role)
+
+    def get_model_for_role(self, role: str) -> str:
+        """Get model for a given role, falling back to claude_model."""
+        persona = self.get_persona(role)
+        if persona and persona.model:
+            return persona.model
+        return self.claude_model
+
 
 # === Config Loading ===
 
 
-def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
+def _parse_personas(raw: dict) -> dict[str, Persona] | None:
+    """Parse personas section from YAML config into Persona objects."""
+    if not raw:
+        return None
+    personas: dict[str, Persona] = {}
+    for name, data in raw.items():
+        if isinstance(data, dict):
+            personas[name] = Persona(
+                system_prompt=data.get("system_prompt", ""),
+                model=data.get("model", ""),
+                focus=data.get("focus", []),
+            )
+    return personas if personas else None
+
+
+def _detect_subdir_repo(project_root: Path) -> Path | None:
+    """Return the git repo toplevel if `project_root` is a strict subdir of
+    a git repo. Return None when project_root IS the toplevel, when no git
+    repo wraps it, or when git is not installed.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    toplevel = Path(result.stdout.strip()).resolve()
+    return toplevel if toplevel != project_root.resolve() else None
+
+
+def _user_set(yaml_config: dict, args: argparse.Namespace, key: str) -> bool:
+    """True if user explicitly set this key in YAML or CLI."""
+    if yaml_config.get(key) is not None:
+        return True
+    val = getattr(args, key, None)
+    return val not in (None, False)
+
+
+def _resolve_config_path() -> Path:
+    """Find the config file, preferring new location over legacy.
+
+    Returns the path to use. Emits deprecation warning for legacy path.
+    """
+    if CONFIG_FILE.exists():
+        if LEGACY_CONFIG_FILE.exists():
+            from .logging import get_logger
+
+            get_logger("config").error(
+                "Both config files exist — remove the legacy one",
+                new=str(CONFIG_FILE),
+                legacy=str(LEGACY_CONFIG_FILE),
+            )
+        return CONFIG_FILE
+
+    if LEGACY_CONFIG_FILE.exists():
+        import sys
+
+        print(
+            f"WARNING: {LEGACY_CONFIG_FILE} is deprecated. "
+            f"Move it to {CONFIG_FILE} (project root).",
+            file=sys.stderr,
+        )
+        return LEGACY_CONFIG_FILE
+
+    return CONFIG_FILE  # default (won't exist, returns empty config)
+
+
+def load_config_from_yaml(config_path: Path | None = None) -> dict:
     """Load configuration from YAML file.
 
+    Supports both v2.0 flat format (spec-runner.config.yaml at project root)
+    and legacy format (spec/executor.config.yaml with executor: wrapper).
+
     Args:
-        config_path: Path to the configuration file.
+        config_path: Explicit path, or None to auto-detect.
 
     Returns:
         Dictionary with configuration values.
     """
+    if config_path is None:
+        config_path = _resolve_config_path()
+
     if not config_path.exists():
         return {}
 
@@ -216,7 +359,8 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
 
-        executor_config = data.get("executor", {})
+        # Support both v2.0 flat format and v1.x legacy (executor: wrapper)
+        executor_config = data.get("executor", {}) if "executor" in data else data
         hooks = executor_config.get("hooks", {})
         pre_start = hooks.get("pre_start", {})
         post_done = hooks.get("post_done", {})
@@ -257,7 +401,22 @@ def load_config_from_yaml(config_path: Path = CONFIG_FILE) -> dict:
             "max_concurrent": executor_config.get("max_concurrent"),
             "budget_usd": executor_config.get("budget_usd"),
             "task_budget_usd": executor_config.get("task_budget_usd"),
+            "max_retry_cost_usd": executor_config.get("max_retry_cost_usd"),
             "log_level": executor_config.get("log_level"),
+            "session_timeout_minutes": executor_config.get("session_timeout_minutes"),
+            "idle_timeout_minutes": executor_config.get("idle_timeout_minutes"),
+            "personas": _parse_personas(executor_config.get("personas", {})),
+            "review_parallel": post_done.get("review_parallel"),
+            "review_roles": post_done.get("review_roles"),
+            "telegram_bot_token": executor_config.get("telegram_bot_token"),
+            "telegram_chat_id": executor_config.get("telegram_chat_id"),
+            "notify_on": executor_config.get("notify_on"),
+            "webhook_url": executor_config.get("webhook_url"),
+            "webhook_method": executor_config.get("webhook_method"),
+            "webhook_headers": executor_config.get("webhook_headers"),
+            "webhook_template": executor_config.get("webhook_template"),
+            "audit_log_path": executor_config.get("audit_log_path"),
+            "audit_log_operator": executor_config.get("audit_log_operator"),
         }
     except Exception as e:
         from .logging import get_logger
@@ -287,9 +446,9 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
             config_kwargs[key] = value
 
     # Override with CLI arguments
-    if hasattr(args, "max_retries") and args.max_retries != 3:
+    if hasattr(args, "max_retries") and args.max_retries is not None:
         config_kwargs["max_retries"] = args.max_retries
-    if hasattr(args, "timeout") and args.timeout != 30:
+    if hasattr(args, "timeout") and args.timeout is not None:
         config_kwargs["task_timeout_minutes"] = args.timeout
     if hasattr(args, "no_tests") and args.no_tests:
         config_kwargs["run_tests_on_done"] = False
@@ -316,4 +475,26 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 
-    return ExecutorConfig(**config_kwargs)
+    config = ExecutorConfig(**config_kwargs)
+
+    git_root = _detect_subdir_repo(config.project_root)
+    if git_root is not None:
+        flipped = []
+        if not _user_set(yaml_config, args, "create_git_branch"):
+            config.create_git_branch = False
+            flipped.append("create_git_branch")
+        if not _user_set(yaml_config, args, "auto_commit"):
+            config.auto_commit = False
+            flipped.append("auto_commit")
+        if flipped:
+            from .logging import get_logger
+
+            get_logger("config").warning(
+                "subdir_project_detected",
+                project_root=str(config.project_root),
+                git_root=str(git_root),
+                defaulted_off=flipped,
+                override_hint="set create_git_branch/auto_commit=true in YAML to opt-in",
+            )
+
+    return config

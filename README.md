@@ -1,6 +1,6 @@
 # spec-runner
 
-Task automation from markdown specs via Claude CLI. Execute tasks from a structured `tasks.md` file with automatic retries, code review, Git integration, parallel execution, and live TUI dashboard.
+Task automation from markdown specs via Claude CLI. Execute tasks from a structured `tasks.md` file with automatic retries, 5-role code review, Git integration, compliance verification, traceability reporting, and live TUI dashboard.
 
 ## Installation
 
@@ -34,8 +34,8 @@ spec-runner run --task=TASK-001
 # Execute all ready tasks
 spec-runner run --all
 
-# Execute in parallel with live TUI
-spec-runner run --all --parallel --tui
+# Execute with live TUI dashboard
+spec-runner run --all --tui
 
 # Create tasks interactively
 spec-runner plan "add user authentication"
@@ -51,17 +51,25 @@ spec-runner watch
 - **Automatic retries** — configurable retry policy with exponential backoff and error context forwarding
 - **Code review** — multi-agent review after task completion with enriched diff context
 - **Git integration** — automatic branch creation, commits, and merges
-- **Parallel execution** — run multiple independent tasks concurrently with semaphore-based limiting
 - **TUI dashboard** — live Textual-based terminal UI with progress bars and log panel
 - **Cost tracking** — per-task token usage and cost breakdown
 - **Watch mode** — continuously poll and execute ready tasks
 - **Plugin system** — extend with custom hooks via `spec/plugins/*/plugin.yaml`
-- **MCP server** — read-only Model Context Protocol server for Claude Code integration
+- **MCP server** — Model Context Protocol server for Claude Code integration (read + write operations)
 - **GitHub Issues sync** — bidirectional sync between tasks.md and GitHub Issues
 - **Interactive planning** — generate specs (requirements + design + tasks) through dialogue with Claude
 - **Structured logging** — JSON/console output via structlog
 - **SQLite state** — persistent execution state with WAL mode, auto-migration from legacy JSON
 - **HITL review** — optional human-in-the-loop approval gate after code review
+- **Parallel review** — 5 specialized review agents (quality, implementation, testing, simplification, docs) running concurrently
+- **Agent personas** — role-specific prompt templates and model selection (architect, implementer, reviewer)
+- **Constitution guardrails** — inviolable project rules from `spec/constitution.md` injected into every prompt
+- **Telegram / webhook notifications** — alerts on task failure, run completion, and degraded-mode persistence failures (Telegram Bot API + generic webhook)
+- **Degraded-mode resilience** — SQLite write failures (disk-full, DB corruption) are caught, the run continues in memory, and operators are notified once
+- **Compliance audit trail** — opt-in JSON-Lines log of every task lifecycle event (started, attempt, completed/failed, state_degraded, run start/end) with operator + run-id attribution
+- **Pause/resume** — pause mid-run with Ctrl+\, edit tasks, resume; TUI keybinding `p`
+- **Streaming events** — live stdout streaming from Claude CLI to TUI via EventBus
+- **Session/idle timeouts** — automatic stop after configurable session or idle duration
 
 ## Task File Format
 
@@ -92,16 +100,18 @@ Tasks are defined in `spec/tasks.md`:
 spec-runner run                            # Execute next ready task
 spec-runner run --task=TASK-001            # Execute specific task
 spec-runner run --all                      # Execute all ready tasks
-spec-runner run --all --parallel           # Execute ready tasks in parallel
-spec-runner run --all --parallel --max-concurrent=5  # With concurrency limit
 spec-runner run --all --hitl-review        # Interactive HITL approval gate
 spec-runner run --force                    # Skip lock check (stale lock)
 spec-runner run --tui                      # Execute with live TUI dashboard
+spec-runner run --dry-run                  # Show what would execute (JSON)
+spec-runner run --json-result              # Structured JSON output (Maestro interop)
+spec-runner run --budget=10.0              # Set global budget in USD
 spec-runner run --log-level=DEBUG          # Set log verbosity
 spec-runner run --log-json                 # Output logs as JSON
 
 # Monitoring
 spec-runner status                         # Show execution status
+spec-runner status --json                  # JSON status output
 spec-runner costs                          # Cost breakdown per task
 spec-runner costs --json                   # JSON output for automation
 spec-runner costs --sort=cost              # Sort by cost descending
@@ -115,36 +125,50 @@ spec-runner watch --tui                    # Watch with live TUI dashboard
 spec-runner tui                            # Launch TUI status dashboard
 spec-runner validate                       # Validate config and tasks
 
+# Verification & Reporting (v2.0)
+spec-runner audit                          # Static pre-execution spec check
+spec-runner audit --strict                 # Fail on warnings (orphans, uncovered)
+spec-runner audit --json                   # JSON findings output (for CI)
+spec-runner audit --csv                    # CSV for spreadsheet review
+spec-runner verify                         # Verify post-execution compliance
+spec-runner verify --task=TASK-001         # Verify specific task
+spec-runner verify --json                  # JSON compliance output
+spec-runner verify --strict                # Fail on warnings too
+spec-runner report                         # Generate traceability matrix
+spec-runner report --milestone=mvp         # Filter by milestone
+spec-runner report --uncovered-only        # Show only uncovered requirements
+spec-runner report --json                  # JSON matrix output
+
 # Planning
 spec-runner plan "description"             # Interactive task planning
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
 
 # Integration
-spec-runner mcp                            # Launch read-only MCP server (stdio)
+spec-runner mcp                            # Launch MCP server (stdio)
 ```
 
-### spec-task
+### Task Management (unified in v2.0)
 
 ```bash
-# Task management
-spec-task list                             # List all tasks
-spec-task list --status=todo               # Filter by status
-spec-task list --priority=p0               # Filter by priority
-spec-task list --milestone=mvp             # Filter by milestone
-spec-task show TASK-001                    # Task details
-spec-task start TASK-001                   # Mark as in_progress
-spec-task done TASK-001                    # Mark as done
-spec-task block TASK-001                   # Mark as blocked
-spec-task check TASK-001 2                 # Mark checklist item
-spec-task stats                            # Statistics
-spec-task next                             # Show next ready tasks
-spec-task graph                            # ASCII dependency graph
+# Task commands (use `spec-runner task` instead of deprecated `spec-task`)
+spec-runner task list                      # List all tasks
+spec-runner task list --status=todo        # Filter by status
+spec-runner task list --priority=p0        # Filter by priority
+spec-runner task list --milestone=mvp      # Filter by milestone
+spec-runner task show TASK-001             # Task details
+spec-runner task start TASK-001            # Mark as in_progress
+spec-runner task done TASK-001             # Mark as done
+spec-runner task block TASK-001            # Mark as blocked
+spec-runner task check TASK-001 2          # Mark checklist item
+spec-runner task stats                     # Statistics
+spec-runner task next                      # Show next ready tasks
+spec-runner task graph                     # ASCII dependency graph
 
 # GitHub Issues
-spec-task export-gh                        # Export to GitHub Issues format
-spec-task sync-to-gh                       # Sync tasks -> GitHub Issues
-spec-task sync-to-gh --dry-run             # Preview without making changes
-spec-task sync-from-gh                     # Sync GitHub Issues -> tasks.md
+spec-runner task export-gh                 # Export to GitHub Issues format
+spec-runner task sync-to-gh                # Sync tasks -> GitHub Issues
+spec-runner task sync-to-gh --dry-run      # Preview without making changes
+spec-runner task sync-from-gh              # Sync GitHub Issues -> tasks.md
 ```
 
 ### spec-runner-init
@@ -157,12 +181,14 @@ spec-runner-init /path/to/project          # Install to specific project
 
 ### Multi-phase Options
 
-Both `spec-runner` and `spec-task` support `--spec-prefix` for phase-based workflows:
+`--spec-prefix` namespaces tasks, state, logs, and history for phase-based workflows:
 
 ```bash
 spec-runner run --spec-prefix=phase5-          # Uses spec/phase5-tasks.md
-spec-task list --spec-prefix=phase5-           # List phase 5 tasks
+spec-runner task list --spec-prefix=phase5-    # List phase 5 tasks
 ```
+
+Phase-scoped paths: `spec/phase5-{tasks,requirements,design}.md`, `spec/.executor-phase5-state.db`, `spec/.executor-phase5-logs/`, `spec/.phase5-task-history.log`. Multiple phases coexist without state bleed.
 
 ## Usage as Library
 
@@ -179,7 +205,7 @@ for task in ready:
 
 ## MCP Server (Claude Code Integration)
 
-spec-runner includes a read-only MCP server for querying project status from Claude Code.
+spec-runner includes an MCP server for querying status and executing tasks from Claude Code.
 
 Add to `.mcp.json`:
 
@@ -194,39 +220,106 @@ Add to `.mcp.json`:
 }
 ```
 
-Available tools: `spec_runner_status`, `spec_runner_tasks`, `spec_runner_costs`, `spec_runner_logs`.
+Available tools:
+
+| Tool | Kind | Effect |
+|---|---|---|
+| `spec_runner_status` | read | Returns aggregate status (completed/failed/running, cost, tokens) |
+| `spec_runner_tasks` | read | Lists tasks with id/name/priority/status/deps |
+| `spec_runner_next_tasks` | read | Lists ready-to-run tasks |
+| `spec_runner_task_detail` | read | Returns per-task checklist, attempts, last review, cost |
+| `spec_runner_costs` | read | Per-task cost/token breakdown |
+| `spec_runner_logs` | read | Tail of a task's execution log |
+| `spec_runner_run_task` | **write** | **Spawns a subprocess that runs Claude CLI** against the workspace. Can modify files, create git branches, run hooks (tests/lint/commit) |
+| `spec_runner_stop` | **write** | Writes a stop-file that asks a running executor to shut down gracefully |
+
+### Security model
+
+**Authentication.** The MCP server has **no built-in authentication**. It uses `stdio` transport and inherits the trust boundary of whatever started it (typically your terminal or Claude Code). Whoever can run the server can call any of its tools.
+
+**Safe deployment patterns:**
+
+- ✅ **Local stdio only** (default). Run via `spec-runner mcp` from `.mcp.json` on a single developer machine. Same trust boundary as your shell.
+- ✅ **Claude Code inside your own workspace.** The MCP server operates on the workspace it's invoked in; tools like `spec_runner_run_task` will modify files in that workspace.
+- ❌ **Do NOT expose over TCP, HTTP, or a shared socket** without adding authentication and audit logging — the write tools execute subprocesses that run Claude CLI with full filesystem access.
+- ❌ **Do NOT run under a shared service account** that multiple users or agents share. There is no per-caller identity, so audit logs cannot attribute actions.
+
+**Write-tool blast radius.** `spec_runner_run_task` does not sandbox execution: the spawned `spec-runner run --task TASK-XXX` can:
+
+- edit any file in the project root
+- create git branches and auto-commit (if `hooks.post_done.auto_commit: true`)
+- run tests, linters, and any configured hook command
+- spend budget (Claude API cost) up to `budget_usd` / `task_budget_usd`
+
+Treat the MCP server as equivalent to giving the caller shell access to the workspace.
+
+**Hardening options** (if you need tighter limits):
+
+- Run in a disposable container or Maestro worktree so writes are isolated
+- Set `budget_usd` low to cap accidental cost spend
+- Disable `hooks.post_done.auto_commit` if you want manual review before commits
+- Restrict `commands.test`/`commands.lint` to safe allow-listed shell commands — they run verbatim
+
+See also: `docs/state-schema.md` for the read contract, and `src/spec_runner/mcp_server.py` for tool implementations.
 
 ## Configuration
 
-Configuration file: `executor.config.yaml`
+Configuration file: `spec-runner.config.yaml` (project root, v2.0)
+
+Legacy location `spec/executor.config.yaml` is still supported with a deprecation warning.
+
+v2.0 flat format (no `executor:` wrapper):
 
 ```yaml
-executor:
-  max_retries: 3
-  task_timeout_minutes: 30
-  claude_command: "claude"
-  claude_model: "sonnet"
-  spec_prefix: ""              # e.g. "phase5-" for phase5-tasks.md
-  max_concurrent: 3            # Parallel task limit
-  budget_usd: 50.0             # Total budget cap
-  task_budget_usd: 10.0        # Per-task budget cap
+max_retries: 3
+task_timeout_minutes: 30
+claude_command: "claude"
+claude_model: "sonnet"
+spec_prefix: ""                # e.g. "phase5-" for phase5-tasks.md
+budget_usd: 50.0               # Total budget cap (whole run)
+task_budget_usd: 10.0          # Per-task cap incl. first attempt
+max_retry_cost_usd: 2.0        # Cap on retry cost only (attempts 2+)
 
-  hooks:
-    pre_start:
-      create_git_branch: true
-    post_done:
-      run_tests: true
-      run_lint: true
-      auto_commit: true
-      run_review: true
+# Telegram notifications (optional)
+telegram_bot_token: ""         # Bot token from @BotFather
+telegram_chat_id: ""           # Chat ID to send notifications to
+notify_on: [run_complete, task_failed, state_degraded]
 
-  commands:
-    test: "pytest tests/ -v"
-    lint: "ruff check ."
+# Generic webhook (optional — works with Slack, Discord, ntfy.sh, etc.)
+webhook_url: ""                # Webhook URL (empty = disabled)
+webhook_template: '{"text": "{{event}}: {{message}}"}'
 
-  paths:
-    root: "."
-    logs: "spec/.executor-logs"
+# Compliance audit trail (optional — JSON Lines, opt-in)
+audit_log_path: ""             # e.g. "spec/.executor-audit.jsonl"; empty = disabled
+audit_log_operator: ""         # Override the auto-detected "user@host" tag
+
+# Agent personas (optional)
+personas:
+  implementer:
+    system_prompt: "You are a focused Python developer"
+    model: "sonnet"
+  reviewer:
+    system_prompt: "You are a senior code reviewer"
+    model: "haiku"
+
+hooks:
+  pre_start:
+    create_git_branch: true
+  post_done:
+    run_tests: true
+    run_lint: true
+    auto_commit: true
+    run_review: true
+    review_parallel: false     # Run 5 review agents in parallel
+    review_roles: [quality, implementation, testing]
+
+commands:
+  test: "uv run pytest tests/ -v"
+  lint: "uv run ruff check ."
+
+paths:
+  root: "."
+  logs: "spec/.executor-logs"
 ```
 
 ### Git Branch Workflow
@@ -241,6 +334,8 @@ executor:
 |-----|--------------|------------------|
 | Claude | Yes | `{cmd} -p {prompt} --model {model}` |
 | Codex | Yes | `{cmd} -p {prompt} --model {model}` |
+| OpenCode ([sst/opencode](https://opencode.ai)) | Yes | `{cmd} run --model {model} {prompt}` |
+| Pi Agent ([pi.dev](https://pi.dev)) | Yes (basename match) | `{cmd} -p --model {model} {prompt}` |
 | Ollama | Yes | `{cmd} run {model} {prompt}` |
 | llama-cli | Yes | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
 | Custom | Use template | `{cmd} --prompt {prompt}` |
@@ -250,33 +345,54 @@ executor:
 ```
 project/
 ├── pyproject.toml
-├── executor.config.yaml
+├── spec-runner.config.yaml      # v2.0 config location
+├── Makefile
+├── .pre-commit-config.yaml
 ├── src/
 │   └── spec_runner/
 │       ├── __init__.py
 │       ├── executor.py          # Re-exports (backward compat)
-│       ├── cli.py               # CLI commands + argparse
+│       ├── cli.py               # Main CLI dispatcher, cmd_run, cmd_watch
+│       ├── cli_info.py          # Status, costs, logs, validate, verify, report, TUI, MCP
+│       ├── cli_plan.py          # Interactive planning command
 │       ├── execution.py         # Task execution + retry logic
-│       ├── parallel.py          # Async parallel execution
 │       ├── config.py            # ExecutorConfig + YAML loading
-│       ├── state.py             # SQLite state persistence
+│       ├── state.py             # SQLite state persistence + degraded-mode fallback
 │       ├── prompt.py            # Prompt building + templates
-│       ├── hooks.py             # Git ops, code review, plugins
-│       ├── runner.py            # Subprocess execution
-│       ├── task.py              # Task parsing + management
+│       ├── hooks.py             # Pre/post hook orchestration
+│       ├── git_ops.py           # Git branch/commit/merge operations
+│       ├── review.py            # 5-role code review + HITL gate
+│       ├── runner.py            # Subprocess execution + event streaming
+│       ├── task.py              # Task parsing + dependency resolution
+│       ├── task_commands.py     # Task CLI commands (list, show, start, etc.)
+│       ├── github_sync.py       # GitHub Issues sync (to/from)
+│       ├── audit.py             # Pre-execution static audit (LABS-37)
+│       ├── audit_log.py         # JSON Lines compliance audit trail (LABS-40)
+│       ├── verify.py            # Post-execution compliance verification
+│       ├── report.py            # Traceability matrix generation
 │       ├── validate.py          # Config + task validation
 │       ├── plugins.py           # Plugin discovery + hooks
 │       ├── logging.py           # Structured logging (structlog)
+│       ├── events.py            # EventBus for streaming to TUI
+│       ├── notifications.py     # Telegram + webhook notifications
 │       ├── tui.py               # Textual TUI dashboard
 │       ├── mcp_server.py        # MCP server (FastMCP, stdio)
 │       ├── init_cmd.py          # Skill installer
 │       └── skills/
 │           └── spec-generator-skill/
+├── docs/
+│   └── state-schema.md          # Maestro interop contract (SQLite + --json-result)
+├── schemas/
+│   ├── executor-state.schema.json   # JSON Schema for .executor-state.db contents
+│   └── json-result.schema.json      # JSON Schema for `run --json-result` stdout
+├── tests/
+│   └── fixtures/maestro-interop/    # Golden fixtures copied by Maestro contract tests
 └── spec/
     ├── tasks.md
     ├── requirements.md
     ├── design.md
-    └── plugins/
+    ├── FORMAT.md                # Task format specification
+    └── plugins/                 # Optional: per-plugin subdirectories with plugin.yaml
 ```
 
 ## License

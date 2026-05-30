@@ -1,9 +1,8 @@
 """Tests for spec_runner.executor — execute_task and run_with_retries."""
 
-import asyncio
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import (
@@ -97,8 +96,8 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_pre.assert_called_once_with(task, config)
-        mock_post.assert_called_once_with(task, config, True)
+        mock_pre.assert_called_once_with(task, config, reporter=ANY)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
         mock_status.assert_called()
         mock_checklist.assert_called_once()
 
@@ -136,7 +135,7 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_post.assert_called_once_with(task, config, True)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
@@ -903,32 +902,6 @@ class TestReviewDataTracking:
         assert len(ts.attempts[-1].review_findings) == 2048
 
 
-# --- Parallel execution tests ---
-
-
-class TestParallelExecution:
-    """Tests for parallel task execution."""
-
-    def test_run_tasks_parallel_exists(self):
-        """_run_tasks_parallel function exists and is a coroutine."""
-        from spec_runner.executor import _run_tasks_parallel
-
-        assert asyncio.iscoroutinefunction(_run_tasks_parallel)
-
-    def test_execute_task_async_exists(self):
-        """_execute_task_async function exists and is a coroutine."""
-        from spec_runner.executor import _execute_task_async
-
-        assert asyncio.iscoroutinefunction(_execute_task_async)
-
-    def test_parallel_flag_in_argparser(self):
-        """CLI parser accepts --parallel flag."""
-        from spec_runner.executor import main
-
-        # Just verify it doesn't crash on import
-        assert callable(main)
-
-
 # --- Budget enforcement tests ---
 
 
@@ -972,6 +945,228 @@ class TestBudgetEnforcement:
         assert result is False
         # Should stop after 2 attempts ($0.12 > $0.10)
         assert call_count == 2
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_task_budget_exceeded_records_attempt(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """Budget exceeded records a BUDGET_EXCEEDED attempt in state."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+
+        run_with_retries(task, config, state)
+
+        ts = state.get_task_state(task.id)
+        assert ts is not None
+        budget_attempts = [a for a in ts.attempts if a.error_code == ErrorCode.BUDGET_EXCEEDED]
+        assert len(budget_attempts) == 1
+        assert "budget exceeded" in budget_attempts[0].error.lower()
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_budget_failure_marks_task_failed_not_blocked(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: budget exhaustion must mark the task `failed` in tasks.md,
+        not `blocked` (blocked implies dependency wait, which is misleading)."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                5.0,
+                error="err",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Verify update_task_status was called with "failed", never "blocked"
+        statuses = [c.args[2] for c in mock_status.call_args_list]
+        assert "failed" in statuses
+        assert "blocked" not in statuses
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_pre_attempt_budget_check_skips_next_attempt(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: once task_budget_usd is spent, we do NOT launch another
+        retry — the pre-attempt check short-circuits the loop."""
+        config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
+        state = _make_state(config)
+        task = _make_task()
+        # Pre-populate one attempt already over the cap
+        state.record_attempt(
+            task.id,
+            False,
+            5.0,
+            error="flake",
+            error_code=ErrorCode.TASK_FAILED,
+            cost_usd=0.08,
+        )
+
+        run_with_retries(task, config, state)
+
+        # execute_task must NOT have been called — the loop ended before it
+        assert mock_exec.call_count == 0
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_max_retry_cost_lets_first_attempt_run(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: `max_retry_cost_usd` caps retries only — the first
+        attempt runs regardless of the retry cap."""
+        config = _make_config(
+            tmp_path,
+            max_retries=5,
+            task_budget_usd=None,
+            max_retry_cost_usd=0.01,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                2.0,
+                error="flaky",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.50,  # far over the retry cap, but it's attempt 1
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # First attempt ran even though its cost dwarfs max_retry_cost_usd.
+        # Second attempt also starts (pre-check sees retry_spent=0), then
+        # post-attempt check fires because retry_spent is now > 0.01.
+        assert mock_exec.call_count == 2
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_max_retry_cost_stops_further_retries(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: once retries have spent > max_retry_cost_usd, no more
+        retries. The first attempt's cost is not counted."""
+        config = _make_config(
+            tmp_path,
+            max_retries=5,
+            task_budget_usd=None,
+            max_retry_cost_usd=0.10,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        attempt_costs = iter([0.50, 0.06, 0.07])  # attempt 1, retry 1, retry 2
+
+        def side_effect(t, cfg, st):
+            cost = next(attempt_costs)
+            st.record_attempt(
+                t.id,
+                False,
+                1.0,
+                error="flake",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=cost,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Attempt 1 (0.50, not counted) + retry 1 (0.06) + retry 2 (0.07)
+        # = retry_total 0.13 > 0.10 → stop before attempt 4.
+        assert mock_exec.call_count == 3
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.execute_task")
+    def test_both_caps_independent(
+        self,
+        mock_exec,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        """LABS-41: whichever cap fires first wins. Here max_retry_cost_usd
+        is tighter than task_budget_usd."""
+        config = _make_config(
+            tmp_path,
+            max_retries=10,
+            task_budget_usd=10.0,
+            max_retry_cost_usd=0.05,
+        )
+        state = _make_state(config)
+        task = _make_task()
+
+        def side_effect(t, cfg, st):
+            st.record_attempt(
+                t.id,
+                False,
+                1.0,
+                error="flake",
+                error_code=ErrorCode.TASK_FAILED,
+                cost_usd=0.06,
+            )
+            return False
+
+        mock_exec.side_effect = side_effect
+        run_with_retries(task, config, state)
+
+        # Attempt 1 (0.06, first — not counted) + retry 1 (0.06) → retry_total
+        # 0.06 > 0.05 → block retry 2. Call count = 2.
+        assert mock_exec.call_count == 2
 
 
 class TestStateCleanup:
@@ -1054,7 +1249,7 @@ class TestSignalHandling:
 
         task = _make_task()
 
-        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c, **kw: True)
         monkeypatch.setattr("spec_runner.execution.update_task_status", lambda *a, **kw: None)
         monkeypatch.setattr("spec_runner.execution.send_callback", lambda *a, **kw: None)
         monkeypatch.setattr(
@@ -1137,7 +1332,6 @@ class TestForceFlag:
                 "all": False,
                 "milestone": None,
                 "restart": False,
-                "parallel": False,
                 "tui": False,
                 "force": True,
             },
@@ -1178,7 +1372,6 @@ class TestForceFlag:
                 "all": False,
                 "milestone": None,
                 "restart": False,
-                "parallel": False,
                 "tui": False,
                 "force": False,
             },
@@ -1349,3 +1542,111 @@ class TestSmartRetry:
         assert result is False
         assert mock_execute.call_count == 1
         assert mock_sleep.call_count == 0
+
+
+class TestStageReporterWiring:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_codex_and_parse_stages_emitted(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_post,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+        monkeypatch,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=0, stdout="TASK_COMPLETE\n", stderr="",
+        )
+        captured: list[str] = []
+
+        def _capture(*args: object) -> None:
+            if args:
+                captured.append(str(args[0]))
+
+        monkeypatch.setattr("spec_runner.execution.log_progress", _capture)
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+        joined = "\n".join(captured)
+        assert "stage: codex" in joined
+        assert "stage: parse" in joined
+        assert joined.index("stage: codex") < joined.index("stage: parse")
+
+
+class TestErrorStageRecorded:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_error_stage_is_codex_on_subprocess_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=1, stdout="",
+            stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
+        )
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_stage == "codex"
+
+
+class TestErrorClassificationInExecution:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_unknown_error_replaced_by_classify(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=1, stdout="",
+            stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
+        )
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            result = execute_task(task, cfg, state)
+            assert result is False
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_kind == "rate_limit"
+            assert "9:54 AM" in attempt.error
+            assert attempt.error != "Unknown error"

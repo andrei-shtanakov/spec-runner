@@ -21,6 +21,31 @@ class TestSetupLogging:
         setup_logging(tui_mode=True, log_file=log_file)
 
 
+class TestConsoleProgress:
+    """Console progress sink (non-TUI mode mirrors a compact line to stderr)."""
+
+    def test_non_tui_mirrors_progress_to_stderr(self, tmp_path, capsys):
+        setup_logging(tui_mode=False, log_file=tmp_path / "run.log")
+        get_logger("console_on_test").info("ping_console", task_id="TASK-099")
+        err = capsys.readouterr().err
+        assert "ping_console" in err
+        assert "TASK-099" in err
+
+    def test_tui_mode_keeps_stderr_quiet(self, tmp_path, capsys):
+        setup_logging(tui_mode=True, log_file=tmp_path / "tui.log")
+        get_logger("console_off_test").info("quiet_console", task_id="TASK-100")
+        err = capsys.readouterr().err
+        assert "quiet_console" not in err
+
+    def test_console_line_omits_trace_plumbing(self, tmp_path, capsys):
+        setup_logging(tui_mode=False, log_file=tmp_path / "run.log")
+        get_logger("console_trace_test").info("trace_check")
+        err = capsys.readouterr().err
+        assert "trace_check" in err
+        assert "pipeline_id" not in err
+        assert "_trace_id" not in err
+
+
 class TestGetLogger:
     """Tests for get_logger."""
 

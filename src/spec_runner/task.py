@@ -1,29 +1,6 @@
-#!/usr/bin/env python3
-"""
-spec-task — CLI for managing tasks from tasks.md
+"""Core task model, parsing, and dependency resolution."""
 
-Usage:
-    spec-task list                    # List all tasks
-    spec-task list --status=todo      # Filter by status
-    spec-task list --priority=p0      # Filter by priority
-    spec-task list --milestone=mvp    # Filter by milestone
-    spec-task show TASK-001           # Task details
-    spec-task start TASK-001          # Start task
-    spec-task done TASK-001           # Complete task
-    spec-task block TASK-001          # Block task
-    spec-task check TASK-001 2        # Mark checklist item
-    spec-task stats                   # Statistics
-    spec-task next                    # Next task (by dependencies)
-    spec-task graph                   # ASCII dependency graph
-    spec-task export-gh               # Export to GitHub Issues
-    spec-task sync-to-gh              # Sync tasks to GitHub Issues
-    spec-task sync-from-gh            # Sync GitHub Issues to tasks.md
-"""
-
-import argparse
-import json
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,12 +12,13 @@ HISTORY_FILE = Path("spec/.task-history.log")
 
 # Patterns
 TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
-TASK_META = re.compile(r"^(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) (\w+)")
+# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
+TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|✅|⏸️)\s+)?(\w+)")
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
 BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
-ESTIMATE = re.compile(r"Est: (\d+(?:-\d+)?[dh])")
+ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 
 STATUS_EMOJI = {"todo": "⬜", "in_progress": "🔄", "done": "✅", "blocked": "⏸️"}
 
@@ -124,17 +102,31 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
         if meta_match:
-            priority_emoji, priority, status_emoji, status_text = meta_match.groups()
-            current_task.priority = PRIORITY_FROM_EMOJI.get(priority_emoji, "p0")
-            current_task.status = STATUS_FROM_EMOJI.get(status_emoji, "todo")
+            priority, status_text = meta_match.groups()
+            current_task.priority = priority.lower()
+            current_task.status = status_text.lower()
 
             est_match = ESTIMATE.search(line)
             if est_match:
                 current_task.estimate = est_match.group(1)
             continue
 
-        # Description
+        # Description header (skip the label itself)
         if line.startswith("**Description:**"):
+            continue
+
+        # Capture description: plain text before any bold field or checklist
+        if (
+            line.strip()
+            and not line.startswith("**")
+            and not line.startswith("- [")
+            and not in_checklist
+            and not TASK_META.match(line)
+        ):
+            if current_task.description:
+                current_task.description += "\n" + line.strip()
+            else:
+                current_task.description = line.strip()
             continue
 
         # Checklist section
@@ -217,7 +209,8 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
             continue
 
         if found and TASK_META.match(line):
-            # Replace status
+            # Replace status — supports both emoji and plain format
+            new_emoji = STATUS_EMOJI[new_status]
             old_emoji = None
             for emoji in STATUS_EMOJI.values():
                 if emoji in line:
@@ -225,22 +218,31 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
                     break
 
             if old_emoji:
-                new_emoji = STATUS_EMOJI[new_status]
+                # Emoji format: replace emoji and status text
                 new_line = line.replace(old_emoji, new_emoji)
                 new_line = re.sub(
                     r"\| (⬜|🔄|✅|⏸️) \w+",
                     f"| {new_emoji} {new_status.upper()}",
                     new_line,
                 )
-                lines[i] = new_line
-
-                filepath.write_text("\n".join(lines))
-                log_change(
-                    task_id,
-                    f"status -> {new_status}",
-                    history_file_for(filepath),
+            else:
+                # Plain format (no emoji): inject emoji and update status text
+                new_line = re.sub(
+                    r"\|\s*(TODO|IN_PROGRESS|DONE|BLOCKED)",
+                    f"| {new_emoji} {new_status.upper()}",
+                    line,
+                    count=1,
+                    flags=re.IGNORECASE,
                 )
-                return True
+            lines[i] = new_line
+
+            filepath.write_text("\n".join(lines))
+            log_change(
+                task_id,
+                f"status -> {new_status}",
+                history_file_for(filepath),
+            )
+            return True
 
     return False
 
@@ -319,6 +321,118 @@ def get_task_by_id(tasks: list[Task], task_id: str) -> Task | None:
     return None
 
 
+@dataclass
+class TaskStatusDiff:
+    """What changed between two task-status snapshots.
+
+    Used by the pause/resume handlers (CLI and TUI) to tell the operator
+    which parents finished while they were paused and which downstream
+    tasks became runnable as a result. Empty diff = no visible change.
+    """
+
+    completed_parents: list[str] = field(default_factory=list)
+    newly_ready: list[str] = field(default_factory=list)
+    other_transitions: list[tuple[str, str, str]] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.completed_parents
+            or self.newly_ready
+            or self.other_transitions
+            or self.added
+            or self.removed
+        )
+
+
+def snapshot_task_statuses(tasks: list[Task]) -> dict[str, str]:
+    """Return `{task_id: status}` — the minimal shape diffing needs."""
+    return {task.id: task.status for task in tasks}
+
+
+def diff_task_statuses(
+    before: dict[str, str],
+    after_tasks: list[Task],
+) -> TaskStatusDiff:
+    """Compare a pre-pause snapshot to the current task list.
+
+    A "completed parent" is any id that went `* → done` and is listed in
+    another current task's `depends_on`. A "newly ready" task is one that
+    previously had unfinished deps (was `blocked` or had non-empty
+    `depends_on`) but now has all deps satisfied.
+
+    The caller should pass `after_tasks` **before** `resolve_dependencies`
+    has mutated statuses, so the diff reflects the literal on-disk state.
+    """
+    diff = TaskStatusDiff()
+    after_map = {t.id: t for t in after_tasks}
+
+    # Index: task id → set of ids that depend on it (reverse edges).
+    reverse_deps: dict[str, set[str]] = {}
+    for task in after_tasks:
+        for dep in task.depends_on:
+            reverse_deps.setdefault(dep, set()).add(task.id)
+
+    for task_id, before_status in before.items():
+        if task_id not in after_map:
+            diff.removed.append(task_id)
+            continue
+        after_status = after_map[task_id].status
+        if before_status == after_status:
+            continue
+        if after_status == "done" and task_id in reverse_deps:
+            diff.completed_parents.append(task_id)
+        else:
+            diff.other_transitions.append((task_id, before_status, after_status))
+
+    for task_id in after_map:
+        if task_id not in before:
+            diff.added.append(task_id)
+
+    # Newly-ready: task whose deps are now all satisfied (either because a
+    # parent completed or a dep was removed from tasks.md).
+    for task in after_tasks:
+        if task.id not in before:
+            continue
+        was_blocked = before[task.id] in {"blocked", "todo"}
+        unfinished_deps = [
+            d for d in task.depends_on if d in after_map and after_map[d].status != "done"
+        ]
+        if was_blocked and not unfinished_deps and task.depends_on:
+            # Had deps, now all satisfied (but `status` may still say blocked —
+            # `resolve_dependencies` hasn't run yet).
+            diff.newly_ready.append(task.id)
+
+    diff.completed_parents.sort()
+    diff.newly_ready.sort()
+    diff.other_transitions.sort()
+    diff.added.sort()
+    diff.removed.sort()
+    return diff
+
+
+def format_task_status_diff(diff: TaskStatusDiff) -> str:
+    """One-line (or short multi-line) human summary for CLI/TUI logs."""
+    if diff.is_empty:
+        return "no task changes while paused"
+
+    parts: list[str] = []
+    if diff.completed_parents:
+        parts.append(f"completed: {', '.join(diff.completed_parents)}")
+    if diff.newly_ready:
+        parts.append(f"unblocked: {', '.join(diff.newly_ready)}")
+    if diff.other_transitions:
+        moves = ", ".join(f"{tid}({a}→{b})" for tid, a, b in diff.other_transitions)
+        parts.append(f"moved: {moves}")
+    if diff.added:
+        parts.append(f"added: {', '.join(diff.added)}")
+    if diff.removed:
+        parts.append(f"removed: {', '.join(diff.removed)}")
+    return " | ".join(parts)
+
+
 def resolve_dependencies(tasks: list[Task]) -> list[Task]:
     """Update depends_on based on dependency status.
 
@@ -376,581 +490,3 @@ def get_next_tasks(tasks: list[Task], include_in_progress: bool = True) -> list[
     result.extend(ready)
 
     return result
-
-
-# === CLI Commands ===
-
-
-def cmd_list(args, tasks: list[Task]):
-    """List tasks"""
-    filtered = tasks
-
-    if args.status:
-        filtered = [t for t in filtered if t.status == args.status]
-
-    if args.priority:
-        filtered = [t for t in filtered if t.priority == args.priority.lower()]
-
-    if args.milestone:
-        milestone_lower = args.milestone.lower()
-        filtered = [t for t in filtered if milestone_lower in t.milestone.lower()]
-
-    if not filtered:
-        print("No tasks matching criteria")
-        return
-
-    header = f"\n{'ID':<12} {'Status':<4} {'P':<3} {'Name':<40} {'Progress':<10} {'Est':<6}"
-    print(header)
-    print("-" * 85)
-
-    for task in filtered:
-        done, total = task.checklist_progress
-        progress = f"{done}/{total}" if total > 0 else "—"
-        status_icon = STATUS_EMOJI.get(task.status, "?")
-        priority_icon = PRIORITY_EMOJI.get(task.priority, "?")
-
-        name = task.name[:38] + ".." if len(task.name) > 40 else task.name
-        line = (
-            f"{task.id:<12} {status_icon:<4} {priority_icon:<3} "
-            f"{name:<40} {progress:<10} {task.estimate:<6}"
-        )
-        print(line)
-
-    print(f"\nTotal: {len(filtered)} tasks")
-
-
-def cmd_show(args, tasks: list[Task]):
-    """Task details"""
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found")
-        return
-
-    status_icon = STATUS_EMOJI.get(task.status, "?")
-    priority_icon = PRIORITY_EMOJI.get(task.priority, "?")
-    done, total = task.checklist_progress
-
-    print(f"\n{'=' * 60}")
-    print(f"{priority_icon} {task.id}: {task.name}")
-    print(f"{'=' * 60}")
-    print(f"Status:     {status_icon} {task.status.upper()}")
-    print(f"Priority:   {task.priority.upper()}")
-    print(f"Milestone:  {task.milestone}")
-    print(f"Estimate:   {task.estimate or '—'}")
-    print(f"Progress:   {done}/{total} ({done * 100 // total if total else 0}%)")
-
-    if task.depends_on:
-        print(f"\n⬅️  Depends on: {', '.join(task.depends_on)}")
-    if task.blocks:
-        print(f"➡️  Blocks:     {', '.join(task.blocks)}")
-    if task.traces_to:
-        print(f"📋 Traces to:  {', '.join(task.traces_to)}")
-
-    if task.checklist:
-        print("\n📝 Checklist:")
-        for i, (item, checked) in enumerate(task.checklist):
-            mark = "✅" if checked else "⬜"
-            print(f"   {i}. {mark} {item}")
-
-
-def cmd_start(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
-    """Start task"""
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found")
-        return
-
-    # Check dependencies
-    tasks = resolve_dependencies(tasks)
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found after resolving")
-        return
-
-    if task.depends_on:
-        print(f"⚠️  Task depends on incomplete: {', '.join(task.depends_on)}")
-        if not args.force:
-            print("   Use --force to start anyway")
-            return
-
-    if update_task_status(tasks_file, task.id, "in_progress"):
-        print(f"🔄 {task.id} started!")
-    else:
-        print("❌ Failed to update status")
-
-
-def cmd_done(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
-    """Complete task"""
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found")
-        return
-
-    # Check checklist
-    done, total = task.checklist_progress
-    if total > 0 and done < total:
-        print(f"⚠️  Checklist incomplete: {done}/{total}")
-        if not args.force:
-            print("   Use --force to complete anyway")
-            return
-
-    if update_task_status(tasks_file, task.id, "done"):
-        print(f"✅ {task.id} completed!")
-
-        # Show unblocked tasks
-        tasks = parse_tasks(tasks_file)
-        tasks = resolve_dependencies(tasks)
-        unblocked = [t for t in tasks if t.status == "todo" and not t.depends_on]
-        if unblocked:
-            print("\n🔓 Unblocked tasks:")
-            for t in unblocked[:5]:
-                print(f"   {t.id}: {t.name}")
-    else:
-        print("❌ Failed to update status")
-
-
-def cmd_block(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
-    """Block task"""
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found")
-        return
-
-    if update_task_status(tasks_file, task.id, "blocked"):
-        print(f"⏸️ {task.id} blocked")
-    else:
-        print("❌ Failed to update status")
-
-
-def cmd_check(args, tasks: list[Task], tasks_file: Path = TASKS_FILE):
-    """Mark checklist item"""
-    task = get_task_by_id(tasks, args.task_id.upper())
-    if not task:
-        print(f"❌ Task {args.task_id} not found")
-        return
-
-    item_index = int(args.item_index)
-    if item_index < 0 or item_index >= len(task.checklist):
-        print(f"❌ Invalid index. Available: 0-{len(task.checklist) - 1}")
-        return
-
-    item_text, was_checked = task.checklist[item_index]
-    new_checked = not was_checked  # toggle
-
-    if update_checklist_item(tasks_file, task.id, item_index, new_checked):
-        mark = "✅" if new_checked else "⬜"
-        print(f"{mark} {item_text}")
-    else:
-        print("❌ Failed to update checklist")
-
-
-def cmd_stats(args, tasks: list[Task]):
-    """Task statistics"""
-    tasks = resolve_dependencies(tasks)
-
-    by_status: dict[str, int] = {}
-    by_priority: dict[str, int] = {}
-    by_milestone: dict[str, int] = {}
-    total_estimate = 0
-
-    for task in tasks:
-        by_status[task.status] = by_status.get(task.status, 0) + 1
-        by_priority[task.priority] = by_priority.get(task.priority, 0) + 1
-        by_milestone[task.milestone] = by_milestone.get(task.milestone, 0) + 1
-
-        # Parse estimate
-        if task.estimate:
-            match = re.match(r"(\d+)", task.estimate)
-            if match:
-                total_estimate += int(match.group(1))
-
-    print("\n📊 Task Statistics")
-    print("=" * 40)
-
-    print("\nBy status:")
-    for status, count in sorted(by_status.items()):
-        icon = STATUS_EMOJI.get(status, "?")
-        pct = count * 100 // len(tasks)
-        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-        print(f"  {icon} {status:<12} {count:>3} {bar} {pct}%")
-
-    print("\nBy priority:")
-    for priority in ["p0", "p1", "p2", "p3"]:
-        count = by_priority.get(priority, 0)
-        icon = PRIORITY_EMOJI.get(priority, "?")
-        print(f"  {icon} {priority.upper():<3} {count:>3}")
-
-    print("\nBy milestone:")
-    for milestone, count in sorted(by_milestone.items()):
-        print(f"  {milestone:<25} {count:>3}")
-
-    ready = get_next_tasks(tasks)
-    print(f"\n🚀 Ready to work: {len(ready)}")
-    for t in ready[:3]:
-        print(f"   {PRIORITY_EMOJI[t.priority]} {t.id}: {t.name}")
-
-    done_count = by_status.get("done", 0)
-    progress = done_count * 100 // len(tasks) if tasks else 0
-    print(f"\n📈 Overall progress: {done_count}/{len(tasks)} ({progress}%)")
-    print(f"⏱️  Total estimate: ~{total_estimate}d")
-
-
-def cmd_next(args, tasks: list[Task]):
-    """Next task to work on"""
-    ready = get_next_tasks(tasks)
-
-    if not ready:
-        in_progress = [t for t in tasks if t.status == "in_progress"]
-        if in_progress:
-            print("🔄 Currently in progress:")
-            for t in in_progress:
-                done, total = t.checklist_progress
-                print(f"   {t.id}: {t.name} ({done}/{total})")
-        else:
-            print("🎉 All tasks completed or blocked!")
-        return
-
-    print("🚀 Next tasks (ready to work):\n")
-    for i, task in enumerate(ready[:5], 1):
-        icon = PRIORITY_EMOJI.get(task.priority, "?")
-        deps_done = "✓ deps OK" if not task.depends_on else ""
-        print(f"{i}. {icon} {task.id}: {task.name}")
-        print(f"   Est: {task.estimate or '?'} | {task.milestone} {deps_done}")
-        if task.checklist:
-            print(f"   Checklist: {len(task.checklist)} items")
-        print()
-
-
-def cmd_graph(args, tasks: list[Task]):
-    """ASCII dependency graph"""
-    print("\n📊 Dependency Graph\n")
-
-    # Find roots (no dependencies)
-    roots = [t for t in tasks if not t.depends_on]
-
-    def print_tree(task_id: str, indent: int = 0, visited: set | None = None):
-        if visited is None:
-            visited = set()
-
-        if task_id in visited:
-            return
-        visited.add(task_id)
-
-        task = get_task_by_id(tasks, task_id)
-        if not task:
-            return
-
-        prefix = "  " * indent + ("├── " if indent > 0 else "")
-        status_icon = STATUS_EMOJI.get(task.status, "?")
-
-        print(f"{prefix}{status_icon} {task.id}: {task.name[:30]}")
-
-        # Find tasks that depend on this one
-        dependents = [t for t in tasks if task_id in t.depends_on]
-        for dep in dependents:
-            print_tree(dep.id, indent + 1, visited)
-
-    for root in roots[:10]:  # Limit output
-        print_tree(root.id)
-        print()
-
-
-def cmd_export_gh(args, tasks: list[Task]):
-    """Export to GitHub Issues format"""
-    print("# GitHub Issues Export\n")
-    print("Execute commands to create issues:\n")
-    print("```bash")
-
-    for task in tasks:
-        if task.status == "done":
-            continue
-
-        labels = f"priority:{task.priority}"
-        if task.milestone:
-            labels += f",milestone:{task.milestone.lower().replace(' ', '-')}"
-
-        body = f"**Estimate:** {task.estimate or 'TBD'}\\n\\n"
-        if task.checklist:
-            body += "**Checklist:**\\n"
-            for item, checked in task.checklist:
-                mark = "x" if checked else " "
-                body += f"- [{mark}] {item}\\n"
-
-        if task.depends_on:
-            body += f"\\n**Depends on:** {', '.join(task.depends_on)}"
-
-        cmd = f'gh issue create --title "{task.id}: {task.name}" --body "{body}" --label "{labels}"'
-        print(cmd)
-
-    print("```")
-
-
-def _gh_run(args: list[str], capture: bool = True) -> subprocess.CompletedProcess:
-    """Run a gh CLI command. Raises FileNotFoundError if gh is missing."""
-    return subprocess.run(
-        ["gh"] + args,
-        capture_output=capture,
-        text=True,
-        check=False,
-    )
-
-
-def _get_existing_issues() -> dict[str, dict]:
-    """Fetch existing [TASK-XXX] issues from GitHub. Returns {task_id: issue_dict}."""
-    result = _gh_run(
-        ["issue", "list", "--state", "all", "--json", "number,title,state,labels", "--limit", "200"]
-    )
-    if result.returncode != 0:
-        return {}
-    issues = json.loads(result.stdout)
-    mapping: dict[str, dict] = {}
-    for issue in issues:
-        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
-        if m:
-            mapping[m.group(1)] = issue
-    return mapping
-
-
-def _task_labels(task: Task) -> list[str]:
-    """Build label list for a task."""
-    return [f"priority:{task.priority}", f"status:{task.status}"]
-
-
-def _task_body(task: Task) -> str:
-    """Build issue body from task."""
-    parts: list[str] = []
-    if task.estimate:
-        parts.append(f"**Estimate:** {task.estimate}")
-    if task.checklist:
-        parts.append("**Checklist:**")
-        for item, checked in task.checklist:
-            mark = "x" if checked else " "
-            parts.append(f"- [{mark}] {item}")
-    if task.depends_on:
-        parts.append(f"\n**Depends on:** {', '.join(task.depends_on)}")
-    if task.traces_to:
-        parts.append(f"**Traces to:** {', '.join(task.traces_to)}")
-    return "\n".join(parts)
-
-
-def cmd_sync_to_gh(args, tasks: list[Task]):
-    """Sync tasks to GitHub Issues. Creates, updates, or closes issues."""
-    dry_run = getattr(args, "dry_run", False)
-
-    try:
-        existing = _get_existing_issues()
-    except FileNotFoundError:
-        print("Error: 'gh' CLI not found. Install from https://cli.github.com/")
-        return
-
-    created, updated, closed = 0, 0, 0
-
-    for task in tasks:
-        issue = existing.get(task.id)
-        labels = _task_labels(task)
-        label_str = ",".join(labels)
-
-        if task.status == "done":
-            if issue and issue["state"] == "OPEN":
-                if not dry_run:
-                    _gh_run(["issue", "close", str(issue["number"])])
-                closed += 1
-            continue
-
-        if issue:
-            if not dry_run:
-                _gh_run(["issue", "edit", str(issue["number"]), "--add-label", label_str])
-                if issue["state"] == "CLOSED":
-                    _gh_run(["issue", "reopen", str(issue["number"])])
-            updated += 1
-        else:
-            title = f"[{task.id}] {task.name}"
-            body = _task_body(task)
-            if not dry_run:
-                _gh_run(
-                    [
-                        "issue",
-                        "create",
-                        "--title",
-                        title,
-                        "--body",
-                        body,
-                        "--label",
-                        label_str,
-                    ]
-                )
-            created += 1
-
-    action = "Would" if dry_run else "Done"
-    print(f"{action}: created={created}, updated={updated}, closed={closed}")
-
-
-def _status_from_issue(issue: dict) -> str:
-    """Derive task status from GitHub issue state + labels."""
-    if issue["state"] == "CLOSED":
-        return "done"
-    for label in issue.get("labels", []):
-        name = label["name"] if isinstance(label, dict) else label
-        if name.startswith("status:"):
-            status = name.split(":", 1)[1]
-            if status in STATUS_EMOJI:
-                return status
-    return "todo"
-
-
-def cmd_sync_from_gh(args, tasks: list[Task], tasks_file: Path):
-    """Sync GitHub Issues state back to tasks.md."""
-    try:
-        result = _gh_run(
-            [
-                "issue",
-                "list",
-                "--state",
-                "all",
-                "--json",
-                "number,title,state,labels",
-                "--limit",
-                "200",
-            ]
-        )
-    except FileNotFoundError:
-        print("Error: 'gh' CLI not found. Install from https://cli.github.com/")
-        return
-
-    if result.returncode != 0:
-        print(f"Error: gh issue list failed: {result.stderr}")
-        return
-
-    issues = json.loads(result.stdout)
-
-    status_map: dict[str, str] = {}
-    for issue in issues:
-        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
-        if m:
-            status_map[m.group(1)] = _status_from_issue(issue)
-
-    updated = 0
-    for task in tasks:
-        new_status = status_map.get(task.id)
-        if (
-            new_status
-            and new_status != task.status
-            and update_task_status(tasks_file, task.id, new_status)
-        ):
-            updated += 1
-            print(f"  {task.id}: {task.status} -> {new_status}")
-
-    print(f"Updated {updated} task(s) from GitHub Issues.")
-
-
-def main():
-    # Shared options available to every subcommand
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--spec-prefix",
-        type=str,
-        default="",
-        help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
-    )
-
-    parser = argparse.ArgumentParser(
-        description="spec-task — manage tasks from tasks.md",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-        parents=[common],
-    )
-
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # list
-    list_parser = subparsers.add_parser("list", aliases=["ls"], parents=[common], help="List tasks")
-    list_parser.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
-    list_parser.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
-    list_parser.add_argument("--milestone", "-m", help="Filter by milestone")
-
-    # show
-    show_parser = subparsers.add_parser("show", parents=[common], help="Task details")
-    show_parser.add_argument("task_id", help="Task ID (e.g., TASK-001)")
-
-    # start
-    start_parser = subparsers.add_parser("start", parents=[common], help="Start task")
-    start_parser.add_argument("task_id", help="Task ID")
-    start_parser.add_argument("--force", "-f", action="store_true", help="Ignore dependencies")
-
-    # done
-    done_parser = subparsers.add_parser("done", parents=[common], help="Complete task")
-    done_parser.add_argument("task_id", help="Task ID")
-    done_parser.add_argument(
-        "--force", "-f", action="store_true", help="Ignore incomplete checklist"
-    )
-
-    # block
-    block_parser = subparsers.add_parser("block", parents=[common], help="Block task")
-    block_parser.add_argument("task_id", help="Task ID")
-
-    # check
-    check_parser = subparsers.add_parser("check", parents=[common], help="Mark checklist item")
-    check_parser.add_argument("task_id", help="Task ID")
-    check_parser.add_argument("item_index", help="Item index (0, 1, 2...)")
-
-    # stats
-    subparsers.add_parser("stats", parents=[common], help="Statistics")
-
-    # next
-    subparsers.add_parser("next", parents=[common], help="Next tasks")
-
-    # graph
-    subparsers.add_parser("graph", parents=[common], help="Dependency graph")
-
-    # export-gh
-    subparsers.add_parser("export-gh", parents=[common], help="Export to GitHub Issues")
-
-    # sync-to-gh
-    sync_to_parser = subparsers.add_parser(
-        "sync-to-gh", parents=[common], help="Sync tasks to GitHub Issues"
-    )
-    sync_to_parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would happen without making changes"
-    )
-
-    # sync-from-gh
-    subparsers.add_parser(
-        "sync-from-gh", parents=[common], help="Sync GitHub Issues state to tasks.md"
-    )
-
-    args = parser.parse_args()
-
-    if not args.command:
-        parser.print_help()
-        return
-
-    tasks_file = Path(f"spec/{args.spec_prefix}tasks.md") if args.spec_prefix else TASKS_FILE
-    tasks = parse_tasks(tasks_file)
-
-    # Commands that modify the tasks file need tasks_file passed
-    write_commands = {
-        "start": cmd_start,
-        "done": cmd_done,
-        "block": cmd_block,
-        "check": cmd_check,
-        "sync-from-gh": cmd_sync_from_gh,
-    }
-    read_commands = {
-        "list": cmd_list,
-        "ls": cmd_list,
-        "show": cmd_show,
-        "stats": cmd_stats,
-        "next": cmd_next,
-        "graph": cmd_graph,
-        "export-gh": cmd_export_gh,
-        "sync-to-gh": cmd_sync_to_gh,
-    }
-
-    if args.command in write_commands:
-        write_commands[args.command](args, tasks, tasks_file)
-    elif args.command in read_commands:
-        read_commands[args.command](args, tasks)
-
-
-if __name__ == "__main__":
-    main()

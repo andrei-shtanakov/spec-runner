@@ -7,8 +7,10 @@ Provides a live terminal UI showing task status across Kanban columns
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -16,8 +18,15 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Static
 
 from .config import ExecutorConfig
+from .events import EventBus
 from .state import ExecutorState
-from .task import parse_tasks, resolve_dependencies
+from .task import (
+    diff_task_statuses,
+    format_task_status_diff,
+    parse_tasks,
+    resolve_dependencies,
+    snapshot_task_statuses,
+)
 
 # === Priority badges ===
 
@@ -151,7 +160,7 @@ class StatsBar(Static):
 class KanbanColumn(Vertical):
     """A single column in the Kanban board."""
 
-    def __init__(self, title: str, **kwargs: object) -> None:
+    def __init__(self, title: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.border_title = title
 
@@ -159,7 +168,7 @@ class KanbanColumn(Vertical):
 class LogPanel(Static):
     """Panel showing execution progress log, tailing a progress file."""
 
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._file_pos: int = 0
         self._lines: list[str] = []
@@ -191,6 +200,13 @@ class LogPanel(Static):
         except OSError:
             pass
         return []
+
+    def add_line(self, text: str) -> None:
+        """Add a line programmatically (for event streaming / status messages)."""
+        self._lines.append(self.format_line(text))
+        if len(self._lines) > 100:
+            self._lines = self._lines[-100:]
+        self.update(self.render_log())
 
     def render_log(self) -> str:
         """Render last N lines as text."""
@@ -260,12 +276,27 @@ class SpecRunnerApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "stop", "Stop execution"),
+        Binding("p", "pause", "Pause/Resume"),
         Binding("r", "refresh", "Refresh"),
     ]
 
     def __init__(self, config: ExecutorConfig | None = None) -> None:
         super().__init__()
         self._config = config
+        self._event_bus: EventBus | None = None
+        # Snapshot taken when the operator pauses execution, so that on
+        # resume we can report which parents finished and which children
+        # became ready while paused (LABS-38).
+        self._pause_snapshot: dict[str, str] | None = None
+
+    @property
+    def event_bus(self) -> EventBus:
+        """Get or create the event bus for streaming task output."""
+        if self._event_bus is None:
+            from .events import EventBus
+
+            self._event_bus = EventBus()
+        return self._event_bus
 
     def compose(self) -> ComposeResult:
         """Build the widget tree."""
@@ -289,7 +320,16 @@ class SpecRunnerApp(App[None]):
         if self._config is None:
             return
 
-        with contextlib.suppress(Exception):
+        # Drain streaming events from EventBus
+        if self._event_bus is not None:
+            events = self._event_bus.drain_recent()
+            if events:
+                log_panel = self.query_one("#log-panel", LogPanel)
+                for event in events:
+                    prefix = f"[dim]{event.task_id}[/dim] " if event.task_id else ""
+                    log_panel.add_line(f"{prefix}{event.data}")
+
+        with contextlib.suppress(sqlite3.OperationalError, OSError):
             # State DB may be locked by executor — silently skip this tick
             self._do_refresh()
 
@@ -307,7 +347,7 @@ class SpecRunnerApp(App[None]):
 
         state: ExecutorState | None = None
         try:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(sqlite3.OperationalError, OSError):
                 state = ExecutorState(config)
 
             # Categorise tasks
@@ -351,6 +391,15 @@ class SpecRunnerApp(App[None]):
                         status="done",
                         cost=cost,
                         duration=duration,
+                    )
+                    columns["done"].append(card)
+                elif task.status == "done":
+                    # Task marked done in tasks.md but missing from state.db
+                    card = TaskCard.format_card(
+                        task_id=task.id,
+                        name=task.name,
+                        priority=task.priority,
+                        status="done",
                     )
                     columns["done"].append(card)
                 elif task.status == "blocked":
@@ -453,6 +502,58 @@ class SpecRunnerApp(App[None]):
         stop_file.parent.mkdir(parents=True, exist_ok=True)
         stop_file.write_text("stop requested from TUI")
 
-    def action_quit(self) -> None:
+    def action_pause(self) -> None:
+        """Toggle pause — sets _pause_requested flag for execution loop.
+
+        On pause, capture a snapshot of current task statuses so resume can
+        diff against it. On resume, compare the current tasks.md to the
+        snapshot and surface the changes (completed parents, newly-ready
+        children) in the log panel. Also forces an immediate board refresh
+        so the Kanban columns reflect the new dependency graph without
+        waiting for the 2-second tick.
+        """
+        import spec_runner.executor as _executor_mod
+
+        _executor_mod._pause_requested = not _executor_mod._pause_requested
+        pausing = _executor_mod._pause_requested
+        log_panel = self.query_one("#log-panel", LogPanel)
+
+        if pausing:
+            self._pause_snapshot = self._current_task_snapshot()
+            log_panel.add_line("[bold yellow]Execution paused[/bold yellow]")
+        else:
+            log_panel.add_line("[bold yellow]Execution resumed[/bold yellow]")
+            self._report_resume_diff(log_panel)
+            self._pause_snapshot = None
+            # Skip the 2-second interval — render the latest board now.
+            self.refresh_board()
+
+    def _current_task_snapshot(self) -> dict[str, str] | None:
+        """Snapshot current tasks.md statuses, or None if unreadable."""
+        if self._config is None or not self._config.tasks_file.exists():
+            return None
+        try:
+            return snapshot_task_statuses(parse_tasks(self._config.tasks_file))
+        except OSError:
+            return None
+
+    def _report_resume_diff(self, log_panel: LogPanel) -> None:
+        """Diff current tasks against the pause-time snapshot and log it."""
+        if self._pause_snapshot is None or self._config is None:
+            return
+        if not self._config.tasks_file.exists():
+            return
+        try:
+            current = parse_tasks(self._config.tasks_file)
+        except OSError:
+            return
+        diff = diff_task_statuses(self._pause_snapshot, current)
+        summary = format_task_status_diff(diff)
+        if diff.is_empty:
+            log_panel.add_line(f"[dim]{summary}[/dim]")
+        else:
+            log_panel.add_line(f"[bold cyan]While paused: {summary}[/bold cyan]")
+
+    async def action_quit(self) -> None:
         """Quit the TUI."""
         self.exit()

@@ -229,6 +229,48 @@ class TestValidateWarnings:
         assert result.warnings == []
 
 
+class TestDuplicateTaskIds:
+    """Duplicate task IDs should be flagged as errors."""
+
+    def test_duplicate_id_is_error(self) -> None:
+        tasks = [
+            _make_task("TASK-001", name="First"),
+            _make_task("TASK-001", name="Duplicate"),
+            _make_task("TASK-002", name="Other"),
+        ]
+        result = validate_task_fields(tasks)
+        assert not result.ok
+        assert any("duplicate task ID" in e for e in result.errors)
+
+    def test_unique_ids_no_error(self) -> None:
+        tasks = [
+            _make_task("TASK-001"),
+            _make_task("TASK-002"),
+        ]
+        result = validate_task_fields(tasks)
+        assert not any("duplicate" in e for e in result.errors)
+
+
+class TestBlocksDependsSymmetry:
+    """Asymmetric blocks/depends_on should produce warnings."""
+
+    def test_asymmetric_blocks_warns(self) -> None:
+        t1 = _make_task("TASK-001")
+        t1.blocks = ["TASK-002"]
+        t2 = _make_task("TASK-002")  # depends_on is empty — asymmetric
+        result = validate_task_fields([t1, t2])
+        assert any(
+            "blocks TASK-002" in w and "does not list TASK-001" in w for w in result.warnings
+        )
+
+    def test_symmetric_blocks_no_warning(self) -> None:
+        t1 = _make_task("TASK-001")
+        t1.blocks = ["TASK-002"]
+        t2 = _make_task("TASK-002", depends_on=["TASK-001"])
+        result = validate_task_fields([t1, t2])
+        assert not any("blocks" in w and "does not list" in w for w in result.warnings)
+
+
 class TestValidateConfig:
     """Config YAML validation with unknown key detection."""
 

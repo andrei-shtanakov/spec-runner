@@ -1,0 +1,29 @@
+[
+  {
+    "attempts": 1,
+    "cost_usd": 0.1,
+    "duration_seconds": 10.0,
+    "exit_code": 0,
+    "review": "passed",
+    "status": "done",
+    "task_id": "TASK-001",
+    "tokens": {
+      "input": 1000,
+      "output": 500
+    }
+  },
+  {
+    "attempts": 1,
+    "cost_usd": 0.25,
+    "duration_seconds": 20.0,
+    "error": "Budget exceeded after 3 retries",
+    "exit_code": 1,
+    "review": "rejected",
+    "status": "failed",
+    "task_id": "TASK-002",
+    "tokens": {
+      "input": 2000,
+      "output": 1000
+    }
+  }
+]

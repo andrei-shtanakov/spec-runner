@@ -40,15 +40,50 @@ class TestBuildCliCommand:
         assert "opus-4" in result
 
     def test_codex_auto_detect(self):
+        # codex uses `exec` subcommand; -p is --profile in codex, not the prompt
         result = build_cli_command("codex", "hello")
-        assert result[0] == "codex"
-        assert "-p" in result
-        assert "hello" in result
+        assert result == ["codex", "exec", "hello"]
 
     def test_codex_with_model(self):
+        # codex model flag is -m (not --model)
         result = build_cli_command("codex", "hello", model="gpt-4")
-        assert "--model" in result
-        assert "gpt-4" in result
+        assert result == ["codex", "exec", "-m", "gpt-4", "hello"]
+
+    def test_opencode_auto_detect(self):
+        result = build_cli_command("opencode", "hello")
+        assert result == ["opencode", "run", "hello"]
+
+    def test_opencode_with_model(self):
+        result = build_cli_command("opencode", "hello", model="anthropic/claude-sonnet-4-6")
+        assert result == [
+            "opencode",
+            "run",
+            "--model",
+            "anthropic/claude-sonnet-4-6",
+            "hello",
+        ]
+
+    def test_pi_auto_detect(self):
+        result = build_cli_command("pi", "hello")
+        assert result == ["pi", "-p", "hello"]
+
+    def test_pi_with_model(self):
+        result = build_cli_command("pi", "hello", model="openai/gpt-4o")
+        assert result == ["pi", "-p", "--model", "openai/gpt-4o", "hello"]
+
+    def test_pi_path_basename_match(self):
+        # Absolute path with pi as the basename should still auto-detect.
+        result = build_cli_command("/usr/local/bin/pi", "hello")
+        assert result == ["/usr/local/bin/pi", "-p", "hello"]
+
+    def test_pi_no_false_positive_substring(self):
+        # "pipe-cli" or anything containing "pi" should NOT be treated as Pi —
+        # it must fall through to the Claude default.
+        result = build_cli_command("pipe-cli", "hello")
+        assert result[0] == "pipe-cli"
+        # Claude default uses -p too, but key signal: prompt is the third
+        # arg ("-p hello"), not the fourth ("-p" + appended prompt).
+        assert result == ["pipe-cli", "-p", "hello"]
 
     def test_ollama_auto_detect(self):
         result = build_cli_command("ollama", "hello", model="llama3")
@@ -259,17 +294,44 @@ class TestRunClaudeAsync:
 
         asyncio.run(_run())
 
-    def test_timeout_kills_process(self):
+    def test_timeout_terminates_then_kills_process(self):
         async def _run():
             with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
                 mock_proc = AsyncMock()
                 mock_proc.communicate.side_effect = TimeoutError()
+                mock_proc.terminate = MagicMock()
                 mock_proc.kill = MagicMock()
-                mock_proc.wait = AsyncMock()
+                # wait() after terminate times out, triggering kill fallback
+                mock_proc.wait = AsyncMock(side_effect=TimeoutError())
                 mock_cse.return_value = mock_proc
 
                 with pytest.raises(TimeoutError):
                     await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
+                mock_proc.terminate.assert_called_once()
                 mock_proc.kill.assert_called_once()
 
         asyncio.run(_run())
+
+
+class TestBuildCliCommandCodexV230:
+    def test_codex_uses_exec_subcommand_positional_prompt(self):
+        from spec_runner.runner import build_cli_command
+
+        out = build_cli_command(cmd="codex", prompt="do the thing")
+        assert out == ["codex", "exec", "do the thing"]
+
+    def test_codex_with_model_inserts_dash_m(self):
+        from spec_runner.runner import build_cli_command
+
+        out = build_cli_command(cmd="codex", prompt="hi", model="gpt-5")
+        assert out == ["codex", "exec", "-m", "gpt-5", "hi"]
+
+    def test_template_override_still_wins(self):
+        from spec_runner.runner import build_cli_command
+
+        out = build_cli_command(
+            cmd="codex",
+            prompt="hi",
+            template="{cmd} exec --dangerously-bypass-approvals-and-sandbox {prompt}",
+        )
+        assert out == ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "hi"]

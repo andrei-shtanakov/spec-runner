@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 from .config import ExecutorConfig
+from .errors import classify
 from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
@@ -16,6 +17,7 @@ from .runner import (
     parse_token_usage,
     send_callback,
 )
+from .stages import StageReporter
 from .state import (
     ErrorCode,
     ExecutorState,
@@ -42,11 +44,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
     """
 
     task_id = task.id
+    reporter = StageReporter(task.id, lambda line: log_progress(line))
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
     # Pre-start hook
-    if not pre_start_hook(task, config):
+    if not pre_start_hook(task, config, reporter=reporter):
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -101,10 +104,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
     try:
         # Build command using template or auto-detect
+        # Use implementer persona model if configured
+        task_model = config.get_model_for_role("implementer")
         cmd = build_cli_command(
             cmd=config.claude_command,
             prompt=prompt,
-            model=config.claude_model,
+            model=task_model,
             template=config.command_template,
             skip_permissions=config.skip_permissions,
         )
@@ -112,9 +117,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         logger.info(
             "Running CLI command",
             command=config.claude_command,
+            model=task_model or "(default)",
             skip_permissions=config.skip_permissions,
         )
 
+        reporter.enter("codex")
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -178,6 +185,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         success = (has_complete_marker and not has_failed_marker) or implicit_success
 
         if success:
+            reporter.enter("parse")
             if has_complete_marker:
                 logger.info("Task completed by Claude", task_id=task_id)
             else:
@@ -185,7 +193,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
             # Post-done hook (tests, lint, review)
             hook_success, hook_error, review_status, review_findings = post_done_hook(
-                task, config, True
+                task, config, True, reporter=reporter
             )
 
             if hook_success:
@@ -260,7 +268,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         else:
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
-            error = error_match.group(1) if error_match else "Unknown error"
+            if error_match:
+                error = error_match.group(1)
+                error_kind = "cli_error"
+            else:
+                error_kind, error = classify(result.stderr, result.returncode)
             state.record_attempt(
                 task_id,
                 False,
@@ -271,6 +283,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                error_kind=error_kind,
+                error_stage=reporter.current,
             )
             log_progress(f"\u274c Failed: {error[:50]}", task_id)
             send_callback(
@@ -372,8 +386,54 @@ def compute_retry_delay(error_code: ErrorCode | str, attempt: int, base_delay: i
     if strategy == "fatal":
         return 0.0
     if strategy == "backoff_exponential":
-        return min(30.0 * (2**attempt), 300.0)
+        return float(min(30.0 * (2**attempt), 300.0))
     return float(base_delay * (attempt + 1))
+
+
+def _check_task_budget(
+    task_id: str,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    attempt_index: int,
+) -> str | None:
+    """Return a budget-exceeded error message, or None if OK to proceed.
+
+    Two independent caps (LABS-41):
+    - `task_budget_usd` — hard ceiling on total task cost (all attempts).
+    - `max_retry_cost_usd` — cap on cumulative cost of retries only,
+      i.e. attempts 2..N. The initial attempt (`attempt_index == 0`)
+      always runs regardless of this key so flaky tasks can fail fast
+      rather than never getting a chance.
+    """
+    spent = state.task_cost(task_id)
+    if config.task_budget_usd is not None and spent >= config.task_budget_usd:
+        return f"Task budget exceeded (${spent:.2f} >= ${config.task_budget_usd:.2f})"
+
+    if config.max_retry_cost_usd is not None and attempt_index > 0:
+        ts = state.get_task_state(task_id)
+        retry_spent = sum(a.cost_usd or 0.0 for a in ts.attempts[1:]) if ts else 0.0
+        if retry_spent >= config.max_retry_cost_usd:
+            return f"Retry budget exceeded (${retry_spent:.2f} >= ${config.max_retry_cost_usd:.2f})"
+    return None
+
+
+def _fail_for_budget(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    message: str,
+) -> None:
+    """Record a BUDGET_EXCEEDED attempt and mark the task failed."""
+    log_progress(message, task.id)
+    state.record_attempt(
+        task.id,
+        False,
+        0.0,
+        error=message,
+        error_code=ErrorCode.BUDGET_EXCEEDED,
+    )
+    # LABS-41: budget exhaustion is terminal, not a dependency wait.
+    update_task_status(config.tasks_file, task.id, "failed")
 
 
 def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:
@@ -386,6 +446,13 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
     task_state = state.get_task_state(task.id)
 
     for attempt in range(task_state.attempt_count, config.max_retries):
+        # Pre-attempt budget check (LABS-41): stop BEFORE burning another
+        # attempt if the caps are already exhausted.
+        pre_msg = _check_task_budget(task.id, config, state, attempt)
+        if pre_msg is not None:
+            _fail_for_budget(task, config, state, pre_msg)
+            return False
+
         log_progress(f"\U0001f4cd Attempt {attempt + 1}/{config.max_retries}", task.id)
 
         result = execute_task(task, config, state)
@@ -394,15 +461,11 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
         if result == "HOOK_ERROR":
             return False
 
-        # Check per-task budget
-        if config.task_budget_usd is not None and state.task_cost(task.id) > config.task_budget_usd:
-            log_progress(
-                f"Task budget exceeded "
-                f"(${state.task_cost(task.id):.2f} > "
-                f"${config.task_budget_usd:.2f})",
-                task.id,
-            )
-            update_task_status(config.tasks_file, task.id, "blocked")
+        # Post-attempt budget check: catches cases where a single expensive
+        # attempt pushed us over the cap.
+        post_msg = _check_task_budget(task.id, config, state, attempt + 1)
+        if post_msg is not None:
+            _fail_for_budget(task, config, state, post_msg)
             return False
 
         if result is True:
@@ -434,6 +497,11 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
     # Task failed after all retries
     log_progress(f"\u274c Failed after {config.max_retries} attempts", task.id)
+
+    # Notify on task failure
+    from .notifications import notify_task_failed
+
+    notify_task_failed(config, task.id, task_state.last_error or "Retries exhausted")
 
     # Log concise error summary
     if task_state.last_error:

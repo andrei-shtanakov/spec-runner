@@ -43,7 +43,7 @@ executor:
   # Paths
   paths:
     logs: "spec/.executor-logs"     # Logs directory
-    state: "spec/.executor-state.json"  # State file
+    state: "spec/.executor-state.db"  # State file (SQLite with WAL)
 
 # Task execution order (optional override)
 # By default uses priority from tasks.md + dependencies

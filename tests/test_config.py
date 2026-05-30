@@ -12,6 +12,34 @@ from spec_runner.config import (
 )
 
 
+def _build_args(**overrides) -> Namespace:
+    """Return a minimal Namespace that satisfies all build_config attribute reads.
+
+    All attributes are set to their "not passed" values (None/False/0/"") so
+    that build_config applies only YAML overrides and dataclass defaults.
+    The subdir-detection tests rely on project_root=None so that ExecutorConfig
+    defaults to Path(".") which resolves to cwd (the monkeypatched directory).
+    """
+    defaults = {
+        "max_retries": None,
+        "timeout": None,
+        "no_tests": False,
+        "no_branch": False,
+        "no_commit": False,
+        "no_review": False,
+        "callback_url": "",
+        "spec_prefix": "",
+        "project_root": None,
+        "max_concurrent": 0,
+        "budget": None,
+        "task_budget": None,
+        "hitl_review": False,
+        "log_level": None,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
+
+
 class TestExecutorConfig:
     def test_defaults(self):
         c = ExecutorConfig()
@@ -113,10 +141,10 @@ class TestLoadConfigFromYaml:
 
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:
-        """Create a Namespace with default CLI arg values."""
+        """Create a Namespace with default CLI arg values (None = not passed)."""
         defaults = {
-            "max_retries": 3,
-            "timeout": 30,
+            "max_retries": None,
+            "timeout": None,
             "no_tests": False,
             "no_branch": False,
             "no_commit": False,
@@ -124,6 +152,8 @@ class TestBuildConfig:
             "callback_url": "",
             "spec_prefix": "",
             "project_root": None,
+            "budget": None,
+            "task_budget": None,
         }
         defaults.update(overrides)
         return Namespace(**defaults)
@@ -160,6 +190,28 @@ class TestBuildConfig:
         config = build_config({}, args)
         assert config.spec_prefix == "phase3-"
         assert config.tasks_file.name == "phase3-tasks.md"
+
+    def test_yaml_not_overridden_by_default_args(self):
+        """When CLI args are None (not passed), YAML values take precedence."""
+        yaml_config = {"max_retries": 7, "task_timeout_minutes": 45}
+        args = self._default_args()  # max_retries=None, timeout=None
+        config = build_config(yaml_config, args)
+        assert config.max_retries == 7
+        assert config.task_timeout_minutes == 45
+
+    def test_budget_args_from_cli(self):
+        """--budget and --task-budget are passed through to config."""
+        args = self._default_args(budget=10.0, task_budget=2.5)
+        config = build_config({}, args)
+        assert config.budget_usd == 10.0
+        assert config.task_budget_usd == 2.5
+
+    def test_budget_args_none_uses_yaml(self):
+        """When budget args are None, YAML values are used."""
+        yaml_config = {"budget_usd": 50.0}
+        args = self._default_args()
+        config = build_config(yaml_config, args)
+        assert config.budget_usd == 50.0
 
 
 class TestExecutorLock:
@@ -276,3 +328,146 @@ class TestLockDiagnostics:
 
     def test_is_pid_alive_dead_process(self):
         assert ExecutorLock._is_pid_alive(99999999) is False
+
+
+class TestTimeoutConfig:
+    def test_session_timeout_default_disabled(self):
+        config = ExecutorConfig()
+        assert config.session_timeout_minutes == 0
+
+    def test_idle_timeout_default_disabled(self):
+        config = ExecutorConfig()
+        assert config.idle_timeout_minutes == 0
+
+    def test_session_timeout_from_kwargs(self):
+        config = ExecutorConfig(session_timeout_minutes=60)
+        assert config.session_timeout_minutes == 60
+
+    def test_idle_timeout_from_kwargs(self):
+        config = ExecutorConfig(idle_timeout_minutes=15)
+        assert config.idle_timeout_minutes == 15
+
+    def test_timeouts_from_yaml(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "executor:\n  session_timeout_minutes: 120\n  idle_timeout_minutes: 30\n"
+        )
+        data = load_config_from_yaml(config_path)
+        assert data["session_timeout_minutes"] == 120
+        assert data["idle_timeout_minutes"] == 30
+
+
+class TestConstitutionConfig:
+    def test_constitution_file_property(self):
+        config = ExecutorConfig()
+        assert str(config.constitution_file).endswith("spec/constitution.md")
+
+    def test_constitution_file_with_prefix(self):
+        config = ExecutorConfig(spec_prefix="phase2-")
+        assert str(config.constitution_file).endswith("spec/phase2-constitution.md")
+
+
+class TestPersonaConfig:
+    def test_personas_default_empty(self):
+        config = ExecutorConfig()
+        assert config.personas == {}
+
+    def test_personas_from_kwargs(self):
+        from spec_runner.config import Persona
+
+        personas = {
+            "implementer": Persona(system_prompt="You are a focused implementer", model="sonnet"),
+            "reviewer": Persona(system_prompt="You are a code reviewer", model="haiku"),
+        }
+        config = ExecutorConfig(personas=personas)
+        assert config.personas["implementer"].model == "sonnet"
+        assert config.personas["reviewer"].system_prompt == "You are a code reviewer"
+
+    def test_get_persona_returns_none_when_missing(self):
+        config = ExecutorConfig()
+        assert config.get_persona("implementer") is None
+
+    def test_get_persona_returns_persona(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            personas={"implementer": Persona(system_prompt="test", model="opus")}
+        )
+        p = config.get_persona("implementer")
+        assert p is not None
+        assert p.model == "opus"
+
+    def test_get_model_for_role_uses_persona(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            claude_model="default-model",
+            personas={"implementer": Persona(model="persona-model")},
+        )
+        assert config.get_model_for_role("implementer") == "persona-model"
+
+    def test_get_model_for_role_falls_back_to_claude_model(self):
+        config = ExecutorConfig(claude_model="default-model")
+        assert config.get_model_for_role("implementer") == "default-model"
+
+    def test_get_model_for_role_persona_empty_model_falls_back(self):
+        from spec_runner.config import Persona
+
+        config = ExecutorConfig(
+            claude_model="default-model",
+            personas={"implementer": Persona(system_prompt="test", model="")},
+        )
+        assert config.get_model_for_role("implementer") == "default-model"
+
+    def test_personas_from_yaml(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "executor:\n"
+            "  personas:\n"
+            "    implementer:\n"
+            "      system_prompt: 'You are a focused implementer'\n"
+            "      model: sonnet\n"
+            "      focus: ['src/', 'tasks.md']\n"
+            "    reviewer:\n"
+            "      system_prompt: 'You are a code reviewer'\n"
+            "      model: haiku\n"
+        )
+        data = load_config_from_yaml(config_path)
+        personas = data["personas"]
+        assert "implementer" in personas
+        assert personas["implementer"].model == "sonnet"
+        assert personas["implementer"].focus == ["src/", "tasks.md"]
+        assert personas["reviewer"].model == "haiku"
+
+
+class TestSubdirAutoDefaultV230:
+    def _make_subdir_repo(self, tmp_path):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        return sub
+
+    def test_subdir_flips_git_branch_and_commit_off(self, tmp_path, monkeypatch):
+        sub = self._make_subdir_repo(tmp_path)
+        monkeypatch.chdir(sub)
+        cfg = build_config({}, _build_args())
+        assert cfg.create_git_branch is False
+        assert cfg.auto_commit is False
+
+    def test_explicit_true_in_yaml_respected(self, tmp_path, monkeypatch):
+        sub = self._make_subdir_repo(tmp_path)
+        monkeypatch.chdir(sub)
+        cfg = build_config({"create_git_branch": True, "auto_commit": True}, _build_args())
+        assert cfg.create_git_branch is True
+        assert cfg.auto_commit is True
+
+    def test_non_subdir_keeps_defaults_true(self, tmp_path, monkeypatch):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        monkeypatch.chdir(tmp_path)
+        cfg = build_config({}, _build_args())
+        assert cfg.create_git_branch is True
+        assert cfg.auto_commit is True

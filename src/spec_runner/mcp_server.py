@@ -1,4 +1,11 @@
-"""Read-only MCP server for spec-runner -- exposes status, tasks, costs, logs as tools."""
+"""MCP server for spec-runner -- exposes status, tasks, costs, logs, and execution tools.
+
+Security: the stdio transport inherits the trust boundary of the process that
+launched it (typically a developer's terminal or Claude Code). There is no
+built-in authentication. Write tools (`run_task`, `stop`) spawn subprocesses
+with full filesystem access. See README.md#security-model for deployment
+guidance.
+"""
 
 import json
 
@@ -19,8 +26,8 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
     args = argparse.Namespace(
         spec_prefix=spec_prefix,
         project_root="",
-        max_retries=3,
-        timeout=30,
+        max_retries=None,
+        timeout=None,
         no_tests=False,
         no_branch=False,
         no_commit=False,
@@ -28,6 +35,8 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
         hitl_review=False,
         callback_url="",
         log_level=None,
+        budget=None,
+        task_budget=None,
     )
     return build_config(yaml_config, args)
 
@@ -162,6 +171,100 @@ def spec_runner_logs(task_id: str, lines: int = 50, spec_prefix: str = "") -> st
     """Get last N lines of a task's execution log."""
     config = _build_config(spec_prefix)
     return _handle_logs(config, task_id=task_id, lines=lines)
+
+
+@mcp_app.tool()
+def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
+    """Start execution of a specific task. Returns immediately with status.
+
+    WRITE tool. Spawns `spec-runner run --task {task_id}` as a subprocess,
+    which runs the Claude CLI with full filesystem access to the workspace:
+    the task can edit files, create git branches, run hooks (tests/lint),
+    auto-commit, and spend API budget. Do not expose this MCP server over
+    the network — it has no authentication. See README.md#security-model.
+    """
+    import subprocess
+
+    cmd = ["spec-runner", "run", "--task", task_id]
+    if spec_prefix:
+        cmd.extend(["--spec-prefix", spec_prefix])
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return json.dumps(
+            {
+                "status": "started",
+                "task_id": task_id,
+                "pid": proc.pid,
+            }
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+
+@mcp_app.tool()
+def spec_runner_stop(spec_prefix: str = "") -> str:
+    """Request graceful shutdown of running execution.
+
+    WRITE tool. Writes a stop-file that asks any running executor on the
+    same workspace to finish the current task and exit. Does not kill
+    processes. See README.md#security-model.
+    """
+    config = _build_config(spec_prefix)
+    stop_file = config.state_file.with_suffix(".stop")
+    stop_file.write_text("stop")
+    return json.dumps({"status": "stop_requested", "stop_file": str(stop_file)})
+
+
+@mcp_app.tool()
+def spec_runner_next_tasks(spec_prefix: str = "") -> str:
+    """Get list of tasks ready to execute (resolved dependencies, TODO status)."""
+    from .task import get_next_tasks
+
+    config = _build_config(spec_prefix)
+    tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
+    ready = get_next_tasks(tasks)
+    return json.dumps([{"id": t.id, "name": t.name, "priority": t.priority} for t in ready])
+
+
+@mcp_app.tool()
+def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
+    """Get full detail for a task: checklist, attempts, review verdicts, cost."""
+    config = _build_config(spec_prefix)
+    tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
+    task = next((t for t in tasks if t.id == task_id.upper()), None)
+    if not task:
+        return json.dumps({"error": f"Task {task_id} not found"})
+
+    detail: dict = {
+        "id": task.id,
+        "name": task.name,
+        "priority": task.priority,
+        "status": task.status,
+        "depends_on": task.depends_on,
+        "traces_to": task.traces_to,
+        "checklist": [{"done": done, "text": text} for text, done in task.checklist],
+    }
+
+    with ExecutorState(config) as state:
+        ts = state.get_task_state(task.id)
+        if ts:
+            detail["execution"] = {
+                "state_status": ts.status,
+                "attempts": ts.attempt_count,
+                "cost_usd": round(state.task_cost(task.id), 2),
+                "last_error": ts.last_error,
+            }
+            if ts.attempts:
+                last = ts.attempts[-1]
+                detail["execution"]["last_review"] = last.review_status
+                detail["execution"]["last_duration"] = last.duration_seconds
+
+    return json.dumps(detail)
 
 
 def run_server() -> None:

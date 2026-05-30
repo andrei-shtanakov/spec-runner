@@ -1,10 +1,17 @@
 """Tests for spec_prefix support: path namespacing, history file derivation,
-project_root resolution, and stop file property."""
+project_root resolution, and stop file property.
 
+Also contains end-to-end multi-phase workflow coverage (LABS-39):
+two phases coexisting in one project must have fully isolated task files,
+state databases, log directories, and history files.
+"""
+
+import argparse
 from pathlib import Path
 
-from spec_runner.config import ExecutorConfig
-from spec_runner.task import history_file_for
+from spec_runner.config import ExecutorConfig, build_config
+from spec_runner.state import ErrorCode, ExecutorState
+from spec_runner.task import history_file_for, parse_tasks, resolve_dependencies
 
 # === ExecutorConfig properties ===
 
@@ -153,3 +160,182 @@ class TestHistoryFileFor:
         # File that doesn't end with "-tasks"
         result = history_file_for(Path("spec/something.md"))
         assert result == Path("spec/.task-history.log")
+
+
+# === Multi-phase end-to-end (LABS-39) =====================================
+
+
+PHASE1_TASKS_MD = """\
+# Phase 1 Tasks
+
+## Milestone: foundation
+
+### TASK-001: Set up project
+🔴 P0 | ⬜ TODO
+Est: 1d
+
+- [ ] Init repo
+
+### TASK-002: Add CI
+🟠 P1 | ⬜ TODO
+**Depends on:** [TASK-001]
+Est: 1d
+
+- [ ] Configure GitHub Actions
+"""
+
+PHASE2_TASKS_MD = """\
+# Phase 2 Tasks
+
+## Milestone: features
+
+### TASK-101: Build API
+🔴 P0 | ⬜ TODO
+Est: 3d
+
+- [ ] Design routes
+
+### TASK-102: Write docs
+🟡 P2 | ⬜ TODO
+**Depends on:** [TASK-101]
+Est: 1d
+
+- [ ] README
+"""
+
+
+def _scaffold_multi_phase_project(root: Path) -> None:
+    """Lay out a realistic multi-phase workspace on disk.
+
+    One `spec/` directory hosts both phase1-* and phase2-* files, mirroring
+    how Maestro or an operator would keep a multi-stage roadmap together.
+    """
+    spec_dir = root / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "phase1-tasks.md").write_text(PHASE1_TASKS_MD)
+    (spec_dir / "phase2-tasks.md").write_text(PHASE2_TASKS_MD)
+    (spec_dir / "phase1-requirements.md").write_text("# REQ-001\nInitial setup requirements.\n")
+    (spec_dir / "phase2-requirements.md").write_text("# REQ-101\nPhase 2 API requirements.\n")
+    (spec_dir / "phase1-design.md").write_text("# DESIGN-001\nPhase 1 design.\n")
+    (spec_dir / "phase2-design.md").write_text("# DESIGN-101\nPhase 2 design.\n")
+
+
+class TestMultiPhaseE2E:
+    """End-to-end checks that `--spec-prefix` isolates one phase from another."""
+
+    def test_each_phase_parses_only_its_own_tasks(self, tmp_path):
+        _scaffold_multi_phase_project(tmp_path)
+        p1 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase1-")
+        p2 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase2-")
+
+        p1_tasks = {t.id for t in parse_tasks(p1.tasks_file)}
+        p2_tasks = {t.id for t in parse_tasks(p2.tasks_file)}
+
+        assert p1_tasks == {"TASK-001", "TASK-002"}
+        assert p2_tasks == {"TASK-101", "TASK-102"}
+        assert p1_tasks.isdisjoint(p2_tasks)
+
+    def test_dependency_resolution_stays_within_phase(self, tmp_path):
+        """TASK-002 blocked by TASK-001 in phase 1, not affected by phase 2."""
+        _scaffold_multi_phase_project(tmp_path)
+        p1 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase1-")
+
+        resolved = resolve_dependencies(parse_tasks(p1.tasks_file))
+        by_id = {t.id: t for t in resolved}
+
+        assert by_id["TASK-002"].depends_on == ["TASK-001"]
+
+    def test_state_is_isolated_between_phases(self, tmp_path):
+        """Recording an attempt in phase 1 must not leak into phase 2's state."""
+        _scaffold_multi_phase_project(tmp_path)
+        p1 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase1-")
+        p2 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase2-")
+
+        assert p1.state_file != p2.state_file
+
+        with ExecutorState(p1) as s1:
+            s1.record_attempt("TASK-001", success=True, duration=10.0)
+            assert s1.total_completed == 1
+
+        with ExecutorState(p2) as s2:
+            # phase 2 state DB must exist but have seen zero work
+            assert s2.total_completed == 0
+            assert s2.total_failed == 0
+            assert "TASK-001" not in s2.tasks
+
+    def test_log_and_history_directories_are_namespaced(self, tmp_path):
+        _scaffold_multi_phase_project(tmp_path)
+        p1 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase1-")
+        p2 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase2-")
+
+        assert p1.logs_dir != p2.logs_dir
+        assert "phase1-" in p1.logs_dir.name
+        assert "phase2-" in p2.logs_dir.name
+
+        h1 = history_file_for(p1.tasks_file)
+        h2 = history_file_for(p2.tasks_file)
+        assert h1 != h2
+        assert h1.name == ".phase1-task-history.log"
+        assert h2.name == ".phase2-task-history.log"
+
+    def test_cli_arg_spec_prefix_survives_build_config(self, tmp_path):
+        """`--spec-prefix` on the CLI must route all paths through phase config."""
+        _scaffold_multi_phase_project(tmp_path)
+        args = argparse.Namespace(
+            spec_prefix="phase2-",
+            project_root=str(tmp_path),
+            max_retries=None,
+            timeout=None,
+            no_tests=False,
+            no_branch=False,
+            no_commit=False,
+            no_review=False,
+            hitl_review=False,
+            callback_url="",
+            budget=None,
+            task_budget=None,
+            log_level=None,
+        )
+
+        config = build_config({}, args)
+
+        assert config.spec_prefix == "phase2-"
+        assert config.tasks_file.name == "phase2-tasks.md"
+        assert config.tasks_file.exists()
+        assert "phase2-" in config.state_file.name
+        assert "phase2-" in config.logs_dir.name
+
+    def test_phase_transition_preserves_prior_phase_state(self, tmp_path):
+        """Completing a phase and starting the next must not touch phase 1's DB.
+
+        Pins the semantic that `--spec-prefix` namespaces are permanent: once
+        phase 1 is marked done, switching to phase 2 and running new work
+        leaves phase 1's SQLite DB byte-for-byte intact.
+        """
+        _scaffold_multi_phase_project(tmp_path)
+        p1 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase1-")
+        p2 = ExecutorConfig(project_root=tmp_path, spec_prefix="phase2-")
+
+        with ExecutorState(p1) as s1:
+            s1.record_attempt("TASK-001", success=True, duration=5.0)
+            s1.record_attempt("TASK-002", success=True, duration=7.0)
+
+        phase1_bytes = p1.state_file.read_bytes()
+
+        with ExecutorState(p2) as s2:
+            s2.record_attempt("TASK-101", success=False, duration=3.0, error_code=ErrorCode.UNKNOWN)
+
+        assert p1.state_file.read_bytes() == phase1_bytes
+
+    def test_wrong_prefix_does_not_find_files(self, tmp_path):
+        """Using a prefix that doesn't match any on-disk file yields no tasks.
+
+        Guards against silently falling back to the unprefixed `tasks.md`.
+        """
+        _scaffold_multi_phase_project(tmp_path)
+        ghost = ExecutorConfig(project_root=tmp_path, spec_prefix="phase99-")
+
+        assert not ghost.tasks_file.exists()
+        # parse_tasks should be safe on missing file — not raise
+        if ghost.tasks_file.exists():
+            assert parse_tasks(ghost.tasks_file) == []

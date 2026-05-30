@@ -21,7 +21,6 @@ class ErrorCode(str, Enum):
 
     TIMEOUT = "TIMEOUT"
     RATE_LIMIT = "RATE_LIMIT"
-    SYNTAX = "SYNTAX"
     TEST_FAILURE = "TEST_FAILURE"
     LINT_FAILURE = "LINT_FAILURE"
     TASK_FAILED = "TASK_FAILED"
@@ -57,6 +56,8 @@ class TaskAttempt:
     cost_usd: float | None = None
     review_status: str | None = None
     review_findings: str | None = None
+    error_kind: str | None = None       # v2.3.0: classified by errors.classify
+    error_stage: str | None = None      # v2.3.0: stage when failure occurred
 
 
 @dataclass
@@ -92,6 +93,25 @@ class TaskState:
         return None
 
 
+_DISK_FULL_MARKERS = (
+    "disk i/o error",
+    "database or disk is full",
+    "disk full",
+    "out of memory",  # SQLite raises this when mmap-backed writes can't extend
+    "no space left on device",
+)
+
+
+def _is_disk_full_error(exc: sqlite3.OperationalError) -> bool:
+    """Classify an OperationalError as disk-full vs another failure.
+
+    SQLite does not expose a stable error code for disk-full via sqlite3, so we
+    match on the textual message. Covers the common POSIX and SQLite phrases.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _DISK_FULL_MARKERS)
+
+
 class ExecutorState:
     """Global executor state backed by SQLite."""
 
@@ -102,6 +122,20 @@ class ExecutorState:
         self.total_completed = 0
         self.total_failed = 0
         self._conn: sqlite3.Connection | None = None
+        # Degraded mode: SQLite writes are failing (typically disk-full or
+        # corruption). In-memory state keeps working so the current run can
+        # finish, but on-disk persistence is lost until the operator fixes the
+        # underlying issue.
+        self._degraded: bool = False
+        self._degraded_reason: str | None = None
+        self._degraded_notified: bool = False
+        # Optional compliance audit trail. Opt-in via `audit_log_path` in the
+        # project config; otherwise a no-op logger. Created lazily so tests
+        # that construct ExecutorState with tmp state files don't
+        # accidentally create audit files in the CWD.
+        from .audit_log import build_audit_logger
+
+        self.audit_logger = build_audit_logger(config)
 
         # Migration: JSON -> SQLite (only for .db state files)
         json_path = (
@@ -133,6 +167,7 @@ class ExecutorState:
         self.config.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.config.state_file))
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY,
@@ -171,6 +206,10 @@ class ExecutorState:
         ]:
             if col not in columns:
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
+        # v2.3.0: add error_kind and error_stage to attempts (idempotent)
+        for col in ("error_kind", "error_stage"):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} TEXT")
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -180,6 +219,7 @@ class ExecutorState:
         # Init DB first so tables exist
         self._init_db()
 
+        assert self._conn is not None
         with self._conn:
             # Migrate tasks and attempts
             for task_id, task_data in data.get("tasks", {}).items():
@@ -229,6 +269,7 @@ class ExecutorState:
 
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""
+        assert self._conn is not None
         # Load tasks
         cursor = self._conn.execute("SELECT task_id, status, started_at, completed_at FROM tasks")
         for row in cursor.fetchall():
@@ -244,7 +285,7 @@ class ExecutorState:
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
             "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
-            "review_status, review_findings "
+            "review_status, review_findings, error_kind, error_stage "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -261,6 +302,8 @@ class ExecutorState:
                 cost_usd,
                 review_status,
                 review_findings,
+                error_kind,
+                error_stage,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -277,6 +320,8 @@ class ExecutorState:
                 cost_usd=cost_usd,
                 review_status=review_status,
                 review_findings=review_findings,
+                error_kind=error_kind,
+                error_stage=error_stage,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -290,6 +335,7 @@ class ExecutorState:
 
     def _save_meta(self) -> None:
         """Persist meta counters to SQLite."""
+        assert self._conn is not None
         for key, value in [
             ("consecutive_failures", str(self.consecutive_failures)),
             ("total_completed", str(self.total_completed)),
@@ -307,6 +353,7 @@ class ExecutorState:
         Called by external code (e.g. executor.py) when direct
         mutations are made to in-memory state outside record_attempt/mark_running.
         """
+        assert self._conn is not None
         with self._conn:
             # Upsert all tasks
             for task_id, ts in self.tasks.items():
@@ -327,8 +374,9 @@ class ExecutorState:
                         "(task_id, timestamp, success, duration_seconds, "
                         "error, error_code, claude_output, "
                         "input_tokens, output_tokens, cost_usd, "
-                        "review_status, review_findings) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "review_status, review_findings, "
+                        "error_kind, error_stage) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -342,6 +390,8 @@ class ExecutorState:
                             a.cost_usd,
                             a.review_status,
                             a.review_findings,
+                            a.error_kind,
+                            a.error_stage,
                         ),
                     )
             self._save_meta()
@@ -364,6 +414,8 @@ class ExecutorState:
         cost_usd: float | None = None,
         review_status: str | None = None,
         review_findings: str | None = None,
+        error_kind: str | None = None,
+        error_stage: str | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -380,8 +432,11 @@ class ExecutorState:
             cost_usd=cost_usd,
             review_status=review_status,
             review_findings=review_findings,
+            error_kind=error_kind,
+            error_stage=error_stage,
         )
         state.attempts.append(attempt)
+        assert self._conn is not None
 
         if success:
             state.status = "success"
@@ -395,57 +450,205 @@ class ExecutorState:
             self.consecutive_failures += 1
 
         # Atomic SQL transaction
-        with self._conn:
-            self._conn.execute(
-                "INSERT INTO tasks (task_id, status, started_at, completed_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_id) DO UPDATE SET "
-                "status = excluded.status, "
-                "started_at = excluded.started_at, "
-                "completed_at = excluded.completed_at",
-                (task_id, state.status, state.started_at, state.completed_at),
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = excluded.started_at, "
+                    "completed_at = excluded.completed_at",
+                    (task_id, state.status, state.started_at, state.completed_at),
+                )
+                self._conn.execute(
+                    "INSERT INTO attempts "
+                    "(task_id, timestamp, success, duration_seconds, "
+                    "error, error_code, claude_output, "
+                    "input_tokens, output_tokens, cost_usd, "
+                    "review_status, review_findings, "
+                    "error_kind, error_stage) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        attempt.timestamp,
+                        int(attempt.success),
+                        attempt.duration_seconds,
+                        attempt.error,
+                        attempt.error_code.value if attempt.error_code else None,
+                        attempt.claude_output,
+                        attempt.input_tokens,
+                        attempt.output_tokens,
+                        attempt.cost_usd,
+                        attempt.review_status,
+                        attempt.review_findings,
+                        attempt.error_kind,
+                        attempt.error_stage,
+                    ),
+                )
+                self._save_meta()
+        except sqlite3.OperationalError as e:
+            self._enter_degraded_mode("record_attempt", e, task_id=task_id)
+
+        self._audit_attempt(task_id, attempt, state)
+
+    def _audit_attempt(
+        self,
+        task_id: str,
+        attempt: TaskAttempt,
+        state: TaskState,
+    ) -> None:
+        """Record one attempt to the compliance audit log (never raises)."""
+        from .audit_log import (
+            EVENT_TASK_ATTEMPT,
+            EVENT_TASK_COMPLETED,
+            EVENT_TASK_FAILED,
+        )
+
+        details: dict = {
+            "attempt_number": state.attempt_count,
+            "success": attempt.success,
+            "duration_seconds": attempt.duration_seconds,
+            "input_tokens": attempt.input_tokens,
+            "output_tokens": attempt.output_tokens,
+            "cost_usd": attempt.cost_usd,
+            "review_status": attempt.review_status,
+            "error_code": (attempt.error_code.value if attempt.error_code else None),
+            "error": attempt.error,
+            "task_total_cost_usd": round(self.task_cost(task_id), 4),
+            "run_total_cost_usd": round(self.total_cost(), 4),
+        }
+        self.audit_logger.record(EVENT_TASK_ATTEMPT, task_id=task_id, **details)
+
+        # Emit terminal transitions separately so compliance readers can
+        # filter on "this is where the task finally succeeded/failed".
+        if state.status == "success":
+            self.audit_logger.record(
+                EVENT_TASK_COMPLETED,
+                task_id=task_id,
+                attempts=state.attempt_count,
+                cost_usd=round(self.task_cost(task_id), 4),
             )
-            self._conn.execute(
-                "INSERT INTO attempts "
-                "(task_id, timestamp, success, duration_seconds, "
-                "error, error_code, claude_output, "
-                "input_tokens, output_tokens, cost_usd, "
-                "review_status, review_findings) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    task_id,
-                    attempt.timestamp,
-                    int(attempt.success),
-                    attempt.duration_seconds,
-                    attempt.error,
-                    attempt.error_code.value if attempt.error_code else None,
-                    attempt.claude_output,
-                    attempt.input_tokens,
-                    attempt.output_tokens,
-                    attempt.cost_usd,
-                    attempt.review_status,
-                    attempt.review_findings,
-                ),
+        elif state.status == "failed":
+            self.audit_logger.record(
+                EVENT_TASK_FAILED,
+                task_id=task_id,
+                attempts=state.attempt_count,
+                cost_usd=round(self.task_cost(task_id), 4),
+                last_error=attempt.error,
+                error_code=attempt.error_code.value if attempt.error_code else None,
             )
-            self._save_meta()
 
     def mark_running(self, task_id: str) -> None:
         """Mark task as running with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
         state.status = "running"
         state.started_at = datetime.now().isoformat()
+        assert self._conn is not None
 
-        with self._conn:
-            self._conn.execute(
-                "INSERT INTO tasks (task_id, status, started_at, completed_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_id) DO UPDATE SET "
-                "status = excluded.status, "
-                "started_at = excluded.started_at, "
-                "completed_at = excluded.completed_at",
-                (task_id, state.status, state.started_at, state.completed_at),
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = excluded.started_at, "
+                    "completed_at = excluded.completed_at",
+                    (task_id, state.status, state.started_at, state.completed_at),
+                )
+                self._save_meta()
+        except sqlite3.OperationalError as e:
+            self._enter_degraded_mode("mark_running", e, task_id=task_id)
+
+        from .audit_log import EVENT_TASK_STARTED
+
+        self.audit_logger.record(
+            EVENT_TASK_STARTED,
+            task_id=task_id,
+            started_at=state.started_at,
+        )
+
+    @property
+    def degraded(self) -> bool:
+        """True if SQLite persistence has failed; in-memory state is still live."""
+        return self._degraded
+
+    @property
+    def degraded_reason(self) -> str | None:
+        """Human-readable description of why we're degraded, or None."""
+        return self._degraded_reason
+
+    def _enter_degraded_mode(
+        self,
+        action: str,
+        exc: sqlite3.OperationalError,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        """Record that SQLite persistence failed and notify the operator once.
+
+        The in-memory state remains authoritative for the rest of the run so the
+        executor can finish gracefully. Once the underlying issue is fixed,
+        restarting the process will reload whatever was last persisted and
+        replay from there.
+        """
+        from .logging import get_logger
+
+        disk_full = _is_disk_full_error(exc)
+        kind = "disk full" if disk_full else "DB write failed"
+        reason = f"{kind} during {action}: {exc}"
+        self._degraded = True
+        self._degraded_reason = reason
+
+        logger = get_logger("state")
+        if not self._degraded_notified:
+            logger.critical(
+                "Executor state degraded — continuing in memory only",
+                action=action,
+                task_id=task_id,
+                disk_full=disk_full,
+                error=str(exc),
+                hint=(
+                    "Free disk space or repair DB at "
+                    f"{self.config.state_file}; restart to resume persistence."
+                ),
             )
-            self._save_meta()
+            self._notify_degraded(reason)
+            from .audit_log import EVENT_STATE_DEGRADED
+
+            self.audit_logger.record(
+                EVENT_STATE_DEGRADED,
+                task_id=task_id,
+                action=action,
+                disk_full=disk_full,
+                reason=reason,
+            )
+            self._degraded_notified = True
+        else:
+            logger.warning(
+                "Persistence still failing (already degraded)",
+                action=action,
+                task_id=task_id,
+                error=str(exc),
+            )
+
+    def _notify_degraded(self, reason: str) -> None:
+        """Best-effort notification that the executor is running in degraded mode.
+
+        Sent via whichever notifier the project has opted into (Telegram,
+        webhook). Failures to send are logged but never raised — a broken
+        notifier must not turn into a crash loop on top of an already-broken
+        state file.
+        """
+        try:
+            from .notifications import notify
+
+            notify(self.config, "state_degraded", f"⚠️ spec-runner degraded: {reason}")
+        except Exception as exc:  # pragma: no cover - defensive
+            from .logging import get_logger
+
+            get_logger("state").debug("Degraded-mode notification failed", error=str(exc))
 
     def should_stop(self) -> bool:
         """Check if we should stop (consecutive failures or budget exceeded)."""
@@ -481,6 +684,97 @@ class ExecutorState:
             if a.output_tokens is not None
         )
         return inp, out
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Insert or replace a key in executor_meta."""
+        assert self._conn is not None
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO executor_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, str(value)),
+            )
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        """Read a key from executor_meta; return default if missing."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM executor_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else default
+
+    _SECOND_PASS_META_KEY = "second_pass_fail_tasks"
+
+    def get_second_pass_fails(self) -> set[str]:
+        """Return the set of task IDs that have failed across runs."""
+        raw = self.get_meta(self._SECOND_PASS_META_KEY, "") or ""
+        return {t for t in raw.split(",") if t}
+
+    def add_second_pass_fail(self, task_id: str) -> None:
+        """Record that this task_id failed a second time across runs."""
+        ids = self.get_second_pass_fails()
+        ids.add(task_id)
+        self.set_meta(self._SECOND_PASS_META_KEY, ",".join(sorted(ids)))
+
+    def clear_second_pass_fails(self) -> None:
+        """Clear the second-pass record (called at start of run --all reset)."""
+        self.set_meta(self._SECOND_PASS_META_KEY, "")
+
+    def reset_failed_to_pending(self) -> set[str]:
+        """Flip every task with status='failed' to 'pending'.
+
+        Updates both the in-memory cache and SQLite atomically so the change
+        survives connection close.  Returns the set of task IDs that were
+        flipped (used by second-pass detection in cli.py).
+        """
+        assert self._conn is not None
+        flipped = {
+            task_id
+            for task_id, ts in self.tasks.items()
+            if ts.status == "failed"
+        }
+        if flipped:
+            for task_id in flipped:
+                self.tasks[task_id].status = "pending"
+                self.tasks[task_id].attempts = []
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET status = 'pending' WHERE status = 'failed'"
+                )
+                placeholders = ",".join("?" for _ in flipped)
+                self._conn.execute(
+                    f"DELETE FROM attempts WHERE task_id IN ({placeholders})",
+                    tuple(flipped),
+                )
+        return flipped
+
+    def most_recent_failed_attempt(self) -> "TaskAttempt | None":
+        """Return the most recently recorded failing attempt, or None."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT timestamp, success, duration_seconds, error, error_code, "
+            "claude_output, input_tokens, output_tokens, cost_usd, "
+            "review_status, review_findings, error_kind, error_stage "
+            "FROM attempts WHERE success = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        error_code = ErrorCode(row[4]) if row[4] is not None else None
+        return TaskAttempt(
+            timestamp=row[0],
+            success=bool(row[1]),
+            duration_seconds=row[2],
+            error=row[3],
+            error_code=error_code,
+            claude_output=row[5],
+            input_tokens=row[6],
+            output_tokens=row[7],
+            cost_usd=row[8],
+            review_status=row[9],
+            review_findings=row[10],
+            error_kind=row[11],
+            error_stage=row[12],
+        )
 
     def close(self) -> None:
         """Close the SQLite connection."""

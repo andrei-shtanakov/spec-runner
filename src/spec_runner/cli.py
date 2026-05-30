@@ -1,21 +1,34 @@
 """CLI commands and argument parsing for spec-runner."""
 
 import argparse
-import asyncio
 import json
-import re
-import shutil
 import signal
-import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
+# Re-exports from submodules for backward compatibility
+from .cli_info import (  # noqa: E402, F401
+    cmd_audit,
+    cmd_costs,
+    cmd_logs,
+    cmd_mcp,
+    cmd_report,
+    cmd_reset,
+    cmd_status,
+    cmd_stop,
+    cmd_tui,
+    cmd_validate,
+    cmd_verify,
+)
+from .cli_plan import cmd_plan  # noqa: E402, F401
 from .config import (
-    CONFIG_FILE,
     ExecutorConfig,
     ExecutorLock,
+    _resolve_config_path,
     build_config,
     load_config_from_yaml,
 )
@@ -23,16 +36,9 @@ from .execution import (
     execute_task,
     run_with_retries,
 )
-from .hooks import ensure_on_main_branch
+from .git_ops import ensure_on_main_branch
 from .logging import get_logger
-from .parallel import _run_tasks_parallel
-from .prompt import (
-    load_prompt_template,
-    render_template,
-)
 from .runner import (
-    build_cli_command,
-    check_error_patterns,
     log_progress,
 )
 from .state import (
@@ -43,27 +49,77 @@ from .state import (
 )
 from .task import (
     Task,
+    diff_task_statuses,
+    format_task_status_diff,
     get_next_tasks,
     get_task_by_id,
     mark_all_checklist_done,
     parse_tasks,
     resolve_dependencies,
+    snapshot_task_statuses,
     update_task_status,
 )
 from .validate import format_results, validate_all
 
-logger = get_logger("executor")
+logger = get_logger("cli")
 
 
 # === CLI Commands ===
 
 
+def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
+    """Build a single task's `--json-result` entry.
+
+    Stable contract: see docs/state-schema.md and schemas/json-result.schema.json.
+    Golden-fixed by tests/test_json_result_contract.py. Any change here is a
+    breaking change requiring a major version bump.
+    """
+    ts = state.get_task_state(task_id)
+    entry: dict = {"task_id": task_id, "status": "unknown", "attempts": 0}
+    if not ts:
+        return entry
+    entry["status"] = "done" if ts.status == "success" else "failed"
+    entry["attempts"] = ts.attempt_count
+    entry["cost_usd"] = round(state.task_cost(task_id), 2)
+    inp_t = sum(a.input_tokens or 0 for a in ts.attempts)
+    out_t = sum(a.output_tokens or 0 for a in ts.attempts)
+    entry["tokens"] = {"input": inp_t, "output": out_t}
+    total_dur = sum(a.duration_seconds for a in ts.attempts)
+    entry["duration_seconds"] = round(total_dur, 1)
+    if ts.attempts:
+        last = ts.attempts[-1]
+        entry["review"] = last.review_status or "skipped"
+        if last.error:
+            entry["error"] = last.error[:200]
+    entry["exit_code"] = 0 if ts.status == "success" else 1
+    return entry
+
+
+def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: ExecutorState) -> None:
+    """Print what tasks would execute without running them."""
+    data = []
+    for t in tasks_to_run:
+        entry = {
+            "task_id": t.id,
+            "name": t.name,
+            "priority": t.priority,
+            "status": t.status,
+            "depends_on": t.depends_on,
+            "checklist_total": len(t.checklist),
+            "checklist_done": sum(1 for done, _ in t.checklist if done),
+        }
+        ts = state.get_task_state(t.id)
+        if ts:
+            entry["previous_attempts"] = ts.attempt_count
+            entry["previous_cost_usd"] = round(state.task_cost(t.id), 2)
+        data.append(entry)
+
+    print(json.dumps({"dry_run": True, "tasks": data}, indent=2))
+
+
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
-    # HITL review incompatible with parallel/TUI modes
-    if config.hitl_review and getattr(args, "parallel", False):
-        logger.warning("--hitl-review ignored in parallel mode (interactive prompts not supported)")
-        config.hitl_review = False
+    # HITL review incompatible with TUI mode
     if config.hitl_review and getattr(args, "tui", False):
         logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
         config.hitl_review = False
@@ -82,59 +138,43 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
         app = SpecRunnerApp(config=config)
 
         def _start_execution() -> None:
-            def run() -> None:
-                if getattr(args, "parallel", False):
-                    config.create_git_branch = False
-                    if getattr(args, "max_concurrent", 0) > 0:
-                        config.max_concurrent = args.max_concurrent
-                    asyncio.run(_run_tasks_parallel(args, config))
-                else:
-                    _run_tasks(args, config)
-
-            t = threading.Thread(target=run, daemon=True)
+            t = threading.Thread(target=lambda: _run_tasks(args, config), daemon=True)
             t.start()
 
         app.call_later(_start_execution)
         app.run()
         return
 
-    if getattr(args, "parallel", False):
-        # Parallel mode implies no branch
-        config.create_git_branch = False
-        if getattr(args, "max_concurrent", 0) > 0:
-            config.max_concurrent = args.max_concurrent
-        asyncio.run(_run_tasks_parallel(args, config))
+    if getattr(args, "force", False):
+        logger.warning("Skipping lock check (--force)")
+        _run_tasks(args, config)
     else:
-        if getattr(args, "force", False):
-            logger.warning("Skipping lock check (--force)")
-            _run_tasks(args, config)
-        else:
-            # Acquire lock to prevent parallel runs
-            lock = ExecutorLock(config.state_file.with_suffix(".lock"))
-            if not lock.acquire():
-                held_by = getattr(lock, "_held_by", {})
-                pid = held_by.get("pid", "unknown")
-                started = held_by.get("started", "unknown")
-                alive = held_by.get("alive", "true")
+        # Acquire lock to prevent concurrent runs
+        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+        if not lock.acquire():
+            held_by = getattr(lock, "_held_by", {})
+            pid = held_by.get("pid", "unknown")
+            started = held_by.get("started", "unknown")
+            alive = held_by.get("alive", "true")
 
+            logger.error(
+                "Another executor is already running",
+                lock_file=str(config.state_file.with_suffix(".lock")),
+                held_by_pid=pid,
+                started=started,
+                process_alive=alive,
+            )
+            if alive == "false":
                 logger.error(
-                    "Another executor is already running",
-                    lock_file=str(config.state_file.with_suffix(".lock")),
-                    held_by_pid=pid,
-                    started=started,
-                    process_alive=alive,
+                    "Lock holder is dead. Use --force to override, "
+                    "or delete the lock file manually."
                 )
-                if alive == "false":
-                    logger.error(
-                        "Lock holder is dead. Use --force to override, "
-                        "or delete the lock file manually."
-                    )
-                sys.exit(1)
+            sys.exit(1)
 
-            try:
-                _run_tasks(args, config)
-            finally:
-                lock.release()
+        try:
+            _run_tasks(args, config)
+        finally:
+            lock.release()
 
 
 def _run_tasks(args, config: ExecutorConfig):
@@ -145,6 +185,15 @@ def _run_tasks(args, config: ExecutorConfig):
     tasks = parse_tasks(config.tasks_file)
 
     with ExecutorState(config) as state:
+        from .audit_log import EVENT_RUN_ENDED, EVENT_RUN_STARTED
+
+        state.audit_logger.record(
+            EVENT_RUN_STARTED,
+            total_tasks=len(tasks),
+            mode="all" if getattr(args, "all", False) else "single",
+            task_filter=getattr(args, "task", None),
+        )
+
         # Recover tasks stuck in 'running' from previous crash
         stale_timeout = config.task_timeout_minutes * 2
         recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
@@ -152,12 +201,25 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # v2.3.0: reset failed-task state on `run --all` unless opted out.
+        reset_enabled = getattr(args, "all", False) and not getattr(
+            args, "no_reset_failed", False
+        )
+        previously_failed: set[str] = set()  # used by T17 second-pass detection
+        if reset_enabled:
+            previously_failed = state.reset_failed_to_pending()
+            state.consecutive_failures = 0
+            state.clear_second_pass_fails()
+            state._save()
+        stop_reason: str = "completed"  # used by T18 stop-reason capture
+        stop_detail: str = ""  # used by T18 stop-reason capture
+
         # Pre-run validation
         from .validate import format_results, validate_all
 
         pre_result = validate_all(
             tasks_file=config.tasks_file,
-            config_file=config.project_root / CONFIG_FILE,
+            config_file=_resolve_config_path(),
         )
         if not pre_result.ok:
             logger.error("Validation failed before execution")
@@ -204,6 +266,15 @@ def _run_tasks(args, config: ExecutorConfig):
 
         if not tasks_to_run:
             logger.info("No tasks ready to execute")
+            if getattr(args, "json_result", False):
+                print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
+            state.set_meta("last_run_stop_reason", stop_reason)
+            state.set_meta("last_run_stop_detail", stop_detail)
+            return
+
+        # --dry-run: show what would execute and exit
+        if getattr(args, "dry_run", False):
+            _print_dry_run(tasks_to_run, config, state)
             return
 
         logger.info("Tasks to execute", count=len(tasks_to_run))
@@ -215,13 +286,66 @@ def _run_tasks(args, config: ExecutorConfig):
             # For --all mode, continuously re-evaluate ready tasks after each completion
             executed_ids: set[str] = set()
             include_in_progress = not getattr(args, "restart", False)
+            session_start = time.monotonic()
+            last_activity = time.monotonic()
             while True:
+                # Check for pause request (SIGQUIT / Ctrl+\)
+                from .executor import _pause_requested
+
+                if _pause_requested:
+                    import spec_runner.executor as _executor_mod
+
+                    _executor_mod._pause_requested = False
+                    pause_snapshot = snapshot_task_statuses(tasks)
+                    log_progress(
+                        "⏸️ Paused. Edit spec/tasks.md, then press Enter to resume (q to quit)."
+                    )
+                    choice = input("> ").strip().lower()
+                    if choice == "q":
+                        break
+                    # Re-parse tasks to pick up edits AND external changes made
+                    # while we were paused (another session, Maestro, manual
+                    # edits). Diff against the pre-pause snapshot so the
+                    # operator can see newly-completed parents and downstream
+                    # tasks that just became ready — LABS-38.
+                    tasks = parse_tasks(config.tasks_file)
+                    diff = diff_task_statuses(pause_snapshot, tasks)
+                    executed_ids.clear()
+                    logger.info(
+                        "Resumed after pause, tasks re-read",
+                        changes=format_task_status_diff(diff),
+                    )
+                    if not diff.is_empty:
+                        log_progress(f"▶️ {format_task_status_diff(diff)}")
+
                 # Check for graceful shutdown request
                 if check_stop_requested(config):
                     clear_stop_file(config)
                     logger.info("Graceful shutdown requested")
                     log_progress("🛑 Graceful shutdown requested")
                     break
+
+                # Session timeout check
+                if config.session_timeout_minutes > 0:
+                    elapsed = (time.monotonic() - session_start) / 60
+                    if elapsed >= config.session_timeout_minutes:
+                        logger.warning(
+                            "Session timeout reached",
+                            elapsed_minutes=round(elapsed, 1),
+                            limit_minutes=config.session_timeout_minutes,
+                        )
+                        break
+
+                # Idle timeout check
+                if config.idle_timeout_minutes > 0:
+                    idle = (time.monotonic() - last_activity) / 60
+                    if idle >= config.idle_timeout_minutes:
+                        logger.warning(
+                            "Idle timeout reached",
+                            idle_minutes=round(idle, 1),
+                            limit_minutes=config.idle_timeout_minutes,
+                        )
+                        break
 
                 # Re-parse tasks to get updated statuses
                 tasks = parse_tasks(config.tasks_file)
@@ -262,12 +386,39 @@ def _run_tasks(args, config: ExecutorConfig):
                 logger.info("Next ready task", task_id=task.id, name=task.name)
 
                 result = run_with_retries(task, config, state)
+                last_activity = time.monotonic()
+
+                # v2.3.0: detect tasks that fail again on a second pass.
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
 
                 # "SKIP" means continue to next task
                 if result == "SKIP":
                     continue
 
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
         else:
@@ -282,12 +433,42 @@ def _run_tasks(args, config: ExecutorConfig):
 
                 result = run_with_retries(task, config, state)
 
+                # v2.3.0: detect tasks that fail again on a second pass.
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
+
                 if result == "SKIP":
                     continue
 
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
+
+        # v2.3.0: persist stop-reason for this run
+        state.set_meta("last_run_stop_reason", stop_reason)
+        state.set_meta("last_run_stop_detail", stop_detail)
 
         # Summary
         # Re-read tasks to get updated statuses after execution
@@ -307,222 +488,29 @@ def _run_tasks(args, config: ExecutorConfig):
             failed_attempts=failed_attempts if failed_attempts > 0 else None,
         )
 
+        # Notify run completion
+        from .notifications import notify_run_complete
 
-def cmd_status(args, config: ExecutorConfig):
-    """Execution status"""
-
-    with ExecutorState(config) as state:
-        # Parse tasks from tasks.md to cross-reference
-        all_tasks: list[Task] = []
-        if config.tasks_file.exists():
-            all_tasks = parse_tasks(config.tasks_file)
-        total_in_spec = len(all_tasks)
-
-        # Calculate statistics from actual task state
-        completed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "success")
-        failed_tasks = sum(1 for ts in state.tasks.values() if ts.status == "failed")
-        running_tasks = [ts for ts in state.tasks.values() if ts.status == "running"]
-        failed_attempts = sum(
-            1 for ts in state.tasks.values() for a in ts.attempts if not a.success
-        )
-
-        # Find tasks in spec but not in state (pending / never started)
-        state_ids = set(state.tasks.keys())
-        not_started = [t for t in all_tasks if t.id not in state_ids]
-
-        print("\n📊 Executor Status")
-        print(f"{'=' * 50}")
-        print(f"Tasks in spec:         {total_in_spec}")
-        print(f"Tasks completed:       {completed_tasks}")
-        print(f"Tasks failed:          {failed_tasks}")
-        if running_tasks:
-            print(f"Tasks in progress:     {len(running_tasks)}")
-        if not_started:
-            print(f"Tasks not started:     {len(not_started)}")
-        if failed_attempts > 0:
-            print(f"Failed attempts:       {failed_attempts} (retried)")
-        print(
-            f"Consecutive failures:  {state.consecutive_failures}/{config.max_consecutive_failures}"
-        )
-
-        # Token/cost summary
         total_cost_val = state.total_cost()
-        if total_cost_val > 0:
-            total_inp, total_out = state.total_tokens()
+        notify_run_complete(
+            config,
+            completed=state.total_completed,
+            failed=state.total_failed,
+            total_cost=total_cost_val if total_cost_val > 0 else None,
+        )
 
-            def _fmt_tokens(n: int) -> str:
-                if n >= 1000:
-                    return f"{n / 1000:.1f}K"
-                return str(n)
+        state.audit_logger.record(
+            EVENT_RUN_ENDED,
+            completed=state.total_completed,
+            failed=state.total_failed,
+            remaining=remaining,
+            total_cost_usd=round(total_cost_val, 4),
+        )
 
-            print(
-                f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
-            )
-            print(f"Total cost:            ${total_cost_val:.2f}")
-
-        # Tasks with attempts
-        attempted = [ts for ts in state.tasks.values() if ts.attempts]
-        if attempted:
-            print("\n📝 Task History:")
-            for ts in attempted:
-                icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
-                attempts_info = f"{ts.attempt_count} attempt"
-                if ts.attempt_count > 1:
-                    attempts_info += "s"
-                task_cost = state.task_cost(ts.task_id)
-                if task_cost > 0:
-                    attempts_info += f", ${task_cost:.2f}"
-                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
-                # Show review verdict from last attempt
-                if ts.attempts:
-                    last_attempt = ts.attempts[-1]
-                    if last_attempt.review_status and last_attempt.review_status != "skipped":
-                        print(f"      Review: {last_attempt.review_status}")
-                if ts.status == "failed" and ts.last_error:
-                    print(f"      Last error: {ts.last_error[:50]}...")
-                elif ts.status == "running" and ts.last_error:
-                    print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
-
-        # Show tasks not yet in executor state
-        if not_started:
-            print(f"\n⏳ Not started ({len(not_started)}):")
-            for t in not_started:
-                print(f"   ⬜ {t.id}: {t.name}")
-
-
-def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
-    """Show cost breakdown per task with optional JSON output."""
-    tasks = parse_tasks(config.tasks_file)
-
-    if not tasks:
-        print("No tasks found")
-        return
-
-    with ExecutorState(config) as state:
-        # Build per-task cost info
-        task_rows: list[dict] = []
-        for t in tasks:
-            ts = state.tasks.get(t.id)
-            cost = state.task_cost(t.id)
-            if ts:
-                inp_tokens = sum(a.input_tokens for a in ts.attempts if a.input_tokens is not None)
-                out_tokens = sum(
-                    a.output_tokens for a in ts.attempts if a.output_tokens is not None
-                )
-                task_rows.append(
-                    {
-                        "task_id": t.id,
-                        "name": t.name,
-                        "status": ts.status,
-                        "cost": cost,
-                        "attempts": ts.attempt_count,
-                        "input_tokens": inp_tokens,
-                        "output_tokens": out_tokens,
-                        "total_tokens": inp_tokens + out_tokens,
-                    }
-                )
-            else:
-                task_rows.append(
-                    {
-                        "task_id": t.id,
-                        "name": t.name,
-                        "status": t.status,
-                        "cost": 0.0,
-                        "attempts": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "no_state": True,
-                    }
-                )
-
-        # Sort
-        sort_key = getattr(args, "sort", "id")
-        if sort_key == "cost":
-            task_rows.sort(key=lambda r: r["cost"], reverse=True)
-        elif sort_key == "tokens":
-            task_rows.sort(key=lambda r: r["total_tokens"], reverse=True)
-        elif sort_key == "name":
-            task_rows.sort(key=lambda r: r["name"])
-        # default "id" — already in parse order (task id order)
-
-        # Summary
-        total_cost = state.total_cost()
-        total_inp, total_out = state.total_tokens()
-        completed_costs = [r["cost"] for r in task_rows if r["cost"] > 0]
-        avg_cost = sum(completed_costs) / len(completed_costs) if completed_costs else 0.0
-        most_expensive = max(task_rows, key=lambda r: r["cost"]) if task_rows else None
-
-        summary = {
-            "total_cost": round(total_cost, 2),
-            "total_input_tokens": total_inp,
-            "total_output_tokens": total_out,
-            "avg_cost_per_completed": round(avg_cost, 2),
-            "most_expensive_task": (
-                most_expensive["task_id"] if most_expensive and most_expensive["cost"] > 0 else None
-            ),
-        }
-        if config.budget_usd is not None:
-            pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
-            summary["budget_usd"] = config.budget_usd
-            summary["budget_used_pct"] = round(pct, 1)
-
-        if getattr(args, "json", False):
-            # JSON output
-            json_tasks = []
-            for r in task_rows:
-                json_tasks.append(
-                    {
-                        "task_id": r["task_id"],
-                        "name": r["name"],
-                        "status": r["status"],
-                        "cost": r["cost"],
-                        "attempts": r["attempts"],
-                        "input_tokens": r["input_tokens"],
-                        "output_tokens": r["output_tokens"],
-                    }
-                )
-            print(json.dumps({"tasks": json_tasks, "summary": summary}, indent=2))
-            return
-
-        # Text table output
-        print(f"\n{'Task':<12} {'Name':<30} {'Status':<10} {'Cost':>8} {'Att':>4} {'Tokens':>10}")
-        print("-" * 78)
-        for r in task_rows:
-            if r.get("no_state"):
-                cost_str = "--"
-                att_str = "--"
-                tok_str = "--"
-            else:
-                cost_str = f"${r['cost']:.2f}"
-                att_str = str(r["attempts"])
-                tok_str = f"{r['total_tokens']}"
-            name = r["name"][:28]
-            print(
-                f"{r['task_id']:<12} {name:<30} {r['status']:<10} "
-                f"{cost_str:>8} {att_str:>4} {tok_str:>10}"
-            )
-
-        # Summary section
-        print(f"\n{'=' * 40}")
-        print(f"Total cost:           ${total_cost:.2f}")
-        if total_inp > 0 or total_out > 0:
-
-            def _fmt_tok(n: int) -> str:
-                return f"{n / 1000:.1f}K" if n >= 1000 else str(n)
-
-            print(
-                f"Total tokens:         {_fmt_tok(total_inp)} input, {_fmt_tok(total_out)} output"
-            )
-        if config.budget_usd is not None:
-            pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
-            print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f}")
-        if completed_costs:
-            print(f"Avg per completed:    ${avg_cost:.2f}")
-        if most_expensive and most_expensive["cost"] > 0:
-            print(
-                f"Most expensive:       {most_expensive['task_id']} (${most_expensive['cost']:.2f})"
-            )
+        # --json-result: structured JSON result per task (for Maestro interop)
+        if getattr(args, "json_result", False):
+            results = [build_task_json_result(t.id, state) for t in tasks_to_run]
+            print(json.dumps(results if len(results) > 1 else results[0], indent=2))
 
 
 def cmd_retry(args, config: ExecutorConfig):
@@ -570,339 +558,12 @@ def cmd_retry(args, config: ExecutorConfig):
             update_task_status(config.tasks_file, task.id, "blocked")
 
 
-def cmd_logs(args, config: ExecutorConfig):
-    """Show task logs"""
-
-    task_id = args.task_id.upper()
-    log_files = sorted(config.logs_dir.glob(f"{task_id}-*.log"))
-
-    if not log_files:
-        logger.info("No logs found", task_id=task_id)
-        return
-
-    latest = log_files[-1]
-    logger.info("Showing latest log", task_id=task_id, log_file=str(latest))
-    print(latest.read_text()[:5000])  # Limit output — raw log content to stdout
-
-
-def cmd_stop(args, config: ExecutorConfig):
-    """Request graceful shutdown of the running executor."""
-    stop_file = config.stop_file
-    stop_file.parent.mkdir(parents=True, exist_ok=True)
-    stop_file.write_text(f"Stop requested at {datetime.now().isoformat()}\n")
-    logger.info("Stop requested", stop_file=str(stop_file))
-
-
-def cmd_reset(args, config: ExecutorConfig):
-    """Reset executor state"""
-
-    if config.state_file.exists():
-        config.state_file.unlink()
-        logger.info("State reset", state_file=str(config.state_file))
-
-    clear_stop_file(config)
-
-    if args.logs and config.logs_dir.exists():
-        shutil.rmtree(config.logs_dir)
-        logger.info("Logs cleared", logs_dir=str(config.logs_dir))
-
-
-def cmd_plan(args, config: ExecutorConfig):
-    """Interactive task planning via Claude.
-
-    With --full flag, runs a three-stage pipeline to generate
-    requirements, design, and tasks files from a description.
-    """
-
-    description = args.description
-
-    if getattr(args, "full", False):
-        from .prompt import build_generation_prompt, parse_spec_marker
-
-        stages = ["requirements", "design", "tasks"]
-        stage_files = {
-            "requirements": config.requirements_file,
-            "design": config.design_file,
-            "tasks": config.tasks_file,
-        }
-        marker_names = {
-            "requirements": "REQUIREMENTS",
-            "design": "DESIGN",
-            "tasks": "TASKS",
-        }
-        context: dict[str, str] = {}
-
-        for stage in stages:
-            logger.info("Generating spec", stage=stage)
-            prompt = build_generation_prompt(stage, description, context)
-
-            cmd = build_cli_command(
-                cmd=config.claude_command,
-                prompt=prompt,
-                model=config.claude_model,
-                template=config.command_template,
-                skip_permissions=config.skip_permissions,
-            )
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=config.task_timeout_minutes * 60,
-                cwd=config.project_root,
-            )
-
-            if result.returncode != 0:
-                logger.error(
-                    "Generation failed",
-                    stage=stage,
-                    stderr=result.stderr[:500],
-                )
-                print(f"Failed at stage: {stage}")
-                sys.exit(1)
-
-            content = parse_spec_marker(result.stdout, marker_names[stage])
-            if not content:
-                logger.error("No spec marker found in output", stage=stage)
-                print(f"Claude did not produce {stage} content.")
-                sys.exit(1)
-
-            output_file = stage_files[stage]
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            output_file.write_text(content + "\n")
-            logger.info("Spec written", stage=stage, file=str(output_file))
-            print(f"Written: {output_file}")
-
-            context[stage] = content
-
-        print("\nSpec generation complete!")
-        print(f"  Requirements: {config.requirements_file}")
-        print(f"  Design:       {config.design_file}")
-        print(f"  Tasks:        {config.tasks_file}")
-        return
-
-    print(f"\n📝 Planning: {description}")
-    print("=" * 60)
-
-    # Load context
-    requirements_summary = "No requirements.md found"
-    if config.requirements_file.exists():
-        content = config.requirements_file.read_text()
-        # Extract just headers and first lines for summary
-        lines = content.split("\n")[:100]
-        requirements_summary = "\n".join(lines) + "\n...(truncated)"
-
-    design_summary = "No design.md found"
-    if config.design_file.exists():
-        content = config.design_file.read_text()
-        lines = content.split("\n")[:100]
-        design_summary = "\n".join(lines) + "\n...(truncated)"
-
-    # Get existing tasks
-    existing_tasks = "No existing tasks"
-    if config.tasks_file.exists():
-        tasks = parse_tasks(config.tasks_file)
-        task_lines = [f"- {t.id}: {t.name} ({t.status})" for t in tasks[-20:]]
-        existing_tasks = "\n".join(task_lines) if task_lines else "No tasks yet"
-
-    # Load template
-    template = load_prompt_template("plan")
-
-    if template:
-        prompt = render_template(
-            template,
-            {
-                "DESCRIPTION": description,
-                "REQUIREMENTS_SUMMARY": requirements_summary,
-                "DESIGN_SUMMARY": design_summary,
-                "EXISTING_TASKS": existing_tasks,
-            },
-        )
-    else:
-        prompt = f"""# Task Planning Request
-
-## Feature Description:
-{description}
-
-## Project Context:
-
-### Requirements (excerpt):
-{requirements_summary}
-
-### Existing Tasks:
-{existing_tasks}
-
-## Instructions:
-
-Create structured tasks for this feature. For each task use format:
-
-### TASK-XXX: <title>
-🔴 P0 | ⬜ TODO | Est: Xd
-
-**Checklist:**
-- [ ] Implementation items
-- [ ] Tests
-
-When done, respond with: PLAN_READY
-"""
-
-    log_progress(f"📝 Planning: {description}")
-
-    # Save prompt
-    log_file = config.logs_dir / f"plan-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    config.logs_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_file, "w") as f:
-        f.write(f"=== PLAN PROMPT ===\n{prompt}\n\n")
-
-    # Interactive loop
-    conversation_history = []
-
-    while True:
-        # Run Claude
-        try:
-            cmd = [config.claude_command, "-p", prompt]
-            if config.skip_permissions:
-                cmd.append("--dangerously-skip-permissions")
-
-            print("\n🤖 Claude is analyzing...")
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=config.task_timeout_minutes * 60,
-                cwd=config.project_root,
-            )
-
-            output = result.stdout
-
-            # Save output
-            with open(log_file, "a") as f:
-                f.write(f"=== OUTPUT ===\n{output}\n\n")
-
-            # Check for API errors
-            error_pattern = check_error_patterns(output + result.stderr)
-            if error_pattern:
-                print(f"\n⚠️  API error: {error_pattern}")
-                return
-
-            # Check for QUESTION
-            question_match = re.search(r"QUESTION:\s*(.+?)(?:OPTIONS:|$)", output, re.DOTALL)
-            if question_match:
-                question = question_match.group(1).strip()
-                print(f"\n❓ {question}")
-
-                # Extract options
-                options_match = re.search(r"OPTIONS:\s*(.+?)(?:$)", output, re.DOTALL)
-                if options_match:
-                    options_text = options_match.group(1)
-                    options = re.findall(r"[-*]\s*(.+)", options_text)
-                    if options:
-                        print("\nOptions:")
-                        for i, opt in enumerate(options, 1):
-                            print(f"  {i}. {opt.strip()}")
-                        print(f"  {len(options) + 1}. Other (type custom answer)")
-
-                        choice = input("\nYour choice (number or text): ").strip()
-
-                        # Determine answer
-                        try:
-                            idx = int(choice)
-                            if 1 <= idx <= len(options):
-                                answer = options[idx - 1].strip()
-                            else:
-                                answer = input("Enter your answer: ").strip()
-                        except ValueError:
-                            answer = choice
-
-                        # Add to conversation
-                        conversation_history.append(f"Q: {question}\nA: {answer}")
-                        prompt = f"{prompt}\n\nPrevious Q&A:\n" + "\n".join(conversation_history)
-                        prompt += f"\n\nContinue planning with the answer: {answer}"
-                        continue
-
-                # No parseable options, ask for freeform input
-                answer = input("\nYour answer: ").strip()
-                conversation_history.append(f"Q: {question}\nA: {answer}")
-                prompt += f"\n\nAnswer: {answer}\n\nContinue planning."
-                continue
-
-            # Check for TASK_PROPOSAL or PLAN_READY
-            if "PLAN_READY" in output or "TASK_PROPOSAL" in output:
-                print("\n" + "=" * 60)
-                print("📋 Proposed Tasks:")
-                print("=" * 60)
-
-                # Extract task proposals
-                task_blocks = re.findall(
-                    r"### (TASK-\d+:.+?)(?=### TASK-|\Z|PLAN_READY)",
-                    output,
-                    re.DOTALL,
-                )
-
-                for block in task_blocks:
-                    print(f"\n### {block.strip()[:500]}")
-
-                print("\n" + "=" * 60)
-
-                # Ask for confirmation
-                confirm = input("\nAdd these tasks to tasks.md? [y/N/edit]: ").strip().lower()
-
-                if confirm == "y":
-                    # Append tasks to tasks.md
-                    tasks_file = config.tasks_file
-                    content = tasks_file.read_text() if tasks_file.exists() else "# Tasks\n\n"
-
-                    for block in task_blocks:
-                        content += f"\n### {block.strip()}\n"
-
-                    tasks_file.write_text(content)
-                    print(f"\n✅ Added {len(task_blocks)} task(s) to {tasks_file}")
-                    log_progress(f"✅ Created {len(task_blocks)} tasks")
-
-                elif confirm == "edit":
-                    print(f"\nEdit {config.tasks_file} manually, then run 'spec-runner run'")
-
-                else:
-                    print("\n❌ Cancelled")
-
-                return
-
-            # No recognizable signal, show output and exit
-            print("\n📄 Claude response:")
-            print(output[:2000])
-            return
-
-        except subprocess.TimeoutExpired:
-            print(f"\n⏰ Planning timeout after {config.task_timeout_minutes}m")
-            return
-        except KeyboardInterrupt:
-            print("\n\n❌ Cancelled by user")
-            return
-        except Exception as e:
-            print(f"\n💥 Error: {e}")
-            return
-
-
-def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
-    """Validate tasks file and config, print results."""
-    from .validate import format_results, validate_all
-
-    result = validate_all(
-        tasks_file=config.tasks_file,
-        config_file=config.project_root / "executor.config.yaml",
-    )
-    output = format_results(result)
-    print(output)
-    if not result.ok:
-        sys.exit(1)
-
-
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Continuously watch tasks.md and execute ready tasks."""
     # Pre-run validation
     pre_result = validate_all(
         tasks_file=config.tasks_file,
-        config_file=config.project_root / CONFIG_FILE,
+        config_file=_resolve_config_path(),
     )
     if not pre_result.ok:
         logger.error("Validation failed before watch")
@@ -1002,38 +663,73 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         time.sleep(1)
 
 
-def cmd_mcp(args: argparse.Namespace, config: ExecutorConfig) -> None:
-    """Launch MCP server (stdio transport)."""
-    from .mcp_server import run_server
-
-    run_server()
-
-
-def cmd_tui(args: argparse.Namespace, config: ExecutorConfig) -> None:
-    """Launch read-only TUI dashboard."""
-    from .logging import setup_logging
-    from .tui import SpecRunnerApp
-
-    # TUI mode: log to file, TUI owns screen
-    log_file = config.logs_dir / f"tui-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    config.logs_dir.mkdir(parents=True, exist_ok=True)
-    setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
-
-    app = SpecRunnerApp(config=config)
-    app.run()
-
-
 # === Main ===
 
 
-def main():
+def _dispatch_task_command(args: argparse.Namespace) -> None:
+    """Dispatch `spec-runner task <subcommand>` to task_commands functions."""
+    from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh, export_gh
+    from .task import parse_tasks
+    from .task_commands import (
+        TASKS_FILE,
+        cmd_block,
+        cmd_check,
+        cmd_done,
+        cmd_graph,
+        cmd_list,
+        cmd_next,
+        cmd_show,
+        cmd_start,
+        cmd_stats,
+    )
+
+    task_cmd = getattr(args, "task_command", None)
+    if not task_cmd:
+        print("Usage: spec-runner task <command>\n")
+        print("Commands: list, show, start, done, block, check, stats, next, graph,")
+        print("          export-gh, sync-to-gh, sync-from-gh")
+        return
+
+    prefix = getattr(args, "spec_prefix", "")
+    tasks_file = Path(f"spec/{prefix}tasks.md") if prefix else TASKS_FILE
+    tasks = parse_tasks(tasks_file)
+
+    write_commands: dict[str, Callable[..., object]] = {
+        "start": cmd_start,
+        "done": cmd_done,
+        "block": cmd_block,
+        "check": cmd_check,
+        "sync-from-gh": cmd_sync_from_gh,
+    }
+    read_commands = {
+        "list": cmd_list,
+        "ls": cmd_list,
+        "show": cmd_show,
+        "stats": cmd_stats,
+        "next": cmd_next,
+        "graph": cmd_graph,
+        "export-gh": export_gh,
+        "sync-to-gh": cmd_sync_to_gh,
+    }
+
+    if task_cmd in write_commands:
+        write_commands[task_cmd](args, tasks, tasks_file)
+    elif task_cmd in read_commands:
+        read_commands[task_cmd](args, tasks)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Extracted from main() to allow programmatic use and testing.
+    """
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--max-retries", type=int, default=3, help="Max retries per task (default: 3)"
+        "--max-retries", type=int, default=None, help="Max retries per task (default: 3)"
     )
     common.add_argument(
-        "--timeout", type=int, default=30, help="Task timeout in minutes (default: 30)"
+        "--timeout", type=int, default=None, help="Task timeout in minutes (default: 30)"
     )
     common.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
@@ -1071,6 +767,18 @@ def main():
         action="store_true",
         help="Output logs as JSON lines",
     )
+    common.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="Global budget in USD (stop when exceeded)",
+    )
+    common.add_argument(
+        "--task-budget",
+        type=float,
+        default=None,
+        help="Per-task budget in USD (block task when exceeded)",
+    )
 
     parser = argparse.ArgumentParser(
         description="spec-runner — task automation from markdown specs via Claude CLI",
@@ -1091,17 +799,6 @@ def main():
         help="Ignore in-progress tasks, start fresh with TODO tasks only",
     )
     run_parser.add_argument(
-        "--parallel",
-        action="store_true",
-        help="Execute ready tasks in parallel (implies --no-branch)",
-    )
-    run_parser.add_argument(
-        "--max-concurrent",
-        type=int,
-        default=0,
-        help="Max parallel tasks (default: from config, typically 3)",
-    )
-    run_parser.add_argument(
         "--tui",
         action="store_true",
         help="Show TUI dashboard during execution",
@@ -1111,9 +808,28 @@ def main():
         action="store_true",
         help="Skip lock check (use when lock is stale)",
     )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show which tasks would execute without running them",
+    )
+    run_parser.add_argument(
+        "--json-result",
+        action="store_true",
+        help="Output structured JSON result per task (for Maestro interop)",
+    )
+    run_parser.add_argument(
+        "--no-reset-failed",
+        action="store_true",
+        help="Do not reset failed→pending or clear consecutive_failures "
+        "at the start of `run --all` (default: reset enabled).",
+    )
 
     # status
-    subparsers.add_parser("status", parents=[common], help="Show execution status")
+    status_parser = subparsers.add_parser("status", parents=[common], help="Show execution status")
+    status_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output status as JSON"
+    )
 
     # retry
     retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")
@@ -1147,6 +863,58 @@ def main():
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
 
+    # verify
+    verify_parser = subparsers.add_parser(
+        "verify", parents=[common], help="Verify post-execution compliance"
+    )
+    verify_parser.add_argument("--task", "-t", help="Verify specific task ID")
+    verify_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output as JSON"
+    )
+    verify_parser.add_argument(
+        "--strict", action="store_true", help="Fail on warnings (missing traceability)"
+    )
+
+    # audit (pre-execution compliance)
+    audit_parser = subparsers.add_parser(
+        "audit",
+        parents=[common],
+        help="Static pre-execution audit of the spec triangle",
+    )
+    audit_group = audit_parser.add_mutually_exclusive_group()
+    audit_group.add_argument(
+        "--json",
+        action="store_const",
+        dest="output_format",
+        const="json",
+        help="Output as JSON",
+    )
+    audit_group.add_argument(
+        "--csv",
+        action="store_const",
+        dest="output_format",
+        const="csv",
+        help="Output as CSV",
+    )
+    audit_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat warnings (orphans, uncovered) as failures",
+    )
+
+    # report
+    report_parser = subparsers.add_parser(
+        "report", parents=[common], help="Generate traceability matrix"
+    )
+    report_parser.add_argument("--milestone", "-m", help="Filter by milestone")
+    report_parser.add_argument("--status", help="Filter by status (done/failed/todo/not covered)")
+    report_parser.add_argument(
+        "--uncovered-only", action="store_true", help="Show only uncovered requirements"
+    )
+    report_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output as JSON"
+    )
+
     # tui
     subparsers.add_parser("tui", parents=[common], help="Launch read-only TUI dashboard")
 
@@ -1175,6 +943,59 @@ def main():
     # mcp
     subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
 
+    # task (unified: replaces spec-task binary)
+    task_parser = subparsers.add_parser(
+        "task", help="Task management (list, show, start, done, graph, sync)"
+    )
+    task_sub = task_parser.add_subparsers(dest="task_command", help="Task commands")
+
+    task_common = argparse.ArgumentParser(add_help=False)
+    task_common.add_argument(
+        "--spec-prefix", type=str, default="", help='Spec file prefix (e.g. "phase5-")'
+    )
+
+    t_list = task_sub.add_parser("list", aliases=["ls"], parents=[task_common], help="List tasks")
+    t_list.add_argument("--status", "-s", choices=["todo", "in_progress", "done", "blocked"])
+    t_list.add_argument("--priority", "-p", choices=["p0", "p1", "p2", "p3"])
+    t_list.add_argument("--milestone", "-m", help="Filter by milestone")
+
+    t_show = task_sub.add_parser("show", parents=[task_common], help="Task details")
+    t_show.add_argument("task_id", help="Task ID (e.g., TASK-001)")
+
+    t_start = task_sub.add_parser("start", parents=[task_common], help="Start task")
+    t_start.add_argument("task_id", help="Task ID")
+    t_start.add_argument("--force", "-f", action="store_true", help="Ignore dependencies")
+
+    t_done = task_sub.add_parser("done", parents=[task_common], help="Complete task")
+    t_done.add_argument("task_id", help="Task ID")
+    t_done.add_argument("--force", "-f", action="store_true", help="Ignore incomplete checklist")
+
+    t_block = task_sub.add_parser("block", parents=[task_common], help="Block task")
+    t_block.add_argument("task_id", help="Task ID")
+
+    t_check = task_sub.add_parser("check", parents=[task_common], help="Mark checklist item")
+    t_check.add_argument("task_id", help="Task ID")
+    t_check.add_argument("item_index", help="Item index (0, 1, 2...)")
+
+    task_sub.add_parser("stats", parents=[task_common], help="Statistics")
+    task_sub.add_parser("next", parents=[task_common], help="Next ready tasks")
+    task_sub.add_parser("graph", parents=[task_common], help="Dependency graph")
+    task_sub.add_parser("export-gh", parents=[task_common], help="Export to GitHub Issues")
+
+    t_sync_to = task_sub.add_parser(
+        "sync-to-gh", parents=[task_common], help="Sync tasks to GitHub Issues"
+    )
+    t_sync_to.add_argument("--dry-run", action="store_true", help="Preview without changes")
+
+    task_sub.add_parser(
+        "sync-from-gh", parents=[task_common], help="Sync GitHub Issues to tasks.md"
+    )
+
+    return parser
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.command:
@@ -1194,10 +1015,11 @@ def main():
     structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
 
     # Register signal handlers for graceful shutdown (late import to avoid circular)
-    from .executor import _signal_handler
+    from .executor import _pause_handler, _signal_handler
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGQUIT, _pause_handler)
 
     # Dispatch
     commands = {
@@ -1210,10 +1032,18 @@ def main():
         "reset": cmd_reset,
         "plan": cmd_plan,
         "validate": cmd_validate,
+        "verify": cmd_verify,
+        "audit": cmd_audit,
+        "report": cmd_report,
         "tui": cmd_tui,
         "watch": cmd_watch,
         "mcp": cmd_mcp,
     }
+
+    # Handle unified task subcommand
+    if args.command == "task":
+        _dispatch_task_command(args)
+        return
 
     cmd_func = commands.get(args.command)
     if cmd_func:
