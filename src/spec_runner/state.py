@@ -687,6 +687,23 @@ class ExecutorState:
         ).fetchone()
         return row[0] if row else default
 
+    _SECOND_PASS_META_KEY = "second_pass_fail_tasks"
+
+    def get_second_pass_fails(self) -> set[str]:
+        """Return the set of task IDs that have failed across runs."""
+        raw = self.get_meta(self._SECOND_PASS_META_KEY, "") or ""
+        return {t for t in raw.split(",") if t}
+
+    def add_second_pass_fail(self, task_id: str) -> None:
+        """Record that this task_id failed a second time across runs."""
+        ids = self.get_second_pass_fails()
+        ids.add(task_id)
+        self.set_meta(self._SECOND_PASS_META_KEY, ",".join(sorted(ids)))
+
+    def clear_second_pass_fails(self) -> None:
+        """Clear the second-pass record (called at start of run --all reset)."""
+        self.set_meta(self._SECOND_PASS_META_KEY, "")
+
     def reset_failed_to_pending(self) -> set[str]:
         """Flip every task with status='failed' to 'pending'.
 

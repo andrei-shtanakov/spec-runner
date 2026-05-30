@@ -1087,3 +1087,33 @@ class TestResetFailedToPending:
         with ExecutorState(cfg) as state:
             state.record_attempt("T1", success=True, duration=1.0)
             assert state.reset_failed_to_pending() == set()
+
+
+class TestSecondPassMeta:
+    META_KEY = "second_pass_fail_tasks"
+
+    def test_add_then_read_returns_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.add_second_pass_fail("T2")
+            assert state.get_second_pass_fails() == {"T1", "T2"}
+
+    def test_add_is_idempotent(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.add_second_pass_fail("T1")
+            assert state.get_second_pass_fails() == {"T1"}
+
+    def test_clear_resets_to_empty(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.clear_second_pass_fails()
+            assert state.get_second_pass_fails() == set()
+
+    def test_empty_meta_returns_empty_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            assert state.get_second_pass_fails() == set()
