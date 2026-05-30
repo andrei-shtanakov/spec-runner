@@ -163,6 +163,8 @@ def post_done_hook(
     config: ExecutorConfig,
     success: bool,
     changed_since: float | None = None,
+    *,
+    reporter: StageReporter | None = None,
 ) -> tuple[bool, str | None, str, str]:
     """Hook after task completion.
 
@@ -180,6 +182,8 @@ def post_done_hook(
     # Run tests — capture output for review context
     test_output_str: str | None = None
     if config.run_tests_on_done:
+        if reporter:
+            reporter.enter("tests")
         test_cmd = config.test_command
 
         # Scope tests to changed files when running in parallel mode
@@ -225,6 +229,8 @@ def post_done_hook(
     # Run lint — capture output for review context
     lint_output_str: str | None = None
     if config.run_lint_on_done and config.lint_command:
+        if reporter:
+            reporter.enter("lint")
         logger.info("Running lint")
         result = subprocess.run(
             config.lint_command,
@@ -337,6 +343,8 @@ def post_done_hook(
 
     # Auto-commit
     if config.auto_commit:
+        if reporter:
+            reporter.enter("commit")
         try:
             # Check if there are changes to commit
             status_result = subprocess.run(
@@ -371,6 +379,8 @@ def post_done_hook(
 
     # Merge branch to main
     if config.create_git_branch:
+        if reporter:
+            reporter.enter("merge")
         try:
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)

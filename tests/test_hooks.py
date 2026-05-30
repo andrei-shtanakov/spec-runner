@@ -928,3 +928,53 @@ class TestStageEmissionPreStart:
         assert any("stage: branch" in e for e in events)
 
 
+class TestStageEmissionPostDone:
+    @patch("spec_runner.hooks.run_code_review", return_value=(ReviewVerdict.PASSED, None, "ok"))
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_tests_lint_commit_merge_emitted(self, mock_run, _mock_review):
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(
+            run_tests_on_done=True,
+            run_lint_on_done=True,
+            auto_commit=True,
+            create_git_branch=True,
+            run_review=False,
+        )
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
+        joined = "\n".join(events)
+        for s in ("tests", "lint", "commit", "merge"):
+            assert f"stage: {s}" in joined
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_no_commit_or_merge_when_git_off(self, mock_run):
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(
+            run_tests_on_done=True,
+            run_lint_on_done=True,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
+        joined = "\n".join(events)
+        assert "stage: tests" in joined
+        assert "stage: commit" not in joined
+        assert "stage: merge" not in joined
+
+
