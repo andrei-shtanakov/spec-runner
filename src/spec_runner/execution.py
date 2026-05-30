@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 from .config import ExecutorConfig
+from .errors import classify
 from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
@@ -263,7 +264,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         else:
             # Claude reported failure
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
-            error = error_match.group(1) if error_match else "Unknown error"
+            if error_match:
+                error = error_match.group(1)
+                error_kind = "cli_error"
+            else:
+                error_kind, error = classify(result.stderr, result.returncode)
             state.record_attempt(
                 task_id,
                 False,
@@ -274,6 +279,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                error_kind=error_kind,
             )
             log_progress(f"\u274c Failed: {error[:50]}", task_id)
             send_callback(

@@ -1542,3 +1542,38 @@ class TestSmartRetry:
         assert result is False
         assert mock_execute.call_count == 1
         assert mock_sleep.call_count == 0
+
+
+class TestErrorClassificationInExecution:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_unknown_error_replaced_by_classify(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=1, stdout="",
+            stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
+        )
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            result = execute_task(task, cfg, state)
+            assert result is False
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_kind == "rate_limit"
+            assert "9:54 AM" in attempt.error
+            assert attempt.error != "Unknown error"
