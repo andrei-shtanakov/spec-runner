@@ -978,3 +978,27 @@ class TestStageEmissionPostDone:
         assert "stage: merge" not in joined
 
 
+class TestReviewStageEmitted:
+    @patch("spec_runner.hooks.run_code_review", return_value=(ReviewVerdict.PASSED, None, "ok"))
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_review_stage_emitted_when_run_review(self, mock_run, _mock_review):
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=True,
+        )
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        with patch("spec_runner.state.ExecutorState") as mock_state_cls:
+            mock_state = MagicMock()
+            mock_state.tasks = {}
+            mock_state_cls.return_value = mock_state
+            post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
+        assert any("stage: review" in e for e in events)
+
+

@@ -298,6 +298,8 @@ def post_done_hook(
     if config.hitl_review and not config.run_review:
         logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
+        if reporter:
+            reporter.enter("review")
         review_fn = run_parallel_review if config.review_parallel else run_code_review
         logger.info(
             "Running code review",
