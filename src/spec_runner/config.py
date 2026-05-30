@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import fcntl
 import os
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -279,6 +280,24 @@ def _parse_personas(raw: dict) -> dict[str, Persona] | None:
                 focus=data.get("focus", []),
             )
     return personas if personas else None
+
+
+def _detect_subdir_repo(project_root: Path) -> Path | None:
+    """Return the git repo toplevel if `project_root` is a strict subdir of
+    a git repo. Return None when project_root IS the toplevel, when no git
+    repo wraps it, or when git is not installed.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    toplevel = Path(result.stdout.strip()).resolve()
+    return toplevel if toplevel != project_root.resolve() else None
 
 
 def _resolve_config_path() -> Path:
