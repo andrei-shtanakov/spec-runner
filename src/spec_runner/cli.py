@@ -201,6 +201,19 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
+        # v2.3.0: reset failed-task state on `run --all` unless opted out.
+        reset_enabled = getattr(args, "all", False) and not getattr(
+            args, "no_reset_failed", False
+        )
+        previously_failed: set[str] = set()  # used by T17 second-pass detection
+        if reset_enabled:
+            previously_failed = state.reset_failed_to_pending()
+            state.consecutive_failures = 0
+            state.clear_second_pass_fails()
+            state._save()
+        stop_reason: str = "completed"  # used by T18 stop-reason capture
+        stop_detail: str = ""  # used by T18 stop-reason capture
+
         # Pre-run validation
         from .validate import format_results, validate_all
 
@@ -255,6 +268,8 @@ def _run_tasks(args, config: ExecutorConfig):
             logger.info("No tasks ready to execute")
             if getattr(args, "json_result", False):
                 print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
+            state.set_meta("last_run_stop_reason", stop_reason)
+            state.set_meta("last_run_stop_detail", stop_detail)
             return
 
         # --dry-run: show what would execute and exit
@@ -373,11 +388,37 @@ def _run_tasks(args, config: ExecutorConfig):
                 result = run_with_retries(task, config, state)
                 last_activity = time.monotonic()
 
+                # v2.3.0: detect tasks that fail again on a second pass.
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
+
                 # "SKIP" means continue to next task
                 if result == "SKIP":
                     continue
 
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
         else:
@@ -392,12 +433,42 @@ def _run_tasks(args, config: ExecutorConfig):
 
                 result = run_with_retries(task, config, state)
 
+                # v2.3.0: detect tasks that fail again on a second pass.
+                # Use the persisted task status (set to "failed" when retries
+                # are exhausted) rather than `result is False`, because the
+                # default on_task_failure="skip" mode returns "SKIP" for a
+                # fully-failed task — so a result-based check would miss it.
+                # Must run BEFORE the SKIP `continue` below, which short-circuits.
+                if (
+                    task.id in previously_failed
+                    and state.get_task_state(task.id).status == "failed"
+                ):
+                    log_progress(
+                        f"💡 [{task.id}] repeated failure — review logs at "
+                        f"{config.logs_dir}/{task.id}-*.log"
+                    )
+                    state.add_second_pass_fail(task.id)
+
                 if result == "SKIP":
                     continue
 
                 if result is False and state.should_stop():
+                    last = state.most_recent_failed_attempt()
+                    if last and last.error_kind and last.error_kind != "unknown":
+                        stop_reason = f"error_{last.error_kind}"
+                        stop_detail = last.error or ""
+                    else:
+                        stop_reason = "max_consecutive_failures"
+                        stop_detail = (
+                            f"{state.consecutive_failures}/"
+                            f"{config.max_consecutive_failures}"
+                        )
                     logger.warning("Stopping: too many consecutive failures")
                     break
+
+        # v2.3.0: persist stop-reason for this run
+        state.set_meta("last_run_stop_reason", stop_reason)
+        state.set_meta("last_run_stop_detail", stop_detail)
 
         # Summary
         # Re-read tasks to get updated statuses after execution
@@ -647,7 +718,11 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         read_commands[task_cmd](args, tasks)
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Extracted from main() to allow programmatic use and testing.
+    """
     # Shared options available to every subcommand
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -742,6 +817,12 @@ def main():
         "--json-result",
         action="store_true",
         help="Output structured JSON result per task (for Maestro interop)",
+    )
+    run_parser.add_argument(
+        "--no-reset-failed",
+        action="store_true",
+        help="Do not reset failed→pending or clear consecutive_failures "
+        "at the start of `run --all` (default: reset enabled).",
     )
 
     # status
@@ -910,6 +991,11 @@ def main():
         "sync-from-gh", parents=[task_common], help="Sync GitHub Issues to tasks.md"
     )
 
+    return parser
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.command:

@@ -56,6 +56,8 @@ class TaskAttempt:
     cost_usd: float | None = None
     review_status: str | None = None
     review_findings: str | None = None
+    error_kind: str | None = None       # v2.3.0: classified by errors.classify
+    error_stage: str | None = None      # v2.3.0: stage when failure occurred
 
 
 @dataclass
@@ -204,6 +206,10 @@ class ExecutorState:
         ]:
             if col not in columns:
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
+        # v2.3.0: add error_kind and error_stage to attempts (idempotent)
+        for col in ("error_kind", "error_stage"):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} TEXT")
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -279,7 +285,7 @@ class ExecutorState:
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
             "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
-            "review_status, review_findings "
+            "review_status, review_findings, error_kind, error_stage "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -296,6 +302,8 @@ class ExecutorState:
                 cost_usd,
                 review_status,
                 review_findings,
+                error_kind,
+                error_stage,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -312,6 +320,8 @@ class ExecutorState:
                 cost_usd=cost_usd,
                 review_status=review_status,
                 review_findings=review_findings,
+                error_kind=error_kind,
+                error_stage=error_stage,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -364,8 +374,9 @@ class ExecutorState:
                         "(task_id, timestamp, success, duration_seconds, "
                         "error, error_code, claude_output, "
                         "input_tokens, output_tokens, cost_usd, "
-                        "review_status, review_findings) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "review_status, review_findings, "
+                        "error_kind, error_stage) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -379,6 +390,8 @@ class ExecutorState:
                             a.cost_usd,
                             a.review_status,
                             a.review_findings,
+                            a.error_kind,
+                            a.error_stage,
                         ),
                     )
             self._save_meta()
@@ -401,6 +414,8 @@ class ExecutorState:
         cost_usd: float | None = None,
         review_status: str | None = None,
         review_findings: str | None = None,
+        error_kind: str | None = None,
+        error_stage: str | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -417,6 +432,8 @@ class ExecutorState:
             cost_usd=cost_usd,
             review_status=review_status,
             review_findings=review_findings,
+            error_kind=error_kind,
+            error_stage=error_stage,
         )
         state.attempts.append(attempt)
         assert self._conn is not None
@@ -449,8 +466,9 @@ class ExecutorState:
                     "(task_id, timestamp, success, duration_seconds, "
                     "error, error_code, claude_output, "
                     "input_tokens, output_tokens, cost_usd, "
-                    "review_status, review_findings) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "review_status, review_findings, "
+                    "error_kind, error_stage) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task_id,
                         attempt.timestamp,
@@ -464,6 +482,8 @@ class ExecutorState:
                         attempt.cost_usd,
                         attempt.review_status,
                         attempt.review_findings,
+                        attempt.error_kind,
+                        attempt.error_stage,
                     ),
                 )
                 self._save_meta()
@@ -664,6 +684,97 @@ class ExecutorState:
             if a.output_tokens is not None
         )
         return inp, out
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Insert or replace a key in executor_meta."""
+        assert self._conn is not None
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO executor_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, str(value)),
+            )
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        """Read a key from executor_meta; return default if missing."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM executor_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else default
+
+    _SECOND_PASS_META_KEY = "second_pass_fail_tasks"
+
+    def get_second_pass_fails(self) -> set[str]:
+        """Return the set of task IDs that have failed across runs."""
+        raw = self.get_meta(self._SECOND_PASS_META_KEY, "") or ""
+        return {t for t in raw.split(",") if t}
+
+    def add_second_pass_fail(self, task_id: str) -> None:
+        """Record that this task_id failed a second time across runs."""
+        ids = self.get_second_pass_fails()
+        ids.add(task_id)
+        self.set_meta(self._SECOND_PASS_META_KEY, ",".join(sorted(ids)))
+
+    def clear_second_pass_fails(self) -> None:
+        """Clear the second-pass record (called at start of run --all reset)."""
+        self.set_meta(self._SECOND_PASS_META_KEY, "")
+
+    def reset_failed_to_pending(self) -> set[str]:
+        """Flip every task with status='failed' to 'pending'.
+
+        Updates both the in-memory cache and SQLite atomically so the change
+        survives connection close.  Returns the set of task IDs that were
+        flipped (used by second-pass detection in cli.py).
+        """
+        assert self._conn is not None
+        flipped = {
+            task_id
+            for task_id, ts in self.tasks.items()
+            if ts.status == "failed"
+        }
+        if flipped:
+            for task_id in flipped:
+                self.tasks[task_id].status = "pending"
+                self.tasks[task_id].attempts = []
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET status = 'pending' WHERE status = 'failed'"
+                )
+                placeholders = ",".join("?" for _ in flipped)
+                self._conn.execute(
+                    f"DELETE FROM attempts WHERE task_id IN ({placeholders})",
+                    tuple(flipped),
+                )
+        return flipped
+
+    def most_recent_failed_attempt(self) -> "TaskAttempt | None":
+        """Return the most recently recorded failing attempt, or None."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT timestamp, success, duration_seconds, error, error_code, "
+            "claude_output, input_tokens, output_tokens, cost_usd, "
+            "review_status, review_findings, error_kind, error_stage "
+            "FROM attempts WHERE success = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        error_code = ErrorCode(row[4]) if row[4] is not None else None
+        return TaskAttempt(
+            timestamp=row[0],
+            success=bool(row[1]),
+            duration_seconds=row[2],
+            error=row[3],
+            error_code=error_code,
+            claude_output=row[5],
+            input_tokens=row[6],
+            output_tokens=row[7],
+            cost_usd=row[8],
+            review_status=row[9],
+            review_findings=row[10],
+            error_kind=row[11],
+            error_stage=row[12],
+        )
 
     def close(self) -> None:
         """Close the SQLite connection."""

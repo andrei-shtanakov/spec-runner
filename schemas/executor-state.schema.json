@@ -127,6 +127,27 @@
         "review_findings": {
           "description": "Free-text review notes (experimental)",
           "type": ["string", "null"]
+        },
+        "error_kind": {
+          "description": "Classified failure kind (experimental, added v2.3.0)",
+          "type": ["string", "null"],
+          "enum": ["rate_limit", "auth", "network", "cli_error", "unknown", null]
+        },
+        "error_stage": {
+          "description": "Sub-stage when the failure occurred (experimental, added v2.3.0)",
+          "type": ["string", "null"],
+          "enum": [
+            "sync_deps",
+            "branch",
+            "codex",
+            "parse",
+            "tests",
+            "lint",
+            "commit",
+            "merge",
+            "review",
+            null
+          ]
         }
       },
       "required": ["timestamp", "success", "duration_seconds"]

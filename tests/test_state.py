@@ -996,3 +996,197 @@ class TestDegradedMode:
 
         assert _is_disk_full_error(sqlite3.OperationalError("database is locked")) is False
         assert _is_disk_full_error(sqlite3.OperationalError("no such table")) is False
+
+
+# --- v2.3.0 schema migration ---
+
+
+class TestSchemaMigrationV230:
+    def test_error_kind_and_stage_columns_added(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg):
+            pass  # init runs migrations
+        with sqlite3.connect(cfg.state_file) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+        assert "error_kind" in cols
+        assert "error_stage" in cols
+
+    def test_migration_is_idempotent(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        # Open and close twice — second pass must not raise OperationalError
+        with ExecutorState(cfg):
+            pass
+        with ExecutorState(cfg):
+            pass
+        with sqlite3.connect(cfg.state_file) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+        assert "error_kind" in cols and "error_stage" in cols
+
+
+# --- set_meta / get_meta ---
+
+
+class TestMetaHelpers:
+    def test_set_meta_then_get_meta_round_trip(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.set_meta("foo", "bar")
+            assert state.get_meta("foo") == "bar"
+
+    def test_get_meta_missing_returns_default(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            assert state.get_meta("nope") is None
+            assert state.get_meta("nope", "fallback") == "fallback"
+
+    def test_set_meta_overwrites(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.set_meta("k", "v1")
+            state.set_meta("k", "v2")
+            assert state.get_meta("k") == "v2"
+
+
+class TestResetFailedToPending:
+    """Tests for ExecutorState.reset_failed_to_pending()."""
+
+    def _seed_tasks(self, state: ExecutorState) -> None:
+        """Seed T1=pending, T2=failed, T3=success, T4=failed."""
+        # T1: stay pending (just ensure it exists in DB)
+        ts = state.get_task_state("T1")
+        assert ts.status == "pending"
+        # Persist T1 so it survives the context-manager close
+        assert state._conn is not None
+        with state._conn:
+            state._conn.execute(
+                "INSERT INTO tasks (task_id, status) VALUES (?, ?) "
+                "ON CONFLICT(task_id) DO UPDATE SET status = excluded.status",
+                ("T1", "pending"),
+            )
+        # T2: one failed attempt with max_retries=1 → status becomes "failed"
+        state.record_attempt("T2", success=False, duration=1.0, error="boom")
+        # T3: success
+        state.record_attempt("T3", success=True, duration=1.0)
+        # T4: one failed attempt → status becomes "failed"
+        state.record_attempt("T4", success=False, duration=1.0, error="oops")
+
+    def test_resets_only_failed_and_returns_their_ids(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            self._seed_tasks(state)
+            flipped = state.reset_failed_to_pending()
+        assert flipped == {"T2", "T4"}
+        with ExecutorState(cfg) as state:
+            assert state.get_task_state("T2").status == "pending"
+            assert state.get_task_state("T4").status == "pending"
+            assert state.get_task_state("T1").status == "pending"
+            assert state.get_task_state("T3").status == "success"
+
+    def test_no_failed_returns_empty_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("T1", success=True, duration=1.0)
+            assert state.reset_failed_to_pending() == set()
+
+    def test_reset_clears_attempts_so_retry_budget_is_restored(self, tmp_path):
+        """A task failed by exhausting retries must get a fresh retry budget
+        (cleared attempts) after reset, else run_with_retries re-runs 0 times."""
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            # Exhaust retries: one failed attempt with max_retries=1 → status "failed"
+            state.record_attempt("T1", success=False, duration=1.0, error="x")
+            assert state.get_task_state("T1").status == "failed"
+            assert state.get_task_state("T1").attempt_count == 1
+            flipped = state.reset_failed_to_pending()
+            assert flipped == {"T1"}
+            ts = state.get_task_state("T1")
+            assert ts.status == "pending"
+            assert ts.attempt_count == 0  # retry budget restored
+            assert ts.attempts == []
+        # survives reopen
+        with ExecutorState(cfg) as state:
+            ts = state.get_task_state("T1")
+            assert ts.status == "pending"
+            assert ts.attempt_count == 0
+
+
+class TestSecondPassMeta:
+    META_KEY = "second_pass_fail_tasks"
+
+    def test_add_then_read_returns_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.add_second_pass_fail("T2")
+            assert state.get_second_pass_fails() == {"T1", "T2"}
+
+    def test_add_is_idempotent(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.add_second_pass_fail("T1")
+            assert state.get_second_pass_fails() == {"T1"}
+
+    def test_clear_resets_to_empty(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.add_second_pass_fail("T1")
+            state.clear_second_pass_fails()
+            assert state.get_second_pass_fails() == set()
+
+    def test_empty_meta_returns_empty_set(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            assert state.get_second_pass_fails() == set()
+
+
+class TestAttemptErrorKindStage:
+    def test_attempt_persists_kind_and_stage(self, tmp_path):
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "T1",
+                success=False,
+                duration=1.0,
+                error="OpenAI usage limit — try again at 9:54 AM",
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind="rate_limit",
+                error_stage="codex",
+            )
+        # (a) raw DB columns
+        with sqlite3.connect(cfg.state_file) as conn:
+            row = conn.execute(
+                "SELECT error_kind, error_stage, error FROM attempts WHERE task_id='T1'"
+            ).fetchone()
+        assert row[0] == "rate_limit"
+        assert row[1] == "codex"
+        assert row[2] == "OpenAI usage limit — try again at 9:54 AM"
+        # (b) reopened state's in-memory attempt carries the fields (loader path)
+        with ExecutorState(cfg) as state:
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_kind == "rate_limit"
+            assert attempt.error_stage == "codex"
+
+    def test_attempt_without_kind_stage_writes_null(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("T1", success=True, duration=0.5)
+        with sqlite3.connect(cfg.state_file) as conn:
+            row = conn.execute(
+                "SELECT error_kind, error_stage FROM attempts WHERE task_id='T1'"
+            ).fetchone()
+        assert row == (None, None)
+
+    def test_save_preserves_kind_and_stage(self, tmp_path):
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "T1", success=False, duration=1.0, error="x",
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind="rate_limit", error_stage="codex",
+            )
+            state._save()  # must NOT drop the columns
+        with ExecutorState(cfg) as state:
+            a = state.get_task_state("T1").attempts[-1]
+            assert a.error_kind == "rate_limit"
+            assert a.error_stage == "codex"

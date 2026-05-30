@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import (
@@ -96,8 +96,8 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_pre.assert_called_once_with(task, config)
-        mock_post.assert_called_once_with(task, config, True)
+        mock_pre.assert_called_once_with(task, config, reporter=ANY)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
         mock_status.assert_called()
         mock_checklist.assert_called_once()
 
@@ -135,7 +135,7 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_post.assert_called_once_with(task, config, True)
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
@@ -1249,7 +1249,7 @@ class TestSignalHandling:
 
         task = _make_task()
 
-        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c: True)
+        monkeypatch.setattr("spec_runner.execution.pre_start_hook", lambda t, c, **kw: True)
         monkeypatch.setattr("spec_runner.execution.update_task_status", lambda *a, **kw: None)
         monkeypatch.setattr("spec_runner.execution.send_callback", lambda *a, **kw: None)
         monkeypatch.setattr(
@@ -1542,3 +1542,111 @@ class TestSmartRetry:
         assert result is False
         assert mock_execute.call_count == 1
         assert mock_sleep.call_count == 0
+
+
+class TestStageReporterWiring:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_codex_and_parse_stages_emitted(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_post,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+        monkeypatch,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=0, stdout="TASK_COMPLETE\n", stderr="",
+        )
+        captured: list[str] = []
+
+        def _capture(*args: object) -> None:
+            if args:
+                captured.append(str(args[0]))
+
+        monkeypatch.setattr("spec_runner.execution.log_progress", _capture)
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+        joined = "\n".join(captured)
+        assert "stage: codex" in joined
+        assert "stage: parse" in joined
+        assert joined.index("stage: codex") < joined.index("stage: parse")
+
+
+class TestErrorStageRecorded:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_error_stage_is_codex_on_subprocess_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=1, stdout="",
+            stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
+        )
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_stage == "codex"
+
+
+class TestErrorClassificationInExecution:
+    @patch("spec_runner.execution.mark_all_checklist_done")
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_unknown_error_replaced_by_classify(
+        self,
+        mock_run,
+        mock_pre,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        mock_checklist,
+        tmp_path,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["x"], returncode=1, stdout="",
+            stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
+        )
+        cfg = _make_config(tmp_path)
+        cfg.logs_dir.mkdir(exist_ok=True)
+        task = _make_task("T1")
+        with ExecutorState(cfg) as state:
+            result = execute_task(task, cfg, state)
+            assert result is False
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_kind == "rate_limit"
+            assert "9:54 AM" in attempt.error
+            assert attempt.error != "Unknown error"

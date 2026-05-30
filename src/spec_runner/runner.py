@@ -214,10 +214,12 @@ def build_cli_command(
         return result
 
     elif "codex" in cmd_lower:
-        # Codex CLI
-        result = [cmd, "-p", prompt]
+        # codex: `codex exec [-m MODEL] [PROMPT]`
+        # NOTE: codex's `-p` is `--profile`, not the prompt — DO NOT use it here.
+        result = [cmd, "exec"]
         if model:
-            result.extend(["--model", model])
+            result.extend(["-m", model])
+        result.append(prompt)
         return result
 
     elif cmd_basename == "pi" or cmd_basename.startswith("pi."):

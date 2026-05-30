@@ -23,8 +23,9 @@ from .task import (
 logger = get_logger("cli")
 
 
-def cmd_status(args, config: ExecutorConfig):
-    """Execution status"""
+def print_status(config: ExecutorConfig) -> None:
+    """Print human-readable status to stdout."""
+    from . import __version__
 
     with ExecutorState(config) as state:
         # Parse tasks from tasks.md to cross-reference
@@ -32,29 +33,6 @@ def cmd_status(args, config: ExecutorConfig):
         if config.tasks_file.exists():
             all_tasks = parse_tasks(config.tasks_file)
 
-        # --json: output matching MCP server format
-        if getattr(args, "json_output", False):
-            completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
-            failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
-            running = sum(1 for ts in state.tasks.values() if ts.status == "running")
-            cost = state.total_cost()
-            inp, out = state.total_tokens()
-            print(
-                json.dumps(
-                    {
-                        "total_tasks": len(all_tasks),
-                        "completed": completed,
-                        "failed": failed,
-                        "running": running,
-                        "not_started": len(all_tasks) - completed - failed - running,
-                        "total_cost": round(cost, 2),
-                        "input_tokens": inp,
-                        "output_tokens": out,
-                        "budget_usd": config.budget_usd,
-                    }
-                )
-            )
-            return
         total_in_spec = len(all_tasks)
 
         # Calculate statistics from actual task state
@@ -69,7 +47,21 @@ def cmd_status(args, config: ExecutorConfig):
         state_ids = set(state.tasks.keys())
         not_started = [t for t in all_tasks if t.id not in state_ids]
 
-        print("\n📊 spec-runner Status")
+        print(f"\n📊 spec-runner v{__version__}")
+
+        # Stop-reason warning from executor_meta
+        reason = state.get_meta("last_run_stop_reason")
+        detail = state.get_meta("last_run_stop_detail") or ""
+        if reason and reason != "completed":
+            if reason == "max_consecutive_failures":
+                human = f"max_consecutive_failures reached ({detail})"
+            elif reason.startswith("error_"):
+                kind = reason.removeprefix("error_")
+                human = f"{kind} — {detail}" if detail else kind
+            else:
+                human = reason
+            print(f"⚠️ Last run stopped: {human}")
+
         print(f"{'=' * 50}")
         print(f"Tasks in spec:         {total_in_spec}")
         print(f"Tasks completed:       {completed_tasks}")
@@ -101,6 +93,7 @@ def cmd_status(args, config: ExecutorConfig):
 
         # Tasks with attempts
         attempted = [ts for ts in state.tasks.values() if ts.attempts]
+        second_pass = state.get_second_pass_fails()
         if attempted:
             print("\n📝 Task History:")
             for ts in attempted:
@@ -111,22 +104,67 @@ def cmd_status(args, config: ExecutorConfig):
                 task_cost = state.task_cost(ts.task_id)
                 if task_cost > 0:
                     attempts_info += f", ${task_cost:.2f}"
-                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info})")
+                # Stage tag on the task header line
+                stage_tag = ""
+                if ts.status == "failed" and ts.attempts and ts.attempts[-1].error_stage:
+                    stage_tag = f" [at: {ts.attempts[-1].error_stage}]"
+                print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info}){stage_tag}")
                 # Show review verdict from last attempt
                 if ts.attempts:
                     last_attempt = ts.attempts[-1]
                     if last_attempt.review_status and last_attempt.review_status != "skipped":
                         print(f"      Review: {last_attempt.review_status}")
+                # Kind tag on the error line
                 if ts.status == "failed" and ts.last_error:
-                    print(f"      Last error: {ts.last_error[:50]}...")
+                    kind = ts.attempts[-1].error_kind if ts.attempts else None
+                    kind_tag = f"[{kind}] " if kind else ""
+                    print(f"      Last error: {kind_tag}{ts.last_error[:50]}...")
                 elif ts.status == "running" and ts.last_error:
                     print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
+                # Second-pass hint
+                if ts.status == "failed" and ts.task_id in second_pass:
+                    print("      💡 Repeated failure across runs — review:")
+                    print(f"         {config.logs_dir}/{ts.task_id}-*.log")
 
         # Show tasks not yet in executor state
         if not_started:
             print(f"\n⏳ Not started ({len(not_started)}):")
             for t in not_started:
                 print(f"   ⬜ {t.id}: {t.name}")
+
+
+def cmd_status(args, config: ExecutorConfig):
+    """Execution status"""
+
+    if getattr(args, "json_output", False):
+        with ExecutorState(config) as state:
+            # Parse tasks from tasks.md to cross-reference
+            all_tasks: list[Task] = []
+            if config.tasks_file.exists():
+                all_tasks = parse_tasks(config.tasks_file)
+
+            completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
+            failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
+            running = sum(1 for ts in state.tasks.values() if ts.status == "running")
+            cost = state.total_cost()
+            inp, out = state.total_tokens()
+            print(
+                json.dumps(
+                    {
+                        "total_tasks": len(all_tasks),
+                        "completed": completed,
+                        "failed": failed,
+                        "running": running,
+                        "not_started": len(all_tasks) - completed - failed - running,
+                        "total_cost": round(cost, 2),
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "budget_usd": config.budget_usd,
+                    }
+                )
+            )
+        return
+    print_status(config)
 
 
 def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:

@@ -10,6 +10,57 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-05-30
+
+### Added
+
+- **Version in `status` header.** First line of `spec-runner status` now
+  reads `📊 spec-runner v<version>`.
+- **Human-readable error reasons.** Failed-task lines in `status` now show
+  `[error_kind] message` instead of "Unknown error", with the failing
+  sub-stage tagged as `[at: <stage>]`. Driven by a small pattern library in
+  `src/spec_runner/errors.py` (codex usage-limit, generic rate-limit, auth,
+  network, generic CLI error) with a last-5-lines-of-stderr fallback.
+- **Run stop-reason summary.** When a run halts abnormally (e.g.,
+  `max_consecutive_failures`, codex rate limit), `status` prints a
+  `⚠️ Last run stopped: …` line above the totals.
+- **Repeated-failure log hint (`💡`).** When a task that was already failed
+  before the current run fails again, spec-runner emits a `💡` warning to
+  stderr immediately and shows a persistent hint under the task in `status`
+  with the path to its log file.
+- **Per-stage progress mirror.** Extends 2.2.2's stderr progress with one
+  `⏳ stage: <name>` line per sub-stage (`sync_deps`, `branch`, `codex`,
+  `parse`, `tests`, `lint`, `commit`, `merge`, `review`). Stages are emitted
+  only when the corresponding step actually runs.
+
+### Changed
+
+- **`run --all` now resets failed→pending and consecutive_failures→0 by
+  default.** Use the new `--no-reset-failed` flag to preserve the old sticky-
+  failed behavior. Single-task runs (`run TASK-X`) and `retry` are unaffected.
+- **Subdir-project safety: git automation defaults OFF when `project_root`
+  is a strict subdirectory of a larger git repo.** Prior behavior could
+  commit unrelated files across the whole repo and merge them to `main`.
+  Explicit `create_git_branch=true` / `auto_commit=true` in YAML or via CLI
+  are respected; a warning log is emitted when the auto-default triggers.
+
+### Fixed
+
+- **codex CLI adapter.** `build_cli_command` now builds `codex exec [-m
+  MODEL] <PROMPT>` instead of `codex -p <PROMPT>`. `-p` in the codex CLI is
+  `--profile`, not the prompt, so the previous form crashed every codex run
+  with an `invalid --profile value` error that spec-runner surfaced as the
+  generic "Unknown error". Existing `command_template` overrides are
+  preserved (template path is checked before auto-detect).
+
+### Schema
+
+- `attempts` gains two TEXT columns: `error_kind`, `error_stage`. Idempotent
+  on-startup migration; legacy rows with NULL values render in the old
+  format. Three new keys appear in `executor_meta`: `last_run_stop_reason`,
+  `last_run_stop_detail`, `second_pass_fail_tasks`. Forward-compatible:
+  downgrading to 2.2.2 simply ignores the extras.
+
 ## [2.2.2] — 2026-05-29
 
 ### Added
