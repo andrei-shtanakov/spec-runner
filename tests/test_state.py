@@ -1117,3 +1117,41 @@ class TestSecondPassMeta:
         cfg = _make_config(tmp_path)
         with ExecutorState(cfg) as state:
             assert state.get_second_pass_fails() == set()
+
+
+class TestAttemptErrorKindStage:
+    def test_attempt_persists_kind_and_stage(self, tmp_path):
+        cfg = _make_config(tmp_path, max_retries=1)
+        with ExecutorState(cfg) as state:
+            state.record_attempt(
+                "T1",
+                success=False,
+                duration=1.0,
+                error="OpenAI usage limit — try again at 9:54 AM",
+                error_code=ErrorCode.TASK_FAILED,
+                error_kind="rate_limit",
+                error_stage="codex",
+            )
+        # (a) raw DB columns
+        with sqlite3.connect(cfg.state_file) as conn:
+            row = conn.execute(
+                "SELECT error_kind, error_stage, error FROM attempts WHERE task_id='T1'"
+            ).fetchone()
+        assert row[0] == "rate_limit"
+        assert row[1] == "codex"
+        assert row[2] == "OpenAI usage limit — try again at 9:54 AM"
+        # (b) reopened state's in-memory attempt carries the fields (loader path)
+        with ExecutorState(cfg) as state:
+            attempt = state.get_task_state("T1").attempts[-1]
+            assert attempt.error_kind == "rate_limit"
+            assert attempt.error_stage == "codex"
+
+    def test_attempt_without_kind_stage_writes_null(self, tmp_path):
+        cfg = _make_config(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("T1", success=True, duration=0.5)
+        with sqlite3.connect(cfg.state_file) as conn:
+            row = conn.execute(
+                "SELECT error_kind, error_stage FROM attempts WHERE task_id='T1'"
+            ).fetchone()
+        assert row == (None, None)

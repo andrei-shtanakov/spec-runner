@@ -56,6 +56,8 @@ class TaskAttempt:
     cost_usd: float | None = None
     review_status: str | None = None
     review_findings: str | None = None
+    error_kind: str | None = None       # v2.3.0: classified by errors.classify
+    error_stage: str | None = None      # v2.3.0: stage when failure occurred
 
 
 @dataclass
@@ -283,7 +285,7 @@ class ExecutorState:
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
             "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
-            "review_status, review_findings "
+            "review_status, review_findings, error_kind, error_stage "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -300,6 +302,8 @@ class ExecutorState:
                 cost_usd,
                 review_status,
                 review_findings,
+                error_kind,
+                error_stage,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -316,6 +320,8 @@ class ExecutorState:
                 cost_usd=cost_usd,
                 review_status=review_status,
                 review_findings=review_findings,
+                error_kind=error_kind,
+                error_stage=error_stage,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -405,6 +411,8 @@ class ExecutorState:
         cost_usd: float | None = None,
         review_status: str | None = None,
         review_findings: str | None = None,
+        error_kind: str | None = None,
+        error_stage: str | None = None,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -421,6 +429,8 @@ class ExecutorState:
             cost_usd=cost_usd,
             review_status=review_status,
             review_findings=review_findings,
+            error_kind=error_kind,
+            error_stage=error_stage,
         )
         state.attempts.append(attempt)
         assert self._conn is not None
@@ -453,8 +463,9 @@ class ExecutorState:
                     "(task_id, timestamp, success, duration_seconds, "
                     "error, error_code, claude_output, "
                     "input_tokens, output_tokens, cost_usd, "
-                    "review_status, review_findings) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "review_status, review_findings, "
+                    "error_kind, error_stage) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task_id,
                         attempt.timestamp,
@@ -468,6 +479,8 @@ class ExecutorState:
                         attempt.cost_usd,
                         attempt.review_status,
                         attempt.review_findings,
+                        attempt.error_kind,
+                        attempt.error_stage,
                     ),
                 )
                 self._save_meta()
