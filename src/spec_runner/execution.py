@@ -284,6 +284,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
                 error_kind=error_kind,
+                error_stage=reporter.current,
             )
             log_progress(f"\u274c Failed: {error[:50]}", task_id)
             send_callback(
