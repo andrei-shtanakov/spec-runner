@@ -13,7 +13,7 @@ spec-runner's role in the ecosystem: the only **working** cross-project link (Ma
 
 ## Project Overview
 
-**spec-runner** (v2.3.0) — Task automation from markdown specs via Claude CLI. Reads structured tasks from `spec/tasks.md`, executes them as Claude CLI subprocesses with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
+**spec-runner** (v2.3.1) — Task automation from markdown specs via Claude CLI. Reads structured tasks from `spec/tasks.md`, executes them as Claude CLI subprocesses with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
 
 ## Build & Development Commands
 
@@ -181,7 +181,7 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - **Specs**: `spec/` (requirements.md, design.md, tasks.md, FORMAT.md, WORKFLOW.md, prompts/)
 - **Config**: `spec-runner.config.yaml` at project root (v2.0) or `spec/executor.config.yaml` (legacy v1.x, deprecated)
 - **Runtime state**: `spec/.executor-state.db` (SQLite + WAL), `spec/.executor-logs/`, `spec/.task-history.log`
-- **Bundled skills**: `src/spec_runner/skills/spec-generator-skill/` (templates + review prompts for claude/codex/ollama/llama)
+- **Bundled skills**: `src/spec_runner/skills/spec-generator-skill/` (templates + review prompts for claude/codex/opencode/pi/ollama/llama; plus a full pi-driven dev→review→test loop under `templates/pi/`)
 - **Plugins**: `spec/plugins/` (optional; each plugin is a directory with `plugin.yaml`)
 - **Interop contract**: `docs/state-schema.md` + `schemas/executor-state.schema.json` + `schemas/json-result.schema.json` + `tests/fixtures/maestro-interop/` (golden fixtures copied by Maestro's contract tests)
 - **Tests**: `tests/` — group by CLI module, mark slow tests with `@pytest.mark.slow`, mock Claude CLI invocations

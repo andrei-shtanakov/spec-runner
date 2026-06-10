@@ -77,6 +77,8 @@ flowchart TB
     subgraph core["Orchestration core"]
         direction LR
         execution["execution.py<br/>execute_task<br/>retry strategy<br/>RetryContext"]
+        errors_m["errors.py<br/>classify stderr<br/>→ error_kind"]
+        stages_m["stages.py<br/>StageReporter<br/>sub-stage progress"]
         hooks["hooks.py<br/>pre_start_hook<br/>post_done_hook"]
         review["review.py<br/>5 REVIEW_ROLES<br/>parallel review<br/>HITL gate"]
         verify_m["verify.py<br/>compliance check"]
@@ -119,7 +121,7 @@ flowchart TB
     classDef adapterC fill:#f0d6f0,stroke:#7a2f7a
     class cli,mcp_server,tui,executor_mod entryC
     class cli_info,cli_plan,task_cmds,github_sync,init_cmd cmdC
-    class execution,hooks,review,verify_m,audit_m,validate_m,report_m coreC
+    class execution,errors_m,stages_m,hooks,review,verify_m,audit_m,validate_m,report_m coreC
     class task,state,config,prompt domainC
     class runner,git_ops,plugins,notifications_m,obs,logging_m,audit_log,events adapterC
 ```
@@ -223,6 +225,6 @@ flowchart LR
 ## Notes
 
 - **Entry points** in `pyproject.toml`: `spec-runner` (→ `executor:main`), `spec-task` (deprecated), `spec-runner-init`.
-- **CLI agnostic**: `runner.build_cli_command()` auto-detects `claude` / `codex` / `ollama` / `llama-cli` / `llama-server` based on command name, or uses a custom `command_template` with `{cmd} {model} {prompt} {prompt_file}` placeholders.
+- **CLI agnostic**: `runner.build_cli_command()` auto-detects `claude` / `codex` / `opencode` / `pi` / `ollama` / `llama-cli` / `llama-server` based on command name, or uses a custom `command_template` with `{cmd} {model} {prompt} {prompt_file}` placeholders. (`codex` uses `codex exec -m {model} {prompt}`; its `-p` is `--profile`, not the prompt.)
 - **Maestro interop contract** (R-04): SQLite schema + `--json-result` stdout. See `docs/state-schema.md`, `schemas/*.json`, `tests/test_json_result_contract.py`. Frozen at v2.0.0.
 - **Observability** (v2.1.0): `obs.py` is the reference implementation of the cross-project OTel JSONL contract (`_cowork_output/observability-contract/log-schema.json`), already vendored into Maestro, arbiter, and ATP.

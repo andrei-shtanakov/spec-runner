@@ -334,7 +334,7 @@ paths:
 | CLI | Auto-detected | Example template |
 |-----|--------------|------------------|
 | Claude | Yes | `{cmd} -p {prompt} --model {model}` |
-| Codex | Yes | `{cmd} -p {prompt} --model {model}` |
+| Codex | Yes | `{cmd} exec -m {model} {prompt}` (codex's `-p` is `--profile`, not the prompt) |
 | OpenCode ([sst/opencode](https://opencode.ai)) | Yes | `{cmd} run --model {model} {prompt}` |
 | Pi Agent ([pi.dev](https://pi.dev)) | Yes (basename match) | `{cmd} -p --model {model} {prompt}` |
 | Ollama | Yes | `{cmd} run {model} {prompt}` |
@@ -362,6 +362,8 @@ project/
 │       ├── cli_info.py          # Status, costs, logs, validate, verify, report, TUI, MCP
 │       ├── cli_plan.py          # Interactive planning command
 │       ├── execution.py         # Task execution + retry logic
+│       ├── errors.py            # CLI stderr → human-readable failure reasons
+│       ├── stages.py            # Per-task sub-stage tracking (StageReporter)
 │       ├── config.py            # ExecutorConfig + YAML loading
 │       ├── state.py             # SQLite state persistence + degraded-mode fallback
 │       ├── prompt.py            # Prompt building + templates
@@ -378,7 +380,8 @@ project/
 │       ├── report.py            # Traceability matrix generation
 │       ├── validate.py          # Config + task validation
 │       ├── plugins.py           # Plugin discovery + hooks
-│       ├── logging.py           # Structured logging (structlog)
+│       ├── logging.py           # Structured logging (structlog back-compat shim)
+│       ├── obs.py               # OTel JSONL observability emitter (shared contract)
 │       ├── events.py            # EventBus for streaming to TUI
 │       ├── notifications.py     # Telegram + webhook notifications
 │       ├── tui.py               # Textual TUI dashboard

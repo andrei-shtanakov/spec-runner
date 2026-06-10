@@ -196,6 +196,8 @@ flowchart TB
     subgraph core[&quot;Orchestration core&quot;]
         direction LR
         execution[&quot;execution.py&lt;br/&gt;execute_task&lt;br/&gt;retry strategy&lt;br/&gt;RetryContext&quot;]
+        errors_m[&quot;errors.py&lt;br/&gt;classify stderr&lt;br/&gt;→ error_kind&quot;]
+        stages_m[&quot;stages.py&lt;br/&gt;StageReporter&lt;br/&gt;sub-stage progress&quot;]
         hooks[&quot;hooks.py&lt;br/&gt;pre_start_hook&lt;br/&gt;post_done_hook&quot;]
         review[&quot;review.py&lt;br/&gt;5 REVIEW_ROLES&lt;br/&gt;parallel review&lt;br/&gt;HITL gate&quot;]
         verify_m[&quot;verify.py&lt;br/&gt;compliance check&quot;]
@@ -238,7 +240,7 @@ flowchart TB
     classDef adapterC fill:#f0d6f0,stroke:#7a2f7a
     class cli,mcp_server,tui,executor_mod entryC
     class cli_info,cli_plan,task_cmds,github_sync,init_cmd cmdC
-    class execution,hooks,review,verify_m,audit_m,validate_m,report_m coreC
+    class execution,errors_m,stages_m,hooks,review,verify_m,audit_m,validate_m,report_m coreC
     class task,state,config,prompt domainC
     class runner,git_ops,plugins,notifications_m,obs,logging_m,audit_log,events adapterC
             </pre>
