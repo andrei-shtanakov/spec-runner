@@ -10,6 +10,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-06-10
+
+### Added
+
+- **Pi-driven dev→review→test loop.** Bundled `pi/` skill templates
+  (`pi-implementer`, `pi-reviewer`, `pi-tester`) plus `spec-runner.pi.config.yaml`
+  with per-stage command templates — full tools for develop, a read-only review
+  gate — letting `pi` run the entire cycle with no core code. Documented in
+  `docs/pi-workflow.md` with a runnable `examples/pi-loop/` example.
+
+### Changed
+
+- **`review.pi.md` is now a strict read-only gate.** The reviewer inspects and
+  reports findings (no self-fixes); the implementer fixes on retry. Dropped the
+  `REVIEW_FIXED` outcome from the pi review prompt.
+- Dependency bumps via Dependabot: `urllib3` 2.6.3→2.7.0,
+  `python-multipart` 0.0.26→0.0.27, `python-dotenv` 1.2.1→1.2.2,
+  `pyjwt` 2.11.0→2.12.0.
+- CI: minimal `GITHUB_TOKEN` permissions.
+
 ## [2.3.0] — 2026-05-30
 
 ### Added
