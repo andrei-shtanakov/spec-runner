@@ -311,6 +311,10 @@ File templates are located in `templates/`:
 - `executor.py` — auto-execution via Claude CLI
 - `executor.config.yaml` — executor configuration
 - `Makefile.template` — Make targets for the project
+- `pi/` — full **dev → review → test loop on the `pi` coding agent** with no core code:
+  `pi/skills/{pi-implementer,pi-reviewer,pi-tester}/SKILL.md` (pi-native role skills) and
+  `pi/spec-runner.pi.config.yaml` (per-stage command templates: full tools for develop, a
+  read-only review gate). See `docs/pi-workflow.md` and `examples/pi-loop/` in the repo.
 
 ## Examples
 
