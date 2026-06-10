@@ -341,6 +341,11 @@ paths:
 | llama-cli | Yes | `{cmd} -m {model} -p {prompt} --no-display-prompt` |
 | Custom | Use template | `{cmd} --prompt {prompt}` |
 
+> **Full pi-driven loop:** `pi` can run the entire dev → review → test cycle (with native
+> skills, per-stage tool control and a read-only review gate) using only config and a small
+> script — no core code. See [docs/pi-workflow.md](docs/pi-workflow.md) and the runnable
+> [examples/pi-loop/](examples/pi-loop/).
+
 ## Project Structure
 
 ```

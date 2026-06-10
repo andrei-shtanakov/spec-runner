@@ -1,0 +1,42 @@
+# Demo: full dev→review→test loop driven entirely by the `pi` coding agent — no core code.
+# Run from this directory with the repo's venv active:  spec-runner run --all
+# See ../../docs/pi-workflow.md for the full explanation.
+
+executor:
+  claude_command: "pi"
+  # Set to a model your pi install is authenticated for — run `pi --list-models` to see them.
+  # (This machine's pi is logged into the openai-codex provider.)
+  # NB: a blank model + `--model {model}` in the template breaks pi (bare `--model`). Always
+  # keep this set, or drop `--model {model}` from the templates below.
+  claude_model: "openai-codex/gpt-5.4"
+
+  # DEVELOP: implementer with full tools + pi-native skill
+  command_template: "{cmd} -p --model {model} --tools read,bash,edit,write,grep,find,ls --skill .pi/skills/pi-implementer {prompt}"
+
+  # REVIEW: read-only gate — no edit/write/bash
+  review_command: "pi"
+  review_model: "openai-codex/gpt-5.4"
+  review_command_template: "{cmd} -p --model {model} --tools read,grep,find --skill .pi/skills/pi-reviewer {prompt}"
+
+  # TEST: spec-runner runs the suite as the gate
+  run_tests_on_done: true
+  run_review: true
+  commands:
+    test: "python -m pytest -q"
+
+  # Keep the demo from touching the parent repo's git.
+  create_git_branch: false
+  auto_commit: false
+
+  personas:
+    implementer:
+      system_prompt: >-
+        You are the implementer. Implement the task and its tests, run the tests via bash
+        until green, then end with TASK_COMPLETE (or TASK_FAILED on the last line).
+    reviewer:
+      system_prompt: >-
+        You are a read-only reviewer. Inspect the diff, report findings, and DO NOT edit code.
+        End with REVIEW_PASSED or REVIEW_FAILED on the last line.
+    qa:
+      system_prompt: >-
+        You harden tests: add edge-case, error-path and regression tests, then run them.

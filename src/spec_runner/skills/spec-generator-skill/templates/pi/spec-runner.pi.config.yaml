@@ -1,0 +1,51 @@
+# spec-runner config for a full dev→review→test loop driven by the `pi` coding agent.
+#
+# Copy to your project root as `spec-runner.config.yaml` and adjust the model. The pi-native
+# skills referenced below ship alongside this file under `pi/skills/` — copy them to your
+# project as `.pi/skills/` (or point `--skill` at wherever you keep them).
+#
+# See docs/pi-workflow.md for the full explanation of how each stage maps to pi flags.
+
+executor:
+  # --- which agent backend ---
+  claude_command: "pi"
+  # IMPORTANT: set an explicit model your pi install is authenticated for — run
+  # `pi --list-models` to see them (ids look like "openai-codex/gpt-5.4", "google/gemini-...").
+  # With the templates below a blank model yields a bare `--model ` which shlex drops and pi
+  # errors. Either set a model here or remove `--model {model}` from the templates and rely on
+  # pi's own default (provider / PI_* env / ~/.pi/agent/settings.json).
+  claude_model: "openai-codex/gpt-5.4"
+
+  # --- DEVELOP stage: implementer with the full tool set + role skill ---
+  command_template: "{cmd} -p --model {model} --tools read,bash,edit,write,grep,find,ls --skill .pi/skills/pi-implementer {prompt}"
+
+  # --- REVIEW stage: read-only gate (no edit/write/bash) + reviewer skill ---
+  review_command: "pi"
+  review_model: "openai-codex/gpt-5.4"
+  review_command_template: "{cmd} -p --model {model} --tools read,grep,find --skill .pi/skills/pi-reviewer {prompt}"
+
+  # --- TEST stage: spec-runner runs the suite as the gate ---
+  run_tests_on_done: true
+  run_review: true
+  commands:
+    test: "uv run pytest -q"
+    lint: "uv run ruff check ."
+    lint_fix: "uv run ruff check . --fix"
+
+  # Roles are ALSO carried as personas. pi only puts skill *descriptions* in the system prompt
+  # and loads the full SKILL.md on demand — in headless `-p` runs that's not guaranteed, so the
+  # persona system_prompt (always injected into the prompt text by spec-runner) is the reliable
+  # belt-and-suspenders layer. The `.pi/skills/` skills add the reusable pi-native workflow.
+  personas:
+    implementer:
+      system_prompt: >-
+        You are the implementer. Implement the task and its tests, run the tests via bash
+        until green, then end with TASK_COMPLETE (or TASK_FAILED on the last line).
+    reviewer:
+      system_prompt: >-
+        You are a read-only reviewer. Inspect the diff, report findings, and DO NOT edit code.
+        End with REVIEW_PASSED or REVIEW_FAILED on the last line.
+    qa:
+      system_prompt: >-
+        You harden tests: add edge-case, error-path and regression tests, then run them.
+        Do not weaken production behavior to make tests pass.
