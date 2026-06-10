@@ -202,9 +202,7 @@ def _run_tasks(args, config: ExecutorConfig):
             tasks = parse_tasks(config.tasks_file)
 
         # v2.3.0: reset failed-task state on `run --all` unless opted out.
-        reset_enabled = getattr(args, "all", False) and not getattr(
-            args, "no_reset_failed", False
-        )
+        reset_enabled = getattr(args, "all", False) and not getattr(args, "no_reset_failed", False)
         previously_failed: set[str] = set()  # used by T17 second-pass detection
         if reset_enabled:
             previously_failed = state.reset_failed_to_pending()
@@ -416,8 +414,7 @@ def _run_tasks(args, config: ExecutorConfig):
                     else:
                         stop_reason = "max_consecutive_failures"
                         stop_detail = (
-                            f"{state.consecutive_failures}/"
-                            f"{config.max_consecutive_failures}"
+                            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
                         )
                     logger.warning("Stopping: too many consecutive failures")
                     break
@@ -460,8 +457,7 @@ def _run_tasks(args, config: ExecutorConfig):
                     else:
                         stop_reason = "max_consecutive_failures"
                         stop_detail = (
-                            f"{state.consecutive_failures}/"
-                            f"{config.max_consecutive_failures}"
+                            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
                         )
                     logger.warning("Stopping: too many consecutive failures")
                     break

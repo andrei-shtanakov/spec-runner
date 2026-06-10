@@ -45,7 +45,14 @@ class TestStageReporter:
 
     def test_stages_tuple_contains_expected_values(self):
         for expected in (
-            "sync_deps", "branch", "codex", "parse",
-            "tests", "lint", "commit", "merge", "review",
+            "sync_deps",
+            "branch",
+            "codex",
+            "parse",
+            "tests",
+            "lint",
+            "commit",
+            "merge",
+            "review",
         ):
             assert expected in STAGES

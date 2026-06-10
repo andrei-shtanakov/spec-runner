@@ -29,9 +29,7 @@ PATTERNS: list[ErrorPattern] = [
     # codex / OpenAI quota — captures the "try again at <time>" hint
     ErrorPattern(
         kind="rate_limit",
-        regex=re.compile(
-            r"hit your usage limit.*?try again at ([\d:]+\s*[AP]M)", re.S
-        ),
+        regex=re.compile(r"hit your usage limit.*?try again at ([\d:]+\s*[AP]M)", re.S),
         template="OpenAI usage limit — try again at {0}",
     ),
     # generic rate-limit (claude, generic providers)

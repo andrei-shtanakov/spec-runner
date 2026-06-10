@@ -56,8 +56,8 @@ class TaskAttempt:
     cost_usd: float | None = None
     review_status: str | None = None
     review_findings: str | None = None
-    error_kind: str | None = None       # v2.3.0: classified by errors.classify
-    error_stage: str | None = None      # v2.3.0: stage when failure occurred
+    error_kind: str | None = None  # v2.3.0: classified by errors.classify
+    error_stage: str | None = None  # v2.3.0: stage when failure occurred
 
 
 @dataclass
@@ -698,9 +698,7 @@ class ExecutorState:
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         """Read a key from executor_meta; return default if missing."""
         assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT value FROM executor_meta WHERE key = ?", (key,)
-        ).fetchone()
+        row = self._conn.execute("SELECT value FROM executor_meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else default
 
     _SECOND_PASS_META_KEY = "second_pass_fail_tasks"
@@ -728,19 +726,13 @@ class ExecutorState:
         flipped (used by second-pass detection in cli.py).
         """
         assert self._conn is not None
-        flipped = {
-            task_id
-            for task_id, ts in self.tasks.items()
-            if ts.status == "failed"
-        }
+        flipped = {task_id for task_id, ts in self.tasks.items() if ts.status == "failed"}
         if flipped:
             for task_id in flipped:
                 self.tasks[task_id].status = "pending"
                 self.tasks[task_id].attempts = []
             with self._conn:
-                self._conn.execute(
-                    "UPDATE tasks SET status = 'pending' WHERE status = 'failed'"
-                )
+                self._conn.execute("UPDATE tasks SET status = 'pending' WHERE status = 'failed'")
                 placeholders = ",".join("?" for _ in flipped)
                 self._conn.execute(
                     f"DELETE FROM attempts WHERE task_id IN ({placeholders})",
