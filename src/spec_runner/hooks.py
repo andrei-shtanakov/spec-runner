@@ -47,7 +47,9 @@ __all__ = [
 ]
 
 
-def pre_start_hook(task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None) -> bool:
+def pre_start_hook(
+    task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None
+) -> bool:
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 

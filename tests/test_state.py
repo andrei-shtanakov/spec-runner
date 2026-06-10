@@ -1181,9 +1181,13 @@ class TestAttemptErrorKindStage:
         cfg = _make_config(tmp_path, max_retries=1)
         with ExecutorState(cfg) as state:
             state.record_attempt(
-                "T1", success=False, duration=1.0, error="x",
+                "T1",
+                success=False,
+                duration=1.0,
+                error="x",
                 error_code=ErrorCode.TASK_FAILED,
-                error_kind="rate_limit", error_stage="codex",
+                error_kind="rate_limit",
+                error_stage="codex",
             )
             state._save()  # must NOT drop the columns
         with ExecutorState(cfg) as state:

@@ -1565,7 +1565,10 @@ class TestStageReporterWiring:
         monkeypatch,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
-            args=["x"], returncode=0, stdout="TASK_COMPLETE\n", stderr="",
+            args=["x"],
+            returncode=0,
+            stdout="TASK_COMPLETE\n",
+            stderr="",
         )
         captured: list[str] = []
 
@@ -1605,7 +1608,9 @@ class TestErrorStageRecorded:
         tmp_path,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
-            args=["x"], returncode=1, stdout="",
+            args=["x"],
+            returncode=1,
+            stdout="",
             stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
         )
         cfg = _make_config(tmp_path)
@@ -1637,7 +1642,9 @@ class TestErrorClassificationInExecution:
         tmp_path,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
-            args=["x"], returncode=1, stdout="",
+            args=["x"],
+            returncode=1,
+            stdout="",
             stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
         )
         cfg = _make_config(tmp_path)

@@ -7,10 +7,7 @@ from spec_runner.errors import ErrorPattern, classify
 
 class TestClassifyCodexUsageLimit:
     def test_codex_quota_message_yields_rate_limit_with_eta(self):
-        stderr = (
-            "ERROR: You've hit your usage limit. "
-            "Upgrade to Pro or try again at 9:54 AM.\n"
-        )
+        stderr = "ERROR: You've hit your usage limit. Upgrade to Pro or try again at 9:54 AM.\n"
         kind, msg = classify(stderr, returncode=1)
         assert kind == "rate_limit"
         assert "9:54 AM" in msg

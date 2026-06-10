@@ -1000,5 +1000,3 @@ class TestReviewStageEmitted:
             mock_state_cls.return_value = mock_state
             post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
         assert any("stage: review" in e for e in events)
-
-
