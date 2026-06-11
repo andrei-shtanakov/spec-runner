@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from jsonschema import Draft7Validator
 
 from spec_runner.cli import _build_parser
@@ -493,3 +494,36 @@ def test_doctor_parser_defaults():
     assert args.with_review is False
     assert args.budget == 0.5
     assert args.yes is False
+
+
+# ---------------------------------------------------------------------------
+# Task 10: --with-review e2e probes (fake review CLIs)
+# ---------------------------------------------------------------------------
+
+
+def _review_probe(tmp_path, script_name):
+    base = ExecutorConfig(
+        project_root=tmp_path,
+        claude_command=str(FIXTURES / script_name),
+    )
+    cfg, root = build_scratch(base, with_review=True, budget=0.5, timeout_min=1)
+    try:
+        attempt = run_probe(cfg)
+        return extract(attempt, root, with_review=True)
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.slow
+def test_with_review_marker_ok(tmp_path):
+    rep = _review_probe(tmp_path, "review_ok.sh")
+    assert "review" in rep.checks
+    assert rep.checks["review"].status == CHECK_OK
+
+
+@pytest.mark.slow
+def test_with_review_no_marker_degraded(tmp_path):
+    rep = _review_probe(tmp_path, "review_nomarker.sh")
+    assert rep.checks["review"].status == CHECK_UNSUPPORTED
