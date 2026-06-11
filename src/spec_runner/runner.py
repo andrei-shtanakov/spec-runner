@@ -10,14 +10,94 @@ import asyncio
 import json
 import re
 import shlex
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .events import EventBus
 
 from .config import ERROR_PATTERNS, PROGRESS_FILE
+
+ResultFormat = Literal["text", "claude_json"]
+
+
+@dataclass
+class CliResult:
+    """Extracted result of a CLI invocation: text (for marker detection + log)
+    plus usage. `is_error` means the CLI explicitly reported failure."""
+
+    text: str
+    input_tokens: int | None
+    output_tokens: int | None
+    cost_usd: float | None
+    is_error: bool = False
+
+
+@dataclass
+class CliInvocation:
+    """A built CLI command plus how to parse its output."""
+
+    argv: list[str]
+    result_format: ResultFormat
+
+
+def _is_explicit_claude(cmd: str) -> bool:
+    """True ONLY for an explicit claude binary (`claude` / `claude-code`), never
+    the unknown-command fallback."""
+    return Path(cmd).name in ("claude", "claude-code")
+
+
+def _fmt_budget(amount: float) -> str:
+    """Format a USD cap without collapsing small values to 0.00."""
+    return f"{amount:.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
+    """Parse `claude -p --output-format json`. Falls back to text + stderr when
+    stdout is not valid JSON (format drift / early crash / templated claude)."""
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        input_tokens, output_tokens, cost = parse_token_usage(stderr)
+        return CliResult(
+            text=stdout,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost,
+            is_error=returncode != 0,
+        )
+    usage = data.get("usage") or {}
+    is_error = bool(data.get("is_error", False))
+    text = str(data.get("result") or "")
+    if is_error:
+        parts = [data.get("subtype"), data.get("error"), data.get("message"), text]
+        text = " | ".join(str(p) for p in parts if p) or "claude reported is_error"
+    return CliResult(
+        text=text,
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        cost_usd=data.get("total_cost_usd"),
+        is_error=is_error,
+    )
+
+
+def parse_cli_result(
+    result_format: ResultFormat, stdout: str, stderr: str, returncode: int
+) -> CliResult:
+    """Per-CLI extraction of (text, usage), keyed on the explicit result_format
+    tag from build_cli_invocation."""
+    if result_format == "claude_json":
+        return _parse_claude_json(stdout, stderr, returncode)
+    input_tokens, output_tokens, cost = parse_token_usage(stderr)
+    return CliResult(
+        text=stdout,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost,
+        is_error=returncode != 0,
+    )
 
 
 def log_progress(message: str, task_id: str | None = None):
@@ -138,14 +218,16 @@ def send_callback(
         get_logger("runner").debug("callback_failed", url=callback_url, exc_info=True)
 
 
-def build_cli_command(
+def build_cli_invocation(
     cmd: str,
     prompt: str,
     model: str = "",
     template: str = "",
     skip_permissions: bool = False,
     prompt_file: Path | None = None,
-) -> list[str]:
+    json_output: bool = False,
+    max_budget_usd: float | None = None,
+) -> CliInvocation:
     """Build CLI command from template or auto-detect based on command name.
 
     Args:
@@ -156,9 +238,11 @@ def build_cli_command(
         template: Command template with placeholders (optional)
         skip_permissions: Add --dangerously-skip-permissions for Claude (optional)
         prompt_file: Path to file containing prompt (optional, for large prompts)
+        json_output: Request JSON output (only honoured for explicit claude binary)
+        max_budget_usd: Per-invocation spend cap (only used with json_output+claude)
 
     Returns:
-        List of command arguments ready for subprocess.
+        CliInvocation with argv ready for subprocess and result_format tag.
 
     Template placeholders:
         {cmd} - CLI command
@@ -166,20 +250,17 @@ def build_cli_command(
         {prompt} - Prompt text (shell-escaped)
         {prompt_file} - Path to prompt file
     """
-    # Use template if provided
+    # Use template if provided — templates bypass json_output (unknown format)
     if template:
-        # Replace placeholders
         prompt_escaped = shlex.quote(prompt)
         prompt_file_str = str(prompt_file) if prompt_file else ""
-
         formatted = template.format(
             cmd=cmd,
             model=model,
             prompt=prompt_escaped,
             prompt_file=prompt_file_str,
         )
-        # Parse the formatted string into arguments
-        return shlex.split(formatted)
+        return CliInvocation(shlex.split(formatted), "text")
 
     # Auto-detect based on command name
     cmd_lower = cmd.lower()
@@ -192,16 +273,16 @@ def build_cli_command(
         result = [cmd, "-p", prompt, "--no-display-prompt"]
         if model:
             result.extend(["-m", model])
-        return result
+        return CliInvocation(result, "text")
 
     elif "llama-server" in cmd_lower or "localhost:8080" in cmd_lower:
         # llama.cpp server via curl
         payload = json.dumps({"prompt": prompt})
-        return ["curl", "-s", "http://localhost:8080/completion", "-d", payload]
+        return CliInvocation(["curl", "-s", "http://localhost:8080/completion", "-d", payload], "text")
 
     elif "ollama" in cmd_lower:
         # Ollama CLI
-        return [cmd, "run", model or "llama3", prompt]
+        return CliInvocation([cmd, "run", model or "llama3", prompt], "text")
 
     elif "opencode" in cmd_lower:
         # sst/opencode: `opencode run [--model provider/id] <prompt>`
@@ -211,7 +292,7 @@ def build_cli_command(
         if model:
             result.extend(["--model", model])
         result.append(prompt)
-        return result
+        return CliInvocation(result, "text")
 
     elif "codex" in cmd_lower:
         # codex: `codex exec [-m MODEL] [PROMPT]`
@@ -220,7 +301,7 @@ def build_cli_command(
         if model:
             result.extend(["-m", model])
         result.append(prompt)
-        return result
+        return CliInvocation(result, "text")
 
     elif cmd_basename == "pi" or cmd_basename.startswith("pi."):
         # earendil-works/pi: `pi -p [--model X] <prompt>` (non-interactive mode)
@@ -231,16 +312,33 @@ def build_cli_command(
         if model:
             result.extend(["--model", model])
         result.append(prompt)
-        return result
+        return CliInvocation(result, "text")
 
     else:
-        # Claude CLI (default)
+        # Claude CLI (default) — also the fallback for unknown commands.
         result = [cmd, "-p", prompt]
         if skip_permissions:
             result.append("--dangerously-skip-permissions")
         if model:
             result.extend(["--model", model])
-        return result
+        if json_output and _is_explicit_claude(cmd):
+            result.extend(["--output-format", "json"])
+            if max_budget_usd is not None:
+                result.extend(["--max-budget-usd", _fmt_budget(max_budget_usd)])
+            return CliInvocation(result, "claude_json")
+        return CliInvocation(result, "text")
+
+
+def build_cli_command(
+    cmd: str,
+    prompt: str,
+    model: str = "",
+    template: str = "",
+    skip_permissions: bool = False,
+    prompt_file: Path | None = None,
+) -> list[str]:
+    """Back-compat wrapper returning just argv (review + existing callers)."""
+    return build_cli_invocation(cmd, prompt, model, template, skip_permissions, prompt_file).argv
 
 
 async def run_claude_async(

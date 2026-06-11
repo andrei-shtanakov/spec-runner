@@ -6,10 +6,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import json as _json
+
 from spec_runner.runner import (
+    CliInvocation,
+    CliResult,
+    ResultFormat,
+    _parse_claude_json,
     build_cli_command,
+    build_cli_invocation,
     check_error_patterns,
     log_progress,
+    parse_cli_result,
     parse_token_usage,
     run_claude_async,
 )
@@ -335,3 +343,23 @@ class TestBuildCliCommandCodexV230:
             template="{cmd} exec --dangerously-bypass-approvals-and-sandbox {prompt}",
         )
         assert out == ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "hi"]
+
+
+class TestParseCliResultText:
+    def test_text_passthrough_parses_stderr_cost(self):
+        res = parse_cli_result(
+            "text",
+            stdout="work done TASK_COMPLETE",
+            stderr="input_tokens: 500\noutput_tokens: 120\ncost: $0.02",
+            returncode=0,
+        )
+        assert res.text == "work done TASK_COMPLETE"
+        assert res.input_tokens == 500
+        assert res.output_tokens == 120
+        assert res.cost_usd == 0.02
+        assert res.is_error is False
+
+    def test_text_nonzero_returncode_is_error(self):
+        res = parse_cli_result("text", stdout="", stderr="boom", returncode=1)
+        assert res.is_error is True
+        assert res.cost_usd is None
