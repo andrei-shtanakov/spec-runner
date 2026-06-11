@@ -149,3 +149,61 @@ def extract(attempt: TaskAttempt, scratch_root: Path, with_review: bool) -> Doct
         duration_s=attempt.duration_seconds,
         budget_enforceable=has_cost,
     )
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+# Order checks are displayed in.
+_CHECK_ORDER = (
+    "invocation",
+    "completion_marker",
+    "task_action",
+    "cost_tracking",
+    "error_classification",
+    "review",
+)
+
+_STATUS_GLYPH = {
+    CHECK_OK: "ok  ",
+    CHECK_UNSUPPORTED: "warn",
+    CHECK_FAIL: "FAIL",
+    CHECK_NA: "n/a ",
+}
+
+
+def report_to_dict(report: DoctorReport) -> dict:  # type: ignore[type-arg]
+    """Serialize a report to the stable --json shape."""
+    return {
+        "cli": report.cli,
+        "model": report.model,
+        "review": report.review,
+        "verdict": report.verdict,
+        "checks": {
+            name: {"status": res.status, "detail": res.detail}
+            for name, res in report.checks.items()
+        },
+        "budget_enforceable": report.budget_enforceable,
+        "measured_cost_usd": report.measured_cost_usd,
+        "duration_s": round(report.duration_s, 2),
+    }
+
+
+def render_human(report: DoctorReport) -> str:
+    """Human-readable report."""
+    lines = [f"spec-runner doctor — {report.cli} / {report.model or '(default)'}", ""]
+    for name in _CHECK_ORDER:
+        res = report.checks.get(name)
+        if res is None:
+            continue
+        glyph = _STATUS_GLYPH.get(res.status, res.status)
+        detail = f"  {res.detail}" if res.detail else ""
+        lines.append(f"  {glyph} {name:<20}{detail}")
+    lines.append("")
+    lines.append(f"  Verdict: {report.verdict.upper()}")
+    if not report.budget_enforceable:
+        lines.append("           Budget cap NOT enforceable (cost not parsed for this CLI).")
+    cost = "n/a" if report.measured_cost_usd is None else f"${report.measured_cost_usd}"
+    lines.append(f"  Measured cost: {cost}")
+    return "\n".join(lines)

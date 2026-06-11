@@ -1,5 +1,8 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
+
+from jsonschema import Draft7Validator
 
 from spec_runner.config import ExecutorConfig, build_config
 from spec_runner.doctor import (
@@ -7,7 +10,11 @@ from spec_runner.doctor import (
     CHECK_NA,
     CHECK_OK,
     CHECK_UNSUPPORTED,
+    CheckResult,
+    DoctorReport,
     extract,
+    render_human,
+    report_to_dict,
 )
 from spec_runner.hooks import pre_start_hook
 from spec_runner.state import TaskAttempt
@@ -167,3 +174,48 @@ def test_extract_review_marker_unrecognized(tmp_path):
     rep = extract(att, tmp_path, with_review=True)
     assert rep.checks["review"].status == CHECK_UNSUPPORTED
     assert rep.verdict == "degraded"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: rendering + JSON schema
+# ---------------------------------------------------------------------------
+
+
+def _ready_report() -> DoctorReport:
+    return DoctorReport(
+        cli="codex",
+        model="gpt-5.4",
+        review=False,
+        checks={
+            "invocation": CheckResult(CHECK_OK, "exit 0 in 7.2s"),
+            "completion_marker": CheckResult(CHECK_OK),
+            "task_action": CheckResult(CHECK_OK),
+            "cost_tracking": CheckResult(CHECK_UNSUPPORTED, "no cost"),
+            "error_classification": CheckResult(CHECK_NA),
+        },
+        measured_cost_usd=None,
+        duration_s=9.1,
+        budget_enforceable=False,
+    )
+
+
+def test_report_to_dict_shape():
+    d = report_to_dict(_ready_report())
+    assert d["cli"] == "codex"
+    assert d["verdict"] == "degraded"
+    assert d["budget_enforceable"] is False
+    assert d["checks"]["cost_tracking"]["status"] == "unsupported"
+    assert set(d["checks"]["cost_tracking"].keys()) == {"status", "detail"}
+
+
+def test_render_human_mentions_verdict_and_checks():
+    text = render_human(_ready_report())
+    assert "DEGRADED" in text
+    assert "cost_tracking" in text
+    assert "codex" in text
+
+
+def test_json_matches_schema():
+    schema = json.loads(Path("schemas/doctor-result.schema.json").read_text())
+    Draft7Validator.check_schema(schema)
+    Draft7Validator(schema).validate(report_to_dict(_ready_report()))
