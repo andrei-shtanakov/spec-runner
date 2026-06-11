@@ -1000,3 +1000,64 @@ class TestReviewStageEmitted:
             mock_state_cls.return_value = mock_state
             post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
         assert any("stage: review" in e for e in events)
+
+
+class TestDoneStatusCommitted:
+    """Regression: the task DONE status must be committed to git, not written
+    after the commit/merge (where it never lands in the repo)."""
+
+    def _git(self, root: Path, *args: str) -> None:
+        import subprocess
+
+        subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True)
+
+    def test_done_status_is_committed_with_auto_commit(self, tmp_path):
+        import subprocess
+
+        root = tmp_path
+        (root / "spec").mkdir()
+        tasks = root / "spec" / "tasks.md"
+        tasks.write_text(
+            "### TASK-001: Test task\n"
+            "🔴 P0 | 🔄 IN_PROGRESS | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] do thing\n"
+        )
+        self._git(root, "init", "-b", "main")
+        self._git(root, "config", "user.email", "t@t.local")
+        self._git(root, "config", "user.name", "tester")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-m", "init")
+
+        # Simulate the agent making a code change during the task.
+        (root / "code.py").write_text("x = 1\n")
+
+        config = ExecutorConfig(
+            project_root=root,
+            create_git_branch=False,
+            auto_commit=True,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+            sync_deps=False,
+        )
+        task = Task(
+            id="TASK-001",
+            name="Test task",
+            priority="p0",
+            status="in_progress",
+            estimate="1d",
+        )
+
+        success, _error, _status, _findings = post_done_hook(task, config, True)
+        assert success is True
+
+        # The DONE status must be in the COMMITTED tasks.md (HEAD), not just the
+        # working tree — that is the whole point of the fix.
+        head_tasks = subprocess.run(
+            ["git", "show", "HEAD:spec/tasks.md"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "DONE" in head_tasks
+        assert "IN_PROGRESS" not in head_tasks

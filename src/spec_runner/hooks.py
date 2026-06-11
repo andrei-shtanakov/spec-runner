@@ -25,7 +25,7 @@ from .review import (
 )
 from .stages import StageReporter
 from .state import ReviewVerdict
-from .task import Task
+from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
 
@@ -347,6 +347,14 @@ def post_done_hook(
             review_verdict = ReviewVerdict.SKIPPED
             logger.info("HITL skipped review", task_id=task.id)
         # "approve" falls through to normal commit flow
+
+    # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
+    # so it is included in the commit/merge. Writing it after the commit (as the
+    # old code did in execution.py) left the update in the working tree post-merge
+    # where it was never committed and got clobbered by the next task's branch.
+    if config.tasks_file.exists():
+        update_task_status(config.tasks_file, task.id, "done")
+        mark_all_checklist_done(config.tasks_file, task.id)
 
     # Auto-commit
     if config.auto_commit:

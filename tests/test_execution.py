@@ -63,7 +63,6 @@ def _make_state(config: ExecutorConfig) -> ExecutorState:
 class TestExecuteTask:
     """Tests for execute_task."""
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -80,7 +79,6 @@ class TestExecuteTask:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Task with TASK_COMPLETE and returncode=0 returns True."""
@@ -99,9 +97,7 @@ class TestExecuteTask:
         mock_pre.assert_called_once_with(task, config, reporter=ANY)
         mock_post.assert_called_once_with(task, config, True, reporter=ANY)
         mock_status.assert_called()
-        mock_checklist.assert_called_once()
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -118,7 +114,6 @@ class TestExecuteTask:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Return code 0 without explicit marker is implicit success."""
@@ -473,7 +468,6 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.TASK_FAILED
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -493,7 +487,6 @@ class TestErrorClassification:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_cl,
         tmp_path,
     ):
         mock_run.return_value = MagicMock(
@@ -508,7 +501,6 @@ class TestErrorClassification:
         ts = state.get_task_state("TASK-001")
         assert ts.attempts[-1].error_code == ErrorCode.TEST_FAILURE
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -528,7 +520,6 @@ class TestErrorClassification:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_cl,
         tmp_path,
     ):
         mock_run.return_value = MagicMock(
@@ -565,7 +556,6 @@ class TestErrorClassification:
 class TestTokenTrackingInExecutor:
     """Tests for token/cost tracking in execute_task."""
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -582,7 +572,6 @@ class TestTokenTrackingInExecutor:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Token counts and cost are parsed from stderr on success."""
@@ -638,7 +627,6 @@ class TestTokenTrackingInExecutor:
         assert ts.attempts[-1].output_tokens == 800
         assert ts.attempts[-1].cost_usd == 0.04
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -655,7 +643,6 @@ class TestTokenTrackingInExecutor:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """When stderr has no token info, fields are None."""
@@ -746,7 +733,6 @@ class TestTokenTrackingInExecutor:
 class TestReviewDataTracking:
     """Tests for review_status and review_findings being passed to record_attempt."""
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -766,7 +752,6 @@ class TestReviewDataTracking:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Review status and findings from post_done_hook are stored in attempt on success."""
@@ -786,7 +771,6 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "passed"
         assert ts.attempts[-1].review_findings == "All checks passed, code looks good"
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -806,7 +790,6 @@ class TestReviewDataTracking:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Review status and findings are stored even when post_done_hook fails."""
@@ -826,7 +809,6 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "failed"
         assert ts.attempts[-1].review_findings == "Review found issues"
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -843,7 +825,6 @@ class TestReviewDataTracking:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Empty review_findings string is stored as None."""
@@ -862,7 +843,6 @@ class TestReviewDataTracking:
         assert ts.attempts[-1].review_status == "skipped"
         assert ts.attempts[-1].review_findings is None
 
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -882,7 +862,6 @@ class TestReviewDataTracking:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         """Long review_findings are truncated to 2048 characters."""
@@ -1545,7 +1524,6 @@ class TestSmartRetry:
 
 
 class TestStageReporterWiring:
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -1560,7 +1538,6 @@ class TestStageReporterWiring:
         mock_cmd,
         mock_post,
         mock_status,
-        mock_checklist,
         tmp_path,
         monkeypatch,
     ):
@@ -1589,7 +1566,6 @@ class TestStageReporterWiring:
 
 
 class TestErrorStageRecorded:
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -1604,7 +1580,6 @@ class TestErrorStageRecorded:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
@@ -1623,7 +1598,6 @@ class TestErrorStageRecorded:
 
 
 class TestErrorClassificationInExecution:
-    @patch("spec_runner.execution.mark_all_checklist_done")
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
@@ -1638,7 +1612,6 @@ class TestErrorClassificationInExecution:
         mock_cmd,
         mock_log,
         mock_status,
-        mock_checklist,
         tmp_path,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
