@@ -53,10 +53,21 @@ class CliResult:
     is_error: bool = False
 
 
+ResultFormat = Literal["text", "claude_json"]
+
+
 @dataclass
 class CliInvocation:
     argv: list[str]
-    result_format: str         # "claude_json" | "text"
+    result_format: ResultFormat
+
+
+def _is_explicit_claude(cmd: str) -> bool:
+    """True ONLY for an explicitly-recognized claude binary — never the
+    unknown-command fallback. `Path(cmd).name` must equal `claude` or
+    `claude-code` (so `/usr/local/bin/claude` matches; `my-claude-wrapper`,
+    `codex`, etc. do not)."""
+    return Path(cmd).name in ("claude", "claude-code")
 
 
 def build_cli_invocation(
@@ -65,13 +76,19 @@ def build_cli_invocation(
     json_output: bool = False, max_budget_usd: float | None = None,
 ) -> CliInvocation:
     # ...existing per-CLI argv construction (llama/ollama/opencode/codex/pi/claude)...
-    # A template override or any non-claude branch yields result_format="text".
-    # The claude default branch, when json_output is set:
-    #     argv += ["--output-format", "json"]
-    #     if max_budget_usd is not None:
-    #         argv += ["--max-budget-usd", f"{max_budget_usd:.2f}"]
-    #     result_format = "claude_json"
-    # Otherwise result_format = "text".
+    # JSON mode is enabled ONLY for an explicit claude binary, with json_output
+    # set, and no template override:
+    #     if json_output and not template and _is_explicit_claude(cmd):
+    #         argv += ["--output-format", "json"]
+    #         if max_budget_usd is not None:
+    #             argv += ["--max-budget-usd", _fmt_budget(max_budget_usd)]
+    #         result_format = "claude_json"
+    #     else:
+    #         result_format = "text"
+    # The unknown-command fallback still builds claude-style argv (back-compat)
+    # but stays result_format="text" with NO --output-format json, so custom
+    # wrappers never receive an unexpected format. (A wrapper that needs JSON is a
+    # future explicit config flag, not a heuristic.)
     return CliInvocation(argv=argv, result_format=result_format)
 
 
@@ -80,7 +97,9 @@ def build_cli_command(*args, **kwargs) -> list[str]:
     return build_cli_invocation(*args, **kwargs).argv
 
 
-def parse_cli_result(result_format: str, stdout: str, stderr: str, returncode: int) -> CliResult:
+def parse_cli_result(
+    result_format: ResultFormat, stdout: str, stderr: str, returncode: int
+) -> CliResult:
     if result_format == "claude_json":
         return _parse_claude_json(stdout, stderr, returncode)
     it, ot, cost = parse_token_usage(stderr)   # "text": unchanged behavior
@@ -88,9 +107,13 @@ def parse_cli_result(result_format: str, stdout: str, stderr: str, returncode: i
                      cost_usd=cost, is_error=returncode != 0)
 ```
 
-- `result_format` is `"claude_json"` **only** when the claude default branch was
-  taken *and* `json_output` was honored (no template override). Custom CLIs and
-  templated claude get `"text"` → never mis-parsed as JSON.
+- `result_format` is `"claude_json"` **only** for an explicitly-recognized claude
+  binary (`Path(cmd).name in {"claude", "claude-code"}`) with `json_output` set
+  and no template. The unknown-command fallback, templated claude, and custom
+  wrappers (`my-claude-wrapper`) all get `"text"` and no `--output-format json` →
+  never mis-parsed. This closes the false-positive class entirely (the builder's
+  `else` branch treats unknown commands as claude-style argv, but they stay
+  `"text"`).
 - `build_cli_command` stays as a thin wrapper returning `.argv`, so **review and
   all existing tests are unchanged**.
 - Adding another CLI later = one branch in `build_cli_invocation` (its
@@ -153,21 +176,25 @@ def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
 it (still `subprocess.run`), and parses via the explicit tag:
 
 ```python
-remaining = None
+# Native hard cap = the tightest of the remaining task and global budgets.
+caps = []
 if config.task_budget_usd is not None:
-    remaining = max(0.0, config.task_budget_usd - state.task_cost(task_id))
+    caps.append(config.task_budget_usd - state.task_cost(task_id))
+if config.budget_usd is not None:
+    caps.append(config.budget_usd - state.total_cost())
+max_budget = max(0.0, min(caps)) if caps else None     # None = no cap
 
 invocation = build_cli_invocation(
     config.claude_command, prompt, model=..., template=config.command_template,
-    skip_permissions=..., json_output=True, max_budget_usd=remaining,
+    skip_permissions=..., json_output=True, max_budget_usd=max_budget,
 )
-result = subprocess.run(invocation.argv, ...)        # unchanged runner mechanics
+result = subprocess.run(invocation.argv, ...)          # unchanged runner mechanics
 
 cli_result = parse_cli_result(
     invocation.result_format, result.stdout, result.stderr, result.returncode
 )
-output = cli_result.text
-combined_output = output + "\n" + result.stderr      # for check_error_patterns / classify
+output = cli_result.text                               # NOT result.stdout
+combined_output = output + "\n" + result.stderr        # for check_error_patterns / classify
 input_tokens, output_tokens, cost_usd = (
     cli_result.input_tokens, cli_result.output_tokens, cli_result.cost_usd
 )
@@ -178,8 +205,27 @@ success = (
 ) or implicit_success
 ```
 
-- `json_output=True` / `max_budget_usd` are honored **only** by the claude
-  branch; other CLIs ignore them and get `result_format="text"`.
+Three integration details the plan must make explicit:
+
+- **Log write uses `output` (= `cli_result.text`), not `result.stdout`.** The
+  existing `=== OUTPUT ===` log block (execution.py:140) must run *after*
+  `parse_cli_result` and write the parsed text, so the per-task log is readable
+  prose, not a raw JSON blob.
+- **`classify` input becomes `combined_output`.** The failure branch
+  (execution.py:274) currently calls `classify(result.stderr, result.returncode)`.
+  In JSON mode the error meaning lives in `cli_result.text` (stderr is often
+  empty), so change it to `classify(combined_output, result.returncode)` —
+  otherwise the richer `is_error` payload reaches the log but not the
+  classification.
+- **`--max-budget-usd` = `min` of remaining task and global budgets** (whichever
+  are set), via `state.task_cost(task_id)` and `state.total_cost()`. Format with
+  `_fmt_budget()` that preserves small limits (e.g. `f"{x:.6f}".rstrip("0").rstrip(".")`)
+  — a naive `:.2f` rounds tiny caps to `0.00` and would block the call.
+
+Other notes:
+
+- `json_output=True` / `max_budget_usd` are honored **only** by the explicit
+  claude branch; other CLIs and templated/wrapper commands get `result_format="text"`.
 - `review.py` is **not** changed (text mode; `REVIEW_PASSED` as before).
 - `--max-budget-usd` is a hard guard on the CLI call — protects spend even if JSON
   parsing breaks or the process overspends before state is written.
@@ -199,8 +245,10 @@ raw JSON) to the per-task log for readability.
 ## Error handling
 
 - Invalid JSON / nonzero exit → defensive fallback (text + stderr); existing
-  `returncode` / `classify(stderr)` / `check_error_patterns(combined_output)`
-  handling runs as before, now with a meaningful `combined_output`.
+  `returncode` / `check_error_patterns(combined_output)` handling runs as before.
+  The failure-branch `classify(...)` call switches from `result.stderr` to
+  `combined_output` (= parsed text + stderr) so a JSON `is_error` payload is
+  classifiable even when stderr is empty.
 - `is_error=true` (possibly with `returncode==0`) forces non-success → classified
   and retried; its message is folded into `text`.
 - `parse_token_usage` retained (text branch + fallback).
@@ -223,13 +271,15 @@ raw JSON) to the per-task log for readability.
 ## Testing
 
 - `tests/test_runner.py`:
-  - `build_cli_invocation`: `cmd="claude"`, `json_output=True` →
+  - `build_cli_invocation` format gating: `cmd="claude"`, `json_output=True` →
     `--output-format json` present, `result_format=="claude_json"`;
-    `json_output=False` → no flag, `"text"`; **template edge:** `cmd="claude"`,
-    `template="{cmd} -p {prompt}"` → no JSON flag, no crash, `"text"`;
-    `cmd="/path/to/claude"` → flag added, `"claude_json"`; `cmd="my-claude-wrapper"`
-    → behavior pinned (claude branch via substring → `"claude_json"`; documented).
-    `max_budget_usd` adds `--max-budget-usd` only for claude+json.
+    `cmd="/path/to/claude"` → same (`"claude_json"`); `json_output=False` → no
+    flag, `"text"`; **template edge:** `cmd="claude"`, `template="{cmd} -p {prompt}"`
+    → no JSON flag, no crash, `"text"`; **wrapper:** `cmd="my-claude-wrapper"` →
+    NO flag, `"text"` (explicitly NOT claude_json); **unknown fallback:**
+    `cmd="some-unknown-cli"` → claude-style argv but `"text"`, no flag.
+  - `max_budget_usd`: adds `--max-budget-usd` only for explicit-claude+json;
+    `_fmt_budget` keeps a tiny cap (e.g. `0.003`) from collapsing to `0.00`.
   - `parse_cli_result("claude_json", …)`: cost + tokens from JSON, text from
     `result`; malformed JSON → fallback to text + `parse_token_usage(stderr)`;
     `is_error=true` folds `subtype`/`error` into text; `parse_cli_result("text", …)`
