@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from jsonschema import Draft7Validator
 
+from spec_runner.cli import _build_parser
 from spec_runner.config import ExecutorConfig, Persona, build_config
 from spec_runner.doctor import (
     CHECK_FAIL,
@@ -454,3 +455,41 @@ def test_run_doctor_json_output(tmp_path, capsys):
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["verdict"] == "ready"
+
+
+def test_doctor_parser_accepts_flags():
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "doctor",
+            "--cli",
+            "codex",
+            "--model",
+            "gpt-5.4",
+            "--with-review",
+            "--budget",
+            "0.25",
+            "--yes",
+            "--strict",
+            "--json",
+            "--keep",
+        ]
+    )
+    assert args.command == "doctor"
+    assert args.cli == "codex"
+    assert args.model == "gpt-5.4"
+    assert args.with_review is True
+    assert args.budget == 0.25
+    assert args.yes is True
+    assert args.strict is True
+    assert args.json is True
+    assert args.keep is True
+
+
+def test_doctor_parser_defaults():
+    parser = _build_parser()
+    args = parser.parse_args(["doctor"])
+    assert args.cli is None
+    assert args.with_review is False
+    assert args.budget == 0.5
+    assert args.yes is False
