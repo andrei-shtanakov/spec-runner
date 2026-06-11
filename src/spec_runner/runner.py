@@ -59,6 +59,8 @@ def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
     stdout is not valid JSON (format drift / early crash / templated claude)."""
     try:
         data = json.loads(stdout)
+        if not isinstance(data, dict):
+            raise ValueError("claude JSON is not an object")
     except (json.JSONDecodeError, ValueError):
         input_tokens, output_tokens, cost = parse_token_usage(stderr)
         return CliResult(
@@ -68,7 +70,8 @@ def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
             cost_usd=cost,
             is_error=returncode != 0,
         )
-    usage = data.get("usage") or {}
+    usage = data.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
     is_error = bool(data.get("is_error", False))
     text = str(data.get("result") or "")
     if is_error:
@@ -278,7 +281,9 @@ def build_cli_invocation(
     elif "llama-server" in cmd_lower or "localhost:8080" in cmd_lower:
         # llama.cpp server via curl
         payload = json.dumps({"prompt": prompt})
-        return CliInvocation(["curl", "-s", "http://localhost:8080/completion", "-d", payload], "text")
+        return CliInvocation(
+            ["curl", "-s", "http://localhost:8080/completion", "-d", payload], "text"
+        )
 
     elif "ollama" in cmd_lower:
         # Ollama CLI

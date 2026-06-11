@@ -388,6 +388,23 @@ class TestParseClaudeJson:
         assert res.cost_usd == 0.01
         assert res.input_tokens == 10
 
+    def test_non_object_json_falls_back_to_stderr(self):
+        # valid JSON but not an object (list/number/non-dict usage) must not crash
+        res = _parse_claude_json("[1, 2, 3]", stderr="cost: $0.04", returncode=0)
+        assert res.text == "[1, 2, 3]"
+        assert res.cost_usd == 0.04
+
+    def test_non_dict_usage_does_not_crash(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps({"result": "ok", "usage": "weird", "total_cost_usd": 0.01}),
+            stderr="",
+            returncode=0,
+        )
+        assert res.input_tokens is None
+        assert res.cost_usd == 0.01
+
     def test_is_error_folds_message_into_text(self):
         payload = _json.dumps(
             {
