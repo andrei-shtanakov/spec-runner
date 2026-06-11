@@ -105,13 +105,11 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         # Build command using template or auto-detect
         # Use implementer persona model if configured
         task_model = config.get_model_for_role("implementer")
-        caps: list[float] = []
-        if config.task_budget_usd is not None:
-            caps.append(config.task_budget_usd - state.task_cost(task_id))
-        if config.budget_usd is not None:
-            caps.append(config.budget_usd - state.total_cost())
-        max_budget = max(0.0, min(caps)) if caps else None
-
+        # NOTE: claude's native --max-budget-usd is intentionally NOT passed here.
+        # build_cli_invocation supports it, but enforcing a hard mid-call cap turns
+        # a slight per-task overage into a hard failure and made `doctor --cli=claude`
+        # fail on its small default budget. Budget stays state-based (post-attempt)
+        # as before; wiring the native cap is a separate, considered follow-up.
         invocation = build_cli_invocation(
             cmd=config.claude_command,
             prompt=prompt,
@@ -119,7 +117,6 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             template=config.command_template,
             skip_permissions=config.skip_permissions,
             json_output=True,
-            max_budget_usd=max_budget,
         )
 
         logger.info(
