@@ -19,10 +19,13 @@ from spec_runner.doctor import (
     render_human,
     report_to_dict,
     resolve_target,
+    run_probe,
 )
 from spec_runner.hooks import pre_start_hook
 from spec_runner.state import TaskAttempt
 from spec_runner.task import Task, parse_tasks
+
+FIXTURES = Path(__file__).parent / "fixtures" / "doctor"
 
 
 def test_sync_deps_defaults_true():
@@ -313,3 +316,46 @@ def test_build_scratch_honors_user_timeout(tmp_path):
         import shutil
 
         shutil.rmtree(root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: fake CLI fixtures + run_probe
+# ---------------------------------------------------------------------------
+
+
+def _probe_with(tmp_path, script_name):
+    base = ExecutorConfig(
+        project_root=tmp_path,
+        claude_command=str(FIXTURES / script_name),
+    )
+    cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=1)
+    try:
+        attempt = run_probe(cfg)
+        return extract(attempt, root, with_review=False)
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_probe_ok(tmp_path):
+    rep = _probe_with(tmp_path, "ok.sh")
+    assert rep.verdict == "ready"
+    assert rep.checks["completion_marker"].status == CHECK_OK
+    assert rep.checks["task_action"].status == CHECK_OK
+
+
+def test_probe_nomarker_broken(tmp_path):
+    rep = _probe_with(tmp_path, "nomarker.sh")
+    assert rep.checks["completion_marker"].status == CHECK_FAIL
+    assert rep.verdict == "broken"
+
+
+def test_probe_noaction_broken(tmp_path):
+    rep = _probe_with(tmp_path, "noaction.sh")
+    assert rep.checks["task_action"].status == CHECK_FAIL
+
+
+def test_probe_authfail(tmp_path):
+    rep = _probe_with(tmp_path, "authfail.sh")
+    assert rep.checks["invocation"].status == CHECK_FAIL

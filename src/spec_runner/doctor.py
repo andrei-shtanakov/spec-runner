@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import ExecutorConfig
-from .state import TaskAttempt
+from .execution import execute_task
+from .state import ExecutorState, TaskAttempt
+from .task import parse_tasks
 
 CHECK_OK = "ok"
 CHECK_UNSUPPORTED = "unsupported"
@@ -307,3 +309,21 @@ def build_scratch(
         cfg.auto_commit = False
 
     return cfg, root
+
+
+# ---------------------------------------------------------------------------
+# run_probe — integration entry point
+# ---------------------------------------------------------------------------
+
+
+def run_probe(cfg: ExecutorConfig) -> TaskAttempt:
+    """Run the canned task through the real execute_task() and return the
+    recorded attempt."""
+    tasks = parse_tasks(cfg.tasks_file)
+    task = tasks[0]
+    last: TaskAttempt
+    with ExecutorState(cfg) as _state:
+        state: ExecutorState = _state
+        execute_task(task, cfg, state)
+        last = state.get_task_state(task.id).attempts[-1]
+    return last
