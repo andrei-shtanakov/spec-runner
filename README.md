@@ -144,6 +144,13 @@ spec-runner report --json                  # JSON matrix output
 spec-runner plan "description"             # Interactive task planning
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
 
+# Diagnostics
+spec-runner doctor                              # Probe the configured CLI/model (real mini-task)
+spec-runner doctor --cli=codex --model=gpt-5.4  # Probe an ad-hoc CLI+model
+spec-runner doctor --with-review                # Also probe the review stage
+spec-runner doctor --json --yes                 # Machine-readable, no confirmation (CI)
+spec-runner doctor --strict                     # Exit non-zero on DEGRADED too
+
 # Integration
 spec-runner mcp                            # Launch MCP server (stdio)
 ```
@@ -345,6 +352,22 @@ paths:
 > skills, per-stage tool control and a read-only review gate) using only config and a small
 > script — no core code. See [docs/pi-workflow.md](docs/pi-workflow.md) and the runnable
 > [examples/pi-loop/](examples/pi-loop/).
+
+### Checking CLI/model compatibility
+
+`spec-runner doctor` runs a real one-task probe through the actual execution
+path and reports, per capability, whether your CLI/model works:
+
+- **invocation** — the command runs and authenticates
+- **completion_marker** — the model prints `TASK_COMPLETE` (not all models do)
+- **task_action** — the model actually performs the work
+- **cost_tracking** — token/cost parsing works (needed for `costs`/`--budget`)
+- **error_classification** — failures are classified (diagnostic)
+- **review** *(with `--with-review`)* — the reviewer prints `REVIEW_PASSED`/`FAILED`
+
+Verdict: **READY** / **DEGRADED** (works, but something like cost tracking is
+unavailable) / **BROKEN**. It makes real, billable model calls (capped by
+`--budget`, default $0.50) and asks for confirmation unless `--yes`.
 
 ## Project Structure
 

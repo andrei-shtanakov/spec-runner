@@ -53,15 +53,18 @@ def pre_start_hook(
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 
-    # Sync dependencies
-    if reporter:
-        reporter.enter("sync_deps")
-    logger.info("Syncing dependencies")
-    result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
-    if result.returncode == 0:
-        logger.info("Dependencies synced")
-    else:
-        logger.warning("uv sync warning", stderr=result.stderr[:200])
+    # Sync dependencies (skippable — doctor and other lightweight runs disable this)
+    if config.sync_deps:
+        if reporter:
+            reporter.enter("sync_deps")
+        logger.info("Syncing dependencies")
+        result = subprocess.run(
+            ["uv", "sync"], capture_output=True, text=True, cwd=config.project_root
+        )
+        if result.returncode == 0:
+            logger.info("Dependencies synced")
+        else:
+            logger.warning("uv sync warning", stderr=result.stderr[:200])
 
     # Create git branch
     if config.create_git_branch:
@@ -360,7 +363,12 @@ def post_done_hook(
             if not status_result.stdout.strip():
                 logger.info("No changes to commit")
             else:
-                subprocess.run(["git", "add", "-A"], cwd=config.project_root)
+                subprocess.run(
+                    ["git", "add", "-A"],
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
                 # Build commit message with task details
                 commit_title = f"{task.id}: {task.name}"
                 commit_body_lines = []
@@ -376,8 +384,16 @@ def post_done_hook(
                 if commit_body_lines:
                     commit_msg += "\n\n" + "\n".join(commit_body_lines)
 
-                subprocess.run(["git", "commit", "-m", commit_msg], cwd=config.project_root)
-                logger.info("Committed changes")
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", commit_msg],
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if commit_result.returncode == 0:
+                    logger.info("Committed changes")
+                else:
+                    logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
         except Exception as e:
             logger.error("Commit failed", error=str(e))
 

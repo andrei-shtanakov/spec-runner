@@ -659,6 +659,25 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         time.sleep(1)
 
 
+def cmd_doctor(args: argparse.Namespace, config: ExecutorConfig) -> None:
+    """Run the CLI/model compatibility probe and exit with its status code."""
+    from .doctor import run_doctor
+
+    code = run_doctor(
+        config,
+        cli=args.cli,
+        model=args.model,
+        with_review=args.with_review,
+        budget=args.budget,
+        timeout_min=getattr(args, "timeout", None),
+        assume_yes=args.yes,
+        strict=args.strict,
+        as_json=args.json,
+        keep=args.keep,
+    )
+    raise SystemExit(code)
+
+
 # === Main ===
 
 
@@ -939,6 +958,28 @@ def _build_parser() -> argparse.ArgumentParser:
     # mcp
     subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
 
+    # doctor
+    doctor_parser = subparsers.add_parser(
+        "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
+    )
+    doctor_parser.add_argument("--cli", help="Override the CLI command (claude/codex/pi/...)")
+    doctor_parser.add_argument("--model", help="Override the model (executor + review)")
+    doctor_parser.add_argument(
+        "--with-review",
+        action="store_true",
+        help="Also probe the review stage (2nd model call)",
+    )
+    doctor_parser.add_argument(
+        "--yes", "-y", action="store_true", help="Skip the cost-gate confirmation"
+    )
+    doctor_parser.add_argument(
+        "--strict", action="store_true", help="Exit non-zero on DEGRADED too"
+    )
+    doctor_parser.add_argument("--json", action="store_true", help="Machine-readable output")
+    doctor_parser.add_argument("--keep", action="store_true", help="Keep the scratch workspace")
+    # --budget is inherited from common (default None); override default to 0.50 for doctor
+    doctor_parser.set_defaults(budget=0.5)
+
     # task (unified: replaces spec-task binary)
     task_parser = subparsers.add_parser(
         "task", help="Task management (list, show, start, done, graph, sync)"
@@ -1034,6 +1075,7 @@ def main():
         "tui": cmd_tui,
         "watch": cmd_watch,
         "mcp": cmd_mcp,
+        "doctor": cmd_doctor,
     }
 
     # Handle unified task subcommand

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "spec-runner doctor result",
+  "type": "object",
+  "required": ["cli", "model", "review", "verdict", "checks", "budget_enforceable"],
+  "additionalProperties": false,
+  "properties": {
+    "cli": {"type": "string"},
+    "model": {"type": "string"},
+    "review": {"type": "boolean"},
+    "verdict": {"type": "string", "enum": ["ready", "degraded", "broken"]},
+    "budget_enforceable": {"type": "boolean"},
+    "measured_cost_usd": {"type": ["number", "null"]},
+    "duration_s": {"type": "number"},
+    "checks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status"],
+        "additionalProperties": false,
+        "properties": {
+          "status": {"type": "string", "enum": ["ok", "unsupported", "fail", "na"]},
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  }
+}
