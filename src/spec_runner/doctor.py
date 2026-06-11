@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -127,15 +128,15 @@ def extract(attempt: TaskAttempt, scratch_root: Path, with_review: bool) -> Doct
         )
 
     # --- cost_tracking ---
-    has_cost = (
-        attempt.cost_usd is not None
-        or attempt.input_tokens is not None
-        or attempt.output_tokens is not None
-    )
+    has_cost = attempt.cost_usd is not None
     if has_cost:
         checks["cost_tracking"] = CheckResult(CHECK_OK, f"cost=${attempt.cost_usd}")
+    elif attempt.input_tokens is not None or attempt.output_tokens is not None:
+        checks["cost_tracking"] = CheckResult(
+            CHECK_UNSUPPORTED, "tokens parsed but no cost — budget not enforceable"
+        )
     else:
-        checks["cost_tracking"] = CheckResult(CHECK_UNSUPPORTED, "no cost/tokens in stderr")
+        checks["cost_tracking"] = CheckResult(CHECK_UNSUPPORTED, "no cost/tokens parsed")
 
     # --- review (only with --with-review) ---
     if with_review:
@@ -283,11 +284,12 @@ def build_scratch(
     cfg = copy.deepcopy(base)
 
     # Reset project_root + relative path defaults BEFORE calling __post_init__
-    # so that __post_init__ resolves state_file/logs_dir under the new root.
+    # so that __post_init__ resolves state_file/logs_dir/plugins_dir under the new root.
     cfg.project_root = root
     cfg.spec_prefix = ""
     cfg.state_file = Path("spec/.executor-state.db")
     cfg.logs_dir = Path("spec/.executor-logs")
+    cfg.plugins_dir = Path("spec/plugins")
     cfg.__post_init__()
 
     # Hook flags
@@ -321,15 +323,24 @@ def build_scratch(
 
 def run_probe(cfg: ExecutorConfig) -> TaskAttempt:
     """Run the canned task through the real execute_task() and return the
-    recorded attempt."""
+    recorded attempt.
+
+    Runs with CWD = the scratch root so CWD-relative artifacts (e.g.
+    runner.PROGRESS_FILE = "spec/.executor-progress.txt") stay inside the
+    ephemeral workspace instead of polluting the caller's project.
+    """
     tasks = parse_tasks(cfg.tasks_file)
     task = tasks[0]
-    last: TaskAttempt
-    with ExecutorState(cfg) as _state:
-        state: ExecutorState = _state
-        execute_task(task, cfg, state)
-        last = state.get_task_state(task.id).attempts[-1]
-    return last
+    attempts: list[TaskAttempt] = []
+    prev_cwd = os.getcwd()
+    os.chdir(cfg.project_root)
+    try:
+        with ExecutorState(cfg) as state:
+            execute_task(task, cfg, state)
+            attempts = state.get_task_state(task.id).attempts
+    finally:
+        os.chdir(prev_cwd)
+    return attempts[-1]
 
 
 # ---------------------------------------------------------------------------

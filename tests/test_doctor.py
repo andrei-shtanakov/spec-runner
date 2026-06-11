@@ -575,3 +575,49 @@ def test_with_review_marker_ok(tmp_path):
 def test_with_review_no_marker_degraded(tmp_path):
     rep = _review_probe(tmp_path, "review_nomarker.sh")
     assert rep.checks["review"].status == CHECK_UNSUPPORTED
+
+
+# ---------------------------------------------------------------------------
+# Copilot review fixes
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tokens_without_cost_not_enforceable(tmp_path):
+    """Fix 1: tokens-only must be UNSUPPORTED/not-enforceable, not OK."""
+    _write_smoke(tmp_path)
+    att = _attempt(claude_output="TASK_COMPLETE", cost_usd=None, input_tokens=120)
+    rep = extract(att, tmp_path, with_review=False)
+    assert rep.checks["cost_tracking"].status == CHECK_UNSUPPORTED
+    assert rep.budget_enforceable is False
+    assert "None" not in rep.checks["cost_tracking"].detail
+    assert rep.verdict == "degraded"
+
+
+def test_build_scratch_isolates_plugins_dir(tmp_path):
+    """Fix 2: plugins_dir must be resolved under the scratch root, not real project."""
+    base = ExecutorConfig(project_root=tmp_path, claude_command="claude")
+    cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=1)
+    try:
+        assert str(cfg.plugins_dir).startswith(str(root.resolve()))
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_run_probe_no_progress_file_pollution(tmp_path, monkeypatch):
+    """Fix 3: progress file must NOT leak into the caller's CWD."""
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    base = ExecutorConfig(project_root=proj, claude_command=str(FIXTURES / "ok.sh"))
+    cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=1)
+    try:
+        run_probe(cfg)
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+    assert not (cwd / "spec" / ".executor-progress.txt").exists()

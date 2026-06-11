@@ -384,13 +384,16 @@ def post_done_hook(
                 if commit_body_lines:
                     commit_msg += "\n\n" + "\n".join(commit_body_lines)
 
-                subprocess.run(
+                commit_result = subprocess.run(
                     ["git", "commit", "-m", commit_msg],
                     cwd=config.project_root,
                     capture_output=True,
                     text=True,
                 )
-                logger.info("Committed changes")
+                if commit_result.returncode == 0:
+                    logger.info("Committed changes")
+                else:
+                    logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
         except Exception as e:
             logger.error("Commit failed", error=str(e))
 
