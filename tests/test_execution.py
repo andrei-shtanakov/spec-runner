@@ -66,7 +66,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -101,7 +104,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -135,7 +141,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -169,7 +178,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -203,7 +215,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook", return_value=(False, "tests failed", "skipped", "")
@@ -256,7 +271,10 @@ class TestExecuteTask:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -394,7 +412,10 @@ class TestErrorClassification:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -411,7 +432,10 @@ class TestErrorClassification:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -441,7 +465,10 @@ class TestErrorClassification:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -471,7 +498,10 @@ class TestErrorClassification:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
@@ -504,7 +534,10 @@ class TestErrorClassification:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
@@ -559,7 +592,10 @@ class TestTokenTrackingInExecutor:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -595,7 +631,10 @@ class TestTokenTrackingInExecutor:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -630,7 +669,10 @@ class TestTokenTrackingInExecutor:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -665,7 +707,10 @@ class TestTokenTrackingInExecutor:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -701,7 +746,10 @@ class TestTokenTrackingInExecutor:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -736,7 +784,10 @@ class TestReviewDataTracking:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
@@ -774,7 +825,10 @@ class TestReviewDataTracking:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
@@ -812,7 +866,10 @@ class TestReviewDataTracking:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
@@ -846,7 +903,10 @@ class TestReviewDataTracking:
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
@@ -1233,7 +1293,8 @@ class TestSignalHandling:
         monkeypatch.setattr("spec_runner.execution.update_task_status", lambda *a, **kw: None)
         monkeypatch.setattr("spec_runner.execution.send_callback", lambda *a, **kw: None)
         monkeypatch.setattr(
-            "spec_runner.execution.build_cli_command", lambda **kw: ["echo", "test"]
+            "spec_runner.execution.build_cli_invocation",
+            lambda **kw: CliInvocation(["echo", "test"], "text"),
         )
 
         def raise_interrupt(*a, **kw):
@@ -1527,7 +1588,10 @@ class TestSmartRetry:
 class TestStageReporterWiring:
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -1569,7 +1633,10 @@ class TestStageReporterWiring:
 class TestErrorStageRecorded:
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -1601,7 +1668,10 @@ class TestErrorStageRecorded:
 class TestErrorClassificationInExecution:
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
-    @patch("spec_runner.execution.build_cli_command", return_value=["echo", "hi"])
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
