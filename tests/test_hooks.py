@@ -1000,3 +1000,75 @@ class TestReviewStageEmitted:
             mock_state_cls.return_value = mock_state
             post_done_hook(_make_task("T1"), cfg, True, reporter=rep)
         assert any("stage: review" in e for e in events)
+
+
+class TestDoneStatusPersistence:
+    """Regression: the task DONE status must persist — committed when auto_commit
+    is on, and not silently stashed-away when committing is off."""
+
+    def _git(self, root: Path, *args: str) -> None:
+        import subprocess
+
+        subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True)
+
+    def _make_task(self) -> Task:
+        return Task(
+            id="TASK-001",
+            name="Test task",
+            priority="p0",
+            status="in_progress",
+            estimate="1d",
+        )
+
+    def _setup_repo(self, root: Path) -> None:
+        """Portable init (avoid `git init -b`, which needs git >= 2.28) with a
+        committed tasks.md on a `main` branch."""
+        (root / "spec").mkdir(exist_ok=True)
+        (root / "spec" / "tasks.md").write_text(
+            "### TASK-001: Test task\n"
+            "🔴 P0 | 🔄 IN_PROGRESS | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] do thing\n"
+        )
+        # A tracked source file so a later uncommitted modification genuinely
+        # conflicts on `git checkout main` (triggers the stash path under test).
+        (root / "code.py").write_text("baseline\n")
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.email", "t@t.local")
+        self._git(root, "config", "user.name", "tester")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "init")
+        self._git(root, "branch", "-M", "main")
+
+    def _make_config(self, root: Path, **overrides) -> ExecutorConfig:
+        base = {
+            "project_root": root,
+            "run_tests_on_done": False,
+            "run_lint_on_done": False,
+            "run_review": False,
+            "sync_deps": False,
+        }
+        base.update(overrides)
+        return ExecutorConfig(**base)
+
+    def test_done_status_is_committed_with_auto_commit(self, tmp_path):
+        import subprocess
+
+        root = tmp_path
+        self._setup_repo(root)
+        (root / "code.py").write_text("changed\n")  # agent's change during the task
+
+        config = self._make_config(root, create_git_branch=False, auto_commit=True)
+        success, _error, _status, _findings = post_done_hook(self._make_task(), config, True)
+        assert success is True
+
+        # The DONE status must be in the COMMITTED tasks.md (HEAD), not just the
+        # working tree — that is the whole point of the fix.
+        head_tasks = subprocess.run(
+            ["git", "show", "HEAD:spec/tasks.md"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "DONE" in head_tasks
+        assert "IN_PROGRESS" not in head_tasks

@@ -25,7 +25,6 @@ from .state import (
 )
 from .task import (
     Task,
-    mark_all_checklist_done,
     update_task_status,
 )
 
@@ -208,8 +207,8 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
                 )
-                update_task_status(config.tasks_file, task_id, "done")
-                mark_all_checklist_done(config.tasks_file, task_id)
+                # NOTE: tasks.md "done" status + checklist are now written inside
+                # post_done_hook (before the commit) so they get committed/merged.
                 log_progress(f"\u2705 Completed in {duration:.1f}s", task_id)
                 send_callback(
                     config.callback_url,
