@@ -10,6 +10,8 @@ success and a review without a marker as PASSED.
 from __future__ import annotations
 
 import copy
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -234,3 +236,74 @@ def resolve_target(base: ExecutorConfig, cli: str | None, model: str | None) -> 
             if persona is not None:
                 persona.model = model
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# build_scratch — ephemeral workspace for the probe
+# ---------------------------------------------------------------------------
+
+DOCTOR_TIMEOUT_MIN = 3
+
+_CANNED_TASK_MD = """# Doctor probe
+
+### TASK-001: Doctor smoke probe
+P0 | TODO
+
+**Checklist:**
+- [ ] Create a file named SMOKE.txt in the project root whose entire contents \
+are exactly: PONG
+"""
+
+
+def _git(root: Path, *args: str) -> None:
+    """Run a git command in *root*, ignoring return code."""
+    subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+
+
+def build_scratch(
+    base: ExecutorConfig,
+    with_review: bool,
+    budget: float,
+    timeout_min: int | None,
+) -> tuple[ExecutorConfig, Path]:
+    """Create an ephemeral workspace + scratch ExecutorConfig for the probe.
+
+    Returns (scratch_config, scratch_root). Caller is responsible for cleanup
+    (shutil.rmtree) unless --keep is set.
+    """
+    root = Path(tempfile.mkdtemp(prefix="spec-runner-doctor-"))
+    (root / "spec").mkdir(parents=True, exist_ok=True)
+    (root / "spec" / "tasks.md").write_text(_CANNED_TASK_MD)
+
+    cfg = copy.deepcopy(base)
+
+    # Reset project_root + relative path defaults BEFORE calling __post_init__
+    # so that __post_init__ resolves state_file/logs_dir under the new root.
+    cfg.project_root = root
+    cfg.spec_prefix = ""
+    cfg.state_file = Path("spec/.executor-state.db")
+    cfg.logs_dir = Path("spec/.executor-logs")
+    cfg.__post_init__()
+
+    # Hook flags
+    cfg.sync_deps = False
+    cfg.create_git_branch = False
+    cfg.run_tests_on_done = False
+    cfg.run_lint_on_done = False
+    cfg.task_budget_usd = budget
+    cfg.task_timeout_minutes = timeout_min if timeout_min is not None else DOCTOR_TIMEOUT_MIN
+
+    if with_review:
+        cfg.run_review = True
+        cfg.auto_commit = True
+        _git(root, "init")
+        _git(root, "config", "user.email", "doctor@spec-runner.local")
+        _git(root, "config", "user.name", "spec-runner doctor")
+        (root / ".gitkeep").write_text("")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-m", "doctor baseline")
+    else:
+        cfg.run_review = False
+        cfg.auto_commit = False
+
+    return cfg, root

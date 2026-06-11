@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,8 +11,10 @@ from spec_runner.doctor import (
     CHECK_NA,
     CHECK_OK,
     CHECK_UNSUPPORTED,
+    DOCTOR_TIMEOUT_MIN,
     CheckResult,
     DoctorReport,
+    build_scratch,
     extract,
     render_human,
     report_to_dict,
@@ -19,7 +22,7 @@ from spec_runner.doctor import (
 )
 from spec_runner.hooks import pre_start_hook
 from spec_runner.state import TaskAttempt
-from spec_runner.task import Task
+from spec_runner.task import Task, parse_tasks
 
 
 def test_sync_deps_defaults_true():
@@ -258,3 +261,55 @@ def test_resolve_no_overrides_keeps_config(tmp_path):
     out = resolve_target(base, cli=None, model=None)
     assert out.claude_command == "pi"
     assert out.claude_model == "x"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: build_scratch
+# ---------------------------------------------------------------------------
+
+
+def test_build_scratch_executor_only(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command="claude")
+    cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=None)
+    try:
+        assert cfg.sync_deps is False
+        assert cfg.create_git_branch is False
+        assert cfg.auto_commit is False
+        assert cfg.run_tests_on_done is False
+        assert cfg.run_lint_on_done is False
+        assert cfg.run_review is False
+        assert cfg.task_budget_usd == 0.5
+        assert cfg.task_timeout_minutes == DOCTOR_TIMEOUT_MIN
+        tasks = parse_tasks(cfg.tasks_file)
+        assert tasks and tasks[0].id == "TASK-001"
+        assert not (root / ".git").exists()
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_build_scratch_with_review_inits_git(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command="claude")
+    cfg, root = build_scratch(base, with_review=True, budget=0.5, timeout_min=None)
+    try:
+        assert cfg.run_review is True
+        assert cfg.auto_commit is True
+        assert (root / ".git").exists()
+        log = subprocess.run(["git", "log", "--oneline"], cwd=root, capture_output=True, text=True)
+        assert log.returncode == 0 and log.stdout.strip()
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_build_scratch_honors_user_timeout(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command="claude")
+    cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=10)
+    try:
+        assert cfg.task_timeout_minutes == 10
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
