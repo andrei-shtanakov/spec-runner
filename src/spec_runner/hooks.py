@@ -53,15 +53,18 @@ def pre_start_hook(
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 
-    # Sync dependencies
-    if reporter:
-        reporter.enter("sync_deps")
-    logger.info("Syncing dependencies")
-    result = subprocess.run(["uv", "sync"], capture_output=True, text=True, cwd=config.project_root)
-    if result.returncode == 0:
-        logger.info("Dependencies synced")
-    else:
-        logger.warning("uv sync warning", stderr=result.stderr[:200])
+    # Sync dependencies (skippable — doctor and other lightweight runs disable this)
+    if config.sync_deps:
+        if reporter:
+            reporter.enter("sync_deps")
+        logger.info("Syncing dependencies")
+        result = subprocess.run(
+            ["uv", "sync"], capture_output=True, text=True, cwd=config.project_root
+        )
+        if result.returncode == 0:
+            logger.info("Dependencies synced")
+        else:
+            logger.warning("uv sync warning", stderr=result.stderr[:200])
 
     # Create git branch
     if config.create_git_branch:
