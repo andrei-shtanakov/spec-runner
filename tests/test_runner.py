@@ -363,3 +363,39 @@ class TestParseCliResultText:
         res = parse_cli_result("text", stdout="", stderr="boom", returncode=1)
         assert res.is_error is True
         assert res.cost_usd is None
+
+
+class TestParseClaudeJson:
+    def test_parses_cost_tokens_and_text(self):
+        payload = _json.dumps({
+            "result": "did the work\nTASK_COMPLETE", "total_cost_usd": 0.0123,
+            "usage": {"input_tokens": 1200, "output_tokens": 340}, "is_error": False,
+        })
+        res = _parse_claude_json(payload, stderr="", returncode=0)
+        assert "TASK_COMPLETE" in res.text
+        assert res.input_tokens == 1200
+        assert res.output_tokens == 340
+        assert res.cost_usd == 0.0123
+        assert res.is_error is False
+
+    def test_malformed_json_falls_back_to_text_and_stderr(self):
+        res = _parse_claude_json(
+            "not json",
+            stderr="input_tokens: 10\noutput_tokens: 2\ncost: $0.01",
+            returncode=0,
+        )
+        assert res.text == "not json"
+        assert res.cost_usd == 0.01
+        assert res.input_tokens == 10
+
+    def test_is_error_folds_message_into_text(self):
+        payload = _json.dumps({
+            "result": "",
+            "is_error": True,
+            "subtype": "error_max_turns",
+            "error": "too many turns",
+        })
+        res = _parse_claude_json(payload, stderr="", returncode=0)
+        assert res.is_error is True
+        assert "error_max_turns" in res.text
+        assert "too many turns" in res.text
