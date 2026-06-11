@@ -153,6 +153,7 @@ class ExecutorConfig:
     create_git_branch: bool = True  # Create branch on start
     auto_commit: bool = True  # Auto-commit on success
     main_branch: str = ""  # Main branch name (empty = auto-detect: main/master)
+    sync_deps: bool = True  # Run `uv sync` in pre_start_hook (doctor disables this)
 
     # Code review
     run_review: bool = True  # Run code review after task completion
@@ -377,6 +378,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "claude_model": executor_config.get("claude_model"),
             "skip_permissions": executor_config.get("skip_permissions"),
             "create_git_branch": pre_start.get("create_git_branch"),
+            "sync_deps": pre_start.get("sync_deps"),
             "main_branch": executor_config.get("main_branch"),
             "run_tests_on_done": post_done.get("run_tests"),
             "run_lint_on_done": post_done.get("run_lint"),
