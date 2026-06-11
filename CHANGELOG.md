@@ -10,6 +10,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner doctor`** — empirical CLI/model compatibility probe. Runs a
+  real one-task run through `execute_task()` against the configured (or
+  `--cli`/`--model`) backend and reports per-capability status (invocation,
+  completion marker, task action, cost tracking, error classification, optional
+  `--with-review`) with a READY/DEGRADED/BROKEN verdict. `--json` output is
+  pinned by `schemas/doctor-result.schema.json`. Budget-capped (default $0.50)
+  with a confirmation gate (`--yes` to skip); `--strict` fails CI on DEGRADED.
+- **`sync_deps` config flag** (under `hooks.pre_start`) — gates the `uv sync`
+  step in `pre_start_hook` (doctor disables it for the scratch workspace).
+
 ## [2.3.1] — 2026-06-10
 
 ### Added
