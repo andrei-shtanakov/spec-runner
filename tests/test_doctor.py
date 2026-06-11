@@ -19,6 +19,7 @@ from spec_runner.doctor import (
     render_human,
     report_to_dict,
     resolve_target,
+    run_doctor,
     run_probe,
 )
 from spec_runner.hooks import pre_start_hook
@@ -359,3 +360,97 @@ def test_probe_noaction_broken(tmp_path):
 def test_probe_authfail(tmp_path):
     rep = _probe_with(tmp_path, "authfail.sh")
     assert rep.checks["invocation"].status == CHECK_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Task 8: cost gate + run_doctor orchestrator
+# ---------------------------------------------------------------------------
+
+
+def test_run_doctor_declined_makes_no_call(tmp_path, monkeypatch):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "ok.sh"))
+    monkeypatch.setattr("builtins.input", lambda _="": "n")
+    code = run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=False,
+        strict=False,
+        as_json=False,
+        keep=False,
+    )
+    assert code == 2
+    assert not (tmp_path / "SMOKE.txt").exists()
+
+
+def test_run_doctor_ready_exit_zero(tmp_path, capsys):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "ok.sh"))
+    code = run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=False,
+        as_json=False,
+        keep=False,
+    )
+    assert code == 0
+    assert "READY" in capsys.readouterr().out
+
+
+def test_run_doctor_broken_exit_one(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "nomarker.sh"))
+    code = run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=False,
+        as_json=False,
+        keep=False,
+    )
+    assert code == 1
+
+
+def test_run_doctor_strict_degraded_exit_one(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "nocost.sh"))
+    code = run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=True,
+        as_json=False,
+        keep=False,
+    )
+    assert code == 1
+
+
+def test_run_doctor_json_output(tmp_path, capsys):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "ok.sh"))
+    run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=False,
+        as_json=True,
+        keep=False,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["verdict"] == "ready"

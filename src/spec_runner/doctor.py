@@ -10,7 +10,10 @@ success and a review without a marker as PASSED.
 from __future__ import annotations
 
 import copy
+import json
+import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -327,3 +330,77 @@ def run_probe(cfg: ExecutorConfig) -> TaskAttempt:
         execute_task(task, cfg, state)
         last = state.get_task_state(task.id).attempts[-1]
     return last
+
+
+# ---------------------------------------------------------------------------
+# Cost gate + top-level orchestrator
+# ---------------------------------------------------------------------------
+
+
+def _confirm(cfg: ExecutorConfig, with_review: bool, budget: float) -> bool:
+    """Print probe info and ask the user to confirm real model calls."""
+    calls = 2 if with_review else 1
+    model = cfg.claude_model or "(default)"
+    print("spec-runner doctor — compatibility probe")
+    print(f"  CLI:    {cfg.claude_command}")
+    print(f"  Model:  {model}")
+    if with_review:
+        print(f"  Review: {cfg.review_command or cfg.claude_command} ({cfg.review_model or model})")
+    print(f"  Budget: capped at ${budget:.2f} (enforceable only if cost parsing is supported)")
+    answer = input(f"This makes {calls} real, billable model call(s). Proceed? [y/N] ")
+    return answer.strip().lower() in ("y", "yes")
+
+
+def run_doctor(
+    base: ExecutorConfig,
+    *,
+    cli: str | None,
+    model: str | None,
+    with_review: bool,
+    budget: float,
+    timeout_min: int | None,
+    assume_yes: bool,
+    strict: bool,
+    as_json: bool,
+    keep: bool,
+) -> int:
+    """Run the probe end to end. Returns the process exit code.
+
+    Exit: 0 = READY/DEGRADED, 1 = BROKEN (or DEGRADED under --strict),
+          2 = user declined at the cost gate.
+    """
+    target = resolve_target(base, cli, model)
+
+    if not assume_yes and not _confirm(target, with_review, budget):
+        print("Aborted.")
+        return 2
+
+    cfg, root = build_scratch(target, with_review, budget, timeout_min)
+    # In JSON mode redirect stdout → stderr during the probe so no progress
+    # text leaks into what must be a single parseable JSON object.
+    _saved_stdout = sys.stdout if as_json else None
+    if _saved_stdout is not None:
+        sys.stdout = sys.stderr
+    try:
+        attempt = run_probe(cfg)
+        report = extract(attempt, root, with_review)
+        report.cli = target.claude_command
+        report.model = target.claude_model
+    finally:
+        if _saved_stdout is not None:
+            sys.stdout = _saved_stdout
+        if keep:
+            print(f"(scratch kept at {root})")
+        else:
+            shutil.rmtree(root, ignore_errors=True)
+
+    if as_json:
+        print(json.dumps(report_to_dict(report)))
+    else:
+        print(render_human(report))
+
+    if report.verdict == "broken":
+        return 1
+    if report.verdict == "degraded" and strict:
+        return 1
+    return 0
