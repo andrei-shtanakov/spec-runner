@@ -109,7 +109,7 @@ All code is in `src/spec_runner/`:
 | `git_ops.py` | ~150 | Git operations: branch creation, main branch detection, `ensure_on_main_branch`, test file mapping |
 | `review.py` | ~480 | Code review: `REVIEW_ROLES` (5 roles), `build_review_prompt`, `run_code_review`, `run_parallel_review`, HITL approval gate |
 | `runner.py` | ~325 | CLI command building (`build_cli_command` — claude/codex/opencode/pi/ollama/llama auto-detect; codex uses `codex exec [-m MODEL] <PROMPT>`, NOT `-p` which is `--profile`), subprocess exec with graceful termination (SIGTERM→SIGKILL), progress logging; `parse_token_usage()`, `run_claude_async()` |
-| `doctor.py` | ~270 | CLI/model compatibility probe: ephemeral scratch workspace + real `execute_task()`, raw-signal extraction (marker/action/cost/error/review), READY/DEGRADED/BROKEN verdict, `--json` schema (`schemas/doctor-result.schema.json`) |
+| `doctor.py` | ~405 | CLI/model compatibility probe: ephemeral scratch workspace + real `execute_task()`, raw-signal extraction (marker/action/cost/error/review), READY/DEGRADED/BROKEN verdict, `--json` schema (`schemas/doctor-result.schema.json`) |
 | `task.py` | ~380 | Task dataclass, regex parsing, dependency resolution, status management |
 | `task_commands.py` | ~440 | Task CLI commands: list, show, start, done, block, check, stats, next, graph |
 | `github_sync.py` | ~200 | GitHub Issues sync: `cmd_sync_to_gh` (local wins), `cmd_sync_from_gh` (remote wins), `export_gh` |

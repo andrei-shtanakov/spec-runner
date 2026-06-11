@@ -363,7 +363,12 @@ def post_done_hook(
             if not status_result.stdout.strip():
                 logger.info("No changes to commit")
             else:
-                subprocess.run(["git", "add", "-A"], cwd=config.project_root)
+                subprocess.run(
+                    ["git", "add", "-A"],
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
                 # Build commit message with task details
                 commit_title = f"{task.id}: {task.name}"
                 commit_body_lines = []
@@ -379,7 +384,12 @@ def post_done_hook(
                 if commit_body_lines:
                     commit_msg += "\n\n" + "\n".join(commit_body_lines)
 
-                subprocess.run(["git", "commit", "-m", commit_msg], cwd=config.project_root)
+                subprocess.run(
+                    ["git", "commit", "-m", commit_msg],
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
                 logger.info("Committed changes")
         except Exception as e:
             logger.error("Commit failed", error=str(e))

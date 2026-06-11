@@ -390,7 +390,7 @@ def run_doctor(
         if _saved_stdout is not None:
             sys.stdout = _saved_stdout
         if keep:
-            print(f"(scratch kept at {root})")
+            print(f"(scratch kept at {root})", file=sys.stderr)
         else:
             shutil.rmtree(root, ignore_errors=True)
 

@@ -458,6 +458,46 @@ def test_run_doctor_json_output(tmp_path, capsys):
     assert payload["verdict"] == "ready"
 
 
+def test_run_doctor_json_with_keep_is_clean(tmp_path, capsys):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "ok.sh"))
+    run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=False,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=False,
+        as_json=True,
+        keep=True,
+    )
+    out = capsys.readouterr().out
+    payload = json.loads(out)  # must be a single valid JSON object
+    assert payload["verdict"] == "ready"
+
+
+@pytest.mark.slow
+def test_run_doctor_json_with_review_is_clean(tmp_path, capfd):
+    base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "review_ok.sh"))
+    run_doctor(
+        base,
+        cli=None,
+        model=None,
+        with_review=True,
+        budget=0.5,
+        timeout_min=1,
+        assume_yes=True,
+        strict=False,
+        as_json=True,
+        keep=False,
+    )
+    out = capfd.readouterr().out
+    payload = json.loads(out)  # must be a single valid JSON object (no git leak)
+    assert payload["verdict"] in ("ready", "degraded")
+    assert payload["review"] is True
+
+
 def test_doctor_parser_accepts_flags():
     parser = _build_parser()
     args = parser.parse_args(
