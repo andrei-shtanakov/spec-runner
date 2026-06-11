@@ -1,7 +1,7 @@
 # Design: Fix cost tracking for the modern claude CLI
 
 **Date:** 2026-06-11
-**Status:** Approved (brainstorm), pending implementation plan
+**Status:** Approved (brainstorm, revised after code-grounded review), pending implementation plan
 **Author:** brainstormed with Claude
 
 ## Problem
@@ -11,75 +11,106 @@
 **stderr** for `input_tokens: …` / `cost: $…`, but the current `claude -p` does
 not emit those in plain text. So `attempt.cost_usd`/tokens come back `None`, and
 `spec-runner costs`, `--budget`, and `--task-budget` silently do nothing for
-claude (zeros, no enforcement). This is the "false confidence" case doctor was
-built to catch.
+claude (zeros, no enforcement) — the "false confidence" case doctor was built to
+catch.
 
-claude exposes the data via `--output-format json` (single result), which
-carries `result` (the assistant's final text), `total_cost_usd`, and `usage`.
-The fix is to invoke claude with `--output-format json` on the execution path and
-parse cost from the JSON instead of stderr.
+claude exposes the data via `--output-format json` (single result): `result`
+(the assistant's final text), `total_cost_usd`, `usage`, `is_error`. The fix is
+to invoke claude with `--output-format json` on the execution path and parse cost
+from the JSON instead of stderr.
 
-## Key decisions (from brainstorm)
+## Key decisions (from brainstorm + review)
 
-1. **Scope: claude only, behind an extensible seam.** Introduce a small per-CLI
-   result parser so codex/pi/ollama can be added later without touching
-   `execution.py`; implement only claude now.
+1. **Scope: claude only, behind an extensible seam.** A per-CLI result parser so
+   codex/pi/ollama can be added later without touching `execution.py`; implement
+   only claude now.
 2. **Mode: `--output-format json` (single-shot).** Simple, reliable parsing and
-   accurate cost. Accepted trade-off: live line-by-line TUI streaming is lost for
-   claude (the response arrives as one JSON blob at the end).
-3. **Opt-in per call.** `--output-format json` is added only on the execution
-   path. The review path is left untouched (it builds the same command via
-   `build_cli_command` and detects `REVIEW_PASSED` in text; it needs no cost).
-4. **Defensive parsing.** If stdout is not valid JSON, fall back to the previous
-   behavior (text + `parse_token_usage(stderr)`) — never crash a run.
+   accurate cost.
+3. **Explicit result-format tag, not command-guessing.** The command builder
+   returns *both* the argv and a `result_format` tag (`"claude_json"` | `"text"`).
+   `parse_cli_result` switches on that tag — it never re-derives the CLI from the
+   command string. This matters because `build_cli_command`'s `else` branch
+   (runner.py:236) treats **any unrecognized command as claude**, so a
+   `_is_claude(cmd)` guess would mis-parse custom CLIs as claude-JSON.
+4. **Opt-in per call.** The JSON flag (and the format tag) is requested only on
+   the execution path; the review path is untouched.
+5. **Defensive parsing.** Invalid JSON → fall back to text + `parse_token_usage`.
+6. **Native hard cap.** When a task budget is set, also pass claude's
+   `--max-budget-usd` as a defense-in-depth guard on the CLI call itself.
 
-## Architecture — the per-CLI result seam
+## Architecture — explicit `CliInvocation` + result seam
 
-Today `execution.py` hard-codes: `output = stdout`, `cost = parse_token_usage(stderr)`.
-Replace that with a single per-CLI extraction seam in `runner.py`:
+Today `execution.py` hard-codes `output = stdout`, `cost = parse_token_usage(stderr)`.
+Replace with an explicit invocation+parse pair in `runner.py`.
 
 ```python
 @dataclass
 class CliResult:
-    text: str                  # for TASK_COMPLETE marker detection + the task log
+    text: str                  # for TASK_COMPLETE detection + the task log
     input_tokens: int | None
     output_tokens: int | None
     cost_usd: float | None
-    is_error: bool = False     # CLI explicitly reported an error (claude is_error)
+    is_error: bool = False
 
 
-def parse_cli_result(cmd: str, stdout: str, stderr: str, returncode: int) -> CliResult:
-    """Per-CLI extraction of (text, usage) from raw process output."""
-    if _is_claude(cmd):
+@dataclass
+class CliInvocation:
+    argv: list[str]
+    result_format: str         # "claude_json" | "text"
+
+
+def build_cli_invocation(
+    cmd: str, prompt: str, model: str = "", template: str = "",
+    skip_permissions: bool = False, prompt_file: Path | None = None,
+    json_output: bool = False, max_budget_usd: float | None = None,
+) -> CliInvocation:
+    # ...existing per-CLI argv construction (llama/ollama/opencode/codex/pi/claude)...
+    # A template override or any non-claude branch yields result_format="text".
+    # The claude default branch, when json_output is set:
+    #     argv += ["--output-format", "json"]
+    #     if max_budget_usd is not None:
+    #         argv += ["--max-budget-usd", f"{max_budget_usd:.2f}"]
+    #     result_format = "claude_json"
+    # Otherwise result_format = "text".
+    return CliInvocation(argv=argv, result_format=result_format)
+
+
+def build_cli_command(*args, **kwargs) -> list[str]:
+    """Back-compat wrapper — existing callers (review, tests) keep getting argv."""
+    return build_cli_invocation(*args, **kwargs).argv
+
+
+def parse_cli_result(result_format: str, stdout: str, stderr: str, returncode: int) -> CliResult:
+    if result_format == "claude_json":
         return _parse_claude_json(stdout, stderr, returncode)
-    # All other CLIs keep the previous behavior: text = stdout, cost from stderr.
-    it, ot, cost = parse_token_usage(stderr)
-    return CliResult(text=stdout, input_tokens=it, output_tokens=ot, cost_usd=cost)
+    it, ot, cost = parse_token_usage(stderr)   # "text": unchanged behavior
+    return CliResult(text=stdout, input_tokens=it, output_tokens=ot,
+                     cost_usd=cost, is_error=returncode != 0)
 ```
 
-- `_is_claude(cmd)` — the same detection already used inside `build_cli_command`,
-  extracted into a shared helper so the two stay in sync.
-- `parse_token_usage` stays (non-claude branches + fallback).
-- Adding another CLI later = one more branch in `parse_cli_result`; `execution.py`
-  is unchanged.
+- `result_format` is `"claude_json"` **only** when the claude default branch was
+  taken *and* `json_output` was honored (no template override). Custom CLIs and
+  templated claude get `"text"` → never mis-parsed as JSON.
+- `build_cli_command` stays as a thin wrapper returning `.argv`, so **review and
+  all existing tests are unchanged**.
+- Adding another CLI later = one branch in `build_cli_invocation` (its
+  result_format) + one in `parse_cli_result`. `execution.py` untouched.
 
-**Files:** `runner.py` (CliResult + `parse_cli_result` + `_parse_claude_json` +
-`_is_claude` + `json_output` param on `build_cli_command`), `execution.py`
-(call the seam instead of direct stdout/`parse_token_usage`). Docs as needed.
+**Files:** `runner.py` (CliResult, CliInvocation, `build_cli_invocation`,
+`_parse_claude_json`, wrapper, `parse_cli_result`), `execution.py` (use the
+invocation + seam). Docs as needed.
 
 ## claude JSON parsing (`_parse_claude_json`)
 
-`claude -p --output-format json` returns one JSON object. Expected fields
-(**verify exact names against the real CLI during implementation**):
+`claude -p --output-format json` returns one JSON object. **Field names below are
+assumed and MUST be verified against the real CLI before coding** (see
+prerequisite). `claude --help` confirms the flags (`--output-format json`,
+`--max-budget-usd`); it does *not* confirm payload field names.
 
 ```json
-{
-  "result": "…assistant final text incl. TASK_COMPLETE…",
-  "total_cost_usd": 0.0123,
+{ "result": "…incl TASK_COMPLETE…", "total_cost_usd": 0.0123,
   "usage": { "input_tokens": 1200, "output_tokens": 340 },
-  "is_error": false,
-  "subtype": "success"
-}
+  "is_error": false, "subtype": "success" }
 ```
 
 ```python
@@ -87,136 +118,141 @@ def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
     try:
         data = json.loads(stdout)
     except (json.JSONDecodeError, ValueError):
-        # claude did not emit valid JSON (errored early / mixed output) — fall back.
-        it, ot, cost = parse_token_usage(stderr)
-        return CliResult(
-            text=stdout, input_tokens=it, output_tokens=ot, cost_usd=cost,
-            is_error=returncode != 0,
-        )
+        it, ot, cost = parse_token_usage(stderr)        # graceful fallback
+        return CliResult(text=stdout, input_tokens=it, output_tokens=ot,
+                         cost_usd=cost, is_error=returncode != 0)
+
     usage = data.get("usage") or {}
+    is_error = bool(data.get("is_error", False))
+    result_text = str(data.get("result") or "")
+    if is_error:
+        # Build a meaningful message so the failure path / classify isn't fed an
+        # empty string (stderr is often empty in JSON mode).
+        parts = [data.get("subtype"), data.get("error"), data.get("message"), result_text]
+        result_text = " | ".join(str(p) for p in parts if p) or "claude reported is_error"
+
     return CliResult(
-        text=str(data.get("result") or ""),
+        text=result_text,
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         cost_usd=data.get("total_cost_usd"),
-        is_error=bool(data.get("is_error", False)),
+        is_error=is_error,
     )
 ```
 
-- **Defensive:** invalid JSON → text + stderr fallback (covers CLI format drift
-  and the custom-`command_template` case where the flag isn't added).
-- **Marker** `TASK_COMPLETE` is detected in `data["result"]` (the assistant's
-  final text, where it is printed).
-- **Cost** = `total_cost_usd` directly; tokens from `usage`. Now non-None for
-  claude → `cost_tracking=ok`, budgets enforceable.
-- **`is_error`** propagated for the success determination (below).
+- **Defensive:** invalid JSON → text + stderr fallback.
+- **Marker** `TASK_COMPLETE` detected in `text` (= `result`).
+- **Cost** = `total_cost_usd`; tokens from `usage`. Non-None for claude →
+  `cost_tracking=ok`, budgets enforceable.
+- **Richer error payload:** on `is_error`, fold `subtype`/`error`/`message`/`result`
+  into `text` so the failure is classifiable even when stderr is empty.
 
-## Integration (opt-in JSON for execution only)
+## Integration (execution path only)
 
-`build_cli_command` gains a `json_output` flag; only the claude branch honors it:
-
-```python
-def build_cli_command(cmd, prompt, model="", template="", skip_permissions=False,
-                      prompt_file=None, json_output=False) -> list[str]:
-    ...
-    else:  # claude (default)
-        result = [cmd, "-p", prompt]
-        if skip_permissions:
-            result.append("--dangerously-skip-permissions")
-        if model:
-            result.extend(["--model", model])
-        if json_output:
-            result.extend(["--output-format", "json"])
-        return result
-```
-
-- Default `json_output=False` → existing callers (**including review**) are
-  unchanged: claude returns text, `REVIEW_PASSED` is detected as before.
-- Only the auto-detect claude branch adds the flag. A `command_template`
-  override stays as-is (cost stays unfixed for custom templates — a conscious
-  user choice; the defensive fallback keeps it from crashing).
-
-`execution.py` opts in and uses the seam:
+`execution.py` builds the invocation with JSON requested + the native cap, runs
+it (still `subprocess.run`), and parses via the explicit tag:
 
 ```python
-cmd = build_cli_command(..., json_output=True)   # passing it is safe: only claude honors it
-...
+remaining = None
+if config.task_budget_usd is not None:
+    remaining = max(0.0, config.task_budget_usd - state.task_cost(task_id))
+
+invocation = build_cli_invocation(
+    config.claude_command, prompt, model=..., template=config.command_template,
+    skip_permissions=..., json_output=True, max_budget_usd=remaining,
+)
+result = subprocess.run(invocation.argv, ...)        # unchanged runner mechanics
+
 cli_result = parse_cli_result(
-    config.claude_command, result.stdout, result.stderr, result.returncode
+    invocation.result_format, result.stdout, result.stderr, result.returncode
 )
 output = cli_result.text
-combined_output = output + "\n" + result.stderr   # for check_error_patterns / classify
-input_tokens = cli_result.input_tokens
-output_tokens = cli_result.output_tokens
-cost_usd = cli_result.cost_usd
+combined_output = output + "\n" + result.stderr      # for check_error_patterns / classify
+input_tokens, output_tokens, cost_usd = (
+    cli_result.input_tokens, cli_result.output_tokens, cli_result.cost_usd
+)
 has_complete_marker = "TASK_COMPLETE" in cli_result.text
+implicit_success = result.returncode == 0 and not has_failed_marker and not cli_result.is_error
+success = (
+    has_complete_marker and not has_failed_marker and not cli_result.is_error
+) or implicit_success
 ```
 
-`review.py` is **not** changed (text mode; no cost needed).
+- `json_output=True` / `max_budget_usd` are honored **only** by the claude
+  branch; other CLIs ignore them and get `result_format="text"`.
+- `review.py` is **not** changed (text mode; `REVIEW_PASSED` as before).
+- `--max-budget-usd` is a hard guard on the CLI call — protects spend even if JSON
+  parsing breaks or the process overspends before state is written.
 
-## Streaming / TUI and error handling
+## Streaming / TUI (corrected)
 
-**Streaming (accepted degradation for claude):** `run_claude_async` streams
-stdout lines to the `event_bus`. In JSON mode claude emits one blob at the end,
-so live line-by-line streaming is lost for claude. To keep the task log readable
-(not raw JSON), the executor writes `cli_result.text` to the per-task log.
-`run_claude_async` itself is unchanged; the degradation is inherent to JSON mode
-and will be documented. (Optionally emitting `cli_result.text` to the event bus
-post-hoc is out of scope — YAGNI.)
+There is **no live-streaming regression**: the execution path uses blocking
+`subprocess.run` (execution.py:124) and collects stdout in bulk — it never streamed
+claude tokens live. `runner.run_claude_async` (the EventBus streaming variant) is
+defined and exported but **not called anywhere** in the codebase, so switching
+claude to single-shot JSON loses nothing currently in use. The TUI shows
+task/stage-level progress, not live claude output. (If `run_claude_async` is ever
+wired into a TUI path, claude-JSON would then warrant `--output-format stream-json`
+— out of scope here.) The executor writes `cli_result.text` (parsed result, not
+raw JSON) to the per-task log for readability.
 
-**Error handling:**
-- Invalid JSON / nonzero exit → defensive fallback (text + stderr); the existing
+## Error handling
+
+- Invalid JSON / nonzero exit → defensive fallback (text + stderr); existing
   `returncode` / `classify(stderr)` / `check_error_patterns(combined_output)`
-  handling runs as before.
-- `is_error=true` (claude reported an error, possibly with `returncode==0`) forces
-  a non-success so it classifies and retries:
-  ```python
-  implicit_success = (
-      result.returncode == 0 and not has_failed_marker and not cli_result.is_error
-  )
-  success = (
-      has_complete_marker and not has_failed_marker and not cli_result.is_error
-  ) or implicit_success
-  ```
-- `parse_token_usage` stays (non-claude + fallback).
+  handling runs as before, now with a meaningful `combined_output`.
+- `is_error=true` (possibly with `returncode==0`) forces non-success → classified
+  and retried; its message is folded into `text`.
+- `parse_token_usage` retained (text branch + fallback).
 - After the fix, `doctor --cli=claude` should report `cost_tracking=ok` → READY.
 
-## Backward compatibility
+## Backward compatibility & a budget caveat
 
-- **`--json-result` (Maestro contract):** `cost_usd` is now populated for claude
-  — more accurate, schema unchanged. Verify golden tests don't assert `cost=None`.
-- **`parse_token_usage`** retained (non-claude + fallback).
-- **Review** unchanged (text mode).
-- **Other CLIs** (codex/pi/ollama/llama) unchanged — `json_output=True` is ignored
-  by their branches, and `parse_cli_result` passes their output through.
-- **Existing token tests** use plain-text fakes with a command not containing
-  "claude", so `parse_cli_result` passes through / falls back — they keep passing.
+- **`--json-result` (Maestro contract):** `cost_usd` now populated for claude —
+  more accurate, schema unchanged. Verify golden tests don't assert `cost=None`.
+- **`build_cli_command`** keeps returning `list[str]` (wrapper) → review and
+  existing tests unchanged.
+- **Other CLIs** unchanged (`json_output`/`max_budget_usd` ignored; `result_format="text"`).
+- **Budget caveat (honesty):** this fix makes the **executor attempt** cost
+  trackable for claude, so `--budget`/`--task-budget` enforce against it. But
+  **review-stage cost is still not counted** (review.py stays text mode), so
+  `task_budget_usd` — documented as "total per-task budget" — remains *partial*
+  until review cost is also captured. `--max-budget-usd` only caps each CLI call,
+  not the cumulative task. Tracking review cost is listed as follow-up.
 
 ## Testing
 
 - `tests/test_runner.py`:
-  - `parse_cli_result` for claude JSON (cost + tokens from JSON, text from
-    `result`); malformed JSON → fallback to text + `parse_token_usage(stderr)`;
-    `is_error=true`; non-claude passthrough.
-  - `build_cli_command(json_output=True)` adds `--output-format json` for claude;
-    `json_output=False` and `command_template` overrides do not.
+  - `build_cli_invocation`: `cmd="claude"`, `json_output=True` →
+    `--output-format json` present, `result_format=="claude_json"`;
+    `json_output=False` → no flag, `"text"`; **template edge:** `cmd="claude"`,
+    `template="{cmd} -p {prompt}"` → no JSON flag, no crash, `"text"`;
+    `cmd="/path/to/claude"` → flag added, `"claude_json"`; `cmd="my-claude-wrapper"`
+    → behavior pinned (claude branch via substring → `"claude_json"`; documented).
+    `max_budget_usd` adds `--max-budget-usd` only for claude+json.
+  - `parse_cli_result("claude_json", …)`: cost + tokens from JSON, text from
+    `result`; malformed JSON → fallback to text + `parse_token_usage(stderr)`;
+    `is_error=true` folds `subtype`/`error` into text; `parse_cli_result("text", …)`
+    passthrough.
 - `tests/test_execution.py`: a fake "claude" emitting a JSON object → `cost_usd`
   and tokens recorded, marker detected; `is_error` forces non-success / retry.
-- `tests/test_doctor.py`: the doctor fakes (e.g. `ok.sh`) have no "claude" in the
-  command → seam passthrough, existing doctor tests unaffected.
+- `tests/test_doctor.py`: doctor fakes have no JSON → seam `"text"` path,
+  existing doctor tests unaffected.
 - Review tests unchanged (proving review is untouched).
-- `tests/test_json_result_contract.py`: run to confirm the contract still holds.
-- Manual: one real `doctor --cli=claude --yes` → expect `cost_tracking=ok`, READY.
+- `tests/test_json_result_contract.py`: run to confirm the contract holds.
+- Manual acceptance: one real `doctor --cli=claude --yes` → `cost_tracking=ok`,
+  READY.
 
-**Implementation prerequisite:** before finalizing `_parse_claude_json`, verify
-the actual field names of `claude -p --output-format json` (one cheap real call
-or a doctor run), since the design assumes `result` / `total_cost_usd` /
-`usage.input_tokens` / `usage.output_tokens` / `is_error`.
+**Implementation prerequisite (do FIRST):** verify the real field names of
+`claude -p --output-format json` with one cheap real call (or a doctor run) and
+pin `_parse_claude_json` to them — the design assumes `result`, `total_cost_usd`,
+`usage.input_tokens`, `usage.output_tokens`, `is_error` (and, on error, `subtype`
+/ `error` / `message`).
 
 ## Out of scope / future
 
-- Cost parsing for codex / pi / ollama (the seam makes these additive — one
-  branch each in `parse_cli_result`, plus their own command flags).
-- Preserving live TUI streaming for claude (would require `--output-format
-  stream-json` and JSONL event parsing).
-- Cost for the review path.
+- Cost parsing for codex / pi / ollama (additive: one `build_cli_invocation`
+  branch + one `parse_cli_result` branch each).
+- **Review-stage cost** (would complete `task_budget_usd` semantics).
+- Preserving live TUI streaming for claude via `--output-format stream-json`
+  (only relevant if `run_claude_async` is wired into a TUI path).
