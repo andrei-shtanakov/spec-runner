@@ -122,6 +122,29 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 - [ ] Аналогично проверить doctor'ом codex/pi/ollama — у них cost, вероятно, тоже не
       парсится (та же причина). См. память `project_cost_tracking_broken`.
 
+### BUG: DONE-статус задачи не персистится в git при auto-commit (2026-06-11)
+
+Найдено на тестовом прогоне `run --all --tui` (репо textkit, 19 задач): 4 задачи
+выполнены и влиты в `main`, но в `tasks.md` все остались 🔄 IN_PROGRESS (БД-учёт
+верный). Причина — порядок в `execution.py`:
+- `execution.py:195` `post_done_hook(...)` делает `git commit` (hooks.py:388) +
+  `merge` (hooks.py:465);
+- `execution.py:211-212` `update_task_status(..., "done")` + `mark_all_checklist_done`
+  пишут DONE в `tasks.md` **после** commit/merge → DONE не коммитится, остаётся в
+  рабочей копии и затирается при создании ветки следующей задачи от `main`.
+- На старте `execution.py:65` пишет IN_PROGRESS — и именно он попадает в коммит.
+
+Следствие: `tasks.md` (читается `task next`/`status`-история/`resolve_dependencies`)
+рассинхронен с `state.db`; next-task-resolution сбивается, выглядит как «зависло».
+
+- [ ] Перенести `update_task_status("done")` + `mark_all_checklist_done` **до**
+      commit-шага в `post_done_hook` (чтобы DONE попал в коммит и merge). Либо
+      выставлять статус/чеклист и коммитить их вместе с кодом в одном шаге.
+- [ ] Регресс-тест: после успешной задачи с `auto_commit=True` HEAD:`tasks.md`
+      содержит `DONE` для задачи (не IN_PROGRESS).
+- [ ] Проверить, что фикс не ломает no-git-режим (auto_commit=False).
+- См. память `project_done_status_not_committed`.
+
 ---
 
 ## Ждём от других проектов
