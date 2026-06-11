@@ -122,7 +122,7 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 - [ ] Аналогично проверить doctor'ом codex/pi/ollama — у них cost, вероятно, тоже не
       парсится (та же причина). См. память `project_cost_tracking_broken`.
 
-### BUG: DONE-статус задачи не персистится в git при auto-commit (2026-06-11)
+### BUG: DONE-статус задачи не персистится в git при auto-commit (2026-06-11) — ✅ ИСПРАВЛЕНО (`9f62ab1`, PR #15)
 
 Найдено на тестовом прогоне `run --all --tui` (репо textkit, 19 задач): 4 задачи
 выполнены и влиты в `main`, но в `tasks.md` все остались 🔄 IN_PROGRESS (БД-учёт
@@ -137,13 +137,20 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 Следствие: `tasks.md` (читается `task next`/`status`-история/`resolve_dependencies`)
 рассинхронен с `state.db`; next-task-resolution сбивается, выглядит как «зависло».
 
-- [ ] Перенести `update_task_status("done")` + `mark_all_checklist_done` **до**
-      commit-шага в `post_done_hook` (чтобы DONE попал в коммит и merge). Либо
-      выставлять статус/чеклист и коммитить их вместе с кодом в одном шаге.
-- [ ] Регресс-тест: после успешной задачи с `auto_commit=True` HEAD:`tasks.md`
-      содержит `DONE` для задачи (не IN_PROGRESS).
-- [ ] Проверить, что фикс не ломает no-git-режим (auto_commit=False).
+- [x] Перенесён `update_task_status("done")` + `mark_all_checklist_done` в
+      `post_done_hook` **до** commit-шага (guard `tasks_file.exists()`).
+- [x] Регресс-тест `TestDoneStatusPersistence` на реальном git-репо (HEAD:`tasks.md` = DONE).
+- [x] Обновлены 13 execute_task-тестов под переезд функции.
 - См. память `project_done_status_not_committed`.
+
+### Minor follow-up: `--no-commit` теряет работу между задачами (2026-06-11)
+
+Не stash (как предполагал Copilot — checkout main не падает, когда ветка == HEAD main),
+а `pre_start` следующей задачи: `git checkout -- .` + `git clean -fd --exclude=spec/`
+(hooks.py ~108-117) затирает незакоммиченную работу предыдущей задачи при
+`create_git_branch=True` + `auto_commit=False`. Низкий приоритет (ниша `--no-commit`).
+- [ ] Решить: при `auto_commit=False` не чистить рабочее дерево / не создавать ветку,
+      либо документировать, что `--no-commit` подразумевает `--no-branch`.
 
 ---
 
