@@ -11,6 +11,7 @@ from spec_runner.executor import (
     execute_task,
     run_with_retries,
 )
+from spec_runner.runner import CliInvocation
 from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
@@ -1630,3 +1631,82 @@ class TestErrorClassificationInExecution:
             assert attempt.error_kind == "rate_limit"
             assert "9:54 AM" in attempt.error
             assert attempt.error != "Unknown error"
+
+
+class TestClaudeJsonCost:
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["claude", "-p", "x", "--output-format", "json"], "claude_json"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_cost_parsed_from_claude_json(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_inv,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        import json as _json
+
+        mock_run.return_value = MagicMock(
+            stdout=_json.dumps(
+                {
+                    "result": "done TASK_COMPLETE",
+                    "total_cost_usd": 0.05,
+                    "usage": {"input_tokens": 900, "output_tokens": 210},
+                    "is_error": False,
+                }
+            ),
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        assert execute_task(task, config, state) is True
+        att = state.get_task_state("TASK-001").attempts[-1]
+        assert att.cost_usd == 0.05
+        assert att.input_tokens == 900
+        assert att.output_tokens == 210
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["claude", "-p", "x", "--output-format", "json"], "claude_json"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="p")
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution.subprocess.run")
+    def test_is_error_json_forces_failure(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_inv,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        import json as _json
+
+        mock_run.return_value = MagicMock(
+            stdout=_json.dumps({"result": "TASK_COMPLETE", "is_error": True, "subtype": "error"}),
+            stderr="",
+            returncode=0,
+        )
+        task = _make_task()
+        config = _make_config(tmp_path)
+        state = _make_state(config)
+        assert execute_task(task, config, state) is not True
