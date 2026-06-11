@@ -399,3 +399,48 @@ class TestParseClaudeJson:
         assert res.is_error is True
         assert "error_max_turns" in res.text
         assert "too many turns" in res.text
+
+
+class TestBuildCliInvocation:
+    def test_explicit_claude_json_adds_flag_and_tag(self):
+        inv = build_cli_invocation("claude", "hi", json_output=True)
+        assert "--output-format" in inv.argv and "json" in inv.argv
+        assert inv.result_format == "claude_json"
+
+    def test_claude_path_basename_recognized(self):
+        inv = build_cli_invocation("/usr/local/bin/claude", "hi", json_output=True)
+        assert inv.result_format == "claude_json"
+
+    def test_no_json_when_not_requested(self):
+        inv = build_cli_invocation("claude", "hi", json_output=False)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_template_claude_stays_text(self):
+        inv = build_cli_invocation("claude", "hi", template="{cmd} -p {prompt}", json_output=True)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_wrapper_name_is_text_not_claude_json(self):
+        inv = build_cli_invocation("my-claude-wrapper", "hi", json_output=True)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_unknown_command_is_text(self):
+        inv = build_cli_invocation("some-unknown-cli", "hi", json_output=True)
+        assert inv.result_format == "text"
+        assert "--output-format" not in inv.argv
+
+    def test_codex_ignores_json_output(self):
+        inv = build_cli_invocation("codex", "hi", json_output=True)
+        assert inv.result_format == "text"
+        assert inv.argv[:2] == ["codex", "exec"]
+
+    def test_max_budget_added_for_claude_json(self):
+        inv = build_cli_invocation("claude", "hi", json_output=True, max_budget_usd=0.003)
+        assert "--max-budget-usd" in inv.argv
+        i = inv.argv.index("--max-budget-usd")
+        assert inv.argv[i + 1] == "0.003"
+
+    def test_build_cli_command_wrapper_returns_argv(self):
+        assert build_cli_command("claude", "hi") == ["claude", "-p", "hi"]
