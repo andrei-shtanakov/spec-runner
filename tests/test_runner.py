@@ -1,17 +1,13 @@
 """Tests for spec_runner.runner module."""
 
 import asyncio
+import json as _json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import json as _json
-
 from spec_runner.runner import (
-    CliInvocation,
-    CliResult,
-    ResultFormat,
     _parse_claude_json,
     build_cli_command,
     build_cli_invocation,
@@ -367,10 +363,14 @@ class TestParseCliResultText:
 
 class TestParseClaudeJson:
     def test_parses_cost_tokens_and_text(self):
-        payload = _json.dumps({
-            "result": "did the work\nTASK_COMPLETE", "total_cost_usd": 0.0123,
-            "usage": {"input_tokens": 1200, "output_tokens": 340}, "is_error": False,
-        })
+        payload = _json.dumps(
+            {
+                "result": "did the work\nTASK_COMPLETE",
+                "total_cost_usd": 0.0123,
+                "usage": {"input_tokens": 1200, "output_tokens": 340},
+                "is_error": False,
+            }
+        )
         res = _parse_claude_json(payload, stderr="", returncode=0)
         assert "TASK_COMPLETE" in res.text
         assert res.input_tokens == 1200
@@ -389,12 +389,14 @@ class TestParseClaudeJson:
         assert res.input_tokens == 10
 
     def test_is_error_folds_message_into_text(self):
-        payload = _json.dumps({
-            "result": "",
-            "is_error": True,
-            "subtype": "error_max_turns",
-            "error": "too many turns",
-        })
+        payload = _json.dumps(
+            {
+                "result": "",
+                "is_error": True,
+                "subtype": "error_max_turns",
+                "error": "too many turns",
+            }
+        )
         res = _parse_claude_json(payload, stderr="", returncode=0)
         assert res.is_error is True
         assert "error_max_turns" in res.text
