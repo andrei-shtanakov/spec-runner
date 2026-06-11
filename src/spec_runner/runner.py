@@ -54,6 +54,28 @@ def _fmt_budget(amount: float) -> str:
     return f"{amount:.6f}".rstrip("0").rstrip(".") or "0"
 
 
+def _coerce_int(value: object) -> int | None:
+    """Coerce a JSON value to int, or None if absent/non-numeric — keeps token
+    invariants stable even if claude reports usage as strings."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object) -> float | None:
+    """Coerce a JSON value to float, or None if absent/non-numeric — keeps cost
+    invariants (sums, budget checks) stable even if claude reports cost as a string."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
     """Parse `claude -p --output-format json`. Falls back to text + stderr when
     stdout is not valid JSON (format drift / early crash / templated claude)."""
@@ -79,9 +101,9 @@ def _parse_claude_json(stdout: str, stderr: str, returncode: int) -> CliResult:
         text = " | ".join(str(p) for p in parts if p) or "claude reported is_error"
     return CliResult(
         text=text,
-        input_tokens=usage.get("input_tokens"),
-        output_tokens=usage.get("output_tokens"),
-        cost_usd=data.get("total_cost_usd"),
+        input_tokens=_coerce_int(usage.get("input_tokens")),
+        output_tokens=_coerce_int(usage.get("output_tokens")),
+        cost_usd=_coerce_float(data.get("total_cost_usd")),
         is_error=is_error,
     )
 

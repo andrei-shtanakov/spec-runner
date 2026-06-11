@@ -388,6 +388,34 @@ class TestParseClaudeJson:
         assert res.cost_usd == 0.01
         assert res.input_tokens == 10
 
+    def test_string_usage_and_cost_coerced_to_numbers(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps(
+                {
+                    "result": "ok",
+                    "total_cost_usd": "0.05",
+                    "usage": {"input_tokens": "900", "output_tokens": "210"},
+                }
+            ),
+            stderr="",
+            returncode=0,
+        )
+        assert res.cost_usd == 0.05 and isinstance(res.cost_usd, float)
+        assert res.input_tokens == 900 and isinstance(res.input_tokens, int)
+
+    def test_non_numeric_usage_becomes_none(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps({"result": "ok", "total_cost_usd": "abc", "usage": {"input_tokens": "xx"}}),
+            stderr="",
+            returncode=0,
+        )
+        assert res.cost_usd is None
+        assert res.input_tokens is None
+
     def test_non_object_json_falls_back_to_stderr(self):
         # valid JSON but not an object (list/number/non-dict usage) must not crash
         res = _parse_claude_json("[1, 2, 3]", stderr="cost: $0.04", returncode=0)
