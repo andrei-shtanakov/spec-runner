@@ -9,9 +9,11 @@ success and a review without a marker as PASSED.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import ExecutorConfig
 from .state import TaskAttempt
 
 CHECK_OK = "ok"
@@ -207,3 +209,28 @@ def render_human(report: DoctorReport) -> str:
     cost = "n/a" if report.measured_cost_usd is None else f"${report.measured_cost_usd}"
     lines.append(f"  Measured cost: {cost}")
     return "\n".join(lines)
+
+
+def resolve_target(base: ExecutorConfig, cli: str | None, model: str | None) -> ExecutorConfig:
+    """Copy `base` and apply --cli/--model overrides for the probe.
+
+    - --cli also clears command/review templates so build_cli_command
+      auto-detects flags for the new CLI (a claude-shaped template would
+      otherwise break e.g. codex).
+    - --model overrides claude_model/review_model AND the implementer/reviewer
+      persona models, since get_model_for_role prefers a persona's model.
+    """
+    cfg = copy.deepcopy(base)
+    if cli:
+        cfg.claude_command = cli
+        cfg.review_command = ""
+        cfg.command_template = ""
+        cfg.review_command_template = ""
+    if model:
+        cfg.claude_model = model
+        cfg.review_model = model
+        for role in ("implementer", "reviewer"):
+            persona = cfg.personas.get(role)
+            if persona is not None:
+                persona.model = model
+    return cfg

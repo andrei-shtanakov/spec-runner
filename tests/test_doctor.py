@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from jsonschema import Draft7Validator
 
-from spec_runner.config import ExecutorConfig, build_config
+from spec_runner.config import ExecutorConfig, Persona, build_config
 from spec_runner.doctor import (
     CHECK_FAIL,
     CHECK_NA,
@@ -15,6 +15,7 @@ from spec_runner.doctor import (
     extract,
     render_human,
     report_to_dict,
+    resolve_target,
 )
 from spec_runner.hooks import pre_start_hook
 from spec_runner.state import TaskAttempt
@@ -219,3 +220,41 @@ def test_json_matches_schema():
     schema = json.loads(Path("schemas/doctor-result.schema.json").read_text())
     Draft7Validator.check_schema(schema)
     Draft7Validator(schema).validate(report_to_dict(_ready_report()))
+
+
+# ---------------------------------------------------------------------------
+# Task 5: resolve_target
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_cli_clears_templates(tmp_path):
+    base = ExecutorConfig(
+        project_root=tmp_path,
+        claude_command="claude",
+        command_template="{cmd} -p {prompt} --model {model}",
+        review_command_template="{cmd} -p {prompt}",
+    )
+    out = resolve_target(base, cli="codex", model=None)
+    assert out.claude_command == "codex"
+    assert out.command_template == ""
+    assert out.review_command_template == ""
+
+
+def test_resolve_model_overrides_personas(tmp_path):
+    base = ExecutorConfig(
+        project_root=tmp_path,
+        claude_model="sonnet",
+        personas={"implementer": Persona(model="haiku"), "reviewer": Persona(model="haiku")},
+    )
+    out = resolve_target(base, cli=None, model="gpt-5.4")
+    assert out.claude_model == "gpt-5.4"
+    assert out.review_model == "gpt-5.4"
+    assert out.get_model_for_role("implementer") == "gpt-5.4"
+    assert out.get_model_for_role("reviewer") == "gpt-5.4"
+
+
+def test_resolve_no_overrides_keeps_config(tmp_path):
+    base = ExecutorConfig(project_root=tmp_path, claude_command="pi", claude_model="x")
+    out = resolve_target(base, cli=None, model=None)
+    assert out.claude_command == "pi"
+    assert out.claude_model == "x"
