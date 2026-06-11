@@ -78,6 +78,32 @@ Maestro-сторона формализации описана в `../Maestro/TO
 
 ---
 
+## Backlog (запланировано, не начато)
+
+### `plan --from-file` — читать описание из файла (2026-06-11)
+
+Сейчас `spec-runner plan [--full] "<описание>"` принимает описание **только** как
+позиционную строку (`cli.py`: `plan_parser.add_argument("description", ...)`;
+`cmd_plan` использует `args.description` как есть). Обходной путь —
+`plan --full "$(cat file.md)"`. Нужна честная поддержка файла.
+
+- [ ] Добавить optional-флаг `--from-file PATH` к `plan`-сабпарсеру в `cli.py`.
+- [ ] Сделать позиционный `description` необязательным (`nargs="?"`); в `cmd_plan`
+      (`cli_plan.py`) ветка: если задан `--from-file` — читать `Path(args.from_file).read_text()`
+      как `description`; иначе использовать позиционный; ошибка, если не задано ни то
+      ни другое (и определить приоритет, если заданы оба).
+- [ ] Тест в `tests/test_plan_full.py`: `--from-file` читает содержимое и оно попадает
+      в `build_generation_prompt`; ошибки при отсутствии файла / пустом вводе.
+- [ ] README + CLAUDE.md: задокументировать флаг.
+- Отдельным PR (не блокирует v2.4.0). Запрошено пользователем 2026-06-11.
+
+### Release v2.4.0 (doctor) — см. память `project_pending_v240_release`
+
+doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в pyproject всё ещё
+`2.3.1`, на PyPI doctor нет. После теста — bump → `v2.4.0`, CHANGELOG, тег, publish.
+
+---
+
 ## Ждём от других проектов
 
 - **Maestro → R-04**: создание `ExecutorState` Pydantic-модели; pin версии spec-runner в `Maestro/pyproject.toml`
