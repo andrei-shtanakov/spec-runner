@@ -102,6 +102,26 @@ Maestro-сторона формализации описана в `../Maestro/TO
 doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в pyproject всё ещё
 `2.3.1`, на PyPI doctor нет. После теста — bump → `v2.4.0`, CHANGELOG, тег, publish.
 
+### Cost tracking сломан для современного claude CLI (2026-06-11)
+
+`spec-runner doctor --cli=claude` на реальном claude **2.1.173** дал
+`cost_tracking=warn` → DEGRADED. `runner.parse_token_usage()` ищет в **stderr**
+паттерны `input_tokens: …` / `cost: $…`, но текущий `claude -p` их так не отдаёт.
+Следствие: `spec-runner costs`, `--budget`, `--task-budget` для claude **молча не
+работают** (cost=None, бюджет не enforce-ится). doctor это и поймал — ровно тот
+кейс «ложной уверенности».
+
+- [ ] claude CLI имеет `--output-format json` (single result) с полями usage /
+      `total_cost_usd`. Перевести получение cost на JSON вместо stderr-regex.
+- ⚠️ Это **не просто regex-твик**: при `--output-format json` весь ответ обёрнут в
+      JSON (текст в поле `result`), значит меняется и детект маркера `TASK_COMPLETE`,
+      и обработка вывода в `runner`/`execution`. Нужно: либо парсить JSON и извлекать
+      и `result` (для маркера/контента), и `usage`/`total_cost_usd` (для cost); либо
+      добавить отдельный лёгкий usage-запрос. Оценить объём перед началом.
+- [ ] После фикса `doctor --cli=claude` должен давать `cost_tracking=ok` и READY.
+- [ ] Аналогично проверить doctor'ом codex/pi/ollama — у них cost, вероятно, тоже не
+      парсится (та же причина). См. память `project_cost_tracking_broken`.
+
 ---
 
 ## Ждём от других проектов
