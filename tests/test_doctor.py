@@ -459,6 +459,9 @@ def test_run_doctor_json_output(tmp_path, capsys):
 
 
 def test_run_doctor_json_with_keep_is_clean(tmp_path, capsys):
+    import re
+    import shutil
+
     base = ExecutorConfig(project_root=tmp_path, claude_command=str(FIXTURES / "ok.sh"))
     run_doctor(
         base,
@@ -472,9 +475,14 @@ def test_run_doctor_json_with_keep_is_clean(tmp_path, capsys):
         as_json=True,
         keep=True,
     )
-    out = capsys.readouterr().out
-    payload = json.loads(out)  # must be a single valid JSON object
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)  # stdout must be a single valid JSON object
     assert payload["verdict"] == "ready"
+    # --keep leaves the scratch dir; clean it up so the test doesn't litter /tmp.
+    # The path is announced on stderr as "(scratch kept at <root>)".
+    match = re.search(r"\(scratch kept at (.+)\)", captured.err)
+    if match:
+        shutil.rmtree(match.group(1), ignore_errors=True)
 
 
 @pytest.mark.slow
