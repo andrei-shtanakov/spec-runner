@@ -194,9 +194,13 @@ def _run_tasks(args, config: ExecutorConfig):
             task_filter=getattr(args, "task", None),
         )
 
-        # Recover tasks stuck in 'running' from previous crash
-        stale_timeout = config.task_timeout_minutes * 2
-        recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
+        # Recover tasks stuck in 'running' from a previous crashed/interrupted run.
+        # We hold the exclusive executor lock here, so no other runner exists — any
+        # 'running' task is orphaned and must be reset regardless of age. Otherwise
+        # a session interruption (e.g. a dropped remote shell) leaves a half-done
+        # task that the next run re-picks first (in_progress goes first) and hangs
+        # re-doing it. Threshold 0 = recover all running.
+        recovered = recover_stale_tasks(state, 0, config.tasks_file)
         if recovered:
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
