@@ -361,6 +361,35 @@ class TestBuildReviewPrompt:
                 prompt = build_review_prompt(task, config)
         assert "Constitution" not in prompt
 
+    def test_skips_git_diff_when_git_automation_off(self):
+        # Subdir project / --no-branch --no-commit: `git diff HEAD~1` would hit the
+        # PARENT repo (huge, unrelated diff → reviewer slow/hangs). Skip it.
+        task = _make_task()
+        config = _make_config(create_git_branch=False, auto_commit=False)
+        with (
+            patch("spec_runner.review.subprocess.run") as mock_run,
+            patch("spec_runner.review.load_prompt_template", return_value=None),
+        ):
+            build_review_prompt(task, config)
+        git_diff_calls = [
+            c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["git", "diff"]
+        ]
+        assert git_diff_calls == []
+
+    def test_runs_git_diff_when_auto_commit_on(self):
+        task = _make_task()
+        config = _make_config(create_git_branch=False, auto_commit=True)
+        with (
+            patch("spec_runner.review.subprocess.run") as mock_run,
+            patch("spec_runner.review.load_prompt_template", return_value=None),
+        ):
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            build_review_prompt(task, config)
+        git_diff_calls = [
+            c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["git", "diff"]
+        ]
+        assert git_diff_calls
+
 
 class TestRunCodeReview:
     """Tests for run_code_review returning ReviewVerdict."""

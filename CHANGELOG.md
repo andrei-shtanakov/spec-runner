@@ -10,6 +10,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Crash/interruption recovery — orphaned `in_progress` tasks.** On run startup
+  the executor holds an exclusive lock, so any task still marked `running` is
+  orphaned from a dead run. Recovery now resets **all** such tasks regardless of
+  age (previously only those running longer than 2× the task timeout, ~60 min).
+  Otherwise an interrupted session (e.g. a dropped remote shell) left a half-done
+  task that the next run re-picked first (`in_progress` goes first) and hung
+  re-doing it.
+- **Review diff against a parent repo.** Code review skips `git diff HEAD~1` when
+  git automation is off (a subdir of a larger repo, or `--no-branch --no-commit`).
+  There the diff was taken against the **parent** repository — a huge, unrelated
+  diff that made the reviewer slow or hang. (The review subprocess timeout
+  `review_timeout_minutes` was already enforced.)
+
 ## [2.4.0] — 2026-06-12
 
 ### Added

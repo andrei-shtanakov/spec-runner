@@ -117,6 +117,27 @@ def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: Exec
     print(json.dumps({"dry_run": True, "tasks": data}, indent=2))
 
 
+def _acquire_run_lock(config: ExecutorConfig) -> ExecutorLock:
+    """Acquire the exclusive executor lock, or exit(1) if another run holds it."""
+    lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+    if not lock.acquire():
+        held_by = getattr(lock, "_held_by", {})
+        alive = held_by.get("alive", "true")
+        logger.error(
+            "Another executor is already running",
+            lock_file=str(config.state_file.with_suffix(".lock")),
+            held_by_pid=held_by.get("pid", "unknown"),
+            started=held_by.get("started", "unknown"),
+            process_alive=alive,
+        )
+        if alive == "false":
+            logger.error(
+                "Lock holder is dead. Use --force to override, or delete the lock file manually."
+            )
+        sys.exit(1)
+    return lock
+
+
 def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Execute tasks."""
     # HITL review incompatible with TUI mode
@@ -124,61 +145,52 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
         logger.warning("--hitl-review ignored in TUI mode (TUI owns the screen)")
         config.hitl_review = False
 
-    if getattr(args, "tui", False):
-        import threading
-
-        from .logging import setup_logging
-        from .tui import SpecRunnerApp
-
-        # TUI mode: log to file, TUI owns screen
-        log_file = config.logs_dir / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-        config.logs_dir.mkdir(parents=True, exist_ok=True)
-        setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
-
-        app = SpecRunnerApp(config=config)
-
-        def _start_execution() -> None:
-            t = threading.Thread(target=lambda: _run_tasks(args, config), daemon=True)
-            t.start()
-
-        app.call_later(_start_execution)
-        app.run()
-        return
-
+    # Acquire the exclusive lock unless --force. TUI mode also holds it (one
+    # executor per project) — when held, stale-task recovery can safely reset all
+    # orphaned 'running' tasks; with --force a concurrent runner may exist, so we
+    # fall back to the age-based heuristic.
     if getattr(args, "force", False):
         logger.warning("Skipping lock check (--force)")
-        _run_tasks(args, config)
+        lock = None
     else:
-        # Acquire lock to prevent concurrent runs
-        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
-        if not lock.acquire():
-            held_by = getattr(lock, "_held_by", {})
-            pid = held_by.get("pid", "unknown")
-            started = held_by.get("started", "unknown")
-            alive = held_by.get("alive", "true")
+        lock = _acquire_run_lock(config)
+    lock_held = lock is not None
 
-            logger.error(
-                "Another executor is already running",
-                lock_file=str(config.state_file.with_suffix(".lock")),
-                held_by_pid=pid,
-                started=started,
-                process_alive=alive,
-            )
-            if alive == "false":
-                logger.error(
-                    "Lock holder is dead. Use --force to override, "
-                    "or delete the lock file manually."
+    try:
+        if getattr(args, "tui", False):
+            import threading
+
+            from .logging import setup_logging
+            from .tui import SpecRunnerApp
+
+            # TUI mode: log to file, TUI owns screen
+            log_file = config.logs_dir / f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+            config.logs_dir.mkdir(parents=True, exist_ok=True)
+            setup_logging(level=config.log_level, tui_mode=True, log_file=log_file)
+
+            app = SpecRunnerApp(config=config)
+
+            def _start_execution() -> None:
+                t = threading.Thread(
+                    target=lambda: _run_tasks(args, config, lock_held=lock_held), daemon=True
                 )
-            sys.exit(1)
+                t.start()
 
-        try:
-            _run_tasks(args, config)
-        finally:
+            app.call_later(_start_execution)
+            app.run()
+        else:
+            _run_tasks(args, config, lock_held=lock_held)
+    finally:
+        if lock is not None:
             lock.release()
 
 
-def _run_tasks(args, config: ExecutorConfig):
-    """Internal task execution logic."""
+def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
+    """Internal task execution logic.
+
+    lock_held: True when the caller holds the exclusive executor lock, so any
+    orphaned 'running' task can be safely reset regardless of age.
+    """
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
 
@@ -194,9 +206,17 @@ def _run_tasks(args, config: ExecutorConfig):
             task_filter=getattr(args, "task", None),
         )
 
-        # Recover tasks stuck in 'running' from previous crash
+        # Recover tasks stuck in 'running' from a previous crashed/interrupted run.
+        # When we hold the exclusive lock (lock_held), no other runner exists — any
+        # 'running' task is orphaned and is reset regardless of age (otherwise a
+        # session interruption, e.g. a dropped remote shell, leaves a half-done
+        # task that the next run re-picks first and hangs re-doing it). Without the
+        # lock (--force), a concurrent runner may be active, so fall back to the
+        # age-based heuristic (2x the task timeout).
         stale_timeout = config.task_timeout_minutes * 2
-        recovered = recover_stale_tasks(state, stale_timeout, config.tasks_file)
+        recovered = recover_stale_tasks(
+            state, stale_timeout, config.tasks_file, recover_all=lock_held
+        )
         if recovered:
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)

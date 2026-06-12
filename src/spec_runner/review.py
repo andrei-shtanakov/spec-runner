@@ -70,36 +70,44 @@ def build_review_prompt(
         lint_output: Lint check output to include in review context
         previous_error: Error from previous attempt (retry context)
     """
-    # Get changed files from git
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD~1"],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    changed_files = (
-        result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
-    )
+    # Gather the task diff via `git diff HEAD~1` ONLY when this project does
+    # git-based task isolation (a branch and/or commit per task). When git
+    # automation is off — a subdir of a larger repo, or `--no-branch --no-commit`
+    # — `git diff HEAD~1` runs against the PARENT repo and yields a huge, unrelated
+    # diff that makes the reviewer slow or hang. In that case skip it.
+    if config.create_git_branch or config.auto_commit:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        changed_files = (
+            result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
+        )
 
-    # Get git diff stat
-    result = subprocess.run(
-        ["git", "diff", "HEAD~1", "--stat"],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
+        result = subprocess.run(
+            ["git", "diff", "HEAD~1", "--stat"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
 
-    # Full diff for review context (truncated to 30KB)
-    diff_p_result = subprocess.run(
-        ["git", "diff", "-p", "HEAD~1"],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    full_diff = diff_p_result.stdout[:30_000]
-    if len(diff_p_result.stdout) > 30_000:
-        full_diff += "\n... (diff truncated)"
+        # Full diff for review context (truncated to 30KB)
+        diff_p_result = subprocess.run(
+            ["git", "diff", "-p", "HEAD~1"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        full_diff = diff_p_result.stdout[:30_000]
+        if len(diff_p_result.stdout) > 30_000:
+            full_diff += "\n... (diff truncated)"
+    else:
+        changed_files = "(git diff unavailable: git automation disabled for this project)"
+        git_diff_stat = ""
+        full_diff = ""
 
     # Try to load CLI-specific or custom template
     template = load_prompt_template("review", cli_name=cli_name)
