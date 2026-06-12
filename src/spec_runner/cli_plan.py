@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from .config import ExecutorConfig
 from .logging import get_logger
@@ -23,6 +24,32 @@ from .task import (
 logger = get_logger("cli")
 
 
+def resolve_plan_description(description: str | None, from_file: str | None) -> str:
+    """Resolve the plan description from --from-file (preferred) or the positional
+    argument. Exits with an error if neither is usable.
+
+    Args:
+        description: the positional description (may be None when --from-file is used).
+        from_file: path to a file whose contents are the description.
+    """
+    if from_file:
+        path = Path(from_file)
+        if not path.is_file():
+            raise SystemExit(f"plan --from-file: not a readable file: {from_file}")
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError as e:
+            raise SystemExit(f"plan --from-file: not valid UTF-8 text: {from_file}") from e
+        except OSError as e:
+            raise SystemExit(f"plan --from-file: cannot read {from_file}: {e}") from e
+        if not text:
+            raise SystemExit(f"plan --from-file: file is empty: {from_file}")
+        return text
+    if description and description.strip():
+        return description
+    raise SystemExit("plan: provide a description argument or --from-file PATH")
+
+
 def cmd_plan(args, config: ExecutorConfig):
     """Interactive task planning via Claude.
 
@@ -30,7 +57,7 @@ def cmd_plan(args, config: ExecutorConfig):
     requirements, design, and tasks files from a description.
     """
 
-    description = args.description
+    description = resolve_plan_description(args.description, getattr(args, "from_file", None))
 
     if getattr(args, "full", False):
         from .prompt import build_generation_prompt, parse_spec_marker

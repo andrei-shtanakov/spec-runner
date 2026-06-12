@@ -21,6 +21,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
   with a confirmation gate (`--yes` to skip); `--strict` fails CI on DEGRADED.
 - **`sync_deps` config flag** (under `hooks.pre_start`) — gates the `uv sync`
   step in `pre_start_hook` (doctor disables it for the scratch workspace).
+- **`spec-runner plan --from-file PATH`** — read the feature description from a
+  file instead of the positional argument (the positional is now optional). Handy
+  for long descriptions; `--from-file` takes priority and errors on a
+  missing/empty file or when neither source is given.
 
 ### Fixed
 
