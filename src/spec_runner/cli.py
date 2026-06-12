@@ -868,7 +868,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # plan
     plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
-    plan_parser.add_argument("description", help="Feature description")
+    plan_parser.add_argument(
+        "description", nargs="?", default=None, help="Feature description (or use --from-file)"
+    )
+    plan_parser.add_argument(
+        "--from-file",
+        metavar="PATH",
+        help="Read the feature description from a file instead of the positional argument",
+    )
     plan_parser.add_argument(
         "--full",
         action="store_true",

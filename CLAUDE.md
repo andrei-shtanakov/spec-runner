@@ -46,6 +46,7 @@ spec-runner status                         # Show execution status
 spec-runner status --json                  # JSON status output
 spec-runner plan "description"             # Interactive task planning
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
+spec-runner plan --full --from-file spec.md  # Read description from a file (vs positional arg)
 spec-runner validate                       # Validate config and tasks
 spec-runner verify                         # Verify post-execution compliance
 spec-runner verify --task=TASK-001         # Verify specific task

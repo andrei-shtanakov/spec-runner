@@ -80,22 +80,13 @@ Maestro-сторона формализации описана в `../Maestro/TO
 
 ## Backlog (запланировано, не начато)
 
-### `plan --from-file` — читать описание из файла (2026-06-11)
+### `plan --from-file` — читать описание из файла (2026-06-11) — ✅ ИСПРАВЛЕНО (PR #17)
 
-Сейчас `spec-runner plan [--full] "<описание>"` принимает описание **только** как
-позиционную строку (`cli.py`: `plan_parser.add_argument("description", ...)`;
-`cmd_plan` использует `args.description` как есть). Обходной путь —
-`plan --full "$(cat file.md)"`. Нужна честная поддержка файла.
-
-- [ ] Добавить optional-флаг `--from-file PATH` к `plan`-сабпарсеру в `cli.py`.
-- [ ] Сделать позиционный `description` необязательным (`nargs="?"`); в `cmd_plan`
-      (`cli_plan.py`) ветка: если задан `--from-file` — читать `Path(args.from_file).read_text()`
-      как `description`; иначе использовать позиционный; ошибка, если не задано ни то
-      ни другое (и определить приоритет, если заданы оба).
-- [ ] Тест в `tests/test_plan_full.py`: `--from-file` читает содержимое и оно попадает
-      в `build_generation_prompt`; ошибки при отсутствии файла / пустом вводе.
-- [ ] README + CLAUDE.md: задокументировать флаг.
-- Отдельным PR (не блокирует v2.4.0). Запрошено пользователем 2026-06-11.
+- [x] Optional-флаг `--from-file PATH` + позиционный `description` → `nargs="?"`.
+- [x] `resolve_plan_description(description, from_file)` в `cli_plan.py` (from-file
+      приоритетнее; ошибки при отсутствии файла / пустом / ни-то-ни-другое).
+- [x] Тесты в `tests/test_plan_full.py` (resolve + парсер).
+- [x] README + CLAUDE.md задокументированы.
 
 ### Release v2.4.0 (doctor) — см. память `project_pending_v240_release`
 

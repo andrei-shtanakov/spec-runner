@@ -143,6 +143,7 @@ spec-runner report --json                  # JSON matrix output
 # Planning
 spec-runner plan "description"             # Interactive task planning
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
+spec-runner plan --full --from-file spec.md  # Read the description from a file instead of an arg
 
 # Diagnostics
 spec-runner doctor                              # Probe the configured CLI/model (real mini-task)

@@ -1,6 +1,55 @@
 """Tests for spec-runner plan --full (spec generation)."""
 
+import pytest
+
+from spec_runner.cli import _build_parser
+from spec_runner.cli_plan import resolve_plan_description
 from spec_runner.prompt import build_generation_prompt, parse_spec_marker
+
+
+class TestResolvePlanDescription:
+    def test_from_file_read_and_stripped(self, tmp_path):
+        f = tmp_path / "d.md"
+        f.write_text("Build textkit\n")
+        assert resolve_plan_description(None, str(f)) == "Build textkit"
+
+    def test_positional_used_when_no_file(self):
+        assert resolve_plan_description("add login", None) == "add login"
+
+    def test_from_file_takes_priority_over_positional(self, tmp_path):
+        f = tmp_path / "d.md"
+        f.write_text("from file")
+        assert resolve_plan_description("positional", str(f)) == "from file"
+
+    def test_neither_provided_errors(self):
+        with pytest.raises(SystemExit):
+            resolve_plan_description(None, None)
+
+    def test_missing_file_errors(self, tmp_path):
+        with pytest.raises(SystemExit):
+            resolve_plan_description(None, str(tmp_path / "nope.md"))
+
+    def test_empty_file_errors(self, tmp_path):
+        f = tmp_path / "e.md"
+        f.write_text("   \n")
+        with pytest.raises(SystemExit):
+            resolve_plan_description(None, str(f))
+
+
+class TestPlanParserFromFile:
+    def test_from_file_flag_and_optional_description(self):
+        parser = _build_parser()
+        args = parser.parse_args(["plan", "--full", "--from-file", "spec.md"])
+        assert args.command == "plan"
+        assert args.description is None
+        assert args.from_file == "spec.md"
+        assert args.full is True
+
+    def test_positional_description_still_works(self):
+        parser = _build_parser()
+        args = parser.parse_args(["plan", "build a thing"])
+        assert args.description == "build a thing"
+        assert args.from_file is None
 
 
 class TestBuildGenerationPrompt:
