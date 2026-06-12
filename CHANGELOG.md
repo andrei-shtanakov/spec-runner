@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.4.1] — 2026-06-12
+
 ### Fixed
 
 - **`doctor` mislabelled auth/API errors as "command not in PATH".** The
