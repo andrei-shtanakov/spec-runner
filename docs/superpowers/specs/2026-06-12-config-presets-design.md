@@ -3,8 +3,8 @@
 **Date:** 2026-06-12
 **Status:** Approved (brainstorming) — ready for implementation plan
 **Target version:** 2.5.0 (minor — new feature, no contract/schema change)
-**Revision:** 2 (incorporates spec-review on pi auto-detect, secrets wording,
-flag naming, canonical YAML shape, merge scoping, packaging, resource loading)
+**Revision:** 3 (adds: llama-cli naming, per-fragment skip_permissions,
+static-template fresh write, flat-config validation, raw-YAML read in cmd_config)
 
 ## Problem
 
@@ -76,16 +76,21 @@ spec-runner config --preset codex --apply             # update CLI profile in ex
 ## Fragment library (composition engine)
 
 `src/spec_runner/presets/<cli>.yaml`, one per supported CLI: `claude`, `codex`,
-`opencode`, `pi`, `ollama`, `llama`. A fragment is **slot-neutral** — it
+`opencode`, `pi`, `ollama`, `llama-cli`. A fragment is **slot-neutral** — it
 describes how to invoke that CLI; the composer places it into the exec or
 review slot.
+
+The preset is named **`llama-cli`** (not `llama`), and its `command` is
+`llama-cli`: `build_cli_invocation` only auto-detects `llama-cli` / `llama.cpp`
+/ `llama-server` (`runner.py:296-308`); a bare `llama` falls through to the
+claude branch and would be invoked wrongly.
 
 Fragment schema (v1 — minimal, all CLIs rely on auto-detect):
 
 ```yaml
-command: pi                  # CLI binary
+command: llama-cli           # CLI binary (must match an auto-detect name)
 model: ""                    # default model ("" = CLI/runtime default)
-skip_permissions: false      # claude-relevant; harmless elsewhere
+skip_permissions: false      # see per-fragment values below
 note: ""                     # optional, printed after writing
 ```
 
@@ -95,6 +100,11 @@ note: ""                     # optional, printed after writing
   "blank model breaks pi" trap does not apply. The composer therefore writes
   `command_template: ""` / `review_command_template: ""` to **clear** any stale
   template from a previously configured CLI.
+- **`skip_permissions` is per-fragment.** `claude.yaml` sets `true` — it maps to
+  claude's `--dangerously-skip-permissions` (`runner.py:347`) and the config
+  default is already `True` (`config.py:138`), so a `claude` preset must
+  preserve it or it silently regresses to permission prompts. All other
+  fragments set `false` (the flag is claude-only and ignored elsewhere).
 - `ollama` fragment carries a `note`: a blank `model` makes the runtime default
   to `llama3` (`runner.py:312`); set `claude_model` if a different model is
   wanted.
@@ -134,7 +144,9 @@ form as legacy. Therefore:
 
 - **Fresh write** → **flat** v2.0: the 7 keys plus a commented scaffold of
   common knobs (budgets, notifications) at the document top level. No
-  `executor:` wrapper is introduced.
+  `executor:` wrapper is introduced. Because PyYAML `safe_dump` cannot emit
+  comments, the fresh file is produced from a **static text template** with the
+  7 key values interpolated — `safe_dump` is used only for the merge path.
 - **Existing file** → **preserve its shape**: if the document has an `executor:`
   key, update the 7 keys inside that mapping; otherwise update them at the top
   level. A flat config never gains an `executor:` wrapper; a wrapped config
@@ -152,7 +164,10 @@ form as legacy. Therefore:
    preview."`; exit 1; file unchanged.
 4. **Config exists, `--apply`** → surgical merge:
    - back up current file to `spec-runner.config.yaml.bak`
-   - `yaml.safe_load` the existing document
+   - `yaml.safe_load` the existing document — **`cmd_config` reads the file
+     itself with raw `safe_load`**, not via `load_config_from_yaml` (which
+     swallows parse errors and returns `{}`, `config.py`). A `yaml.YAMLError`
+     here aborts before any write (see Error handling).
    - select the target mapping: `data["executor"]` if an `executor` key exists,
      else `data` (mirrors `load_config_from_yaml`)
    - overwrite **only** the 7 CLI-profile keys in that mapping; leave everything
@@ -184,11 +199,17 @@ values carried through `safe_load`/`safe_dump`.
   - `list_presets() -> list[str]`.
   - `compose(exec_frag, review_frag, model_override, review_model_override) ->
     dict` — returns the 7 CLI-profile keys.
-  - `apply_to_config(profile, *, apply, dry_run, config_path) -> Path | None` —
-    fresh-write / refuse / surgical-merge logic.
+  - `apply_to_config(profile, *, apply_changes, dry_run, config_path) ->
+    Path | None` — fresh-write (static template) / refuse / surgical-merge
+    (`safe_load` + `safe_dump`) logic. Reads YAML with raw `safe_load` so
+    malformed input raises rather than being swallowed.
   - `cmd_config(args) -> int` — CLI entry: parse, compose, apply, print.
 - `src/spec_runner/cli.py` `_build_parser()` — register the `config` subparser
   and dispatch to `cmd_config`.
+- `src/spec_runner/validate.py` `validate_config()` — small in-scope fix: select
+  the target mapping as `data["executor"] if "executor" in data else data`, so
+  the now-canonical **flat** v2.0 config is validated for unknown keys instead of
+  being silently skipped (`validate.py:224-225`).
 
 ## Data flow
 
@@ -210,7 +231,8 @@ args ──> load_fragment(exec) ─┐
 - Config exists without `--apply` (and not `--dry-run`) → `SystemExit(1)` with
   the re-run hint; file unchanged.
 - Malformed existing YAML on `--apply` → abort without writing; surface the
-  parse error.
+  parse error (raw `safe_load` in `cmd_config`, not the error-swallowing
+  `load_config_from_yaml`).
 - Bundled fragment file missing/corrupt → `SystemExit(2)` (packaging error).
 
 ## Packaging
@@ -237,6 +259,13 @@ args ──> load_fragment(exec) ─┐
 - `--list-presets` lists all 6 and not `copilot`.
 - **CLI dispatch:** `spec-runner config --list-presets` is reachable through the
   argparse parser built by `_build_parser()` and routes to `cmd_config`.
+- **Malformed YAML on `--apply`** raises/aborts and leaves the file unchanged.
+- `claude` preset writes `skip_permissions: true`; a non-claude preset writes
+  `false`.
+- `llama-cli` preset's `command` is `llama-cli` (round-trips through
+  `build_cli_invocation` to the llama branch, not the claude fallback).
+- **`validate_config` on a flat config** flags an unknown top-level key
+  (regression test for the in-scope `validate.py` fix).
 
 Mock nothing external — pure file/YAML; fast, no `@pytest.mark.slow`.
 
