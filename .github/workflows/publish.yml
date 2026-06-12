@@ -46,3 +46,7 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent: don't fail if the version is already on PyPI (e.g. a
+          # re-run, or a tag pushed after a manual twine upload).
+          skip-existing: true
