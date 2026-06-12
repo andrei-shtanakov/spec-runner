@@ -35,6 +35,18 @@ class TestResolvePlanDescription:
         with pytest.raises(SystemExit):
             resolve_plan_description(None, str(f))
 
+    def test_directory_errors_cleanly(self, tmp_path):
+        d = tmp_path / "adir"
+        d.mkdir()
+        with pytest.raises(SystemExit):
+            resolve_plan_description(None, str(d))
+
+    def test_non_utf8_file_errors_cleanly(self, tmp_path):
+        f = tmp_path / "bin.dat"
+        f.write_bytes(b"\xff\xfe\x00\x01garbage")
+        with pytest.raises(SystemExit):
+            resolve_plan_description(None, str(f))
+
 
 class TestPlanParserFromFile:
     def test_from_file_flag_and_optional_description(self):

@@ -35,8 +35,13 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
     if from_file:
         path = Path(from_file)
         if not path.is_file():
-            raise SystemExit(f"plan --from-file: no such file: {from_file}")
-        text = path.read_text().strip()
+            raise SystemExit(f"plan --from-file: not a readable file: {from_file}")
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError as e:
+            raise SystemExit(f"plan --from-file: not valid UTF-8 text: {from_file}") from e
+        except OSError as e:
+            raise SystemExit(f"plan --from-file: cannot read {from_file}: {e}") from e
         if not text:
             raise SystemExit(f"plan --from-file: file is empty: {from_file}")
         return text
