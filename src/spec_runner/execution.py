@@ -11,10 +11,10 @@ from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
 from .runner import (
-    build_cli_command,
+    build_cli_invocation,
     check_error_patterns,
     log_progress,
-    parse_token_usage,
+    parse_cli_result,
     send_callback,
 )
 from .stages import StageReporter
@@ -105,12 +105,18 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         # Build command using template or auto-detect
         # Use implementer persona model if configured
         task_model = config.get_model_for_role("implementer")
-        cmd = build_cli_command(
+        # NOTE: claude's native --max-budget-usd is intentionally NOT passed here.
+        # build_cli_invocation supports it, but enforcing a hard mid-call cap turns
+        # a slight per-task overage into a hard failure and made `doctor --cli=claude`
+        # fail on its small default budget. Budget stays state-based (post-attempt)
+        # as before; wiring the native cap is a separate, considered follow-up.
+        invocation = build_cli_invocation(
             cmd=config.claude_command,
             prompt=prompt,
             model=task_model,
             template=config.command_template,
             skip_permissions=config.skip_permissions,
+            json_output=True,
         )
 
         logger.info(
@@ -122,7 +128,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
 
         reporter.enter("codex")
         result = subprocess.run(
-            cmd,
+            invocation.argv,
             capture_output=True,
             text=True,
             timeout=config.task_timeout_minutes * 60,
@@ -130,11 +136,14 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         )
 
         duration = (datetime.now() - start_time).total_seconds()
-        output = result.stdout
+        cli_result = parse_cli_result(
+            invocation.result_format, result.stdout, result.stderr, result.returncode
+        )
+        output = cli_result.text
         combined_output = output + "\n" + result.stderr
-
-        # Parse token usage from stderr
-        input_tokens, output_tokens, cost_usd = parse_token_usage(result.stderr)
+        input_tokens = cli_result.input_tokens
+        output_tokens = cli_result.output_tokens
+        cost_usd = cli_result.cost_usd
 
         # Save output
         with open(log_file, "a") as f:
@@ -179,9 +188,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         # 2. Return code 0 and no TASK_FAILED (Claude forgot the marker)
         has_complete_marker = "TASK_COMPLETE" in output
         has_failed_marker = "TASK_FAILED" in output
-        implicit_success = result.returncode == 0 and not has_failed_marker
-
-        success = (has_complete_marker and not has_failed_marker) or implicit_success
+        implicit_success = (
+            result.returncode == 0 and not has_failed_marker and not cli_result.is_error
+        )
+        success = (
+            has_complete_marker and not has_failed_marker and not cli_result.is_error
+        ) or implicit_success
 
         if success:
             reporter.enter("parse")
@@ -271,7 +283,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 error = error_match.group(1)
                 error_kind = "cli_error"
             else:
-                error_kind, error = classify(result.stderr, result.returncode)
+                error_kind, error = classify(combined_output, result.returncode)
             state.record_attempt(
                 task_id,
                 False,

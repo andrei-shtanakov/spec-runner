@@ -22,6 +22,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 - **`sync_deps` config flag** (under `hooks.pre_start`) — gates the `uv sync`
   step in `pre_start_hook` (doctor disables it for the scratch workspace).
 
+### Fixed
+
+- **Cost tracking for the claude CLI.** `execute_task` now invokes claude with
+  `--output-format json` and parses `total_cost_usd` / `usage` from the result —
+  the old stderr regex (`parse_token_usage`) no longer matches modern claude
+  (2.x), so cost/tokens were silently `None` and `costs` / `--budget` /
+  `--task-budget` did nothing for claude. Implemented behind a per-CLI result
+  seam: `build_cli_invocation() -> CliInvocation{argv, result_format}` and
+  `parse_cli_result(result_format, …) -> CliResult`. JSON mode is gated to an
+  **explicit** `claude` / `claude-code` binary (no template), so other CLIs,
+  templated claude, and custom wrappers are unaffected (`build_cli_command` stays
+  a thin argv wrapper, so the review path and other callers are unchanged). A
+  claude `is_error` JSON payload now forces a task failure. Verified end to end:
+  `spec-runner doctor --cli=claude` → READY with a real measured cost. Claude's
+  native `--max-budget-usd` cap is supported by the builder but intentionally not
+  wired into runs yet (it would hard-fail on slight overage) — deferred. Review-
+  stage cost is still not tracked (follow-up).
+
 ## [2.3.1] — 2026-06-10
 
 ### Added

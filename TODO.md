@@ -102,7 +102,7 @@ Maestro-сторона формализации описана в `../Maestro/TO
 doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в pyproject всё ещё
 `2.3.1`, на PyPI doctor нет. После теста — bump → `v2.4.0`, CHANGELOG, тег, publish.
 
-### Cost tracking сломан для современного claude CLI (2026-06-11)
+### Cost tracking сломан для современного claude CLI (2026-06-11) — ✅ ИСПРАВЛЕНО (PR #16)
 
 `spec-runner doctor --cli=claude` на реальном claude **2.1.173** дал
 `cost_tracking=warn` → DEGRADED. `runner.parse_token_usage()` ищет в **stderr**
@@ -111,16 +111,14 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 работают** (cost=None, бюджет не enforce-ится). doctor это и поймал — ровно тот
 кейс «ложной уверенности».
 
-- [ ] claude CLI имеет `--output-format json` (single result) с полями usage /
-      `total_cost_usd`. Перевести получение cost на JSON вместо stderr-regex.
-- ⚠️ Это **не просто regex-твик**: при `--output-format json` весь ответ обёрнут в
-      JSON (текст в поле `result`), значит меняется и детект маркера `TASK_COMPLETE`,
-      и обработка вывода в `runner`/`execution`. Нужно: либо парсить JSON и извлекать
-      и `result` (для маркера/контента), и `usage`/`total_cost_usd` (для cost); либо
-      добавить отдельный лёгкий usage-запрос. Оценить объём перед началом.
-- [ ] После фикса `doctor --cli=claude` должен давать `cost_tracking=ok` и READY.
-- [ ] Аналогично проверить doctor'ом codex/pi/ollama — у них cost, вероятно, тоже не
-      парсится (та же причина). См. память `project_cost_tracking_broken`.
+- [x] Перевод на `--output-format json` через per-CLI seam (`build_cli_invocation`/
+      `CliInvocation`/`parse_cli_result`/`_parse_claude_json`); JSON-режим строго для
+      явного claude (`claude`/`claude-code`), остальные CLI/template/wrapper — text.
+- [x] `doctor --cli=claude` → **READY**, `cost_tracking=ok` (реальный cost $0.32).
+- [x] `is_error`-payload форсит неуспех; defensive fallback при невалидном JSON.
+- Отложено: нативный `--max-budget-usd` cap (поддержан builder'ом, но не включён в
+      runs — хард-фейлит при малом overage, ломал doctor); review-stage cost; cost для
+      codex/pi/ollama (та же seam — добавить ветку). См. память `project_cost_tracking_broken`.
 
 ### BUG: DONE-статус задачи не персистится в git при auto-commit (2026-06-11) — ✅ ИСПРАВЛЕНО (`9f62ab1`, PR #15)
 

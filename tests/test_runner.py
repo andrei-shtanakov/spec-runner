@@ -1,15 +1,19 @@
 """Tests for spec_runner.runner module."""
 
 import asyncio
+import json as _json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from spec_runner.runner import (
+    _parse_claude_json,
     build_cli_command,
+    build_cli_invocation,
     check_error_patterns,
     log_progress,
+    parse_cli_result,
     parse_token_usage,
     run_claude_async,
 )
@@ -335,3 +339,155 @@ class TestBuildCliCommandCodexV230:
             template="{cmd} exec --dangerously-bypass-approvals-and-sandbox {prompt}",
         )
         assert out == ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "hi"]
+
+
+class TestParseCliResultText:
+    def test_text_passthrough_parses_stderr_cost(self):
+        res = parse_cli_result(
+            "text",
+            stdout="work done TASK_COMPLETE",
+            stderr="input_tokens: 500\noutput_tokens: 120\ncost: $0.02",
+            returncode=0,
+        )
+        assert res.text == "work done TASK_COMPLETE"
+        assert res.input_tokens == 500
+        assert res.output_tokens == 120
+        assert res.cost_usd == 0.02
+        assert res.is_error is False
+
+    def test_text_nonzero_returncode_is_error(self):
+        res = parse_cli_result("text", stdout="", stderr="boom", returncode=1)
+        assert res.is_error is True
+        assert res.cost_usd is None
+
+
+class TestParseClaudeJson:
+    def test_parses_cost_tokens_and_text(self):
+        payload = _json.dumps(
+            {
+                "result": "did the work\nTASK_COMPLETE",
+                "total_cost_usd": 0.0123,
+                "usage": {"input_tokens": 1200, "output_tokens": 340},
+                "is_error": False,
+            }
+        )
+        res = _parse_claude_json(payload, stderr="", returncode=0)
+        assert "TASK_COMPLETE" in res.text
+        assert res.input_tokens == 1200
+        assert res.output_tokens == 340
+        assert res.cost_usd == 0.0123
+        assert res.is_error is False
+
+    def test_malformed_json_falls_back_to_text_and_stderr(self):
+        res = _parse_claude_json(
+            "not json",
+            stderr="input_tokens: 10\noutput_tokens: 2\ncost: $0.01",
+            returncode=0,
+        )
+        assert res.text == "not json"
+        assert res.cost_usd == 0.01
+        assert res.input_tokens == 10
+
+    def test_string_usage_and_cost_coerced_to_numbers(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps(
+                {
+                    "result": "ok",
+                    "total_cost_usd": "0.05",
+                    "usage": {"input_tokens": "900", "output_tokens": "210"},
+                }
+            ),
+            stderr="",
+            returncode=0,
+        )
+        assert res.cost_usd == 0.05 and isinstance(res.cost_usd, float)
+        assert res.input_tokens == 900 and isinstance(res.input_tokens, int)
+
+    def test_non_numeric_usage_becomes_none(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps({"result": "ok", "total_cost_usd": "abc", "usage": {"input_tokens": "xx"}}),
+            stderr="",
+            returncode=0,
+        )
+        assert res.cost_usd is None
+        assert res.input_tokens is None
+
+    def test_non_object_json_falls_back_to_stderr(self):
+        # valid JSON but not an object (list/number/non-dict usage) must not crash
+        res = _parse_claude_json("[1, 2, 3]", stderr="cost: $0.04", returncode=0)
+        assert res.text == "[1, 2, 3]"
+        assert res.cost_usd == 0.04
+
+    def test_non_dict_usage_does_not_crash(self):
+        import json as _j
+
+        res = _parse_claude_json(
+            _j.dumps({"result": "ok", "usage": "weird", "total_cost_usd": 0.01}),
+            stderr="",
+            returncode=0,
+        )
+        assert res.input_tokens is None
+        assert res.cost_usd == 0.01
+
+    def test_is_error_folds_message_into_text(self):
+        payload = _json.dumps(
+            {
+                "result": "",
+                "is_error": True,
+                "subtype": "error_max_turns",
+                "error": "too many turns",
+            }
+        )
+        res = _parse_claude_json(payload, stderr="", returncode=0)
+        assert res.is_error is True
+        assert "error_max_turns" in res.text
+        assert "too many turns" in res.text
+
+
+class TestBuildCliInvocation:
+    def test_explicit_claude_json_adds_flag_and_tag(self):
+        inv = build_cli_invocation("claude", "hi", json_output=True)
+        assert "--output-format" in inv.argv and "json" in inv.argv
+        assert inv.result_format == "claude_json"
+
+    def test_claude_path_basename_recognized(self):
+        inv = build_cli_invocation("/usr/local/bin/claude", "hi", json_output=True)
+        assert inv.result_format == "claude_json"
+
+    def test_no_json_when_not_requested(self):
+        inv = build_cli_invocation("claude", "hi", json_output=False)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_template_claude_stays_text(self):
+        inv = build_cli_invocation("claude", "hi", template="{cmd} -p {prompt}", json_output=True)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_wrapper_name_is_text_not_claude_json(self):
+        inv = build_cli_invocation("my-claude-wrapper", "hi", json_output=True)
+        assert "--output-format" not in inv.argv
+        assert inv.result_format == "text"
+
+    def test_unknown_command_is_text(self):
+        inv = build_cli_invocation("some-unknown-cli", "hi", json_output=True)
+        assert inv.result_format == "text"
+        assert "--output-format" not in inv.argv
+
+    def test_codex_ignores_json_output(self):
+        inv = build_cli_invocation("codex", "hi", json_output=True)
+        assert inv.result_format == "text"
+        assert inv.argv[:2] == ["codex", "exec"]
+
+    def test_max_budget_added_for_claude_json(self):
+        inv = build_cli_invocation("claude", "hi", json_output=True, max_budget_usd=0.003)
+        assert "--max-budget-usd" in inv.argv
+        i = inv.argv.index("--max-budget-usd")
+        assert inv.argv[i + 1] == "0.003"
+
+    def test_build_cli_command_wrapper_returns_argv(self):
+        assert build_cli_command("claude", "hi") == ["claude", "-p", "hi"]
