@@ -1323,7 +1323,7 @@ class TestCrashRecovery:
         recover_calls = []
         monkeypatch.setattr(
             "spec_runner.cli.recover_stale_tasks",
-            lambda state, timeout_minutes, tasks_file: recover_calls.append(True) or [],
+            lambda state, timeout_minutes, tasks_file, **kw: recover_calls.append(True) or [],
         )
 
         args = type(

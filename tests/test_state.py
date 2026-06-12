@@ -887,11 +887,10 @@ class TestRecoverStaleTasks:
             recovered = recover_stale_tasks(state, timeout_minutes=60, tasks_file=tasks_file)
             assert recovered == []
 
-    def test_zero_timeout_recovers_orphaned_running_task(self, tmp_path):
-        # On run startup the caller holds the exclusive executor lock, so ANY
-        # 'running' task is orphaned from a dead run. A timeout of 0 must recover
-        # even a just-started one (otherwise an interrupted session leaves a
-        # half-done task that the next run re-picks first and re-hangs on).
+    def test_recover_all_resets_orphaned_running_regardless_of_age(self, tmp_path):
+        # Under the exclusive lock any 'running' task is orphaned from a dead run.
+        # recover_all=True must reset even a just-started one (no age check), so an
+        # interrupted session doesn't leave a half-done task the next run re-hangs on.
         from spec_runner.state import recover_stale_tasks
 
         config = _make_config(tmp_path)
@@ -901,7 +900,10 @@ class TestRecoverStaleTasks:
 
         with ExecutorState(config) as state:
             state.mark_running("TASK-001")
-            recovered = recover_stale_tasks(state, timeout_minutes=0, tasks_file=tasks_file)
+            # Large timeout would normally NOT recover a fresh task; recover_all overrides.
+            recovered = recover_stale_tasks(
+                state, timeout_minutes=999, tasks_file=tasks_file, recover_all=True
+            )
             assert recovered == ["TASK-001"]
 
     def test_does_not_recover_completed_tasks(self, tmp_path):

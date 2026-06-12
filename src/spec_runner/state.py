@@ -799,11 +799,15 @@ def recover_stale_tasks(
     state: ExecutorState,
     timeout_minutes: float,
     tasks_file: Path,
+    *,
+    recover_all: bool = False,
 ) -> list[str]:
     """Detect and recover tasks stuck in 'running' status.
 
-    A task is considered stale if it has been 'running' for longer
-    than timeout_minutes (typically 2x the task timeout).
+    A task is considered stale if it has been 'running' for longer than
+    timeout_minutes (typically 2x the task timeout). When ``recover_all`` is True
+    (the caller holds the exclusive executor lock, so any 'running' task is
+    orphaned from a dead run) every running task is recovered regardless of age.
 
     Returns list of recovered task IDs.
     """
@@ -819,7 +823,7 @@ def recover_stale_tasks(
         started = datetime.fromisoformat(ts.started_at)
         elapsed_minutes = (now - started).total_seconds() / 60
 
-        if elapsed_minutes <= timeout_minutes:
+        if not recover_all and elapsed_minutes <= timeout_minutes:
             continue
 
         # Stale task — recover it
