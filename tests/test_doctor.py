@@ -150,6 +150,21 @@ def test_extract_command_not_found(tmp_path):
     assert rep.verdict == "broken"
 
 
+def test_extract_not_found_in_message_is_not_path_error(tmp_path):
+    # An auth/API error whose TEXT contains "not found" (e.g. Google's
+    # "API Key not found") must NOT be misreported as command-not-in-PATH.
+    att = _attempt(
+        success=False,
+        error='{"error": {"message": "API Key not found. Please pass a valid API key."}}',
+        error_kind="auth",
+        claude_output=None,
+    )
+    rep = extract(att, tmp_path, with_review=False)
+    assert rep.checks["invocation"].status == CHECK_FAIL
+    assert "PATH" not in rep.checks["invocation"].detail
+    assert "auth" in rep.checks["invocation"].detail
+
+
 def test_extract_auth_failure_classified(tmp_path):
     att = _attempt(
         success=False,

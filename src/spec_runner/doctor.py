@@ -65,8 +65,10 @@ class DoctorReport:
 
 
 def _not_in_path(error: str) -> bool:
-    e = error.lower()
-    return "no such file" in e or "not found" in e
+    # Match the FileNotFoundError for a missing executable specifically. A broad
+    # "not found" also appears in API/auth errors (e.g. "API Key not found"),
+    # which must not be misreported as command-not-in-PATH.
+    return "no such file or directory" in error.lower()
 
 
 def extract(attempt: TaskAttempt, scratch_root: Path, with_review: bool) -> DoctorReport:
