@@ -12,13 +12,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
-- **Crash/interruption recovery — orphaned `in_progress` tasks.** On run startup
-  the executor holds an exclusive lock, so any task still marked `running` is
-  orphaned from a dead run. Recovery now resets **all** such tasks regardless of
-  age (previously only those running longer than 2× the task timeout, ~60 min).
+- **Crash/interruption recovery — orphaned `in_progress` tasks.** When the run
+  holds the exclusive executor lock, any task still marked `running` is orphaned
+  from a dead run, so recovery now resets **all** such tasks regardless of age
+  (previously only those running longer than 2× the task timeout, ~60 min).
   Otherwise an interrupted session (e.g. a dropped remote shell) left a half-done
   task that the next run re-picked first (`in_progress` goes first) and hung
-  re-doing it.
+  re-doing it. **TUI runs now also take the lock** (one executor per project);
+  `--force` runs hold no lock and keep the conservative age-based heuristic.
 - **Review diff against a parent repo.** Code review skips `git diff HEAD~1` when
   git automation is off (a subdir of a larger repo, or `--no-branch --no-commit`).
   There the diff was taken against the **parent** repository — a huge, unrelated
