@@ -12,6 +12,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`doctor` mislabelled auth/API errors as "command not in PATH".** The
+  invocation check matched a bare "not found" substring, so an error whose text
+  contained it (e.g. a CLI returning Google's "API Key not found") was reported
+  as a missing executable. It now matches the actual `No such file or directory`
+  FileNotFoundError, so auth/network failures surface with their real cause.
+
 - **Crash/interruption recovery — orphaned `in_progress` tasks.** When the run
   holds the exclusive executor lock, any task still marked `running` is orphaned
   from a dead run, so recovery now resets **all** such tasks regardless of age
