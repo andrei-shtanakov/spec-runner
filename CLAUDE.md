@@ -13,7 +13,7 @@ spec-runner's role in the ecosystem: the only **working** cross-project link (Ma
 
 ## Project Overview
 
-**spec-runner** (v2.3.1) — Task automation from markdown specs via Claude CLI. Reads structured tasks from `spec/tasks.md`, executes them as Claude CLI subprocesses with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
+**spec-runner** (v2.4.0) — Task automation from markdown specs via Claude CLI. Reads structured tasks from `spec/tasks.md`, executes them as Claude CLI subprocesses with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
 
 ## Build & Development Commands
 

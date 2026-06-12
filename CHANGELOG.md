@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-06-12
+
 ### Added
 
 - **`spec-runner doctor`** — empirical CLI/model compatibility probe. Runs a
@@ -43,6 +45,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   native `--max-budget-usd` cap is supported by the builder but intentionally not
   wired into runs yet (it would hard-fail on slight overage) — deferred. Review-
   stage cost is still not tracked (follow-up).
+- **Task `DONE` status is now committed to git.** The `tasks.md` done-status +
+  checklist update happened in `execution.py` *after* `post_done_hook`'s
+  commit/merge, so it landed in the working tree post-merge, was never committed,
+  and got clobbered by the next task's branch — leaving completed tasks stuck at
+  `IN_PROGRESS` and desyncing `get_next_tasks` from the executor DB. The update
+  now runs inside `post_done_hook` before the auto-commit.
 
 ## [2.3.1] — 2026-06-10
 
