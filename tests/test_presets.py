@@ -231,6 +231,7 @@ def test_config_preset_copilot_no_longer_rejected(tmp_path, monkeypatch):
     loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
     assert loaded["claude_command"] == "copilot"
     assert "--allow-all-tools" in loaded["command_template"]
+    assert "--allow-tool='shell'" in loaded["review_command_template"]
 
 
 def test_config_multi_exec_review_through_parser(tmp_path, monkeypatch):
@@ -298,6 +299,7 @@ def test_compose_exec_template_lands_in_command_template():
 def test_compose_review_template_lands_in_review_command_template():
     profile = compose(load_fragment("claude"), load_fragment("copilot"))
     assert profile["command_template"] == ""  # exec is auto-detect
+    # template stored raw; shlex.split at runtime strips the single quotes -> --allow-tool=shell
     assert "--allow-tool='shell'" in profile["review_command_template"]
 
 
@@ -305,3 +307,11 @@ def test_compose_mono_copilot_fills_both_template_slots():
     profile = compose(load_fragment("copilot"), load_fragment("copilot"))
     assert "--allow-all-tools" in profile["command_template"]
     assert "--allow-tool='shell'" in profile["review_command_template"]
+
+
+def test_compose_model_override_with_template_preset_sets_claude_model_but_not_template():
+    """--model is written to claude_model but silently ignored by qwen/copilot templates (documented trade-off)."""
+    profile = compose(load_fragment("qwen"), load_fragment("qwen"), model_override="qwen3-coder")
+    assert profile["claude_model"] == "qwen3-coder"
+    assert "qwen3-coder" not in profile["command_template"]
+    assert "qwen3-coder" not in profile["review_command_template"]
