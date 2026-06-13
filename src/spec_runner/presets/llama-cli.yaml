@@ -1,0 +1,4 @@
+command: llama-cli
+model: ""
+skip_permissions: false
+note: ""
