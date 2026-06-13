@@ -1,0 +1,6 @@
+command: copilot
+model: ""
+skip_permissions: false
+exec_template: "{cmd} -p {prompt} -s --no-ask-user --allow-all-tools"
+review_template: "{cmd} -p {prompt} -s --no-ask-user --allow-tool='shell'"
+note: "GitHub Copilot CLI: needs Copilot access (gh auth / COPILOT_GITHUB_TOKEN). Set the model via COPILOT_MODEL env or add --model <id> to command_template. -s gives clean output so the TASK_COMPLETE marker is parseable."

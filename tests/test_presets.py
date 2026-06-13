@@ -14,7 +14,7 @@ from spec_runner.preset_cmd import (
 )
 
 
-def test_list_presets_has_six_known_clis():
+def test_list_presets_has_known_clis():
     assert list_presets() == [
         "claude",
         "codex",
@@ -22,6 +22,8 @@ def test_list_presets_has_six_known_clis():
         "pi",
         "ollama",
         "llama-cli",
+        "qwen",
+        "copilot",
     ]
 
 
@@ -46,11 +48,6 @@ def test_load_fragment_pi_has_model_note():
 def test_load_fragment_unknown_raises():
     with pytest.raises(ValueError, match="Unknown preset"):
         load_fragment("nope")
-
-
-def test_load_fragment_copilot_rejected_with_hint():
-    with pytest.raises(ValueError, match="copilot is not supported"):
-        load_fragment("copilot")
 
 
 def test_compose_mono_codex():
@@ -193,7 +190,7 @@ def test_config_subcommand_parses_and_lists(capsys):
     assert args.command == "config"
     cmd_config(args, None)
     out = capsys.readouterr().out.split()
-    assert out == ["claude", "codex", "opencode", "pi", "ollama", "llama-cli"]
+    assert out == ["claude", "codex", "opencode", "pi", "ollama", "llama-cli", "qwen", "copilot"]
 
 
 def test_config_requires_a_cli_selection(capsys):
@@ -215,14 +212,25 @@ def test_config_preset_writes_mono(tmp_path, monkeypatch):
     assert loaded["review_command"] == "codex"
 
 
-def test_config_copilot_exits_2(tmp_path, monkeypatch, capsys):
+def test_config_preset_qwen_writes_template(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "qwen"])
+    cmd_config(args, None)
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert loaded["claude_command"] == "qwen"
+    assert "--approval-mode yolo" in loaded["command_template"]
+    assert "--approval-mode plan" in loaded["review_command_template"]
+
+
+def test_config_preset_copilot_no_longer_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     parser = _build_parser()
     args = parser.parse_args(["config", "--preset", "copilot"])
-    with pytest.raises(SystemExit) as exc:
-        cmd_config(args, None)
-    assert exc.value.code == 2
-    assert "copilot is not supported" in capsys.readouterr().err
+    cmd_config(args, None)  # must NOT raise SystemExit
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert loaded["claude_command"] == "copilot"
+    assert "--allow-all-tools" in loaded["command_template"]
 
 
 def test_config_multi_exec_review_through_parser(tmp_path, monkeypatch):
@@ -257,3 +265,43 @@ def test_config_apply_through_parser_merges(tmp_path, monkeypatch):
     loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
     assert loaded["claude_command"] == "codex"
     assert loaded["budget_usd"] == 3.0
+
+
+def test_load_fragment_qwen_has_templates():
+    frag = load_fragment("qwen")
+    assert frag.command == "qwen"
+    assert "--approval-mode yolo" in frag.exec_template
+    assert "--approval-mode plan" in frag.review_template
+
+
+def test_load_fragment_copilot_has_templates_and_is_not_rejected():
+    frag = load_fragment("copilot")
+    assert frag.command == "copilot"
+    assert "--allow-all-tools" in frag.exec_template
+    assert "--allow-tool='shell'" in frag.review_template
+
+
+def test_auto_detect_presets_have_empty_templates():
+    for name in ["claude", "codex", "opencode", "pi", "ollama", "llama-cli"]:
+        frag = load_fragment(name)
+        assert frag.exec_template == ""
+        assert frag.review_template == ""
+
+
+def test_compose_exec_template_lands_in_command_template():
+    profile = compose(load_fragment("qwen"), load_fragment("claude"))
+    assert "--approval-mode yolo" in profile["command_template"]
+    # review slot is an auto-detect CLI → template cleared
+    assert profile["review_command_template"] == ""
+
+
+def test_compose_review_template_lands_in_review_command_template():
+    profile = compose(load_fragment("claude"), load_fragment("copilot"))
+    assert profile["command_template"] == ""  # exec is auto-detect
+    assert "--allow-tool='shell'" in profile["review_command_template"]
+
+
+def test_compose_mono_copilot_fills_both_template_slots():
+    profile = compose(load_fragment("copilot"), load_fragment("copilot"))
+    assert "--allow-all-tools" in profile["command_template"]
+    assert "--allow-tool='shell'" in profile["review_command_template"]
