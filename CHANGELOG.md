@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-06-13
+
 ### Added
 
 - **`spec-runner config`** — apply a CLI profile preset to
