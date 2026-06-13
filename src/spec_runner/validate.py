@@ -198,7 +198,8 @@ def validate_config(config_path: Path) -> ValidationResult:
     Checks:
     - File exists (missing = ok, use defaults)
     - YAML is parseable
-    - Keys under ``executor:`` are recognised
+    - Keys are checked against known config keys (flat v2.0 and legacy
+      ``executor:``-wrapped formats)
 
     Args:
         config_path: Path to the YAML config file.
@@ -221,12 +222,16 @@ def validate_config(config_path: Path) -> ValidationResult:
     if not isinstance(data, dict):
         return result
 
-    executor_section = data.get("executor")
+    # Canonical v2.0 is flat (no executor: wrapper); legacy uses the wrapper.
+    executor_section = data.get("executor", data)
     if not isinstance(executor_section, dict):
         return result
 
+    # Top-level sections that are parsed but not processed — warned, not errored.
+    _DEAD_SECTIONS = {"execution_order", "skip_tasks", "environment"}
+
     for key in executor_section:
-        if key not in KNOWN_EXECUTOR_KEYS:
+        if key not in KNOWN_EXECUTOR_KEYS and key not in _DEAD_SECTIONS:
             suggestion = _suggest_key(key, KNOWN_EXECUTOR_KEYS)
             msg = f"Unknown config key 'executor.{key}'"
             if suggestion:
@@ -234,7 +239,6 @@ def validate_config(config_path: Path) -> ValidationResult:
             result.errors.append(msg)
 
     # Warn about top-level sections that are not processed
-    _DEAD_SECTIONS = {"execution_order", "skip_tasks", "environment"}
     for key in data:
         if key in _DEAD_SECTIONS:
             result.warnings.append(f"Top-level key '{key}' is not supported and will be ignored")

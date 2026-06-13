@@ -10,6 +10,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner config`** — apply a CLI profile preset to
+  `spec-runner.config.yaml`. `--preset X` sets both the exec and review CLI
+  (mono); `--exec X --review Y` mixes them (multi). Presets: claude, codex,
+  opencode, pi, ollama, llama-cli. `--model` / `--review-model` override the
+  model; `--list-presets` lists them; `--dry-run` previews; `--apply` updates an
+  existing config (surgical merge of the 7 CLI-profile keys, other settings
+  preserved, backed up to `.bak`). Note: on `--apply`, PyYAML normalises
+  comments and key ordering.
+
+### Fixed
+
+- **`validate` now checks flat v2.0 configs**, not only `executor:`-wrapped
+  ones, so unknown top-level keys in `spec-runner.config.yaml` are caught.
+
 ## [2.4.1] — 2026-06-12
 
 ### Fixed

@@ -1,0 +1,4 @@
+command: claude
+model: ""
+skip_permissions: true
+note: ""

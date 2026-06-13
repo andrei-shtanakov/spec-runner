@@ -1,0 +1,4 @@
+command: ollama
+model: ""
+skip_permissions: false
+note: "Blank model defaults to llama3 at runtime; set claude_model for a different model."

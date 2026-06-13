@@ -1,0 +1,4 @@
+command: pi
+model: ""
+skip_permissions: false
+note: "Set claude_model to a model your pi install is authenticated for (pi --list-models)."

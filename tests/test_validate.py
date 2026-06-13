@@ -415,3 +415,33 @@ class TestFormatResults:
         result = ValidationResult(warnings=["some warning"])
         output = format_results(result)
         assert "  ! some warning" in output
+
+
+class TestValidateFlatConfig:
+    """Flat v2.0 config validation (no executor: wrapper)."""
+
+    def test_validate_config_flags_unknown_key_in_flat_config(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("claude_command: codex\nnonsense_key: 1\n")
+        result = validate_config(cfg)
+        assert any("nonsense_key" in e for e in result.errors)
+
+    def test_validate_config_accepts_known_flat_keys(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "claude_command: codex\n"
+            "review_command: claude\n"
+            "budget_usd: 5.0\n"
+            "hooks:\n"
+            "  pre_start:\n"
+            "    create_git_branch: true\n"
+        )
+        result = validate_config(cfg)
+        assert result.ok
+
+    def test_validate_config_flat_dead_section_is_warning_not_error(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("claude_command: codex\nexecution_order: [a, b]\n")
+        result = validate_config(cfg)
+        assert not any("execution_order" in e for e in result.errors)
+        assert any("execution_order" in w for w in result.warnings)

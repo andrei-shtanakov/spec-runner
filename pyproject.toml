@@ -56,7 +56,7 @@ Repository = "https://github.com/andrei-shtanakov/spec-runner"
 where = ["src"]
 
 [tool.setuptools.package-data]
-spec_runner = ["skills/**/*"]
+spec_runner = ["skills/**/*", "presets/*.yaml"]
 
 [tool.ruff]
 line-length = 100
