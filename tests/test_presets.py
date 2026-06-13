@@ -309,18 +309,6 @@ def test_compose_mono_copilot_fills_both_template_slots():
     assert "--allow-tool='shell'" in profile["review_command_template"]
 
 
-def test_compose_model_override_with_template_preset_sets_claude_model_but_not_template():
-    """--model is written to claude_model but silently ignored by qwen/copilot templates (documented trade-off)."""
-    # NOTE: this test documents the OLD v2.6.0 behaviour and is superseded by
-    # test_compose_templated_preset_with_model_appends_flag (Rev-5 / v2.7.0).
-    # Keep it commented out rather than deleted so the history is visible.
-    # profile = compose(load_fragment("qwen"), load_fragment("qwen"), model_override="qwen3-coder")
-    # assert profile["claude_model"] == "qwen3-coder"
-    # assert "qwen3-coder" not in profile["command_template"]
-    # assert "qwen3-coder" not in profile["review_command_template"]
-    pass  # superseded by Rev-5 behaviour tested below
-
-
 # --- Revision 5 / v2.7.0: model-aware templates for qwen/copilot ---
 
 
