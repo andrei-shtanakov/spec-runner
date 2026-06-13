@@ -354,6 +354,20 @@ paths:
 > script — no core code. See [docs/pi-workflow.md](docs/pi-workflow.md) and the runnable
 > [examples/pi-loop/](examples/pi-loop/).
 
+### Switching CLI (claude / codex / pi / ...)
+
+Apply a preset instead of hand-editing `spec-runner.config.yaml`:
+
+```bash
+spec-runner config --preset codex                 # everything on codex
+spec-runner config --exec claude --review codex    # claude codes, codex reviews
+spec-runner config --list-presets                  # claude codex opencode pi ollama llama-cli
+spec-runner config --preset pi --apply             # update an existing config
+```
+
+Tests stay on your `test_command` (e.g. pytest); presets only set the exec and
+review CLIs. Run `spec-runner doctor` afterwards to verify the profile.
+
 ### Checking CLI/model compatibility
 
 `spec-runner doctor` runs a real one-task probe through the actual execution

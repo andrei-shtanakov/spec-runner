@@ -82,6 +82,9 @@ spec-runner task sync-from-gh              # Sync GitHub Issues → tasks.md
 spec-runner doctor                         # Probe CLI/model compatibility (real mini-task)
 spec-runner doctor --cli=codex --model=X   # Ad-hoc CLI+model probe
 spec-runner doctor --with-review --json    # Include review stage, machine output
+spec-runner config --preset codex          # Set exec+review CLI (mono)
+spec-runner config --exec claude --review codex  # Mixed CLIs (multi)
+spec-runner config --list-presets          # List available CLI presets
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
