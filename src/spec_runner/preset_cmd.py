@@ -61,3 +61,28 @@ def load_fragment(name: str) -> Fragment:
         skip_permissions=bool(data.get("skip_permissions", False)),
         note=data.get("note", ""),
     )
+
+
+def compose(
+    exec_frag: Fragment,
+    review_frag: Fragment,
+    model_override: str = "",
+    review_model_override: str = "",
+) -> dict[str, object]:
+    """Map an (exec, review) fragment pair into the 7 CLI-profile keys.
+
+    `command_template` / `review_command_template` are always cleared to "" so a
+    stale template from a previously configured CLI does not leak. Model
+    precedence: per-slot override > shared --model override > fragment default.
+    """
+    exec_model = model_override or exec_frag.model
+    review_model = review_model_override or model_override or review_frag.model
+    return {
+        "claude_command": exec_frag.command,
+        "claude_model": exec_model,
+        "command_template": "",
+        "skip_permissions": exec_frag.skip_permissions,
+        "review_command": review_frag.command,
+        "review_model": review_model,
+        "review_command_template": "",
+    }
