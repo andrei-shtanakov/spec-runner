@@ -160,6 +160,7 @@ def test_apply_merges_wrapped_preserving_wrapper(tmp_path, monkeypatch):
     assert loaded["claude_command"] == "pi"
     assert loaded["review_command"] == "claude"
     assert loaded["budget_usd"] == 7.0
+    assert Path("spec-runner.config.yaml.bak").exists()
 
 
 def test_apply_malformed_yaml_aborts_without_writing(tmp_path, monkeypatch):
@@ -168,7 +169,8 @@ def test_apply_malformed_yaml_aborts_without_writing(tmp_path, monkeypatch):
     cfg.write_text("claude_command: [unclosed\n")
     original = cfg.read_text()
     profile = compose(load_fragment("codex"), load_fragment("codex"))
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         apply_to_config(profile, apply_changes=True, dry_run=False)
+    assert exc.value.code == 1
     assert cfg.read_text() == original
     assert not Path("spec-runner.config.yaml.bak").exists()

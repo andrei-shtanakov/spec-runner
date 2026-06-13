@@ -170,16 +170,19 @@ def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
     try:
         existing = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        raise SystemExit(f"{target_path}: cannot parse YAML: {exc}") from exc
+        print(f"{target_path}: cannot parse YAML: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     if existing is None:
         existing = {}
     if not isinstance(existing, dict):
-        raise SystemExit(f"{target_path}: expected a top-level YAML mapping")
+        print(f"{target_path}: expected a top-level YAML mapping", file=sys.stderr)
+        raise SystemExit(1)
 
     # Select target mapping; mirror load_config_from_yaml's flat/wrapped rule.
     target: dict[str, object] = existing.get("executor", existing)
     if not isinstance(target, dict):
-        raise SystemExit(f"{target_path}: 'executor' is not a mapping")
+        print(f"{target_path}: 'executor' is not a mapping", file=sys.stderr)
+        raise SystemExit(1)
 
     backup = target_path.parent / (target_path.name + ".bak")
     shutil.copyfile(target_path, backup)
