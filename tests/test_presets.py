@@ -311,7 +311,67 @@ def test_compose_mono_copilot_fills_both_template_slots():
 
 def test_compose_model_override_with_template_preset_sets_claude_model_but_not_template():
     """--model is written to claude_model but silently ignored by qwen/copilot templates (documented trade-off)."""
-    profile = compose(load_fragment("qwen"), load_fragment("qwen"), model_override="qwen3-coder")
-    assert profile["claude_model"] == "qwen3-coder"
-    assert "qwen3-coder" not in profile["command_template"]
-    assert "qwen3-coder" not in profile["review_command_template"]
+    # NOTE: this test documents the OLD v2.6.0 behaviour and is superseded by
+    # test_compose_templated_preset_with_model_appends_flag (Rev-5 / v2.7.0).
+    # Keep it commented out rather than deleted so the history is visible.
+    # profile = compose(load_fragment("qwen"), load_fragment("qwen"), model_override="qwen3-coder")
+    # assert profile["claude_model"] == "qwen3-coder"
+    # assert "qwen3-coder" not in profile["command_template"]
+    # assert "qwen3-coder" not in profile["review_command_template"]
+    pass  # superseded by Rev-5 behaviour tested below
+
+
+# --- Revision 5 / v2.7.0: model-aware templates for qwen/copilot ---
+
+
+def test_qwen_copilot_fragments_have_model_flag():
+    assert load_fragment("qwen").model_flag == "--model"
+    assert load_fragment("copilot").model_flag == "--model"
+
+
+def test_auto_detect_fragments_have_no_model_flag():
+    for name in ["claude", "codex", "opencode", "pi", "ollama", "llama-cli"]:
+        assert load_fragment(name).model_flag == ""
+
+
+def test_compose_templated_preset_with_model_appends_flag():
+    profile = compose(
+        load_fragment("qwen"), load_fragment("qwen"), model_override="qwen-coder-plus"
+    )
+    assert profile["command_template"].endswith("--model {model}")
+    assert profile["review_command_template"].endswith("--model {model}")
+    assert profile["claude_model"] == "qwen-coder-plus"
+    assert profile["review_model"] == "qwen-coder-plus"
+
+
+def test_compose_templated_preset_without_model_has_no_flag():
+    # anti-trap regression: empty model must NOT produce a dangling --model
+    profile = compose(load_fragment("copilot"), load_fragment("copilot"))
+    assert "--model" not in profile["command_template"]
+    assert "--model" not in profile["review_command_template"]
+
+
+def test_compose_auto_detect_preset_with_model_keeps_empty_template():
+    profile = compose(load_fragment("claude"), load_fragment("claude"), model_override="sonnet")
+    assert profile["command_template"] == ""
+    assert profile["review_command_template"] == ""
+    assert profile["claude_model"] == "sonnet"  # model flows via auto-detect, not the template
+
+
+def test_compose_multi_exec_qwen_review_claude_with_model():
+    profile = compose(
+        load_fragment("qwen"), load_fragment("claude"), model_override="qwen-coder-plus"
+    )
+    assert profile["command_template"].endswith("--model {model}")  # exec qwen templated
+    assert profile["review_command_template"] == ""  # review claude auto-detect
+    assert profile["review_model"] == "qwen-coder-plus"
+
+
+def test_config_preset_qwen_with_model_through_parser(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "qwen", "--model", "qwen-coder-plus"])
+    cmd_config(args, None)
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert "--model {model}" in loaded["command_template"]
+    assert loaded["claude_model"] == "qwen-coder-plus"

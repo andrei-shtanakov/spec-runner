@@ -52,6 +52,7 @@ class Fragment:
     skip_permissions: bool = False
     exec_template: str = ""
     review_template: str = ""
+    model_flag: str = ""
     note: str = ""
 
 
@@ -75,8 +76,17 @@ def load_fragment(name: str) -> Fragment:
         skip_permissions=bool(data.get("skip_permissions", False)),
         exec_template=data.get("exec_template", ""),
         review_template=data.get("review_template", ""),
+        model_flag=data.get("model_flag", ""),
         note=data.get("note", ""),
     )
+
+
+def _apply_model_flag(template: str, model_flag: str, model: str) -> str:
+    """Append the model flag to a template only when there is a template, a flag,
+    and a non-empty model — avoids a dangling `--model` with no value."""
+    if template and model_flag and model:
+        return f"{template} {model_flag} {{model}}"
+    return template
 
 
 def compose(
@@ -91,17 +101,25 @@ def compose(
     from the review fragment. Auto-detect CLIs carry empty templates, which also
     clears any stale template from a previously configured CLI. Model precedence:
     per-slot override > shared --model override > fragment default.
+
+    When a fragment has a `model_flag` (e.g. ``"--model"``), it is appended to
+    the template only when the resolved model is non-empty — avoiding a dangling
+    ``--model`` argument when no model is supplied.
     """
     exec_model = model_override or exec_frag.model
     review_model = review_model_override or model_override or review_frag.model
     return {
         "claude_command": exec_frag.command,
         "claude_model": exec_model,
-        "command_template": exec_frag.exec_template,
+        "command_template": _apply_model_flag(
+            exec_frag.exec_template, exec_frag.model_flag, exec_model
+        ),
         "skip_permissions": exec_frag.skip_permissions,
         "review_command": review_frag.command,
         "review_model": review_model,
-        "review_command_template": review_frag.review_template,
+        "review_command_template": _apply_model_flag(
+            review_frag.review_template, review_frag.model_flag, review_model
+        ),
     }
 
 
