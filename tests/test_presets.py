@@ -223,3 +223,37 @@ def test_config_copilot_exits_2(tmp_path, monkeypatch, capsys):
         cmd_config(args, None)
     assert exc.value.code == 2
     assert "copilot is not supported" in capsys.readouterr().err
+
+
+def test_config_multi_exec_review_through_parser(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(
+        ["config", "--exec", "claude", "--review", "codex", "--model", "sonnet"]
+    )
+    cmd_config(args, None)
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert loaded["claude_command"] == "claude"
+    assert loaded["claude_model"] == "sonnet"
+    assert loaded["review_command"] == "codex"
+    assert loaded["review_model"] == "sonnet"
+
+
+def test_config_dry_run_through_parser_writes_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "codex", "--dry-run"])
+    cmd_config(args, None)
+    assert not Path("spec-runner.config.yaml").exists()
+    assert "claude_command:" in capsys.readouterr().out
+
+
+def test_config_apply_through_parser_merges(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("spec-runner.config.yaml").write_text("claude_command: claude\nbudget_usd: 3.0\n")
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "codex", "--apply"])
+    cmd_config(args, None)
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert loaded["claude_command"] == "codex"
+    assert loaded["budget_usd"] == 3.0

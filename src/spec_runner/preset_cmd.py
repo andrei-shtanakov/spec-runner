@@ -164,9 +164,9 @@ def apply_to_config(
 
 
 def _print_profile(profile: dict[str, object]) -> None:
-    """Print the 7 keys that would be written (stdout)."""
+    """Print the 7 keys that would be written (stdout), in YAML scalar format."""
     for key in PROFILE_KEYS:
-        print(f"{key}: {profile[key]!r}")
+        print(f"{key}: {_fmt_scalar(profile[key])}")
 
 
 def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
