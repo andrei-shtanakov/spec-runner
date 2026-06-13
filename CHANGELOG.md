@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`config` presets for `qwen` and `copilot`.** `spec-runner config --preset
+  qwen` (Qwen Code CLI) and `--preset copilot` (GitHub Copilot CLI) now write the
+  correct headless `command_template` / `review_command_template` (these CLIs are
+  not auto-detected). qwen uses `--approval-mode yolo` for exec and `plan` for the
+  read-only review; copilot uses `-s --no-ask-user --allow-all-tools` for exec and
+  `--allow-tool='shell'` for review. The model is configured in each CLI's own
+  settings/env (see the printed note); `--model` does not apply to these two.
+  Preset list is now: claude, codex, opencode, pi, ollama, llama-cli, qwen, copilot.
+
 ## [2.5.0] — 2026-06-13
 
 ### Added

@@ -18,8 +18,18 @@ if TYPE_CHECKING:
 CONFIG_FILE = Path("spec-runner.config.yaml")
 LEGACY_CONFIG_FILE = Path("spec/executor.config.yaml")
 
-# CLI names recognised by runner.build_cli_invocation auto-detect.
-PRESET_NAMES = ["claude", "codex", "opencode", "pi", "ollama", "llama-cli"]
+# CLI names: the first six are auto-detected by runner.build_cli_invocation;
+# qwen and copilot are template-driven (not auto-detected).
+PRESET_NAMES = [
+    "claude",
+    "codex",
+    "opencode",
+    "pi",
+    "ollama",
+    "llama-cli",
+    "qwen",
+    "copilot",
+]
 
 # The 7 CLI-profile keys the composer manages (top-level executor-mapping keys).
 PROFILE_KEYS = [
@@ -40,6 +50,8 @@ class Fragment:
     command: str
     model: str = ""
     skip_permissions: bool = False
+    exec_template: str = ""
+    review_template: str = ""
     note: str = ""
 
 
@@ -50,11 +62,6 @@ def list_presets() -> list[str]:
 
 def load_fragment(name: str) -> Fragment:
     """Load a preset fragment by CLI name from bundled package data."""
-    if name == "copilot":
-        raise ValueError(
-            "copilot is not supported in v1 (no auto-detect); set "
-            "command_template manually in spec-runner.config.yaml."
-        )
     if name not in PRESET_NAMES:
         valid = ", ".join(PRESET_NAMES)
         raise ValueError(f"Unknown preset '{name}'. Valid presets: {valid}")
@@ -66,6 +73,8 @@ def load_fragment(name: str) -> Fragment:
         command=data["command"],
         model=data.get("model", ""),
         skip_permissions=bool(data.get("skip_permissions", False)),
+        exec_template=data.get("exec_template", ""),
+        review_template=data.get("review_template", ""),
         note=data.get("note", ""),
     )
 
@@ -78,20 +87,21 @@ def compose(
 ) -> dict[str, object]:
     """Map an (exec, review) fragment pair into the 7 CLI-profile keys.
 
-    `command_template` / `review_command_template` are always cleared to "" so a
-    stale template from a previously configured CLI does not leak. Model
-    precedence: per-slot override > shared --model override > fragment default.
+    `command_template` comes from the exec fragment, `review_command_template`
+    from the review fragment. Auto-detect CLIs carry empty templates, which also
+    clears any stale template from a previously configured CLI. Model precedence:
+    per-slot override > shared --model override > fragment default.
     """
     exec_model = model_override or exec_frag.model
     review_model = review_model_override or model_override or review_frag.model
     return {
         "claude_command": exec_frag.command,
         "claude_model": exec_model,
-        "command_template": "",
+        "command_template": exec_frag.exec_template,
         "skip_permissions": exec_frag.skip_permissions,
         "review_command": review_frag.command,
         "review_model": review_model,
-        "review_command_template": "",
+        "review_command_template": review_frag.review_template,
     }
 
 

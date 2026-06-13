@@ -17,6 +17,25 @@ from .task import Task
 
 logger = get_logger("review")
 
+
+def _resolve_review_template(config: ExecutorConfig, review_cmd: str) -> str:
+    """Return the command template to use for the review stage.
+
+    Resolution order:
+    1. Explicit ``review_command_template`` — always wins.
+    2. ``command_template`` — only when ``review_cmd`` is the *same binary* as
+       ``config.claude_command`` (i.e. the exec CLI).  Prevents an exec-CLI
+       template (e.g. a templated codex/qwen/copilot preset) from bleeding into
+       a different review CLI.
+    3. Empty string — let the runner auto-detect argv for the review CLI.
+    """
+    if config.review_command_template:
+        return config.review_command_template
+    if review_cmd == config.claude_command:
+        return config.command_template
+    return ""
+
+
 # Review role definitions for parallel review agents
 REVIEW_ROLES: dict[str, str] = {
     "quality": (
@@ -223,7 +242,7 @@ def run_code_review(
     # Use review-specific command/model if configured, then persona, then main settings
     review_cmd = config.review_command or config.claude_command
     review_model = config.review_model or config.get_model_for_role("reviewer")
-    review_template = config.review_command_template or config.command_template
+    review_template = _resolve_review_template(config, review_cmd)
 
     # Build prompt with CLI-specific template
     prompt = build_review_prompt(
@@ -391,7 +410,7 @@ def run_parallel_review(
 
     review_cmd = config.review_command or config.claude_command
     review_model = config.review_model or config.get_model_for_role("reviewer")
-    review_template = config.review_command_template or config.command_template
+    review_template = _resolve_review_template(config, review_cmd)
 
     base_prompt = build_review_prompt(
         task,

@@ -3,8 +3,9 @@
 **Date:** 2026-06-12
 **Status:** Approved (brainstorming) — ready for implementation plan
 **Target version:** 2.5.0 (minor — new feature, no contract/schema change)
-**Revision:** 3 (adds: llama-cli naming, per-fragment skip_permissions,
-static-template fresh write, flat-config validation, raw-YAML read in cmd_config)
+**Revision:** 4 (adds qwen + copilot presets in v2.6.0 — see the "Revision 4"
+section at the end; re-introduces per-fragment templates for non-auto-detected
+CLIs). Revisions 1–3 shipped as v2.5.0.
 
 ## Problem
 
@@ -279,3 +280,127 @@ Mock nothing external — pure file/YAML; fast, no `@pytest.mark.slow`.
 
 None blocking. (ruamel-based comment preservation and per-CLI tool restriction
 are deliberate future upgrades, not v1 requirements.)
+
+---
+
+# Revision 4 — `qwen` + `copilot` presets (v2.6.0)
+
+**Date:** 2026-06-13
+**Target version:** 2.6.0 (minor — adds two presets + a fragment-schema field)
+
+## Goal
+
+Add `qwen` (Qwen Code CLI) and `copilot` (GitHub Copilot CLI) as presets. Both
+were deferred in v1 because neither is auto-detected by
+`runner.build_cli_invocation` — they need an explicit `command_template`. This
+revision re-introduces per-fragment template fields (removed in Revision 2 when
+all presets were auto-detect-only) and ships the two fragments.
+
+Also: document the already-working Qwen paths (no code) — Qwen in the cloud via
+the `opencode` preset, and locally via the `ollama` preset.
+
+## Fragment schema change
+
+The fragment gains two optional fields:
+
+```yaml
+command: qwen
+model: ""
+skip_permissions: false
+exec_template: ""      # NEW — → command_template (empty = rely on auto-detect)
+review_template: ""    # NEW — → review_command_template
+note: ""
+```
+
+- The six auto-detect presets (claude/codex/opencode/pi/ollama/llama-cli) leave
+  both template fields empty → composer continues to emit `command_template: ""`
+  / `review_command_template: ""` (auto-detect path, unchanged behavior).
+- Only `qwen` and `copilot` set non-empty templates.
+
+## Composer change
+
+`compose` no longer hard-codes the two template keys to `""`. Instead:
+
+- `command_template` = `exec_frag.exec_template` (default `""`)
+- `review_command_template` = `review_frag.review_template` (default `""`)
+
+This keeps the stale-template-clearing property (auto-detect fragments emit `""`,
+overwriting any previous CLI's template) while letting qwen/copilot inject their
+required invocation. The 7-key output shape is unchanged.
+
+## New fragments
+
+**`presets/qwen.yaml`** (Qwen Code CLI — `qwen -p` headless; verified against
+qwen-code docs):
+
+```yaml
+command: qwen
+model: ""
+skip_permissions: false
+exec_template: "{cmd} -p {prompt} --approval-mode yolo"
+review_template: "{cmd} -p {prompt} --approval-mode plan"
+note: "Qwen Code: set the model in ~/.qwen/settings.json (modelProviders). yolo is required for headless edits; plan = read-only review."
+```
+
+**`presets/copilot.yaml`** (GitHub Copilot CLI — `copilot -p` programmatic;
+verified against github/docs copilot-cli reference):
+
+```yaml
+command: copilot
+model: ""
+skip_permissions: false
+exec_template: "{cmd} -p {prompt} -s --no-ask-user --allow-all-tools"
+review_template: "{cmd} -p {prompt} -s --no-ask-user --allow-tool='shell'"
+note: "GitHub Copilot CLI: needs Copilot access (gh auth / COPILOT_GITHUB_TOKEN). Set the model via COPILOT_MODEL env or add --model <id> to command_template. -s gives clean output so the TASK_COMPLETE marker is parseable."
+```
+
+Rationale for the flags:
+- qwen headless with default approval *fails* on file edits → `--approval-mode
+  yolo` for exec; `--approval-mode plan` (analysis only) for the read-only review
+  gate.
+- copilot headless needs an approval bypass or tool calls block → `--allow-all-tools`
+  for exec; `--allow-tool='shell'` (read via shell, no `write`) for review.
+  `-s` (silent) strips session metadata so `TASK_COMPLETE` is visible in stdout;
+  `--no-ask-user` stops it pausing for clarifying questions.
+
+## Deliberate trade-off: model-less templates
+
+The qwen/copilot templates omit `{model}`. A non-empty `{model}` placeholder with
+an empty model produces a broken `--model ` argument (the same trap pi avoids).
+Consequence: `spec-runner config --preset copilot --model X` sets `claude_model`
+in the config but the template ignores it for these two CLIs — the model is set
+in the CLI's own settings/env (documented in each fragment's `note`). A
+model-aware composer (append `--model` only when a model is given) is a deliberate
+follow-up, not part of this revision.
+
+## Other changes
+
+- `load_fragment` no longer special-cases `copilot` as rejected; `copilot` is now
+  a valid preset. The unknown-preset path still rejects truly unknown names.
+- `PRESET_NAMES` → `[claude, codex, opencode, pi, ollama, llama-cli, qwen, copilot]`
+  (8). `--list-presets` lists all 8.
+- README: add a "Qwen — cheap in the cloud (OpenCode) and local (Ollama)" section
+  with the `opencode`/`ollama` preset examples, and mention the new `qwen`/`copilot`
+  presets. CHANGELOG `[Unreleased]` → Added.
+
+## Testing (extends `tests/test_presets.py`)
+
+- `load_fragment("qwen")` / `load_fragment("copilot")` return fragments with the
+  expected non-empty `exec_template` / `review_template`.
+- `copilot` is no longer rejected (the old `test_..._copilot...` reject test is
+  updated/removed; a new test asserts copilot loads).
+- `compose` with a templated exec fragment puts the template in `command_template`;
+  with a templated review fragment puts it in `review_command_template`; mixing a
+  templated CLI with an auto-detect CLI leaves the other slot's template `""`
+  (e.g. `--exec copilot --review claude` → `command_template` = copilot's,
+  `review_command_template` = `""`).
+- The six auto-detect presets still produce empty templates (regression guard).
+- `--list-presets` returns all 8 including qwen and copilot.
+- End-to-end through `_build_parser()`: `config --preset qwen` writes a config
+  whose `command_template` is the qwen exec template.
+
+## Out of scope (still)
+
+- A model-aware composer (`--model` wired into qwen/copilot templates).
+- Auto-detection of qwen/copilot in `runner.build_cli_invocation` (templates are
+  the supported mechanism; auto-detect would be a separate change).
