@@ -38,7 +38,7 @@ from .execution import (
 )
 from .git_ops import ensure_on_main_branch
 from .logging import get_logger
-from .preset_cmd import cmd_config  # noqa: F401
+from .preset_cmd import cmd_config
 from .runner import (
     log_progress,
 )

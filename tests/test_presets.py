@@ -202,6 +202,7 @@ def test_config_requires_a_cli_selection(capsys):
     with pytest.raises(SystemExit) as exc:
         cmd_config(args, None)
     assert exc.value.code == 2
+    assert "Specify --preset" in capsys.readouterr().err
 
 
 def test_config_preset_writes_mono(tmp_path, monkeypatch):
@@ -214,10 +215,11 @@ def test_config_preset_writes_mono(tmp_path, monkeypatch):
     assert loaded["review_command"] == "codex"
 
 
-def test_config_copilot_exits_2(tmp_path, monkeypatch):
+def test_config_copilot_exits_2(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     parser = _build_parser()
     args = parser.parse_args(["config", "--preset", "copilot"])
     with pytest.raises(SystemExit) as exc:
         cmd_config(args, None)
     assert exc.value.code == 2
+    assert "copilot is not supported" in capsys.readouterr().err

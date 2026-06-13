@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import sys
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from .config import ExecutorConfig
 
 CONFIG_FILE = Path("spec-runner.config.yaml")
 LEGACY_CONFIG_FILE = Path("spec/executor.config.yaml")
@@ -191,15 +196,15 @@ def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
     return target_path
 
 
-def cmd_config(args: object, config: object = None) -> None:
+def cmd_config(args: argparse.Namespace, config: ExecutorConfig | None = None) -> None:
     """CLI entry for `spec-runner config`."""
-    if getattr(args, "list_presets", False):
+    if args.list_presets:
         for name in list_presets():
             print(name)
         return
 
-    exec_name: str = getattr(args, "exec_cli", None) or getattr(args, "preset", None) or ""
-    review_name: str = getattr(args, "review_cli", None) or getattr(args, "preset", None) or ""
+    exec_name: str = args.exec_cli or args.preset or ""
+    review_name: str = args.review_cli or args.preset or ""
     if not exec_name or not review_name:
         print(
             "Specify --preset X (mono) or --exec X --review Y (multi). See --list-presets.",
@@ -217,13 +222,13 @@ def cmd_config(args: object, config: object = None) -> None:
     profile = compose(
         exec_frag,
         review_frag,
-        model_override=getattr(args, "model", None) or "",
-        review_model_override=getattr(args, "review_model", None) or "",
+        model_override=args.model or "",
+        review_model_override=args.review_model or "",
     )
     written = apply_to_config(
         profile,
-        apply_changes=getattr(args, "apply", False),
-        dry_run=getattr(args, "dry_run", False),
+        apply_changes=args.apply,
+        dry_run=args.dry_run,
     )
     if written is not None:
         for note in dict.fromkeys(n for n in (exec_frag.note, review_frag.note) if n):
