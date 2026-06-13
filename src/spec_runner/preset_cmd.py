@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -54,6 +53,8 @@ def load_fragment(name: str) -> Fragment:
         raise ValueError(f"Unknown preset '{name}'. Valid presets: {valid}")
     resource = files("spec_runner") / "presets" / f"{name}.yaml"
     data = yaml.safe_load(resource.read_text()) or {}
+    if "command" not in data:
+        raise ValueError(f"Preset file for '{name}' is missing required 'command' key")
     return Fragment(
         command=data["command"],
         model=data.get("model", ""),

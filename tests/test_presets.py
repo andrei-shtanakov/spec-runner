@@ -5,7 +5,12 @@ from spec_runner.preset_cmd import Fragment, list_presets, load_fragment
 
 def test_list_presets_has_six_known_clis():
     assert list_presets() == [
-        "claude", "codex", "opencode", "pi", "ollama", "llama-cli",
+        "claude",
+        "codex",
+        "opencode",
+        "pi",
+        "ollama",
+        "llama-cli",
     ]
 
 
