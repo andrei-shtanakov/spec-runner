@@ -132,3 +132,43 @@ def test_refuse_without_apply_exits_1_and_leaves_file(tmp_path, monkeypatch):
         apply_to_config(profile, apply_changes=False, dry_run=False)
     assert exc.value.code == 1
     assert cfg.read_text() == original
+
+
+def test_apply_merges_flat_preserving_other_keys(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = Path("spec-runner.config.yaml")
+    cfg.write_text("claude_command: claude\nbudget_usd: 10.0\ntelegram_bot_token: secret123\n")
+    profile = compose(load_fragment("codex"), load_fragment("codex"))
+    apply_to_config(profile, apply_changes=True, dry_run=False)
+    loaded = load_config_from_yaml(cfg)
+    assert loaded["claude_command"] == "codex"
+    assert loaded["review_command"] == "codex"
+    assert loaded["budget_usd"] == 10.0
+    assert loaded["telegram_bot_token"] == "secret123"
+    assert "executor:" not in cfg.read_text()  # flat stays flat
+    assert Path("spec-runner.config.yaml.bak").exists()
+
+
+def test_apply_merges_wrapped_preserving_wrapper(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = Path("spec-runner.config.yaml")
+    cfg.write_text("executor:\n  claude_command: claude\n  budget_usd: 7.0\n")
+    profile = compose(load_fragment("pi"), load_fragment("claude"))
+    apply_to_config(profile, apply_changes=True, dry_run=False)
+    assert "executor:" in cfg.read_text()  # wrapped stays wrapped
+    loaded = load_config_from_yaml(cfg)
+    assert loaded["claude_command"] == "pi"
+    assert loaded["review_command"] == "claude"
+    assert loaded["budget_usd"] == 7.0
+
+
+def test_apply_malformed_yaml_aborts_without_writing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = Path("spec-runner.config.yaml")
+    cfg.write_text("claude_command: [unclosed\n")
+    original = cfg.read_text()
+    profile = compose(load_fragment("codex"), load_fragment("codex"))
+    with pytest.raises(SystemExit):
+        apply_to_config(profile, apply_changes=True, dry_run=False)
+    assert cfg.read_text() == original
+    assert not Path("spec-runner.config.yaml.bak").exists()

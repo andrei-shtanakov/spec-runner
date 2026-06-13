@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from dataclasses import dataclass
 from importlib.resources import files
@@ -164,4 +165,24 @@ def _print_profile(profile: dict[str, object]) -> None:
 
 
 def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
-    raise NotImplementedError  # implemented in Task 5
+    """Overwrite only the 7 CLI-profile keys, preserving shape and other keys."""
+    raw = target_path.read_text()
+    try:
+        existing = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"{target_path}: cannot parse YAML: {exc}") from exc
+    if existing is None:
+        existing = {}
+    if not isinstance(existing, dict):
+        raise SystemExit(f"{target_path}: expected a top-level YAML mapping")
+
+    # Select target mapping; mirror load_config_from_yaml's flat/wrapped rule.
+    target: dict[str, object] = existing.get("executor", existing)
+    if not isinstance(target, dict):
+        raise SystemExit(f"{target_path}: 'executor' is not a mapping")
+
+    backup = target_path.parent / (target_path.name + ".bak")
+    shutil.copyfile(target_path, backup)
+    target.update(profile)
+    target_path.write_text(yaml.safe_dump(existing, sort_keys=False, allow_unicode=True))
+    return target_path
