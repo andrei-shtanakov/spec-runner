@@ -38,6 +38,7 @@ from .execution import (
 )
 from .git_ops import ensure_on_main_branch
 from .logging import get_logger
+from .preset_cmd import cmd_config  # noqa: F401
 from .runner import (
     log_progress,
 )
@@ -905,6 +906,25 @@ def _build_parser() -> argparse.ArgumentParser:
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
 
+    # config (CLI profile presets)
+    config_parser = subparsers.add_parser(
+        "config", parents=[common], help="Apply a CLI profile preset to config"
+    )
+    config_parser.add_argument("--preset", help="CLI for both exec and review (mono)")
+    config_parser.add_argument("--exec", dest="exec_cli", help="CLI for the exec/implementer stage")
+    config_parser.add_argument("--review", dest="review_cli", help="CLI for the review stage")
+    config_parser.add_argument("--model", help="Model for both slots")
+    config_parser.add_argument(
+        "--review-model", dest="review_model", help="Model for the review slot only"
+    )
+    config_parser.add_argument("--list-presets", action="store_true", help="List available presets")
+    config_parser.add_argument(
+        "--dry-run", action="store_true", help="Print keys that would change; write nothing"
+    )
+    config_parser.add_argument(
+        "--apply", action="store_true", help="Update the CLI profile in an existing config"
+    )
+
     # verify
     verify_parser = subparsers.add_parser(
         "verify", parents=[common], help="Verify post-execution compliance"
@@ -1103,6 +1123,7 @@ def main():
         "watch": cmd_watch,
         "mcp": cmd_mcp,
         "doctor": cmd_doctor,
+        "config": cmd_config,
     }
 
     # Handle unified task subcommand

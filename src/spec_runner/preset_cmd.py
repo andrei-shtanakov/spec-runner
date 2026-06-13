@@ -189,3 +189,43 @@ def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
     target.update(profile)
     target_path.write_text(yaml.safe_dump(existing, sort_keys=False, allow_unicode=True))
     return target_path
+
+
+def cmd_config(args: object, config: object = None) -> None:
+    """CLI entry for `spec-runner config`."""
+    if getattr(args, "list_presets", False):
+        for name in list_presets():
+            print(name)
+        return
+
+    exec_name: str = getattr(args, "exec_cli", None) or getattr(args, "preset", None) or ""
+    review_name: str = getattr(args, "review_cli", None) or getattr(args, "preset", None) or ""
+    if not exec_name or not review_name:
+        print(
+            "Specify --preset X (mono) or --exec X --review Y (multi). See --list-presets.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        exec_frag = load_fragment(exec_name)
+        review_frag = load_fragment(review_name)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
+
+    profile = compose(
+        exec_frag,
+        review_frag,
+        model_override=getattr(args, "model", None) or "",
+        review_model_override=getattr(args, "review_model", None) or "",
+    )
+    written = apply_to_config(
+        profile,
+        apply_changes=getattr(args, "apply", False),
+        dry_run=getattr(args, "dry_run", False),
+    )
+    if written is not None:
+        for note in dict.fromkeys(n for n in (exec_frag.note, review_frag.note) if n):
+            print(f"note: {note}")
+        print(f"Wrote {written}. Run 'spec-runner doctor' to verify the CLI profile.")

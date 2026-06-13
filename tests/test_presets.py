@@ -2,8 +2,16 @@ from pathlib import Path
 
 import pytest
 
+from spec_runner.cli import _build_parser
 from spec_runner.config import load_config_from_yaml
-from spec_runner.preset_cmd import Fragment, apply_to_config, compose, list_presets, load_fragment
+from spec_runner.preset_cmd import (
+    Fragment,
+    apply_to_config,
+    cmd_config,
+    compose,
+    list_presets,
+    load_fragment,
+)
 
 
 def test_list_presets_has_six_known_clis():
@@ -174,3 +182,42 @@ def test_apply_malformed_yaml_aborts_without_writing(tmp_path, monkeypatch):
     assert exc.value.code == 1
     assert cfg.read_text() == original
     assert not Path("spec-runner.config.yaml.bak").exists()
+
+
+# Task 6: cmd_config entry point + argparse wiring
+
+
+def test_config_subcommand_parses_and_lists(capsys):
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--list-presets"])
+    assert args.command == "config"
+    cmd_config(args, None)
+    out = capsys.readouterr().out.split()
+    assert out == ["claude", "codex", "opencode", "pi", "ollama", "llama-cli"]
+
+
+def test_config_requires_a_cli_selection(capsys):
+    parser = _build_parser()
+    args = parser.parse_args(["config"])
+    with pytest.raises(SystemExit) as exc:
+        cmd_config(args, None)
+    assert exc.value.code == 2
+
+
+def test_config_preset_writes_mono(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "codex"])
+    cmd_config(args, None)
+    loaded = load_config_from_yaml(Path("spec-runner.config.yaml"))
+    assert loaded["claude_command"] == "codex"
+    assert loaded["review_command"] == "codex"
+
+
+def test_config_copilot_exits_2(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parser = _build_parser()
+    args = parser.parse_args(["config", "--preset", "copilot"])
+    with pytest.raises(SystemExit) as exc:
+        cmd_config(args, None)
+    assert exc.value.code == 2
