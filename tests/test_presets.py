@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import pytest
 
-from spec_runner.preset_cmd import Fragment, compose, list_presets, load_fragment
+from spec_runner.config import load_config_from_yaml
+from spec_runner.preset_cmd import Fragment, apply_to_config, compose, list_presets, load_fragment
 
 
 def test_list_presets_has_six_known_clis():
@@ -84,3 +87,25 @@ def test_compose_review_model_override_targets_review_only():
     )
     assert profile["claude_model"] == "sonnet"
     assert profile["review_model"] == "o3"
+
+
+def test_fresh_write_creates_flat_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    profile = compose(load_fragment("codex"), load_fragment("codex"))
+    written = apply_to_config(profile, apply_changes=False, dry_run=False)
+    assert written == Path("spec-runner.config.yaml")
+    text = written.read_text()
+    # flat v2.0 — no executor: wrapper
+    assert "executor:" not in text
+    assert "claude_command:" in text
+    # round-trips through the real loader
+    loaded = load_config_from_yaml(written)
+    assert loaded["claude_command"] == "codex"
+    assert loaded["review_command"] == "codex"
+
+
+def test_fresh_write_renders_skip_permissions_bool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    profile = compose(load_fragment("claude"), load_fragment("claude"))
+    written = apply_to_config(profile, apply_changes=False, dry_run=False)
+    assert load_config_from_yaml(written)["skip_permissions"] is True
