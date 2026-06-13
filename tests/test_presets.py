@@ -109,3 +109,26 @@ def test_fresh_write_renders_skip_permissions_bool(tmp_path, monkeypatch):
     profile = compose(load_fragment("claude"), load_fragment("claude"))
     written = apply_to_config(profile, apply_changes=False, dry_run=False)
     assert load_config_from_yaml(written)["skip_permissions"] is True
+
+
+def test_dry_run_writes_nothing_and_prints_keys(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    profile = compose(load_fragment("codex"), load_fragment("codex"))
+    result = apply_to_config(profile, apply_changes=False, dry_run=True)
+    assert result is None
+    assert not Path("spec-runner.config.yaml").exists()
+    out = capsys.readouterr().out
+    assert "claude_command:" in out
+    assert "review_command_template:" in out
+
+
+def test_refuse_without_apply_exits_1_and_leaves_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = Path("spec-runner.config.yaml")
+    cfg.write_text("claude_command: claude\nbudget_usd: 5.0\n")
+    original = cfg.read_text()
+    profile = compose(load_fragment("codex"), load_fragment("codex"))
+    with pytest.raises(SystemExit) as exc:
+        apply_to_config(profile, apply_changes=False, dry_run=False)
+    assert exc.value.code == 1
+    assert cfg.read_text() == original

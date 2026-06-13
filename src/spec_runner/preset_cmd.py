@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import sys  # noqa: F401  # used by _print_profile and apply_to_config (Task 4+)
+import sys
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -136,6 +136,7 @@ def apply_to_config(
     if not target_path.exists() and LEGACY_CONFIG_FILE.exists():
         target_path = LEGACY_CONFIG_FILE
 
+    # dry_run short-circuits before any file check (applies in all cases)
     if dry_run:
         _print_profile(profile)
         return None
@@ -144,11 +145,23 @@ def apply_to_config(
         config_path.write_text(_render_fresh(profile))
         return config_path
 
-    # merge path implemented in Task 5
-    raise NotImplementedError
+    if not apply_changes:
+        _print_profile(profile)
+        print(
+            f"{target_path} exists. Re-run with --apply to update the CLI "
+            "profile (other settings preserved), or --dry-run to preview.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    return _merge_into_existing(profile, target_path)
 
 
 def _print_profile(profile: dict[str, object]) -> None:
     """Print the 7 keys that would be written (stdout)."""
     for key in PROFILE_KEYS:
         print(f"{key}: {profile[key]!r}")
+
+
+def _merge_into_existing(profile: dict[str, object], target_path: Path) -> Path:
+    raise NotImplementedError  # implemented in Task 5
