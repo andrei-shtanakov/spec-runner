@@ -368,6 +368,20 @@ spec-runner config --preset pi --apply             # update an existing config
 Tests stay on your `test_command` (e.g. pytest); presets only set the exec and
 review CLIs. Run `spec-runner doctor` afterwards to verify the profile.
 
+#### Using Qwen
+
+Qwen works two cheap ways, both already supported:
+
+- **Cloud (cheap), via OpenCode:** `spec-runner config --preset opencode --model "openrouter/qwen/qwen3-coder"` (any OpenCode-supported Qwen provider/model string).
+- **Local, via Ollama:** `ollama pull qwen2.5-coder:32b` then `spec-runner config --preset ollama --model "qwen2.5-coder:32b"`.
+
+Or use the official agents directly:
+
+- **Qwen Code CLI:** `spec-runner config --preset qwen` (set the model in `~/.qwen/settings.json`).
+- **GitHub Copilot CLI:** `spec-runner config --preset copilot` (needs Copilot access; set the model via `COPILOT_MODEL`).
+
+Run `spec-runner doctor` afterwards to confirm the chosen CLI is READY.
+
 ### Checking CLI/model compatibility
 
 `spec-runner doctor` runs a real one-task probe through the actual execution

@@ -85,6 +85,8 @@ spec-runner doctor --with-review --json    # Include review stage, machine outpu
 spec-runner config --preset codex          # Set exec+review CLI (mono)
 spec-runner config --exec claude --review codex  # Mixed CLIs (multi)
 spec-runner config --list-presets          # List available CLI presets
+spec-runner config --preset qwen           # Qwen Code CLI (template-driven)
+spec-runner config --preset copilot        # GitHub Copilot CLI (template-driven)
 spec-runner-init                           # Install skills to .claude/skills
 ```
 
