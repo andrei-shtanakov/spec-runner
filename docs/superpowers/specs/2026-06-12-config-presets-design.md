@@ -3,9 +3,9 @@
 **Date:** 2026-06-12
 **Status:** Approved (brainstorming) — ready for implementation plan
 **Target version:** 2.5.0 (minor — new feature, no contract/schema change)
-**Revision:** 4 (adds qwen + copilot presets in v2.6.0 — see the "Revision 4"
-section at the end; re-introduces per-fragment templates for non-auto-detected
-CLIs). Revisions 1–3 shipped as v2.5.0.
+**Revision:** 5 (model-aware templates for qwen/copilot in v2.7.0 — see the
+"Revision 5" section at the end; resolves the model-less trade-off from Rev 4).
+Rev 4 shipped as v2.6.0; Revisions 1–3 shipped as v2.5.0.
 
 ## Problem
 
@@ -404,3 +404,96 @@ follow-up, not part of this revision.
 - A model-aware composer (`--model` wired into qwen/copilot templates).
 - Auto-detection of qwen/copilot in `runner.build_cli_invocation` (templates are
   the supported mechanism; auto-detect would be a separate change).
+
+---
+
+# Revision 5 — model-aware templates for qwen/copilot (v2.7.0)
+
+**Date:** 2026-06-13
+**Target version:** 2.7.0 (minor — one fragment field + composer logic)
+
+## Goal
+
+Make `--model` actually apply to the template-driven `qwen`/`copilot` presets,
+resolving the "model-less templates" trade-off deferred in Revision 4. Verified:
+both Qwen Code (`qwen --model <id>`, precedence flag > `QWEN_MODEL` > settings)
+and GitHub Copilot CLI (`copilot --model <id>`) accept a `--model` flag.
+
+## The blank-model trap (why this needs care)
+
+A template containing `--model {model}` with an empty model produces a broken
+`--model ` argument (after `shlex.split`, a dangling `--model` with no value).
+Rev 4 avoided this by omitting `{model}` entirely. Rev 5 instead adds the model
+flag **only when a model is actually set**.
+
+## Fragment schema change
+
+`Fragment` gains one optional field:
+
+```yaml
+model_flag: ""   # NEW — CLI flag used to pass the model (e.g. "--model")
+```
+
+- `qwen.yaml` and `copilot.yaml`: `model_flag: "--model"`.
+- The six auto-detect presets: `model_flag: ""` (they carry no template; the
+  model flows through `runner.build_cli_invocation` auto-detect as before).
+
+## Composer change
+
+`compose` appends the model flag to a slot's template only when that slot has a
+template, a `model_flag`, and a non-empty resolved model:
+
+```python
+def _apply_model_flag(template: str, model_flag: str, model: str) -> str:
+    if template and model_flag and model:
+        return f"{template} {model_flag} {{model}}"
+    return template
+```
+
+- `command_template = _apply_model_flag(exec_frag.exec_template, exec_frag.model_flag, exec_model)`
+- `review_command_template = _apply_model_flag(review_frag.review_template, review_frag.model_flag, review_model)`
+
+The appended `{{model}}` is a literal `{model}` placeholder in the stored
+template; at runtime `build_cli_command` substitutes it with `claude_model`
+(exec) / `review_model` (review), which `compose` already sets to the same
+resolved model — so the value is guaranteed non-empty whenever the flag is
+present. The 7-key compose output shape is unchanged.
+
+## Behavior
+
+- `config --preset qwen --model qwen-coder-plus` → `command_template` =
+  `{cmd} -p {prompt} --approval-mode yolo --model {model}`, `claude_model` =
+  `qwen-coder-plus` → runtime `qwen -p … --approval-mode yolo --model qwen-coder-plus`.
+- `config --preset qwen` (no model) → template unchanged (no `--model`), no trap.
+- `config --exec qwen --review claude --model X` → exec qwen template gets
+  `--model {model}`; review claude is auto-detect (empty template) and takes the
+  model through the normal auto-detect path.
+- `--review-model` targets the review slot's template independently.
+
+## Other changes
+
+- `qwen.yaml` / `copilot.yaml` `note` updated: `--model` now applies (with an
+  example); settings/env remain alternatives.
+- This supersedes the "Deliberate trade-off: model-less templates" subsection of
+  Revision 4.
+
+## Testing (extends `tests/test_presets.py`)
+
+- `_apply_model_flag`-driven behavior via `compose`:
+  - templated exec + non-empty model → `command_template` ends with
+    `--model {model}` and `claude_model` is the model.
+  - templated exec + empty model → `command_template` has NO `--model` (anti-trap
+    regression).
+  - auto-detect preset + `--model` → template stays `""` (model via auto-detect,
+    not the template).
+  - multi `--exec qwen --review claude --model X` → exec template has `--model
+    {model}`; review template `""`.
+- `load_fragment("qwen"/"copilot").model_flag == "--model"`; the six auto-detect
+  fragments have `model_flag == ""`.
+- End-to-end through `_build_parser()`: `config --preset qwen --model
+  qwen-coder-plus` writes a config whose `command_template` contains `--model
+  {model}` and whose `claude_model` is `qwen-coder-plus`.
+
+## Out of scope (still)
+
+- Auto-detection of qwen/copilot in `runner.build_cli_invocation`.
