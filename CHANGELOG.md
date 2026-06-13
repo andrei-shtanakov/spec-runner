@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-06-13
+
 ### Added
 
 - **`config` presets for `qwen` and `copilot`.** `spec-runner config --preset
