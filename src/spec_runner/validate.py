@@ -221,7 +221,8 @@ def validate_config(config_path: Path) -> ValidationResult:
     if not isinstance(data, dict):
         return result
 
-    executor_section = data.get("executor")
+    # Canonical v2.0 is flat (no executor: wrapper); legacy uses the wrapper.
+    executor_section = data.get("executor", data)
     if not isinstance(executor_section, dict):
         return result
 
