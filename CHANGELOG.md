@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-06-14
+
 ### Added
 
 - **`--model` now applies to the `qwen` and `copilot` presets.** Previously these
