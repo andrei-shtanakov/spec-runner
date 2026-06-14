@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`--model` now applies to the `qwen` and `copilot` presets.** Previously these
+  template-driven presets ignored `--model` (model was set in the CLI's own
+  settings/env). Now `spec-runner config --preset qwen --model qwen-coder-plus`
+  (or `copilot --model claude-haiku-4.5`) appends `--model <id>` to the generated
+  `command_template`. A blank model still omits the flag (no dangling `--model`).
+
 ## [2.6.0] — 2026-06-13
 
 ### Added

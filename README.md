@@ -377,8 +377,8 @@ Qwen works two cheap ways, both already supported:
 
 Or use the official agents directly:
 
-- **Qwen Code CLI:** `spec-runner config --preset qwen` (set the model in `~/.qwen/settings.json`).
-- **GitHub Copilot CLI:** `spec-runner config --preset copilot` (needs Copilot access; set the model via `COPILOT_MODEL`).
+- **Qwen Code CLI:** `spec-runner config --preset qwen --model qwen-coder-plus` (or set the model in `~/.qwen/settings.json`).
+- **GitHub Copilot CLI:** `spec-runner config --preset copilot --model claude-haiku-4.5` (needs Copilot access; set the model via `COPILOT_MODEL`).
 
 Run `spec-runner doctor` afterwards to confirm the chosen CLI is READY.
 
