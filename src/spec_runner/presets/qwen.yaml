@@ -3,4 +3,5 @@ model: ""
 skip_permissions: false
 exec_template: "{cmd} -p {prompt} --approval-mode yolo"
 review_template: "{cmd} -p {prompt} --approval-mode plan"
-note: "Qwen Code: set the model in ~/.qwen/settings.json (modelProviders). yolo is required for headless edits; plan = read-only review."
+model_flag: "--model"
+note: "Qwen Code: --model now applies (e.g. --preset qwen --model qwen-coder-plus); or set it in ~/.qwen/settings.json (modelProviders) / QWEN_MODEL. yolo is required for headless edits; plan = read-only review."
