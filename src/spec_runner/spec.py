@@ -1,10 +1,18 @@
-"""Spec frontmatter: SpecMeta dataclass and parse/split/strip helpers."""
+"""Spec frontmatter: SpecMeta dataclass and parse/split/strip/read/write helpers."""
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from .config import ExecutorLock
 
 STAGES: tuple[str, str, str] = ("requirements", "design", "tasks")
 
@@ -64,3 +72,52 @@ def meta_from_dict(d: dict) -> SpecMeta:
 def meta_to_dict(m: SpecMeta) -> dict:
     """Serialize a SpecMeta to a plain dict (frontmatter order)."""
     return asdict(m)
+
+
+def _render(meta: SpecMeta, body: str) -> str:
+    """Render frontmatter + body back into document text."""
+    fm = yaml.safe_dump(meta_to_dict(meta), sort_keys=False).rstrip("\n")
+    return f"{_FM_DELIM}\n{fm}\n{_FM_DELIM}\n{body}"
+
+
+def read_spec_meta(path: Path) -> SpecMeta | None:
+    """Return the SpecMeta for ``path``, or None if missing/unmanaged."""
+    if not path.exists():
+        return None
+    meta_dict, _ = split_frontmatter(path.read_text())
+    if meta_dict is None:
+        return None
+    return meta_from_dict(meta_dict)
+
+
+def read_spec_body(path: Path) -> str:
+    """Return the document body (frontmatter stripped); '' if missing."""
+    if not path.exists():
+        return ""
+    return strip_frontmatter(path.read_text())
+
+
+def write_spec(
+    path: Path,
+    meta: SpecMeta,
+    body: str,
+    lock: ExecutorLock | None = None,
+) -> None:
+    """Atomically write frontmatter + body, optionally under a file lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    acquired = False
+    if lock is not None:
+        acquired = lock.acquire()
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(_render(meta, body))
+            os.replace(tmp, str(path))
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
+    finally:
+        if lock is not None and acquired:
+            lock.release()

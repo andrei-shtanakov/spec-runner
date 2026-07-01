@@ -1,9 +1,15 @@
+import contextlib
+from pathlib import Path
+
 from spec_runner.spec import (
     SpecMeta,
     meta_from_dict,
     meta_to_dict,
+    read_spec_body,
+    read_spec_meta,
     split_frontmatter,
     strip_frontmatter,
+    write_spec,
 )
 
 FM = """---
@@ -62,3 +68,38 @@ def test_split_frontmatter_malformed_yaml():
     meta, body = split_frontmatter(text)
     assert meta is None
     assert body == text
+
+
+def test_write_then_read_roundtrip(tmp_path: Path):
+    p = tmp_path / "requirements.md"
+    write_spec(p, SpecMeta(spec_stage="requirements", version=2), "# Body\ntext\n")
+    meta = read_spec_meta(p)
+    assert meta is not None and meta.version == 2 and meta.spec_stage == "requirements"
+    assert read_spec_body(p).startswith("# Body")
+
+
+def test_read_meta_none_for_unmanaged(tmp_path: Path):
+    p = tmp_path / "tasks.md"
+    p.write_text("# Tasks\nno frontmatter\n")
+    assert read_spec_meta(p) is None
+
+
+def test_read_meta_none_for_missing(tmp_path: Path):
+    assert read_spec_meta(tmp_path / "nope.md") is None
+
+
+def test_write_is_atomic_no_partial_on_replace(tmp_path: Path, monkeypatch):
+    # Simulate os.replace failing: the original file must remain intact.
+    p = tmp_path / "design.md"
+    write_spec(p, SpecMeta(spec_stage="design", version=1), "original\n")
+    import spec_runner.spec as specmod
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(specmod.os, "replace", boom)
+    with contextlib.suppress(OSError):
+        write_spec(p, SpecMeta(spec_stage="design", version=9), "new body\n")
+    # Original content preserved; no temp file left behind.
+    assert read_spec_meta(p).version == 1
+    assert not any(x.name.startswith(".design.md.") for x in tmp_path.iterdir())
