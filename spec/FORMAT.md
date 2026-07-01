@@ -110,7 +110,32 @@ Tasks under a milestone heading inherit the milestone name. Milestones are used 
 | Duplicate TASK ID | Validation error |
 | `- [ ] item` with indentation | Not matched — silently skipped |
 | Text between header and checklist | Captured as description |
-| YAML frontmatter at start of file | Ignored (no frontmatter support) |
+| YAML frontmatter at start of file | Stripped before parsing, and preserved on write-back (see below) |
+
+## Frontmatter (gated spec governance, optional)
+
+Under the opt-in gated-generation workflow (`spec-runner plan --gated`, `spec-runner
+spec ...`), `tasks.md` (and `requirements.md`/`design.md`) may carry a leading YAML
+frontmatter block tracking `SpecMeta` (`src/spec_runner/spec.py`):
+
+```yaml
+---
+spec_stage: tasks
+status: approved   # draft | approved | stale
+version: 2
+generated_by: claude
+generated_at: 2026-07-01T00:00:00
+source_prompt_version: ""
+validation: pass   # pass | warn | fail | ""
+approved_by: ""
+approved_at: 2026-07-01T00:05:00
+---
+```
+
+`parse_tasks()` strips this block before parsing the task entries below it;
+`update_task_status()` / `mark_all_checklist_done()` preserve it on write-back.
+Files without frontmatter ("unmanaged") parse exactly as before — this is purely
+additive. See `README.md#spec-governance-gated-generation` for the full workflow.
 
 ## Example
 

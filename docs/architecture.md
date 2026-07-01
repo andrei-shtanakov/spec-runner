@@ -1,6 +1,6 @@
 # spec-runner — architecture
 
-Layered view of `spec-runner` v2.1.0. Generated 2026-05-25.
+Layered view of `spec-runner` v2.7.0. Generated 2026-05-25, module map refreshed 2026-07-01 (added `preset_cmd.py`, `doctor.py`, `spec.py`, `spec_commands.py`).
 
 ## System context
 
@@ -68,7 +68,10 @@ flowchart TB
     subgraph commands["Command modules"]
         direction LR
         cli_info["cli_info.py<br/>status / verify<br/>report / costs / logs"]
-        cli_plan["cli_plan.py<br/>plan (interactive + --full)"]
+        cli_plan["cli_plan.py<br/>plan (interactive + --full + --gated)"]
+        spec_cmds["spec_commands.py<br/>spec status/approve<br/>reject/adopt/check"]
+        preset_cmd["preset_cmd.py<br/>config (CLI presets)"]
+        doctor_cmd["doctor.py<br/>CLI/model probe"]
         task_cmds["task_commands.py<br/>list / show / next<br/>graph / stats"]
         github_sync["github_sync.py<br/>sync-to-gh<br/>sync-from-gh"]
         init_cmd["init_cmd.py<br/>install skills"]
@@ -91,8 +94,9 @@ flowchart TB
         direction LR
         task["task.py<br/>Task dataclass<br/>dep graph<br/>parse_tasks"]
         state["state.py<br/>ExecutorState ctx mgr<br/>SQLite + WAL<br/>ErrorCode / ReviewVerdict<br/>degraded-mode"]
-        config["config.py<br/>ExecutorConfig<br/>Persona / ExecutorLock<br/>YAML loader"]
+        config["config.py<br/>ExecutorConfig<br/>Persona / ExecutorLock<br/>spec_governance / YAML loader"]
         prompt["prompt.py<br/>build_task_prompt<br/>SPEC_STAGES<br/>constitution"]
+        spec_m["spec.py<br/>SpecMeta frontmatter<br/>draft/approved/stale<br/>locked read/write_spec"]
     end
 
     subgraph adapters["Infra adapters"]
@@ -120,9 +124,9 @@ flowchart TB
     classDef domainC fill:#d6f0d6,stroke:#2f7a2f
     classDef adapterC fill:#f0d6f0,stroke:#7a2f7a
     class cli,mcp_server,tui,executor_mod entryC
-    class cli_info,cli_plan,task_cmds,github_sync,init_cmd cmdC
+    class cli_info,cli_plan,spec_cmds,preset_cmd,doctor_cmd,task_cmds,github_sync,init_cmd cmdC
     class execution,errors_m,stages_m,hooks,review,verify_m,audit_m,validate_m,report_m coreC
-    class task,state,config,prompt domainC
+    class task,state,config,prompt,spec_m domainC
     class runner,git_ops,plugins,notifications_m,obs,logging_m,audit_log,events adapterC
 ```
 
@@ -228,3 +232,4 @@ flowchart LR
 - **CLI agnostic**: `runner.build_cli_command()` auto-detects `claude` / `codex` / `opencode` / `pi` / `ollama` / `llama-cli` / `llama-server` based on command name, or uses a custom `command_template` with `{cmd} {model} {prompt} {prompt_file}` placeholders. (`codex` uses `codex exec -m {model} {prompt}`; its `-p` is `--profile`, not the prompt.)
 - **Maestro interop contract** (R-04): SQLite schema + `--json-result` stdout. See `docs/state-schema.md`, `schemas/*.json`, `tests/test_json_result_contract.py`. Frozen at v2.0.0.
 - **Observability** (v2.1.0): `obs.py` is the reference implementation of the cross-project OTel JSONL contract (`_cowork_output/observability-contract/log-schema.json`), already vendored into Maestro, arbiter, and ATP.
+- **Gated spec governance** (v2.7.0): `spec.py` defines the `SpecMeta` frontmatter (draft/approved/stale) shared by `requirements.md`/`design.md`/`tasks.md`; `cli_plan.py`'s `plan --gated` generates one stage at a time, `spec_commands.py` implements `spec status/approve/reject/adopt/check`, and `config.spec_governance` (`off`|`strict`) gates `run`/`watch` on an approved `tasks.md` via `cli.spec_run_gate_ok()`. See `README.md#spec-governance-gated-generation`.
