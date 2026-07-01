@@ -42,6 +42,7 @@ from .preset_cmd import cmd_config
 from .runner import (
     log_progress,
 )
+from .spec import read_spec_meta
 from .state import (
     ExecutorState,
     check_stop_requested,
@@ -186,12 +187,36 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
             lock.release()
 
 
+def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
+    """Return (allowed, reason). Blocks unapproved managed tasks.md in strict mode.
+
+    Governance is off by default: unless ``config.spec_governance == "strict"``,
+    or the tasks.md is unmanaged (no frontmatter), the gate always allows the run.
+    """
+    if getattr(config, "spec_governance", "off") != "strict":
+        return True, ""
+    meta = read_spec_meta(config.tasks_file)
+    if meta is None:
+        return True, ""  # unmanaged: backward-compatible
+    if meta.status == "approved":
+        return True, ""
+    return False, (
+        f"tasks.md is {meta.status} (v{meta.version}); "
+        f"approve with `spec-runner spec approve tasks` or run with --no-strict"
+    )
+
+
 def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
     lock_held: True when the caller holds the exclusive executor lock, so any
     orphaned 'running' task can be safely reset regardless of age.
     """
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
+
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
 
@@ -859,6 +884,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not reset failed→pending or clear consecutive_failures "
         "at the start of `run --all` (default: reset enabled).",
+    )
+    run_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce spec governance: block unapproved managed tasks.md",
+    )
+    run_parser.add_argument(
+        "--no-strict",
+        action="store_true",
+        help="Disable spec governance gate (default behavior)",
     )
 
     # status

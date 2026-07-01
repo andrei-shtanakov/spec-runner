@@ -482,6 +482,10 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["task_budget_usd"] = args.task_budget
     if hasattr(args, "hitl_review") and getattr(args, "hitl_review", False):
         config_kwargs["hitl_review"] = True
+    if getattr(args, "strict", False):
+        config_kwargs["spec_governance"] = "strict"
+    if getattr(args, "no_strict", False):
+        config_kwargs["spec_governance"] = "off"
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 
