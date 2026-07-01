@@ -6,7 +6,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config import ExecutorConfig
+from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .prompt import (
     build_gated_generation_prompt,
@@ -119,11 +119,12 @@ def run_gated_stage(
         generated_at=_now_iso(),
         source_prompt_version=template_hash(stage),
     )
-    write_spec(path, meta, body.rstrip("\n") + "\n")
+    lock = ExecutorLock(config.spec_lock_file)
+    write_spec(path, meta, body.rstrip("\n") + "\n", lock=lock)
 
     verdict = verdict_from_result(validate_spec_stage(stage, config))
     meta.validation = verdict
-    write_spec(path, meta, read_spec_body(path))
+    write_spec(path, meta, read_spec_body(path), lock=lock)
 
     print(f"{stage}.md written as DRAFT — validation={verdict}")
     if verdict == "fail":
@@ -179,7 +180,10 @@ def cmd_plan(args, config: ExecutorConfig):
                 print(f"{stage} is DRAFT — approve or edit it before continuing")
                 return
             if action == "stale":
-                print(f"{stage} is STALE — regenerate (--stage {stage} --force) or re-approve")
+                print(
+                    f"{stage} is STALE — re-run `plan --gated --stage {stage}` to "
+                    f"regenerate, or `spec approve {stage}` / `spec reject {stage}`"
+                )
                 return
             if action == "done":
                 print("all stages approved → spec-runner run")

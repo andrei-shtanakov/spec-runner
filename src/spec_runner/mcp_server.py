@@ -182,8 +182,20 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     the task can edit files, create git branches, run hooks (tests/lint),
     auto-commit, and spend API budget. Do not expose this MCP server over
     the network — it has no authentication. See README.md#security-model.
+
+    Under `spec_governance: strict`, refuses to start when the managed
+    tasks.md is not approved (mirrors the CLI's `run`/`watch`/`retry` gate).
+    No-ops (always allows) under default `off` governance and for unmanaged
+    (frontmatter-less) tasks.md files.
     """
     import subprocess
+
+    from .cli import spec_run_gate_ok
+
+    config = _build_config(spec_prefix)
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        return json.dumps({"status": "error", "error": f"⛔ spec governance: {reason}"})
 
     cmd = ["spec-runner", "run", "--task", task_id]
     if spec_prefix:

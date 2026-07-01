@@ -303,3 +303,68 @@ class TestMCPTaskDetail:
         with patch("spec_runner.mcp_server._build_config", return_value=config):
             result = json.loads(spec_runner_task_detail("TASK-999"))
         assert "error" in result
+
+
+class TestMCPRunTask:
+    """Tests for spec_runner_run_task tool's spec-governance gate.
+
+    Mirrors the CLI `run`/`watch`/`retry` gate: refuses to spawn under
+    strict governance with a draft managed tasks.md, and is a no-op
+    (proceeds to spawn) under default 'off' governance or an unmanaged file.
+    """
+
+    def test_strict_governance_blocks_spawn(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from spec_runner.mcp_server import spec_runner_run_task
+        from spec_runner.spec import SpecMeta, write_spec
+
+        config = _make_config(tmp_path, spec_governance="strict")
+        write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
+
+        with (
+            patch("spec_runner.mcp_server._build_config", return_value=config),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            result = json.loads(spec_runner_run_task("TASK-001"))
+
+        mock_popen.assert_not_called()
+        assert result["status"] == "error"
+        assert "governance" in result["error"].lower()
+
+    def test_off_governance_allows_spawn(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from spec_runner.mcp_server import spec_runner_run_task
+        from spec_runner.spec import SpecMeta, write_spec
+
+        config = _make_config(tmp_path, spec_governance="off")
+        write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
+
+        with (
+            patch("spec_runner.mcp_server._build_config", return_value=config),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value = MagicMock(pid=4242)
+            result = json.loads(spec_runner_run_task("TASK-001"))
+
+        mock_popen.assert_called_once()
+        assert result["status"] == "started"
+
+    def test_unmanaged_tasks_file_allows_spawn(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from spec_runner.mcp_server import spec_runner_run_task
+
+        config = _make_config(tmp_path, spec_governance="strict")
+        _write_tasks(config.tasks_file, [("TASK-001", "Task", "p0", "todo")])
+
+        with (
+            patch("spec_runner.mcp_server._build_config", return_value=config),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value = MagicMock(pid=4242)
+            result = json.loads(spec_runner_run_task("TASK-001"))
+
+        mock_popen.assert_called_once()
+        assert result["status"] == "started"

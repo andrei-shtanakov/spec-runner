@@ -557,6 +557,12 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
 
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
+    # Spec governance gate — must run before any task execution/lock so a
+    # blocked retry has zero side effects (same bypass class as `watch`).
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
 
     tasks = parse_tasks(config.tasks_file)
 
