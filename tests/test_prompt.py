@@ -5,6 +5,7 @@ from pathlib import Path
 import spec_runner.prompt as prompt_mod
 from spec_runner.config import ExecutorConfig
 from spec_runner.prompt import (
+    build_gated_generation_prompt,
     build_task_prompt,
     extract_test_failures,
     format_error_summary,
@@ -410,3 +411,22 @@ class TestParseSpecMarker:
         )
         result = parse_spec_marker(output, "REQUIREMENTS")
         assert result == "First"
+
+
+# === build_gated_generation_prompt ===
+
+
+class TestBuildGatedGenerationPrompt:
+    def test_gated_prompt_embeds_template_and_markers(self):
+        p = build_gated_generation_prompt("requirements", "Build a widget", {})
+        assert "Build a widget" in p
+        assert "SPEC_REQUIREMENTS_READY" in p
+        assert "SPEC_REQUIREMENTS_END" in p
+        # Template body is embedded (rich, not the 3-line stub).
+        assert len(p) > 500
+
+    def test_gated_prompt_design_includes_prior_requirements(self):
+        ctx = {"requirements": "REQ-001 the widget spins"}
+        p = build_gated_generation_prompt("design", "Build a widget", ctx)
+        assert "REQ-001 the widget spins" in p
+        assert "SPEC_DESIGN_READY" in p

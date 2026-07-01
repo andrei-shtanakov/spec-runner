@@ -1,5 +1,6 @@
 """Validation for tasks.md — field checks, dependency refs, cycle detection, and config validation."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,12 +8,17 @@ import yaml
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
+from spec_runner.spec import strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
 
 VALID_STATUSES = {"todo", "in_progress", "done", "blocked"}
 VALID_PRIORITIES = {"p0", "p1", "p2", "p3"}
+
+_REQ_ID = re.compile(r"\bREQ-\d+\b")
+_REQ_HEADING = re.compile(r"^#+\s*REQ-(\d+)\b", re.MULTILINE)
+_DESIGN_HEADING = re.compile(r"^#+\s*DESIGN-(\d+)\b", re.MULTILINE)
 
 # Known keys allowed under the executor: section in config YAML.
 # Built from ExecutorConfig dataclass fields plus nested config sections.
@@ -39,6 +45,102 @@ class ValidationResult:
         """Merge another result into this one."""
         self.errors.extend(other.errors)
         self.warnings.extend(other.warnings)
+
+
+def verdict_from_result(result: ValidationResult) -> str:
+    """Map a ValidationResult to a stage-gate verdict.
+
+    Args:
+        result: The validation result to classify.
+
+    Returns:
+        ``"fail"`` if there are errors, ``"warn"`` if only warnings, else ``"pass"``.
+    """
+    if result.errors:
+        return "fail"
+    if result.warnings:
+        return "warn"
+    return "pass"
+
+
+def validate_requirements(path: Path) -> ValidationResult:
+    """Validate a requirements doc: unique REQ ids, scope, acceptance criteria.
+
+    Args:
+        path: Path to the requirements.md file (may carry frontmatter).
+
+    Returns:
+        ValidationResult with errors/warnings found.
+    """
+    result = ValidationResult()
+    body = strip_frontmatter(path.read_text())
+
+    ids = _REQ_HEADING.findall(body)
+    seen: set[str] = set()
+    for rid in ids:
+        if rid in seen:
+            result.errors.append(f"REQ-{rid}: duplicate requirement ID")
+        seen.add(rid)
+    if not ids:
+        result.errors.append("no REQ-XXX requirements found")
+    if "out of scope" not in body.lower():
+        result.errors.append("missing 'Out of Scope' section")
+    if "acceptance criteria" not in body.lower():
+        result.warnings.append("no 'Acceptance Criteria' found")
+    return result
+
+
+def validate_design(path: Path) -> ValidationResult:
+    """Validate a design doc: unique DESIGN ids, no dangling REQ references.
+
+    Args:
+        path: Path to the design.md file (may carry frontmatter).
+
+    Returns:
+        ValidationResult with errors/warnings found.
+    """
+    result = ValidationResult()
+    body = strip_frontmatter(path.read_text())
+
+    ids = _DESIGN_HEADING.findall(body)
+    seen: set[str] = set()
+    for did in ids:
+        if did in seen:
+            result.errors.append(f"DESIGN-{did}: duplicate design ID")
+        seen.add(did)
+    if not ids:
+        result.errors.append("no DESIGN-XXX components found")
+
+    req_path = path.parent / path.name.replace("design.md", "requirements.md")
+    known_reqs: set[str] = set()
+    if req_path.exists():
+        known_reqs = set(_REQ_ID.findall(strip_frontmatter(req_path.read_text())))
+    for ref in _REQ_ID.findall(body):
+        if known_reqs and ref not in known_reqs:
+            result.errors.append(f"design references unknown {ref}")
+    return result
+
+
+def validate_spec_stage(stage: str, config: ExecutorConfig) -> ValidationResult:
+    """Dispatch stage validation using the config's stage file paths.
+
+    Args:
+        stage: One of ``"requirements"``, ``"design"``, ``"tasks"``.
+        config: Executor config providing the stage file paths.
+
+    Returns:
+        ValidationResult for the requested stage.
+
+    Raises:
+        ValueError: If ``stage`` is not a recognised stage name.
+    """
+    if stage == "requirements":
+        return validate_requirements(config.requirements_file)
+    if stage == "design":
+        return validate_design(config.design_file)
+    if stage == "tasks":
+        return validate_tasks(config.tasks_file)
+    raise ValueError(f"unknown stage: {stage}")
 
 
 def validate_task_fields(tasks: list[Task]) -> ValidationResult:

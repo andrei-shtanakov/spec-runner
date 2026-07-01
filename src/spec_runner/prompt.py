@@ -5,7 +5,9 @@ Builds prompts from task specs, templates, and previous attempt context
 for use with Claude CLI and other LLM tools.
 """
 
+import hashlib
 import re
+from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
@@ -13,6 +15,43 @@ from .state import RetryContext, TaskAttempt
 from .task import Task
 
 PROMPTS_DIR = Path("spec/prompts")
+
+_TEMPLATE_FILES = {
+    "requirements": "requirements.template.md",
+    "design": "design.template.md",
+    "tasks": "tasks.template.md",
+}
+
+
+def load_bundled_template(stage: str) -> str:
+    """Load the bundled rich template for a stage (importlib.resources).
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+
+    Returns:
+        Template content as a string.
+    """
+    fname = _TEMPLATE_FILES[stage]
+    return (
+        resources.files("spec_runner")
+        .joinpath("skills", "spec-generator-skill", "templates", fname)
+        .read_text(encoding="utf-8")
+    )
+
+
+def template_hash(stage: str) -> str:
+    """Return 'sha256:<hex>' content hash of the stage template.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+
+    Returns:
+        SHA256 hash prefixed with 'sha256:'.
+    """
+    digest = hashlib.sha256(load_bundled_template(stage).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
 
 SPEC_STAGES: dict[str, dict[str, str]] = {
     "requirements": {
@@ -229,6 +268,67 @@ def build_generation_prompt(
         parts.extend(["", "## Design (already generated)", ctx["design"]])
 
     return "\n".join(parts)
+
+
+_PRIOR_FOR: dict[str, list[str]] = {
+    "requirements": [],
+    "design": ["requirements"],
+    "tasks": ["requirements", "design"],
+}
+
+
+def build_gated_generation_prompt(
+    stage: str,
+    description: str,
+    context: dict[str, str],
+) -> str:
+    """Build a rich, template-driven generation prompt for one gated stage.
+
+    Combines role instructions, the full bundled template for the stage,
+    the project description, any approved upstream stage outputs (e.g.
+    requirements when generating design), and the ``SPEC_<STAGE>_READY``/
+    ``_END`` markers the caller uses to extract the result.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+        description: Project description from the user.
+        context: Approved upstream stage outputs, keyed by stage name
+            (e.g. {'requirements': '...'}).
+
+    Returns:
+        The assembled prompt string.
+    """
+    marker = SPEC_STAGES[stage]["marker"]
+    template = load_bundled_template(stage)
+
+    prior_parts = [
+        f"## Approved {prior}\n\n{context[prior]}"
+        for prior in _PRIOR_FOR[stage]
+        if context.get(prior)
+    ]
+    prior_block = "\n\n".join(prior_parts)
+
+    header = (
+        f"You are generating the '{stage}' spec document. Fill the TEMPLATE below "
+        "from the DESCRIPTION" + (" and any approved upstream stages" if prior_block else "") + ". "
+        "Do not invent or drop sections. Out of Scope is mandatory; acceptance "
+        "criteria use GIVEN-WHEN-THEN"
+        + (
+            "; add [REQ-XXX]/[DESIGN-XXX] traceability where the template calls for it."
+            if prior_block
+            else "."
+        )
+    )
+
+    parts = [header, f"## DESCRIPTION\n\n{description}"]
+    if prior_block:
+        parts.append(prior_block)
+    parts.append(f"## TEMPLATE\n\n{template}")
+    parts.append(
+        "When done, output ONLY the finished document between markers:\n"
+        f"{marker}_READY\n<document>\n{marker}_END"
+    )
+    return "\n\n".join(parts)
 
 
 def parse_spec_marker(output: str, marker_name: str) -> str | None:

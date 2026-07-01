@@ -42,6 +42,7 @@ from .preset_cmd import cmd_config
 from .runner import (
     log_progress,
 )
+from .spec import read_spec_meta
 from .state import (
     ExecutorState,
     check_stop_requested,
@@ -186,12 +187,36 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
             lock.release()
 
 
+def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
+    """Return (allowed, reason). Blocks unapproved managed tasks.md in strict mode.
+
+    Governance is off by default: unless ``config.spec_governance == "strict"``,
+    or the tasks.md is unmanaged (no frontmatter), the gate always allows the run.
+    """
+    if getattr(config, "spec_governance", "off") != "strict":
+        return True, ""
+    meta = read_spec_meta(config.tasks_file)
+    if meta is None:
+        return True, ""  # unmanaged: backward-compatible
+    if meta.status == "approved":
+        return True, ""
+    return False, (
+        f"tasks.md is {meta.status} (v{meta.version}); "
+        f"approve with `spec-runner spec approve tasks` or run with --no-strict"
+    )
+
+
 def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
     lock_held: True when the caller holds the exclusive executor lock, so any
     orphaned 'running' task can be safely reset regardless of age.
     """
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
+
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
 
@@ -532,6 +557,12 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
 
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
+    # Spec governance gate — must run before any task execution/lock so a
+    # blocked retry has zero side effects (same bypass class as `watch`).
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
 
     tasks = parse_tasks(config.tasks_file)
 
@@ -577,6 +608,15 @@ def cmd_retry(args, config: ExecutorConfig):
 
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Continuously watch tasks.md and execute ready tasks."""
+    # Spec governance gate — must run before anything else (before the TUI
+    # branch, before pre-run validation, before any lock/stop-file handling)
+    # so a blocked watch has zero side effects. `run` gates via `_run_tasks`;
+    # `watch` has its own loop and previously bypassed the gate entirely.
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
+
     # Pre-run validation
     pre_result = validate_all(
         tasks_file=config.tasks_file,
@@ -860,6 +900,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not reset failed→pending or clear consecutive_failures "
         "at the start of `run --all` (default: reset enabled).",
     )
+    run_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce spec governance: block unapproved managed tasks.md",
+    )
+    run_parser.add_argument(
+        "--no-strict",
+        action="store_true",
+        help="Disable spec governance gate (default behavior)",
+    )
 
     # status
     status_parser = subparsers.add_parser("status", parents=[common], help="Show execution status")
@@ -901,6 +951,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="Generate full spec (requirements + design + tasks)",
+    )
+    plan_parser.add_argument(
+        "--gated",
+        action="store_true",
+        help="Generate one gated spec stage, validate, write DRAFT, and stop",
+    )
+    plan_parser.add_argument(
+        "--stage",
+        choices=["requirements", "design", "tasks"],
+        default=None,
+        help="Stage to generate with --gated (default: auto-resolved next stage)",
+    )
+    plan_parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Disable the interactive checkpoint menu in --gated mode",
     )
 
     # validate
@@ -989,6 +1055,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show TUI dashboard during watch",
     )
+    watch_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce spec governance: block unapproved managed tasks.md",
+    )
+    watch_parser.add_argument(
+        "--no-strict",
+        action="store_true",
+        help="Disable spec governance gate (default behavior)",
+    )
 
     # costs
     costs_parser = subparsers.add_parser(
@@ -1026,6 +1102,29 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--keep", action="store_true", help="Keep the scratch workspace")
     # --budget is inherited from common (default None); override default to 0.50 for doctor
     doctor_parser.set_defaults(budget=0.5)
+
+    # spec (gated spec lifecycle: status, approve, reject, adopt, check)
+    spec_parser = subparsers.add_parser(
+        "spec", parents=[common], help="Manage spec lifecycle (gated governance)"
+    )
+    spec_sub = spec_parser.add_subparsers(dest="spec_command", help="Spec lifecycle commands")
+
+    spec_sub.add_parser("status", help="Show per-stage status and next action")
+
+    spec_approve = spec_sub.add_parser("approve", help="Approve a spec stage")
+    spec_approve.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_reject = spec_sub.add_parser("reject", help="Reopen a spec stage as draft")
+    spec_reject.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_check = spec_sub.add_parser("check", help="Refresh cached validation for a stage")
+    spec_check.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_adopt = spec_sub.add_parser("adopt", help="Adopt an unmanaged spec file")
+    spec_adopt.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_adopt.add_argument(
+        "--force", action="store_true", help="Adopt as approved even if validation fails"
+    )
 
     # task (unified: replaces spec-task binary)
     task_parser = subparsers.add_parser(
@@ -1130,6 +1229,22 @@ def main():
     if args.command == "task":
         _dispatch_task_command(args)
         return
+
+    # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
+    if args.command == "spec":
+        from . import spec_commands
+
+        handler = {
+            "status": spec_commands.cmd_spec_status,
+            "approve": spec_commands.cmd_spec_approve,
+            "reject": spec_commands.cmd_spec_reject,
+            "adopt": spec_commands.cmd_spec_adopt,
+            "check": spec_commands.cmd_spec_check,
+        }.get(args.spec_command)
+        if handler is None:
+            # no sub-subcommand given -> default to `spec status`
+            raise SystemExit(spec_commands.cmd_spec_status(args, config))
+        raise SystemExit(handler(args, config))
 
     cmd_func = commands.get(args.command)
     if cmd_func:

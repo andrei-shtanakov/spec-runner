@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import cmd_watch
+from spec_runner.spec import SpecMeta, write_spec
 from spec_runner.task import Task
 
 # --- Helpers ---
@@ -273,6 +274,50 @@ class TestCmdWatch:
 
         mock_run.assert_not_called()
         assert mock_time.sleep.call_count >= 2
+
+
+class TestWatchGovernanceGate:
+    """Watch must be gated by spec governance, same as run (no bypass)."""
+
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    def test_strict_governance_blocks_before_loop(
+        self,
+        mock_validate,
+        mock_run,
+        tmp_path: Path,
+    ) -> None:
+        """A draft managed tasks.md under strict governance blocks watch
+        entirely: no validation, no polling loop, no task execution.
+
+        This is safe to call directly (no mocked time.sleep needed) because
+        the gate check returns before the loop is ever entered.
+        """
+        config = _make_config(tmp_path, spec_governance="strict")
+        write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
+
+        cmd_watch(_make_args(), config)
+
+        mock_validate.assert_not_called()
+        mock_run.assert_not_called()
+
+    @patch("spec_runner.cli.run_with_retries")
+    @patch("spec_runner.cli.validate_all")
+    def test_off_governance_does_not_block(
+        self,
+        mock_validate,
+        mock_run,
+        tmp_path: Path,
+    ) -> None:
+        """Default governance ('off') is a no-op: watch proceeds to validation."""
+        config = _make_config(tmp_path, spec_governance="off")
+        write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
+        mock_validate.return_value = MagicMock(ok=False, errors=["stop here"])
+
+        cmd_watch(_make_args(), config)
+
+        mock_validate.assert_called_once()
+        mock_run.assert_not_called()
 
 
 class TestWatchTui:

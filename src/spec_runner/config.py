@@ -214,6 +214,9 @@ class ExecutorConfig:
     audit_log_path: str = ""
     audit_log_operator: str = ""  # Override auto-detected "user@host"
 
+    # Spec governance: "off" (default) | "strict" (gate run on approved tasks.md)
+    spec_governance: str = "off"
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -252,6 +255,10 @@ class ExecutorConfig:
     @property
     def constitution_file(self) -> Path:
         return self.project_root / "spec" / f"{self.spec_prefix}constitution.md"
+
+    @property
+    def spec_lock_file(self) -> Path:
+        return self.project_root / "spec" / f".{self.spec_prefix}spec.lock"
 
     def get_persona(self, role: str) -> Persona | None:
         """Get persona by role name (e.g., 'implementer', 'reviewer', 'architect')."""
@@ -419,6 +426,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "webhook_template": executor_config.get("webhook_template"),
             "audit_log_path": executor_config.get("audit_log_path"),
             "audit_log_operator": executor_config.get("audit_log_operator"),
+            "spec_governance": executor_config.get("spec_governance"),
         }
     except Exception as e:
         from .logging import get_logger
@@ -474,6 +482,10 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["task_budget_usd"] = args.task_budget
     if hasattr(args, "hitl_review") and getattr(args, "hitl_review", False):
         config_kwargs["hitl_review"] = True
+    if getattr(args, "strict", False):
+        config_kwargs["spec_governance"] = "strict"
+    if getattr(args, "no_strict", False):
+        config_kwargs["spec_governance"] = "off"
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
 
