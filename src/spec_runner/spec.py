@@ -19,6 +19,10 @@ STAGES: tuple[str, str, str] = ("requirements", "design", "tasks")
 _FM_DELIM = "---"
 
 
+class SpecLockError(RuntimeError):
+    """Raised when a spec-file lock cannot be acquired (another mutation in progress)."""
+
+
 @dataclass
 class SpecMeta:
     """Frontmatter state for one spec document."""
@@ -108,6 +112,11 @@ def write_spec(
     acquired = False
     if lock is not None:
         acquired = lock.acquire()
+        if not acquired:
+            raise SpecLockError(
+                f"could not acquire spec lock {lock.lock_path}; "
+                "another spec mutation in progress"
+            )
     try:
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
         try:
