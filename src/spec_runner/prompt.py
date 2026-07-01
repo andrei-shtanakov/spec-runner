@@ -5,7 +5,9 @@ Builds prompts from task specs, templates, and previous attempt context
 for use with Claude CLI and other LLM tools.
 """
 
+import hashlib
 import re
+from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
@@ -13,6 +15,44 @@ from .state import RetryContext, TaskAttempt
 from .task import Task
 
 PROMPTS_DIR = Path("spec/prompts")
+
+_TEMPLATE_FILES = {
+    "requirements": "requirements.template.md",
+    "design": "design.template.md",
+    "tasks": "tasks.template.md",
+}
+
+
+def load_bundled_template(stage: str) -> str:
+    """Load the bundled rich template for a stage (importlib.resources).
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+
+    Returns:
+        Template content as a string.
+    """
+    fname = _TEMPLATE_FILES[stage]
+    return (
+        resources.files("spec_runner")
+        .joinpath("skills", "spec-generator-skill", "templates", fname)
+        .read_text(encoding="utf-8")
+    )
+
+
+def template_hash(stage: str) -> str:
+    """Return 'sha256:<hex>' content hash of the stage template.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+
+    Returns:
+        SHA256 hash prefixed with 'sha256:'.
+    """
+    digest = hashlib.sha256(
+        load_bundled_template(stage).encode("utf-8")
+    ).hexdigest()
+    return f"sha256:{digest}"
 
 SPEC_STAGES: dict[str, dict[str, str]] = {
     "requirements": {
