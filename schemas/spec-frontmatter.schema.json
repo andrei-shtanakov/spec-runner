@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/spec-frontmatter.schema.json",
+  "title": "SpecRunnerSpecFrontmatter",
+  "description": "YAML frontmatter of a gated spec document (spec/{requirements,design,tasks}.md), serialized by spec_runner.spec.SpecMeta. The spec-runner-vscode extension reads this directly for governance state. additionalProperties is false so a new SpecMeta field trips the contract test. See src/spec_runner/spec.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec_stage", "status", "version"],
+  "properties": {
+    "spec_stage": {
+      "description": "Which gated stage this document is",
+      "type": "string",
+      "enum": ["requirements", "design", "tasks"]
+    },
+    "status": {
+      "description": "Governance state of the stage",
+      "type": "string",
+      "enum": ["draft", "approved", "stale"]
+    },
+    "version": {
+      "description": "Monotonic version, bumped on approval",
+      "type": "integer",
+      "minimum": 1
+    },
+    "generated_by": {
+      "description": "Generator identity (CLI/model), empty when unset",
+      "type": "string"
+    },
+    "generated_at": {
+      "description": "ISO-8601 generation timestamp, empty when unset",
+      "type": "string"
+    },
+    "source_prompt_version": {
+      "description": "Content-hash version of the generation prompt template",
+      "type": "string"
+    },
+    "validation": {
+      "description": "Cached validation verdict. CACHE ONLY — refreshed by `spec check`/`spec approve`, not by manual edits.",
+      "type": "string",
+      "enum": ["pass", "fail", "warn", ""]
+    },
+    "approved_by": {
+      "description": "Approver identity, or null when not approved",
+      "type": ["string", "null"]
+    },
+    "approved_at": {
+      "description": "ISO-8601 approval timestamp, or null when not approved",
+      "type": ["string", "null"]
+    }
+  }
+}
