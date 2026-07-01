@@ -5,6 +5,10 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
+- ✅ **Gated spec generation** влито в master 2026-07-01 (`592528f`, PR #28): `plan --gated`,
+  `spec status/approve/reject/adopt/check`, `config.spec_governance: off|strict` +
+  `run`/`watch --strict`. Пока в `CHANGELOG.md` как `[Unreleased]` — версия не забампана.
+- ✅ v2.7.0 зарелижен 2026-06-14 (`--model` для qwen/copilot presets)
 - ✅ v2.2.2 зарелижен 2026-05-29 (console-прогресс в stderr для non-TUI run/watch)
 - ✅ v2.2.1 зарелижен 2026-05-28 (CI off Node 20 → Node 24, obs contract test skip-guard)
 - ✅ v2.2.0 зарелижен 2026-05-28 (auto-detect OpenCode/Pi CLI, architecture diagrams, green CI)
