@@ -46,3 +46,19 @@ def test_meta_roundtrip():
     d = meta_to_dict(m)
     m2 = meta_from_dict(d)
     assert m2 == m
+
+
+def test_split_frontmatter_missing_closing_delimiter():
+    """Test defensive fallback when closing --- delimiter is missing."""
+    text = "---\nspec_stage: requirements\nno closing delimiter"
+    meta, body = split_frontmatter(text)
+    assert meta is None
+    assert body == text
+
+
+def test_split_frontmatter_malformed_yaml():
+    """Test defensive fallback when YAML inside frontmatter is unparsable."""
+    text = "---\n:\n  - [unbalanced\n---\n# Body"
+    meta, body = split_frontmatter(text)
+    assert meta is None
+    assert body == text

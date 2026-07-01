@@ -1,4 +1,4 @@
-"""Spec lifecycle state: frontmatter parsing, status, atomic locked writes."""
+"""Spec frontmatter: SpecMeta dataclass and parse/split/strip helpers."""
 
 from __future__ import annotations
 
