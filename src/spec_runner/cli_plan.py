@@ -3,25 +3,134 @@
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import ExecutorConfig
 from .logging import get_logger
 from .prompt import (
+    build_gated_generation_prompt,
     load_prompt_template,
+    parse_spec_marker,
     render_template,
+    template_hash,
 )
 from .runner import (
     build_cli_command,
     check_error_patterns,
     log_progress,
 )
+from .spec import (
+    SpecMeta,
+    read_spec_body,
+    read_spec_meta,
+    stage_path,
+    write_spec,
+)
 from .task import (
     parse_tasks,
 )
+from .validate import validate_spec_stage, verdict_from_result
 
 logger = get_logger("cli")
+
+_MARKER = {"requirements": "REQUIREMENTS", "design": "DESIGN", "tasks": "TASKS"}
+_UPSTREAM: dict[str, list[str]] = {
+    "requirements": [],
+    "design": ["requirements"],
+    "tasks": ["requirements", "design"],
+}
+
+
+def _harness(config) -> str:
+    """Derive a short harness name from the configured CLI command."""
+    base = (config.claude_command or "claude").split("/")[-1]
+    return base or "claude"
+
+
+def _now_iso() -> str:
+    """Current UTC time as an ISO-8601 string (second precision, 'Z' suffix)."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def run_gated_stage(
+    stage: str,
+    description: str,
+    config,
+    invoke=subprocess.run,
+) -> int:
+    """Generate one gated spec stage: enforce upstream gate, write DRAFT, validate, stop.
+
+    Every upstream stage must already be APPROVED, else generation is refused
+    (no CLI invocation, no file write). On success, writes the generated stage
+    as a DRAFT with frontmatter, then runs stage validation and records the
+    verdict on the same file.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+        description: Project description used to build the generation prompt.
+        config: Executor config providing stage file paths and CLI settings.
+        invoke: Injectable subprocess runner (defaults to `subprocess.run`);
+            tests pass a fake to avoid spawning a real CLI.
+
+    Returns:
+        0 on success (DRAFT written, validated); 1 on generation failure
+        (non-zero CLI exit or missing marker); 2 when the upstream gate blocks
+        generation.
+    """
+    context: dict[str, str] = {}
+    for upstream in _UPSTREAM[stage]:
+        meta = read_spec_meta(stage_path(config, upstream))
+        if meta is None or meta.status != "approved":
+            print(f"⛔ cannot generate {stage}: {upstream} must be APPROVED first")
+            return 2
+        context[upstream] = read_spec_body(stage_path(config, upstream))
+
+    prompt = build_gated_generation_prompt(stage, description, context)
+    cmd = build_cli_command(
+        cmd=config.claude_command,
+        prompt=prompt,
+        model=config.claude_model,
+        template=config.command_template,
+        skip_permissions=config.skip_permissions,
+    )
+    result = invoke(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=config.task_timeout_minutes * 60,
+        cwd=config.project_root,
+    )
+    if result.returncode != 0:
+        print(f"generation failed at {stage}: {result.stderr[:300]}")
+        return 1
+
+    body = parse_spec_marker(result.stdout, _MARKER[stage])
+    if not body:
+        print(f"no {stage} content produced (marker missing)")
+        return 1
+
+    path = stage_path(config, stage)
+    meta = SpecMeta(
+        spec_stage=stage,
+        status="draft",
+        version=1,
+        generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
+        generated_at=_now_iso(),
+        source_prompt_version=template_hash(stage),
+    )
+    write_spec(path, meta, body.rstrip("\n") + "\n")
+
+    verdict = verdict_from_result(validate_spec_stage(stage, config))
+    meta.validation = verdict
+    write_spec(path, meta, read_spec_body(path))
+
+    print(f"{stage}.md written as DRAFT — validation={verdict}")
+    if verdict == "fail":
+        print("  fix the errors, then `spec approve` (approve will re-validate)")
+    else:
+        print(f"  approve with: spec-runner spec approve {stage}")
+    return 0
 
 
 def resolve_plan_description(description: str | None, from_file: str | None) -> str:
@@ -58,6 +167,24 @@ def cmd_plan(args, config: ExecutorConfig):
     """
 
     description = resolve_plan_description(args.description, getattr(args, "from_file", None))
+
+    if getattr(args, "gated", False):
+        from .spec import STAGES, resolve_next_stage
+
+        stage = getattr(args, "stage", None)
+        if not stage:
+            metas = {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
+            action, stage = resolve_next_stage(metas)
+            if action == "await_approval":
+                print(f"{stage} is DRAFT — approve or edit it before continuing")
+                return
+            if action == "stale":
+                print(f"{stage} is STALE — regenerate (--stage {stage} --force) or re-approve")
+                return
+            if action == "done":
+                print("all stages approved → spec-runner run")
+                return
+        raise SystemExit(run_gated_stage(stage, description, config))
 
     if getattr(args, "full", False):
         from .prompt import build_generation_prompt, parse_spec_marker

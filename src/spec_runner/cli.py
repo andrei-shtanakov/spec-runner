@@ -946,6 +946,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate full spec (requirements + design + tasks)",
     )
+    plan_parser.add_argument(
+        "--gated",
+        action="store_true",
+        help="Generate one gated spec stage, validate, write DRAFT, and stop",
+    )
+    plan_parser.add_argument(
+        "--stage",
+        choices=["requirements", "design", "tasks"],
+        default=None,
+        help="Stage to generate with --gated (default: auto-resolved next stage)",
+    )
 
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")

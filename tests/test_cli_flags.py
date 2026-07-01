@@ -39,3 +39,17 @@ class TestWatchSubparserFlags:
         ns = parser.parse_args(["watch", "--no-strict"])
         assert ns.no_strict is True
         assert ns.strict is False
+
+
+class TestPlanSubparserFlags:
+    def test_gated_and_stage_flags(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["plan", "--gated", "--stage", "design", "desc"])
+        assert ns.gated is True
+        assert ns.stage == "design"
+
+    def test_gated_default_false_and_stage_default_none(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["plan", "desc"])
+        assert ns.gated is False
+        assert ns.stage is None
