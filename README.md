@@ -199,6 +199,48 @@ spec-runner task list --spec-prefix=phase5-    # List phase 5 tasks
 
 Phase-scoped paths: `spec/phase5-{tasks,requirements,design}.md`, `spec/.executor-phase5-state.db`, `spec/.executor-phase5-logs/`, `spec/.phase5-task-history.log`. Multiple phases coexist without state bleed.
 
+## Spec Governance (gated generation)
+
+An opt-in workflow for generating and approving `requirements.md` / `design.md` /
+`tasks.md` one stage at a time instead of all at once, with a human checkpoint
+between stages:
+
+```bash
+spec-runner plan --gated "description"     # Generate the next stage as DRAFT (auto-resolved)
+spec-runner plan --gated --stage design    # ...or a specific stage (upstream must be approved)
+spec-runner spec status                    # Show each stage's status + the recommended next action
+# edit the generated file if needed, then:
+spec-runner spec approve requirements      # Re-validates the body, then approves (bumps version)
+spec-runner plan --gated --stage design    # Repeat per stage: requirements -> design -> tasks
+spec-runner spec approve tasks
+spec-runner run                            # Or `spec-runner run --strict` to enforce the gate below
+```
+
+Each managed spec file carries a small YAML frontmatter block tracking one of
+three statuses:
+
+- **draft** — generated (or edited) but not yet approved.
+- **approved** — validated and signed off; bumps the file's version.
+- **stale** — an upstream stage was re-approved after this one was generated,
+  so this stage may be out of sync and should be regenerated or re-reviewed.
+
+Other useful commands: `spec-runner spec reject <stage>` reopens an approved/stale
+stage as draft; `spec-runner spec adopt <stage>` stamps frontmatter onto an
+existing unmanaged file (validates first — a failing file is adopted as draft
+unless you pass `--force`); `spec-runner spec check <stage>` refreshes the
+cached validation verdict without approving.
+
+Set `spec_governance: strict` in `spec-runner.config.yaml` (default: `off`) to
+make `run`/`watch` refuse to execute a **managed** `tasks.md` that isn't
+`approved`; `--strict`/`--no-strict` override this per invocation.
+
+> **Guardrail, not an enforcement boundary.** `strict` mode only blocks tasks.md
+> files that carry gated-spec frontmatter. Deleting the frontmatter (or never
+> adopting it) makes the file "unmanaged," which always passes the gate for
+> backward compatibility with unmanaged and Maestro-produced specs. Treat this
+> as a workflow guardrail against accidental unapproved runs, not a security
+> control.
+
 ## Usage as Library
 
 ```python

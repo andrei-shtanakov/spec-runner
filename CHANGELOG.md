@@ -10,6 +10,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **Gated spec generation** (`plan --gated`, `spec status/approve/reject/adopt/check`):
+  an opt-in workflow that stamps `requirements.md`/`design.md`/`tasks.md` with
+  frontmatter (`spec_stage`, `status: draft|approved|stale`, `version`,
+  `generated_by`, `validation`, `approved_by`/`approved_at`) tracked through
+  atomic, file-locked writes. `plan --gated [--stage S]` generates one stage at
+  a time from rich single-source templates (content-hashed as
+  `source_prompt_version`), enforces that upstream stages are already
+  `approved`, writes the result as `draft`, validates it, and stops.
+  `spec approve <stage>` always re-validates the body before approving (never
+  trusts the cached `validation` field) and cascades `stale` to downstream
+  stages on any version bump; `spec adopt` validates first and refuses to
+  silently stamp an invalid file as `approved` (unless `--force`); `spec
+  reject` reopens a stage as `draft`. `run`/`watch` gain a hard gate: with
+  `spec_governance: strict` (default `off`) in config, or `--strict`/
+  `--no-strict` on the CLI, an unapproved *managed* `tasks.md` blocks
+  execution; unmanaged (frontmatter-less) and Maestro-produced specs run
+  unchanged for backward compatibility. `task.py` parsing strips leading
+  frontmatter transparently and write-back preserves it.
+
 ## [2.7.0] — 2026-06-14
 
 ### Added
