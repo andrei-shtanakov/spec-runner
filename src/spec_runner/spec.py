@@ -67,6 +67,20 @@ def strip_frontmatter(text: str) -> str:
     return body
 
 
+def split_frontmatter_raw(text: str) -> tuple[str, str]:
+    """Split the verbatim leading frontmatter block from the body.
+
+    Returns ``("", text)`` when no frontmatter is present, else
+    ``(raw_prefix, body)`` such that ``raw_prefix + body == text`` exactly,
+    where ``raw_prefix`` is the leading ``---\\n...\\n---\\n`` block verbatim
+    (including delimiters).
+    """
+    meta, body = split_frontmatter(text)
+    if meta is None:
+        return "", text
+    return text[: len(text) - len(body)], body
+
+
 def meta_from_dict(d: dict) -> SpecMeta:
     """Build a SpecMeta from a dict, ignoring unknown keys."""
     known = {f.name for f in fields(SpecMeta)}

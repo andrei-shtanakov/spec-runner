@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .spec import strip_frontmatter
+from .spec import split_frontmatter_raw, strip_frontmatter
 
 # Configuration
 TASKS_FILE = Path("spec/tasks.md")
@@ -201,7 +201,7 @@ def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
 
 def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     """Update task status in file"""
-    content = strip_frontmatter(filepath.read_text())
+    fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
 
     found = False
@@ -238,7 +238,7 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
                 )
             lines[i] = new_line
 
-            filepath.write_text("\n".join(lines))
+            filepath.write_text(fm + "\n".join(lines))
             log_change(
                 task_id,
                 f"status -> {new_status}",
@@ -251,7 +251,7 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
 
 def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked: bool) -> bool:
     """Update checklist item"""
-    content = strip_frontmatter(filepath.read_text())
+    fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
 
     in_task = False
@@ -268,7 +268,7 @@ def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked
                 mark = "x" if checked else " "
                 new_line = re.sub(r"- \[[ x]\]", f"- [{mark}]", line)
                 lines[i] = new_line
-                filepath.write_text("\n".join(lines))
+                filepath.write_text(fm + "\n".join(lines))
                 log_change(
                     task_id,
                     f"checklist[{item_index}] -> {'done' if checked else 'undone'}",
@@ -285,7 +285,7 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
 
     Returns number of items marked.
     """
-    content = strip_frontmatter(filepath.read_text())
+    fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
 
     in_task = False
@@ -305,7 +305,7 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
             marked_count += 1
 
     if marked_count > 0:
-        filepath.write_text("\n".join(lines))
+        filepath.write_text(fm + "\n".join(lines))
         log_change(
             task_id,
             f"checklist: marked {marked_count} items done",
