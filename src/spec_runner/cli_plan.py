@@ -1,8 +1,10 @@
 """CLI plan command: interactive task planning via Claude."""
 
+import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -53,13 +55,19 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run_gated_stage(
+def _open_editor(path: Path) -> None:
+    """Launch ``$EDITOR`` (falling back to ``vi``) on ``path``, blocking until exit."""
+    editor = os.environ.get("EDITOR") or "vi"
+    subprocess.run([editor, str(path)])
+
+
+def _generate_stage_draft(
     stage: str,
     description: str,
     config,
     invoke=subprocess.run,
 ) -> int:
-    """Generate one gated spec stage: enforce upstream gate, write DRAFT, validate, stop.
+    """Generate one gated spec stage: enforce upstream gate, write DRAFT, validate.
 
     Every upstream stage must already be APPROVED, else generation is refused
     (no CLI invocation, no file write). On success, writes the generated stage
@@ -134,6 +142,88 @@ def run_gated_stage(
     return 0
 
 
+def run_gated_stage(
+    stage: str,
+    description: str,
+    config,
+    invoke=subprocess.run,
+    *,
+    interactive: bool = False,
+    input_fn: Callable[[str], str] = input,
+    editor_fn: Callable[[Path], None] | None = None,
+) -> int:
+    """Generate one gated spec stage, optionally overlaying the TTY checkpoint menu.
+
+    Delegates the generate/write-DRAFT/validate work to `_generate_stage_draft`.
+    When `interactive` is False (the default), behavior is unchanged: generate
+    once and return.
+
+    When `interactive` is True, after the DRAFT is written and validated, loop
+    over `run_checkpoint_menu` (see `spec_commands.py`):
+      - "approved" / "stop" / "abort" → return 0 (caller decides what's next).
+      - "edit" → run `editor_fn` (or `_open_editor`) on the stage file, then
+        redisplay the menu (which re-validates from disk).
+      - "regenerate" → re-run `_generate_stage_draft` for the same stage and
+        redisplay the menu.
+
+    Args:
+        stage: One of 'requirements', 'design', 'tasks'.
+        description: Project description used to build the generation prompt.
+        config: Executor config providing stage file paths and CLI settings.
+        invoke: Injectable subprocess runner (defaults to `subprocess.run`).
+        interactive: Show the TTY checkpoint menu after a successful DRAFT.
+        input_fn: Injectable input function for the menu (tests never read
+            real stdin).
+        editor_fn: Injectable editor launcher for the "edit" action (tests
+            never launch a real editor); defaults to `_open_editor`.
+
+    Returns:
+        0 on a successful DRAFT (non-interactive), or on any terminal menu
+        action ("approved"/"stop"/"abort"); the `_generate_stage_draft`
+        error code (1 or 2) if generation itself fails.
+    """
+    rc = _generate_stage_draft(stage, description, config, invoke)
+    if rc != 0 or not interactive:
+        return rc
+
+    from .spec_commands import run_checkpoint_menu
+
+    while True:
+        action = run_checkpoint_menu(stage, config, input_fn=input_fn)
+        if action in ("approved", "stop", "abort"):
+            return 0
+        if action == "edit":
+            (editor_fn or _open_editor)(stage_path(config, stage))
+            continue
+        if action == "regenerate":
+            rc = _generate_stage_draft(stage, description, config, invoke)
+            if rc != 0:
+                return rc
+            continue
+
+
+def _print_gate_status(action: str, stage: str) -> bool:
+    """Print the message for a non-"generate" `resolve_next_stage` action.
+
+    Returns True when `action` is terminal (the caller should stop: the
+    pipeline is done, a stage is stale, or a stage awaits approval); False
+    when `action == "generate"` (the caller should proceed to generate it).
+    """
+    if action == "await_approval":
+        print(f"{stage} is DRAFT — approve or edit it before continuing")
+        return True
+    if action == "stale":
+        print(
+            f"{stage} is STALE — re-run `plan --gated --stage {stage}` to "
+            f"regenerate, or `spec approve {stage}` / `spec reject {stage}`"
+        )
+        return True
+    if action == "done":
+        print("all stages approved → spec-runner run")
+        return True
+    return False
+
+
 def resolve_plan_description(description: str | None, from_file: str | None) -> str:
     """Resolve the plan description from --from-file (preferred) or the positional
     argument. Exits with an error if neither is usable.
@@ -172,23 +262,40 @@ def cmd_plan(args, config: ExecutorConfig):
     if getattr(args, "gated", False):
         from .spec import STAGES, resolve_next_stage
 
-        stage = getattr(args, "stage", None)
-        if not stage:
-            metas = {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
-            action, stage = resolve_next_stage(metas)
-            if action == "await_approval":
-                print(f"{stage} is DRAFT — approve or edit it before continuing")
+        explicit_stage = getattr(args, "stage", None)
+        if explicit_stage:
+            # Single-stage request: never auto-continue, never show the menu —
+            # this is the same behavior regardless of TTY/--no-interactive.
+            raise SystemExit(run_gated_stage(explicit_stage, description, config))
+
+        interactive = sys.stdout.isatty() and not getattr(args, "no_interactive", False)
+        metas = {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
+        action, stage = resolve_next_stage(metas)
+
+        if not interactive:
+            if _print_gate_status(action, stage):
                 return
-            if action == "stale":
-                print(
-                    f"{stage} is STALE — re-run `plan --gated --stage {stage}` to "
-                    f"regenerate, or `spec approve {stage}` / `spec reject {stage}`"
-                )
-                return
-            if action == "done":
-                print("all stages approved → spec-runner run")
-                return
-        raise SystemExit(run_gated_stage(stage, description, config))
+            raise SystemExit(run_gated_stage(stage, description, config))
+
+        # Interactive auto-continue: keep generating + checkpointing stages
+        # until the pipeline is done, a stage awaits approval/is stale, or
+        # generation fails. Guard against looping forever if the user picks
+        # stop/abort: resolve_next_stage would then report the SAME
+        # (action, stage) again (the stage is still a draft), so we detect
+        # "no progress" and break instead of re-generating in a loop.
+        while True:
+            if _print_gate_status(action, stage):
+                break
+            rc = run_gated_stage(stage, description, config, interactive=True)
+            if rc != 0:
+                break
+            new_action, new_stage = resolve_next_stage(
+                {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
+            )
+            if (new_action, new_stage) == (action, stage):
+                break
+            action, stage = new_action, new_stage
+        return
 
     if getattr(args, "full", False):
         from .prompt import build_generation_prompt, parse_spec_marker

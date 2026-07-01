@@ -84,3 +84,87 @@ def test_gated_stage_missing_marker_returns_nonzero(tmp_path: Path):
     )
     assert rc == 1
     assert not cfg.requirements_file.exists()
+
+
+def _good_out() -> str:
+    return f"SPEC_REQUIREMENTS_READY\n{GOOD_REQ_BODY}\nSPEC_REQUIREMENTS_END\n"
+
+
+def test_interactive_approve_via_menu(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    rc = run_gated_stage(
+        "requirements",
+        "Build X",
+        cfg,
+        invoke=_fake_invoke(_good_out()),
+        interactive=True,
+        input_fn=lambda _: "a",
+    )
+    assert rc == 0
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None and meta.status == "approved"
+
+
+def test_interactive_stop_leaves_draft(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    inputs = iter(["s"])
+    rc = run_gated_stage(
+        "requirements",
+        "Build X",
+        cfg,
+        invoke=_fake_invoke(_good_out()),
+        interactive=True,
+        input_fn=lambda _: next(inputs),
+    )
+    assert rc == 0
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None and meta.status == "draft"
+
+
+def test_interactive_edit_then_stop_calls_editor(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    inputs = iter(["e", "s"])
+    editor_calls = []
+
+    def _editor(path):
+        editor_calls.append(path)
+        # Mutate the file to a valid body (still DRAFT) so re-validation passes.
+        meta = read_spec_meta(path)
+        write_spec(path, meta, GOOD_REQ_BODY, lock=None)
+
+    rc = run_gated_stage(
+        "requirements",
+        "Build X",
+        cfg,
+        invoke=_fake_invoke(_good_out()),
+        interactive=True,
+        input_fn=lambda _: next(inputs),
+        editor_fn=_editor,
+    )
+    assert rc == 0
+    assert len(editor_calls) == 1
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None and meta.status == "draft"
+
+
+def test_interactive_regenerate_then_stop_invokes_again(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    inputs = iter(["r", "s"])
+    calls = {"n": 0}
+
+    def _invoke(cmd, **kwargs):
+        calls["n"] += 1
+        return SimpleNamespace(returncode=0, stdout=_good_out(), stderr="")
+
+    rc = run_gated_stage(
+        "requirements",
+        "Build X",
+        cfg,
+        invoke=_invoke,
+        interactive=True,
+        input_fn=lambda _: next(inputs),
+    )
+    assert rc == 0
+    assert calls["n"] == 2
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None and meta.status == "draft"

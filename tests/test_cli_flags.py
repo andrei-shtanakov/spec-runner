@@ -56,6 +56,16 @@ class TestPlanSubparserFlags:
         assert ns.gated is False
         assert ns.stage is None
 
+    def test_no_interactive_flag_present(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["plan", "--gated", "--no-interactive", "desc"])
+        assert ns.no_interactive is True
+
+    def test_no_interactive_default_false(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["plan", "--gated", "desc"])
+        assert ns.no_interactive is False
+
 
 class TestSpecSubparser:
     def test_spec_subparser_exists(self):

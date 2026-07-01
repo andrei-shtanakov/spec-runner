@@ -963,6 +963,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stage to generate with --gated (default: auto-resolved next stage)",
     )
+    plan_parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Disable the interactive checkpoint menu in --gated mode",
+    )
 
     # validate
     subparsers.add_parser("validate", parents=[common], help="Validate tasks and config")
