@@ -6,7 +6,7 @@ import argparse
 import subprocess
 from datetime import UTC, datetime
 
-from .config import ExecutorConfig
+from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .spec import (
     STAGES,
@@ -99,7 +99,7 @@ def cmd_spec_reject(args: argparse.Namespace, config: ExecutorConfig) -> int:
         print(f"{stage}: unmanaged")
         return 2
     meta.status = "draft"
-    write_spec(path, meta, read_spec_body(path))
+    write_spec(path, meta, read_spec_body(path), lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: re-opened as draft")
     return 0
 
@@ -137,7 +137,7 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
         approved_by=_approver() if status == "approved" else None,
         approved_at=_now() if status == "approved" else None,
     )
-    write_spec(path, meta, body)
+    write_spec(path, meta, body, lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: adopted ({status})")
     return 0
 
@@ -152,6 +152,6 @@ def cmd_spec_check(args: argparse.Namespace, config: ExecutorConfig) -> int:
         return 2
     verdict = verdict_from_result(validate_spec_stage(stage, config))
     meta.validation = verdict
-    write_spec(path, meta, read_spec_body(path))
+    write_spec(path, meta, read_spec_body(path), lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: validation={verdict}")
     return 0 if verdict != "fail" else 1

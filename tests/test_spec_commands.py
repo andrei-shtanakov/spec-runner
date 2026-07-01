@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from spec_runner import spec_commands
+from spec_runner.config import ExecutorLock
 from spec_runner.spec import SpecMeta, read_spec_meta, write_spec
 
 
@@ -66,3 +67,35 @@ def test_reject_returns_to_draft(tmp_path: Path):
     args = SimpleNamespace(stage="requirements")
     assert spec_commands.cmd_spec_reject(args, cfg) == 0
     assert read_spec_meta(cfg.requirements_file).status == "draft"
+
+
+def test_reject_writes_under_lock_and_releases(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "approved", version=3), GOOD_REQ)
+    args = SimpleNamespace(stage="requirements")
+    assert spec_commands.cmd_spec_reject(args, cfg) == 0
+    # The command must release the lock after writing.
+    fresh_lock = ExecutorLock(cfg.spec_lock_file)
+    assert fresh_lock.acquire()
+    fresh_lock.release()
+
+
+def test_adopt_writes_under_lock_and_releases(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    cfg.requirements_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.requirements_file.write_text(GOOD_REQ)
+    args = SimpleNamespace(stage="requirements", force=False)
+    assert spec_commands.cmd_spec_adopt(args, cfg) == 0
+    fresh_lock = ExecutorLock(cfg.spec_lock_file)
+    assert fresh_lock.acquire()
+    fresh_lock.release()
+
+
+def test_check_writes_under_lock_and_releases(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
+    args = SimpleNamespace(stage="requirements")
+    spec_commands.cmd_spec_check(args, cfg)
+    fresh_lock = ExecutorLock(cfg.spec_lock_file)
+    assert fresh_lock.acquire()
+    fresh_lock.release()

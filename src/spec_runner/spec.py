@@ -185,7 +185,7 @@ def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
     """Build an ``ExecutorLock`` bound to ``config``'s spec lock file."""
     from .config import ExecutorLock
 
-    return ExecutorLock(config.spec_lock_file)  # type: ignore[attr-defined]  # spec_lock_file added in a later task
+    return ExecutorLock(config.spec_lock_file)
 
 
 def apply_approval(

@@ -471,3 +471,26 @@ class TestSubdirAutoDefaultV230:
         cfg = build_config({}, _build_args())
         assert cfg.create_git_branch is True
         assert cfg.auto_commit is True
+
+
+class TestSpecGovernance:
+    """Tests for the spec_governance flag + spec_lock_file property (Task 9)."""
+
+    def test_spec_governance_defaults_off(self):
+        cfg = ExecutorConfig(project_root=Path("."))
+        assert cfg.spec_governance == "off"
+
+    def test_spec_lock_file_path(self):
+        cfg = ExecutorConfig(project_root=Path("."))
+        assert cfg.spec_lock_file.name == ".spec.lock"
+        assert cfg.spec_lock_file.parent.name == "spec"
+
+    def test_spec_lock_file_respects_spec_prefix(self):
+        cfg = ExecutorConfig(project_root=Path("."), spec_prefix="phase2-")
+        assert cfg.spec_lock_file.name == ".phase2-spec.lock"
+
+    def test_spec_governance_from_yaml(self, tmp_path: Path):
+        config_path = tmp_path / "spec-runner.config.yaml"
+        config_path.write_text("spec_governance: strict\n")
+        loaded = load_config_from_yaml(config_path)
+        assert loaded["spec_governance"] == "strict"
