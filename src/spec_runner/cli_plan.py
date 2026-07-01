@@ -23,9 +23,11 @@ from .runner import (
     log_progress,
 )
 from .spec import (
+    STAGES,
     SpecMeta,
     read_spec_body,
     read_spec_meta,
+    resolve_next_stage,
     stage_path,
     write_spec,
 )
@@ -224,6 +226,11 @@ def _print_gate_status(action: str, stage: str) -> bool:
     return False
 
 
+def _current_metas(config) -> dict[str, SpecMeta | None]:
+    """Read the current `SpecMeta` for every gated-pipeline stage."""
+    return {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
+
+
 def resolve_plan_description(description: str | None, from_file: str | None) -> str:
     """Resolve the plan description from --from-file (preferred) or the positional
     argument. Exits with an error if neither is usable.
@@ -260,8 +267,6 @@ def cmd_plan(args, config: ExecutorConfig):
     description = resolve_plan_description(args.description, getattr(args, "from_file", None))
 
     if getattr(args, "gated", False):
-        from .spec import STAGES, resolve_next_stage
-
         explicit_stage = getattr(args, "stage", None)
         if explicit_stage:
             # Single-stage request: never auto-continue, never show the menu —
@@ -269,32 +274,26 @@ def cmd_plan(args, config: ExecutorConfig):
             raise SystemExit(run_gated_stage(explicit_stage, description, config))
 
         interactive = sys.stdout.isatty() and not getattr(args, "no_interactive", False)
-        metas = {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
-        action, stage = resolve_next_stage(metas)
 
         if not interactive:
+            action, stage = resolve_next_stage(_current_metas(config))
             if _print_gate_status(action, stage):
                 return
             raise SystemExit(run_gated_stage(stage, description, config))
 
-        # Interactive auto-continue: keep generating + checkpointing stages
-        # until the pipeline is done, a stage awaits approval/is stale, or
-        # generation fails. Guard against looping forever if the user picks
-        # stop/abort: resolve_next_stage would then report the SAME
-        # (action, stage) again (the stage is still a draft), so we detect
-        # "no progress" and break instead of re-generating in a loop.
+        # Interactive auto-continue: generate -> checkpoint menu -> next stage.
+        # Terminates in at most len(STAGES) generate-iterations: each generated
+        # stage flips from missing to draft, so resolve_next_stage can never
+        # return "generate" for the same stage twice; a stop/await/stale/done
+        # resolves to a terminal action that _print_gate_status breaks on at
+        # the top of the loop.
         while True:
+            action, stage = resolve_next_stage(_current_metas(config))
             if _print_gate_status(action, stage):
                 break
             rc = run_gated_stage(stage, description, config, interactive=True)
             if rc != 0:
                 break
-            new_action, new_stage = resolve_next_stage(
-                {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
-            )
-            if (new_action, new_stage) == (action, stage):
-                break
-            action, stage = new_action, new_stage
         return
 
     if getattr(args, "full", False):

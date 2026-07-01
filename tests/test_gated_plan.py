@@ -3,8 +3,11 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from spec_runner import cli_plan
 from spec_runner.cli_plan import run_gated_stage
-from spec_runner.spec import SpecMeta, read_spec_meta, write_spec
+from spec_runner.spec import STAGES, SpecMeta, read_spec_meta, stage_path, write_spec
 
 
 def _cfg(tmp_path: Path):
@@ -168,3 +171,83 @@ def test_interactive_regenerate_then_stop_invokes_again(tmp_path: Path):
     assert calls["n"] == 2
     meta = read_spec_meta(cfg.requirements_file)
     assert meta is not None and meta.status == "draft"
+
+
+def _plan_args(*, no_interactive: bool = False) -> SimpleNamespace:
+    """Build the argparse-shaped namespace `cmd_plan` reads for `--gated`."""
+    return SimpleNamespace(
+        description="Build X",
+        from_file=None,
+        full=False,
+        gated=True,
+        stage=None,
+        no_interactive=no_interactive,
+    )
+
+
+def test_gated_interactive_auto_continue_terminates_at_first_draft(tmp_path, monkeypatch):
+    """Drive `cmd_plan`'s interactive auto-continue loop across two stages and prove
+    it stops instead of looping forever.
+
+    `run_gated_stage` is monkeypatched with a spy: call #1 (requirements) writes an
+    APPROVED stage, so `resolve_next_stage` advances to design; call #2 (design)
+    leaves the stage as a DRAFT (simulating the user picking "stop" in the real
+    checkpoint menu), so the loop's top-of-iteration `_print_gate_status` check
+    sees `await_approval` and breaks. A hard call-count assertion (> len(STAGES))
+    guards against a hang/infinite loop if the termination logic ever regresses —
+    the test can never block on real I/O since `run_gated_stage` itself is stubbed.
+    """
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+
+    calls: list[str] = []
+
+    def _fake_run_gated_stage(stage, description, config, invoke=None, **kwargs):
+        calls.append(stage)
+        assert len(calls) <= len(STAGES), "run_gated_stage looped past len(STAGES) calls"
+        if len(calls) == 1:
+            # Simulate the user approving requirements via the checkpoint menu.
+            write_spec(
+                stage_path(config, stage),
+                SpecMeta(spec_stage=stage, status="approved", version=2),
+                GOOD_REQ_BODY,
+            )
+        else:
+            # Simulate the user picking "stop": design stays a DRAFT.
+            write_spec(
+                stage_path(config, stage),
+                SpecMeta(spec_stage=stage, status="draft"),
+                "# Design\n",
+            )
+        return 0
+
+    monkeypatch.setattr(cli_plan, "run_gated_stage", _fake_run_gated_stage)
+
+    cli_plan.cmd_plan(_plan_args(), cfg)
+
+    assert calls == ["requirements", "design"]
+    design_meta = read_spec_meta(cfg.design_file)
+    assert design_meta is not None and design_meta.status == "draft"
+
+
+def test_gated_no_interactive_does_not_auto_continue(tmp_path, monkeypatch):
+    """`--no-interactive` (or a non-TTY stdout) must engage the single-stage path:
+    exactly one `run_gated_stage` call, no auto-continue loop, exit via SystemExit.
+    """
+    cfg = _cfg(tmp_path)
+    # isatty() would say "interactive" if the flag didn't override it.
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+
+    calls = {"n": 0}
+
+    def _fake_run_gated_stage(stage, description, config, invoke=None, **kwargs):
+        calls["n"] += 1
+        return 0
+
+    monkeypatch.setattr(cli_plan, "run_gated_stage", _fake_run_gated_stage)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_plan.cmd_plan(_plan_args(no_interactive=True), cfg)
+
+    assert exc_info.value.code == 0
+    assert calls["n"] == 1
