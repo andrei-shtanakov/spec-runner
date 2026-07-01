@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .spec import strip_frontmatter
+
 # Configuration
 TASKS_FILE = Path("spec/tasks.md")
 HISTORY_FILE = Path("spec/.task-history.log")
@@ -61,7 +63,7 @@ def parse_tasks(filepath: Path) -> list[Task]:
         print(f"❌ File {filepath} not found")
         sys.exit(1)
 
-    content = filepath.read_text()
+    content = strip_frontmatter(filepath.read_text())
     lines = content.split("\n")
 
     tasks = []
@@ -199,7 +201,7 @@ def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
 
 def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     """Update task status in file"""
-    content = filepath.read_text()
+    content = strip_frontmatter(filepath.read_text())
     lines = content.split("\n")
 
     found = False
@@ -249,7 +251,7 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
 
 def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked: bool) -> bool:
     """Update checklist item"""
-    content = filepath.read_text()
+    content = strip_frontmatter(filepath.read_text())
     lines = content.split("\n")
 
     in_task = False
@@ -283,7 +285,7 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
 
     Returns number of items marked.
     """
-    content = filepath.read_text()
+    content = strip_frontmatter(filepath.read_text())
     lines = content.split("\n")
 
     in_task = False

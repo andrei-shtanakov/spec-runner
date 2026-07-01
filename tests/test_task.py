@@ -27,3 +27,30 @@ class TestEstimateParsing:
 
     def test_ascii_hyphen_range_still_parsed(self, tmp_path: Path) -> None:
         assert _single_task(tmp_path, "P0 | todo | Est: 1-2d") == "1-2d"
+
+
+TASKS_WITH_FM = """---
+spec_stage: tasks
+status: approved
+version: 2
+---
+## Milestone M1
+
+### TASK-001: First
+🔴 P0 | ⬜ TODO | Est: 1d
+"""
+
+
+def test_parse_tasks_ignores_frontmatter(tmp_path: Path) -> None:
+    p = tmp_path / "tasks.md"
+    p.write_text(TASKS_WITH_FM)
+    tasks = parse_tasks(p)
+    assert [t.id for t in tasks] == ["TASK-001"]
+    assert tasks[0].name == "First"
+
+
+def test_parse_tasks_without_frontmatter_unchanged(tmp_path: Path) -> None:
+    p = tmp_path / "tasks.md"
+    p.write_text("### TASK-009: Solo\n🔴 P0 | ⬜ TODO | Est: 1d\n")
+    tasks = parse_tasks(p)
+    assert [t.id for t in tasks] == ["TASK-009"]
