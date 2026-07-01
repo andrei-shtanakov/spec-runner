@@ -9,8 +9,11 @@ from spec_runner.validate import (
     format_results,
     validate_all,
     validate_config,
+    validate_design,
+    validate_requirements,
     validate_task_fields,
     validate_tasks,
+    verdict_from_result,
 )
 
 
@@ -445,3 +448,51 @@ class TestValidateFlatConfig:
         result = validate_config(cfg)
         assert not any("execution_order" in e for e in result.errors)
         assert any("execution_order" in w for w in result.warnings)
+
+
+GOOD_REQ = """# Requirements
+
+## Out of Scope
+- nothing yet
+
+#### REQ-001: Widget spins
+**Acceptance Criteria:**
+GIVEN a widget WHEN started THEN it spins
+"""
+
+BAD_REQ_NO_SCOPE = """#### REQ-001: X
+**Acceptance Criteria:**
+GIVEN a WHEN b THEN c
+"""
+
+
+def test_validate_requirements_ok(tmp_path: Path) -> None:
+    p = tmp_path / "requirements.md"
+    p.write_text(GOOD_REQ)
+    assert validate_requirements(p).ok
+
+
+def test_validate_requirements_missing_out_of_scope(tmp_path: Path) -> None:
+    p = tmp_path / "requirements.md"
+    p.write_text(BAD_REQ_NO_SCOPE)
+    r = validate_requirements(p)
+    assert not r.ok
+    assert any("Out of Scope" in e for e in r.errors)
+
+
+def test_validate_design_dangling_req(tmp_path: Path) -> None:
+    (tmp_path / "requirements.md").write_text(GOOD_REQ)
+    design = tmp_path / "design.md"
+    design.write_text("### DESIGN-001: C\ntraces to [REQ-999]\n")
+    r = validate_design(design)
+    assert not r.ok
+    assert any("REQ-999" in e for e in r.errors)
+
+
+def test_verdict_levels() -> None:
+    ok = ValidationResult()
+    assert verdict_from_result(ok) == "pass"
+    warn = ValidationResult(warnings=["w"])
+    assert verdict_from_result(warn) == "warn"
+    fail = ValidationResult(errors=["e"])
+    assert verdict_from_result(fail) == "fail"
