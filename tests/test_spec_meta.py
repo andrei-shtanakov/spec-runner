@@ -3,10 +3,13 @@ from pathlib import Path
 
 from spec_runner.spec import (
     SpecMeta,
+    apply_approval,
+    downstream_stages,
     meta_from_dict,
     meta_to_dict,
     read_spec_body,
     read_spec_meta,
+    resolve_next_stage,
     split_frontmatter,
     strip_frontmatter,
     write_spec,
@@ -103,3 +106,83 @@ def test_write_is_atomic_no_partial_on_replace(tmp_path: Path, monkeypatch):
     # Original content preserved; no temp file left behind.
     assert read_spec_meta(p).version == 1
     assert not any(x.name.startswith(".design.md.") for x in tmp_path.iterdir())
+
+
+def test_downstream_stages():
+    assert downstream_stages("requirements") == ["design", "tasks"]
+    assert downstream_stages("tasks") == []
+
+
+def _m(stage, status):
+    return SpecMeta(spec_stage=stage, status=status)
+
+
+def test_resolve_next_stage_table():
+    # nothing yet -> generate requirements
+    assert resolve_next_stage({"requirements": None, "design": None, "tasks": None}) == (
+        "generate",
+        "requirements",
+    )
+    # requirements draft -> await approval
+    assert resolve_next_stage(
+        {"requirements": _m("requirements", "draft"), "design": None, "tasks": None}
+    ) == ("await_approval", "requirements")
+    # requirements approved, design missing -> generate design
+    assert resolve_next_stage(
+        {"requirements": _m("requirements", "approved"), "design": None, "tasks": None}
+    ) == ("generate", "design")
+    # all approved -> done
+    assert resolve_next_stage(
+        {
+            "requirements": _m("requirements", "approved"),
+            "design": _m("design", "approved"),
+            "tasks": _m("tasks", "approved"),
+        }
+    ) == ("done", "tasks")
+    # a stale stage takes priority
+    assert resolve_next_stage(
+        {
+            "requirements": _m("requirements", "approved"),
+            "design": _m("design", "stale"),
+            "tasks": _m("tasks", "approved"),
+        }
+    ) == ("stale", "design")
+
+
+class _Cfg:
+    def __init__(self, root: Path):
+        self.project_root = root
+        self._spec = root / "spec"
+
+    @property
+    def requirements_file(self):
+        return self._spec / "requirements.md"
+
+    @property
+    def design_file(self):
+        return self._spec / "design.md"
+
+    @property
+    def tasks_file(self):
+        return self._spec / "tasks.md"
+
+    @property
+    def spec_lock_file(self):
+        return self._spec / ".spec.lock"
+
+
+def test_apply_approval_bumps_and_cascades_stale(tmp_path: Path):
+    cfg = _Cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "approved", version=1), "r\n")
+    write_spec(cfg.design_file, SpecMeta("design", "approved", version=1), "d\n")
+    write_spec(cfg.tasks_file, SpecMeta("tasks", "approved", version=1), "t\n")
+
+    # Re-approve requirements (version 1 -> 2) must cascade stale downstream.
+    apply_approval(
+        cfg, "requirements", approver="tester", now="2026-07-01T00:00:00Z", fresh_validation="pass"
+    )
+
+    assert read_spec_meta(cfg.requirements_file).version == 2
+    assert read_spec_meta(cfg.requirements_file).status == "approved"
+    assert read_spec_meta(cfg.design_file).status == "stale"
+    assert read_spec_meta(cfg.tasks_file).status == "stale"

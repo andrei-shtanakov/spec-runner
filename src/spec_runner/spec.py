@@ -143,3 +143,78 @@ def write_spec(
     finally:
         if lock is not None and acquired:
             lock.release()
+
+
+def downstream_stages(stage: str) -> list[str]:
+    """Stages strictly after ``stage`` in canonical order."""
+    i = STAGES.index(stage)
+    return list(STAGES[i + 1 :])
+
+
+def resolve_next_stage(metas: dict[str, SpecMeta | None]) -> tuple[str, str]:
+    """Compute ``(action, stage)`` from current per-stage metas.
+
+    A stale stage anywhere takes priority; else the first missing stage is
+    generated, then the first draft stage awaits approval; if all stages are
+    approved, the pipeline is done.
+    """
+    for stage in STAGES:
+        m = metas.get(stage)
+        if m is not None and m.status == "stale":
+            return ("stale", stage)
+    for stage in STAGES:
+        m = metas.get(stage)
+        if m is None:
+            return ("generate", stage)
+        if m.status == "draft":
+            return ("await_approval", stage)
+    return ("done", STAGES[-1])
+
+
+def stage_path(config: object, stage: str) -> Path:
+    """Map a stage name to its spec file path on ``config``."""
+    paths: dict[str, Path] = {
+        "requirements": config.requirements_file,  # type: ignore[attr-defined]
+        "design": config.design_file,  # type: ignore[attr-defined]
+        "tasks": config.tasks_file,  # type: ignore[attr-defined]
+    }
+    return paths[stage]
+
+
+def _spec_lock(config: object) -> ExecutorLock:
+    """Build an ``ExecutorLock`` bound to ``config``'s spec lock file."""
+    from .config import ExecutorLock
+
+    return ExecutorLock(config.spec_lock_file)  # type: ignore[attr-defined]
+
+
+def apply_approval(
+    config: object,
+    stage: str,
+    approver: str,
+    now: str,
+    fresh_validation: str,
+) -> None:
+    """Approve a stage: bump version, record approver, cascade stale downstream.
+
+    Always cascades a ``stale`` status to every downstream stage that isn't
+    already stale, since approval bumps the version and any generated
+    downstream content may now be out of sync with the newly approved stage.
+    """
+    path = stage_path(config, stage)
+    meta = read_spec_meta(path)
+    if meta is None:
+        raise ValueError(f"{stage} is unmanaged (no frontmatter)")
+    lock = _spec_lock(config)
+    meta.status = "approved"
+    meta.version += 1
+    meta.approved_by = approver
+    meta.approved_at = now
+    meta.validation = fresh_validation
+    write_spec(path, meta, read_spec_body(path), lock=lock)
+    for ds in downstream_stages(stage):
+        ds_path = stage_path(config, ds)
+        ds_meta = read_spec_meta(ds_path)
+        if ds_meta is not None and ds_meta.status != "stale":
+            ds_meta.status = "stale"
+            write_spec(ds_path, ds_meta, read_spec_body(ds_path), lock=lock)
