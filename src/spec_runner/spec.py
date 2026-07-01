@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 if TYPE_CHECKING:
-    from .config import ExecutorLock
+    from .config import ExecutorConfig, ExecutorLock
 
 STAGES: tuple[str, str, str] = ("requirements", "design", "tasks")
 
@@ -171,25 +171,25 @@ def resolve_next_stage(metas: dict[str, SpecMeta | None]) -> tuple[str, str]:
     return ("done", STAGES[-1])
 
 
-def stage_path(config: object, stage: str) -> Path:
+def stage_path(config: ExecutorConfig, stage: str) -> Path:
     """Map a stage name to its spec file path on ``config``."""
     paths: dict[str, Path] = {
-        "requirements": config.requirements_file,  # type: ignore[attr-defined]
-        "design": config.design_file,  # type: ignore[attr-defined]
-        "tasks": config.tasks_file,  # type: ignore[attr-defined]
+        "requirements": config.requirements_file,
+        "design": config.design_file,
+        "tasks": config.tasks_file,
     }
     return paths[stage]
 
 
-def _spec_lock(config: object) -> ExecutorLock:
+def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
     """Build an ``ExecutorLock`` bound to ``config``'s spec lock file."""
     from .config import ExecutorLock
 
-    return ExecutorLock(config.spec_lock_file)  # type: ignore[attr-defined]
+    return ExecutorLock(config.spec_lock_file)  # type: ignore[attr-defined]  # spec_lock_file added in a later task
 
 
 def apply_approval(
-    config: object,
+    config: ExecutorConfig,
     stage: str,
     approver: str,
     now: str,
