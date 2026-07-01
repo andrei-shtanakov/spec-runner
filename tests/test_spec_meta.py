@@ -91,6 +91,31 @@ def test_read_meta_none_for_missing(tmp_path: Path):
     assert read_spec_meta(tmp_path / "nope.md") is None
 
 
+def test_read_meta_none_for_non_spec_frontmatter(tmp_path: Path):
+    """A dict-shaped frontmatter block without `spec_stage` (e.g. unrelated
+    notes frontmatter) must be treated as unmanaged, not crash `SpecMeta(**...)`
+    with a missing-required-argument TypeError."""
+    p = tmp_path / "notes.md"
+    p.write_text("---\ntitle: notes\n---\nbody\n")
+    assert read_spec_meta(p) is None
+
+
+def test_read_meta_none_for_unknown_spec_stage(tmp_path: Path):
+    """An unrecognized `spec_stage` value is also unmanaged."""
+    p = tmp_path / "tasks.md"
+    p.write_text("---\nspec_stage: bogus\nstatus: draft\nversion: 1\n---\nbody\n")
+    assert read_spec_meta(p) is None
+
+
+def test_read_meta_valid_spec_still_returns_meta(tmp_path: Path):
+    """Sanity check: a real spec file with proper frontmatter is unaffected."""
+    p = tmp_path / "requirements.md"
+    write_spec(p, SpecMeta(spec_stage="requirements", version=1), "# Body\n")
+    meta = read_spec_meta(p)
+    assert meta is not None
+    assert meta.spec_stage == "requirements"
+
+
 def test_write_is_atomic_no_partial_on_replace(tmp_path: Path, monkeypatch):
     # Simulate os.replace failing: the original file must remain intact.
     p = tmp_path / "design.md"

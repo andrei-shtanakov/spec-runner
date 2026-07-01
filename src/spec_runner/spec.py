@@ -99,13 +99,24 @@ def _render(meta: SpecMeta, body: str) -> str:
 
 
 def read_spec_meta(path: Path) -> SpecMeta | None:
-    """Return the SpecMeta for ``path``, or None if missing/unmanaged."""
+    """Return the SpecMeta for ``path``, or None if missing/unmanaged.
+
+    A frontmatter block that lacks a recognized ``spec_stage`` (e.g. an
+    unrelated or partial frontmatter block on a non-spec file) is treated as
+    unmanaged rather than raising: only frontmatter that actually looks like
+    spec meta is considered managed.
+    """
     if not path.exists():
         return None
     meta_dict, _ = split_frontmatter(path.read_text())
     if meta_dict is None:
         return None
-    return meta_from_dict(meta_dict)
+    if meta_dict.get("spec_stage") not in STAGES:
+        return None
+    try:
+        return meta_from_dict(meta_dict)
+    except TypeError:
+        return None
 
 
 def read_spec_body(path: Path) -> str:

@@ -46,6 +46,16 @@ def test_gate_strict_allows_approved(tmp_path: Path):
     assert ok
 
 
+def test_gate_strict_allows_non_spec_frontmatter(tmp_path: Path):
+    """A tasks.md carrying unrelated (non-spec) frontmatter must be treated as
+    unmanaged and allowed through — not crash `spec_run_gate_ok` (Copilot PR#28)."""
+    cfg = _cfg(tmp_path, "strict")
+    cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.tasks_file.write_text("---\ntitle: notes\n---\n# Tasks\n")
+    ok, _ = spec_run_gate_ok(cfg)
+    assert ok
+
+
 class TestRetryGovernanceGate:
     """`retry` must be gated by spec governance, same as `run`/`watch` (no bypass)."""
 

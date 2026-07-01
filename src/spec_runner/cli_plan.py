@@ -2,6 +2,7 @@
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable
@@ -58,9 +59,14 @@ def _now_iso() -> str:
 
 
 def _open_editor(path: Path) -> None:
-    """Launch ``$EDITOR`` (falling back to ``vi``) on ``path``, blocking until exit."""
+    """Launch ``$EDITOR`` (falling back to ``vi``) on ``path``, blocking until exit.
+
+    ``$EDITOR`` is shell-word-split so values with arguments (e.g.
+    ``"code --wait"``, ``"vim -u NONE"``) invoke correctly instead of being
+    passed as a single (invalid) argv element.
+    """
     editor = os.environ.get("EDITOR") or "vi"
-    subprocess.run([editor, str(path)])
+    subprocess.run([*shlex.split(editor), str(path)])
 
 
 def _generate_stage_draft(
@@ -121,10 +127,12 @@ def _generate_stage_draft(
         return 1
 
     path = stage_path(config, stage)
+    existing = read_spec_meta(path)
+    version = existing.version if existing is not None else 1
     meta = SpecMeta(
         spec_stage=stage,
         status="draft",
-        version=1,
+        version=version,
         generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
         generated_at=_now_iso(),
         source_prompt_version=template_hash(stage),

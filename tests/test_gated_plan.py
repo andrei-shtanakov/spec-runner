@@ -251,3 +251,42 @@ def test_gated_no_interactive_does_not_auto_continue(tmp_path, monkeypatch):
 
     assert exc_info.value.code == 0
     assert calls["n"] == 1
+
+
+def test_regenerate_draft_preserves_existing_version(tmp_path: Path):
+    """Regenerating a stage that already has a managed frontmatter (e.g. an
+    approved/stale stage at version 3) must preserve that version instead of
+    resetting the counter to 1 (Copilot PR#28)."""
+    cfg = _cfg(tmp_path)
+    write_spec(
+        cfg.requirements_file,
+        SpecMeta(spec_stage="requirements", status="approved", version=3),
+        GOOD_REQ_BODY,
+    )
+
+    rc = cli_plan._generate_stage_draft(
+        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
+    )
+
+    assert rc == 0
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None
+    assert meta.version == 3
+    assert meta.status == "draft"
+
+
+def test_open_editor_splits_editor_with_args(monkeypatch, tmp_path: Path):
+    """`$EDITOR` with embedded arguments (e.g. "code --wait") must be
+    shell-word-split, not passed as a single (invalid) argv element."""
+    monkeypatch.setenv("EDITOR", "myed --wait")
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+
+    monkeypatch.setattr(cli_plan.subprocess, "run", _fake_run)
+
+    path = tmp_path / "requirements.md"
+    cli_plan._open_editor(path)
+
+    assert captured["argv"] == ["myed", "--wait", str(path)]
