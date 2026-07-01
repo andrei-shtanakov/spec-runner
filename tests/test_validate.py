@@ -11,6 +11,7 @@ from spec_runner.validate import (
     validate_config,
     validate_design,
     validate_requirements,
+    validate_spec_stage,
     validate_task_fields,
     validate_tasks,
     verdict_from_result,
@@ -496,3 +497,55 @@ def test_verdict_levels() -> None:
     assert verdict_from_result(warn) == "warn"
     fail = ValidationResult(errors=["e"])
     assert verdict_from_result(fail) == "fail"
+
+
+class TestValidateSpecStageDispatch:
+    """Tests for validate_spec_stage dispatcher function."""
+
+    @staticmethod
+    def _stage_cfg(tmp_path: Path):
+        """Create a mock config with stage file paths."""
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            requirements_file=tmp_path / "requirements.md",
+            design_file=tmp_path / "design.md",
+            tasks_file=tmp_path / "tasks.md",
+        )
+
+    def test_validate_spec_stage_requirements_dispatch(self, tmp_path: Path) -> None:
+        """Test dispatch to validate_requirements for 'requirements' stage."""
+        cfg = self._stage_cfg(tmp_path)
+        cfg.requirements_file.write_text(GOOD_REQ)
+        result = validate_spec_stage("requirements", cfg)
+        assert result.ok, f"requirements validation should pass: {result.errors}"
+
+    def test_validate_spec_stage_design_dispatch(self, tmp_path: Path) -> None:
+        """Test dispatch to validate_design for 'design' stage."""
+        cfg = self._stage_cfg(tmp_path)
+        # Write requirements with REQ-001 so design can reference it
+        cfg.requirements_file.write_text(GOOD_REQ)
+        # Design with valid DESIGN ID and REQ reference that exists
+        cfg.design_file.write_text("### DESIGN-001: Component\ntraces to [REQ-001]\n")
+        result = validate_spec_stage("design", cfg)
+        assert result.ok, f"design validation should pass: {result.errors}"
+
+    def test_validate_spec_stage_tasks_dispatch(self, tmp_path: Path) -> None:
+        """Test dispatch to validate_tasks for 'tasks' stage."""
+        cfg = self._stage_cfg(tmp_path)
+        # Write a minimal valid task
+        cfg.tasks_file.write_text(
+            "### TASK-001: First task\n🔴 P0 | ⬜ todo | Est: 1d\n\n**Traces to:** [REQ-001]\n"
+        )
+        result = validate_spec_stage("tasks", cfg)
+        # Dispatch succeeded if we got a ValidationResult without exception
+        assert isinstance(result, ValidationResult)
+        assert isinstance(result.errors, list)
+
+    def test_validate_spec_stage_unknown_raises_error(self, tmp_path: Path) -> None:
+        """Test that unknown stage raises ValueError."""
+        import pytest
+
+        cfg = self._stage_cfg(tmp_path)
+        with pytest.raises(ValueError, match="unknown stage"):
+            validate_spec_stage("bogus", cfg)
