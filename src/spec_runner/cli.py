@@ -1092,6 +1092,29 @@ def _build_parser() -> argparse.ArgumentParser:
     # --budget is inherited from common (default None); override default to 0.50 for doctor
     doctor_parser.set_defaults(budget=0.5)
 
+    # spec (gated spec lifecycle: status, approve, reject, adopt, check)
+    spec_parser = subparsers.add_parser(
+        "spec", parents=[common], help="Manage spec lifecycle (gated governance)"
+    )
+    spec_sub = spec_parser.add_subparsers(dest="spec_command", help="Spec lifecycle commands")
+
+    spec_sub.add_parser("status", help="Show per-stage status and next action")
+
+    spec_approve = spec_sub.add_parser("approve", help="Approve a spec stage")
+    spec_approve.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_reject = spec_sub.add_parser("reject", help="Reopen a spec stage as draft")
+    spec_reject.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_check = spec_sub.add_parser("check", help="Refresh cached validation for a stage")
+    spec_check.add_argument("stage", choices=["requirements", "design", "tasks"])
+
+    spec_adopt = spec_sub.add_parser("adopt", help="Adopt an unmanaged spec file")
+    spec_adopt.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_adopt.add_argument(
+        "--force", action="store_true", help="Adopt as approved even if validation fails"
+    )
+
     # task (unified: replaces spec-task binary)
     task_parser = subparsers.add_parser(
         "task", help="Task management (list, show, start, done, graph, sync)"
@@ -1195,6 +1218,22 @@ def main():
     if args.command == "task":
         _dispatch_task_command(args)
         return
+
+    # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
+    if args.command == "spec":
+        from . import spec_commands
+
+        handler = {
+            "status": spec_commands.cmd_spec_status,
+            "approve": spec_commands.cmd_spec_approve,
+            "reject": spec_commands.cmd_spec_reject,
+            "adopt": spec_commands.cmd_spec_adopt,
+            "check": spec_commands.cmd_spec_check,
+        }.get(args.spec_command)
+        if handler is None:
+            # no sub-subcommand given -> default to `spec status`
+            raise SystemExit(spec_commands.cmd_spec_status(args, config))
+        raise SystemExit(handler(args, config))
 
     cmd_func = commands.get(args.command)
     if cmd_func:

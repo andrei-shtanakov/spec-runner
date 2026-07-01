@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from .config import ExecutorConfig, ExecutorLock
@@ -155,3 +156,40 @@ def cmd_spec_check(args: argparse.Namespace, config: ExecutorConfig) -> int:
     write_spec(path, meta, read_spec_body(path), lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: validation={verdict}")
     return 0 if verdict != "fail" else 1
+
+
+def run_checkpoint_menu(
+    stage: str,
+    config: ExecutorConfig,
+    input_fn: Callable[[str], str] = input,
+) -> str:
+    """Interactive TTY checkpoint over the same file operations as the CI path.
+
+    Loops showing the current validation verdict and a menu of actions;
+    ``[a] approve`` is refused (loops back) while the stage fails validation.
+
+    Returns one of: ``approved``, ``edit``, ``regenerate``, ``stop``, ``abort``.
+    """
+    while True:
+        verdict = verdict_from_result(validate_spec_stage(stage, config))
+        approve_hint = "[a] approve" if verdict != "fail" else "[a] approve (blocked: fix errors)"
+        print(f"{stage}.md — DRAFT, validation: {verdict.upper()}")
+        prompt = f"{approve_hint}  [e] edit  [r] regenerate  [s] stop  [q] abort: "
+        choice = input_fn(prompt).strip().lower()
+        if choice == "a":
+            if verdict == "fail":
+                print("  cannot approve while validation fails")
+                continue
+            approve_args = argparse.Namespace(stage=stage, force=False)
+            rc = cmd_spec_approve(approve_args, config)
+            if rc == 0:
+                return "approved"
+            continue
+        if choice == "e":
+            return "edit"
+        if choice == "r":
+            return "regenerate"
+        if choice == "s":
+            return "stop"
+        if choice == "q":
+            return "abort"

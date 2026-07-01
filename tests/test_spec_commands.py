@@ -99,3 +99,42 @@ def test_check_writes_under_lock_and_releases(tmp_path: Path):
     fresh_lock = ExecutorLock(cfg.spec_lock_file)
     assert fresh_lock.acquire()
     fresh_lock.release()
+
+
+def test_menu_refuses_approve_when_validation_fails(tmp_path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), "no scope\n")
+    # User picks 'a' (approve) but validation fails -> menu returns to prompt; feed 's' next.
+    answers = iter(["a", "s"])
+    action = spec_commands.run_checkpoint_menu(
+        "requirements", cfg, input_fn=lambda _: next(answers)
+    )
+    assert action == "stop"
+
+
+def test_menu_approve_when_valid(tmp_path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
+    action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "a")
+    assert action == "approved"
+
+
+def test_menu_edit_returns_edit(tmp_path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
+    action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "e")
+    assert action == "edit"
+
+
+def test_menu_regenerate_returns_regenerate(tmp_path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
+    action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "r")
+    assert action == "regenerate"
+
+
+def test_menu_abort_returns_abort(tmp_path):
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
+    action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "q")
+    assert action == "abort"
