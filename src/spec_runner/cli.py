@@ -602,6 +602,15 @@ def cmd_retry(args, config: ExecutorConfig):
 
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Continuously watch tasks.md and execute ready tasks."""
+    # Spec governance gate — must run before anything else (before the TUI
+    # branch, before pre-run validation, before any lock/stop-file handling)
+    # so a blocked watch has zero side effects. `run` gates via `_run_tasks`;
+    # `watch` has its own loop and previously bypassed the gate entirely.
+    allowed, reason = spec_run_gate_ok(config)
+    if not allowed:
+        print(f"⛔ spec governance: {reason}")
+        return
+
     # Pre-run validation
     pre_result = validate_all(
         tasks_file=config.tasks_file,
@@ -1023,6 +1032,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tui",
         action="store_true",
         help="Show TUI dashboard during watch",
+    )
+    watch_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enforce spec governance: block unapproved managed tasks.md",
+    )
+    watch_parser.add_argument(
+        "--no-strict",
+        action="store_true",
+        help="Disable spec governance gate (default behavior)",
     )
 
     # costs

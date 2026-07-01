@@ -25,3 +25,17 @@ class TestRunSubparserFlags:
         ns = parser.parse_args(["run", "--no-strict"])
         assert ns.no_strict is True
         assert ns.strict is False
+
+
+class TestWatchSubparserFlags:
+    def test_strict_flag_present(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["watch", "--strict"])
+        assert ns.strict is True
+        assert ns.no_strict is False
+
+    def test_no_strict_flag_present(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["watch", "--no-strict"])
+        assert ns.no_strict is True
+        assert ns.strict is False
