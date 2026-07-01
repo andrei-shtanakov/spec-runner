@@ -24,9 +24,7 @@ def test_write_raises_when_lock_contended(tmp_path: Path):
     try:
         contender = ExecutorLock(lock_path)
         with pytest.raises(SpecLockError):
-            write_spec(
-                p, SpecMeta(spec_stage="requirements", version=1), "x\n", lock=contender
-            )
+            write_spec(p, SpecMeta(spec_stage="requirements", version=1), "x\n", lock=contender)
         # Nothing was written under contention.
         assert not p.exists()
     finally:

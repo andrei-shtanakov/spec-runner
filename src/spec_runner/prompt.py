@@ -49,10 +49,9 @@ def template_hash(stage: str) -> str:
     Returns:
         SHA256 hash prefixed with 'sha256:'.
     """
-    digest = hashlib.sha256(
-        load_bundled_template(stage).encode("utf-8")
-    ).hexdigest()
+    digest = hashlib.sha256(load_bundled_template(stage).encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
 
 SPEC_STAGES: dict[str, dict[str, str]] = {
     "requirements": {

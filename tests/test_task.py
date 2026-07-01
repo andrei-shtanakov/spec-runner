@@ -89,9 +89,7 @@ def test_update_checklist_item_preserves_frontmatter(tmp_path: Path) -> None:
 
 def test_mark_all_checklist_done_preserves_frontmatter(tmp_path: Path) -> None:
     p = tmp_path / "tasks.md"
-    p.write_text(
-        TASKS_WITH_FM.rstrip("\n") + "\n- [ ] one\n- [ ] two\n### TASK-002: Next\n"
-    )
+    p.write_text(TASKS_WITH_FM.rstrip("\n") + "\n- [ ] one\n- [ ] two\n### TASK-002: Next\n")
 
     assert mark_all_checklist_done(p, "TASK-001") == 2
 

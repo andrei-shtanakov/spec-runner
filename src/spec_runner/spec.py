@@ -128,8 +128,7 @@ def write_spec(
         acquired = lock.acquire()
         if not acquired:
             raise SpecLockError(
-                f"could not acquire spec lock {lock.lock_path}; "
-                "another spec mutation in progress"
+                f"could not acquire spec lock {lock.lock_path}; another spec mutation in progress"
             )
     try:
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
