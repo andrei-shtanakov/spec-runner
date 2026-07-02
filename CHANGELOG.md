@@ -10,8 +10,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-07-02
+
 ### Added
 
+- **VSCode extension read-surface contracts** — pinned schemas for the surfaces
+  the `spec-runner-vscode` extension reads: `schemas/status.schema.json`
+  (`status --json` flat aggregate), `schemas/costs.schema.json` (`costs --json`
+  per-task list; pins the *mixed* status enum — DB
+  `pending/running/success/failed/skipped` + tasks.md
+  `todo/in_progress/done/blocked`), and `schemas/spec-frontmatter.schema.json`
+  (`SpecMeta` governance frontmatter). Golden fixtures + contract tests
+  (`tests/test_vscode_contract.py`) validate both sample fixtures and *live*
+  command output, with a drift guard on the union status enum. Adds
+  `spec-runner --version` for the extension's activation compatibility check.
+  Additive only — no change to existing output shapes.
 - **Gated spec generation** (`plan --gated`, `spec status/approve/reject/adopt/check`):
   an opt-in workflow that stamps `requirements.md`/`design.md`/`tasks.md` with
   frontmatter (`spec_stage`, `status: draft|approved|stale`, `version`,
