@@ -13,7 +13,7 @@ spec-runner's role in the ecosystem: the only **working** cross-project link (Ma
 
 ## Project Overview
 
-**spec-runner** (v2.7.0) — Task automation from markdown specs via a coding-agent CLI. Reads structured tasks from `spec/tasks.md`, executes them as CLI subprocesses (claude/codex/opencode/pi/ollama/llama-cli/qwen/copilot — selectable via `spec-runner config`) with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
+**spec-runner** (v2.8.0) — Task automation from markdown specs via a coding-agent CLI. Reads structured tasks from `spec/tasks.md`, executes them as CLI subprocesses (claude/codex/opencode/pi/ollama/llama-cli/qwen/copilot — selectable via `spec-runner config`) with retries, code review, Git automation, and hook-based CI-like workflows. Includes post-execution compliance verification and traceability matrix reporting.
 
 ## Build & Development Commands
 

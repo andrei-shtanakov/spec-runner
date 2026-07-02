@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/costs.schema.json",
+  "title": "SpecRunnerCosts",
+  "description": "Output of `spec-runner costs --json` (spec_runner.cli_info.cmd_costs). The per-task read surface that backs the spec-runner-vscode extension's TASKS tree. NOTE: `status` carries a MIXED vocabulary — DB states (pending/running/success/failed/skipped) for tasks that have run, tasks.md states (todo/in_progress/done/blocked) otherwise. Consumers must normalize both. See docs/state-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tasks", "summary"],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/TaskCost" }
+    },
+    "summary": { "$ref": "#/definitions/Summary" }
+  },
+  "definitions": {
+    "TaskCost": {
+      "title": "TaskCost",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "name",
+        "status",
+        "cost",
+        "attempts",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "task_id": {
+          "description": "Task identifier (e.g. TASK-001)",
+          "type": "string"
+        },
+        "name": {
+          "description": "Task title",
+          "type": "string"
+        },
+        "status": {
+          "description": "Mixed vocabulary: DB status (has state) OR tasks.md status (no state). The union of both is pinned here; normalize on the consumer side.",
+          "type": "string",
+          "enum": [
+            "pending",
+            "running",
+            "success",
+            "failed",
+            "skipped",
+            "todo",
+            "in_progress",
+            "done",
+            "blocked"
+          ]
+        },
+        "cost": {
+          "description": "Cost in USD for this task (0.0 when no state)",
+          "type": "number"
+        },
+        "attempts": {
+          "description": "Attempt count (0 when no state)",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "description": "Total input tokens for this task",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "description": "Total output tokens for this task",
+          "type": "integer"
+        }
+      }
+    },
+    "Summary": {
+      "title": "Summary",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_cost",
+        "total_input_tokens",
+        "total_output_tokens",
+        "avg_cost_per_completed",
+        "most_expensive_task"
+      ],
+      "properties": {
+        "total_cost": {
+          "description": "Total cost in USD (rounded to 2dp)",
+          "type": "number"
+        },
+        "total_input_tokens": {
+          "description": "Total input tokens across all tasks",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "description": "Total output tokens across all tasks",
+          "type": "integer"
+        },
+        "avg_cost_per_completed": {
+          "description": "Average cost across tasks with cost > 0 (rounded to 2dp)",
+          "type": "number"
+        },
+        "most_expensive_task": {
+          "description": "task_id of the costliest task, or null when none has cost > 0",
+          "type": ["string", "null"]
+        },
+        "budget_usd": {
+          "description": "Configured budget in USD; present only when a budget is set",
+          "type": "number"
+        },
+        "budget_used_pct": {
+          "description": "Percentage of budget consumed; present only when a budget is set",
+          "type": "number"
+        }
+      }
+    }
+  }
+}

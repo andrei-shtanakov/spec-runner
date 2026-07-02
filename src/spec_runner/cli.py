@@ -861,6 +861,18 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
     )
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        _pkg_version = version("spec-runner")
+    except PackageNotFoundError:
+        _pkg_version = "0.0.0.dev"
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"spec-runner {_pkg_version}",
+        help="Print the spec-runner version and exit",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 

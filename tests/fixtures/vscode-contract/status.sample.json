@@ -1,0 +1,11 @@
+{
+  "total_tasks": 2,
+  "completed": 1,
+  "failed": 0,
+  "running": 0,
+  "not_started": 1,
+  "total_cost": 0.5,
+  "input_tokens": 1000,
+  "output_tokens": 500,
+  "budget_usd": 5.0
+}

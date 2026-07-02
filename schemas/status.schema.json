@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/status.schema.json",
+  "title": "SpecRunnerStatus",
+  "description": "Output of `spec-runner status --json` (spec_runner.cli_info.cmd_status). A FLAT run-level aggregate with NO per-task array — for per-task data use costs --json (costs.schema.json). Consumed by the spec-runner-vscode extension's RUN view (summary + budget). See docs/state-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "total_tasks",
+    "completed",
+    "failed",
+    "running",
+    "not_started",
+    "total_cost",
+    "input_tokens",
+    "output_tokens",
+    "budget_usd"
+  ],
+  "properties": {
+    "total_tasks": {
+      "description": "Total tasks parsed from tasks.md",
+      "type": "integer"
+    },
+    "completed": {
+      "description": "Tasks with DB status == success",
+      "type": "integer"
+    },
+    "failed": {
+      "description": "Tasks with DB status == failed",
+      "type": "integer"
+    },
+    "running": {
+      "description": "Tasks with DB status == running",
+      "type": "integer"
+    },
+    "not_started": {
+      "description": "total_tasks - completed - failed - running",
+      "type": "integer"
+    },
+    "total_cost": {
+      "description": "Total cost in USD across all attempts (rounded to 2dp)",
+      "type": "number"
+    },
+    "input_tokens": {
+      "description": "Total input tokens across all attempts",
+      "type": "integer"
+    },
+    "output_tokens": {
+      "description": "Total output tokens across all attempts",
+      "type": "integer"
+    },
+    "budget_usd": {
+      "description": "Configured global budget in USD, or null when unset",
+      "type": ["number", "null"]
+    }
+  }
+}

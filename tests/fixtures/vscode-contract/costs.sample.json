@@ -1,0 +1,31 @@
+{
+  "tasks": [
+    {
+      "task_id": "TASK-001",
+      "name": "Login page",
+      "status": "success",
+      "cost": 0.5,
+      "attempts": 1,
+      "input_tokens": 1000,
+      "output_tokens": 500
+    },
+    {
+      "task_id": "TASK-002",
+      "name": "Dashboard",
+      "status": "todo",
+      "cost": 0.0,
+      "attempts": 0,
+      "input_tokens": 0,
+      "output_tokens": 0
+    }
+  ],
+  "summary": {
+    "total_cost": 0.5,
+    "total_input_tokens": 1000,
+    "total_output_tokens": 500,
+    "avg_cost_per_completed": 0.5,
+    "most_expensive_task": "TASK-001",
+    "budget_usd": 5.0,
+    "budget_used_pct": 10.0
+  }
+}
