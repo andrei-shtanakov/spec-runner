@@ -82,8 +82,12 @@ changes that must land first, as a separate spec-runner PR, and become part of t
    if we later want a reliable live stage).
 
 **Version pin:** the extension pins `spec-runner >=` the release that contains gated generation
-(#28, currently on `master`, unreleased — will be the next tagged version) **and** the three new
-schemas above. Half-working against an older spec-runner is thereby prevented.
+(#28) **and** the three new schemas above. Half-working against an older spec-runner is thereby
+prevented.
+
+> **Status (2026-07-02):** all prerequisites shipped in **spec-runner 2.8.0** (PR #30) — the
+> three schemas, the contract tests, and `spec-runner --version` are on `master` and released to
+> PyPI. References to `--version` below are therefore live, not aspirational; the pin is `>=2.8.0`.
 
 ## Architecture
 
@@ -247,9 +251,10 @@ Mechanism:
   leading arg, so a string-path model breaks `spawn`. Missing binary → a one-time actionable
   notification ("install: `uv tool install spec-runner` / set path"); the extension degrades to
   read-only (frontmatter + tasks.md are still readable).
-- **Version check on activation:** run `spec-runner --version`, parse semver, compare to the
-  pinned minimum (the release carrying #28 + the new schemas). Below the pin → a hard warning
-  and degrade to **read-only** (don't dispatch actions against an incompatible contract).
+- **Version check on activation:** run `spec-runner --version` (implemented in spec-runner
+  2.8.0, PR #30), parse semver, compare to the pinned minimum (`2.8.0` — the release carrying
+  #28 + the new schemas). Below the pin → a hard warning and degrade to **read-only** (don't
+  dispatch actions against an incompatible contract).
 - Activation: any of `spec/tasks.md`, `spec/${prefix}tasks.md`, `spec/*.md`, or
   `spec-runner.config.yaml` present (`activationEvents: workspaceContains`). The bare
   `spec/tasks.md` glob misses phase-only projects whose file is `spec/phase2-tasks.md`, so
@@ -313,9 +318,9 @@ Mechanism:
   `spec/*.md` (not just `spec/tasks.md`) or phase-only projects never activate.
 - **Version skew** — an older `spec-runner` may emit different JSON/CLI; a `--version` check on
   activation gates against the pin and drops to read-only below it.
-- **Cross-repo sequencing** — the three spec-runner schema additions (+ pinned `--version`) must
-  land (a small spec-runner PR) before the extension can honor its pin; the plan sequences
-  spec-runner-side first, extension second.
+- **Cross-repo sequencing** — the three spec-runner schema additions (+ `spec-runner --version`)
+  had to land before the extension could honor its pin; **done in spec-runner 2.8.0 (PR #30)**,
+  so the extension scaffold followed second, as planned.
 - **Contract drift** — vendored schemas (now four-surface) + a concrete version pin + a
   contract test are the guard.
 - **Interactive parity** — the `plan --gated` TTY menu is intentionally not reproduced; the
