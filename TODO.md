@@ -5,9 +5,17 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
+- ✅ **v2.8.0 зарелижен 2026-07-02** (PyPI + GitHub Release, тег `v2.8.0`): VSCode
+  read-surface контракты (`schemas/status|costs|spec-frontmatter.schema.json` +
+  `spec-runner --version` + `tests/test_vscode_contract.py`, PR #30) **вместе с**
+  gated spec generation (#28, была `[Unreleased]`). Version-pin в
+  `spec-runner-vscode` (`>=2.8.0`) теперь честный.
 - ✅ **Gated spec generation** влито в master 2026-07-01 (`592528f`, PR #28): `plan --gated`,
   `spec status/approve/reject/adopt/check`, `config.spec_governance: off|strict` +
-  `run`/`watch --strict`. Пока в `CHANGELOG.md` как `[Unreleased]` — версия не забампана.
+  `run`/`watch --strict`. Вышло в составе v2.8.0.
+- ✅ **spec-runner-vscode** — новый sibling-репозиторий (TS/npm), тонкое расширение над
+  CLI/JSON-контрактами: три TreeView, gated-действия, run/stop, unit (vitest) +
+  integration (`@vscode/test-electron`) тесты. Первый JS-тулчейн в монорепе.
 - ✅ v2.7.0 зарелижен 2026-06-14 (`--model` для qwen/copilot presets)
 - ✅ v2.2.2 зарелижен 2026-05-29 (console-прогресс в stderr для non-TUI run/watch)
 - ✅ v2.2.1 зарелижен 2026-05-28 (CI off Node 20 → Node 24, obs contract test skip-guard)
