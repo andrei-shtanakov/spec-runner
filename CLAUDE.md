@@ -11,13 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 spec-runner's role in the ecosystem: the only **working** cross-project link (Maestro→spec-runner). Contract stability (`.executor-state.db` SQLite schema, `--json-result` stdout) is the main ecosystem responsibility — see `docs/state-schema.md`, `schemas/*.json`, and `tests/test_json_result_contract.py`. Any breaking change needs a major version bump.
 
-## `_cowork_output/` is dev-only — never a code/runtime resource
+## `../_cowork_output/` is dev-only — never a code/runtime resource
 
-`../_cowork_output/` is the polyrepo's development-time coordination workspace (cross-team ADRs, status notes, contract drafts, PM/dev tooling). Users and teams installing or cloning this project do NOT have it. Rules:
+`../_cowork_output/` (the polyrepo **sibling** workspace — not to be confused with this repo's own local `./_cowork_output/` scratch directory) is the development-time coordination area (cross-team ADRs, status notes, contract drafts, PM/dev tooling). Users and teams installing or cloning this project do NOT have it. Rules:
 
-- Shipped/runtime code must never read, import, or resolve paths under `_cowork_output/`.
-- Canonical shippable facts live inside the owning repo (e.g. the ecosystem agents-catalog SSOT is `atp-platform/method/agents-catalog.toml`). Cross-repo contracts this repo depends on must be **vendored in** as pinned copies (as with the observability-contract pin) — never referenced from `_cowork_output/` at runtime.
-- Only workspace-local dev tooling (e.g. `_cowork_output/devtools/`) and documentation may reference it.
+- Shipped/runtime code must never read, import, or resolve paths under `../_cowork_output/`.
+- Canonical shippable facts live inside the owning repo (e.g. the ecosystem agents-catalog SSOT is `atp-platform/method/agents-catalog.toml`). Cross-repo contracts this repo depends on must be **vendored in** as pinned copies (as with the observability-contract pin) — never referenced from `../_cowork_output/` at runtime.
+- Only workspace-local dev tooling (e.g. `../_cowork_output/devtools/`) and documentation may reference it.
 
 ## Project Overview
 
