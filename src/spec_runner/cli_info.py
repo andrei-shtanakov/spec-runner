@@ -169,10 +169,28 @@ def cmd_status(args, config: ExecutorConfig):
 
 def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Show cost breakdown per task with optional JSON output."""
-    tasks = parse_tasks(config.tasks_file)
+    # Guard the file-exists case like cmd_status does: parse_tasks() hard-exits
+    # when tasks.md is missing, but a gated spec has no tasks.md until that stage
+    # is generated, and the extension still polls costs --json.
+    tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
 
     if not tasks:
-        print("No tasks found")
+        # --json must stay machine-parseable even with no tasks (empty is not an
+        # error) — emit a valid, schema-conformant payload instead of prose.
+        if getattr(args, "json", False):
+            summary: dict = {
+                "total_cost": 0.0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "avg_cost_per_completed": 0.0,
+                "most_expensive_task": None,
+            }
+            if config.budget_usd is not None:
+                summary["budget_usd"] = config.budget_usd
+                summary["budget_used_pct"] = 0.0
+            print(json.dumps({"tasks": [], "summary": summary}, indent=2))
+        else:
+            print("No tasks found")
         return
 
     with ExecutorState(config) as state:

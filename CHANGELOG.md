@@ -10,6 +10,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`costs --json` on a project without `tasks.md` emits valid empty JSON** —
+  previously `parse_tasks()` hard-exited when `tasks.md` was missing, and with
+  zero tasks the command printed the prose fallback `No tasks found`, breaking
+  machine consumers (the `spec-runner-vscode` extension polls `costs --json`
+  on fresh gated specs that have no tasks stage yet). Now emits a
+  schema-conformant `{"tasks": [], "summary": {…}}` payload.
+- **Pre-init log lines no longer leak to stdout** — structlog's built-in
+  default prints to stdout until `init_logging()` runs, so logs emitted during
+  `build_config()` (e.g. the subdir-project warning) corrupted machine output
+  (`status --json` failed `JSON.parse` in the VSCode extension). `obs.py` now
+  installs a pre-init default that routes logging to the *current*
+  `sys.stderr`, keeping stdout reserved for `--json` / `--json-result`.
+
 ## [2.8.0] — 2026-07-02
 
 ### Added

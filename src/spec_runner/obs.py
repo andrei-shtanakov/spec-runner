@@ -23,6 +23,33 @@ from typing import Any, cast
 import structlog
 import ulid
 
+
+class _StderrProxy:
+    """File-like that forwards to the *current* ``sys.stderr`` at call time.
+
+    Lets the pre-init structlog default (below) resolve the stream lazily, so it
+    survives pytest capture / stderr reassignment — mirroring ``_console_progress``.
+    """
+
+    def write(self, s: str) -> int:
+        return sys.stderr.write(s)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+
+# Pre-init default: route logging to stderr, never stdout. Until init_logging()
+# runs, structlog's built-in default factory prints to *stdout*; commands emit
+# logs during build_config() (e.g. the subdir-project warning) before
+# init_logging() is reached, which would corrupt stdout — reserved for machine
+# output (`--json`, `--json-result`). Binding the default sink to stderr keeps
+# that stream clean for machine consumers (the CLI's `--json` commands, the
+# `--json-result` Maestro contract, and the spec-runner-vscode extension).
+# PrintLogger only calls write()/flush(), which _StderrProxy provides.
+structlog.configure(
+    logger_factory=structlog.PrintLoggerFactory(file=_StderrProxy())  # type: ignore[arg-type]
+)
+
 _SEVERITY_NUMBER = {
     "debug": 5,
     "info": 9,

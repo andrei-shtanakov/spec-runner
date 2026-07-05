@@ -15,6 +15,8 @@ Design: docs/superpowers/specs/2026-07-01-spec-runner-vscode-design.md
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -114,6 +116,44 @@ def test_live_costs_json_matches_schema(tmp_path: Path, capsys) -> None:
     cmd_costs(Namespace(json=True, sort="id"), config)
     payload = json.loads(capsys.readouterr().out)
     _validator("costs.schema.json").validate(payload)
+
+
+def test_costs_json_empty_project_is_valid_json(tmp_path: Path, capsys) -> None:
+    """`costs --json` with no tasks must emit valid JSON, not the prose fallback.
+
+    A fresh gated spec has requirements/design but no tasks.md yet; the extension
+    still polls `costs --json` and must be able to parse it.
+    """
+    config = _make_config(tmp_path)  # no tasks.md written
+    cmd_costs(Namespace(json=True, sort="id"), config)
+    payload = json.loads(capsys.readouterr().out)
+    _validator("costs.schema.json").validate(payload)
+    assert payload["tasks"] == []
+
+
+def test_status_json_stdout_not_polluted_by_logs_in_git_subdir(tmp_path: Path) -> None:
+    """Machine `--json` stdout must stay clean when the project is nested in a git
+    repo — the subdir-detection warning must go to stderr, never stdout.
+
+    Regression for the leak that broke the spec-runner-vscode extension's refresh
+    (JSON.parse failing on a leading log line).
+    """
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outer, check=True, capture_output=True)
+    proj = outer / "proj"
+    proj.mkdir()
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from spec_runner.executor import main; main()", "status", "--json"],
+        cwd=proj,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)  # raises if a log line leaked to stdout
+    assert "total_tasks" in payload
+    assert "subdir_project_detected" in result.stderr  # warning belongs on stderr
 
 
 def test_costs_status_enum_covers_both_vocabularies() -> None:
