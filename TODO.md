@@ -5,6 +5,11 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
+- ✅ **v2.8.1 зарелижен 2026-07-05** (PyPI + GitHub Release, тег `v2.8.1`): два фикса
+  machine-JSON поверхностей для `spec-runner-vscode` — `costs --json` без `tasks.md`
+  отдаёт валидный пустой payload (не прозу/hard-exit), и pre-init structlog default
+  в `obs.py` уводит логи в stderr (subdir-warning больше не ломает `JSON.parse`
+  на `status --json`). Фиксы: `31410ab`, релиз: `85278a7`.
 - ✅ **v2.8.0 зарелижен 2026-07-02** (PyPI + GitHub Release, тег `v2.8.0`): VSCode
   read-surface контракты (`schemas/status|costs|spec-frontmatter.schema.json` +
   `spec-runner --version` + `tests/test_vscode_contract.py`, PR #30) **вместе с**
