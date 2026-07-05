@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.8.1] — 2026-07-05
+
 ### Fixed
 
 - **`costs --json` on a project without `tasks.md` emits valid empty JSON** —
