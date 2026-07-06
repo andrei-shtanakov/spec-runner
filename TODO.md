@@ -5,6 +5,18 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
+- ✅ **C1 «STAGES → загружаемый профиль» реализован 2026-07-06** (master `717bd3a`, ещё НЕ
+  зарелижен): захардкоженная цепочка стадий вынесена в данные — `StageDef`/`StageProfile` +
+  бандленый `profiles/lite.yaml` (= прежние req→design→tasks 1:1), `spec.py`/`prompt.py`/
+  `validate.py` читают из профиля, `config.spec_profile` + флаг `--profile`, неизвестный профиль →
+  внятная ошибка. Zero behaviour change: сьют **976 passed** (+50 тестов, ни одной правки старых),
+  ruff/mypy чистые. Keystone steward Phase 1 — разблокирует governance-профили (steward G1/G2).
+  Спека-бандл: `docs/plans/spec-runner-c1-stages-profile/`. Исполнено самим spec-runner (claude
+  preset, 7/7 задач с первой попытки, $15.91) — dogfood gated+run пайплайна.
+- ⚠️ **Два бага `--spec-prefix` найдены при dogfood C1** (кандидаты в v2.8.2): (1) флаг ПЕРЕД
+  субкомандой (`spec-runner --spec-prefix=X run`) молча игнорируется — argparse parent-дефлт
+  затирает значение; **важно: VSCode-расширение ставит флаг именно так** → `spec-runner.specPrefix`
+  сейчас не работает. (2) Семейство `spec status/approve/...` вообще не принимает `--spec-prefix`.
 - ✅ **v2.8.1 зарелижен 2026-07-05** (PyPI + GitHub Release, тег `v2.8.1`): два фикса
   machine-JSON поверхностей для `spec-runner-vscode` — `costs --json` без `tasks.md`
   отдаёт валидный пустой payload (не прозу/hard-exit), и pre-init structlog default
