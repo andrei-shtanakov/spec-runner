@@ -83,6 +83,15 @@ def load_profile(name: str) -> StageProfile:
     return StageProfile(name=data.get("profile", name), stages=stages)
 
 
+def available_profiles() -> list[str]:
+    """Return the sorted names of bundled stage profiles (``profiles/*.yaml``)."""
+    prof_dir = files("spec_runner") / "profiles"
+    names = [
+        entry.name[: -len(".yaml")] for entry in prof_dir.iterdir() if entry.name.endswith(".yaml")
+    ]
+    return sorted(names)
+
+
 #: Built-in default profile — the canonical requirements→design→tasks chain.
 LITE: StageProfile = load_profile("lite")
 

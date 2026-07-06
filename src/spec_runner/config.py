@@ -12,9 +12,19 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 import yaml
+
+if TYPE_CHECKING:
+    from .spec import StageProfile
+
+# === Errors ===
+
+
+class ConfigError(ValueError):
+    """Raised for invalid configuration values (e.g. an unknown ``spec_profile``)."""
+
 
 # === Persona ===
 
@@ -217,6 +227,9 @@ class ExecutorConfig:
     # Spec governance: "off" (default) | "strict" (gate run on approved tasks.md)
     spec_governance: str = "off"
 
+    # Gated spec-generation profile name (resolves to a spec.StageProfile).
+    spec_profile: str = "lite"
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -270,6 +283,23 @@ class ExecutorConfig:
         if persona and persona.model:
             return persona.model
         return self.claude_model
+
+    def resolve_spec_profile(self) -> "StageProfile":
+        """Resolve ``spec_profile`` (a name) to its :class:`~spec_runner.spec.StageProfile`.
+
+        Raises:
+            ConfigError: If the name matches no bundled profile; the message
+                lists the available profile names (no traceback for the CLI).
+        """
+        from .spec import available_profiles, load_profile
+
+        try:
+            return load_profile(self.spec_profile)
+        except ValueError:
+            available = ", ".join(available_profiles())
+            raise ConfigError(
+                f"unknown spec_profile: {self.spec_profile!r}; available: {available}"
+            ) from None
 
 
 # === Config Loading ===
@@ -427,6 +457,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "audit_log_path": executor_config.get("audit_log_path"),
             "audit_log_operator": executor_config.get("audit_log_operator"),
             "spec_governance": executor_config.get("spec_governance"),
+            "spec_profile": executor_config.get("spec_profile"),
         }
     except Exception as e:
         from .logging import get_logger
@@ -488,6 +519,8 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["spec_governance"] = "off"
     if hasattr(args, "log_level") and getattr(args, "log_level", None):
         config_kwargs["log_level"] = args.log_level
+    if getattr(args, "profile", None):
+        config_kwargs["spec_profile"] = args.profile
 
     config = ExecutorConfig(**config_kwargs)
 

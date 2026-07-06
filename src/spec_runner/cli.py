@@ -856,6 +856,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Per-task budget in USD (block task when exceeded)",
     )
 
+    # Gated spec-generation profile selector (plan --gated and the spec family).
+    profile_parent = argparse.ArgumentParser(add_help=False)
+    profile_parent.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Gated spec-generation profile name (default: lite)",
+    )
+
     parser = argparse.ArgumentParser(
         description="spec-runner — task automation from markdown specs via Claude CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -950,7 +959,9 @@ def _build_parser() -> argparse.ArgumentParser:
     reset_parser.add_argument("--logs", action="store_true", help="Also clear logs")
 
     # plan
-    plan_parser = subparsers.add_parser("plan", parents=[common], help="Interactive task planning")
+    plan_parser = subparsers.add_parser(
+        "plan", parents=[common, profile_parent], help="Interactive task planning"
+    )
     plan_parser.add_argument(
         "description", nargs="?", default=None, help="Feature description (or use --from-file)"
     )
@@ -1121,18 +1132,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     spec_sub = spec_parser.add_subparsers(dest="spec_command", help="Spec lifecycle commands")
 
-    spec_sub.add_parser("status", help="Show per-stage status and next action")
+    spec_sub.add_parser("status", parents=[profile_parent], help="Show per-stage status")
 
-    spec_approve = spec_sub.add_parser("approve", help="Approve a spec stage")
+    spec_approve = spec_sub.add_parser(
+        "approve", parents=[profile_parent], help="Approve a spec stage"
+    )
     spec_approve.add_argument("stage", choices=["requirements", "design", "tasks"])
 
-    spec_reject = spec_sub.add_parser("reject", help="Reopen a spec stage as draft")
+    spec_reject = spec_sub.add_parser(
+        "reject", parents=[profile_parent], help="Reopen a spec stage as draft"
+    )
     spec_reject.add_argument("stage", choices=["requirements", "design", "tasks"])
 
-    spec_check = spec_sub.add_parser("check", help="Refresh cached validation for a stage")
+    spec_check = spec_sub.add_parser(
+        "check", parents=[profile_parent], help="Refresh cached validation for a stage"
+    )
     spec_check.add_argument("stage", choices=["requirements", "design", "tasks"])
 
-    spec_adopt = spec_sub.add_parser("adopt", help="Adopt an unmanaged spec file")
+    spec_adopt = spec_sub.add_parser(
+        "adopt", parents=[profile_parent], help="Adopt an unmanaged spec file"
+    )
     spec_adopt.add_argument("stage", choices=["requirements", "design", "tasks"])
     spec_adopt.add_argument(
         "--force", action="store_true", help="Adopt as approved even if validation fails"
@@ -1200,6 +1219,14 @@ def main():
     # Load config from YAML file, then override with CLI args
     yaml_config = load_config_from_yaml()
     config = build_config(yaml_config, args)
+
+    # Fail fast with a clean message (no traceback) on an unknown spec profile.
+    from .config import ConfigError
+
+    try:
+        config.resolve_spec_profile()
+    except ConfigError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
 
     from .logging import setup_logging
 
