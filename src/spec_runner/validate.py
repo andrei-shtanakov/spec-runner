@@ -1,6 +1,7 @@
 """Validation for tasks.md — field checks, dependency refs, cycle detection, and config validation."""
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import yaml
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
-from spec_runner.spec import strip_frontmatter
+from spec_runner.spec import LITE, StageProfile, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
@@ -121,26 +122,62 @@ def validate_design(path: Path) -> ValidationResult:
     return result
 
 
-def validate_spec_stage(stage: str, config: ExecutorConfig) -> ValidationResult:
-    """Dispatch stage validation using the config's stage file paths.
+def _stage_path(stage: str, config: ExecutorConfig) -> Path:
+    """Resolve the file path for ``stage`` from the config.
 
     Args:
         stage: One of ``"requirements"``, ``"design"``, ``"tasks"``.
         config: Executor config providing the stage file paths.
 
     Returns:
+        The path to the stage's spec file.
+
+    Raises:
+        ValueError: If ``stage`` has no known config file path.
+    """
+    paths = {
+        "requirements": config.requirements_file,
+        "design": config.design_file,
+        "tasks": config.tasks_file,
+    }
+    try:
+        return paths[stage]
+    except KeyError:
+        raise ValueError(f"unknown stage: {stage}") from None
+
+
+def validate_spec_stage(
+    stage: str, config: ExecutorConfig, profile: StageProfile = LITE
+) -> ValidationResult:
+    """Dispatch stage validation via the profile's validator registry.
+
+    The stage's :class:`~spec_runner.spec.StageDef` supplies a serializable
+    ``validator_key`` that is looked up in :data:`VALIDATORS` (DESIGN-304),
+    replacing the previous hard-coded ``if/elif`` chain.
+
+    Args:
+        stage: A stage name in ``profile`` (default lite: requirements/design/tasks).
+        config: Executor config providing the stage file paths.
+        profile: Stage profile supplying the validator key (default lite).
+
+    Returns:
         ValidationResult for the requested stage.
 
     Raises:
-        ValueError: If ``stage`` is not a recognised stage name.
+        ValueError: If ``stage`` is not a stage of ``profile``, or if its
+            ``validator_key`` is not registered in :data:`VALIDATORS`.
     """
-    if stage == "requirements":
-        return validate_requirements(config.requirements_file)
-    if stage == "design":
-        return validate_design(config.design_file)
-    if stage == "tasks":
-        return validate_tasks(config.tasks_file)
-    raise ValueError(f"unknown stage: {stage}")
+    stagedef = next((s for s in profile.stages if s.name == stage), None)
+    if stagedef is None:
+        raise ValueError(f"unknown stage: {stage}")
+    try:
+        validator = VALIDATORS[stagedef.validator_key]
+    except KeyError:
+        raise ValueError(
+            f"unknown validator_key: {stagedef.validator_key!r}; "
+            f"available: {sorted(VALIDATORS)}"
+        ) from None
+    return validator(_stage_path(stage, config))
 
 
 def validate_task_fields(tasks: list[Task]) -> ValidationResult:
@@ -392,6 +429,16 @@ def validate_tasks(tasks_file: Path) -> ValidationResult:
     )
 
     return result
+
+
+#: Registry of stage validators keyed by :attr:`StageDef.validator_key`
+#: (DESIGN-304). Profiles reference these string keys rather than the callables
+#: themselves so that :class:`~spec_runner.spec.StageProfile` stays serializable.
+VALIDATORS: dict[str, Callable[[Path], ValidationResult]] = {
+    "requirements": validate_requirements,
+    "design": validate_design,
+    "tasks": validate_tasks,
+}
 
 
 def validate_all(
