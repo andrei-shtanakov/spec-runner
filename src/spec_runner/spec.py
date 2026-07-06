@@ -5,7 +5,8 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
+from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,9 +15,80 @@ import yaml
 if TYPE_CHECKING:
     from .config import ExecutorConfig, ExecutorLock
 
-STAGES: tuple[str, str, str] = ("requirements", "design", "tasks")
-
 _FM_DELIM = "---"
+
+
+@dataclass(frozen=True)
+class StageDef:
+    """One stage in a spec-generation profile.
+
+    Consolidates the data that previously lived in three scattered maps
+    (``prompt.py`` templates/markers, ``validate.py`` validator dispatch):
+    the stage name, its bundled template filename, the ``marker_prefix`` used
+    to bracket generated output (``{prefix}_READY`` / ``{prefix}_END``), the
+    validator-registry key, its direct ``upstream`` stage(s), and optional
+    generation instruction text (``prompt_text``).
+    """
+
+    name: str
+    template: str
+    marker_prefix: str
+    validator_key: str
+    upstream: tuple[str, ...] = ()
+    prompt_text: str = ""
+
+
+@dataclass(frozen=True)
+class StageProfile:
+    """An ordered spec-generation profile (list order = pipeline order)."""
+
+    name: str
+    stages: tuple[StageDef, ...] = field(default_factory=tuple)
+
+    def names(self) -> tuple[str, ...]:
+        """Return the stage names in profile order."""
+        return tuple(s.name for s in self.stages)
+
+
+def load_profile(name: str) -> StageProfile:
+    """Load a bundled stage profile by name from ``spec_runner/profiles``.
+
+    Args:
+        name: Profile name (e.g. ``"lite"``); resolves ``profiles/{name}.yaml``.
+
+    Returns:
+        The parsed :class:`StageProfile`.
+
+    Raises:
+        ValueError: If the profile file cannot be found.
+    """
+    resource = files("spec_runner") / "profiles" / f"{name}.yaml"
+    try:
+        raw = resource.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError(f"unknown stage profile: {name!r}") from exc
+    data = yaml.safe_load(raw) or {}
+    stages = tuple(
+        StageDef(
+            name=s["name"],
+            template=s["template"],
+            marker_prefix=s["marker_prefix"],
+            validator_key=s["validator"],
+            upstream=tuple(s.get("upstream") or ()),
+            prompt_text=s.get("prompt_text", ""),
+        )
+        for s in data.get("stages", [])
+    )
+    return StageProfile(name=data.get("profile", name), stages=stages)
+
+
+#: Built-in default profile — the canonical requirements→design→tasks chain.
+LITE: StageProfile = load_profile("lite")
+
+#: Canonical stage names. Kept as a backward-compatible export, now derived
+#: from the ``lite`` profile (DESIGN-302). Deprecated in favour of
+#: ``StageProfile.names()`` for profile-aware callers.
+STAGES: tuple[str, ...] = LITE.names()
 
 
 class SpecLockError(RuntimeError):

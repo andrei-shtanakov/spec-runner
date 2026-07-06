@@ -1,0 +1,5 @@
+profile: lite
+stages:
+  - {name: requirements, template: requirements.template.md, marker_prefix: SPEC_REQUIREMENTS, validator: requirements, upstream: []}
+  - {name: design,       template: design.template.md,       marker_prefix: SPEC_DESIGN,       validator: design,       upstream: [requirements]}
+  - {name: tasks,        template: tasks.template.md,        marker_prefix: SPEC_TASKS,        validator: tasks,        upstream: [design]}
