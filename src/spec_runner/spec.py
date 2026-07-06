@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
 from importlib.resources import files
 from pathlib import Path
@@ -170,20 +171,21 @@ def _render(meta: SpecMeta, body: str) -> str:
     return f"{_FM_DELIM}\n{fm}\n{_FM_DELIM}\n{body}"
 
 
-def read_spec_meta(path: Path) -> SpecMeta | None:
+def read_spec_meta(path: Path, stages: Sequence[str] = STAGES) -> SpecMeta | None:
     """Return the SpecMeta for ``path``, or None if missing/unmanaged.
 
     A frontmatter block that lacks a recognized ``spec_stage`` (e.g. an
     unrelated or partial frontmatter block on a non-spec file) is treated as
     unmanaged rather than raising: only frontmatter that actually looks like
-    spec meta is considered managed.
+    spec meta is considered managed. ``stages`` supplies the recognized stage
+    names (default = the ``lite`` profile; DESIGN-303).
     """
     if not path.exists():
         return None
     meta_dict, _ = split_frontmatter(path.read_text())
     if meta_dict is None:
         return None
-    if meta_dict.get("spec_stage") not in STAGES:
+    if meta_dict.get("spec_stage") not in stages:
         return None
     try:
         return meta_from_dict(meta_dict)
@@ -228,30 +230,33 @@ def write_spec(
             lock.release()
 
 
-def downstream_stages(stage: str) -> list[str]:
-    """Stages strictly after ``stage`` in canonical order."""
-    i = STAGES.index(stage)
-    return list(STAGES[i + 1 :])
+def downstream_stages(stage: str, stages: Sequence[str] = STAGES) -> list[str]:
+    """Stages strictly after ``stage`` in ``stages`` order (default = lite)."""
+    i = stages.index(stage)
+    return list(stages[i + 1 :])
 
 
-def resolve_next_stage(metas: dict[str, SpecMeta | None]) -> tuple[str, str]:
+def resolve_next_stage(
+    metas: dict[str, SpecMeta | None], stages: Sequence[str] = STAGES
+) -> tuple[str, str]:
     """Compute ``(action, stage)`` from current per-stage metas.
 
     A stale stage anywhere takes priority; else the first missing stage is
     generated, then the first draft stage awaits approval; if all stages are
-    approved, the pipeline is done.
+    approved, the pipeline is done. ``stages`` supplies the pipeline order
+    (default = the ``lite`` profile; DESIGN-303).
     """
-    for stage in STAGES:
+    for stage in stages:
         m = metas.get(stage)
         if m is not None and m.status == "stale":
             return ("stale", stage)
-    for stage in STAGES:
+    for stage in stages:
         m = metas.get(stage)
         if m is None:
             return ("generate", stage)
         if m.status == "draft":
             return ("await_approval", stage)
-    return ("done", STAGES[-1])
+    return ("done", stages[-1])
 
 
 def stage_path(config: ExecutorConfig, stage: str) -> Path:
@@ -269,6 +274,25 @@ def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
     from .config import ExecutorLock
 
     return ExecutorLock(config.spec_lock_file)
+
+
+def mark_downstream_stale(
+    config: ExecutorConfig,
+    stage: str,
+    lock: ExecutorLock,
+    stages: Sequence[str] = STAGES,
+) -> None:
+    """Flip every not-already-stale stage strictly after ``stage`` to ``stale``.
+
+    ``stages`` supplies the pipeline order (default = the ``lite`` profile;
+    DESIGN-303). Writes are serialized through the caller-supplied ``lock``.
+    """
+    for ds in downstream_stages(stage, stages):
+        ds_path = stage_path(config, ds)
+        ds_meta = read_spec_meta(ds_path, stages)
+        if ds_meta is not None and ds_meta.status != "stale":
+            ds_meta.status = "stale"
+            write_spec(ds_path, ds_meta, read_spec_body(ds_path), lock=lock)
 
 
 def apply_approval(
@@ -295,9 +319,4 @@ def apply_approval(
     meta.approved_at = now
     meta.validation = fresh_validation
     write_spec(path, meta, read_spec_body(path), lock=lock)
-    for ds in downstream_stages(stage):
-        ds_path = stage_path(config, ds)
-        ds_meta = read_spec_meta(ds_path)
-        if ds_meta is not None and ds_meta.status != "stale":
-            ds_meta.status = "stale"
-            write_spec(ds_path, ds_meta, read_spec_body(ds_path), lock=lock)
+    mark_downstream_stale(config, stage, lock)
