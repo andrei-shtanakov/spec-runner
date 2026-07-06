@@ -11,6 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
+from .spec import LITE
 from .state import RetryContext, TaskAttempt
 from .task import Task
 
@@ -53,37 +54,39 @@ def template_hash(stage: str) -> str:
     return f"sha256:{digest}"
 
 
+# Generation instruction text for the built-in 'lite' profile, keyed by stage.
+# The lite profile carries no prompt_text yet (DESIGN-305 will migrate these
+# into the StageDef), so instructions stay local while SPEC_STAGES derives its
+# structure (keys, order, markers) from the profile.
+_LITE_INSTRUCTIONS: dict[str, str] = {
+    "requirements": (
+        "Generate a requirements document based on the project description below. "
+        "Use [REQ-001], [REQ-002], etc. for each requirement. "
+        "When done, output the requirements between markers:\n"
+        "SPEC_REQUIREMENTS_READY\n<your requirements>\nSPEC_REQUIREMENTS_END"
+    ),
+    "design": (
+        "Generate a design document based on the requirements below. "
+        "Use [DESIGN-001], [DESIGN-002], etc. and trace back to requirements "
+        "with [REQ-XXX]. "
+        "When done, output the design between markers:\n"
+        "SPEC_DESIGN_READY\n<your design>\nSPEC_DESIGN_END"
+    ),
+    "tasks": (
+        "Generate a tasks document based on the requirements and design below. "
+        "Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, "
+        "checklists, "
+        "dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. "
+        "When done, output the tasks between markers:\n"
+        "SPEC_TASKS_READY\n<your tasks>\nSPEC_TASKS_END"
+    ),
+}
+
+#: Backward-compatible export, now derived from the ``lite`` profile: keys,
+#: order, and markers come from ``LITE.stages`` (DESIGN-302/DESIGN-305).
 SPEC_STAGES: dict[str, dict[str, str]] = {
-    "requirements": {
-        "marker": "SPEC_REQUIREMENTS",
-        "instruction": (
-            "Generate a requirements document based on the project description below. "
-            "Use [REQ-001], [REQ-002], etc. for each requirement. "
-            "When done, output the requirements between markers:\n"
-            "SPEC_REQUIREMENTS_READY\n<your requirements>\nSPEC_REQUIREMENTS_END"
-        ),
-    },
-    "design": {
-        "marker": "SPEC_DESIGN",
-        "instruction": (
-            "Generate a design document based on the requirements below. "
-            "Use [DESIGN-001], [DESIGN-002], etc. and trace back to requirements "
-            "with [REQ-XXX]. "
-            "When done, output the design between markers:\n"
-            "SPEC_DESIGN_READY\n<your design>\nSPEC_DESIGN_END"
-        ),
-    },
-    "tasks": {
-        "marker": "SPEC_TASKS",
-        "instruction": (
-            "Generate a tasks document based on the requirements and design below. "
-            "Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, "
-            "checklists, "
-            "dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. "
-            "When done, output the tasks between markers:\n"
-            "SPEC_TASKS_READY\n<your tasks>\nSPEC_TASKS_END"
-        ),
-    },
+    s.name: {"marker": s.marker_prefix, "instruction": _LITE_INSTRUCTIONS[s.name]}
+    for s in LITE.stages
 }
 
 
