@@ -45,7 +45,11 @@ logs/
 
 # Claude templates
 .claude/
+# Runtime spec workspace (repo root) — `spec/` matches at any depth, so carve out
+# versioned gated-spec bundles under docs/plans/ (e.g. spec-runner-c1-stages-profile)
 spec/
+!docs/plans/*/spec/
+!docs/plans/*/spec/**
 
 COWORK_CONTEXT.md
 _cowork_output/
