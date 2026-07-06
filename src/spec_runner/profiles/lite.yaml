@@ -1,5 +1,32 @@
 profile: lite
 stages:
-  - {name: requirements, template: requirements.template.md, marker_prefix: SPEC_REQUIREMENTS, validator: requirements, upstream: []}
-  - {name: design,       template: design.template.md,       marker_prefix: SPEC_DESIGN,       validator: design,       upstream: [requirements]}
-  - {name: tasks,        template: tasks.template.md,        marker_prefix: SPEC_TASKS,        validator: tasks,        upstream: [design]}
+  - name: requirements
+    template: requirements.template.md
+    marker_prefix: SPEC_REQUIREMENTS
+    validator: requirements
+    upstream: []
+    prompt_text: |-
+      Generate a requirements document based on the project description below. Use [REQ-001], [REQ-002], etc. for each requirement. When done, output the requirements between markers:
+      SPEC_REQUIREMENTS_READY
+      <your requirements>
+      SPEC_REQUIREMENTS_END
+  - name: design
+    template: design.template.md
+    marker_prefix: SPEC_DESIGN
+    validator: design
+    upstream: [requirements]
+    prompt_text: |-
+      Generate a design document based on the requirements below. Use [DESIGN-001], [DESIGN-002], etc. and trace back to requirements with [REQ-XXX]. When done, output the design between markers:
+      SPEC_DESIGN_READY
+      <your design>
+      SPEC_DESIGN_END
+  - name: tasks
+    template: tasks.template.md
+    marker_prefix: SPEC_TASKS
+    validator: tasks
+    upstream: [design]
+    prompt_text: |-
+      Generate a tasks document based on the requirements and design below. Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, checklists, dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. When done, output the tasks between markers:
+      SPEC_TASKS_READY
+      <your tasks>
+      SPEC_TASKS_END

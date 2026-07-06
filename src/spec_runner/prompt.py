@@ -11,29 +11,43 @@ from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
-from .spec import LITE
+from .spec import LITE, StageDef, StageProfile
 from .state import RetryContext, TaskAttempt
 from .task import Task
 
 PROMPTS_DIR = Path("spec/prompts")
 
-_TEMPLATE_FILES = {
-    "requirements": "requirements.template.md",
-    "design": "design.template.md",
-    "tasks": "tasks.template.md",
-}
+
+def _stage_def(stage: str, profile: StageProfile = LITE) -> StageDef:
+    """Return the :class:`StageDef` for ``stage`` in ``profile`` (default lite).
+
+    Args:
+        stage: Stage name (e.g. 'requirements').
+        profile: Stage profile to look up in; defaults to the ``lite`` profile.
+
+    Raises:
+        KeyError: If ``stage`` is not a stage of ``profile``.
+    """
+    for s in profile.stages:
+        if s.name == stage:
+            return s
+    raise KeyError(stage)
 
 
-def load_bundled_template(stage: str) -> str:
+def load_bundled_template(stage: str, profile: StageProfile = LITE) -> str:
     """Load the bundled rich template for a stage (importlib.resources).
+
+    The template filename is read from the stage's :class:`StageDef`
+    (``StageDef.template``) rather than a local map (DESIGN-305).
 
     Args:
         stage: One of 'requirements', 'design', 'tasks'.
+        profile: Stage profile supplying the template filename (default lite).
 
     Returns:
         Template content as a string.
     """
-    fname = _TEMPLATE_FILES[stage]
+    fname = _stage_def(stage, profile).template
     return (
         resources.files("spec_runner")
         .joinpath("skills", "spec-generator-skill", "templates", fname)
@@ -41,52 +55,26 @@ def load_bundled_template(stage: str) -> str:
     )
 
 
-def template_hash(stage: str) -> str:
+def template_hash(stage: str, profile: StageProfile = LITE) -> str:
     """Return 'sha256:<hex>' content hash of the stage template.
 
     Args:
         stage: One of 'requirements', 'design', 'tasks'.
+        profile: Stage profile supplying the template filename (default lite).
 
     Returns:
         SHA256 hash prefixed with 'sha256:'.
     """
-    digest = hashlib.sha256(load_bundled_template(stage).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(load_bundled_template(stage, profile).encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
 
 
-# Generation instruction text for the built-in 'lite' profile, keyed by stage.
-# The lite profile carries no prompt_text yet (DESIGN-305 will migrate these
-# into the StageDef), so instructions stay local while SPEC_STAGES derives its
-# structure (keys, order, markers) from the profile.
-_LITE_INSTRUCTIONS: dict[str, str] = {
-    "requirements": (
-        "Generate a requirements document based on the project description below. "
-        "Use [REQ-001], [REQ-002], etc. for each requirement. "
-        "When done, output the requirements between markers:\n"
-        "SPEC_REQUIREMENTS_READY\n<your requirements>\nSPEC_REQUIREMENTS_END"
-    ),
-    "design": (
-        "Generate a design document based on the requirements below. "
-        "Use [DESIGN-001], [DESIGN-002], etc. and trace back to requirements "
-        "with [REQ-XXX]. "
-        "When done, output the design between markers:\n"
-        "SPEC_DESIGN_READY\n<your design>\nSPEC_DESIGN_END"
-    ),
-    "tasks": (
-        "Generate a tasks document based on the requirements and design below. "
-        "Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, "
-        "checklists, "
-        "dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. "
-        "When done, output the tasks between markers:\n"
-        "SPEC_TASKS_READY\n<your tasks>\nSPEC_TASKS_END"
-    ),
-}
-
 #: Backward-compatible export, now derived from the ``lite`` profile: keys,
-#: order, and markers come from ``LITE.stages`` (DESIGN-302/DESIGN-305).
+#: order, markers, and instruction text all come from ``LITE.stages``
+#: (DESIGN-302/DESIGN-305). Deprecated in favour of reading the ``StageDef``
+#: fields directly for profile-aware callers.
 SPEC_STAGES: dict[str, dict[str, str]] = {
-    s.name: {"marker": s.marker_prefix, "instruction": _LITE_INSTRUCTIONS[s.name]}
-    for s in LITE.stages
+    s.name: {"marker": s.marker_prefix, "instruction": s.prompt_text} for s in LITE.stages
 }
 
 
@@ -249,18 +237,22 @@ def build_generation_prompt(
     stage: str,
     description: str,
     context: dict[str, str] | None = None,
+    profile: StageProfile = LITE,
 ) -> str:
     """Build prompt for spec generation stage.
+
+    The instruction text comes from the stage's :class:`StageDef`
+    (``StageDef.prompt_text``) rather than a local map (DESIGN-305).
 
     Args:
         stage: One of 'requirements', 'design', 'tasks'.
         description: Project description from user.
         context: Previous stage outputs (e.g., {'requirements': '...'}).
+        profile: Stage profile supplying the instruction text (default lite).
     """
     ctx = context or {}
-    stage_info = SPEC_STAGES[stage]
     parts: list[str] = [
-        stage_info["instruction"],
+        _stage_def(stage, profile).prompt_text,
         "",
         f"Project description: {description}",
     ]
@@ -284,6 +276,7 @@ def build_gated_generation_prompt(
     stage: str,
     description: str,
     context: dict[str, str],
+    profile: StageProfile = LITE,
 ) -> str:
     """Build a rich, template-driven generation prompt for one gated stage.
 
@@ -297,12 +290,14 @@ def build_gated_generation_prompt(
         description: Project description from the user.
         context: Approved upstream stage outputs, keyed by stage name
             (e.g. {'requirements': '...'}).
+        profile: Stage profile supplying the marker prefix and template
+            (default lite).
 
     Returns:
         The assembled prompt string.
     """
-    marker = SPEC_STAGES[stage]["marker"]
-    template = load_bundled_template(stage)
+    marker = _stage_def(stage, profile).marker_prefix
+    template = load_bundled_template(stage, profile)
 
     prior_parts = [
         f"## Approved {prior}\n\n{context[prior]}"
