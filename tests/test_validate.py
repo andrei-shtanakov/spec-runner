@@ -4,6 +4,7 @@ from pathlib import Path
 
 from spec_runner.task import Task
 from spec_runner.validate import (
+    VALIDATORS,
     ValidationResult,
     _detect_cycle,
     format_results,
@@ -549,3 +550,82 @@ class TestValidateSpecStageDispatch:
         cfg = self._stage_cfg(tmp_path)
         with pytest.raises(ValueError, match="unknown stage"):
             validate_spec_stage("bogus", cfg)
+
+
+class TestValidatorRegistry:
+    """Tests for the VALIDATORS registry-based dispatch (DESIGN-304)."""
+
+    def test_registry_maps_lite_validator_keys(self) -> None:
+        """Every lite-profile validator_key resolves to a callable in VALIDATORS."""
+        from spec_runner.spec import LITE
+
+        for stagedef in LITE.stages:
+            assert stagedef.validator_key in VALIDATORS
+            assert callable(VALIDATORS[stagedef.validator_key])
+
+    def test_registry_bindings(self) -> None:
+        """Registry keys bind to the expected validator callables."""
+        assert VALIDATORS["requirements"] is validate_requirements
+        assert VALIDATORS["design"] is validate_design
+        assert VALIDATORS["tasks"] is validate_tasks
+
+    def test_dispatch_uses_profile_validator_key(self, tmp_path: Path) -> None:
+        """validate_spec_stage routes through the profile's StageDef.validator_key."""
+        from types import SimpleNamespace
+
+        from spec_runner.spec import StageDef, StageProfile
+
+        req = tmp_path / "requirements.md"
+        req.write_text(GOOD_REQ)
+        design = tmp_path / "design.md"
+        design.write_text("### DESIGN-001: Component\ntraces to [REQ-001]\n")
+        cfg = SimpleNamespace(
+            requirements_file=req,
+            design_file=design,
+            tasks_file=tmp_path / "tasks.md",
+        )
+        # A stage named "design" whose validator_key points at requirements:
+        # the registry, not the stage name, must decide which validator runs.
+        profile = StageProfile(
+            name="custom",
+            stages=(
+                StageDef(
+                    name="design",
+                    template="design.template.md",
+                    marker_prefix="SPEC_DESIGN",
+                    validator_key="requirements",
+                ),
+            ),
+        )
+        # Path comes from the "design" stage file, validated as requirements.
+        result = validate_spec_stage("design", cfg, profile)
+        # design.md has no REQ headings / Out of Scope → requirements validator fails.
+        assert not result.ok
+        assert any("REQ" in e or "Out of Scope" in e for e in result.errors)
+
+    def test_unknown_validator_key_raises_value_error(self, tmp_path: Path) -> None:
+        """A stage whose validator_key is absent from VALIDATORS fails loudly."""
+        from types import SimpleNamespace
+
+        import pytest
+
+        from spec_runner.spec import StageDef, StageProfile
+
+        cfg = SimpleNamespace(
+            requirements_file=tmp_path / "requirements.md",
+            design_file=tmp_path / "design.md",
+            tasks_file=tmp_path / "tasks.md",
+        )
+        profile = StageProfile(
+            name="custom",
+            stages=(
+                StageDef(
+                    name="requirements",
+                    template="requirements.template.md",
+                    marker_prefix="SPEC_REQUIREMENTS",
+                    validator_key="bogus",
+                ),
+            ),
+        )
+        with pytest.raises(ValueError, match="unknown validator_key"):
+            validate_spec_stage("requirements", cfg, profile)
