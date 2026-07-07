@@ -10,6 +10,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.9.0] — 2026-07-07
+
+### Added
+
+- **Loadable stage profiles for gated spec generation** — the previously
+  hardcoded stage chain `requirements → design → tasks` is now data. A
+  `StageProfile` (ordered `StageDef`s carrying name, template, marker prefix,
+  validator key, and upstream stages) is loaded from a bundled YAML profile;
+  the built-in `lite` profile (`src/spec_runner/profiles/lite.yaml`) reproduces
+  the old chain 1:1. `spec.py` (stage ordering / next-stage resolution / stale
+  cascade / `spec_stage` validation), `prompt.py` (templates + markers), and
+  `validate.py` (per-stage validator dispatch) all read from the profile
+  instead of scattered module-level maps.
+- **Profile selection** — `spec_profile` config key (default `lite`) and a
+  `--profile` flag on `plan --gated` and the `spec` command family. An unknown
+  profile raises a clear `ConfigError` listing the available profiles instead
+  of a traceback.
+
+  This is additive and behaviour-preserving: the default (`lite`) pipeline is
+  identical to 2.8.x, the `SPEC_STAGES` export is unchanged, and existing specs
+  with `spec_stage` in `{requirements, design, tasks}` need no migration. Full
+  suite stays green with no test edits (976 passed). Unblocks richer
+  governance-layer profiles downstream.
+
 ## [2.8.1] — 2026-07-05
 
 ### Fixed
