@@ -144,6 +144,7 @@ spec-runner report --json                  # JSON matrix output
 spec-runner plan "description"             # Interactive task planning
 spec-runner plan --full "description"      # Generate full spec (requirements + design + tasks)
 spec-runner plan --full --from-file spec.md  # Read the description from a file instead of an arg
+spec-runner plan --gated --profile lite    # Select the gated stage profile (default: lite)
 
 # Diagnostics
 spec-runner doctor                              # Probe the configured CLI/model (real mini-task)
@@ -233,6 +234,16 @@ cached validation verdict without approving.
 Set `spec_governance: strict` in `spec-runner.config.yaml` (default: `off`) to
 make `run`/`watch` refuse to execute a **managed** `tasks.md` that isn't
 `approved`; `--strict`/`--no-strict` override this per invocation.
+
+### Stage profiles
+
+The stage chain is data, loaded from a bundled profile. The default `lite`
+profile is `requirements → design → tasks` (the historical chain). Select a
+profile with `spec_profile:` in `spec-runner.config.yaml` or the `--profile`
+flag on `plan --gated` and the `spec` command family; an unknown profile name
+fails with a clear error listing the available profiles. Profiles live in
+`src/spec_runner/profiles/*.yaml`, each stage declaring its template, marker
+prefix, validator, and upstream stages.
 
 > **Guardrail, not an enforcement boundary.** `strict` mode only blocks tasks.md
 > files that carry gated-spec frontmatter. Deleting the frontmatter (or never
@@ -403,7 +414,7 @@ Apply a preset instead of hand-editing `spec-runner.config.yaml`:
 ```bash
 spec-runner config --preset codex                 # everything on codex
 spec-runner config --exec claude --review codex    # claude codes, codex reviews
-spec-runner config --list-presets                  # claude codex opencode pi ollama llama-cli
+spec-runner config --list-presets                  # claude codex opencode pi ollama llama-cli qwen copilot
 spec-runner config --preset pi --apply             # update an existing config
 ```
 
@@ -481,6 +492,7 @@ project/
 │       ├── tui.py               # Textual TUI dashboard
 │       ├── mcp_server.py        # MCP server (FastMCP, stdio)
 │       ├── init_cmd.py          # Skill installer
+│       ├── profiles/            # Bundled gated-spec stage profiles (lite.yaml)
 │       └── skills/
 │           └── spec-generator-skill/
 ├── docs/

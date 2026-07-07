@@ -1,6 +1,6 @@
 # spec-runner — architecture
 
-Layered view of `spec-runner` v2.7.0. Generated 2026-05-25, module map refreshed 2026-07-01 (added `preset_cmd.py`, `doctor.py`, `spec.py`, `spec_commands.py`).
+Layered view of `spec-runner` v2.9.0. Generated 2026-05-25, module map refreshed 2026-07-07 (added `preset_cmd.py`, `doctor.py`, `spec.py`, `spec_commands.py`; C1 stage profiles).
 
 ## System context
 
@@ -96,7 +96,7 @@ flowchart TB
         state["state.py<br/>ExecutorState ctx mgr<br/>SQLite + WAL<br/>ErrorCode / ReviewVerdict<br/>degraded-mode"]
         config["config.py<br/>ExecutorConfig<br/>Persona / ExecutorLock<br/>spec_governance / YAML loader"]
         prompt["prompt.py<br/>build_task_prompt<br/>SPEC_STAGES<br/>constitution"]
-        spec_m["spec.py<br/>SpecMeta frontmatter<br/>draft/approved/stale<br/>locked read/write_spec"]
+        spec_m["spec.py<br/>StageProfile / StageDef<br/>SpecMeta frontmatter<br/>draft/approved/stale<br/>locked read/write_spec"]
     end
 
     subgraph adapters["Infra adapters"]
@@ -233,3 +233,4 @@ flowchart LR
 - **Maestro interop contract** (R-04): SQLite schema + `--json-result` stdout. See `docs/state-schema.md`, `schemas/*.json`, `tests/test_json_result_contract.py`. Frozen at v2.0.0.
 - **Observability** (v2.1.0): `obs.py` is the reference implementation of the cross-project OTel JSONL contract (`_cowork_output/observability-contract/log-schema.json`), already vendored into Maestro, arbiter, and ATP.
 - **Gated spec governance** (v2.7.0): `spec.py` defines the `SpecMeta` frontmatter (draft/approved/stale) shared by `requirements.md`/`design.md`/`tasks.md`; `cli_plan.py`'s `plan --gated` generates one stage at a time, `spec_commands.py` implements `spec status/approve/reject/adopt/check`, and `config.spec_governance` (`off`|`strict`) gates `run`/`watch` on an approved `tasks.md` via `cli.spec_run_gate_ok()`. See `README.md#spec-governance-gated-generation`.
+- **Stage profiles** (v2.9.0): `spec.py`'s `StageProfile`/`StageDef` make the stage chain data, loaded from bundled `profiles/*.yaml`; the default `lite` profile reproduces `requirements → design → tasks`. `spec.py`, `prompt.py` (templates/markers/prompt text), and `validate.py` (`VALIDATORS` registry keyed by `validator_key`) all read stages from the resolved profile. Selected via `config.spec_profile` / `--profile`. Behaviour-preserving: `SPEC_STAGES` and existing specs are unchanged under `lite`.
