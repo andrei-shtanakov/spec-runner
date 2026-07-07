@@ -5,8 +5,10 @@
 > Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
 
 ## Текущее состояние
-- ✅ **C1 «STAGES → загружаемый профиль» реализован 2026-07-06** (master `717bd3a`, ещё НЕ
-  зарелижен): захардкоженная цепочка стадий вынесена в данные — `StageDef`/`StageProfile` +
+- ✅ **v2.9.0 зарелижен 2026-07-07** (PyPI + GitHub Release, тег `v2.9.0`, release commit
+  `538d570`): C1 loadable stage profiles. Additive/minor, дефолт `lite` = поведение 2.8.x.
+- ✅ **C1 «STAGES → загружаемый профиль» реализован 2026-07-06** (вошёл в v2.9.0):
+  захардкоженная цепочка стадий вынесена в данные — `StageDef`/`StageProfile` +
   бандленый `profiles/lite.yaml` (= прежние req→design→tasks 1:1), `spec.py`/`prompt.py`/
   `validate.py` читают из профиля, `config.spec_profile` + флаг `--profile`, неизвестный профиль →
   внятная ошибка. Zero behaviour change: сьют **976 passed** (+50 тестов, ни одной правки старых),
