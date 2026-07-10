@@ -57,7 +57,7 @@
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 
-Контракт: `_cowork_output/observability-contract/log-schema.json` (OTel Logs Data Model JSONL).
+Контракт: `Maestro/contracts/observability/log-schema.json` (OTel Logs Data Model JSONL).
 `spec-runner` — reference, файл `obs.py` затем вендорится в другие проекты.
 
 - [x] **`init_logging` + `get_logger` скелет** (`ead7070`)

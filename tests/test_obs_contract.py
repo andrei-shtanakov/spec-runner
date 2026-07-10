@@ -1,4 +1,4 @@
-"""Validates obs.py output against _cowork_output/observability-contract/."""
+"""Validates obs.py output against Maestro/contracts/observability/."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ import pytest
 
 _SPEC_RUNNER_ROOT = Path(__file__).resolve().parents[1]
 _UMBRELLA = _SPEC_RUNNER_ROOT.parent  # all_ai_orchestrators/
-_CONTRACT = _UMBRELLA / "Maestro" / "_cowork_output" / "observability-contract"
+_CONTRACT = _UMBRELLA / "Maestro" / "contracts" / "observability"
 _SCHEMA_PATH = _CONTRACT / "log-schema.json"
 if not _SCHEMA_PATH.exists():
     pytest.skip(
-        "observability-contract unavailable (external cowork workspace, "
-        "not checked out in standalone CI)",
+        "observability contract unavailable (sibling Maestro checkout "
+        "not present in standalone CI)",
         allow_module_level=True,
     )
 _SCHEMA = json.loads(_SCHEMA_PATH.read_text())
