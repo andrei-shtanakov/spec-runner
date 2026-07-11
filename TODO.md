@@ -1,8 +1,8 @@
 # TODO — spec-runner (план от 2026-04-16, обновлено 2026-05-23)
 
 > Роль в экосистеме: единственная **работающая** кросс-проектная связка Maestro→spec-runner.
-> Стратегический контекст: `../_cowork_output/roadmap/ecosystem-roadmap.md`
-> Актуальный статус: `../_cowork_output/status/2026-05-22-status.md`
+> Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
+> Актуальный статус: `../prograph-vault/authored/notes/status/2026-05-22-status.md`
 
 ## Текущее состояние
 - ✅ **v2.9.0 зарелижен 2026-07-07** (PyPI + GitHub Release, тег `v2.9.0`, release commit
@@ -44,7 +44,7 @@
 - ✅ CI/CD работает (`.github/workflows/ci.yml`) — единственный проект помимо ATP с CI
 - ✅ `--json-result` флаг для Maestro interop
 - ✅ R-04 (контракт с Maestro) заморожен 2026-04-17 — см. `docs/state-schema.md`, `schemas/`, `tests/test_json_result_contract.py`
-- ✅ **Cross-project observability v1 shipped** — spec-runner reference + Maestro M1/M2 + arbiter Rust + ATP (см. `_cowork_output/status/2026-05-22-status.md`)
+- ✅ **Cross-project observability v1 shipped** — spec-runner reference + Maestro M1/M2 + arbiter Rust + ATP (см. `../prograph-vault/authored/notes/status/2026-05-22-status.md`)
 - ⏸️ **Статус по weekly: `frozen by design`** — нет открытых задач на спринт, ждём Maestro M4
 
 ## Правила ведения
@@ -71,7 +71,7 @@
 - [x] **Использовать `TRACEPARENT` parent span_id как initial `_span_id`** (`fa6b106`)
 
 Дальнейшие шаги:
-- [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `_cowork_output/status/2026-05-22-status.md`.
+- [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `../prograph-vault/authored/notes/status/2026-05-22-status.md`.
 - [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
 - [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее
 

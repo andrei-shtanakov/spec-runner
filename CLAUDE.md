@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Active Work & Roadmap
 
 - **Current task list:** `./TODO.md` — read it at the start of every session
-- **Ecosystem roadmap (strategic):** `../_cowork_output/roadmap/ecosystem-roadmap.md` — R-01…R-16 across Maestro / arbiter / ATP / spec-runner
-- **Latest weekly status:** `../_cowork_output/status/2026-04-10-status.md`
+- **Ecosystem roadmap (strategic):** `../prograph-vault/authored/notes/ecosystem-roadmap.md` — R-01…R-16 across Maestro / arbiter / ATP / spec-runner
+- **Latest weekly status:** `../prograph-vault/authored/notes/status/2026-04-10-status.md`
 - **Sibling projects** (reference only): `../Maestro/`, `../arbiter/`, `../atp-platform/`, `../proctor/`
 
 spec-runner's role in the ecosystem: the only **working** cross-project link (Maestro→spec-runner). Contract stability (`.executor-state.db` SQLite schema, `--json-result` stdout) is the main ecosystem responsibility — see `docs/state-schema.md`, `schemas/*.json`, and `tests/test_json_result_contract.py`. Any breaking change needs a major version bump.
