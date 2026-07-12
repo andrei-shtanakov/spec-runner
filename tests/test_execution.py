@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import (
     classify_retry_strategy,
@@ -1334,7 +1336,10 @@ class TestCrashRecovery:
 
         from spec_runner.executor import _run_tasks
 
-        _run_tasks(args, config)
+        # H-1: an unparseable spec now exits 1 (after recovery has run).
+        with pytest.raises(SystemExit) as excinfo:
+            _run_tasks(args, config)
+        assert excinfo.value.code == 1
 
         assert len(recover_calls) == 1
 
@@ -1377,7 +1382,10 @@ class TestForceFlag:
                 "force": True,
             },
         )()
-        cmd_run(args, config)
+        # H-1: the empty spec fixture fails validation -> exit 1 (post-lock).
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_run(args, config)
+        assert excinfo.value.code == 1
         assert len(lock_acquired) == 0
 
     def test_no_force_acquires_lock(self, tmp_path, monkeypatch):
@@ -1417,7 +1425,10 @@ class TestForceFlag:
                 "force": False,
             },
         )()
-        cmd_run(args, config)
+        # H-1: the empty spec fixture fails validation -> exit 1 (post-lock).
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_run(args, config)
+        assert excinfo.value.code == 1
         assert len(lock_acquired) == 1
 
 

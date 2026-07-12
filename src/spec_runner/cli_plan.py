@@ -265,6 +265,25 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
     raise SystemExit("plan: provide a description argument or --from-file PATH")
 
 
+def validate_generated_tasks(tasks_file: Path) -> int:
+    """Ensure a generated tasks.md parses with the runner's own parser.
+
+    Returns the parsed task count; exits 1 when zero tasks parse (the file is
+    left in place for debugging). Guards the plan->run format contract:
+    task headers must match ``^### (TASK-\\d+): `` (task.py TASK_HEADER).
+    """
+    parsed = parse_tasks(tasks_file)
+    if not parsed:
+        logger.error("Generated tasks.md has no parseable tasks", file=str(tasks_file))
+        print(
+            f"Generated {tasks_file} contains no parseable tasks: headers must "
+            f"match '### TASK-NNN: Title' (the exact parser `run` uses). "
+            f"The file is kept for inspection; re-run plan."
+        )
+        sys.exit(1)
+    return len(parsed)
+
+
 def cmd_plan(args, config: ExecutorConfig):
     """Interactive task planning via Claude.
 
@@ -359,6 +378,12 @@ def cmd_plan(args, config: ExecutorConfig):
             output_file.write_text(content + "\n")
             logger.info("Spec written", stage=stage, file=str(output_file))
             print(f"Written: {output_file}")
+
+            # H-2 (governed-run finding): generation must validate its own
+            # output against the SAME parser `run` uses — an LLM heading like
+            # "## TASK-001 — Title" produced a spec run could not consume.
+            if stage == "tasks":
+                validate_generated_tasks(output_file)
 
             context[stage] = content
 

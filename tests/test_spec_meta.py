@@ -190,12 +190,14 @@ def test_resolve_next_stage_uses_passed_profile():
     # With the custom profile, an approved requirements-equivalent chain still
     # advances through the profile order, and "done" reports the profile's last
     # stage, not the lite tail.
-    assert resolve_next_stage(
-        {"spec": _m("spec", "approved"), "design": None}, CUSTOM_STAGES
-    ) == ("generate", "design")
-    assert resolve_next_stage(
-        {s: _m(s, "approved") for s in CUSTOM_STAGES}, CUSTOM_STAGES
-    ) == ("done", "tasks")
+    assert resolve_next_stage({"spec": _m("spec", "approved"), "design": None}, CUSTOM_STAGES) == (
+        "generate",
+        "design",
+    )
+    assert resolve_next_stage({s: _m(s, "approved") for s in CUSTOM_STAGES}, CUSTOM_STAGES) == (
+        "done",
+        "tasks",
+    )
 
 
 def test_read_spec_meta_uses_passed_profile(tmp_path: Path):

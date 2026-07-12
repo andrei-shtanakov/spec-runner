@@ -266,9 +266,21 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
             config_file=_resolve_config_path(),
         )
         if not pre_result.ok:
+            # H-1 (governed-run finding): a silent `return` here exited 0 and
+            # orchestrators (Maestro) read that as workstream success — an
+            # unparseable spec became a mergeable empty run. Fail loudly.
             logger.error("Validation failed before execution")
             print(format_results(pre_result))
-            return
+            # Close the audit pair: EVENT_RUN_STARTED was already recorded,
+            # and a dangling start would make the trail ambiguous.
+            state.audit_logger.record(
+                EVENT_RUN_ENDED,
+                completed=0,
+                failed=0,
+                remaining=len(tasks),
+                stop_reason="validation_failed",
+            )
+            sys.exit(1)
 
         # Check failure limit
         if state.should_stop():
