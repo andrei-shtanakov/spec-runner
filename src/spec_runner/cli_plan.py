@@ -265,7 +265,7 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
     raise SystemExit("plan: provide a description argument or --from-file PATH")
 
 
-def validate_generated_tasks(tasks_file) -> int:
+def validate_generated_tasks(tasks_file: Path) -> int:
     """Ensure a generated tasks.md parses with the runner's own parser.
 
     Returns the parsed task count; exits 1 when zero tasks parse (the file is
