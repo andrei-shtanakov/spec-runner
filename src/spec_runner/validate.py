@@ -174,8 +174,7 @@ def validate_spec_stage(
         validator = VALIDATORS[stagedef.validator_key]
     except KeyError:
         raise ValueError(
-            f"unknown validator_key: {stagedef.validator_key!r}; "
-            f"available: {sorted(VALIDATORS)}"
+            f"unknown validator_key: {stagedef.validator_key!r}; available: {sorted(VALIDATORS)}"
         ) from None
     return validator(_stage_path(stage, config))
 
