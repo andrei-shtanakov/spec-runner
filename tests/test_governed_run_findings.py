@@ -90,3 +90,45 @@ class TestH2PlanValidatesOwnOutput:
             "**Traces to:** [REQ-1]\n**Depends on:** —\n"
         )
         assert validate_generated_tasks(p) >= 1
+
+
+class TestH2bHeaderNormalization:
+    """Governed run #2: the LLM systematically emits '### TASK-001 — Title'
+    (em-dash) despite the template. Recoverable deviations are normalized
+    before validation; validation stays as the backstop."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("### TASK-001 — Add rule", "### TASK-001: Add rule"),
+            ("### TASK-002 – Title", "### TASK-002: Title"),  # en-dash
+            ("### TASK-003 - Title", "### TASK-003: Title"),  # hyphen
+            ("## TASK-004 — Title", "### TASK-004: Title"),  # h2 -> h3
+            ("### TASK-005: Already fine", "### TASK-005: Already fine"),
+        ],
+    )
+    def test_variants_normalized(self, raw: str, expected: str) -> None:
+        from spec_runner.cli_plan import normalize_task_headers
+
+        assert normalize_task_headers(raw + "\nbody\n") == expected + "\nbody\n"
+
+    def test_non_task_headings_untouched(self) -> None:
+        from spec_runner.cli_plan import normalize_task_headers
+
+        text = "# Tasks\n\n## Milestone — one\n\nplain — dash text\n"
+        assert normalize_task_headers(text) == text
+
+    def test_normalized_output_parses(self, tmp_path: Path) -> None:
+        from spec_runner.cli_plan import normalize_task_headers, validate_generated_tasks
+
+        raw = (
+            "# Tasks\n\n### TASK-001 — Add docs rule\n"
+            "🔴 P0 | ⬜ TODO | Est: 0.1d\n\n"
+            "**Checklist:**\n- [ ] do it\n\n"
+            "**Traces to:** [REQ-1]\n**Depends on:** —\n"
+        )
+        spec = tmp_path / "spec"
+        spec.mkdir()
+        p = spec / "tasks.md"
+        p.write_text(normalize_task_headers(raw))
+        assert validate_generated_tasks(p) == 1

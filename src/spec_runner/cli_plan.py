@@ -265,6 +265,21 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
     raise SystemExit("plan: provide a description argument or --from-file PATH")
 
 
+_TASK_HEADER_VARIANT = re.compile(r"^#{2,4} (TASK-\d+)\s*[—–:-]\s*(.+)$", re.MULTILINE)
+
+
+def normalize_task_headers(text: str) -> str:
+    """Normalize recoverable task-header variants to the parseable form.
+
+    Governed-run finding H-2b: the generation LLM systematically emits
+    variants like ``### TASK-001 — Title`` (em-dash) or an h2 heading despite
+    the template. Anything shaped like a task header is rewritten to the
+    canonical ``### TASK-NNN: Title`` the run parser requires; genuinely
+    unrecoverable output is still caught by validate_generated_tasks.
+    """
+    return _TASK_HEADER_VARIANT.sub(lambda m: f"### {m.group(1)}: {m.group(2)}", text)
+
+
 def validate_generated_tasks(tasks_file: Path) -> int:
     """Ensure a generated tasks.md parses with the runner's own parser.
 
@@ -373,15 +388,24 @@ def cmd_plan(args, config: ExecutorConfig):
                 print(f"Claude did not produce {stage} content.")
                 sys.exit(1)
 
+            # H-2b (governed-run finding): recoverable task-header variants
+            # (em-dash, wrong heading depth) are normalized BEFORE the single
+            # write, so the file, the validation and `context` all agree.
+            if stage == "tasks":
+                normalized = normalize_task_headers(content)
+                if normalized != content:
+                    logger.info("Task headers normalized", stage=stage)
+                content = normalized
+
             output_file = stage_files[stage]
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(content + "\n")
             logger.info("Spec written", stage=stage, file=str(output_file))
             print(f"Written: {output_file}")
 
-            # H-2 (governed-run finding): generation must validate its own
-            # output against the SAME parser `run` uses — an LLM heading like
-            # "## TASK-001 — Title" produced a spec run could not consume.
+            # H-2: generation must validate its own output against the SAME
+            # parser `run` uses — an LLM heading like "## TASK-001 — Title"
+            # produced a spec run could not consume.
             if stage == "tasks":
                 validate_generated_tasks(output_file)
 
