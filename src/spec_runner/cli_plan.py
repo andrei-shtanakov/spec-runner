@@ -388,21 +388,25 @@ def cmd_plan(args, config: ExecutorConfig):
                 print(f"Claude did not produce {stage} content.")
                 sys.exit(1)
 
+            # H-2b (governed-run finding): recoverable task-header variants
+            # (em-dash, wrong heading depth) are normalized BEFORE the single
+            # write, so the file, the validation and `context` all agree.
+            if stage == "tasks":
+                normalized = normalize_task_headers(content)
+                if normalized != content:
+                    logger.info("Task headers normalized", stage=stage)
+                content = normalized
+
             output_file = stage_files[stage]
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(content + "\n")
             logger.info("Spec written", stage=stage, file=str(output_file))
             print(f"Written: {output_file}")
 
-            # H-2 (governed-run finding): generation must validate its own
-            # output against the SAME parser `run` uses — an LLM heading like
-            # "## TASK-001 — Title" produced a spec run could not consume.
-            # H-2b: recoverable header variants are normalized first.
+            # H-2: generation must validate its own output against the SAME
+            # parser `run` uses — an LLM heading like "## TASK-001 — Title"
+            # produced a spec run could not consume.
             if stage == "tasks":
-                normalized = normalize_task_headers(content + "\n")
-                if normalized != content + "\n":
-                    output_file.write_text(normalized)
-                    logger.info("Task headers normalized", file=str(output_file))
                 validate_generated_tasks(output_file)
 
             context[stage] = content
