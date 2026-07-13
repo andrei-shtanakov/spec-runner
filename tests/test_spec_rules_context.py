@@ -64,9 +64,8 @@ class TestDefaultUnchanged:
 class TestContextInjection:
     def test_context_appears_in_generation_prompt(self):
         out = build_generation_prompt("requirements", "DESC", spec_context="Stack: Python")
-        assert "<context>\nStack: Python\n</context>" in out or (
-            "<context>" in out and "Stack: Python" in out and "</context>" in out
-        )
+        # Assert the exact block (ordering + tags), not just loose co-occurrence.
+        assert "<context>\nStack: Python\n</context>" in out
 
     def test_context_appears_in_gated_prompt(self):
         out = build_gated_generation_prompt(
@@ -94,6 +93,43 @@ class TestRulesInjection:
         out = build_gated_generation_prompt("requirements", "DESC", {}, spec_rules=rules)
         assert "<rules>" in out
         assert "- Use SHALL/MUST" in out
+
+
+class TestMistypedConfigDoesNotCrash:
+    """Mis-typed config that bypasses validation must not crash/garble prompts."""
+
+    def test_non_string_context_coerced(self):
+        out = build_generation_prompt("requirements", "DESC", spec_context=123)
+        assert "<context>\n123\n</context>" in out
+
+    def test_non_dict_rules_ignored(self):
+        # spec_rules as a string used to raise on .get(); now silently ignored.
+        out = build_generation_prompt("requirements", "DESC", spec_rules="Use MUST")
+        assert "<rules>" not in out
+
+    def test_single_string_rule_not_iterated_per_char(self):
+        # A stage whose rules are one string → one bullet, not one per char.
+        rules = {"requirements": "Use SHALL"}
+        out = build_generation_prompt("requirements", "DESC", spec_rules=rules)
+        assert "- Use SHALL" in out
+        assert "- U\n" not in out  # not character-by-character
+
+    def test_single_string_rule_gated_not_iterated(self):
+        rules = {"requirements": "Use SHALL"}
+        out = build_gated_generation_prompt("requirements", "DESC", {}, spec_rules=rules)
+        assert "- Use SHALL" in out
+        assert "- U\n" not in out
+
+    def test_scalar_stage_rule_not_iterated(self):
+        # A non-str, non-list scalar (e.g. 123) is not iterable — must not crash.
+        out = build_generation_prompt("requirements", "DESC", spec_rules={"requirements": 123})
+        assert "- 123" in out
+
+    def test_scalar_stage_rule_gated_not_iterated(self):
+        out = build_gated_generation_prompt(
+            "requirements", "DESC", {}, spec_rules={"requirements": 123}
+        )
+        assert "- 123" in out
 
 
 class TestConfigLoading:
@@ -145,6 +181,27 @@ class TestValidation:
         cfg.write_text(f"spec_context: {ok_ctx}\n")
         result = validate_config(cfg)
         assert result.ok
+
+    def test_non_string_context_errors(self, tmp_path: Path):
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("spec_context: 123\n")
+        result = validate_config(cfg)
+        assert not result.ok
+        assert any("spec_context must be a string" in e for e in result.errors)
+
+    def test_non_dict_rules_errors(self, tmp_path: Path):
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text('spec_rules: "Use MUST"\n')
+        result = validate_config(cfg)
+        assert not result.ok
+        assert any("spec_rules must be a mapping" in e for e in result.errors)
+
+    def test_stage_rules_not_a_list_errors(self, tmp_path: Path):
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("spec_rules:\n  requirements: Use MUST\n")
+        result = validate_config(cfg)
+        assert not result.ok
+        assert any("must be a list" in e for e in result.errors)
 
 
 if __name__ == "__main__":

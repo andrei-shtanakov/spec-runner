@@ -33,9 +33,7 @@ def _current_branch(cwd: Path) -> str:
 
 
 def _branches(cwd: Path) -> str:
-    return subprocess.run(
-        ["git", "branch"], cwd=cwd, capture_output=True, text=True
-    ).stdout
+    return subprocess.run(["git", "branch"], cwd=cwd, capture_output=True, text=True).stdout
 
 
 @pytest.fixture
@@ -108,9 +106,7 @@ def test_finalize_opens_pr_when_commits_and_remote(git_repo, monkeypatch):
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:1] == ["gh"]:
             calls["gh"] = cmd
-            return subprocess.CompletedProcess(
-                cmd, 0, "https://github.com/x/y/pull/1\n", ""
-            )
+            return subprocess.CompletedProcess(cmd, 0, "https://github.com/x/y/pull/1\n", "")
         return real_run(cmd, *a, **kw)
 
     monkeypatch.setattr("spec_runner.git_ops.subprocess.run", fake_run)

@@ -234,15 +234,40 @@ def extract_test_failures(output: str) -> str:
 
 
 def _context_lines(spec_context: str | None) -> list[str]:
-    """Return ``<context>`` block lines, or empty when no context (M0)."""
+    """Return ``<context>`` block lines, or empty when no context (M0).
+
+    Coerces to ``str`` so a mis-typed config value (e.g. ``spec_context: 123``)
+    cannot crash prompt assembly at ``"\\n".join(...)``.
+    """
     if not spec_context:
         return []
-    return ["<context>", spec_context, "</context>", ""]
+    return ["<context>", str(spec_context), "</context>", ""]
+
+
+def _stage_rule_list(stage: str, spec_rules: dict[str, list[str]] | None) -> list[str]:
+    """Return the coerced list of rules for ``stage``, tolerant of mis-typing.
+
+    Guards against config that bypasses validation (e.g. ``plan`` without a
+    prior ``validate``): a non-dict ``spec_rules`` yields no rules, and a
+    stage whose value is a single string becomes one rule rather than one
+    bullet per character.
+    """
+    if not isinstance(spec_rules, dict):
+        return []
+    rules = spec_rules.get(stage)
+    if not rules:
+        return []
+    if not isinstance(rules, list):
+        # A single string or any scalar (123, True) → one rule, never
+        # iterated (a str would become one bullet per character; a non-str
+        # scalar is not iterable at all).
+        return [str(rules)]
+    return [str(rule) for rule in rules]
 
 
 def _rules_lines(stage: str, spec_rules: dict[str, list[str]] | None) -> list[str]:
     """Return ``<rules>`` block lines for ``stage`` only, or empty (M0)."""
-    rules = (spec_rules or {}).get(stage) or []
+    rules = _stage_rule_list(stage, spec_rules)
     if not rules:
         return []
     return ["<rules>", *[f"- {rule}" for rule in rules], "</rules>", ""]
@@ -347,7 +372,7 @@ def build_gated_generation_prompt(
     parts = [header]
     if spec_context:
         parts.append(f"<context>\n{spec_context}\n</context>")
-    stage_rules = (spec_rules or {}).get(stage) or []
+    stage_rules = _stage_rule_list(stage, spec_rules)
     if stage_rules:
         parts.append("<rules>\n" + "\n".join(f"- {rule}" for rule in stage_rules) + "\n</rules>")
     parts.append(f"## DESCRIPTION\n\n{description}")
