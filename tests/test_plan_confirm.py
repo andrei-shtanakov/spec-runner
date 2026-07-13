@@ -8,7 +8,16 @@ literally nothing to edit and the generated proposal was lost.
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from spec_runner.cli_plan import apply_plan_confirmation
+
+
+@pytest.fixture(autouse=True)
+def _isolated_progress_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep `log_progress` writes out of the test runner's CWD."""
+    monkeypatch.setattr("spec_runner.runner.PROGRESS_FILE", tmp_path / "progress.txt")
+
 
 TASK_BLOCKS = [
     "TASK-001: First task\n- [ ] do a thing",
