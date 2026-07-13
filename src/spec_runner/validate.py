@@ -91,11 +91,17 @@ def validate_requirements(path: Path) -> ValidationResult:
         result.warnings.append("no 'Acceptance Criteria' found")
 
     # Per-requirement structural checks (M1): warn on a functional requirement
-    # with no acceptance-criteria section. NFRs (tables) are exempt to avoid
-    # noise; the global check above still covers the whole-doc case.
+    # with no acceptance-criteria section (NFRs, being tables, are exempt to
+    # avoid noise), and report duplicate NFR ids — the REQ dup check above only
+    # scans REQ-* headings, so NFR-* uniqueness relies on the parsed list.
+    seen_nfr: set[str] = set()
     for req in parse_requirements(body):
         if req.kind == "functional" and not req.acceptance_criteria:
             result.warnings.append(f"{req.id}: no acceptance criteria")
+        if req.kind == "non-functional":
+            if req.id in seen_nfr:
+                result.errors.append(f"{req.id}: duplicate requirement ID")
+            seen_nfr.add(req.id)
     return result
 
 
