@@ -482,6 +482,21 @@ def test_validate_requirements_missing_out_of_scope(tmp_path: Path) -> None:
     assert any("Out of Scope" in e for e in r.errors)
 
 
+def test_validate_requirements_duplicate_nfr_id(tmp_path: Path) -> None:
+    # The REQ-only heading scan misses NFR dups; the parsed-list check catches
+    # them (Copilot review on #43).
+    p = tmp_path / "requirements.md"
+    p.write_text(
+        "# Requirements\n\n## Out of Scope\n- none\n\n"
+        "#### REQ-001: Widget\n**Acceptance Criteria:**\nGIVEN a WHEN b THEN c\n\n"
+        "### NFR-001: Performance\n| m | v |\n\n"
+        "### NFR-001: Performance again\n| m | v |\n"
+    )
+    r = validate_requirements(p)
+    assert not r.ok
+    assert any("NFR-001: duplicate requirement ID" in e for e in r.errors)
+
+
 def test_validate_design_dangling_req(tmp_path: Path) -> None:
     (tmp_path / "requirements.md").write_text(GOOD_REQ)
     design = tmp_path / "design.md"

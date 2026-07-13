@@ -9,6 +9,7 @@ import yaml
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
+from spec_runner.requirements import parse_requirements
 from spec_runner.spec import LITE, StageProfile, load_profile, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
@@ -88,6 +89,19 @@ def validate_requirements(path: Path) -> ValidationResult:
         result.errors.append("missing 'Out of Scope' section")
     if "acceptance criteria" not in body.lower():
         result.warnings.append("no 'Acceptance Criteria' found")
+
+    # Per-requirement structural checks (M1): warn on a functional requirement
+    # with no acceptance-criteria section (NFRs, being tables, are exempt to
+    # avoid noise), and report duplicate NFR ids — the REQ dup check above only
+    # scans REQ-* headings, so NFR-* uniqueness relies on the parsed list.
+    seen_nfr: set[str] = set()
+    for req in parse_requirements(body):
+        if req.kind == "functional" and not req.acceptance_criteria:
+            result.warnings.append(f"{req.id}: no acceptance criteria")
+        if req.kind == "non-functional":
+            if req.id in seen_nfr:
+                result.errors.append(f"{req.id}: duplicate requirement ID")
+            seen_nfr.add(req.id)
     return result
 
 

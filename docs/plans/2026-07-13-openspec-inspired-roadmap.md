@@ -68,38 +68,45 @@ byte-identical prompts to v2.9.
 
 ---
 
-## M1: Structured requirements format + parser
+## M1: Structured requirements parser — SHIPPED (PR #43)
 
 **Pattern borrowed:** requirement-as-mergeable-unit. OpenSpec specs are
-`### Requirement:` blocks each containing `#### Scenario:` blocks with
-RFC 2119 keywords — rigid enough that later delta merges (M3) are mechanical.
+`### Requirement:` blocks with RFC-2119 keywords, rigid enough that later
+delta merges (M3) are mechanical.
 
-**Problem:** `requirements.md` is free-form with `REQ-XXX` anchors used only
-for traceability. There is no parseable unit of requirement, so no diffing,
-merging, or per-requirement validation is possible.
+**Problem:** `requirements.md` has `REQ-XXX` anchors used only for
+traceability. There was no parseable *unit* of requirement, so no diffing,
+merging, or per-requirement validation was possible.
 
-**Scope:**
-- Extend FORMAT.md with a structured requirements grammar, keeping our IDs:
-  `### REQ-001: <name>` followed by normative text (SHALL/MUST) and one or
-  more `#### Scenario: <name>` blocks (WHEN/THEN bullets).
-- New module `requirements.py`: frozen dataclasses `Requirement` /
-  `Scenario`, `parse_requirements()` (regex-based, same style as `task.py`),
-  round-trip serializer (needed by M3's merge).
-- `validate.py`: new checks — every requirement has ≥1 scenario, scenario
-  headers are exactly `####`, duplicate REQ ids, normative keyword present
-  (warning). Wire into `spec-runner validate` and the `requirements` stage
-  validator of the gated pipeline.
-- `report.py` traceability: unchanged inputs (REQ ids preserved).
+**Reality-based design decision (settled during implementation):** the strict
+OpenSpec grammar (`### Requirement:` + `#### Scenario:` gherkin) was
+**rejected** — the repo's own `spec/requirements.md` and the bundled `lite`
+template already use `#### REQ-NNN:` headings with *heterogeneous* bodies
+(gherkin, `- [ ]` checklists, or prose). Forcing a rigid grammar would break
+brownfield compatibility and the byte-identical guarantee. Instead M1 ships a
+**tolerant, id-keyed block parser** that anchors only on the `#+ (REQ|NFR)-NNN`
+heading and block boundaries (next same-or-higher-level heading), preserving
+each block's exact `raw` (the merge/round-trip unit) and extracting optional
+fields best-effort. The rigid `Scenario` dataclass was descoped as fiction
+against real data.
 
-**Explicit design decision to make first:** hybrid header format
-(`### REQ-001: name` vs OpenSpec's `### Requirement: name`) — we keep IDs
-because `audit.py`/`report.py`/task `Traces to:` depend on them.
+**Delivered:**
+- `requirements.py` (new): frozen `Requirement` dataclass (`id`, `name`,
+  `level`, `raw`, `acceptance_criteria`, `priority`, `traces_to`, `kind`,
+  `number`); `parse_requirements()`, `serialize_requirement()` (= `raw`),
+  `find_requirement()`. Handles REQ + NFR, strips frontmatter.
+- `validate.py`: `validate_requirements` enriched additively — per functional
+  requirement lacking an acceptance-criteria section → warning (NFRs exempt to
+  avoid noise). Existing checks (dup ids, Out of Scope, global AC) untouched.
+- `spec/FORMAT.md`: documents the tolerant requirements grammar.
+- `__init__.py`: exports the new public API.
+- `report.py` / `audit.py`: unchanged (they keep their own REQ regex; M1 is
+  purely additive).
 
-**Touches:** `requirements.py` (new), `validate.py`, `spec/FORMAT.md`,
-bundled generation templates (teach the requirements stage the new grammar).
-**Acceptance:** parser round-trips the repo's own `spec/requirements.md`
-once migrated; legacy free-form files parse to zero requirements without
-erroring (opt-in); validation suite green.
+**Result:** parser round-trips the repo's own 28KB `spec/requirements.md`
+(idempotent per-block reparse); free-form/no-requirement files parse to `[]`
+without erroring; 1040 tests pass, lint + mypy clean. No contract surface
+touched.
 
 ---
 
