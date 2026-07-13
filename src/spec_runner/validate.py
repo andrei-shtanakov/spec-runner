@@ -9,7 +9,7 @@ import yaml
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
-from spec_runner.spec import LITE, StageProfile, strip_frontmatter
+from spec_runner.spec import LITE, StageProfile, load_profile, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
@@ -381,7 +381,42 @@ def validate_config(config_path: Path) -> ValidationResult:
         if key in _DEAD_SECTIONS:
             result.warnings.append(f"Top-level key '{key}' is not supported and will be ignored")
 
+    _validate_spec_context_rules(executor_section, result)
+
     return result
+
+
+# OpenSpec caps injected context at 50KB; mirror that (M0).
+_SPEC_CONTEXT_LIMIT_BYTES = 50 * 1024
+
+
+def _validate_spec_context_rules(section: dict, result: "ValidationResult") -> None:
+    """Validate M0 ``spec_context`` size and ``spec_rules`` stage keys.
+
+    ``spec_context`` over 50KB is an error; ``spec_rules`` keyed by a stage
+    absent from the configured profile is a warning (mirrors OpenSpec's
+    "unknown artifact ID in rules" behaviour).
+    """
+    spec_context = section.get("spec_context")
+    if (
+        isinstance(spec_context, str)
+        and len(spec_context.encode("utf-8")) > _SPEC_CONTEXT_LIMIT_BYTES
+    ):
+        result.errors.append("spec_context exceeds the 50KB limit; summarise or link out")
+
+    spec_rules = section.get("spec_rules")
+    if isinstance(spec_rules, dict):
+        profile_name = section.get("spec_profile", "lite")
+        try:
+            stage_names = set(load_profile(profile_name).names())
+        except Exception:
+            stage_names = set(LITE.names())
+        for stage_key in spec_rules:
+            if stage_key not in stage_names:
+                result.warnings.append(
+                    f"spec_rules references unknown stage '{stage_key}' "
+                    f"(profile '{profile_name}' stages: {', '.join(sorted(stage_names))})"
+                )
 
 
 def validate_tasks(tasks_file: Path) -> ValidationResult:

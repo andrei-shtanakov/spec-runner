@@ -23,6 +23,8 @@ def _cfg(tmp_path: Path):
         command_template="",
         skip_permissions=True,
         task_timeout_minutes=1,
+        spec_context="",
+        spec_rules={},
     )
 
 

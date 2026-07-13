@@ -102,7 +102,13 @@ def _generate_stage_draft(
             return 2
         context[upstream] = read_spec_body(stage_path(config, upstream))
 
-    prompt = build_gated_generation_prompt(stage, description, context)
+    prompt = build_gated_generation_prompt(
+        stage,
+        description,
+        context,
+        spec_context=config.spec_context or None,
+        spec_rules=config.spec_rules or None,
+    )
     cmd = build_cli_command(
         cmd=config.claude_command,
         prompt=prompt,
@@ -399,7 +405,13 @@ def cmd_plan(args, config: ExecutorConfig):
 
         for stage in stages:
             logger.info("Generating spec", stage=stage)
-            prompt = build_generation_prompt(stage, description, context)
+            prompt = build_generation_prompt(
+                stage,
+                description,
+                context,
+                spec_context=config.spec_context or None,
+                spec_rules=config.spec_rules or None,
+            )
 
             cmd = build_cli_command(
                 cmd=config.claude_command,
