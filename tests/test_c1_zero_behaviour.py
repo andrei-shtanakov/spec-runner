@@ -26,7 +26,7 @@ import pytest
 from spec_runner import cli, cli_plan
 from spec_runner.config import ConfigError, ExecutorConfig
 from spec_runner.prompt import SPEC_STAGES, build_gated_generation_prompt
-from spec_runner.spec import read_spec_meta, stage_path, write_spec
+from spec_runner.spec import LITE, read_spec_meta, stage_path, write_spec
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "c1-zero-behaviour"
 
@@ -86,6 +86,8 @@ def _pipeline_cfg(tmp_path: Path) -> SimpleNamespace:
         task_timeout_minutes=1,
         spec_context="",
         spec_rules={},
+        spec_prefix="",
+        resolve_spec_profile=lambda: LITE,
     )
 
 
