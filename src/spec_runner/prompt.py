@@ -257,8 +257,11 @@ def _stage_rule_list(stage: str, spec_rules: dict[str, list[str]] | None) -> lis
     rules = spec_rules.get(stage)
     if not rules:
         return []
-    if isinstance(rules, str):
-        return [rules]
+    if not isinstance(rules, list):
+        # A single string or any scalar (123, True) → one rule, never
+        # iterated (a str would become one bullet per character; a non-str
+        # scalar is not iterable at all).
+        return [str(rules)]
     return [str(rule) for rule in rules]
 
 

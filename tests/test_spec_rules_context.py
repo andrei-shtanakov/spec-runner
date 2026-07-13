@@ -120,6 +120,17 @@ class TestMistypedConfigDoesNotCrash:
         assert "- Use SHALL" in out
         assert "- U\n" not in out
 
+    def test_scalar_stage_rule_not_iterated(self):
+        # A non-str, non-list scalar (e.g. 123) is not iterable — must not crash.
+        out = build_generation_prompt("requirements", "DESC", spec_rules={"requirements": 123})
+        assert "- 123" in out
+
+    def test_scalar_stage_rule_gated_not_iterated(self):
+        out = build_gated_generation_prompt(
+            "requirements", "DESC", {}, spec_rules={"requirements": 123}
+        )
+        assert "- 123" in out
+
 
 class TestConfigLoading:
     def test_fields_default_empty(self):
