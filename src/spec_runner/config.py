@@ -230,6 +230,14 @@ class ExecutorConfig:
     # Gated spec-generation profile name (resolves to a spec.StageProfile).
     spec_profile: str = "lite"
 
+    # Project-wide context prepended to every spec-generation stage prompt,
+    # wrapped in <context>...</context> (OpenSpec-style, M0).
+    spec_context: str = ""
+
+    # Per-stage generation rules keyed by stage name (e.g. "requirements"),
+    # injected only for the matching stage, wrapped in <rules>...</rules>.
+    spec_rules: dict[str, list[str]] = field(default_factory=dict)
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix."""
         self.project_root = self.project_root.resolve()
@@ -458,6 +466,8 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "audit_log_operator": executor_config.get("audit_log_operator"),
             "spec_governance": executor_config.get("spec_governance"),
             "spec_profile": executor_config.get("spec_profile"),
+            "spec_context": executor_config.get("spec_context"),
+            "spec_rules": executor_config.get("spec_rules"),
         }
     except Exception as e:
         from .logging import get_logger

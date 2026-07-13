@@ -10,6 +10,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-stage rules & project context injection for spec generation** (M0 of
+  the OpenSpec-inspired roadmap, `docs/plans/2026-07-13-openspec-inspired-roadmap.md`).
+  Two new opt-in config keys: `spec_context` (project-wide text prepended to
+  every generation stage inside a `<context>` block) and `spec_rules` (per-stage
+  rules keyed by stage name, injected only for the matching stage inside a
+  `<rules>` block). Both flow through `plan --full` and `plan --gated`.
+  `validate` flags an oversized `spec_context` (>50KB) as an error and unknown
+  `spec_rules` stage keys as a warning. Non-contract change; default (no config)
+  produces byte-identical prompts to 2.9.0.
+
 ## [2.9.0] — 2026-07-07
 
 ### Added

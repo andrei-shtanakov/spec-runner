@@ -233,11 +233,28 @@ def extract_test_failures(output: str) -> str:
     return "\n".join(result_lines[-30:]) if result_lines else output[-500:]
 
 
+def _context_lines(spec_context: str | None) -> list[str]:
+    """Return ``<context>`` block lines, or empty when no context (M0)."""
+    if not spec_context:
+        return []
+    return ["<context>", spec_context, "</context>", ""]
+
+
+def _rules_lines(stage: str, spec_rules: dict[str, list[str]] | None) -> list[str]:
+    """Return ``<rules>`` block lines for ``stage`` only, or empty (M0)."""
+    rules = (spec_rules or {}).get(stage) or []
+    if not rules:
+        return []
+    return ["<rules>", *[f"- {rule}" for rule in rules], "</rules>", ""]
+
+
 def build_generation_prompt(
     stage: str,
     description: str,
     context: dict[str, str] | None = None,
     profile: StageProfile = LITE,
+    spec_context: str | None = None,
+    spec_rules: dict[str, list[str]] | None = None,
 ) -> str:
     """Build prompt for spec generation stage.
 
@@ -249,13 +266,16 @@ def build_generation_prompt(
         description: Project description from user.
         context: Previous stage outputs (e.g., {'requirements': '...'}).
         profile: Stage profile supplying the instruction text (default lite).
+        spec_context: Optional project-wide context, injected as a
+            ``<context>`` block after the instruction (M0). Falsy → omitted.
+        spec_rules: Optional per-stage rules; only the entry matching
+            ``stage`` is injected as a ``<rules>`` block (M0).
     """
     ctx = context or {}
-    parts: list[str] = [
-        _stage_def(stage, profile).prompt_text,
-        "",
-        f"Project description: {description}",
-    ]
+    parts: list[str] = [_stage_def(stage, profile).prompt_text, ""]
+    parts.extend(_context_lines(spec_context))
+    parts.extend(_rules_lines(stage, spec_rules))
+    parts.append(f"Project description: {description}")
 
     if "requirements" in ctx:
         parts.extend(["", "## Requirements (already generated)", ctx["requirements"]])
@@ -277,6 +297,8 @@ def build_gated_generation_prompt(
     description: str,
     context: dict[str, str],
     profile: StageProfile = LITE,
+    spec_context: str | None = None,
+    spec_rules: dict[str, list[str]] | None = None,
 ) -> str:
     """Build a rich, template-driven generation prompt for one gated stage.
 
@@ -292,6 +314,10 @@ def build_gated_generation_prompt(
             (e.g. {'requirements': '...'}).
         profile: Stage profile supplying the marker prefix and template
             (default lite).
+        spec_context: Optional project-wide context, injected as a
+            ``<context>`` block after the header (M0). Falsy → omitted.
+        spec_rules: Optional per-stage rules; only the entry matching
+            ``stage`` is injected as a ``<rules>`` block (M0).
 
     Returns:
         The assembled prompt string.
@@ -318,7 +344,13 @@ def build_gated_generation_prompt(
         )
     )
 
-    parts = [header, f"## DESCRIPTION\n\n{description}"]
+    parts = [header]
+    if spec_context:
+        parts.append(f"<context>\n{spec_context}\n</context>")
+    stage_rules = (spec_rules or {}).get(stage) or []
+    if stage_rules:
+        parts.append("<rules>\n" + "\n".join(f"- {rule}" for rule in stage_rules) + "\n</rules>")
+    parts.append(f"## DESCRIPTION\n\n{description}")
     if prior_block:
         parts.append(prior_block)
     parts.append(f"## TEMPLATE\n\n{template}")
