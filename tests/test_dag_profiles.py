@@ -169,6 +169,40 @@ class TestGraphValidation:
         sd = StageDef("tasks", "t", "T", "tasks", upstream=("specs", "design"))
         assert sd.requires == ("specs", "design")
 
+    def test_graph_error_is_valueerror_subclass(self):
+        from spec_runner.spec import ProfileGraphError
+
+        assert issubclass(ProfileGraphError, ValueError)
+
+
+class TestResolveSpecProfileGraphError:
+    def test_graph_error_not_masked_as_unknown_profile(self, monkeypatch):
+        # An existing-but-invalid profile must surface the real graph error,
+        # not be rewritten to "unknown spec_profile" (Copilot review on #44).
+        from spec_runner import spec as spec_mod
+        from spec_runner.config import ConfigError, ExecutorConfig
+
+        def _raise(_name):
+            raise spec_mod.ProfileGraphError("dependency cycle through 'b'")
+
+        monkeypatch.setattr(spec_mod, "load_profile", _raise)
+        cfg = ExecutorConfig(spec_profile="broken")
+        with pytest.raises(ConfigError, match="cycle"):
+            cfg.resolve_spec_profile()
+
+
+class TestGateStatusBlocked:
+    def test_blocked_is_terminal(self, capsys):
+        from spec_runner.cli_plan import _print_gate_status
+
+        assert _print_gate_status("blocked", "tasks") is True
+        assert "BLOCKED" in capsys.readouterr().out
+
+    def test_generate_is_not_terminal(self):
+        from spec_runner.cli_plan import _print_gate_status
+
+        assert _print_gate_status("generate", "requirements") is False
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

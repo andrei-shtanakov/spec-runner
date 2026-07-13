@@ -221,8 +221,9 @@ def _print_gate_status(action: str, stage: str) -> bool:
     """Print the message for a non-"generate" `resolve_next_stage` action.
 
     Returns True when `action` is terminal (the caller should stop: the
-    pipeline is done, a stage is stale, or a stage awaits approval); False
-    when `action == "generate"` (the caller should proceed to generate it).
+    pipeline is done, a stage is stale, awaits approval, or is dependency-
+    blocked); False when `action == "generate"` (the caller should proceed to
+    generate it).
     """
     if action == "await_approval":
         print(f"{stage} is DRAFT — approve or edit it before continuing")
@@ -235,6 +236,12 @@ def _print_gate_status(action: str, stage: str) -> bool:
         return True
     if action == "done":
         print("all stages approved → spec-runner run")
+        return True
+    if action == "blocked":
+        print(
+            f"{stage} is BLOCKED — its upstream stages must be approved first "
+            f"(run `spec-runner spec status` to see what's missing)"
+        )
         return True
     return False
 

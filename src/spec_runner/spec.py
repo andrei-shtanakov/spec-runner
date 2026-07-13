@@ -102,11 +102,19 @@ def load_profile(name: str) -> StageProfile:
     return profile
 
 
+class ProfileGraphError(ValueError):
+    """A profile exists but its ``requires`` graph is invalid (cycle/unknown ref).
+
+    Distinct from the "profile not found" ``ValueError`` so callers can tell a
+    genuine graph error from an unknown-profile-name error (M4).
+    """
+
+
 def validate_profile_graph(profile: StageProfile) -> None:
     """Validate a profile's dependency graph (M4).
 
-    Raises ``ValueError`` when a stage ``requires`` an unknown stage or the
-    ``requires`` edges form a cycle.
+    Raises :class:`ProfileGraphError` when a stage ``requires`` an unknown
+    stage or the ``requires`` edges form a cycle.
     """
     names = set(profile.names())
     edges = profile.edges()

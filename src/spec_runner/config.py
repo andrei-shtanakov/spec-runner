@@ -303,10 +303,14 @@ class ExecutorConfig:
             ConfigError: If the name matches no bundled profile; the message
                 lists the available profile names (no traceback for the CLI).
         """
-        from .spec import available_profiles, load_profile
+        from .spec import ProfileGraphError, available_profiles, load_profile
 
         try:
             return load_profile(self.spec_profile)
+        except ProfileGraphError as exc:
+            # The profile exists but its dependency graph is invalid — surface
+            # the real cycle/unknown-stage message, not "unknown profile".
+            raise ConfigError(str(exc)) from exc
         except ValueError:
             available = ", ".join(available_profiles())
             raise ConfigError(

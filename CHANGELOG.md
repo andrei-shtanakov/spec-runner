@@ -26,8 +26,6 @@ is a **breaking change** and requires a major version bump plus an entry here.
   The built-in linear `lite` profile is byte-for-byte unchanged (proven by an
   exhaustive graph-vs-linear equivalence test). No contract surface touched.
 
-### Added
-
 - **Structured requirements parser** (M1 of the OpenSpec-inspired roadmap).
   New `requirements.py` parses `requirements.md` into id-keyed `Requirement`
   blocks — a diffable/mergeable unit that lays the groundwork for delta specs.
