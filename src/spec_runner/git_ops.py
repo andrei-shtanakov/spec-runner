@@ -4,7 +4,10 @@ Contains branch management, file change detection, and test scoping
 functions used by hooks during task execution.
 """
 
+import contextlib
+import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -172,10 +175,20 @@ def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def pick_remote(config: ExecutorConfig) -> str | None:
+    """Remote to push to: ``origin`` if present, else the first configured."""
+    result = _git(config, "remote")
+    if result.returncode != 0:
+        return None
+    remotes = result.stdout.split()
+    if not remotes:
+        return None
+    return "origin" if "origin" in remotes else remotes[0]
+
+
 def has_remote(config: ExecutorConfig) -> bool:
     """True when the repo has at least one configured git remote."""
-    result = _git(config, "remote")
-    return result.returncode == 0 and bool(result.stdout.strip())
+    return pick_remote(config) is not None
 
 
 def make_integration_branch_name(now: datetime | None = None) -> str:
@@ -237,7 +250,8 @@ def finalize_integration_branch(
     # A non-empty branch is never deleted (it holds the run's work); leave the
     # working copy back on the base branch regardless of how far we get.
     try:
-        if not has_remote(config):
+        remote = pick_remote(config)
+        if remote is None:
             logger.warning(
                 "integration_pr: no git remote, leaving integration branch local",
                 branch=run.branch,
@@ -245,20 +259,53 @@ def finalize_integration_branch(
             )
             return None
 
-        push = _git(config, "push", "-u", "origin", run.branch)
+        push = _git(config, "push", "-u", remote, run.branch)
         if push.returncode != 0:
             logger.warning(
                 "integration_pr: push failed",
                 branch=run.branch,
+                remote=remote,
                 stderr=push.stderr.strip()[:200],
             )
             return None
 
-        subjects = _git(
-            config, "log", "--format=- %s", f"{run.base}..{run.branch}"
-        ).stdout.strip()
-        title = f"spec-runner: {commits} commit(s) from automated run"
-        body = f"Automated spec-runner run.\n\nCommits:\n{subjects}"
+        return _open_pr(config, run, commits)
+    finally:
+        back = _git(config, "checkout", run.base)
+        if back.returncode != 0:
+            logger.warning(
+                "integration_pr: could not return to base branch",
+                base=run.base,
+                stderr=back.stderr.strip()[:200],
+            )
+
+
+# Cap the commit list embedded in the PR body: keeps it readable and, with
+# --body-file, well clear of any OS command-line length limits.
+_MAX_PR_SUBJECTS = 50
+
+
+def _open_pr(
+    config: ExecutorConfig, run: IntegrationRun, commits: int
+) -> str | None:
+    """Open one PR for the pushed integration branch. Returns URL or None."""
+    subjects = _git(
+        config, "log", "--format=- %s", f"{run.base}..{run.branch}"
+    ).stdout.strip().splitlines()
+    shown = subjects[:_MAX_PR_SUBJECTS]
+    if len(subjects) > _MAX_PR_SUBJECTS:
+        shown.append(f"- …and {len(subjects) - _MAX_PR_SUBJECTS} more")
+    title = f"spec-runner: {commits} commit(s) from automated run"
+    body = "Automated spec-runner run.\n\nCommits:\n" + "\n".join(shown)
+
+    # --body-file (not --body) so a large body never hits arg-length limits.
+    body_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write(body)
+            body_path = fh.name
         try:
             pr = subprocess.run(
                 [
@@ -266,7 +313,7 @@ def finalize_integration_branch(
                     "--base", run.base,
                     "--head", run.branch,
                     "--title", title,
-                    "--body", body,
+                    "--body-file", body_path,
                 ],
                 capture_output=True,
                 text=True,
@@ -278,15 +325,18 @@ def finalize_integration_branch(
                 branch=run.branch,
             )
             return None
-        if pr.returncode != 0:
-            logger.warning(
-                "integration_pr: gh pr create failed",
-                branch=run.branch,
-                stderr=pr.stderr.strip()[:200],
-            )
-            return None
-        url = pr.stdout.strip()
-        logger.info("Opened integration PR", url=url, branch=run.branch)
-        return url
     finally:
-        _git(config, "checkout", run.base)
+        if body_path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(body_path)
+
+    if pr.returncode != 0:
+        logger.warning(
+            "integration_pr: gh pr create failed",
+            branch=run.branch,
+            stderr=pr.stderr.strip()[:200],
+        )
+        return None
+    url = pr.stdout.strip()
+    logger.info("Opened integration PR", url=url, branch=run.branch)
+    return url

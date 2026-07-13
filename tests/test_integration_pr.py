@@ -15,6 +15,7 @@ from spec_runner.git_ops import (
     finalize_integration_branch,
     has_remote,
     make_integration_branch_name,
+    pick_remote,
 )
 
 
@@ -121,6 +122,51 @@ def test_finalize_opens_pr_when_commits_and_remote(git_repo, monkeypatch):
     assert "--base" in calls["gh"] and "master" in calls["gh"]
     assert "--head" in calls["gh"] and "spec-runner/run-pr" in calls["gh"]
     assert _current_branch(git_repo) == "master"  # returned to base after PR
+
+
+def test_pick_remote_prefers_origin(git_repo):
+    _run(git_repo, "git", "remote", "add", "upstream", "https://example.com/u.git")
+    _run(git_repo, "git", "remote", "add", "origin", "https://example.com/o.git")
+    assert pick_remote(_config(git_repo)) == "origin"
+
+
+def test_pick_remote_falls_back_to_first(git_repo):
+    _run(git_repo, "git", "remote", "add", "upstream", "https://example.com/u.git")
+    assert pick_remote(_config(git_repo)) == "upstream"
+
+
+def test_pick_remote_none_without_remote(git_repo):
+    assert pick_remote(_config(git_repo)) is None
+
+
+def test_pr_body_capped_and_via_body_file(git_repo, monkeypatch):
+    config = _config(git_repo)
+    run = create_integration_branch(config, "spec-runner/run-big")
+    for i in range(55):
+        _commit(git_repo, f"f{i}.txt", f"TASK-{i:03d}: work {i}")
+
+    captured: dict[str, str] = {}
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if cmd[:2] == ["git", "remote"]:
+            return subprocess.CompletedProcess(cmd, 0, "origin\n", "")
+        if cmd[:2] == ["git", "push"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:1] == ["gh"]:
+            # Body is passed via --body-file, not inline, to dodge arg limits.
+            assert "--body" not in cmd
+            captured["body"] = Path(cmd[cmd.index("--body-file") + 1]).read_text()
+            return subprocess.CompletedProcess(cmd, 0, "https://x/pull/9\n", "")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr("spec_runner.git_ops.subprocess.run", fake_run)
+    url = finalize_integration_branch(config, run)
+
+    assert url == "https://x/pull/9"
+    body = captured["body"]
+    assert "…and 5 more" in body  # 55 commits, capped at 50 shown
+    assert "TASK-000: work 0" not in body  # oldest commits truncated
 
 
 def test_config_default_is_off():
