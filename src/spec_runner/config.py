@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import fcntl
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -120,6 +121,20 @@ ERROR_PATTERNS = [
 ]
 
 
+# Change ids become directory names and dated archive prefixes: lowercase
+# alnum plus ._- (no leading separator); "archive" is the archive dir itself.
+_CHANGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _validate_change_id(change_id: str) -> None:
+    """Raise ConfigError when ``change_id`` can't be a safe change dir name."""
+    if change_id == "archive" or not _CHANGE_ID_RE.match(change_id):
+        raise ConfigError(
+            f"invalid change id {change_id!r}: use lowercase letters, digits, "
+            "'.', '_' or '-' (must not start with a separator; 'archive' is reserved)"
+        )
+
+
 # === ExecutorConfig ===
 
 
@@ -189,6 +204,11 @@ class ExecutorConfig:
     # Spec file prefix (e.g. "phase5-" for phase5-tasks.md)
     spec_prefix: str = ""
 
+    # Change-as-folder id (M2): scope every spec path to
+    # spec/changes/<change_id>/ (CLI --change). Empty = flat spec/ layout.
+    # Mutually exclusive with spec_prefix.
+    change_id: str = ""
+
     # Test command (using uv)
     test_command: str = "uv run pytest tests/ -v -m 'not slow'"
     lint_command: str = "uv run ruff check ."
@@ -243,16 +263,31 @@ class ExecutorConfig:
     spec_rules: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Resolve project_root and namespace state/log paths by spec_prefix."""
+        """Resolve project_root and namespace state/log paths by spec_prefix/change_id."""
         self.project_root = self.project_root.resolve()
 
+        if self.change_id:
+            if self.spec_prefix:
+                raise ConfigError(
+                    "change_id and spec_prefix are mutually exclusive: a change is "
+                    "its own spec dir, a prefix namespaces within one"
+                )
+            _validate_change_id(self.change_id)
+
+        default_state = Path("spec/.executor-state.db")
+        default_logs = Path("spec/.executor-logs")
         if self.spec_prefix:
-            default_state = Path("spec/.executor-state.db")
-            default_logs = Path("spec/.executor-logs")
             if self.state_file == default_state:
                 self.state_file = Path(f"spec/.executor-{self.spec_prefix}state.db")
             if self.logs_dir == default_logs:
                 self.logs_dir = Path(f"spec/.executor-{self.spec_prefix}logs")
+        elif self.change_id:
+            # Per-change state also yields a per-change run lock (the lock
+            # derives from the state path), so changes run in parallel.
+            if self.state_file == default_state:
+                self.state_file = Path(f"spec/changes/{self.change_id}/.executor-state.db")
+            if self.logs_dir == default_logs:
+                self.logs_dir = Path(f"spec/changes/{self.change_id}/.executor-logs")
 
         if not self.state_file.is_absolute():
             self.state_file = self.project_root / self.state_file
@@ -262,28 +297,34 @@ class ExecutorConfig:
             self.plugins_dir = self.project_root / self.plugins_dir
 
     @property
+    def spec_dir(self) -> Path:
+        """The active spec dir: ``spec/changes/<id>/`` under a change, else ``spec/``."""
+        base = self.project_root / "spec"
+        return base / "changes" / self.change_id if self.change_id else base
+
+    @property
     def stop_file(self) -> Path:
-        return self.project_root / "spec" / ".executor-stop"
+        return self.spec_dir / ".executor-stop"
 
     @property
     def tasks_file(self) -> Path:
-        return self.project_root / "spec" / f"{self.spec_prefix}tasks.md"
+        return self.spec_dir / f"{self.spec_prefix}tasks.md"
 
     @property
     def requirements_file(self) -> Path:
-        return self.project_root / "spec" / f"{self.spec_prefix}requirements.md"
+        return self.spec_dir / f"{self.spec_prefix}requirements.md"
 
     @property
     def design_file(self) -> Path:
-        return self.project_root / "spec" / f"{self.spec_prefix}design.md"
+        return self.spec_dir / f"{self.spec_prefix}design.md"
 
     @property
     def constitution_file(self) -> Path:
-        return self.project_root / "spec" / f"{self.spec_prefix}constitution.md"
+        return self.spec_dir / f"{self.spec_prefix}constitution.md"
 
     @property
     def spec_lock_file(self) -> Path:
-        return self.project_root / "spec" / f".{self.spec_prefix}spec.lock"
+        return self.spec_dir / f".{self.spec_prefix}spec.lock"
 
     def get_persona(self, role: str) -> Persona | None:
         """Get persona by role name (e.g., 'implementer', 'reviewer', 'architect')."""
@@ -524,6 +565,8 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["callback_url"] = args.callback_url
     if hasattr(args, "spec_prefix") and args.spec_prefix:
         config_kwargs["spec_prefix"] = args.spec_prefix
+    if getattr(args, "change", None):
+        config_kwargs["change_id"] = args.change
     if hasattr(args, "project_root") and args.project_root:
         config_kwargs["project_root"] = Path(args.project_root)
     if hasattr(args, "max_concurrent") and getattr(args, "max_concurrent", 0) > 0:

@@ -886,6 +886,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
     )
     common.add_argument(
+        "--change",
+        type=str,
+        default="",
+        help="Operate inside spec/changes/<id>/ (change-as-folder; see `change` command)",
+    )
+    common.add_argument(
         "--project-root",
         type=str,
         default="",
@@ -1217,6 +1223,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Adopt as approved even if validation fails"
     )
 
+    # change (change-as-folder lifecycle, M2)
+    change_parser = subparsers.add_parser(
+        "change", parents=[common], help="Manage change folders (new, list, archive)"
+    )
+    change_sub = change_parser.add_subparsers(dest="change_command", help="Change commands")
+
+    ch_new = change_sub.add_parser("new", help="Create spec/changes/<id>/ with a tasks.md stub")
+    ch_new.add_argument("change_id", help="Change id (kebab-case, e.g. add-dark-mode)")
+
+    ch_list = change_sub.add_parser("list", help="List in-flight changes")
+    ch_list.add_argument("--json", action="store_true", help="JSON output")
+
+    ch_archive = change_sub.add_parser(
+        "archive", help="Move a completed change to spec/changes/archive/"
+    )
+    ch_archive.add_argument("change_id", help="Change id to archive")
+    ch_archive.add_argument(
+        "--force", action="store_true", help="Archive even if tasks are not all done"
+    )
+
     # task (unified: replaces spec-task binary)
     task_parser = subparsers.add_parser(
         "task", help="Task management (list, show, start, done, graph, sync)"
@@ -1328,6 +1354,20 @@ def main():
     if args.command == "task":
         _dispatch_task_command(args)
         return
+
+    # Handle change-as-folder subcommand (new/list/archive)
+    if args.command == "change":
+        from . import change_commands
+
+        handler = {
+            "new": change_commands.cmd_change_new,
+            "list": change_commands.cmd_change_list,
+            "archive": change_commands.cmd_change_archive,
+        }.get(args.change_command)
+        if handler is None:
+            # no sub-subcommand given -> default to `change list`
+            raise SystemExit(change_commands.cmd_change_list(args, config))
+        raise SystemExit(handler(args, config))
 
     # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
     if args.command == "spec":
