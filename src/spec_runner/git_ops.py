@@ -4,7 +4,12 @@ Contains branch management, file change detection, and test scoping
 functions used by hooks during task execution.
 """
 
+import contextlib
+import os
 import subprocess
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .config import ExecutorConfig
@@ -146,3 +151,192 @@ def build_scoped_test_command(
             return base_command.replace(pattern, rel_paths + " ", 1)
     # Append test files if no pattern matched
     return f"{base_command} {rel_paths}"
+
+
+@dataclass
+class IntegrationRun:
+    """State for a run that collects every task on one integration branch.
+
+    ``base`` is the real main branch the final PR targets; ``branch`` is the
+    per-run integration branch that tasks merge into.
+    """
+
+    branch: str
+    base: str
+
+
+def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess:
+    """Run a git command in the project root, capturing output."""
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+
+
+def pick_remote(config: ExecutorConfig) -> str | None:
+    """Remote to push to: ``origin`` if present, else the first configured."""
+    result = _git(config, "remote")
+    if result.returncode != 0:
+        return None
+    remotes = result.stdout.split()
+    if not remotes:
+        return None
+    return "origin" if "origin" in remotes else remotes[0]
+
+
+def has_remote(config: ExecutorConfig) -> bool:
+    """True when the repo has at least one configured git remote."""
+    return pick_remote(config) is not None
+
+
+def make_integration_branch_name(now: datetime | None = None) -> str:
+    """Per-run integration branch name, unique to the second."""
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    return f"spec-runner/run-{stamp}"
+
+
+def create_integration_branch(
+    config: ExecutorConfig, branch_name: str
+) -> IntegrationRun | None:
+    """Fork ``branch_name`` off the real main branch and check it out.
+
+    Returns None (caller falls back to normal per-task merge) when the base
+    branch cannot be checked out or the integration branch cannot be created.
+    """
+    base = get_main_branch(config)
+    checkout = _git(config, "checkout", base)
+    if checkout.returncode != 0:
+        logger.warning(
+            "integration_pr: cannot checkout base branch, falling back",
+            base=base,
+            stderr=checkout.stderr.strip()[:200],
+        )
+        return None
+    created = _git(config, "checkout", "-b", branch_name)
+    if created.returncode != 0:
+        logger.warning(
+            "integration_pr: cannot create integration branch, falling back",
+            branch=branch_name,
+            stderr=created.stderr.strip()[:200],
+        )
+        return None
+    logger.info("Integration branch created", branch=branch_name, base=base)
+    return IntegrationRun(branch=branch_name, base=base)
+
+
+def finalize_integration_branch(
+    config: ExecutorConfig, run: IntegrationRun
+) -> str | None:
+    """Push the integration branch and open one PR; clean up when empty.
+
+    Returns the PR URL on success, else None. When no task produced a commit,
+    the empty integration branch is deleted and no PR is opened. A missing
+    remote or ``gh`` degrades to a warning, leaving the branch local.
+    """
+    count = _git(config, "rev-list", "--count", f"{run.base}..{run.branch}")
+    try:
+        commits = int(count.stdout.strip() or "0")
+    except ValueError:
+        commits = 0
+
+    if commits == 0:
+        logger.info("Integration branch empty, cleaning up", branch=run.branch)
+        _git(config, "checkout", run.base)
+        _git(config, "branch", "-D", run.branch)
+        return None
+
+    # A non-empty branch is never deleted (it holds the run's work); leave the
+    # working copy back on the base branch regardless of how far we get.
+    try:
+        remote = pick_remote(config)
+        if remote is None:
+            logger.warning(
+                "integration_pr: no git remote, leaving integration branch local",
+                branch=run.branch,
+                commits=commits,
+            )
+            return None
+
+        push = _git(config, "push", "-u", remote, run.branch)
+        if push.returncode != 0:
+            logger.warning(
+                "integration_pr: push failed",
+                branch=run.branch,
+                remote=remote,
+                stderr=push.stderr.strip()[:200],
+            )
+            return None
+
+        return _open_pr(config, run, commits)
+    finally:
+        back = _git(config, "checkout", run.base)
+        if back.returncode != 0:
+            logger.warning(
+                "integration_pr: could not return to base branch",
+                base=run.base,
+                stderr=back.stderr.strip()[:200],
+            )
+
+
+# Cap the commit list embedded in the PR body: keeps it readable and, with
+# --body-file, well clear of any OS command-line length limits.
+_MAX_PR_SUBJECTS = 50
+
+
+def _open_pr(
+    config: ExecutorConfig, run: IntegrationRun, commits: int
+) -> str | None:
+    """Open one PR for the pushed integration branch. Returns URL or None."""
+    subjects = _git(
+        config, "log", "--format=- %s", f"{run.base}..{run.branch}"
+    ).stdout.strip().splitlines()
+    shown = subjects[:_MAX_PR_SUBJECTS]
+    if len(subjects) > _MAX_PR_SUBJECTS:
+        shown.append(f"- …and {len(subjects) - _MAX_PR_SUBJECTS} more")
+    title = f"spec-runner: {commits} commit(s) from automated run"
+    body = "Automated spec-runner run.\n\nCommits:\n" + "\n".join(shown)
+
+    # --body-file (not --body) so a large body never hits arg-length limits.
+    body_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write(body)
+            body_path = fh.name
+        try:
+            pr = subprocess.run(
+                [
+                    "gh", "pr", "create",
+                    "--base", run.base,
+                    "--head", run.branch,
+                    "--title", title,
+                    "--body-file", body_path,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "integration_pr: gh not found; branch pushed, open the PR manually",
+                branch=run.branch,
+            )
+            return None
+    finally:
+        if body_path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(body_path)
+
+    if pr.returncode != 0:
+        logger.warning(
+            "integration_pr: gh pr create failed",
+            branch=run.branch,
+            stderr=pr.stderr.strip()[:200],
+        )
+        return None
+    url = pr.stdout.strip()
+    logger.info("Opened integration PR", url=url, branch=run.branch)
+    return url

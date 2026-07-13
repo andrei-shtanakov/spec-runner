@@ -163,6 +163,10 @@ class ExecutorConfig:
     create_git_branch: bool = True  # Create branch on start
     auto_commit: bool = True  # Auto-commit on success
     main_branch: str = ""  # Main branch name (empty = auto-detect: main/master)
+    # Integration mode: fork one branch per run, merge every task into it, and
+    # open a single PR at the end instead of self-merging tasks into main. For
+    # repos with a remote where a human reviews/merges (never touches main).
+    integration_pr: bool = False
     sync_deps: bool = True  # Run `uv sync` in pre_start_hook (doctor disables this)
 
     # Code review
@@ -425,6 +429,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "create_git_branch": pre_start.get("create_git_branch"),
             "sync_deps": pre_start.get("sync_deps"),
             "main_branch": executor_config.get("main_branch"),
+            "integration_pr": executor_config.get("integration_pr"),
             "run_tests_on_done": post_done.get("run_tests"),
             "run_lint_on_done": post_done.get("run_lint"),
             "lint_blocking": post_done.get("lint_blocking"),
@@ -509,6 +514,8 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
         config_kwargs["auto_commit"] = False
     if hasattr(args, "no_review") and args.no_review:
         config_kwargs["run_review"] = False
+    if getattr(args, "integration_pr", None):
+        config_kwargs["integration_pr"] = True
     if hasattr(args, "callback_url") and args.callback_url:
         config_kwargs["callback_url"] = args.callback_url
     if hasattr(args, "spec_prefix") and args.spec_prefix:
