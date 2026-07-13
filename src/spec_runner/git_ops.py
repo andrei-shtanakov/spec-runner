@@ -197,9 +197,7 @@ def make_integration_branch_name(now: datetime | None = None) -> str:
     return f"spec-runner/run-{stamp}"
 
 
-def create_integration_branch(
-    config: ExecutorConfig, branch_name: str
-) -> IntegrationRun | None:
+def create_integration_branch(config: ExecutorConfig, branch_name: str) -> IntegrationRun | None:
     """Fork ``branch_name`` off the real main branch and check it out.
 
     Returns None (caller falls back to normal per-task merge) when the base
@@ -226,9 +224,7 @@ def create_integration_branch(
     return IntegrationRun(branch=branch_name, base=base)
 
 
-def finalize_integration_branch(
-    config: ExecutorConfig, run: IntegrationRun
-) -> str | None:
+def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> str | None:
     """Push the integration branch and open one PR; clean up when empty.
 
     Returns the PR URL on success, else None. When no task produced a commit,
@@ -285,13 +281,13 @@ def finalize_integration_branch(
 _MAX_PR_SUBJECTS = 50
 
 
-def _open_pr(
-    config: ExecutorConfig, run: IntegrationRun, commits: int
-) -> str | None:
+def _open_pr(config: ExecutorConfig, run: IntegrationRun, commits: int) -> str | None:
     """Open one PR for the pushed integration branch. Returns URL or None."""
-    subjects = _git(
-        config, "log", "--format=- %s", f"{run.base}..{run.branch}"
-    ).stdout.strip().splitlines()
+    subjects = (
+        _git(config, "log", "--format=- %s", f"{run.base}..{run.branch}")
+        .stdout.strip()
+        .splitlines()
+    )
     shown = subjects[:_MAX_PR_SUBJECTS]
     if len(subjects) > _MAX_PR_SUBJECTS:
         shown.append(f"- …and {len(subjects) - _MAX_PR_SUBJECTS} more")
@@ -309,11 +305,17 @@ def _open_pr(
         try:
             pr = subprocess.run(
                 [
-                    "gh", "pr", "create",
-                    "--base", run.base,
-                    "--head", run.branch,
-                    "--title", title,
-                    "--body-file", body_path,
+                    "gh",
+                    "pr",
+                    "create",
+                    "--base",
+                    run.base,
+                    "--head",
+                    run.branch,
+                    "--title",
+                    title,
+                    "--body-file",
+                    body_path,
                 ],
                 capture_output=True,
                 text=True,
