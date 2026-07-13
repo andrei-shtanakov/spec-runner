@@ -9,6 +9,7 @@ import yaml
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
+from spec_runner.requirements import parse_requirements
 from spec_runner.spec import LITE, StageProfile, load_profile, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
@@ -88,6 +89,13 @@ def validate_requirements(path: Path) -> ValidationResult:
         result.errors.append("missing 'Out of Scope' section")
     if "acceptance criteria" not in body.lower():
         result.warnings.append("no 'Acceptance Criteria' found")
+
+    # Per-requirement structural checks (M1): warn on a functional requirement
+    # with no acceptance-criteria section. NFRs (tables) are exempt to avoid
+    # noise; the global check above still covers the whole-doc case.
+    for req in parse_requirements(body):
+        if req.kind == "functional" and not req.acceptance_criteria:
+            result.warnings.append(f"{req.id}: no acceptance criteria")
     return result
 
 

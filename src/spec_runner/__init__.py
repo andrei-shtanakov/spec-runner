@@ -45,6 +45,12 @@ from .prompt import (
     build_task_prompt,
     parse_spec_marker,
 )
+from .requirements import (
+    Requirement,
+    find_requirement,
+    parse_requirements,
+    serialize_requirement,
+)
 from .runner import parse_token_usage, run_claude_async
 from .state import (
     ErrorCode,
@@ -94,6 +100,11 @@ __all__ = [
     "update_task_status",
     "update_checklist_item",
     "mark_all_checklist_done",
+    # Requirements (M1)
+    "Requirement",
+    "parse_requirements",
+    "serialize_requirement",
+    "find_requirement",
     # Executor
     "classify_retry_strategy",
     "cmd_costs",

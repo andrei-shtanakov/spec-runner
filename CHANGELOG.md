@@ -12,6 +12,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Structured requirements parser** (M1 of the OpenSpec-inspired roadmap).
+  New `requirements.py` parses `requirements.md` into id-keyed `Requirement`
+  blocks — a diffable/mergeable unit that lays the groundwork for delta specs.
+  Tolerant of heterogeneous bodies (gherkin, `- [ ]` checklists, prose): it
+  anchors only on the `#+ (REQ|NFR)-NNN` heading and block boundaries (next
+  same-or-higher-level heading), preserving each block's exact text for
+  round-trip. Public API: `parse_requirements`, `serialize_requirement`,
+  `find_requirement`, `Requirement`. `spec-runner validate` now also warns per
+  functional requirement that has no acceptance-criteria section (NFRs exempt).
+  `spec/FORMAT.md` documents the grammar. Non-contract, additive change.
+
 - **Per-stage rules & project context injection for spec generation** (M0 of
   the OpenSpec-inspired roadmap, `docs/plans/2026-07-13-openspec-inspired-roadmap.md`).
   Two new opt-in config keys: `spec_context` (project-wide text prepended to

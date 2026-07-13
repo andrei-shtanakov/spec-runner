@@ -160,3 +160,49 @@ Implement the /api/login endpoint with JWT token generation.
 **Depends on:** [TASK-001]
 **Traces to:** [REQ-003]
 ```
+
+## Requirements Format (`requirements.md`)
+
+`requirements.py:parse_requirements()` reads `requirements.md` into id-keyed
+requirement blocks so a requirement is a diffable, mergeable unit (the
+foundation for delta specs). Real requirement bodies vary widely — gherkin
+acceptance criteria, `- [ ]` checklists, or plain prose — so the parser is
+**tolerant** and anchors on only two firm signals:
+
+1. **Requirement heading** — a line matching `#+ (REQ|NFR)-NNN[: Name]` at any
+   heading depth. `REQ-` is functional, `NFR-` is non-functional.
+2. **Block boundary** — the block runs from its heading until the next heading
+   whose level is the same or higher (i.e. fewer-or-equal `#`). Everything in
+   between — prose, code fences, `---` rules — belongs to that requirement and
+   is preserved verbatim in the block's `raw` text.
+
+Best-effort optional fields extracted from each block (empty when absent):
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| `priority` | `**Priority:** …` / `**Priority**: …` | colon inside or outside the bold |
+| `acceptance_criteria` | text under `**Acceptance Criteria:**` | up to the next bold-field marker or block end |
+| `traces_to` | `REQ-`/`DESIGN-`/`TASK-`/`NFR-` refs in the block | excludes the requirement's own id |
+
+### Example
+
+```markdown
+## 2. Functional Requirements
+
+### 2.1 Authentication
+#### REQ-001: User can log in
+**Priority**: P0
+
+**Acceptance Criteria**:
+- [ ] POST /api/login returns a JWT on valid credentials
+- [ ] Invalid credentials return 401
+
+**Traces to:** [DESIGN-002], [TASK-001]
+```
+
+### Validation
+
+`spec-runner validate` (and the gated `requirements` stage) checks: unique
+requirement ids, an `Out of Scope` section, and that acceptance criteria are
+present. As of M1 it additionally warns per functional requirement that has no
+acceptance-criteria section (NFRs are exempt to avoid noise).
