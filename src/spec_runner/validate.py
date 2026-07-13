@@ -391,32 +391,41 @@ _SPEC_CONTEXT_LIMIT_BYTES = 50 * 1024
 
 
 def _validate_spec_context_rules(section: dict, result: "ValidationResult") -> None:
-    """Validate M0 ``spec_context`` size and ``spec_rules`` stage keys.
+    """Validate M0 ``spec_context`` and ``spec_rules``.
 
-    ``spec_context`` over 50KB is an error; ``spec_rules`` keyed by a stage
-    absent from the configured profile is a warning (mirrors OpenSpec's
-    "unknown artifact ID in rules" behaviour).
+    Wrong types are errors (so a mis-typed config is caught before ``plan``):
+    ``spec_context`` must be a string, ``spec_rules`` a mapping of stage name
+    to a list of rules. ``spec_context`` over 50KB is an error; ``spec_rules``
+    keyed by a stage absent from the configured profile is a warning (mirrors
+    OpenSpec's "unknown artifact ID in rules" behaviour).
     """
     spec_context = section.get("spec_context")
-    if (
-        isinstance(spec_context, str)
-        and len(spec_context.encode("utf-8")) > _SPEC_CONTEXT_LIMIT_BYTES
-    ):
-        result.errors.append("spec_context exceeds the 50KB limit; summarise or link out")
+    if spec_context is not None:
+        if not isinstance(spec_context, str):
+            result.errors.append("spec_context must be a string")
+        elif len(spec_context.encode("utf-8")) > _SPEC_CONTEXT_LIMIT_BYTES:
+            result.errors.append("spec_context exceeds the 50KB limit; summarise or link out")
 
     spec_rules = section.get("spec_rules")
-    if isinstance(spec_rules, dict):
-        profile_name = section.get("spec_profile", "lite")
-        try:
-            stage_names = set(load_profile(profile_name).names())
-        except Exception:
-            stage_names = set(LITE.names())
-        for stage_key in spec_rules:
-            if stage_key not in stage_names:
-                result.warnings.append(
-                    f"spec_rules references unknown stage '{stage_key}' "
-                    f"(profile '{profile_name}' stages: {', '.join(sorted(stage_names))})"
-                )
+    if spec_rules is None:
+        return
+    if not isinstance(spec_rules, dict):
+        result.errors.append("spec_rules must be a mapping of stage name to a list of rules")
+        return
+
+    profile_name = section.get("spec_profile", "lite")
+    try:
+        stage_names = set(load_profile(profile_name).names())
+    except Exception:
+        stage_names = set(LITE.names())
+    for stage_key, stage_rules in spec_rules.items():
+        if stage_key not in stage_names:
+            result.warnings.append(
+                f"spec_rules references unknown stage '{stage_key}' "
+                f"(profile '{profile_name}' stages: {', '.join(sorted(stage_names))})"
+            )
+        if not isinstance(stage_rules, list):
+            result.errors.append(f"spec_rules['{stage_key}'] must be a list of rules")
 
 
 def validate_tasks(tasks_file: Path) -> ValidationResult:
