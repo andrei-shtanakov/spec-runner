@@ -36,7 +36,12 @@ from .execution import (
     execute_task,
     run_with_retries,
 )
-from .git_ops import ensure_on_main_branch
+from .git_ops import (
+    create_integration_branch,
+    ensure_on_main_branch,
+    finalize_integration_branch,
+    make_integration_branch_name,
+)
 from .logging import get_logger
 from .preset_cmd import cmd_config
 from .runner import (
@@ -206,7 +211,44 @@ def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
     )
 
 
+def _maybe_start_integration(args, config: ExecutorConfig):
+    """Fork a per-run integration branch when ``integration_pr`` is enabled.
+
+    Returns an ``IntegrationRun`` (and redirects task merges onto it via
+    ``config.main_branch``) or None when the mode is off/unavailable — in
+    which case the run behaves exactly as before (self-merge into main).
+    """
+    if not getattr(config, "integration_pr", False):
+        return None
+    if not config.create_git_branch:
+        logger.warning("integration_pr ignored: create_git_branch is off")
+        return None
+    if getattr(args, "dry_run", False):
+        return None
+    run = create_integration_branch(config, make_integration_branch_name())
+    if run is not None:
+        # Redirect every task's merge target to the integration branch; the
+        # existing merge stage reads config.main_branch, so main is untouched.
+        config.main_branch = run.branch
+    return run
+
+
 def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
+    """Run tasks, optionally collecting them on one integration branch + PR.
+
+    Thin wrapper around :func:`_run_tasks_inner`: sets up the integration
+    branch first (when enabled) and always finalizes it (push + open PR, or
+    clean up) afterwards, regardless of how the inner run exits.
+    """
+    integration = _maybe_start_integration(args, config)
+    try:
+        _run_tasks_inner(args, config, lock_held=lock_held)
+    finally:
+        if integration is not None:
+            finalize_integration_branch(config, integration)
+
+
+def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
     lock_held: True when the caller holds the exclusive executor lock, so any
@@ -823,6 +865,12 @@ def _build_parser() -> argparse.ArgumentParser:
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
     common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
     common.add_argument("--no-review", action="store_true", help="Skip code review after task")
+    common.add_argument(
+        "--integration-pr",
+        action="store_true",
+        default=None,
+        help="Collect all tasks on one branch and open a single PR (never merge into main)",
+    )
     common.add_argument(
         "--hitl-review",
         action="store_true",
