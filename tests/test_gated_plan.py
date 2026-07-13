@@ -11,6 +11,8 @@ from spec_runner.spec import STAGES, SpecMeta, read_spec_meta, stage_path, write
 
 
 def _cfg(tmp_path: Path):
+    from spec_runner.spec import LITE
+
     spec = tmp_path / "spec"
     return SimpleNamespace(
         project_root=tmp_path,
@@ -25,6 +27,8 @@ def _cfg(tmp_path: Path):
         task_timeout_minutes=1,
         spec_context="",
         spec_rules={},
+        spec_prefix="",
+        resolve_spec_profile=lambda: LITE,
     )
 
 

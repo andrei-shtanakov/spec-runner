@@ -24,7 +24,6 @@ from .runner import (
     log_progress,
 )
 from .spec import (
-    STAGES,
     SpecMeta,
     read_spec_body,
     read_spec_meta,
@@ -222,8 +221,9 @@ def _print_gate_status(action: str, stage: str) -> bool:
     """Print the message for a non-"generate" `resolve_next_stage` action.
 
     Returns True when `action` is terminal (the caller should stop: the
-    pipeline is done, a stage is stale, or a stage awaits approval); False
-    when `action == "generate"` (the caller should proceed to generate it).
+    pipeline is done, a stage is stale, awaits approval, or is dependency-
+    blocked); False when `action == "generate"` (the caller should proceed to
+    generate it).
     """
     if action == "await_approval":
         print(f"{stage} is DRAFT — approve or edit it before continuing")
@@ -237,12 +237,19 @@ def _print_gate_status(action: str, stage: str) -> bool:
     if action == "done":
         print("all stages approved → spec-runner run")
         return True
+    if action == "blocked":
+        print(
+            f"{stage} is BLOCKED — its upstream stages must be approved first "
+            f"(run `spec-runner spec status` to see what's missing)"
+        )
+        return True
     return False
 
 
 def _current_metas(config) -> dict[str, SpecMeta | None]:
-    """Read the current `SpecMeta` for every gated-pipeline stage."""
-    return {s: read_spec_meta(stage_path(config, s)) for s in STAGES}
+    """Read the current `SpecMeta` for every stage of the configured profile."""
+    names = config.resolve_spec_profile().names()
+    return {s: read_spec_meta(stage_path(config, s), names) for s in names}
 
 
 def resolve_plan_description(description: str | None, from_file: str | None) -> str:
@@ -367,7 +374,9 @@ def cmd_plan(args, config: ExecutorConfig):
         interactive = sys.stdout.isatty() and not getattr(args, "no_interactive", False)
 
         if not interactive:
-            action, stage = resolve_next_stage(_current_metas(config))
+            action, stage = resolve_next_stage(
+                _current_metas(config), config.resolve_spec_profile()
+            )
             if _print_gate_status(action, stage):
                 return
             raise SystemExit(run_gated_stage(stage, description, config))
@@ -379,7 +388,9 @@ def cmd_plan(args, config: ExecutorConfig):
         # resolves to a terminal action that _print_gate_status breaks on at
         # the top of the loop.
         while True:
-            action, stage = resolve_next_stage(_current_metas(config))
+            action, stage = resolve_next_stage(
+                _current_metas(config), config.resolve_spec_profile()
+            )
             if _print_gate_status(action, stage):
                 break
             rc = run_gated_stage(stage, description, config, interactive=True)

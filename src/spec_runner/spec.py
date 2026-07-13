@@ -38,10 +38,21 @@ class StageDef:
     upstream: tuple[str, ...] = ()
     prompt_text: str = ""
 
+    @property
+    def requires(self) -> tuple[str, ...]:
+        """Alias for :attr:`upstream` — the stages this one depends on (M4)."""
+        return self.upstream
+
 
 @dataclass(frozen=True)
 class StageProfile:
-    """An ordered spec-generation profile (list order = pipeline order)."""
+    """A spec-generation profile: a DAG of stages linked by ``requires`` edges.
+
+    List order is the presentation/tie-break order; the actual dependencies
+    come from each stage's ``requires``/``upstream`` (M4). A linear profile
+    (each stage requiring only its predecessor) behaves exactly as the old
+    ordered-list model.
+    """
 
     name: str
     stages: tuple[StageDef, ...] = field(default_factory=tuple)
@@ -49,6 +60,10 @@ class StageProfile:
     def names(self) -> tuple[str, ...]:
         """Return the stage names in profile order."""
         return tuple(s.name for s in self.stages)
+
+    def edges(self) -> dict[str, tuple[str, ...]]:
+        """Return ``{stage: direct requires}`` for every stage."""
+        return {s.name: s.upstream for s in self.stages}
 
 
 def load_profile(name: str) -> StageProfile:
@@ -75,12 +90,57 @@ def load_profile(name: str) -> StageProfile:
             template=s["template"],
             marker_prefix=s["marker_prefix"],
             validator_key=s["validator"],
-            upstream=tuple(s.get("upstream") or ()),
+            # Accept both spellings; ``requires`` is the M4 canonical key,
+            # ``upstream`` the historical one.
+            upstream=tuple(s.get("requires") or s.get("upstream") or ()),
             prompt_text=s.get("prompt_text", ""),
         )
         for s in data.get("stages", [])
     )
-    return StageProfile(name=data.get("profile", name), stages=stages)
+    profile = StageProfile(name=data.get("profile", name), stages=stages)
+    validate_profile_graph(profile)
+    return profile
+
+
+class ProfileGraphError(ValueError):
+    """A profile exists but its ``requires`` graph is invalid (cycle/unknown ref).
+
+    Distinct from the "profile not found" ``ValueError`` so callers can tell a
+    genuine graph error from an unknown-profile-name error (M4).
+    """
+
+
+def validate_profile_graph(profile: StageProfile) -> None:
+    """Validate a profile's dependency graph (M4).
+
+    Raises :class:`ProfileGraphError` when a stage ``requires`` an unknown
+    stage or the ``requires`` edges form a cycle.
+    """
+    names = set(profile.names())
+    edges = profile.edges()
+    for stage, deps in edges.items():
+        for dep in deps:
+            if dep not in names:
+                raise ValueError(
+                    f"stage {stage!r} requires unknown stage {dep!r} in profile {profile.name!r}"
+                )
+
+    # Cycle detection via DFS with a recursion stack.
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = dict.fromkeys(names, WHITE)
+
+    def visit(node: str) -> None:
+        color[node] = GREY
+        for dep in edges.get(node, ()):
+            if color[dep] == GREY:
+                raise ValueError(f"dependency cycle through {dep!r} in profile {profile.name!r}")
+            if color[dep] == WHITE:
+                visit(dep)
+        color[node] = BLACK
+
+    for node in names:
+        if color[node] == WHITE:
+            visit(node)
 
 
 def available_profiles() -> list[str]:
@@ -239,43 +299,127 @@ def write_spec(
             lock.release()
 
 
-def downstream_stages(stage: str, stages: Sequence[str] = STAGES) -> list[str]:
-    """Stages strictly after ``stage`` in ``stages`` order (default = lite)."""
-    i = stages.index(stage)
-    return list(stages[i + 1 :])
+def _order_and_edges(graph: StageProfile | Sequence[str]) -> tuple[tuple[str, ...], dict | None]:
+    """Normalize a stage-graph arg into (ordered names, edges-or-None).
+
+    A stage-graph arg is either a full :class:`StageProfile` (DAG edges
+    honored) or a bare ordered name list (legacy linear behavior). ``edges``
+    is ``None`` in the linear case, so callers fall back to list-order
+    semantics.
+    """
+    if isinstance(graph, StageProfile):
+        return graph.names(), graph.edges()
+    return tuple(graph), None
+
+
+def downstream_stages(stage: str, graph: StageProfile | Sequence[str] = STAGES) -> list[str]:
+    """Stages that depend on ``stage``, directly or transitively (M4).
+
+    With a :class:`StageProfile`, follows ``requires`` edges so *sibling*
+    stages (which merely share an upstream) are excluded. With a bare name
+    sequence, keeps the historical "everything after in list order" behavior.
+    Results are returned in profile/list order.
+    """
+    names, edges = _order_and_edges(graph)
+    if edges is None:
+        i = names.index(stage)
+        return list(names[i + 1 :])
+
+    dependents: set[str] = set()
+    frontier = [stage]
+    while frontier:
+        current = frontier.pop()
+        for node, deps in edges.items():
+            if current in deps and node not in dependents:
+                dependents.add(node)
+                frontier.append(node)
+    return [n for n in names if n in dependents]
+
+
+def _deps_satisfied(deps: tuple[str, ...], metas: dict[str, SpecMeta | None]) -> bool:
+    """True when every dependency in ``deps`` is present and approved."""
+    return all((m := metas.get(d)) is not None and m.status == "approved" for d in deps)
 
 
 def resolve_next_stage(
-    metas: dict[str, SpecMeta | None], stages: Sequence[str] = STAGES
+    metas: dict[str, SpecMeta | None], graph: StageProfile | Sequence[str] = STAGES
 ) -> tuple[str, str]:
     """Compute ``(action, stage)`` from current per-stage metas.
 
-    A stale stage anywhere takes priority; else the first missing stage is
-    generated, then the first draft stage awaits approval; if all stages are
-    approved, the pipeline is done. ``stages`` supplies the pipeline order
-    (default = the ``lite`` profile; DESIGN-303).
+    A stale stage anywhere takes priority. Otherwise the first stage in order
+    that is generatable (missing, with all ``requires`` approved) is generated,
+    then the first draft stage awaits approval. If every stage is approved the
+    pipeline is done; if the only remaining work is dependency-blocked, returns
+    ``("blocked", stage)``. In legacy linear mode a missing stage is always
+    generatable (no dependency gate), preserving the old behavior.
     """
-    for stage in stages:
+    names, edges = _order_and_edges(graph)
+    for stage in names:
         m = metas.get(stage)
         if m is not None and m.status == "stale":
             return ("stale", stage)
-    for stage in stages:
+
+    first_blocked: str | None = None
+    for stage in names:
         m = metas.get(stage)
         if m is None:
-            return ("generate", stage)
-        if m.status == "draft":
+            deps = edges.get(stage, ()) if edges is not None else ()
+            if edges is None or _deps_satisfied(deps, metas):
+                return ("generate", stage)
+            if first_blocked is None:
+                first_blocked = stage
+        elif m.status == "draft":
             return ("await_approval", stage)
-    return ("done", stages[-1])
+
+    if first_blocked is not None:
+        return ("blocked", first_blocked)
+    return ("done", names[-1])
+
+
+def stage_readiness(
+    metas: dict[str, SpecMeta | None], graph: StageProfile | Sequence[str] = STAGES
+) -> dict[str, dict]:
+    """Return per-stage ``{state, missing_deps}`` for the whole graph (M4).
+
+    ``state`` is one of ``done`` (approved), ``draft``, ``stale``, ``ready``
+    (missing but all deps approved), or ``blocked`` (missing with unapproved
+    deps). ``missing_deps`` lists the unapproved dependencies (in ``requires``
+    order); empty unless blocked. This exposes DAG parallelism — several stages
+    can be ``ready`` at once.
+    """
+    names, edges = _order_and_edges(graph)
+    result: dict[str, dict] = {}
+    for stage in names:
+        m = metas.get(stage)
+        if m is not None and m.status == "approved":
+            result[stage] = {"state": "done", "missing_deps": []}
+        elif m is not None and m.status == "stale":
+            result[stage] = {"state": "stale", "missing_deps": []}
+        elif m is not None and m.status == "draft":
+            result[stage] = {"state": "draft", "missing_deps": []}
+        else:
+            deps = edges.get(stage, ()) if edges is not None else ()
+            missing = [
+                d
+                for d in deps
+                if not ((mm := metas.get(d)) is not None and mm.status == "approved")
+            ]
+            result[stage] = {
+                "state": "blocked" if missing else "ready",
+                "missing_deps": missing,
+            }
+    return result
 
 
 def stage_path(config: ExecutorConfig, stage: str) -> Path:
-    """Map a stage name to its spec file path on ``config``."""
-    paths: dict[str, Path] = {
-        "requirements": config.requirements_file,
-        "design": config.design_file,
-        "tasks": config.tasks_file,
-    }
-    return paths[stage]
+    """Map a stage name to its spec file path via the ``spec/<prefix><name>.md``
+    convention (M4).
+
+    Byte-identical to the former hard-coded map for the ``lite`` stages
+    (``requirements`` / ``design`` / ``tasks`` all follow this convention on
+    ``config``), and it now resolves custom-profile stage names too.
+    """
+    return config.project_root / "spec" / f"{config.spec_prefix}{stage}.md"
 
 
 def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
@@ -289,16 +433,19 @@ def mark_downstream_stale(
     config: ExecutorConfig,
     stage: str,
     lock: ExecutorLock,
-    stages: Sequence[str] = STAGES,
+    graph: StageProfile | Sequence[str] = STAGES,
 ) -> None:
-    """Flip every not-already-stale stage strictly after ``stage`` to ``stale``.
+    """Flip every not-already-stale stage that depends on ``stage`` to ``stale``.
 
-    ``stages`` supplies the pipeline order (default = the ``lite`` profile;
-    DESIGN-303). Writes are serialized through the caller-supplied ``lock``.
+    With a :class:`StageProfile`, "depends on" follows ``requires`` edges, so a
+    *sibling* stage (sharing an upstream but not depending on ``stage``) is not
+    stale-cascaded — unlike the old list-order behavior. Writes are serialized
+    through the caller-supplied ``lock``.
     """
-    for ds in downstream_stages(stage, stages):
+    names, _ = _order_and_edges(graph)
+    for ds in downstream_stages(stage, graph):
         ds_path = stage_path(config, ds)
-        ds_meta = read_spec_meta(ds_path, stages)
+        ds_meta = read_spec_meta(ds_path, names)
         if ds_meta is not None and ds_meta.status != "stale":
             ds_meta.status = "stale"
             write_spec(ds_path, ds_meta, read_spec_body(ds_path), lock=lock)
@@ -317,8 +464,9 @@ def apply_approval(
     already stale, since approval bumps the version and any generated
     downstream content may now be out of sync with the newly approved stage.
     """
+    profile = config.resolve_spec_profile()
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, profile.names())
     if meta is None:
         raise ValueError(f"{stage} is unmanaged (no frontmatter)")
     lock = _spec_lock(config)
@@ -328,4 +476,4 @@ def apply_approval(
     meta.approved_at = now
     meta.validation = fresh_validation
     write_spec(path, meta, read_spec_body(path), lock=lock)
-    mark_downstream_stale(config, stage, lock)
+    mark_downstream_stale(config, stage, lock, profile)

@@ -12,6 +12,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **DAG stage profiles** (M4 of the OpenSpec-inspired roadmap). Spec-generation
+  profiles are now a true dependency graph rather than a flat ordered list.
+  `StageDef.requires` (alias of `upstream`, and the new canonical `requires:`
+  key in profile YAML) defines edges; `downstream_stages` follows them
+  transitively so a *sibling* stage (sharing an upstream) is no longer
+  wrongly stale-cascaded when another stage is approved. New
+  `stage_readiness()` reports per-stage `ready`/`blocked`/`done`/`draft`/`stale`
+  + `missing_deps`, exposing parallelism (several stages `ready` at once).
+  `resolve_next_stage` is dependency-gated, `load_profile` rejects unknown
+  `requires` refs and cycles, and `stage_path` / `spec status` / the gated
+  planner resolve stages from the configured profile (custom stage names work).
+  The built-in linear `lite` profile is byte-for-byte unchanged (proven by an
+  exhaustive graph-vs-linear equivalence test). No contract surface touched.
+
 - **Structured requirements parser** (M1 of the OpenSpec-inspired roadmap).
   New `requirements.py` parses `requirements.md` into id-keyed `Requirement`
   blocks — a diffable/mergeable unit that lays the groundwork for delta specs.

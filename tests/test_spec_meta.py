@@ -213,7 +213,13 @@ def test_read_spec_meta_uses_passed_profile(tmp_path: Path):
 class _Cfg:
     def __init__(self, root: Path):
         self.project_root = root
+        self.spec_prefix = ""
         self._spec = root / "spec"
+
+    def resolve_spec_profile(self):
+        from spec_runner.spec import LITE
+
+        return LITE
 
     @property
     def requirements_file(self):

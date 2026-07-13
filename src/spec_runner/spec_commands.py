@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .spec import (
-    STAGES,
     SpecMeta,
     apply_approval,
     read_spec_body,
@@ -44,14 +43,16 @@ def _approver() -> str:
 
 
 def _metas(config: ExecutorConfig) -> dict[str, SpecMeta | None]:
-    """Read the frontmatter meta for every stage in ``STAGES``."""
-    return {stage: read_spec_meta(stage_path(config, stage)) for stage in STAGES}
+    """Read the frontmatter meta for every stage in the configured profile."""
+    names = config.resolve_spec_profile().names()
+    return {stage: read_spec_meta(stage_path(config, stage), names) for stage in names}
 
 
 def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Print per-stage status plus the recommended next action."""
+    profile = config.resolve_spec_profile()
     metas = _metas(config)
-    for stage in STAGES:
+    for stage in profile.names():
         meta = metas[stage]
         if meta is None:
             print(f"{stage:12} —        unmanaged")
@@ -59,7 +60,7 @@ def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
             print(
                 f"{stage:12} {meta.status:8} v{meta.version}  validation={meta.validation or '?'}"
             )
-    action, stage = resolve_next_stage(metas)
+    action, stage = resolve_next_stage(metas, profile)
     print(f"\nnext: {action} → {stage}")
     return 0
 

@@ -186,37 +186,47 @@ round-trip idempotence (re-archiving same delta → conflict error, not dup).
 
 ---
 
-## M4: Stage profiles → artifact DAG
+## M4: Stage profiles → artifact DAG — SHIPPED (engine-only, PR #44)
 
-**Pattern borrowed:** OpenSpec `schema.yaml` — artifacts declare
-`generates:` (file or glob) and `requires:` (list ⇒ DAG); artifact state is
-derived from file existence (`blocked/ready/done` via topological sort);
-`status --json` / `instructions --json` feed agents structured next-step data.
+**Pattern borrowed:** OpenSpec `schema.yaml` — artifacts declare `requires:`
+(list ⇒ DAG) with `blocked/ready/done` state.
 
-**Problem:** `StageProfile` (v2.9) is a linear chain — `upstream` is a single
-stage, `generates` is a single file, parallel branches (specs ∥ design after
-proposal) are inexpressible.
+**Reality-based reframe (settled during implementation):**
+- `StageDef.upstream` was *already* `tuple[str, ...]`; the linearity lived in
+  three functions (`downstream_stages` via list-slice, `resolve_next_stage`
+  with no dep gate, `mark_downstream_stale`) and a hard-coded 3-name
+  `stage_path` map.
+- OpenSpec's `generates:` glob + **file-existence** state was **descoped** —
+  spec-runner already has a *richer* per-stage state (`draft/approved/stale`
+  via frontmatter `SpecMeta`), so bolting on a parallel existence model would
+  be redundant.
+- Per the user, **engine-only**: ship the DAG machinery and prove it with a
+  test fixture profile; do **not** author a user-facing `spec-driven` profile
+  (that needs new proposal/specs templates + validators — a separate feature).
 
-**Scope:**
-- `spec.py`: `StageDef.upstream: str | None` → `requires: tuple[str, ...]`
-  (loader accepts both spellings; `upstream: x` ≡ `requires: [x]`).
-- `generates:` supports glob patterns; stage status = all deps done ∧ any
-  generated file exists (existence-based, no new state storage).
-- Status derivation: topological sort + `blocked/ready/done`; cycle
-  detection at profile load.
-- `spec-runner spec status --json` gains `ready`/`blocked`/`missing_deps`
-  per stage (additive fields only).
-- `resolve_next_stage` returns the set of ready stages; `plan --gated`
-  prompts when >1 is ready.
-- Ship one bundled non-linear profile (e.g. `spec-driven`: proposal →
-  {specs, design} → tasks) as the reference; `lite` stays default and
-  byte-identical in behavior.
+**Delivered:**
+- `spec.py`: `StageDef.requires` (alias of `upstream`); profile YAML accepts
+  `requires:` or `upstream:`. `StageProfile.edges()`. `validate_profile_graph`
+  rejects unknown `requires` refs and cycles (run in `load_profile`).
+  `downstream_stages`/`resolve_next_stage`/`mark_downstream_stale` accept a
+  `StageProfile` (DAG semantics) or a bare name list (legacy linear) —
+  transitive graph successors mean a **sibling** stage is no longer
+  wrongly stale-cascaded. New `stage_readiness()` →
+  `{state, missing_deps}` per stage. `stage_path` is now convention-based
+  (`spec/<prefix><name>.md`) so custom stage names resolve.
+- `spec_commands.py` / `cli_plan.py`: `spec status`, `_metas`,
+  `resolve_next_stage`, and the gated planner read stages from
+  `config.resolve_spec_profile()` (were pinned to the module-level lite
+  `STAGES`).
 
-**Touches:** `spec.py`, `spec_commands.py`, `cli_plan.py`, `validate.py`,
-`profiles/*.yaml`.
-**Acceptance:** `lite` profile zero-behaviour-change proof (extend
-`test_c1_zero_behaviour.py`); DAG profile e2e: parallel stages both ready
-after root approved; cycle → `ConfigError` naming the cycle.
+**Descoped to a follow-up:** surfacing `stage_readiness` via a new
+`spec status --json` (no `--json` on `spec status` today); the pure function
+is shipped and tested. Shipping a bundled non-linear profile is option B.
+
+**Result:** the built-in linear `lite` profile is byte-for-byte unchanged —
+proven by an exhaustive graph-vs-linear equivalence test over every meta
+combination — plus the existing `test_c1_zero_behaviour` golden stays green.
+1058 tests pass; lint + mypy clean. No contract surface touched.
 
 ---
 

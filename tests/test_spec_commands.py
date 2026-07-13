@@ -7,9 +7,13 @@ from spec_runner.spec import SpecMeta, read_spec_meta, write_spec
 
 
 def _cfg(tmp_path: Path):
+    from spec_runner.spec import LITE
+
     spec = tmp_path / "spec"
     return SimpleNamespace(
         project_root=tmp_path,
+        spec_prefix="",
+        resolve_spec_profile=lambda: LITE,
         requirements_file=spec / "requirements.md",
         design_file=spec / "design.md",
         tasks_file=spec / "tasks.md",
