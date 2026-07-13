@@ -299,6 +299,49 @@ def validate_generated_tasks(tasks_file: Path) -> int:
     return len(parsed)
 
 
+def apply_plan_confirmation(
+    confirm: str,
+    task_blocks: list[str],
+    config: ExecutorConfig,
+    editor_fn: Callable[[Path], None] | None = None,
+) -> None:
+    """Apply the user's [y/N/edit] choice to the proposed task blocks.
+
+    Both "y" and "edit" persist the proposal by appending it to ``tasks.md``
+    (creating the file if needed) — "edit" additionally opens the file in
+    ``$EDITOR`` so the draft can be adjusted before ``spec-runner run``.
+    Persisting BEFORE the editor launch is the point: the proposal must never
+    exist only in scrollback (previously "edit" wrote nothing, so with no
+    pre-existing ``tasks.md`` there was nothing to edit and the generated
+    tasks were lost). Any other answer cancels without touching the file.
+
+    Args:
+        confirm: Normalized (stripped, lowercased) answer to the prompt.
+        task_blocks: Task proposal bodies as extracted from the CLI output
+            (without the leading ``### ``).
+        config: Executor config providing ``tasks_file``.
+        editor_fn: Injectable editor launcher for the "edit" action (tests
+            never launch a real editor); defaults to `_open_editor`.
+    """
+    if confirm not in ("y", "edit"):
+        print("\n❌ Cancelled")
+        return
+
+    tasks_file = config.tasks_file
+    content = tasks_file.read_text() if tasks_file.exists() else "# Tasks\n\n"
+    for block in task_blocks:
+        content += f"\n### {block.strip()}\n"
+
+    tasks_file.parent.mkdir(parents=True, exist_ok=True)
+    tasks_file.write_text(content)
+    print(f"\n✅ Added {len(task_blocks)} task(s) to {tasks_file}")
+    log_progress(f"✅ Created {len(task_blocks)} tasks")
+
+    if confirm == "edit":
+        (editor_fn or _open_editor)(tasks_file)
+        print(f"\nEdited {tasks_file} — run 'spec-runner run' when ready")
+
+
 def cmd_plan(args, config: ExecutorConfig):
     """Interactive task planning via Claude.
 
@@ -583,25 +626,7 @@ When done, respond with: PLAN_READY
 
                 # Ask for confirmation
                 confirm = input("\nAdd these tasks to tasks.md? [y/N/edit]: ").strip().lower()
-
-                if confirm == "y":
-                    # Append tasks to tasks.md
-                    tasks_file = config.tasks_file
-                    content = tasks_file.read_text() if tasks_file.exists() else "# Tasks\n\n"
-
-                    for block in task_blocks:
-                        content += f"\n### {block.strip()}\n"
-
-                    tasks_file.write_text(content)
-                    print(f"\n✅ Added {len(task_blocks)} task(s) to {tasks_file}")
-                    log_progress(f"✅ Created {len(task_blocks)} tasks")
-
-                elif confirm == "edit":
-                    print(f"\nEdit {config.tasks_file} manually, then run 'spec-runner run'")
-
-                else:
-                    print("\n❌ Cancelled")
-
+                apply_plan_confirmation(confirm, task_blocks, config)
                 return
 
             # No recognizable signal, show output and exit
