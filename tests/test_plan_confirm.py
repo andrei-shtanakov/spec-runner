@@ -18,6 +18,7 @@ def _isolated_progress_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     """Keep `log_progress` writes out of the test runner's CWD."""
     monkeypatch.setattr("spec_runner.runner.PROGRESS_FILE", tmp_path / "progress.txt")
 
+
 TASK_BLOCKS = [
     "TASK-001: First task\n- [ ] do a thing",
     "TASK-002: Second task\n- [ ] do another thing",
