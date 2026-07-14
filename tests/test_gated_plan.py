@@ -20,6 +20,7 @@ def _cfg(tmp_path: Path):
         design_file=spec / "design.md",
         tasks_file=spec / "tasks.md",
         spec_lock_file=spec / ".spec.lock",
+        spec_dir=spec,
         claude_command="claude",
         claude_model="",
         command_template="",

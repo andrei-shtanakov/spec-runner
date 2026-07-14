@@ -12,6 +12,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Change-as-folder lifecycle** (M2 of the OpenSpec-inspired roadmap; design:
+  `docs/plans/2026-07-13-m2-change-folder-design.md`). A change is a
+  self-rooted spec dir at `spec/changes/<id>/` selected with `--change <id>`:
+  every spec path (`tasks.md`, gated pipeline files, locks, state-db, logs)
+  scopes to the change through the config path seam, so `run`, `plan --gated`,
+  governance, `verify` and reports all work inside a change unchanged. The
+  per-change state-db yields a per-change executor lock, so parallel
+  `run --change A` and `run --change B` don't contend. New `change` command
+  family: `change new <id>` (scaffold with a tasks.md stub), `change list`
+  (`--json`), `change archive <id>` (moves to
+  `spec/changes/archive/YYYY-MM-DD-<id>/`; refuses while a run is live or
+  tasks are unfinished — `--force` overrides the task gate only). Archive here
+  only moves the folder; delta-spec merge is M3. `--change` and
+  `--spec-prefix` are mutually exclusive. **No contract change**: the state-db
+  schema and `--json-result` stdout are untouched (per the M2 design decision,
+  the db *location* is configuration — same precedent as `--spec-prefix`);
+  the flat `spec/` layout is byte-identical when `--change` is not used.
+
 - **DAG stage profiles** (M4 of the OpenSpec-inspired roadmap). Spec-generation
   profiles are now a true dependency graph rather than a flat ordered list.
   `StageDef.requires` (alias of `upstream`, and the new canonical `requires:`

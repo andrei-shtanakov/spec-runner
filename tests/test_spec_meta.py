@@ -215,6 +215,7 @@ class _Cfg:
         self.project_root = root
         self.spec_prefix = ""
         self._spec = root / "spec"
+        self.spec_dir = self._spec
 
     def resolve_spec_profile(self):
         from spec_runner.spec import LITE

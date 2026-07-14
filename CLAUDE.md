@@ -99,6 +99,10 @@ spec-runner task graph                     # ASCII dependency graph
 spec-runner task sync-to-gh                # Sync tasks → GitHub Issues
 spec-runner task sync-to-gh --dry-run      # Preview without making changes
 spec-runner task sync-from-gh              # Sync GitHub Issues → tasks.md
+spec-runner change new add-dark-mode       # Scaffold spec/changes/add-dark-mode/ (change-as-folder)
+spec-runner change list                    # List in-flight changes (--json)
+spec-runner change archive add-dark-mode   # Move a finished change to spec/changes/archive/ (--force)
+spec-runner run --change add-dark-mode     # Any command scoped to a change folder (--change on run/status/verify/...)
 spec-runner doctor                         # Probe CLI/model compatibility (real mini-task)
 spec-runner doctor --cli=codex --model=X   # Ad-hoc CLI+model probe
 spec-runner doctor --with-review --json    # Include review stage, machine output
@@ -141,6 +145,7 @@ All code is in `src/spec_runner/`:
 | `task_commands.py` | ~440 | Task CLI commands: list, show, start, done, block, check, stats, next, graph |
 | `spec.py` | ~330 | Stage profiles (v2.9.0): `StageDef`/`StageProfile` (frozen dataclasses; `name`/`template`/`marker_prefix`/`validator_key`/`upstream`/`prompt_text`), `load_profile()`/`available_profiles()` load bundled `profiles/*.yaml` via `importlib.resources`; `STAGES`/`SPEC_STAGES` derived from the `LITE` profile. Gated spec-generation frontmatter: `SpecMeta` (spec_stage/status/version/generated_by/generated_at/source_prompt_version/validation/approved_by/approved_at), atomic locked `write_spec`/`read_spec_meta`/`read_spec_body` (raises `SpecLockError` on lock contention), profile-parameterized `resolve_next_stage`/`downstream_stages`/`mark_downstream_stale`, `apply_approval` (bumps version, cascades `stale` downstream) |
 | `spec_commands.py` | ~195 | `spec status/approve/reject/adopt/check` CLI handlers + `run_checkpoint_menu` TTY overlay; `approve` re-validates from scratch (never trusts cached `validation`), `adopt` validates-first (fail→draft unless `--force`), `reject`→draft |
+| `change_commands.py` | ~160 | Change-as-folder (M2): `change new/list/archive` — a change is a self-rooted spec dir at `spec/changes/<id>/` (selected via `config.change_id` / `--change`); archive moves to a dated `archive/` dir, refusing live runs/unfinished tasks |
 | `github_sync.py` | ~200 | GitHub Issues sync: `cmd_sync_to_gh` (local wins), `cmd_sync_from_gh` (remote wins), `export_gh` |
 | `audit.py` | ~280 | Pre-execution static audit: orphan tasks, dangling/uncovered refs, dead designs; text/JSON/CSV output |
 | `audit_log.py` | ~210 | Opt-in compliance audit-trail writer: JSON-Lines appender, `AuditLogger` + `NoOpAuditLogger`, thread-safe, `run_id` + operator attribution |

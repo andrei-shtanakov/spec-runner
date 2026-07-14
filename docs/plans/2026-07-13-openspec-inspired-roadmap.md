@@ -110,41 +110,43 @@ touched.
 
 ---
 
-## M2: Change-as-folder lifecycle
+## M2: Change-as-folder lifecycle — SHIPPED (PR #45)
 
 **Pattern borrowed:** OpenSpec `changes/<name>/` — each change is a
-self-contained folder (proposal + design + tasks + delta specs), parallel
-changes coexist, completed changes archive to `changes/archive/<date>-<name>/`
-with full context preserved.
+self-contained folder, parallel changes coexist, completed changes archive to
+`changes/archive/<date>-<name>/` with full context preserved.
 
-**Problem:** one flat `spec/` per project; `--spec-prefix` gives flat
-namespacing with no lifecycle (no parallel in-flight changes, no archive, no
-"why" preserved after completion).
+**Design doc:** `2026-07-13-m2-change-folder-design.md` (approved 2026-07-13).
 
-**Scope:**
-- New layout (opt-in): `spec/changes/<change-id>/` containing `proposal.md`,
-  `design.md`, `tasks.md`, `specs/` (delta specs, consumed in M3), and
-  per-change state db (`.executor-state.db` inside the change folder —
-  schema unchanged, location parameterized).
-- CLI: `spec-runner change new <id>`, `change list`, `change archive <id>`
-  (M2 archives without merging; merge lands in M3), `run --change <id>`.
-- `--spec-prefix` remains supported; a change folder is effectively a
-  self-rooted spec dir, so most path logic reuses the existing
-  `spec_prefix`/root resolution seam in `config.py`.
-- Gated governance and stage profiles operate per-change unchanged.
-- Archive: move to `spec/changes/archive/YYYY-MM-DD-<id>/`, refuse if tasks
-  are not all done unless `--force`.
+**Key reframe — no contract change (Fork A, owner decision):** the roadmap
+originally assumed v3.0 because of the state-db location + a `change_id` field
+in `--json-result`. Reading the code showed the db *location* is already
+configuration (`paths.state`, `--spec-prefix` precedent) — only the
+`change_id` field would break the contract (`TaskResult` has
+`additionalProperties: false`), and it adds nothing Maestro doesn't already
+know (it passes `--change` itself). Decision: ship M2 **additive in v2.x**;
+`change_id` in-band deferred to a possible future, well-telegraphed v3.0.
 
-**Version note:** v3.0 — layout addition is backward compatible, but state-db
-location and `--json-result` gain a `change_id` field → contract-affecting;
-requires schema version bump + golden fixtures + `docs/state-schema.md`
-update, per the Maestro interop rule.
+**Delivered:**
+- `config.change_id` (CLI `--change`, on the common arg set): `spec_dir`
+  property redirects every spec path to `spec/changes/<id>/`; default
+  state-db/logs relocate into the change folder (explicit `paths.*` still
+  win); per-change state → per-change executor run lock (derived from the
+  state path) → parallel `run --change A` ∥ `run --change B` with zero new
+  lock code. `--change` + `--spec-prefix` → `ConfigError`. Id validation
+  (kebab-case-safe, `archive` reserved).
+- `change_commands.py`: `change new` (scaffold + tasks.md stub),
+  `change list` (`--json`, task progress), `change archive` (dated move,
+  collision `-2` suffix; refuses live runs — lock probe — and unfinished
+  tasks, `--force` overrides the task gate only). Merge-on-archive is M3.
+- Gated pipeline / governance / profiles / verify all scope to the change
+  automatically via the config path seam (payoff of M4's profile threading).
+- Descoped: `.openspec.yaml` per-change metadata (folder name is the id;
+  per-change config = global config + flags).
 
-**Touches:** `config.py`, `cli.py`, `state.py` (path only), new
-`change_commands.py`, `docs/state-schema.md`, `schemas/*.json`.
-**Acceptance:** two changes run in parallel without lock/db contention; e2e
-test: new → plan → run → archive; legacy flat layout untouched by default;
-Maestro contract tests updated and green.
+**Result:** e2e verified live (new → list → `run --dry-run --change` →
+archive-refuse → `--force` archive). Flat layout byte-identical (full suite
+green with `change_id=""`); contract tests untouched. 1089 tests pass.
 
 ---
 
