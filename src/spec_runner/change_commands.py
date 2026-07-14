@@ -10,7 +10,10 @@ Design: docs/plans/2026-07-13-m2-change-folder-design.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,6 +79,22 @@ def delta_spec_path(config: ExecutorConfig, change_id: str | None = None) -> Pat
 def _flat_requirements(config: ExecutorConfig) -> Path:
     """The merge target: the project's flat source-of-truth requirements."""
     return config.project_root / "spec" / "requirements.md"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically (temp file + ``os.replace``).
+
+    A crash mid-write must not leave a truncated source-of-truth file.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
 
 
 def validate_change_delta(config: ExecutorConfig, change_id: str | None = None) -> list[str]:
@@ -254,7 +273,7 @@ def cmd_change_archive(args: argparse.Namespace, config: ExecutorConfig) -> int:
     if merged_text is not None:
         target = _flat_requirements(config)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(merged_text)
+        _atomic_write(target, merged_text)
 
     src.rename(dest)
     logger.info("change_archived", change_id=change_id, dest=str(dest))

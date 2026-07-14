@@ -202,6 +202,11 @@ def parse_delta(text: str) -> Delta:
     body = strip_frontmatter(text)
     sections: dict[str, str] = {}
     for m in _DELTA_SECTION.finditer(body):
+        if m.group(1) in sections:
+            raise ValueError(
+                f"duplicate '## {m.group(1)} Requirements' section — merge them "
+                "into one (a repeated section would silently drop operations)"
+            )
         start = m.end()
         next_l2 = re.compile(r"^## ", re.MULTILINE).search(body, start)
         end = next_l2.start() if next_l2 else len(body)
@@ -224,7 +229,19 @@ def parse_delta(text: str) -> Delta:
 
 
 def _parse_renames(section: str) -> list[RenameOp]:
-    """Pair FROM/TO lines of a RENAMED section into :class:`RenameOp`s."""
+    """Pair FROM/TO lines of a RENAMED section into :class:`RenameOp`s.
+
+    The section grammar is strict — only backticked ``- FROM:``/``- TO:``
+    bullets (and blank lines) are allowed; anything else is a parse error so a
+    malformed rename cannot be silently dropped.
+    """
+    for line in section.splitlines():
+        if line.strip() and not _RENAME_LINE.match(line):
+            raise ValueError(
+                "RENAMED section: unrecognized line "
+                f"{line.strip()!r} — expected `- FROM: `#### REQ-NNN: name`` / "
+                "`- TO: ...` bullets (heading in backticks)"
+            )
     lines = _RENAME_LINE.findall(section)
     ops: list[RenameOp] = []
     i = 0

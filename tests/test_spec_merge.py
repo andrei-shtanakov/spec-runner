@@ -97,6 +97,23 @@ class TestParseDelta:
         d = parse_delta("---\nspec_stage: requirements\n---\n" + DELTA)
         assert [r.id for r in d.added] == ["REQ-010"]
 
+    def test_duplicate_section_rejected(self):
+        # Copilot review on #46: a repeated section header must error, not
+        # silently drop the earlier section's operations.
+        doc = (
+            "## ADDED Requirements\n\n#### REQ-001: A\nx\n\n"
+            "## ADDED Requirements\n\n#### REQ-002: B\ny\n"
+        )
+        with pytest.raises(ValueError, match="duplicate"):
+            parse_delta(doc)
+
+    def test_malformed_rename_line_rejected(self):
+        # Copilot review on #46: a non-matching line in RENAMED (e.g. missing
+        # backticks) must error, not be silently ignored.
+        doc = "## RENAMED Requirements\n\n- FROM: #### REQ-001: A\n- TO: #### REQ-001: B\n"
+        with pytest.raises(ValueError, match="unrecognized line"):
+            parse_delta(doc)
+
 
 class TestApplyMerge:
     def test_full_delta_applies(self):

@@ -435,6 +435,16 @@ class TestArchiveDeltaMerge:
         scoped = ExecutorConfig(project_root=tmp_path, change_id="add-x")
         assert validate_change_delta(scoped) == []
 
+    def test_merged_write_leaves_no_tmp_files(self, tmp_path: Path):
+        # Merged target is written atomically (temp file + os.replace); no
+        # stray .tmp files must survive a successful archive.
+        cfg = self._change_with_delta(tmp_path, DELTA_OK)
+        assert (
+            cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=False), cfg) == 0
+        )
+        leftovers = list((tmp_path / "spec").glob(".requirements.md.*"))
+        assert leftovers == []
+
 
 class TestParallelIsolation:
     def test_two_changes_have_independent_state_and_locks(self, tmp_path: Path):
