@@ -365,6 +365,14 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
         tasks_file=config.tasks_file,
         config_file=_resolve_config_path(),
     )
+    # Fail-fast delta check (M3): under --change, a delta spec is validated
+    # against the flat requirements now, not first at archive time.
+    if config.change_id:
+        from .change_commands import delta_spec_path, validate_change_delta
+
+        if delta_spec_path(config).exists():
+            for conflict in validate_change_delta(config):
+                result.errors.append(f"delta: {conflict}")
     output = format_results(result)
     print(output)
     if not result.ok:

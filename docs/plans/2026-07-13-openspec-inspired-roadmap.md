@@ -150,41 +150,42 @@ green with `change_id=""`); contract tests untouched. 1089 tests pass.
 
 ---
 
-## M3: Delta specs + archive merge
+## M3: Delta specs + archive merge — SHIPPED (PR #46)
 
 **Pattern borrowed:** OpenSpec delta specs — a change carries only what
-changes: `## ADDED Requirements`, `## MODIFIED Requirements` (full updated
-block), `## REMOVED Requirements` (with Reason/Migration), `## RENAMED
-Requirements` (FROM:/TO:). On archive, deltas merge deterministically into
-the source-of-truth spec.
+changes; on archive, deltas merge deterministically into the source of truth.
 
-**Problem:** requirements never evolve; there is no mechanism connecting a
-completed change back into the project's requirements. This is the single
-biggest gap OpenSpec exposes in spec-runner.
+**Reality-based adjustments (settled during implementation):**
+- **Merge target = the existing flat `spec/requirements.md`**, not a new
+  `spec/specs/<capability>/spec.md` tree — requirements.md is already the
+  source of truth all tooling (audit/report/traceability) reads; the
+  capability tree can come later if the file outgrows itself. A missing
+  target is bootstrapped by the first archived delta's ADDED blocks.
+- **Identity is the REQ/NFR id, not the header text** — unlike OpenSpec's
+  whitespace-insensitive header matching, id-keyed matching is exact and
+  makes RENAMED a *name* change with a stable id (FROM-name must match the
+  target as a drift guard).
 
-**Scope:**
-- Source of truth moves to `spec/specs/<capability>/spec.md` (created lazily;
-  a project's first archived delta bootstraps it). Flat `requirements.md`
-  remains valid for projects that never opt in.
-- `requirements.py` grows delta parsing: section headers → operations
-  (`Added/Modified/Removed/Renamed` dataclasses).
-- Merge engine (`spec_merge.py`): apply operations to a parsed spec —
-  ADDED appends, MODIFIED replaces by header match (whitespace-insensitive),
-  REMOVED deletes (requires Reason + Migration), RENAMED rewrites header.
-  Conflicts (target not found, duplicate add) → hard errors listing the
-  requirement header.
-- `spec-runner change archive` (from M2) now: validate deltas → merge →
-  write updated specs → move folder to archive. `--dry-run` prints the merge
-  plan.
-- Validation: delta files validated at plan time, not only at archive time
-  (fail fast, mirrors OpenSpec's "4-hashtag scenarios fail silently" pitfall
-  warning — we make it a hard error).
+**Delivered:**
+- `requirements.py`: `parse_delta` → `Delta` (`added`/`modified` as
+  `Requirement`s, `removed` as `RemovedRequirement` with mandatory
+  Reason/Migration, `renamed` as `RenameOp`); malformed RENAMED pairs are
+  parse errors.
+- `spec_merge.py` (new): `plan_merge` (dry-run ops + conflicts, never raises)
+  and `apply_merge` (all-or-nothing; raises `MergeConflictError` listing every
+  conflict). Conflicts: unknown id, duplicate ADDED, several ops on one id,
+  REMOVED without Reason/Migration, RENAMED name mismatch.
+- `change archive`: validate → print plan → merge → write target → move to
+  archive (write-before-move so a failed rename re-conflicts loudly instead of
+  double-applying). `--dry-run` prints the plan and destination, changes
+  nothing. `--force` never overrides merge safety.
+- `validate --change <id>`: reports delta conflicts early (fail fast).
+- `spec/FORMAT.md`: delta grammar documented.
 
-**Touches:** `requirements.py`, `spec_merge.py` (new), `change_commands.py`,
-`validate.py`, generation templates for the specs stage.
-**Acceptance:** golden merge fixtures (each operation + conflict cases);
-property: archive(parse(spec) + delta) == expected spec, byte-stable;
-round-trip idempotence (re-archiving same delta → conflict error, not dup).
+**Result:** e2e verified live (validate → dry-run → archive-merge →
+re-apply-conflict). Determinism + idempotence-guard covered by tests
+(re-archiving the same delta → conflict, not duplication). 1126 tests pass;
+no contract surface touched.
 
 ---
 

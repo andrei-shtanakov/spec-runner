@@ -206,3 +206,49 @@ Best-effort optional fields extracted from each block (empty when absent):
 requirement ids, an `Out of Scope` section, and that acceptance criteria are
 present. As of M1 it additionally warns per functional requirement that has no
 acceptance-criteria section (NFRs are exempt to avoid noise).
+
+## Delta Specs (`spec/changes/<id>/specs/requirements.md`)
+
+A change may carry a **delta spec** describing only what changes relative to
+the flat `spec/requirements.md`. On `change archive` the delta is merged into
+the target (all-or-nothing; conflicts abort the archive). Identity is the
+REQ/NFR **id**, so matching is exact.
+
+Four level-2 sections, each containing the same id-keyed blocks as above:
+
+```markdown
+## ADDED Requirements
+
+#### REQ-010: Dark mode
+**Acceptance Criteria**:
+- [ ] theme toggles
+
+## MODIFIED Requirements
+
+#### REQ-001: Login          <- full updated block; replaces the target block
+New behavior text.
+
+## REMOVED Requirements
+
+#### REQ-002: Legacy export
+**Reason**: replaced by the new export system
+**Migration**: use REQ-010 flow
+
+## RENAMED Requirements
+
+- FROM: `### NFR-001: Performance`
+- TO: `### NFR-001: Performance & Latency`
+```
+
+| Section | Rule | On archive |
+|---------|------|------------|
+| `ADDED` | id must **not** exist in target | block appended |
+| `MODIFIED` | id must exist; carry the **full** updated block | block replaced |
+| `REMOVED` | id must exist; `**Reason**` + `**Migration**` mandatory | block deleted |
+| `RENAMED` | id must exist; FROM name must match target; id never changes | heading rewritten |
+
+Conflicts (unknown id, duplicate ADDED, several ops on one id, name mismatch)
+are hard errors listing the requirement id. `spec-runner validate --change
+<id>` checks the delta against the current target early;
+`change archive --dry-run` prints the merge plan without changing anything.
+Re-archiving the same delta conflicts instead of double-applying.

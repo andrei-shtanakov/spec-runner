@@ -10,7 +10,10 @@ Design: docs/plans/2026-07-13-m2-change-folder-design.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,6 +64,57 @@ def _count_tasks(change_dir: Path) -> tuple[int, int]:
         return 0, 0
     tasks = parse_tasks(tasks_file)
     return len(tasks), sum(1 for t in tasks if t.status == "done")
+
+
+def delta_spec_path(config: ExecutorConfig, change_id: str | None = None) -> Path:
+    """The change's delta spec for the flat requirements (M3).
+
+    Defaults to ``config.change_id``; pass ``change_id`` explicitly when the
+    config is not change-scoped (e.g. from ``change archive <id>``).
+    """
+    cid = change_id or config.change_id
+    return _change_dir(config, cid) / "specs" / "requirements.md"
+
+
+def _flat_requirements(config: ExecutorConfig) -> Path:
+    """The merge target: the project's flat source-of-truth requirements."""
+    return config.project_root / "spec" / "requirements.md"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically (temp file + ``os.replace``).
+
+    A crash mid-write must not leave a truncated source-of-truth file.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
+
+
+def validate_change_delta(config: ExecutorConfig, change_id: str | None = None) -> list[str]:
+    """Return merge conflicts of the change's delta against the flat target.
+
+    Empty list = the delta applies cleanly (or structural parse issues are
+    returned as a single conflict). Used both by ``validate --change``
+    (fail fast) and by ``change archive`` (gate).
+    """
+    from .requirements import parse_delta
+    from .spec_merge import plan_merge
+
+    path = delta_spec_path(config, change_id)
+    try:
+        delta = parse_delta(path.read_text())
+    except ValueError as exc:
+        return [str(exc)]
+    target = _flat_requirements(config)
+    target_text = target.read_text() if target.exists() else ""
+    return list(plan_merge(target_text, delta).conflicts)
 
 
 def list_changes(config: ExecutorConfig) -> list[ChangeInfo]:
@@ -159,6 +213,47 @@ def cmd_change_archive(args: argparse.Namespace, config: ExecutorConfig) -> int:
             print(f"⛔ {change_id!r}: {done}/{total} tasks done — finish or --force")
             return 1
 
+        # Delta merge (M3): a delta spec at specs/requirements.md is merged
+        # into the flat source-of-truth requirements as part of archiving.
+        # Conflicts abort the archive; --force never overrides merge safety.
+        merged_text: str | None = None
+        delta_file = delta_spec_path(config, change_id)
+        dry_run = getattr(args, "dry_run", False)
+        if delta_file.exists():
+            from .requirements import parse_delta
+            from .spec_merge import MergeConflictError, apply_merge, plan_merge
+
+            try:
+                delta = parse_delta(delta_file.read_text())
+            except ValueError as exc:
+                print(f"⛔ delta spec is malformed: {exc}")
+                return 1
+            target = _flat_requirements(config)
+            target_text = target.read_text() if target.exists() else ""
+            plan = plan_merge(target_text, delta)
+            if not plan.ok:
+                print(f"⛔ delta does not apply cleanly to {target}:")
+                for conflict in plan.conflicts:
+                    print(f"  - {conflict}")
+                return 1
+            if dry_run:
+                print(f"merge plan for {target} (dry run — nothing written):")
+                for op in plan.operations:
+                    print(f"  - {op}")
+                print(f"would archive {change_id} → {_archive_dest(config, change_id)}")
+                return 0
+            try:
+                merged_text = apply_merge(target_text, delta)
+            except MergeConflictError as exc:  # pragma: no cover — plan gated
+                print(f"⛔ {exc}")
+                return 1
+            print(f"merging delta into {target}:")
+            for op in plan.operations:
+                print(f"  - {op}")
+        elif dry_run:
+            print(f"no delta spec; would archive {change_id} → {_archive_dest(config, change_id)}")
+            return 0
+
         dest = _archive_dest(config, change_id)
         n = 2
         while dest.exists():
@@ -171,6 +266,14 @@ def cmd_change_archive(args: argparse.Namespace, config: ExecutorConfig) -> int:
         # gate only guards against a run that was live at check time.
         for lock in acquired:
             lock.release()
+
+    # Write the merged requirements before the move: if the write succeeds
+    # but the rename fails, re-running archive conflicts loudly (idempotence
+    # guard) instead of silently double-applying.
+    if merged_text is not None:
+        target = _flat_requirements(config)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(target, merged_text)
 
     src.rename(dest)
     logger.info("change_archived", change_id=change_id, dest=str(dest))
