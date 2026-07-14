@@ -12,6 +12,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Delta specs + archive merge** (M3, the culmination of the OpenSpec-inspired
+  roadmap). A change may carry `spec/changes/<id>/specs/requirements.md` — a
+  delta with `## ADDED / MODIFIED / REMOVED / RENAMED Requirements` sections of
+  id-keyed blocks (see `spec/FORMAT.md`). `change archive` now validates the
+  delta, prints the merge plan, merges it into the flat `spec/requirements.md`
+  (all-or-nothing: ADDED appends a new id, MODIFIED replaces the whole block,
+  REMOVED deletes it — `**Reason**`/`**Migration**` mandatory, RENAMED rewrites
+  the heading name only), then moves the folder to the archive. Conflicts
+  (unknown id, duplicate ADDED, several ops on one id, FROM-name mismatch)
+  abort the archive and name the offending requirement; `--force` never
+  overrides merge safety. New `change archive --dry-run` prints the plan
+  without changing anything; `validate --change <id>` reports delta conflicts
+  early (fail fast). Re-archiving the same delta conflicts instead of
+  double-applying. A missing target is bootstrapped by the first archived
+  delta's ADDED blocks. New public API: `parse_delta` (`requirements.py`) and
+  `plan_merge`/`apply_merge`/`MergeConflictError` (`spec_merge.py`, new).
+  Non-contract, additive change.
+
 - **Change-as-folder lifecycle** (M2 of the OpenSpec-inspired roadmap; design:
   `docs/plans/2026-07-13-m2-change-folder-design.md`). A change is a
   self-rooted spec dir at `spec/changes/<id>/` selected with `--change <id>`:

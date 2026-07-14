@@ -324,6 +324,118 @@ class TestChangeParserSurface:
         assert args.project_root == "/tmp/x"
 
 
+FLAT_REQS = """# Requirements
+
+## Out of Scope
+- none
+
+#### REQ-001: Login
+**Acceptance Criteria:**
+GIVEN a WHEN b THEN c
+"""
+
+DELTA_OK = """## ADDED Requirements
+
+#### REQ-010: Dark mode
+body
+
+## MODIFIED Requirements
+
+#### REQ-001: Login
+New login behavior.
+"""
+
+DELTA_CONFLICT = """## ADDED Requirements
+
+#### REQ-001: Login
+duplicate id
+"""
+
+
+class TestArchiveDeltaMerge:
+    """M3: `change archive` merges specs/requirements.md into the flat target."""
+
+    def _change_with_delta(self, tmp_path: Path, delta: str) -> ExecutorConfig:
+        cfg = ExecutorConfig(project_root=tmp_path)
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        root = tmp_path / "spec" / "changes" / "add-x"
+        (root / "tasks.md").write_text(DONE_TASKS)
+        (root / "specs").mkdir()
+        (root / "specs" / "requirements.md").write_text(delta)
+        (tmp_path / "spec" / "requirements.md").write_text(FLAT_REQS)
+        return cfg
+
+    def test_archive_merges_and_moves(self, tmp_path: Path):
+        cfg = self._change_with_delta(tmp_path, DELTA_OK)
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=False), cfg)
+        assert rc == 0
+        merged = (tmp_path / "spec" / "requirements.md").read_text()
+        assert "REQ-010: Dark mode" in merged
+        assert "New login behavior." in merged
+        assert not (tmp_path / "spec" / "changes" / "add-x").exists()
+        # the archived copy keeps the delta for history
+        archived = next((tmp_path / "spec" / "changes" / "archive").iterdir())
+        assert (archived / "specs" / "requirements.md").exists()
+
+    def test_conflict_aborts_archive(self, tmp_path: Path):
+        cfg = self._change_with_delta(tmp_path, DELTA_CONFLICT)
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=False), cfg)
+        assert rc == 1
+        # nothing moved, nothing written
+        assert (tmp_path / "spec" / "changes" / "add-x").exists()
+        assert (tmp_path / "spec" / "requirements.md").read_text() == FLAT_REQS
+
+    def test_force_does_not_override_merge_conflict(self, tmp_path: Path):
+        cfg = self._change_with_delta(tmp_path, DELTA_CONFLICT)
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=True, dry_run=False), cfg)
+        assert rc == 1
+        assert (tmp_path / "spec" / "changes" / "add-x").exists()
+
+    def test_dry_run_prints_plan_and_changes_nothing(self, tmp_path: Path, capsys):
+        cfg = self._change_with_delta(tmp_path, DELTA_OK)
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=True), cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "ADD REQ-010" in out and "MODIFY REQ-001" in out
+        assert (tmp_path / "spec" / "changes" / "add-x").exists()
+        assert (tmp_path / "spec" / "requirements.md").read_text() == FLAT_REQS
+
+    def test_bootstrap_missing_flat_requirements(self, tmp_path: Path):
+        cfg = ExecutorConfig(project_root=tmp_path)
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        root = tmp_path / "spec" / "changes" / "add-x"
+        (root / "tasks.md").write_text(DONE_TASKS)
+        (root / "specs").mkdir()
+        (root / "specs" / "requirements.md").write_text(
+            "## ADDED Requirements\n\n#### REQ-001: First\nbody\n"
+        )
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=False), cfg)
+        assert rc == 0
+        assert "REQ-001: First" in (tmp_path / "spec" / "requirements.md").read_text()
+
+    def test_archive_without_delta_still_works(self, tmp_path: Path):
+        cfg = ExecutorConfig(project_root=tmp_path)
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        (tmp_path / "spec" / "changes" / "add-x" / "tasks.md").write_text(DONE_TASKS)
+        rc = cmd_change_archive(Namespace(change_id="add-x", force=False, dry_run=False), cfg)
+        assert rc == 0
+
+    def test_validate_change_reports_delta_conflicts(self, tmp_path: Path):
+        from spec_runner.change_commands import validate_change_delta
+
+        self._change_with_delta(tmp_path, DELTA_CONFLICT)
+        scoped = ExecutorConfig(project_root=tmp_path, change_id="add-x")
+        conflicts = validate_change_delta(scoped)
+        assert any("REQ-001" in c for c in conflicts)
+
+    def test_validate_change_clean_delta(self, tmp_path: Path):
+        from spec_runner.change_commands import validate_change_delta
+
+        self._change_with_delta(tmp_path, DELTA_OK)
+        scoped = ExecutorConfig(project_root=tmp_path, change_id="add-x")
+        assert validate_change_delta(scoped) == []
+
+
 class TestParallelIsolation:
     def test_two_changes_have_independent_state_and_locks(self, tmp_path: Path):
         from spec_runner.config import ExecutorLock

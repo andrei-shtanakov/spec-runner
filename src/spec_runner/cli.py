@@ -1274,6 +1274,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ch_archive.add_argument(
         "--force", action="store_true", help="Archive even if tasks are not all done"
     )
+    ch_archive.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the delta merge plan and archive destination without changing anything",
+    )
 
     # task (unified: replaces spec-task binary)
     task_parser = subparsers.add_parser(
