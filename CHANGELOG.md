@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.10.0] — 2026-07-14
+
+OpenSpec-inspired spec lifecycle: this release delivers five milestones drawn
+from a study of OpenSpec (2026-07-13) — per-stage prompt context/rules, a
+structured requirements parser, DAG stage profiles, change-as-folder, and
+delta-spec merge on archive. See `docs/plans/2026-07-13-openspec-inspired-roadmap.md`.
+The Maestro interop contract (state-db schema, `--json-result`) is unchanged.
+
 ### Added
 
 - **Delta specs + archive merge** (M3, the culmination of the OpenSpec-inspired
