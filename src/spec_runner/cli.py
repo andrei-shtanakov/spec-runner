@@ -821,7 +821,21 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         return
 
     prefix = getattr(args, "spec_prefix", "")
-    tasks_file = Path(f"spec/{prefix}tasks.md") if prefix else TASKS_FILE
+    change = getattr(args, "change", "")
+    if change:
+        from .config import ConfigError, _validate_change_id
+
+        if prefix:
+            raise SystemExit("⛔ --change and --spec-prefix are mutually exclusive")
+        try:
+            _validate_change_id(change)
+        except ConfigError as exc:
+            raise SystemExit(f"⛔ {exc}") from None
+        tasks_file = Path(f"spec/changes/{change}/tasks.md")
+    elif prefix:
+        tasks_file = Path(f"spec/{prefix}tasks.md")
+    else:
+        tasks_file = TASKS_FILE
     tasks = parse_tasks(tasks_file)
 
     write_commands: dict[str, Callable[..., object]] = {
@@ -1223,9 +1237,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Adopt as approved even if validation fails"
     )
 
-    # change (change-as-folder lifecycle, M2)
+    # change (change-as-folder lifecycle, M2). Deliberately NOT parented on
+    # `common`: flags like --change/--spec-prefix are meaningless here (the
+    # change id is the positional arg) and would mutate config paths under
+    # the archive gate. Only the options the family actually uses.
+    change_common = argparse.ArgumentParser(add_help=False)
+    change_common.add_argument(
+        "--project-root",
+        type=str,
+        default="",
+        help="Project root directory (default: current directory)",
+    )
+    change_common.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        choices=["debug", "info", "warning", "error"],
+        help="Log level (default: info)",
+    )
+    change_common.add_argument("--log-json", action="store_true", help="Output logs as JSON lines")
     change_parser = subparsers.add_parser(
-        "change", parents=[common], help="Manage change folders (new, list, archive)"
+        "change", parents=[change_common], help="Manage change folders (new, list, archive)"
     )
     change_sub = change_parser.add_subparsers(dest="change_command", help="Change commands")
 
@@ -1252,6 +1284,9 @@ def _build_parser() -> argparse.ArgumentParser:
     task_common = argparse.ArgumentParser(add_help=False)
     task_common.add_argument(
         "--spec-prefix", type=str, default="", help='Spec file prefix (e.g. "phase5-")'
+    )
+    task_common.add_argument(
+        "--change", type=str, default="", help="Operate on spec/changes/<id>/tasks.md"
     )
 
     t_list = task_sub.add_parser("list", aliases=["ls"], parents=[task_common], help="List tasks")

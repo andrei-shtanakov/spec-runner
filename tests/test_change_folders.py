@@ -205,6 +205,125 @@ class TestChangeArchive:
             lock.release()
 
 
+class TestArchiveHardening:
+    """Copilot review on #45: id traversal + lock probe with explicit paths.state."""
+
+    def test_archive_rejects_traversal_id(self, tmp_path: Path):
+        cfg = ExecutorConfig(project_root=tmp_path)
+        (tmp_path / "victim").mkdir()
+        rc = cmd_change_archive(Namespace(change_id="../../victim", force=True), cfg)
+        assert rc == 2
+        assert (tmp_path / "victim").exists()
+
+    def test_archive_rejects_reserved_id(self, tmp_path: Path):
+        cfg = ExecutorConfig(project_root=tmp_path)
+        assert cmd_change_archive(Namespace(change_id="archive", force=True), cfg) == 2
+
+    def test_archive_probes_explicit_state_lock(self, tmp_path: Path):
+        # With explicit paths.state every change shares one state path, so the
+        # live-run lock lives there — not inside the change folder.
+        from spec_runner.config import ExecutorLock
+
+        cfg = ExecutorConfig(project_root=tmp_path, state_file=Path("custom/state.db"))
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        (tmp_path / "spec" / "changes" / "add-x" / "tasks.md").write_text(DONE_TASKS)
+        lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+        assert lock.acquire()
+        try:
+            assert cmd_change_archive(Namespace(change_id="add-x", force=False), cfg) == 1
+        finally:
+            lock.release()
+
+    def test_flat_default_run_does_not_block_archive(self, tmp_path: Path):
+        # A live run on the FLAT layout (default state path) is unrelated to
+        # the change and must not block archiving it.
+        from spec_runner.config import ExecutorLock
+
+        cfg = ExecutorConfig(project_root=tmp_path)
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        (tmp_path / "spec" / "changes" / "add-x" / "tasks.md").write_text(DONE_TASKS)
+        flat_lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+        assert flat_lock.acquire()
+        try:
+            assert cmd_change_archive(Namespace(change_id="add-x", force=False), cfg) == 0
+        finally:
+            flat_lock.release()
+
+
+class TestStagePathScoping:
+    """Copilot review on #45: stage_path must honor the change-scoped spec dir."""
+
+    def test_stage_path_scopes_to_change(self, tmp_path: Path):
+        from spec_runner.spec import stage_path
+
+        cfg = ExecutorConfig(project_root=tmp_path, change_id="add-x")
+        assert stage_path(cfg, "requirements") == (
+            tmp_path / "spec" / "changes" / "add-x" / "requirements.md"
+        )
+
+    def test_stage_path_flat_unchanged(self, tmp_path: Path):
+        from spec_runner.spec import stage_path
+
+        cfg = ExecutorConfig(project_root=tmp_path)
+        assert stage_path(cfg, "design") == tmp_path / "spec" / "design.md"
+
+
+class TestTaskFamilyChange:
+    """Copilot review on #45: `task` family must honor --change too."""
+
+    def test_task_common_accepts_change(self):
+        from spec_runner.cli import _build_parser
+
+        args = _build_parser().parse_args(["task", "list", "--change", "add-x"])
+        assert args.change == "add-x"
+
+    def test_task_list_reads_change_tasks(self, tmp_path: Path, monkeypatch, capsys):
+        from spec_runner.cli import _dispatch_task_command
+
+        cfg = ExecutorConfig(project_root=tmp_path)
+        cmd_change_new(Namespace(change_id="add-x"), cfg)
+        (tmp_path / "spec" / "changes" / "add-x" / "tasks.md").write_text(MIXED_TASKS)
+        monkeypatch.chdir(tmp_path)
+        from spec_runner.cli import _build_parser
+
+        args = _build_parser().parse_args(["task", "list", "--change", "add-x"])
+        _dispatch_task_command(args)
+        out = capsys.readouterr().out
+        assert "TASK-002" in out
+
+    def test_task_change_plus_prefix_rejected(self, tmp_path: Path, monkeypatch, capsys):
+        from spec_runner.cli import _build_parser, _dispatch_task_command
+
+        monkeypatch.chdir(tmp_path)
+        args = _build_parser().parse_args(
+            ["task", "list", "--change", "add-x", "--spec-prefix", "p-"]
+        )
+        with pytest.raises(SystemExit):
+            _dispatch_task_command(args)
+
+
+class TestChangeParserSurface:
+    """Copilot review on #45: `change` family must not accept --change/--spec-prefix."""
+
+    def test_change_family_rejects_change_flag(self):
+        from spec_runner.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["change", "--change", "y", "new", "add-x"])
+
+    def test_change_family_rejects_spec_prefix(self):
+        from spec_runner.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["change", "--spec-prefix", "p-", "list"])
+
+    def test_change_family_keeps_project_root(self):
+        from spec_runner.cli import _build_parser
+
+        args = _build_parser().parse_args(["change", "--project-root", "/tmp/x", "list"])
+        assert args.project_root == "/tmp/x"
+
+
 class TestParallelIsolation:
     def test_two_changes_have_independent_state_and_locks(self, tmp_path: Path):
         from spec_runner.config import ExecutorLock

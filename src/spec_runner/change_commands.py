@@ -119,17 +119,33 @@ def cmd_change_archive(args: argparse.Namespace, config: ExecutorConfig) -> int:
     task gate only, never the live-run gate.
     """
     change_id = args.change_id
+    try:
+        # Guards path traversal too: ids are single safe path components.
+        _validate_change_id(change_id)
+    except ConfigError as exc:
+        print(f"⛔ {exc}")
+        return 2
     src = _change_dir(config, change_id)
     if not src.is_dir():
         print(f"⛔ no such change: {change_id!r} (see `spec-runner change list`)")
         return 2
 
-    # Never archive under a live run: the run lock derives from the
-    # change-scoped state path.
-    run_lock = ExecutorLock(src / ".executor-state.lock")
-    if not run_lock.acquire():
-        print(f"⛔ change {change_id!r} has a running executor — stop it first")
-        return 1
+    # Never archive under a live run. The run lock derives from the state
+    # path: normally the change-local default, but an explicit paths.state
+    # makes every run (flat or change) share that location instead.
+    lock_paths = [src / ".executor-state.lock"]
+    flat_default_state = config.project_root / "spec" / ".executor-state.db"
+    if config.state_file != flat_default_state:
+        lock_paths.append(config.state_file.with_suffix(".lock"))
+    run_locks = [ExecutorLock(p) for p in dict.fromkeys(lock_paths)]
+    acquired: list[ExecutorLock] = []
+    for lock in run_locks:
+        if not lock.acquire():
+            for held in acquired:
+                held.release()
+            print(f"⛔ change {change_id!r} has a running executor — stop it first")
+            return 1
+        acquired.append(lock)
     try:
         tasks_file = src / "tasks.md"
         force = getattr(args, "force", False)
@@ -150,10 +166,11 @@ def cmd_change_archive(args: argparse.Namespace, config: ExecutorConfig) -> int:
             n += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
     finally:
-        # Release before the move: the lock file lives inside the folder
+        # Release before the move: one lock file lives inside the folder
         # being moved, and holding it during rename is unnecessary — the
         # gate only guards against a run that was live at check time.
-        run_lock.release()
+        for lock in acquired:
+            lock.release()
 
     src.rename(dest)
     logger.info("change_archived", change_id=change_id, dest=str(dest))

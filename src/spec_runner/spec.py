@@ -417,9 +417,11 @@ def stage_path(config: ExecutorConfig, stage: str) -> Path:
 
     Byte-identical to the former hard-coded map for the ``lite`` stages
     (``requirements`` / ``design`` / ``tasks`` all follow this convention on
-    ``config``), and it now resolves custom-profile stage names too.
+    ``config``), and it now resolves custom-profile stage names too. Builds
+    on ``config.spec_dir`` so a change-scoped config (``--change``, M2)
+    redirects stages into ``spec/changes/<id>/``.
     """
-    return config.project_root / "spec" / f"{config.spec_prefix}{stage}.md"
+    return config.spec_dir / f"{config.spec_prefix}{stage}.md"
 
 
 def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
