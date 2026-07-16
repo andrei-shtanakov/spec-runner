@@ -276,4 +276,4 @@ Breaking changes require:
 - `src/spec_runner/cli_info.py` — `status --json` emitter
 - `schemas/executor-state.schema.json` — generated JSON Schema
 - `tests/fixtures/maestro-interop/` — golden fixtures for contract tests
-- Maestro side: `Maestro/maestro/spec_runner.py`, `Maestro/maestro/models.py` (ExecutorState, ExecutorTaskEntry, ExecutorTaskAttempt, ExecutorTaskStatus)
+- Maestro side: `maestro/maestro/spec_runner.py`, `maestro/maestro/models.py` (ExecutorState, ExecutorTaskEntry, ExecutorTaskAttempt, ExecutorTaskStatus)

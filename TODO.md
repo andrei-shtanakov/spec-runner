@@ -57,7 +57,7 @@
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 
-Контракт: `Maestro/contracts/observability/log-schema.json` (OTel Logs Data Model JSONL).
+Контракт: `maestro/contracts/observability/log-schema.json` (OTel Logs Data Model JSONL).
 `spec-runner` — reference, файл `obs.py` затем вендорится в другие проекты.
 
 - [x] **`init_logging` + `get_logger` скелет** (`ead7070`)
@@ -77,7 +77,7 @@
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
-Maestro-сторона формализации описана в `../Maestro/TODO.md` (создаёт `ExecutorState` Pydantic-модель). Наша задача — дать Maestro **стабильный контракт, к которому можно прицепиться**.
+Maestro-сторона формализации описана в `../maestro/TODO.md` (создаёт `ExecutorState` Pydantic-модель). Наша задача — дать Maestro **стабильный контракт, к которому можно прицепиться**.
 
 > Коммит: `273ef00`
 
@@ -176,7 +176,7 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 
 ## Ждём от других проектов
 
-- **Maestro → R-04**: создание `ExecutorState` Pydantic-модели; pin версии spec-runner в `Maestro/pyproject.toml`
+- **Maestro → R-04**: создание `ExecutorState` Pydantic-модели; pin версии spec-runner в `maestro/pyproject.toml`
 - **Maestro → R-03**: когда Maestro начнёт вызывать arbiter, spec-runner потенциально получит информацию о маршрутизации через конфиг — сейчас не блокирует
 
 ---
