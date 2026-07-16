@@ -1,4 +1,4 @@
-"""Validates obs.py output against Maestro/contracts/observability/."""
+"""Validates obs.py output against maestro/contracts/observability/."""
 
 from __future__ import annotations
 
