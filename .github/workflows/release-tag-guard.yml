@@ -1,0 +1,57 @@
+# Catches the release half that publish.yml cannot see.
+#
+# publish.yml fires on a pushed tag and verifies the tag matches the pyproject
+# version. Nothing verified the reverse: a release commit landing on master with
+# a bumped version and no tag. That is the failure that actually happened —
+# twice (v2.4.0 and v2.10.0 both sat on master untagged, so PyPI lagged behind
+# for weeks and consumers pinning the published version stayed blocked).
+#
+# It never runs on pull requests, so a release PR stays green while its tag
+# legitimately does not exist yet. It goes red the moment the release commit
+# merges untagged. Between releases every commit carries an already-tagged
+# version, so it stays quiet.
+#
+# It also runs on `v*` tag pushes, and that trigger is load-bearing rather than
+# decorative: without it the failed master run would stay red until some
+# unrelated commit happened to land, since pushing a tag does not re-run a
+# branch-triggered workflow. Tagging the release commit re-runs the guard on the
+# same SHA, and the passing run supersedes the failed one on that commit.
+# (If the tag is created on an older commit than master's HEAD the SHAs differ
+# and HEAD keeps the stale red — use workflow_dispatch to re-run it.)
+name: release-tag-guard
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tag-exists:
+    name: pyproject version is tagged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Tags are not fetched by the default shallow checkout, and without
+          # them every run would report a missing tag.
+          fetch-depth: 0
+
+      - name: Verify the pyproject version has a matching tag
+        run: |
+          # Same extraction as publish.yml, deliberately — if the two ever
+          # disagree, one of them is checking the wrong string.
+          version="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ -z "$version" ]; then
+            echo "::error::could not read a version from pyproject.toml"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "✅ v${version} is tagged — release is complete"
+            exit 0
+          fi
+          echo "::error title=Release not cut::pyproject declares ${version} but no v${version} tag exists. The release commit merged without a tag, so publish.yml never ran and PyPI still serves the previous version. Fix: git switch master && git pull --ff-only && git tag -a v${version} -m 'v${version}' && git push origin v${version}"
+          exit 1
