@@ -1184,6 +1184,178 @@ Read GitHub Copilot's review; fix valid findings on the same branch, answer inva
 
 ---
 
+---
+
+### Task 9: VS Code frontmatter schema — open the wire contract
+
+> **Execution order:** run this immediately after Task 4, before Tasks 5-8. It is caused by
+> `owner_role` becoming canonical and by extras now surviving into real files, and Task 8's
+> CHANGELOG depends on it having landed.
+
+**Files:**
+- Modify: `schemas/spec-frontmatter.schema.json`
+- Test: `tests/test_vscode_contract.py`
+
+**Interfaces:**
+- Consumes: `canonical_fields()` from Task 1, `SpecMeta.owner_role` from Task 4.
+- Produces: a schema that validates real, extended frontmatter. No Python API change.
+
+**Why.** `schemas/spec-frontmatter.schema.json` is the contract the sibling `spec-runner-vscode`
+extension pins against, and `tests/test_vscode_contract.py` validates **live** frontmatter
+against it (`test_live_frontmatter_matches_schema`), not a curated subset. Two conflicts:
+
+1. It sets `additionalProperties: false` — deliberately, as a drift alarm. But the entire
+   point of this PR is that foreign keys (steward's `traces_to`, `upstream_hashes`) now
+   survive into the file. Any real governed spec would fail validation. Two contracts in one
+   repo demanding opposite things.
+2. `spec_stage` carries `enum: ["requirements", "design", "tasks"]`, so a spec on a
+   custom-profile stage fails the contract. That is a latent bug dating from stage profiles
+   in v2.9.0 — unrelated to this PR, fixed here because it is the same schema.
+
+**Ruling (owner, 2026-07-26):** open the wire contract. Membership of a stage in the active
+profile is a runtime, config-aware check that JSON Schema cannot express without the profile.
+The drift protection does not disappear — it moves to the exact-canonical-field test from
+Task 6, which is stricter and more precise than the schema ever was.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/test_vscode_contract.py`, reusing the file's existing `_validator` helper and
+`SpecMeta`/`write_spec`/`split_frontmatter` imports:
+
+```python
+def test_schema_lists_every_canonical_field() -> None:
+    """The schema's properties must cover every field spec-runner owns.
+
+    This is the schema half of the drift guard: canonical_fields() is the SSOT,
+    and a new SpecMeta field must be described here too.
+    """
+    import json
+
+    from spec_runner.spec import canonical_fields
+
+    schema = json.loads((SCHEMAS_DIR / "spec-frontmatter.schema.json").read_text())
+    missing = canonical_fields() - set(schema["properties"])
+    assert not missing, f"schema does not describe canonical field(s): {sorted(missing)}"
+
+
+def test_schema_accepts_foreign_extension_keys() -> None:
+    """Extending layers (steward) add their own keys; they must validate."""
+    sample = {
+        "spec_stage": "tasks",
+        "status": "approved",
+        "version": 2,
+        "traces_to": "REQ-001",
+        "upstream_hashes": {"design": "deadbeef"},
+        "owner_role": "@platform,@sre",
+    }
+    _validator("spec-frontmatter.schema.json").validate(sample)
+
+
+def test_schema_accepts_a_custom_profile_stage() -> None:
+    """Stage membership belongs to the active profile, not to JSON Schema."""
+    sample = {"spec_stage": "acceptance", "status": "draft", "version": 1}
+    _validator("spec-frontmatter.schema.json").validate(sample)
+
+
+def test_schema_rejects_empty_spec_stage() -> None:
+    import pytest
+    from jsonschema.exceptions import ValidationError
+
+    with pytest.raises(ValidationError):
+        _validator("spec-frontmatter.schema.json").validate(
+            {"spec_stage": "", "status": "draft", "version": 1}
+        )
+
+
+def test_schema_still_type_checks_canonical_properties() -> None:
+    """Opening the object must not weaken the fields the schema does describe."""
+    import pytest
+    from jsonschema.exceptions import ValidationError
+
+    validator = _validator("spec-frontmatter.schema.json")
+    for bad in (
+        {"spec_stage": "tasks", "status": "approvd", "version": 1},
+        {"spec_stage": "tasks", "status": "draft", "version": "two"},
+        {"spec_stage": "tasks", "status": "draft", "version": 1, "owner_role": 7},
+        {"spec_stage": "tasks", "status": "draft", "version": 1, "validation": "weird"},
+    ):
+        with pytest.raises(ValidationError):
+            validator.validate(bad)
+
+
+def test_live_frontmatter_with_extras_matches_schema(tmp_path: Path) -> None:
+    """End-to-end: a written file carrying extras and owner_role validates."""
+    from spec_runner.spec import meta_from_dict
+
+    meta = meta_from_dict(
+        {
+            "spec_stage": "tasks",
+            "status": "approved",
+            "version": 2,
+            "owner_role": "@platform",
+            "traces_to": "REQ-001",
+        }
+    )
+    path = tmp_path / "tasks.md"
+    write_spec(path, meta, "# body\n")
+    fm, _ = split_frontmatter(path.read_text())
+    assert fm is not None
+    _validator("spec-frontmatter.schema.json").validate(fm)
+```
+
+Check the file's real constant for the schemas directory (it may not be called `SCHEMAS_DIR`)
+and the real `_validator` signature before writing; reuse them rather than inventing new ones.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `uv run pytest tests/test_vscode_contract.py -v`
+Expected: the canonical-field, foreign-key, custom-stage and live-extras tests fail —
+`owner_role` is not in `properties`, `additionalProperties: false` rejects foreign keys, and
+the `spec_stage` enum rejects `acceptance`.
+
+- [ ] **Step 3: Open the schema**
+
+In `schemas/spec-frontmatter.schema.json`:
+
+- set `"additionalProperties": true`;
+- replace `spec_stage`'s `enum` with `"minLength": 1` (keep `"type": "string"`);
+- add an `owner_role` property of type `["string", "null"]`;
+- rewrite `description` so it no longer claims `additionalProperties` is the drift alarm, and
+  add a `$comment` recording that `properties` describes the canonical fields spec-runner
+  owns, that additional keys are deliberately permitted and preserved losslessly under
+  `SPEC_META_CONTRACT` v2, and that stage membership is validated at runtime against the
+  configured profile.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `uv run pytest tests/test_vscode_contract.py -v`
+Expected: PASS, including every pre-existing test in the file unchanged.
+
+- [ ] **Step 5: Full suite**
+
+Run: `uv run pytest tests/ -q -m "not slow"`, plus `uv run ruff check .`,
+`uv run ruff format --check .`, `uv run mypy src`. All clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add schemas/spec-frontmatter.schema.json tests/test_vscode_contract.py
+git commit -m "fix(schema): open the spec-frontmatter wire contract
+
+The VS Code frontmatter schema set additionalProperties: false as a drift
+alarm, which contradicts the point of contract v2: foreign keys written by
+extending layers now survive into the file, so any governed spec carrying
+them failed validation. Opened the object, added owner_role, and moved the
+drift guard to the exact-canonical-field test, which is stricter.
+
+Separately fixes a latent bug from stage profiles (v2.9.0): spec_stage
+carried an enum of the three lite stage names, so a spec on a custom-profile
+stage failed the contract. Stage membership is a runtime check against the
+configured profile and cannot be expressed in JSON Schema without it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
 ## Self-Review
 
 **Spec coverage.** Design §3.1 → Tasks 2 and 4; §3.2 round-trip and omit-when-None → Tasks 3 and 4; §3.3 parse order and validation matrix → Tasks 1 and 5; §3.4 → PR 1, deliberately absent here and named as a dependency; §3.5 → Task 6; §3.6 `approver` closed by documentation → Task 8 Step 6; §3.7 frozen surface → Task 6, `docs/CONTRACTS.md` → Task 8; §4 CLI boundary → Task 7; §5 testing → distributed across all tasks, with the golden fixture in Task 8 and the in-tree survey added as Step 5 because the design flags that risk without assigning it a step. §6 steward handoff → Task 8 Step 9. §7 out-of-scope items appear nowhere, as intended.
