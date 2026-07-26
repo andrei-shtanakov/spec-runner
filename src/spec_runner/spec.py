@@ -7,7 +7,7 @@ import datetime
 import os
 import tempfile
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -334,14 +334,32 @@ def meta_from_dict(d: dict) -> SpecMeta:
     return SpecMeta(**known, extra=extra)  # type: ignore[arg-type]
 
 
-def meta_to_dict(m: SpecMeta) -> dict:
-    """Serialize a SpecMeta to a plain dict (frontmatter order).
+def _canonical_order() -> tuple[str, ...]:
+    """Canonical field names in declaration order (the frontmatter order)."""
+    return tuple(f.name for f in fields(SpecMeta) if f.name != "extra")
 
-    Omits ``extra`` (internal field) from the wire format. Task 3 adds rendering.
+
+def meta_to_dict(m: SpecMeta) -> dict:
+    """Serialize a SpecMeta to a flat frontmatter dict.
+
+    Extras are written first and canonical fields last, so a canonical field
+    can never be shadowed by a foreign key. Extras holding a canonical name,
+    or a non-string key, are a programming error and raise rather than
+    silently corrupting the document.
+
+    Raises:
+        SpecMetaError: on a non-string or canonical-shadowing key in ``extra``.
     """
-    d = asdict(m)
-    d.pop("extra", None)
-    return d
+    canonical = canonical_fields()
+    for key in m.extra:
+        if not isinstance(key, str):
+            raise SpecMetaError(f"extra frontmatter key {key!r} is not a string")
+        if key in canonical:
+            raise SpecMetaError(f"extra frontmatter key {key!r} shadows a canonical field")
+    out: dict[str, Any] = dict(m.extra)
+    for name in _canonical_order():
+        out[name] = getattr(m, name)
+    return out
 
 
 def _render(meta: SpecMeta, body: str) -> str:
