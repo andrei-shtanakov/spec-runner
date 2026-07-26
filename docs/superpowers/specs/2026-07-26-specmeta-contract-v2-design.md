@@ -111,14 +111,27 @@ could legitimately ship different v2 contracts. The exact rules:
 | `spec_stage` | `str` | member of the active profile's stage names (step 3) |
 | `status` | `str` | must be one of `draft` / `approved` / `stale` |
 | `version` | `type(v) is int` | none |
-| `generated_by`, `generated_at`, `source_prompt_version` | `str` | none |
+| `generated_by`, `source_prompt_version` | `str` | none |
 | `validation` | `str` | none |
-| `approved_by`, `approved_at` | `str \| None` | none |
+| `approved_by` | `str \| None` | none |
+| `generated_at`, `approved_at` | `str`, or `datetime.datetime` / `datetime.date` normalized via `.isoformat()`; `approved_at` also `None` | none |
 | `owner_role` | `str \| None` | none — steward owns role semantics |
 | `extra` keys | `str` | none |
 | `extra` values | any YAML value | none — opaque by definition |
 
-Three deliberate choices:
+Four deliberate choices:
+
+- **The two timestamp fields accept YAML's native date types** and normalize them to a
+  string via `.isoformat()` inside `meta_from_dict`, so the first write canonicalizes the
+  file to a quoted string. `datetime.datetime` must be tested **before** `datetime.date`,
+  since `datetime` subclasses `date`. This is a narrow, documented compatibility exception,
+  not a general loosening: a bare `generated_at: 2026-07-05` is the same information in
+  YAML's own scalar type, unlike `version: true`, where a bool masquerades as an int.
+  It is not hypothetical — a pre-flight survey of this repo (2026-07-26) found three spec
+  files under `docs/plans/spec-runner-c1-stages-profile/spec/` carrying exactly that bare
+  date, and hand-editing a spec is a supported workflow (`spec adopt` exists for it).
+  spec-runner's own writes are unaffected either way: `yaml.safe_dump` already quotes the
+  ISO timestamps it emits, so they round-trip as `str`.
 
 - `version` uses `type(v) is int`, not `isinstance`, because `isinstance(True, int)` is
   `True` and `version: true` must not slip through as `1`. **No range check** — the value

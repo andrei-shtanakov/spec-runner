@@ -14,7 +14,7 @@
 - Design doc: `docs/superpowers/specs/2026-07-26-specmeta-contract-v2-design.md`. Where this plan and the doc disagree, the doc wins.
 - Ruff line length **100**; rules E, F, W, I, UP, B, C4, SIM with E501 ignored.
 - Type annotations required everywhere; mypy strict must stay clean.
-- Baseline before starting: `uv run pytest tests/ -q -m "not slow"` = 1129 passed **plus** whatever PR 1 added. Record the real number before Task 1 and use it as the baseline.
+- Baseline before starting: `uv run pytest tests/ -q -m "not slow"` = **1147 passed** (measured on `master` at `7d336cc`, after PR 1 merged). Per-task counts below are relative to it; report the ACTUAL count each time rather than treating a predicted number as a gate.
 - The Maestro interop contract (`.executor-state.db` schema, `--json-result`) must not change.
 - A document with no extras and no `owner_role` must render **byte-identically** to before this PR.
 - Regression gate: existing tests stay green; a test may only have its expectation changed when it explicitly asserts the old fail-open or data-loss behaviour, and then only together with a new regression test and a written rationale in the commit message.
@@ -44,7 +44,7 @@
 - Test: `tests/test_spec_meta_contract.py` (create)
 
 **Interfaces:**
-- Produces: `SpecMetaError(Exception)`; `canonical_fields() -> frozenset[str]`; `meta_from_dict(d: dict) -> SpecMeta` now raising `SpecMetaError`. Later tasks rely on all three.
+- Produces: `SpecMetaError(Exception)`; `canonical_fields() -> frozenset[str]`; `_coerce_canonical(key: str, value: object) -> object` (internal, validates and normalizes); `meta_from_dict(d: dict) -> SpecMeta` now raising `SpecMetaError`. Later tasks rely on the first three.
 
 - [ ] **Step 1: Record the baseline test count**
 
@@ -112,6 +112,42 @@ def test_validation_is_type_checked_only():
         meta_from_dict(_base(validation=3))
 
 
+def test_bare_yaml_date_is_normalized_to_string():
+    """A hand-written `generated_at: 2026-07-05` must not be a hard error."""
+    import datetime
+
+    m = meta_from_dict(_base(generated_at=datetime.date(2026, 7, 5)))
+    assert m.generated_at == "2026-07-05"
+    assert isinstance(m.generated_at, str)
+
+
+def test_yaml_datetime_keeps_time_and_offset():
+    import datetime
+
+    stamp = datetime.datetime(2026, 7, 5, 13, 45, 1, tzinfo=datetime.timezone.utc)
+    m = meta_from_dict(_base(approved_at=stamp))
+    assert m.approved_at == stamp.isoformat()
+    assert "13:45:01" in m.approved_at
+
+
+def test_approved_at_accepts_null():
+    assert meta_from_dict(_base(approved_at=None)).approved_at is None
+
+
+@pytest.mark.parametrize("bad", [7, ["2026-07-05"], True])
+def test_timestamp_fields_reject_other_types(bad):
+    with pytest.raises(SpecMetaError, match="generated_at"):
+        meta_from_dict(_base(generated_at=bad))
+
+
+def test_other_string_fields_still_reject_dates():
+    """The exception is narrow: only the two timestamp fields accept dates."""
+    import datetime
+
+    with pytest.raises(SpecMetaError, match="generated_by"):
+        meta_from_dict(_base(generated_by=datetime.date(2026, 7, 5)))
+
+
 def test_non_string_key_raises():
     with pytest.raises(SpecMetaError, match="key"):
         meta_from_dict({"spec_stage": "tasks", 1: "foo"})
@@ -145,12 +181,16 @@ _STR_FIELDS = frozenset(
         "spec_stage",
         "status",
         "generated_by",
-        "generated_at",
         "source_prompt_version",
         "validation",
     }
 )
-_NULLABLE_STR_FIELDS = frozenset({"approved_by", "approved_at"})
+_NULLABLE_STR_FIELDS = frozenset({"approved_by"})
+#: Timestamp wire fields: accept YAML's native date scalars and normalize them
+#: to a string, so a hand-written `generated_at: 2026-07-05` is not a hard
+#: error. ``approved_at`` is additionally nullable.
+_TIMESTAMP_FIELDS = frozenset({"generated_at", "approved_at"})
+_NULLABLE_TIMESTAMP_FIELDS = frozenset({"approved_at"})
 
 
 def canonical_fields() -> frozenset[str]:
@@ -162,8 +202,30 @@ def canonical_fields() -> frozenset[str]:
     return frozenset(f.name for f in fields(SpecMeta)) - {"extra"}
 
 
-def _validate_canonical(key: str, value: object) -> None:
-    """Validate one canonical field against the v2 matrix (design §3.3)."""
+def _coerce_canonical(key: str, value: object) -> object:
+    """Validate one canonical field against the v2 matrix, returning its value.
+
+    Only the two timestamp fields change their value: YAML parses a bare
+    ``2026-07-05`` into a ``datetime.date``, which is normalized here to a
+    string so the next write canonicalizes the file (design §3.3).
+
+    Raises:
+        SpecMetaError: if the value violates the matrix.
+    """
+    if key in _TIMESTAMP_FIELDS:
+        if value is None:
+            if key in _NULLABLE_TIMESTAMP_FIELDS:
+                return None
+            raise SpecMetaError(f"frontmatter field {key!r} must not be null")
+        if isinstance(value, str):
+            return value
+        # datetime BEFORE date: datetime.datetime subclasses datetime.date.
+        if isinstance(value, datetime.datetime | datetime.date):
+            return value.isoformat()
+        raise SpecMetaError(
+            f"frontmatter field {key!r} must be a string or a date, "
+            f"got {type(value).__name__}"
+        )
     if key in _STR_FIELDS:
         if not isinstance(value, str):
             raise SpecMetaError(
@@ -187,7 +249,10 @@ def _validate_canonical(key: str, value: object) -> None:
                 f"frontmatter field 'version' must be an integer, "
                 f"got {type(value).__name__}"
             )
+    return value
 ```
+
+Add `import datetime` to the module imports.
 
 Replace `meta_from_dict` with:
 
@@ -208,8 +273,7 @@ def meta_from_dict(d: dict) -> SpecMeta:
         if not isinstance(key, str):
             raise SpecMetaError(f"frontmatter key {key!r} is not a string")
         if key in canonical:
-            _validate_canonical(key, value)
-            known[key] = value
+            known[key] = _coerce_canonical(key, value)
     return SpecMeta(**known)  # type: ignore[arg-type]
 ```
 
@@ -350,8 +414,7 @@ Change the loop body added in Task 1 so foreign keys are collected instead of dr
         if not isinstance(key, str):
             raise SpecMetaError(f"frontmatter key {key!r} is not a string")
         if key in canonical:
-            _validate_canonical(key, value)
-            known[key] = value
+            known[key] = _coerce_canonical(key, value)
         else:
             extra[key] = value
     return SpecMeta(**known, extra=extra)  # type: ignore[arg-type]
@@ -1127,4 +1190,4 @@ Read GitHub Copilot's review; fix valid findings on the same branch, answer inva
 
 **Placeholders.** None. Four steps direct the implementer to reuse an existing test helper or pick the right command rather than hardcoding a name this plan cannot verify (Task 3 Step 5, Task 7 Step 1, Task 8 Steps 2 and 4); each names exactly what to look for and what to substitute.
 
-**Type consistency.** `canonical_fields() -> frozenset[str]` is used as a set in `meta_from_dict` and `meta_to_dict`. `_canonical_order() -> tuple[str, ...]` derives from `fields(SpecMeta)`, so adding `owner_role` before `extra` in Task 4 automatically places it last in the wire order without touching the renderer. `_validate_canonical(key: str, value: object) -> None` raises or returns. `SpecMeta.extra: dict[str, Any]` matches `meta.extra[...]` in every test. `meta_from_dict(d: dict) -> SpecMeta` and `meta_to_dict(m: SpecMeta) -> dict` keep their published signatures, so the frozen surface in Task 6 is honest. `read_spec_meta(path, stages) -> SpecMeta | None` is unchanged. `SPEC_META_CONTRACT: int` matches steward's vendored `SPEC_META_CONTRACT: int = 1`.
+**Type consistency.** `canonical_fields() -> frozenset[str]` is used as a set in `meta_from_dict` and `meta_to_dict`. `_canonical_order() -> tuple[str, ...]` derives from `fields(SpecMeta)`, so adding `owner_role` before `extra` in Task 4 automatically places it last in the wire order without touching the renderer. `_coerce_canonical(key: str, value: object) -> object` raises or returns the value, normalized for the two timestamp fields. `SpecMeta.extra: dict[str, Any]` matches `meta.extra[...]` in every test. `meta_from_dict(d: dict) -> SpecMeta` and `meta_to_dict(m: SpecMeta) -> dict` keep their published signatures, so the frozen surface in Task 6 is honest. `read_spec_meta(path, stages) -> SpecMeta | None` is unchanged. `SPEC_META_CONTRACT: int` matches steward's vendored `SPEC_META_CONTRACT: int = 1`.
