@@ -130,6 +130,7 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
     if not path.exists():
         print(f"{stage}: no file to adopt at {path}")
         return 2
+    existing = read_spec_meta(path, _stage_names(config))
     body = read_spec_body(path)  # strips frontmatter if somehow already present
     result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
@@ -149,6 +150,8 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
         validation=verdict,
         approved_by=_approver() if status == "approved" else None,
         approved_at=_now() if status == "approved" else None,
+        owner_role=existing.owner_role if existing is not None else None,
+        extra=dict(existing.extra) if existing is not None else {},
     )
     write_spec(path, meta, body, lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: adopted ({status})")

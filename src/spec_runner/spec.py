@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import contextlib
+import datetime
 import os
 import tempfile
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 if TYPE_CHECKING:
     from .config import ExecutorConfig, ExecutorLock
+
+# Version of the SpecMeta frontmatter contract that consumers pin against
+# (steward vendors a pinned copy — DEC-003). v1 was the implicit historical
+# contract, inferred from behaviour before it was ever declared here; v2 is
+# the first version this repo declares. Adding an optional field is
+# non-breaking and does not bump; removing or renaming one bumps.
+SPEC_META_CONTRACT: int = 2
 
 _FM_DELIM = "---"
 
@@ -165,9 +173,18 @@ class SpecLockError(RuntimeError):
     """Raised when a spec-file lock cannot be acquired (another mutation in progress)."""
 
 
+class SpecMetaError(Exception):
+    """Raised when a managed spec's frontmatter cannot be parsed faithfully."""
+
+
 @dataclass
 class SpecMeta:
-    """Frontmatter state for one spec document."""
+    """Frontmatter state for one spec document.
+
+    ``extra`` holds foreign frontmatter keys verbatim so spec-runner is a
+    lossless intermediary for extending layers (steward). It is an internal
+    field, not a wire field: see :func:`canonical_fields`.
+    """
 
     spec_stage: str
     status: str = "draft"  # draft | approved | stale
@@ -178,6 +195,12 @@ class SpecMeta:
     validation: str = ""  # pass | fail | warn | ""
     approved_by: str | None = None
     approved_at: str | None = None
+    owner_role: str | None = None  # CODEOWNERS role(s), "@role[,@role]"; steward owns the semantics
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Copy: a caller-owned mapping must not mutate metadata via an alias.
+        self.extra = dict(self.extra)
 
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:
@@ -223,15 +246,139 @@ def split_frontmatter_raw(text: str) -> tuple[str, str]:
     return text[: len(text) - len(body)], body
 
 
+_STATUS_VALUES = frozenset({"draft", "approved", "stale"})
+_STR_FIELDS = frozenset(
+    {
+        "spec_stage",
+        "status",
+        "generated_by",
+        "source_prompt_version",
+        "validation",
+    }
+)
+_NULLABLE_STR_FIELDS = frozenset({"approved_by", "owner_role"})
+#: Timestamp wire fields: accept YAML's native date scalars and normalize them
+#: to a string, so a hand-written `generated_at: 2026-07-05` is not a hard
+#: error. ``approved_at`` is additionally nullable.
+_TIMESTAMP_FIELDS = frozenset({"generated_at", "approved_at"})
+_NULLABLE_TIMESTAMP_FIELDS = frozenset({"approved_at"})
+
+
+def canonical_fields() -> frozenset[str]:
+    """Frontmatter (wire) field names: every SpecMeta field except ``extra``.
+
+    Derived by subtraction so an internal dataclass field can never silently
+    widen the wire contract.
+    """
+    return frozenset(f.name for f in fields(SpecMeta)) - {"extra"}
+
+
+def _coerce_canonical(key: str, value: object) -> object:
+    """Validate one canonical field against the v2 matrix, returning its value.
+
+    Only the two timestamp fields change their value: YAML parses a bare
+    ``2026-07-05`` into a ``datetime.date``, which is normalized here to a
+    string so the next write canonicalizes the file (design §3.3).
+
+    Raises:
+        SpecMetaError: if the value violates the matrix.
+    """
+    if key in _TIMESTAMP_FIELDS:
+        if value is None:
+            if key in _NULLABLE_TIMESTAMP_FIELDS:
+                return None
+            raise SpecMetaError(f"frontmatter field {key!r} must not be null")
+        if isinstance(value, str):
+            return value
+        # datetime BEFORE date: datetime.datetime subclasses datetime.date.
+        if isinstance(value, datetime.datetime | datetime.date):
+            return value.isoformat()
+        raise SpecMetaError(
+            f"frontmatter field {key!r} must be a string or a date, got {type(value).__name__}"
+        )
+    if key in _STR_FIELDS:
+        if not isinstance(value, str):
+            raise SpecMetaError(
+                f"frontmatter field {key!r} must be a string, got {type(value).__name__}"
+            )
+        if key == "status" and value not in _STATUS_VALUES:
+            raise SpecMetaError(
+                f"frontmatter field 'status' must be one of {sorted(_STATUS_VALUES)}, got {value!r}"
+            )
+    elif key in _NULLABLE_STR_FIELDS:
+        if value is not None and not isinstance(value, str):
+            raise SpecMetaError(
+                f"frontmatter field {key!r} must be a string or null, got {type(value).__name__}"
+            )
+    elif key == "version":
+        # type() not isinstance(): isinstance(True, int) is True.
+        if type(value) is not int:
+            raise SpecMetaError(
+                f"frontmatter field 'version' must be an integer, got {type(value).__name__}"
+            )
+    return value
+
+
 def meta_from_dict(d: dict) -> SpecMeta:
-    """Build a SpecMeta from a dict, ignoring unknown keys."""
-    known = {f.name for f in fields(SpecMeta)}
-    return SpecMeta(**{k: v for k, v in d.items() if k in known})
+    """Build a SpecMeta from a frontmatter dict.
+
+    Canonical fields are validated against the v2 matrix. Unknown *string*
+    keys are preserved verbatim (see ``SpecMeta.extra``). A non-string key
+    raises, since it cannot be round-tripped faithfully.
+
+    Raises:
+        SpecMetaError: on a non-string key or a malformed canonical field.
+    """
+    canonical = canonical_fields()
+    known: dict[str, object] = {}
+    extra: dict[str, Any] = {}
+    for key, value in d.items():
+        if not isinstance(key, str):
+            raise SpecMetaError(f"frontmatter key {key!r} is not a string")
+        if key in canonical:
+            known[key] = _coerce_canonical(key, value)
+        else:
+            extra[key] = value
+    if "spec_stage" not in known:
+        raise SpecMetaError("frontmatter is missing required field 'spec_stage'")
+    return SpecMeta(**known, extra=extra)  # type: ignore[arg-type]
+
+
+def _canonical_order() -> tuple[str, ...]:
+    """Canonical field names in declaration order (the frontmatter order)."""
+    return tuple(f.name for f in fields(SpecMeta) if f.name != "extra")
+
+
+# Fields added in contract v2 and later are omitted when None, so existing
+# documents do not gain new null keys on their next write. The v1 nullable
+# fields (approved_by/approved_at) keep emitting null as they always have.
+_OMIT_WHEN_NONE = frozenset({"owner_role"})
 
 
 def meta_to_dict(m: SpecMeta) -> dict:
-    """Serialize a SpecMeta to a plain dict (frontmatter order)."""
-    return asdict(m)
+    """Serialize a SpecMeta to a flat frontmatter dict.
+
+    Extras are written first and canonical fields last, so a canonical field
+    can never be shadowed by a foreign key. Extras holding a canonical name,
+    or a non-string key, are a programming error and raise rather than
+    silently corrupting the document.
+
+    Raises:
+        SpecMetaError: on a non-string or canonical-shadowing key in ``extra``.
+    """
+    canonical = canonical_fields()
+    for key in m.extra:
+        if not isinstance(key, str):
+            raise SpecMetaError(f"extra frontmatter key {key!r} is not a string")
+        if key in canonical:
+            raise SpecMetaError(f"extra frontmatter key {key!r} shadows a canonical field")
+    out: dict[str, Any] = dict(m.extra)
+    for name in _canonical_order():
+        value = getattr(m, name)
+        if value is None and name in _OMIT_WHEN_NONE:
+            continue
+        out[name] = value
+    return out
 
 
 def _render(meta: SpecMeta, body: str) -> str:
@@ -256,10 +403,7 @@ def read_spec_meta(path: Path, stages: Sequence[str] = STAGES) -> SpecMeta | Non
         return None
     if meta_dict.get("spec_stage") not in stages:
         return None
-    try:
-        return meta_from_dict(meta_dict)
-    except TypeError:
-        return None
+    return meta_from_dict(meta_dict)
 
 
 def read_spec_body(path: Path) -> str:

@@ -221,6 +221,82 @@ def test_schema_is_valid_draft7(schema_name: str) -> None:
     Draft7Validator.check_schema(json.loads((SCHEMAS_DIR / schema_name).read_text()))
 
 
+def test_schema_lists_every_canonical_field() -> None:
+    """The schema's properties must cover every field spec-runner owns.
+
+    This is the schema half of the drift guard: canonical_fields() is the SSOT,
+    and a new SpecMeta field must be described here too.
+    """
+    from spec_runner.spec import canonical_fields
+
+    schema = json.loads((SCHEMAS_DIR / "spec-frontmatter.schema.json").read_text())
+    missing = canonical_fields() - set(schema["properties"])
+    assert not missing, f"schema does not describe canonical field(s): {sorted(missing)}"
+
+
+def test_schema_accepts_foreign_extension_keys() -> None:
+    """Extending layers (steward) add their own keys; they must validate."""
+    sample = {
+        "spec_stage": "tasks",
+        "status": "approved",
+        "version": 2,
+        "traces_to": "REQ-001",
+        "upstream_hashes": {"design": "deadbeef"},
+        "owner_role": "@platform,@sre",
+    }
+    _validator("spec-frontmatter.schema.json").validate(sample)
+
+
+def test_schema_accepts_a_custom_profile_stage() -> None:
+    """Stage membership belongs to the active profile, not to JSON Schema."""
+    sample = {"spec_stage": "acceptance", "status": "draft", "version": 1}
+    _validator("spec-frontmatter.schema.json").validate(sample)
+
+
+def test_schema_rejects_empty_spec_stage() -> None:
+    from jsonschema.exceptions import ValidationError
+
+    with pytest.raises(ValidationError):
+        _validator("spec-frontmatter.schema.json").validate(
+            {"spec_stage": "", "status": "draft", "version": 1}
+        )
+
+
+def test_schema_still_type_checks_canonical_properties() -> None:
+    """Opening the object must not weaken the fields the schema does describe."""
+    from jsonschema.exceptions import ValidationError
+
+    validator = _validator("spec-frontmatter.schema.json")
+    for bad in (
+        {"spec_stage": "tasks", "status": "approvd", "version": 1},
+        {"spec_stage": "tasks", "status": "draft", "version": "two"},
+        {"spec_stage": "tasks", "status": "draft", "version": 1, "owner_role": 7},
+        {"spec_stage": "tasks", "status": "draft", "version": 1, "validation": "weird"},
+    ):
+        with pytest.raises(ValidationError):
+            validator.validate(bad)
+
+
+def test_live_frontmatter_with_extras_matches_schema(tmp_path: Path) -> None:
+    """End-to-end: a written file carrying extras and owner_role validates."""
+    from spec_runner.spec import meta_from_dict
+
+    meta = meta_from_dict(
+        {
+            "spec_stage": "tasks",
+            "status": "approved",
+            "version": 2,
+            "owner_role": "@platform",
+            "traces_to": "REQ-001",
+        }
+    )
+    path = tmp_path / "tasks.md"
+    write_spec(path, meta, "# body\n")
+    fm, _ = split_frontmatter(path.read_text())
+    assert fm is not None
+    _validator("spec-frontmatter.schema.json").validate(fm)
+
+
 # --- version pin ----------------------------------------------------------
 
 

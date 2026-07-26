@@ -97,6 +97,33 @@ def test_adopt_writes_under_lock_and_releases(tmp_path: Path):
     fresh_lock.release()
 
 
+def test_adopt_preserves_extras_and_owner_role_on_managed_file(tmp_path: Path):
+    """Adopting an already-managed file must not erase steward's foreign keys
+    or owner_role — mirrors test_apply_approval_preserves_extras for the
+    `spec adopt` write path. Version/status semantics of adopt are unchanged:
+    only extra/owner_role preservation is under test here."""
+    cfg = _cfg(tmp_path)
+    write_spec(
+        cfg.tasks_file,
+        SpecMeta(
+            spec_stage="tasks",
+            status="approved",
+            version=5,
+            owner_role="@platform",
+            extra={"traces_to": "REQ-001", "upstream_hashes": {"design": "abc"}},
+        ),
+        GOOD_REQ,
+    )
+    args = SimpleNamespace(stage="tasks", force=False)
+    rc = spec_commands.cmd_spec_adopt(args, cfg)
+    assert rc == 0
+    m = read_spec_meta(cfg.tasks_file)
+    assert m is not None
+    assert m.owner_role == "@platform"
+    assert m.extra["traces_to"] == "REQ-001"
+    assert m.extra["upstream_hashes"] == {"design": "abc"}
+
+
 def test_check_writes_under_lock_and_releases(tmp_path: Path):
     cfg = _cfg(tmp_path)
     write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)

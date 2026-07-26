@@ -52,6 +52,19 @@ from .requirements import (
     serialize_requirement,
 )
 from .runner import parse_token_usage, run_claude_async
+from .spec import (
+    SPEC_META_CONTRACT,
+    SpecMeta,
+    SpecMetaError,
+    meta_from_dict,
+    meta_to_dict,
+    read_spec_body,
+    read_spec_meta,
+    split_frontmatter,
+    split_frontmatter_raw,
+    strip_frontmatter,
+    write_spec,
+)
 from .state import (
     ErrorCode,
     ExecutorState,
@@ -148,4 +161,16 @@ __all__ = [
     # Logging
     "get_logger",
     "setup_logging",
+    # SpecMeta contract v2 (frozen surface — see docs/CONTRACTS.md)
+    "SPEC_META_CONTRACT",
+    "SpecMeta",
+    "SpecMetaError",
+    "meta_from_dict",
+    "meta_to_dict",
+    "read_spec_body",
+    "read_spec_meta",
+    "split_frontmatter",
+    "split_frontmatter_raw",
+    "strip_frontmatter",
+    "write_spec",
 ]
