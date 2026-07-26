@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime
 import os
 import tempfile
 from collections.abc import Sequence
@@ -165,6 +166,10 @@ class SpecLockError(RuntimeError):
     """Raised when a spec-file lock cannot be acquired (another mutation in progress)."""
 
 
+class SpecMetaError(Exception):
+    """Raised when a managed spec's frontmatter cannot be parsed faithfully."""
+
+
 @dataclass
 class SpecMeta:
     """Frontmatter state for one spec document."""
@@ -223,10 +228,97 @@ def split_frontmatter_raw(text: str) -> tuple[str, str]:
     return text[: len(text) - len(body)], body
 
 
+_STATUS_VALUES = frozenset({"draft", "approved", "stale"})
+_STR_FIELDS = frozenset(
+    {
+        "spec_stage",
+        "status",
+        "generated_by",
+        "source_prompt_version",
+        "validation",
+    }
+)
+_NULLABLE_STR_FIELDS = frozenset({"approved_by"})
+#: Timestamp wire fields: accept YAML's native date scalars and normalize them
+#: to a string, so a hand-written `generated_at: 2026-07-05` is not a hard
+#: error. ``approved_at`` is additionally nullable.
+_TIMESTAMP_FIELDS = frozenset({"generated_at", "approved_at"})
+_NULLABLE_TIMESTAMP_FIELDS = frozenset({"approved_at"})
+
+
+def canonical_fields() -> frozenset[str]:
+    """Frontmatter (wire) field names: every SpecMeta field except ``extra``.
+
+    Derived by subtraction so an internal dataclass field can never silently
+    widen the wire contract.
+    """
+    return frozenset(f.name for f in fields(SpecMeta)) - {"extra"}
+
+
+def _coerce_canonical(key: str, value: object) -> object:
+    """Validate one canonical field against the v2 matrix, returning its value.
+
+    Only the two timestamp fields change their value: YAML parses a bare
+    ``2026-07-05`` into a ``datetime.date``, which is normalized here to a
+    string so the next write canonicalizes the file (design §3.3).
+
+    Raises:
+        SpecMetaError: if the value violates the matrix.
+    """
+    if key in _TIMESTAMP_FIELDS:
+        if value is None:
+            if key in _NULLABLE_TIMESTAMP_FIELDS:
+                return None
+            raise SpecMetaError(f"frontmatter field {key!r} must not be null")
+        if isinstance(value, str):
+            return value
+        # datetime BEFORE date: datetime.datetime subclasses datetime.date.
+        if isinstance(value, datetime.datetime | datetime.date):
+            return value.isoformat()
+        raise SpecMetaError(
+            f"frontmatter field {key!r} must be a string or a date, got {type(value).__name__}"
+        )
+    if key in _STR_FIELDS:
+        if not isinstance(value, str):
+            raise SpecMetaError(
+                f"frontmatter field {key!r} must be a string, got {type(value).__name__}"
+            )
+        if key == "status" and value not in _STATUS_VALUES:
+            raise SpecMetaError(
+                f"frontmatter field 'status' must be one of {sorted(_STATUS_VALUES)}, got {value!r}"
+            )
+    elif key in _NULLABLE_STR_FIELDS:
+        if value is not None and not isinstance(value, str):
+            raise SpecMetaError(
+                f"frontmatter field {key!r} must be a string or null, got {type(value).__name__}"
+            )
+    elif key == "version":
+        # type() not isinstance(): isinstance(True, int) is True.
+        if type(value) is not int:
+            raise SpecMetaError(
+                f"frontmatter field 'version' must be an integer, got {type(value).__name__}"
+            )
+    return value
+
+
 def meta_from_dict(d: dict) -> SpecMeta:
-    """Build a SpecMeta from a dict, ignoring unknown keys."""
-    known = {f.name for f in fields(SpecMeta)}
-    return SpecMeta(**{k: v for k, v in d.items() if k in known})
+    """Build a SpecMeta from a frontmatter dict.
+
+    Canonical fields are validated against the v2 matrix. Unknown *string*
+    keys are preserved verbatim (see ``SpecMeta.extra``). A non-string key
+    raises, since it cannot be round-tripped faithfully.
+
+    Raises:
+        SpecMetaError: on a non-string key or a malformed canonical field.
+    """
+    canonical = canonical_fields()
+    known: dict[str, object] = {}
+    for key, value in d.items():
+        if not isinstance(key, str):
+            raise SpecMetaError(f"frontmatter key {key!r} is not a string")
+        if key in canonical:
+            known[key] = _coerce_canonical(key, value)
+    return SpecMeta(**known)  # type: ignore[arg-type]
 
 
 def meta_to_dict(m: SpecMeta) -> dict:
@@ -256,10 +348,7 @@ def read_spec_meta(path: Path, stages: Sequence[str] = STAGES) -> SpecMeta | Non
         return None
     if meta_dict.get("spec_stage") not in stages:
         return None
-    try:
-        return meta_from_dict(meta_dict)
-    except TypeError:
-        return None
+    return meta_from_dict(meta_dict)
 
 
 def read_spec_body(path: Path) -> str:
