@@ -272,3 +272,54 @@ def test_invalid_yaml_frontmatter_stays_unmanaged(tmp_path):
     """The fail-closed guarantee starts only after the YAML parses."""
     p = _write(tmp_path, "---\nspec_stage: [unclosed\n---\nbody\n")
     assert read_spec_meta(p, LITE.names()) is None
+
+
+# --- SPEC_META_CONTRACT v2: frozen surface + wire-contract guard ---
+#
+# SPEC_META_CONTRACT never existed upstream before this: steward invented it
+# in its vendored copy (pinned at 1), inferring the contract from observed
+# behaviour. This declares it here for the first time, at 2, and freezes the
+# set of symbols steward may import from spec_runner.
+
+
+def test_contract_version_is_two():
+    from spec_runner import SPEC_META_CONTRACT
+
+    assert SPEC_META_CONTRACT == 2
+
+
+def test_frozen_surface_is_importable_from_package_root():
+    import spec_runner
+
+    for symbol in (
+        "SpecMeta",
+        "SpecMetaError",
+        "SPEC_META_CONTRACT",
+        "SPEC_STAGES",
+        "split_frontmatter",
+        "strip_frontmatter",
+        "split_frontmatter_raw",
+        "read_spec_meta",
+        "read_spec_body",
+        "write_spec",
+        "meta_from_dict",
+        "meta_to_dict",
+    ):
+        assert hasattr(spec_runner, symbol), symbol
+        assert symbol in spec_runner.__all__, symbol
+
+
+def test_canonical_wire_fields_are_exactly_the_expected_set():
+    """Adding an internal dataclass field must not widen the wire contract."""
+    assert canonical_fields() == {
+        "spec_stage",
+        "status",
+        "version",
+        "generated_by",
+        "generated_at",
+        "source_prompt_version",
+        "validation",
+        "approved_by",
+        "approved_at",
+        "owner_role",
+    }

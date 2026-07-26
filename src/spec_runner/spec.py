@@ -17,6 +17,13 @@ import yaml
 if TYPE_CHECKING:
     from .config import ExecutorConfig, ExecutorLock
 
+# Version of the SpecMeta frontmatter contract that consumers pin against
+# (steward vendors a pinned copy — DEC-003). v1 was the implicit historical
+# contract, inferred from behaviour before it was ever declared here; v2 is
+# the first version this repo declares. Adding an optional field is
+# non-breaking and does not bump; removing or renaming one bumps.
+SPEC_META_CONTRACT: int = 2
+
 _FM_DELIM = "---"
 
 
