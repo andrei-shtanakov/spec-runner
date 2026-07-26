@@ -18,8 +18,9 @@ in released versions are fixed: the `run --strict` gate could be bypassed under
 a custom stage profile, and `plan --gated` crashed on one. The Maestro interop
 contract (`.executor-state.db` schema, `--json-result` stdout) is unchanged.
 
-Consumers pinning the frontmatter contract should read `docs/CONTRACTS.md` and
-pin `SPEC_META_CONTRACT = 2`.
+Additive only — nothing is removed from any contract surface. Consumers pinning
+the frontmatter contract should read `docs/CONTRACTS.md` for the field table, the
+frozen public surface and the contract changelog, and pin `SPEC_META_CONTRACT = 2`.
 
 ### Added
 
@@ -119,10 +120,6 @@ pin `SPEC_META_CONTRACT = 2`.
   `target-version = "py311"` and CI tests 3.11/3.12/3.13 with no 3.10 job. Metadata,
   the `Programming Language :: Python :: 3.10` classifier and the docs now match the
   code. No runtime behaviour changes; 3.10 was never actually functional.
-
-SpecMeta frontmatter contract v2 (minor release): additive only, nothing
-removed from any contract surface. See `docs/CONTRACTS.md` for the full
-field table, the frozen public surface, and the contract changelog.
 
 - **Governance gate could be bypassed under a custom stage profile.**
   `spec_run_gate_ok` read `tasks.md` via `read_spec_meta`'s default `lite`
