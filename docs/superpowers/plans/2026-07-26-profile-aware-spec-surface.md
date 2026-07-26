@@ -26,90 +26,120 @@
 | `src/spec_runner/cli.py` | `spec_run_gate_ok` — the governance gate | Pass profile stage names |
 | `src/spec_runner/spec_commands.py` | `spec approve/reject/check` handlers | Pass profile stage names (4 calls) |
 | `src/spec_runner/cli_plan.py` | Gated generation | Replace `_MARKER`/`_UPSTREAM` with profile lookups; pass stage names (2 calls) |
+| `src/spec_runner/prompt.py` | Prompt/marker helpers | Add internal `_parse_stage_marker`; leave `parse_spec_marker` untouched |
+| `tests/conftest.py` | Shared fixtures | Add the `acceptance_profile` fixture |
+| `tests/test_stage_profile.py` | Profile shape | Assert the fixture is well-formed and non-`lite` |
 | `tests/test_run_gate.py` | Gate behaviour | Add custom-profile regression test; extend the config double |
 | `tests/test_spec_commands.py` | `spec` family | Add custom-profile tests |
-| `tests/test_gated_plan.py` | Gated generation | Add custom-profile test |
-| `tests/fixtures/profiles/acceptance.yaml` | A non-`lite` profile for tests | Create |
+| `tests/test_gated_plan.py` | Gated generation | Add custom-profile test + two gate-relaxation tests |
 | `CHANGELOG.md` | Release notes | Add `[Unreleased] / Fixed` entries |
 
 ---
 
-### Task 1: Test fixture — a non-`lite` stage profile
+### Task 1: Shared test profile — a non-`lite` stage chain
 
 **Files:**
-- Create: `tests/fixtures/profiles/acceptance.yaml`
+- Modify: `tests/conftest.py`
 - Test: `tests/test_stage_profile.py`
 
 **Interfaces:**
-- Consumes: `spec_runner.spec.load_profile`, `StageProfile`
-- Produces: a YAML profile file whose stages are `requirements → design → acceptance`, used by every later task in this plan. The stage name `acceptance` is deliberately absent from `lite`, which is what makes the bugs observable.
+- Consumes: `spec_runner.spec.StageProfile`, `spec_runner.spec.StageDef`.
+- Produces: a pytest fixture `acceptance_profile` returning a `StageProfile` whose stages
+  are `requirements -> design -> acceptance`. Every later task in this plan uses it. The
+  stage name `acceptance` is deliberately absent from `lite` — that is what makes the bugs
+  observable.
 
-- [ ] **Step 1: Read the bundled profile to copy its exact schema**
+**Why a Python-built profile and not a YAML file:** `load_profile(name: str)` resolves only
+`spec_runner/profiles/{name}.yaml` through `importlib.resources`; it cannot load a path
+under `tests/`, and a test-only profile must never ship inside the package. Construct the
+dataclasses directly. Note the real YAML key is `validator` while the dataclass field is
+`validator_key` — this task bypasses YAML entirely, so use the dataclass field name.
 
-Run: `cat src/spec_runner/profiles/lite.yaml`
+- [ ] **Step 1: Add the fixture to `tests/conftest.py`**
 
-Match the key names exactly (`name`, `template`, `marker_prefix`, `validator_key`, `requires`/`upstream`, `prompt_text`). Do not invent keys — `load_profile` rejects unknown `requires` refs and cycles.
+```python
+import pytest
 
-- [ ] **Step 2: Write the fixture**
+from spec_runner.spec import StageDef, StageProfile
 
-Create `tests/fixtures/profiles/acceptance.yaml` with three stages. Reuse `lite`'s template filenames and validator keys for `requirements` and `design`; for `acceptance` reuse the `tasks` template and validator key so no new bundled template is needed:
 
-```yaml
-name: acceptance
-stages:
-  - name: requirements
-    template: requirements.md
-    marker_prefix: REQUIREMENTS
-    validator_key: requirements
-  - name: design
-    template: design.md
-    marker_prefix: DESIGN
-    validator_key: design
-    requires: [requirements]
-  - name: acceptance
-    template: tasks.md
-    marker_prefix: TASKS
-    validator_key: tasks
-    requires: [requirements, design]
+@pytest.fixture
+def acceptance_profile() -> StageProfile:
+    """A non-lite profile whose final stage is absent from the lite chain.
+
+    Mirrors lite's marker prefixes and validator keys so no new bundled
+    template is needed; only the final stage name differs.
+    """
+    return StageProfile(
+        name="acceptance",
+        stages=(
+            StageDef(
+                name="requirements",
+                template="requirements.template.md",
+                marker_prefix="SPEC_REQUIREMENTS",
+                validator_key="requirements",
+            ),
+            StageDef(
+                name="design",
+                template="design.template.md",
+                marker_prefix="SPEC_DESIGN",
+                validator_key="design",
+                upstream=("requirements",),
+            ),
+            StageDef(
+                name="acceptance",
+                template="tasks.template.md",
+                marker_prefix="SPEC_TASKS",
+                validator_key="tasks",
+                upstream=("design",),
+            ),
+        ),
+    )
 ```
 
-Adjust the `template:` values to the real filenames printed in Step 1 if they differ.
+Follow the import style already used in `tests/conftest.py`; if it has no imports yet, put
+them at the top of the file.
 
-- [ ] **Step 3: Write a test that the fixture loads**
+- [ ] **Step 2: Write a test that the fixture is well-formed and non-lite**
 
 Add to `tests/test_stage_profile.py`:
 
 ```python
-def test_acceptance_fixture_profile_loads(tmp_path):
-    """The test fixture profile is a valid, non-lite stage chain."""
-    from pathlib import Path
+def test_acceptance_fixture_profile_is_non_lite(acceptance_profile):
+    """The shared test profile ends in a stage the lite chain does not have."""
+    from spec_runner.spec import LITE
 
-    from spec_runner.spec import load_profile
-
-    fixture = Path(__file__).parent / "fixtures" / "profiles" / "acceptance.yaml"
-    profile = load_profile(fixture)
-    assert profile.names() == ("requirements", "design", "acceptance")
-    assert "acceptance" not in ("requirements", "design", "tasks")
+    assert acceptance_profile.names() == ("requirements", "design", "acceptance")
+    assert "acceptance" not in LITE.names()
+    assert acceptance_profile.edges()["acceptance"] == ("design",)
 ```
 
-- [ ] **Step 4: Run the test**
+- [ ] **Step 3: Run the test**
 
-Run: `uv run pytest tests/test_stage_profile.py::test_acceptance_fixture_profile_loads -v`
+Run: `uv run pytest tests/test_stage_profile.py::test_acceptance_fixture_profile_is_non_lite -v`
 Expected: PASS.
 
-If `load_profile` takes a profile *name* rather than a path, read its signature (`grep -n "def load_profile" -A 20 src/spec_runner/spec.py`) and adapt: either point it at the fixture directory or place the fixture where `load_profile` looks. Do not change `load_profile` itself in this task.
+- [ ] **Step 4: Confirm nothing was added to the shipped package**
+
+Run: `git status --porcelain src/`
+Expected: no output — this task touches tests only.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/fixtures/profiles/acceptance.yaml tests/test_stage_profile.py
-git commit -m "test: add a non-lite stage profile fixture
+git add tests/conftest.py tests/test_stage_profile.py
+git commit -m "test: add a shared non-lite stage-profile fixture
+
+Built in Python rather than as a YAML file: load_profile resolves only
+bundled spec_runner/profiles/*.yaml through importlib.resources, and a
+test-only profile must not ship inside the package.
 
 The 'acceptance' stage is absent from lite, which is what makes the
 profile-blind call sites observable in the tests that follow.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
+
 
 ---
 
@@ -130,17 +160,10 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 Add to `tests/test_run_gate.py`:
 
 ```python
-def test_gate_strict_blocks_draft_under_custom_profile(tmp_path: Path):
+def test_gate_strict_blocks_draft_under_custom_profile(tmp_path: Path, acceptance_profile):
     """A managed draft on a non-lite stage must not read as unmanaged (bypass)."""
-    from pathlib import Path as _Path
-
-    from spec_runner.spec import load_profile
-
-    fixture = _Path(__file__).parent / "fixtures" / "profiles" / "acceptance.yaml"
-    profile = load_profile(fixture)
-
     cfg = _cfg(tmp_path, "strict")
-    cfg.resolve_spec_profile = lambda: profile
+    cfg.resolve_spec_profile = lambda: acceptance_profile
     write_spec(cfg.tasks_file, SpecMeta("acceptance", "draft"), "x\n")
 
     ok, reason = spec_run_gate_ok(cfg)
@@ -237,20 +260,17 @@ def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
 `reject` is the cheapest of the three to exercise (no validator run). Add to `tests/test_spec_commands.py`:
 
 ```python
-def test_spec_reject_sees_custom_profile_stage(tmp_path, monkeypatch, capsys):
+def test_spec_reject_sees_custom_profile_stage(
+    tmp_path, monkeypatch, capsys, acceptance_profile
+):
     """A managed custom-profile stage must not be reported as unmanaged."""
     from argparse import Namespace
-    from pathlib import Path
 
-    from spec_runner.spec import SpecMeta, load_profile, write_spec
+    from spec_runner.spec import SpecMeta, stage_path, write_spec
     from spec_runner.spec_commands import cmd_spec_reject
 
-    fixture = Path(__file__).parent / "fixtures" / "profiles" / "acceptance.yaml"
-    profile = load_profile(fixture)
-
     config = _config(tmp_path)          # existing helper in this file
-    config.spec_profile = "acceptance"
-    monkeypatch.setattr(type(config), "resolve_spec_profile", lambda self: profile)
+    monkeypatch.setattr(type(config), "resolve_spec_profile", lambda self: acceptance_profile)
 
     path = stage_path(config, "acceptance")
     write_spec(path, SpecMeta("acceptance", "approved"), "body\n")
@@ -326,42 +346,78 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 Add to `tests/test_gated_plan.py`:
 
 ```python
-def test_gated_generation_handles_custom_profile_stage(tmp_path, monkeypatch):
+def test_gated_generation_handles_custom_profile_stage(
+    tmp_path, monkeypatch, acceptance_profile
+):
     """A custom stage must not KeyError on the hardcoded lite marker/upstream maps."""
-    from pathlib import Path
+    from subprocess import CompletedProcess
 
     from spec_runner.cli_plan import _generate_stage_draft
-    from spec_runner.spec import SpecMeta, load_profile, stage_path, write_spec
-
-    fixture = Path(__file__).parent / "fixtures" / "profiles" / "acceptance.yaml"
-    profile = load_profile(fixture)
+    from spec_runner.spec import SpecMeta, stage_path, write_spec
 
     config = _config(tmp_path)          # existing helper in this file
-    monkeypatch.setattr(type(config), "resolve_spec_profile", lambda self: profile)
+    monkeypatch.setattr(type(config), "resolve_spec_profile", lambda self: acceptance_profile)
 
-    # Both upstreams approved so the gate lets generation proceed.
+    # Direct upstream approved so the gate lets generation proceed.
     for upstream in ("requirements", "design"):
         write_spec(stage_path(config, upstream), SpecMeta(upstream, "approved"), "up\n")
 
     def fake_invoke(cmd, **kwargs):
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(cmd, 0, stdout="TASKS_READY\nbody\nTASKS_END\n", stderr="")
+        return CompletedProcess(
+            cmd, 0, stdout="SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n", stderr=""
+        )
 
     rc = _generate_stage_draft("acceptance", "desc", config, invoke=fake_invoke)
     assert rc == 0
 ```
 
-Read the existing tests in `tests/test_gated_plan.py` first and reuse their config helper, their fake-invoke shape and their marker text; the fake stdout above must match whatever `parse_spec_marker` expects for the `TASKS` prefix in that file's existing tests.
+Read the existing tests in `tests/test_gated_plan.py` first and reuse their config helper
+and fake-invoke shape; replace `_config` with whatever that file actually defines. The
+marker text above is deliberate — see Step 3.
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `uv run pytest tests/test_gated_plan.py::test_gated_generation_handles_custom_profile_stage -v`
 Expected: FAIL with `KeyError: 'acceptance'` raised from `_UPSTREAM[stage]`.
 
-- [ ] **Step 3: Delete the hardcoded maps**
+- [ ] **Step 3: Add an internal stage-aware marker parser**
 
-In `src/spec_runner/cli_plan.py`, delete lines 41-46 entirely:
+**This is the trap in this task — read before touching the marker call.**
+`parse_spec_marker(output, marker_name)` builds `f"SPEC_{marker_name}_READY"` **itself**
+(`prompt.py:399`). That is why `_MARKER` holds the *unprefixed* name (`"TASKS"`), while
+`StageDef.marker_prefix` holds the *full* prefix (`"SPEC_TASKS"`). Passing
+`stage_def.marker_prefix` straight into `parse_spec_marker` would search for
+`SPEC_SPEC_TASKS_READY` and never match, breaking every gated generation.
+
+`parse_spec_marker` is exported in `spec_runner.__all__`, so its behaviour must not change.
+Add an **internal** helper to `src/spec_runner/prompt.py`, directly below
+`parse_spec_marker`:
+
+```python
+def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
+    """Extract content between a stage's own ``{marker_prefix}_READY``/``_END``.
+
+    ``StageDef.marker_prefix`` is the complete prefix (e.g. ``SPEC_TASKS``),
+    unlike :func:`parse_spec_marker`, which prepends ``SPEC_`` to a bare name
+    and stays unchanged for backward compatibility.
+    """
+    start_marker = f"{stage.marker_prefix}_READY"
+    end_marker = f"{stage.marker_prefix}_END"
+    start = output.find(start_marker)
+    if start == -1:
+        return None
+    start += len(start_marker)
+    end = output.find(end_marker, start)
+    if end == -1:
+        return None
+    return output[start:end].strip()
+```
+
+Do **not** export `_parse_stage_marker` from `spec_runner/__init__.py`; it is internal.
+
+- [ ] **Step 4: Delete the hardcoded maps**
+
+In `src/spec_runner/cli_plan.py`, delete these lines entirely:
 
 ```python
 _MARKER = {"requirements": "REQUIREMENTS", "design": "DESIGN", "tasks": "TASKS"}
@@ -372,12 +428,12 @@ _UPSTREAM: dict[str, list[str]] = {
 }
 ```
 
-- [ ] **Step 4: Resolve the stage definition once per call**
+- [ ] **Step 5: Resolve the stage definition once per call**
 
 In `_generate_stage_draft`, immediately before the upstream loop, add:
 
 ```python
-    from .prompt import _stage_def
+    from .prompt import _parse_stage_marker, _stage_def
 
     profile = config.resolve_spec_profile()
     stage_def = _stage_def(stage, profile)
@@ -399,7 +455,7 @@ the upstream meta read:
 the marker parse:
 
 ```python
-    body = parse_spec_marker(result.stdout, stage_def.marker_prefix)
+    body = _parse_stage_marker(result.stdout, stage_def)
 ```
 
 and the existing-version read:
@@ -408,32 +464,101 @@ and the existing-version read:
     existing = read_spec_meta(path, stage_names)
 ```
 
-- [ ] **Step 5: Run the test**
+- [ ] **Step 6: Pin the deliberate gate relaxation with two tests**
+
+`_UPSTREAM["tasks"]` was `["requirements", "design"]`, but `lite.yaml` declares
+`upstream: [design]`. `requires` describes **direct** DAG edges, not the transitive
+closure, so the profile is the source of truth and the gate relaxes to direct
+prerequisites. This is an intentional behaviour change (ruling 2026-07-26) — do not "fix"
+it by editing `lite.yaml`. Pin both sides in `tests/test_gated_plan.py`:
+
+```python
+def test_gated_tasks_blocked_when_design_went_stale(tmp_path, monkeypatch):
+    """Normal lifecycle: re-approving requirements stales design, which blocks tasks."""
+    from subprocess import CompletedProcess
+
+    from spec_runner.cli_plan import _generate_stage_draft
+    from spec_runner.spec import SpecMeta, stage_path, write_spec
+
+    config = _config(tmp_path)
+    write_spec(stage_path(config, "requirements"), SpecMeta("requirements", "approved"), "r\n")
+    write_spec(stage_path(config, "design"), SpecMeta("design", "stale"), "d\n")
+
+    def fake_invoke(cmd, **kwargs):
+        raise AssertionError("generation must not start when the direct upstream is stale")
+
+    rc = _generate_stage_draft("tasks", "desc", config, invoke=fake_invoke)
+    assert rc == 2
+
+
+def test_gated_tasks_allowed_when_only_direct_upstream_is_approved(tmp_path, monkeypatch):
+    """Deliberate relaxation: only direct requires are gated, not the transitive closure.
+
+    An artificially inconsistent state (requirements back to draft while design
+    stayed approved) is now allowed, where the old hardcoded map blocked it.
+    """
+    from subprocess import CompletedProcess
+
+    from spec_runner.cli_plan import _generate_stage_draft
+    from spec_runner.spec import SpecMeta, stage_path, write_spec
+
+    config = _config(tmp_path)
+    write_spec(stage_path(config, "requirements"), SpecMeta("requirements", "draft"), "r\n")
+    write_spec(stage_path(config, "design"), SpecMeta("design", "approved"), "d\n")
+
+    def fake_invoke(cmd, **kwargs):
+        return CompletedProcess(
+            cmd, 0, stdout="SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n", stderr=""
+        )
+
+    rc = _generate_stage_draft("tasks", "desc", config, invoke=fake_invoke)
+    assert rc == 0
+```
+
+Replace `_config` with the file's real helper. These two use the default `lite` profile —
+no `acceptance_profile` — because the relaxation is about `lite`'s own `tasks` stage.
+
+- [ ] **Step 7: Run the tests**
 
 Run: `uv run pytest tests/test_gated_plan.py -v`
-Expected: PASS, new test included, all pre-existing gated-plan tests unchanged and green.
+Expected: PASS, the three new tests included, all pre-existing gated-plan tests unchanged
+and green. A pre-existing test that asserted `tasks` generation is blocked while
+`requirements` is unapproved is asserting the old hardcoded behaviour — under the
+regression gate its expectation may be updated, but say so in the commit message and keep
+the new pinning tests.
 
-- [ ] **Step 6: Verify no hardcoded stage maps survive**
+- [ ] **Step 8: Verify no hardcoded stage maps survive**
 
 Run: `grep -n "_MARKER\|_UPSTREAM" src/spec_runner/cli_plan.py`
 Expected: no output.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/spec_runner/cli_plan.py tests/test_gated_plan.py
+git add src/spec_runner/cli_plan.py src/spec_runner/prompt.py tests/test_gated_plan.py
 git commit -m "fix(plan): drive gated generation markers and upstreams from the profile
 
 _MARKER and _UPSTREAM were module-level dicts hardcoded to the three lite
 stages, so plan --gated with a custom profile raised KeyError before it
-reached the meta reads. StageDef already carries marker_prefix and
-upstream; resolve both through prompt._stage_def, and pass the profile's
-stage names to the two read_spec_meta calls.
+reached the meta reads.
+
+The two dicts were not redundant with StageDef, which is the trap here:
+parse_spec_marker prepends SPEC_ to a bare name, so _MARKER held 'TASKS'
+while StageDef.marker_prefix holds 'SPEC_TASKS'. Passing marker_prefix to
+parse_spec_marker would search SPEC_SPEC_TASKS_READY and match nothing, so
+an internal _parse_stage_marker treats marker_prefix as the full prefix;
+parse_spec_marker is exported and stays unchanged.
+
+_UPSTREAM also disagreed with lite.yaml, requiring both requirements and
+design for tasks where the profile declares only design. requires means
+direct DAG edges, not the transitive closure, so the profile wins and the
+gate relaxes to direct prerequisites. Two tests pin both sides: a staled
+design still blocks, and an artificially inconsistent draft-requirements
+state is now allowed.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
 
----
 
 ### Task 5: Full verification, CHANGELOG, PR
 
@@ -483,6 +608,20 @@ Under `## [Unreleased]` in `CHANGELOG.md`, add:
   `_UPSTREAM` in `cli_plan.py` were hardcoded to the three `lite` stages, so
   generating a stage from any other profile raised `KeyError`. Both are now
   resolved from the profile's `StageDef` (`marker_prefix`, `upstream`).
+
+### Changed
+
+- **Gated generation now gates on a stage's *direct* `requires` only.** The
+  removed `_UPSTREAM` map demanded that both `requirements` and `design` be
+  approved before `tasks` could be generated, while `lite.yaml` declares
+  `tasks` as requiring only `design`. The stage profile is the single source
+  of truth, and `requires` describes direct DAG edges rather than the
+  transitive closure — which matters for branching profiles, where a
+  hardcoded closure is actively wrong. In a normal lifecycle nothing changes:
+  re-approving an upstream stales its downstream, so a staled `design` still
+  blocks `tasks`. Only an artificially inconsistent state (`requirements`
+  manually returned to draft while `design` stayed approved) is now allowed
+  where it was previously blocked.
 ```
 
 - [ ] **Step 4: Commit and push**
