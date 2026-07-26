@@ -2,15 +2,16 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/spec-frontmatter.schema.json",
   "title": "SpecRunnerSpecFrontmatter",
-  "description": "YAML frontmatter of a gated spec document (spec/{requirements,design,tasks}.md), serialized by spec_runner.spec.SpecMeta. The spec-runner-vscode extension reads this directly for governance state. additionalProperties is false so a new SpecMeta field trips the contract test. See src/spec_runner/spec.py.",
+  "description": "YAML frontmatter of a gated spec document (spec/{requirements,design,tasks}.md), serialized by spec_runner.spec.SpecMeta. The spec-runner-vscode extension reads this directly for governance state. See src/spec_runner/spec.py.",
+  "$comment": "properties describes the canonical fields spec-runner owns (kept in sync with spec_runner.spec.canonical_fields() by tests/test_vscode_contract.py::test_schema_lists_every_canonical_field). Additional keys are deliberately permitted and preserved losslessly under SPEC_META_CONTRACT v2 (extending layers such as steward write their own foreign keys into this file). Stage membership (spec_stage) is validated at runtime against the configured profile, not by this schema.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["spec_stage", "status", "version"],
   "properties": {
     "spec_stage": {
       "description": "Which gated stage this document is",
       "type": "string",
-      "enum": ["requirements", "design", "tasks"]
+      "minLength": 1
     },
     "status": {
       "description": "Governance state of the stage",
@@ -45,6 +46,10 @@
     },
     "approved_at": {
       "description": "ISO-8601 approval timestamp, or null when not approved",
+      "type": ["string", "null"]
+    },
+    "owner_role": {
+      "description": "CODEOWNERS role(s) for this stage, \"@role[,@role]\", or null when unset",
       "type": ["string", "null"]
     }
   }
