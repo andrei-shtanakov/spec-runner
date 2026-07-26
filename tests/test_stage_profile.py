@@ -55,3 +55,10 @@ def test_spec_stages_export_derived_from_lite():
     for s in LITE.stages:
         assert prompt.SPEC_STAGES[s.name]["marker"] == s.marker_prefix
         assert prompt.SPEC_STAGES[s.name]["instruction"]
+
+
+def test_acceptance_fixture_profile_is_non_lite(acceptance_profile):
+    """The shared test profile ends in a stage the lite chain does not have."""
+    assert acceptance_profile.names() == ("requirements", "design", "acceptance")
+    assert "acceptance" not in LITE.names()
+    assert acceptance_profile.edges()["acceptance"] == ("design",)
