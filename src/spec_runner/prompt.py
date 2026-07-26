@@ -310,6 +310,18 @@ def build_generation_prompt(
     return "\n".join(parts)
 
 
+def _prior_heading(stage: str, status: str) -> str:
+    """Heading for one ancestor's context block, honest about its status.
+
+    ``approved`` keeps the historical wording so existing prompts (and the
+    C1 zero-behaviour goldens) are unchanged; anything else is marked
+    unapproved with its real status.
+    """
+    if status == "approved":
+        return f"## Approved {stage}"
+    return f"## Unapproved {stage} ({status})"
+
+
 def build_gated_generation_prompt(
     stage: str,
     description: str,
@@ -317,25 +329,34 @@ def build_gated_generation_prompt(
     profile: StageProfile = LITE,
     spec_context: str | None = None,
     spec_rules: dict[str, list[str]] | None = None,
+    statuses: dict[str, str] | None = None,
 ) -> str:
     """Build a rich, template-driven generation prompt for one gated stage.
 
     Combines role instructions, the full bundled template for the stage,
-    the project description, any approved upstream stage outputs (e.g.
-    requirements when generating design), and the ``SPEC_<STAGE>_READY``/
-    ``_END`` markers the caller uses to extract the result.
+    the project description, the outputs of the stage's transitive ancestors
+    (e.g. requirements when generating design), and the
+    ``<MARKER_PREFIX>_READY``/``_END`` markers the caller uses to extract the
+    result.
 
     Args:
-        stage: One of 'requirements', 'design', 'tasks'.
+        stage: Any stage name of ``profile`` — not limited to the ``lite``
+            chain ('requirements'/'design'/'tasks'); custom profiles supply
+            their own stage names.
         description: Project description from the user.
-        context: Approved upstream stage outputs, keyed by stage name
-            (e.g. {'requirements': '...'}).
+        context: Upstream stage outputs, keyed by stage name
+            (e.g. {'requirements': '...'}). Ancestors absent from the mapping,
+            or mapped to an empty body, are skipped.
         profile: Stage profile supplying the marker prefix and template
             (default lite).
         spec_context: Optional project-wide context, injected as a
             ``<context>`` block after the header (M0). Falsy → omitted.
         spec_rules: Optional per-stage rules; only the entry matching
             ``stage`` is injected as a ``<rules>`` block (M0).
+        statuses: Optional ``{stage: status}`` for the context entries, used
+            to label each block honestly. A stage that is missing here is
+            assumed approved, so callers that do not track statuses render
+            exactly as before.
 
     Returns:
         The assembled prompt string.
@@ -348,8 +369,14 @@ def build_gated_generation_prompt(
     # this one depends on, directly or through another), not just the direct
     # `requires` gated by the caller — a "tasks" stage needs to trace back to
     # "requirements" even though its only direct requirement is "design".
+    # Each block is labelled by the ancestor's ACTUAL status. The gate checks
+    # only a stage's direct `requires`, so an ancestor further back can be a
+    # draft (reachable via `spec reject`, which does not cascade stale). Its
+    # body still belongs here — dropping it would lose the traceability the
+    # template asks for — but presenting a draft as "Approved" would lie to
+    # the model. Callers that pass no ``statuses`` render exactly as before.
     prior_parts = [
-        f"## Approved {prior}\n\n{context[prior]}"
+        f"{_prior_heading(prior, (statuses or {}).get(prior, 'approved'))}\n\n{context[prior]}"
         for prior in ancestor_stages(stage, profile)
         if context.get(prior)
     ]

@@ -315,6 +315,35 @@ def test_gated_tasks_blocked_when_design_went_stale(tmp_path):
     assert rc == 2
 
 
+def test_gated_prompt_labels_a_draft_ancestor_as_unapproved(tmp_path):
+    """The draft ancestor's body reaches the prompt, but not under an "Approved" heading.
+
+    Reachable with documented commands: `spec reject` does not cascade stale, so
+    requirements can be draft while design stays approved. Narrowing the context
+    instead would lose the traceability the tasks template asks for.
+    """
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), "REQ-001 spins\n")
+    write_spec(cfg.design_file, SpecMeta("design", "approved"), "DESIGN-001 motor\n")
+
+    seen: dict[str, str] = {}
+
+    def _capture(cmd, **kwargs):
+        seen["prompt"] = "\n".join(cmd) if isinstance(cmd, list) else str(cmd)
+        return SimpleNamespace(
+            returncode=0, stdout="SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n", stderr=""
+        )
+
+    rc = cli_plan._generate_stage_draft("tasks", "desc", cfg, invoke=_capture)
+    assert rc == 0
+
+    prompt = seen["prompt"]
+    assert "REQ-001 spins" in prompt, "draft ancestor body must still be supplied"
+    assert "## Approved requirements" not in prompt, "a draft must not be labelled approved"
+    assert "## Unapproved requirements (draft)" in prompt
+    assert "## Approved design" in prompt
+
+
 def test_gated_tasks_allowed_when_only_direct_upstream_is_approved(tmp_path):
     """Deliberate relaxation: only direct requires are gated, not the transitive closure.
 

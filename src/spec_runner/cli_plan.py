@@ -105,10 +105,15 @@ def _generate_stage_draft(
 
     # Context: the full transitive ancestor closure, so e.g. "tasks" still
     # sees "requirements" even though its only direct requirement is "design".
-    context: dict[str, str] = {
-        ancestor: read_spec_body(stage_path(config, ancestor))
-        for ancestor in ancestor_stages(stage, profile)
-    }
+    # Statuses ride along so the prompt can label each block honestly: the
+    # gate above clears only the DIRECT requires, so an ancestor further back
+    # may still be a draft and must not be presented as approved.
+    context: dict[str, str] = {}
+    statuses: dict[str, str] = {}
+    for ancestor in ancestor_stages(stage, profile):
+        context[ancestor] = read_spec_body(stage_path(config, ancestor))
+        ancestor_meta = read_spec_meta(stage_path(config, ancestor), stage_names)
+        statuses[ancestor] = ancestor_meta.status if ancestor_meta is not None else "unmanaged"
 
     prompt = build_gated_generation_prompt(
         stage,
@@ -117,6 +122,7 @@ def _generate_stage_draft(
         profile=profile,
         spec_context=config.spec_context or None,
         spec_rules=config.spec_rules or None,
+        statuses=statuses,
     )
     cmd = build_cli_command(
         cmd=config.claude_command,
