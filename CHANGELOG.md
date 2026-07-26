@@ -17,10 +17,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
   a release commit landing on `master` with a bumped version and no tag. That is
   the failure that actually happened, twice: v2.4.0 and v2.10.0 both sat on
   `master` untagged, so PyPI lagged and consumers pinning the published version
-  stayed blocked. The new `release-tag-guard` workflow runs on `master` only
-  (never on pull requests, so a release PR stays green while its tag legitimately
-  does not exist yet), goes red the moment an untagged release commit merges, and
-  self-heals as soon as the tag is pushed.
+  stayed blocked. The new `release-tag-guard` workflow never runs on pull
+  requests, so a release PR stays green while its tag legitimately does not exist
+  yet; it goes red the moment an untagged release commit merges. It also runs on
+  `v*` tag pushes, so tagging the release commit re-runs it on the same SHA and
+  the passing run supersedes the failed one — without that trigger the red would
+  linger until an unrelated commit landed, since a tag push does not re-run a
+  branch-triggered workflow. `workflow_dispatch` is available for the case where
+  the tag lands on an older commit than master's HEAD.
 
 ## [2.11.0] — 2026-07-26
 
