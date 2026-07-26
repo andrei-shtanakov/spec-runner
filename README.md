@@ -14,7 +14,7 @@ uv sync
 ```
 
 Requirements:
-- Python 3.10+
+- Python 3.11+
 - Claude CLI (`claude` command available)
 - Git (for branch management)
 - `gh` CLI (optional, for GitHub Issues sync)
