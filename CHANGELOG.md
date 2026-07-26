@@ -10,20 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-### Fixed
+## [2.11.0] — 2026-07-26
 
-- **`requires-python` corrected to `>=3.11`.** The package declared `>=3.10`, but
-  `from datetime import UTC` (3.11+) has been imported by five shipped modules —
-  `obs.py`, `audit_log.py`, `cli_plan.py`, `spec_commands.py`, `change_commands.py` —
-  for some time, so `import spec_runner` raised `ImportError` on 3.10 while pip
-  happily installed it. The supporting config already assumed 3.11: ruff is set to
-  `target-version = "py311"` and CI tests 3.11/3.12/3.13 with no 3.10 job. Metadata,
-  the `Programming Language :: Python :: 3.10` classifier and the docs now match the
-  code. No runtime behaviour changes; 3.10 was never actually functional.
+The SpecMeta frontmatter contract becomes losslessly extensible, and the spec
+surface becomes genuinely profile-aware. Two governance defects that were live
+in released versions are fixed: the `run --strict` gate could be bypassed under
+a custom stage profile, and `plan --gated` crashed on one. The Maestro interop
+contract (`.executor-state.db` schema, `--json-result` stdout) is unchanged.
 
-SpecMeta frontmatter contract v2 (minor release): additive only, nothing
-removed from any contract surface. See `docs/CONTRACTS.md` for the full
-field table, the frozen public surface, and the contract changelog.
+Consumers pinning the frontmatter contract should read `docs/CONTRACTS.md` and
+pin `SPEC_META_CONTRACT = 2`.
 
 ### Added
 
@@ -114,6 +110,19 @@ field table, the frozen public surface, and the contract changelog.
   contract consumed by `spec-runner-vscode`.
 
 ### Fixed
+
+- **`requires-python` corrected to `>=3.11`.** The package declared `>=3.10`, but
+  `from datetime import UTC` (3.11+) has been imported by five shipped modules —
+  `obs.py`, `audit_log.py`, `cli_plan.py`, `spec_commands.py`, `change_commands.py` —
+  for some time, so `import spec_runner` raised `ImportError` on 3.10 while pip
+  happily installed it. The supporting config already assumed 3.11: ruff is set to
+  `target-version = "py311"` and CI tests 3.11/3.12/3.13 with no 3.10 job. Metadata,
+  the `Programming Language :: Python :: 3.10` classifier and the docs now match the
+  code. No runtime behaviour changes; 3.10 was never actually functional.
+
+SpecMeta frontmatter contract v2 (minor release): additive only, nothing
+removed from any contract surface. See `docs/CONTRACTS.md` for the full
+field table, the frozen public surface, and the contract changelog.
 
 - **Governance gate could be bypassed under a custom stage profile.**
   `spec_run_gate_ok` read `tasks.md` via `read_spec_meta`'s default `lite`
@@ -602,7 +611,19 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.10.0...v2.11.0
+[2.10.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.9.0...v2.10.0
+[2.9.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.8.1...v2.9.0
+[2.8.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.7.0...v2.8.0
+[2.7.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.4.1...v2.5.0
+[2.4.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.4.0...v2.4.1
+[2.4.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.1.0...v2.2.0
