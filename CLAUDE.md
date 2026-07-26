@@ -207,7 +207,7 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 
 ## Code Style
 
-- Python 3.10+, Ruff line length **100** (not 88 — configured in pyproject.toml)
+- Python 3.11+, Ruff line length **100** (not 88 — configured in pyproject.toml)
 - Ruff rules: E, F, W, I, UP, B, C4, SIM (E501 ignored)
 - Type annotations required everywhere; mypy strict mode
 - Git branches follow `task/TASK-###-short-name` pattern

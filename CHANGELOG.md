@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`requires-python` corrected to `>=3.11`.** The package declared `>=3.10`, but
+  `from datetime import UTC` (3.11+) has been imported by five shipped modules —
+  `obs.py`, `audit_log.py`, `cli_plan.py`, `spec_commands.py`, `change_commands.py` —
+  for some time, so `import spec_runner` raised `ImportError` on 3.10 while pip
+  happily installed it. The supporting config already assumed 3.11: ruff is set to
+  `target-version = "py311"` and CI tests 3.11/3.12/3.13 with no 3.10 job. Metadata,
+  the `Programming Language :: Python :: 3.10` classifier and the docs now match the
+  code. No runtime behaviour changes; 3.10 was never actually functional.
+
 SpecMeta frontmatter contract v2 (minor release): additive only, nothing
 removed from any contract surface. See `docs/CONTRACTS.md` for the full
 field table, the frozen public surface, and the contract changelog.
