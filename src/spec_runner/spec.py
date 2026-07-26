@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -172,7 +172,12 @@ class SpecMetaError(Exception):
 
 @dataclass
 class SpecMeta:
-    """Frontmatter state for one spec document."""
+    """Frontmatter state for one spec document.
+
+    ``extra`` holds foreign frontmatter keys verbatim so spec-runner is a
+    lossless intermediary for extending layers (steward). It is an internal
+    field, not a wire field: see :func:`canonical_fields`.
+    """
 
     spec_stage: str
     status: str = "draft"  # draft | approved | stale
@@ -183,6 +188,11 @@ class SpecMeta:
     validation: str = ""  # pass | fail | warn | ""
     approved_by: str | None = None
     approved_at: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Copy: a caller-owned mapping must not mutate metadata via an alias.
+        self.extra = dict(self.extra)
 
 
 def split_frontmatter(text: str) -> tuple[dict | None, str]:
@@ -313,17 +323,25 @@ def meta_from_dict(d: dict) -> SpecMeta:
     """
     canonical = canonical_fields()
     known: dict[str, object] = {}
+    extra: dict[str, Any] = {}
     for key, value in d.items():
         if not isinstance(key, str):
             raise SpecMetaError(f"frontmatter key {key!r} is not a string")
         if key in canonical:
             known[key] = _coerce_canonical(key, value)
-    return SpecMeta(**known)  # type: ignore[arg-type]
+        else:
+            extra[key] = value
+    return SpecMeta(**known, extra=extra)  # type: ignore[arg-type]
 
 
 def meta_to_dict(m: SpecMeta) -> dict:
-    """Serialize a SpecMeta to a plain dict (frontmatter order)."""
-    return asdict(m)
+    """Serialize a SpecMeta to a plain dict (frontmatter order).
+
+    Omits ``extra`` (internal field) from the wire format. Task 3 adds rendering.
+    """
+    d = asdict(m)
+    d.pop("extra", None)
+    return d
 
 
 def _render(meta: SpecMeta, body: str) -> str:

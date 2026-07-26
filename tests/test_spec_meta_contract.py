@@ -2,7 +2,7 @@
 
 import pytest
 
-from spec_runner.spec import SpecMetaError, canonical_fields, meta_from_dict
+from spec_runner.spec import SpecMeta, SpecMetaError, canonical_fields, meta_from_dict
 
 
 def _base(**over):
@@ -98,3 +98,29 @@ def test_non_string_key_raises():
 def test_valid_meta_still_parses():
     m = meta_from_dict(_base(status="approved", version=4, approved_by="andrei"))
     assert (m.spec_stage, m.status, m.version) == ("tasks", "approved", 4)
+
+
+def test_unknown_string_keys_land_in_extra():
+    m = meta_from_dict(
+        _base(owner_role="@platform", traces_to="REQ-001", upstream_hashes={"design": "abc"})
+    )
+    assert m.extra["traces_to"] == "REQ-001"
+    assert m.extra["upstream_hashes"] == {"design": "abc"}
+
+
+def test_literal_extra_key_is_foreign():
+    """A frontmatter key named 'extra' is foreign data, not the extras dict."""
+    m = meta_from_dict(_base(extra="hello"))
+    assert m.extra["extra"] == "hello"
+
+
+def test_extra_is_copied_on_construction():
+    """A caller-owned mapping must not mutate metadata through an alias."""
+    caller = {"traces_to": "REQ-001"}
+    m = SpecMeta(spec_stage="tasks", extra=caller)
+    caller["traces_to"] = "REQ-999"
+    assert m.extra["traces_to"] == "REQ-001"
+
+
+def test_document_without_extras_has_empty_extra():
+    assert meta_from_dict(_base()).extra == {}
