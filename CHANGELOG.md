@@ -10,6 +10,42 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+SpecMeta frontmatter contract v2 (minor release): additive only, nothing
+removed from any contract surface. See `docs/CONTRACTS.md` for the full
+field table, the frozen public surface, and the contract changelog.
+
+### Added
+
+- **`SpecMeta.owner_role: str | None`** — a first-class field carrying
+  CODEOWNERS role(s) (`"@role[,@role]"`, e.g. `"@platform,@sre"`). The role
+  semantics belong to the consumer (steward); spec-runner is only the
+  carrier. `None` is omitted from rendered frontmatter, so existing spec
+  files don't gain an `owner_role: null` key on their next write.
+- **`SpecMeta.extra: dict[str, Any]`** — foreign frontmatter keys (e.g.
+  steward's `traces_to`, `upstream_hashes`) are now preserved verbatim
+  through parse and render. The canonical wire fields are
+  `fields(SpecMeta) - {"extra"}`, computed by subtraction so an internal
+  dataclass field can never silently widen the wire contract — meaning a
+  frontmatter key literally named `extra` is itself foreign data and lands
+  in `meta.extra["extra"]`.
+- **`SPEC_META_CONTRACT = 2`**, declared upstream for the first time. v1 was
+  the implicit historical contract a consumer (steward) had pinned by
+  inferring it from observed behaviour. Bump policy: adding an optional
+  field does not bump the contract; removing or renaming one does; the
+  existence of `extra` never bumps it by itself.
+- **A frozen public surface** exported from `spec_runner`: `SpecMeta`,
+  `SpecMetaError`, `SPEC_META_CONTRACT`, `SPEC_STAGES`, `split_frontmatter`,
+  `strip_frontmatter`, `split_frontmatter_raw`, `read_spec_meta`,
+  `read_spec_body`, `write_spec`, `meta_from_dict`, `meta_to_dict`.
+  Everything else in `spec.py` is private and outside the contract.
+- **`docs/CONTRACTS.md`** — the field table, semantics, round-trip
+  guarantee, bump policy and contract changelog for the SpecMeta frontmatter
+  contract.
+- **A golden fixture**
+  (`src/spec_runner/contract_fixtures/spec_meta_contract_v2.md`) shipped as
+  package data (`importlib.resources`), so a consumer can validate its own
+  parser against the exact same bytes spec-runner tests against.
+
 ### Fixed
 
 - **Governance gate could be bypassed under a custom stage profile.**
@@ -34,6 +70,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   had its own hardcoded three-key stage→file map and raised
   `ValueError: unknown stage: <name>` for anything else; it now resolves the
   path via the shared `spec.stage_path` convention.
+- **Custom-profile stages were rejected by the VS Code frontmatter schema.**
+  `spec_stage` carried an `enum` of the three `lite` stage names, so a spec
+  on any other stage profile failed the contract — a latent bug since stage
+  profiles shipped in v2.9.0. Stage membership is a runtime check against
+  the configured profile and cannot be expressed in JSON Schema without it,
+  so the schema now only requires a non-empty string.
 
 ### Changed
 
@@ -61,6 +103,35 @@ is a **breaking change** and requires a major version bump plus an entry here.
   now separate concerns fed by different graph walks. The default `lite`
   pipeline's generated prompts stay byte-identical to before, reproven by the
   unchanged C1 zero-behaviour golden fixtures.
+- **spec-runner no longer discards foreign frontmatter keys on write.**
+  Previously `meta_to_dict` was `asdict(meta)` and `meta_from_dict` silently
+  dropped unknown keys, so every `spec approve` / `write_spec` / stale
+  cascade erased them — a real data-loss bug for extending layers (steward),
+  not a missing convenience. Frontmatter is now losslessly extensible. The
+  round-trip guarantee is *semantic*, not textual: keys and YAML values
+  survive; comments, quoting style and original key order do not.
+- **Canonical frontmatter fields are now validated.** They were previously
+  accepted unchecked — dataclasses don't enforce types, so `version:
+  "three"` was silently stored as the string `'three'` and a non-string
+  YAML key was silently dropped. A violation now raises `SpecMetaError`.
+  `version` uses `type(v) is int` so `version: true` cannot pass as `1`;
+  `status` is value-checked against `draft`/`approved`/`stale` because it
+  drives the state machine; `validation` is type-checked only, since it
+  drives no decision. As a documented compatibility exception,
+  `generated_at` and `approved_at` also accept YAML's native date scalars
+  and normalize them via `.isoformat()`.
+- **A recognized-but-malformed spec now fails loud instead of silently
+  reading as unmanaged.** Unmanaged/foreign documents still return `None`
+  permissively — that matters, since "unmanaged" passes the governance gate
+  — but once `spec_stage` is recognized, the document can no longer
+  silently degrade. Syntactically invalid frontmatter YAML remains
+  unmanaged, since the stage cannot be read at all in that case.
+- **The VS Code frontmatter schema is now open**
+  (`additionalProperties: true`) and gained `owner_role`. It previously
+  declared `additionalProperties: false` as a drift alarm, which
+  contradicts a deliberately extensible frontmatter; that protection moved
+  to an exact canonical-field test, which is stricter. This is a cross-repo
+  contract consumed by `spec-runner-vscode`.
 
 ## [2.10.0] — 2026-07-14
 

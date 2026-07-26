@@ -1,0 +1,196 @@
+# SpecMeta frontmatter contract
+
+This document describes the YAML frontmatter contract that spec-runner owns and
+extending layers (primarily steward) consume. It complements
+`docs/state-schema.md` (the Maestro execution-state/`--json-result` contract),
+which is unrelated and unaffected by anything here.
+
+**Source of truth:** `src/spec_runner/spec.py` — dataclass `SpecMeta` and the
+parse/render functions below. **Everything else in `spec.py`** (`StageDef`,
+`StageProfile`, `load_profile`, the stage-graph helpers, `apply_approval`,
+`write_spec`'s locking, etc.) **is private** and outside this contract; it may
+change without a contract-version bump.
+
+## Contract version
+
+```python
+from spec_runner import SPEC_META_CONTRACT
+```
+
+`SPEC_META_CONTRACT: int = 2`, declared upstream (spec-runner) for the first
+time in this release. See [Contract changelog](#contract-changelog) below for
+why v1 predates this constant's existence.
+
+**Bump policy:**
+
+- adding an optional field does **not** bump the contract;
+- removing or renaming a field **does** bump it;
+- the existence of `SpecMeta.extra` — i.e. a consumer writing new foreign
+  frontmatter keys — never bumps the contract by itself. That is the point of
+  `extra`: extending layers grow without spec-runner's involvement.
+
+## Frozen public surface
+
+The following symbols are importable from the `spec_runner` package root and
+are covered by this contract (pinned by
+`tests/test_spec_meta_contract.py::test_frozen_surface_is_importable_from_package_root`):
+
+| Symbol | Kind |
+|---|---|
+| `SpecMeta` | dataclass |
+| `SpecMetaError` | exception |
+| `SPEC_META_CONTRACT` | `int` constant |
+| `SPEC_STAGES` | `tuple[str, ...]` constant (the `lite` profile's stage names) |
+| `split_frontmatter` | function |
+| `strip_frontmatter` | function |
+| `split_frontmatter_raw` | function |
+| `read_spec_meta` | function |
+| `read_spec_body` | function |
+| `write_spec` | function |
+| `meta_from_dict` | function |
+| `meta_to_dict` | function |
+
+A consumer should import only from `spec_runner` (the package root), never
+from `spec_runner.spec` directly — the module path is not part of the
+contract, only the re-export is.
+
+## `SpecMeta` field table
+
+`canonical_fields()` (= `{f.name for f in fields(SpecMeta)} - {"extra"}`) is
+the exact set of wire (frontmatter) keys spec-runner owns. Every other
+frontmatter key a document carries is foreign and lands in `SpecMeta.extra`
+verbatim.
+
+| Field | Type rule | Value rule |
+|---|---|---|
+| `spec_stage` | `str` | member of the active profile's stage names |
+| `status` | `str` | one of `draft` / `approved` / `stale` |
+| `version` | `type(v) is int` (not `isinstance` — a bool must not pass as an int) | none |
+| `generated_by`, `source_prompt_version` | `str` | none |
+| `validation` | `str` | none (advisory field, drives no decision) |
+| `approved_by` | `str \| None` | none |
+| `generated_at`, `approved_at` | `str`, or `datetime.datetime` / `datetime.date` (normalized via `.isoformat()`); `approved_at` also accepts `None` | none |
+| `owner_role` | `str \| None` | none — steward owns role semantics, spec-runner is only the carrier |
+| `extra` keys | `str` | none |
+| `extra` values | any YAML value | none — opaque by definition |
+
+A violation of any type or value rule above raises `SpecMetaError` once the
+document is recognized as managed (see
+[Managed boundary](#managed-boundary-and-fail-closed-parsing) below).
+
+### `generated_at` / `approved_at`: the date-scalar exception
+
+These two fields alone accept YAML's native `datetime.date` /
+`datetime.datetime` scalars (e.g. a hand-written `generated_at: 2026-07-05`
+with no quotes) and normalize them to a string via `.isoformat()`. This is a
+narrow, documented compatibility exception — not a general loosening of the
+string rule — because a bare YAML date is the same information in YAML's own
+scalar type, unlike e.g. `version: true`, where a bool masquerades as an int.
+`datetime.datetime` is checked before `datetime.date` since `datetime`
+subclasses `date`. Every other string-typed field rejects a date value.
+
+### `owner_role`
+
+CODEOWNERS role(s) for the stage, formatted `"@role[,@role]"` (e.g.
+`"@platform,@sre"`). spec-runner validates only that it is a string or
+`None`; the role semantics (what a role means, who it maps to) belong to the
+consumer (steward), not to spec-runner.
+
+### `approved_by` vs. `generated_by`
+
+- `approved_by` is the **git handle of the human** who ran `spec approve`
+  (`git config user.name`, via `_approver()` in `spec_commands.py`).
+- `generated_by` is `<harness>@<model>` — the agent identity that produced the
+  draft (e.g. `claude@claude-opus-5`).
+
+These are two different actors recorded in two different fields; there is no
+separate "approver" field, and none is planned — an earlier proposal to add
+one was closed as documentation, because the semantics above already match
+what was being asked for.
+
+## Round-trip guarantee
+
+**Semantic, not textual.** Keys and YAML values survive a
+parse → mutate → render → parse cycle; comments, quoting style, and the
+original key order in the source file do **not** survive.
+
+- `meta_to_dict()` emits extras first, canonical fields last, so a canonical
+  field can never be shadowed by a foreign key — this is enforced by
+  construction (extras are checked against `canonical_fields()` at
+  serialization time), not merely by convention.
+- A document with **no** extras and no `owner_role` set renders
+  byte-identically to spec-runner 2.10.0 (the pre-contract-v2 behaviour).
+- Fields added in contract v2 and later (currently only `owner_role`) are
+  omitted from the rendered frontmatter when `None`, so an existing document
+  does not gain a new `owner_role: null` key on its next write. The v1
+  nullable fields (`approved_by`, `approved_at`) keep emitting `null` as they
+  always have — changing that would itself be a round-trip break.
+
+## Managed boundary and fail-closed parsing
+
+`read_spec_meta(path, stages)` returns `None` for an **unmanaged** document
+(no frontmatter, frontmatter that isn't a YAML mapping, or a `spec_stage` not
+in `stages`) — this stays permissive, unchanged from prior versions, and is
+depended on by the spec-governance gate (an unmanaged `tasks.md` always
+passes `run --strict`).
+
+Once a document's `spec_stage` **is** recognized, it is managed and can no
+longer silently degrade to `None`: a non-string frontmatter key, or any
+canonical field violating the table above, raises `SpecMetaError` rather than
+being silently dropped or accepted with the wrong type. This is new in
+contract v2 — previously `meta_from_dict` filtered to known keys and
+dataclasses did not enforce types, so e.g. `version: "three"` was silently
+accepted as the string `'three'`.
+
+The one case that stays outside this guarantee: syntactically invalid YAML
+frontmatter is unmanaged, full stop — `split_frontmatter` returns `(None,
+text)` before `spec_stage` can even be examined, so step 3 (the managed
+check) is unreachable. The fail-closed guarantee begins only once the
+frontmatter has parsed into a mapping and the stage has been recognized.
+
+At the CLI process boundary, `main()` wraps the whole dispatch in a single
+`try/except SpecMetaError`, exiting with `SystemExit(f"⛔ {exc}")` — a clean
+diagnostic, no traceback, non-zero exit.
+
+## The stale cascade is sequential, not transactional
+
+`mark_downstream_stale` reads and writes one downstream document at a time.
+If a downstream document is malformed (raises `SpecMetaError`) partway
+through, the cascade halts with the earlier writes already committed —
+there is no rollback. This is documented behaviour, not a bug to fix here;
+making it transactional is out of scope for this contract.
+
+## Golden fixture
+
+`src/spec_runner/contract_fixtures/spec_meta_contract_v2.md` ships as package
+data specifically so a consumer can validate its own parser against the exact
+same bytes spec-runner tests against:
+
+```python
+from importlib.resources import files
+
+text = (files("spec_runner.contract_fixtures") / "spec_meta_contract_v2.md").read_text()
+```
+
+See `tests/test_spec_meta_contract.py::test_golden_fixture_round_trips` for
+the reference assertions (extras present, `owner_role` present, round-trip
+stability).
+
+## Contract changelog
+
+- **v1 (implicit, historical).** Never declared by spec-runner. steward
+  inferred this version by observing spec-runner's behaviour and pinned
+  `SPEC_META_CONTRACT = 1` in its own vendored copy. Under v1, foreign
+  frontmatter keys were silently discarded on every write (`spec approve`,
+  `write_spec`, the stale cascade), and canonical fields were accepted
+  unchecked.
+- **v2 (this release).** Declared upstream for the first time.
+  - `SpecMeta.extra` — foreign frontmatter keys are preserved losslessly
+    through parse and render.
+  - `SpecMeta.owner_role: str | None` — a first-class field.
+  - Canonical fields are validated against the table above; a violation
+    raises `SpecMetaError` instead of being silently dropped or
+    misinterpreted.
+  - A recognized-but-malformed managed spec now fails loud instead of
+    silently reading as unmanaged (closing a governance-gate bypass).
+  - The frozen public surface (above) and this document are new.

@@ -262,6 +262,29 @@ def test_managed_document_with_malformed_known_field_raises(tmp_path):
         read_spec_meta(p, LITE.names())
 
 
+# --- Golden fixture (REQ-406): a consumer (steward) can validate its own
+# parser against these exact bytes, shipped as package data. ---
+
+
+def test_golden_fixture_round_trips():
+    from importlib.resources import files
+
+    text = (files("spec_runner.contract_fixtures") / "spec_meta_contract_v2.md").read_text()
+    parsed, body = split_frontmatter(text)
+    meta = meta_from_dict(parsed)
+
+    assert meta.owner_role == "@platform,@sre"
+    assert meta.approved_by == "andrei"
+    assert meta.version == 3
+    assert meta.extra["traces_to"] == "REQ-001"
+    assert meta.extra["upstream_hashes"] == {
+        "requirements": "5f2a9c1",
+        "design": "8b3e7d0",
+    }
+    assert body.startswith("# Golden fixture for SpecMeta contract v2")
+    assert meta_to_dict(meta_from_dict(meta_to_dict(meta))) == meta_to_dict(meta)
+
+
 def test_unknown_spec_stage_stays_unmanaged(tmp_path):
     """A spec_stage not in the recognized set keeps the doc unmanaged."""
     p = _write(tmp_path, "---\nspec_stage: acceptance\nstatus: draft\n---\nbody\n")
