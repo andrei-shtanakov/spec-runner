@@ -3,12 +3,14 @@
 import pytest
 
 from spec_runner.spec import (
+    LITE,
     SpecMeta,
     SpecMetaError,
     _render,
     canonical_fields,
     meta_from_dict,
     meta_to_dict,
+    read_spec_meta,
     split_frontmatter,
 )
 
@@ -231,3 +233,42 @@ def test_v1_nullable_fields_still_render_as_null():
 def test_owner_role_rejects_non_string():
     with pytest.raises(SpecMetaError, match="owner_role"):
         meta_from_dict(_base(owner_role=["@a"]))
+
+
+def _write(tmp_path, text):
+    """Write text to tasks.md and return the path."""
+    p = tmp_path / "tasks.md"
+    p.write_text(text)
+    return p
+
+
+def test_unmanaged_document_with_non_string_key_is_none(tmp_path):
+    """Foreign frontmatter stays permissive: unmanaged, not an error."""
+    p = _write(tmp_path, "---\ntitle: notes\n1: foo\n---\nbody\n")
+    assert read_spec_meta(p, LITE.names()) is None
+
+
+def test_managed_document_with_non_string_key_raises(tmp_path):
+    """Managed document with non-string key must raise, not silently degrade."""
+    p = _write(tmp_path, "---\nspec_stage: tasks\nstatus: draft\n1: foo\n---\nbody\n")
+    with pytest.raises(SpecMetaError):
+        read_spec_meta(p, LITE.names())
+
+
+def test_managed_document_with_malformed_known_field_raises(tmp_path):
+    """Must not silently degrade to unmanaged, which would bypass the gate."""
+    p = _write(tmp_path, "---\nspec_stage: tasks\nstatus: draft\nversion: three\n---\nbody\n")
+    with pytest.raises(SpecMetaError):
+        read_spec_meta(p, LITE.names())
+
+
+def test_unknown_spec_stage_stays_unmanaged(tmp_path):
+    """A spec_stage not in the recognized set keeps the doc unmanaged."""
+    p = _write(tmp_path, "---\nspec_stage: acceptance\nstatus: draft\n---\nbody\n")
+    assert read_spec_meta(p, LITE.names()) is None
+
+
+def test_invalid_yaml_frontmatter_stays_unmanaged(tmp_path):
+    """The fail-closed guarantee starts only after the YAML parses."""
+    p = _write(tmp_path, "---\nspec_stage: [unclosed\n---\nbody\n")
+    assert read_spec_meta(p, LITE.names()) is None
