@@ -42,9 +42,14 @@ def _approver() -> str:
         return "unknown"
 
 
+def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
+    """Stage names of the configured profile, for profile-aware meta reads."""
+    return config.resolve_spec_profile().names()
+
+
 def _metas(config: ExecutorConfig) -> dict[str, SpecMeta | None]:
     """Read the frontmatter meta for every stage in the configured profile."""
-    names = config.resolve_spec_profile().names()
+    names = _stage_names(config)
     return {stage: read_spec_meta(stage_path(config, stage), names) for stage in names}
 
 
@@ -74,7 +79,7 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged (no frontmatter); run `spec adopt` first")
         return 2
@@ -86,7 +91,7 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
             print(f"  - {error}")
         return 1
     apply_approval(config, stage, approver=_approver(), now=_now(), fresh_validation=verdict)
-    new_meta = read_spec_meta(path)
+    new_meta = read_spec_meta(path, _stage_names(config))
     version = new_meta.version if new_meta is not None else "?"
     print(f"{stage}: approved (v{version})")
     return 0
@@ -96,7 +101,7 @@ def cmd_spec_reject(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Reopen ``args.stage`` as ``draft``."""
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged")
         return 2
@@ -148,7 +153,7 @@ def cmd_spec_check(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Refresh the cached ``validation`` field for ``args.stage``."""
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged")
         return 2

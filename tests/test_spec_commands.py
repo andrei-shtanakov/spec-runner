@@ -1,9 +1,10 @@
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
 from spec_runner import spec_commands
 from spec_runner.config import ExecutorLock
-from spec_runner.spec import SpecMeta, read_spec_meta, write_spec
+from spec_runner.spec import SpecMeta, read_spec_meta, stage_path, write_spec
 
 
 def _cfg(tmp_path: Path):
@@ -143,3 +144,20 @@ def test_menu_abort_returns_abort(tmp_path):
     write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
     action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "q")
     assert action == "abort"
+
+
+def test_spec_reject_sees_custom_profile_stage(tmp_path, monkeypatch, capsys, acceptance_profile):
+    """A managed custom-profile stage must not be reported as unmanaged."""
+    cfg = _cfg(tmp_path)
+    # Override the profile to use acceptance_profile which has "acceptance" stage.
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "approved"), "body\n")
+
+    rc = spec_commands.cmd_spec_reject(Namespace(stage="acceptance"), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"custom-profile stage reported unmanaged: {out}"
+    assert "re-opened as draft" in out
