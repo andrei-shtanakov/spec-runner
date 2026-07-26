@@ -14,7 +14,6 @@ from .logging import get_logger
 from .prompt import (
     build_gated_generation_prompt,
     load_prompt_template,
-    parse_spec_marker,
     render_template,
     template_hash,
 )
@@ -37,13 +36,6 @@ from .task import (
 from .validate import validate_spec_stage, verdict_from_result
 
 logger = get_logger("cli")
-
-_MARKER = {"requirements": "REQUIREMENTS", "design": "DESIGN", "tasks": "TASKS"}
-_UPSTREAM: dict[str, list[str]] = {
-    "requirements": [],
-    "design": ["requirements"],
-    "tasks": ["requirements", "design"],
-}
 
 
 def _harness(config) -> str:
@@ -93,9 +85,15 @@ def _generate_stage_draft(
         (non-zero CLI exit or missing marker); 2 when the upstream gate blocks
         generation.
     """
+    from .prompt import _parse_stage_marker, _stage_def
+
+    profile = config.resolve_spec_profile()
+    stage_def = _stage_def(stage, profile)
+    stage_names = profile.names()
+
     context: dict[str, str] = {}
-    for upstream in _UPSTREAM[stage]:
-        meta = read_spec_meta(stage_path(config, upstream))
+    for upstream in stage_def.upstream:
+        meta = read_spec_meta(stage_path(config, upstream), stage_names)
         if meta is None or meta.status != "approved":
             print(f"⛔ cannot generate {stage}: {upstream} must be APPROVED first")
             return 2
@@ -105,6 +103,7 @@ def _generate_stage_draft(
         stage,
         description,
         context,
+        profile=profile,
         spec_context=config.spec_context or None,
         spec_rules=config.spec_rules or None,
     )
@@ -126,13 +125,13 @@ def _generate_stage_draft(
         print(f"generation failed at {stage}: {result.stderr[:300]}")
         return 1
 
-    body = parse_spec_marker(result.stdout, _MARKER[stage])
+    body = _parse_stage_marker(result.stdout, stage_def)
     if not body:
         print(f"no {stage} content produced (marker missing)")
         return 1
 
     path = stage_path(config, stage)
-    existing = read_spec_meta(path)
+    existing = read_spec_meta(path, stage_names)
     version = existing.version if existing is not None else 1
     meta = SpecMeta(
         spec_stage=stage,
@@ -140,12 +139,12 @@ def _generate_stage_draft(
         version=version,
         generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
         generated_at=_now_iso(),
-        source_prompt_version=template_hash(stage),
+        source_prompt_version=template_hash(stage, profile),
     )
     lock = ExecutorLock(config.spec_lock_file)
     write_spec(path, meta, body.rstrip("\n") + "\n", lock=lock)
 
-    verdict = verdict_from_result(validate_spec_stage(stage, config))
+    verdict = verdict_from_result(validate_spec_stage(stage, config, profile))
     meta.validation = verdict
     write_spec(path, meta, read_spec_body(path), lock=lock)
 

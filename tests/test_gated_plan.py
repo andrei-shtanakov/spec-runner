@@ -282,6 +282,58 @@ def test_regenerate_draft_preserves_existing_version(tmp_path: Path):
     assert meta.status == "draft"
 
 
+def test_gated_generation_handles_custom_profile_stage(tmp_path, monkeypatch, acceptance_profile):
+    """A custom stage must not KeyError on the hardcoded lite marker/upstream maps."""
+    cfg = _cfg(tmp_path)
+    # Instance-level override only — `type(cfg)` is `types.SimpleNamespace`, shared by
+    # every SimpleNamespace in the process, so patching the class would leak globally.
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    # Direct upstream approved so the gate lets generation proceed.
+    for upstream in ("requirements", "design"):
+        write_spec(stage_path(cfg, upstream), SpecMeta(upstream, "approved"), "up\n")
+
+    rc = cli_plan._generate_stage_draft(
+        "acceptance",
+        "desc",
+        cfg,
+        invoke=_fake_invoke("SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n"),
+    )
+    assert rc == 0
+
+
+def test_gated_tasks_blocked_when_design_went_stale(tmp_path):
+    """Normal lifecycle: re-approving requirements stales design, which blocks tasks."""
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "approved"), "r\n")
+    write_spec(cfg.design_file, SpecMeta("design", "stale"), "d\n")
+
+    def _fail(cmd, **kwargs):
+        raise AssertionError("generation must not start when the direct upstream is stale")
+
+    rc = cli_plan._generate_stage_draft("tasks", "desc", cfg, invoke=_fail)
+    assert rc == 2
+
+
+def test_gated_tasks_allowed_when_only_direct_upstream_is_approved(tmp_path):
+    """Deliberate relaxation: only direct requires are gated, not the transitive closure.
+
+    An artificially inconsistent state (requirements back to draft while design
+    stayed approved) is now allowed, where the old hardcoded map blocked it.
+    """
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), "r\n")
+    write_spec(cfg.design_file, SpecMeta("design", "approved"), "d\n")
+
+    rc = cli_plan._generate_stage_draft(
+        "tasks",
+        "desc",
+        cfg,
+        invoke=_fake_invoke("SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n"),
+    )
+    assert rc == 0
+
+
 def test_open_editor_splits_editor_with_args(monkeypatch, tmp_path: Path):
     """`$EDITOR` with embedded arguments (e.g. "code --wait") must be
     shell-word-split, not passed as a single (invalid) argv element."""

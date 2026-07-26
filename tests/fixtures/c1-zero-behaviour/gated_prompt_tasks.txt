@@ -4,15 +4,6 @@ You are generating the 'tasks' spec document. Fill the TEMPLATE below from the D
 
 Build a widget factory with retries
 
-## Approved requirements
-
-# Requirements
-
-#### REQ-001: X
-**Acceptance Criteria:**
-GIVEN a WHEN b THEN c
-
-
 ## Approved design
 
 # Design

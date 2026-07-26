@@ -310,13 +310,6 @@ def build_generation_prompt(
     return "\n".join(parts)
 
 
-_PRIOR_FOR: dict[str, list[str]] = {
-    "requirements": [],
-    "design": ["requirements"],
-    "tasks": ["requirements", "design"],
-}
-
-
 def build_gated_generation_prompt(
     stage: str,
     description: str,
@@ -347,12 +340,13 @@ def build_gated_generation_prompt(
     Returns:
         The assembled prompt string.
     """
-    marker = _stage_def(stage, profile).marker_prefix
+    stage_def = _stage_def(stage, profile)
+    marker = stage_def.marker_prefix
     template = load_bundled_template(stage, profile)
 
     prior_parts = [
         f"## Approved {prior}\n\n{context[prior]}"
-        for prior in _PRIOR_FOR[stage]
+        for prior in stage_def.upstream
         if context.get(prior)
     ]
     prior_block = "\n\n".join(prior_parts)
@@ -406,6 +400,25 @@ def parse_spec_marker(output: str, marker_name: str) -> str | None:
     if end_idx == -1:
         return None
     return output[start_idx:end_idx].strip()
+
+
+def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
+    """Extract content between a stage's own ``{marker_prefix}_READY``/``_END``.
+
+    ``StageDef.marker_prefix`` is the complete prefix (e.g. ``SPEC_TASKS``),
+    unlike :func:`parse_spec_marker`, which prepends ``SPEC_`` to a bare name
+    and stays unchanged for backward compatibility.
+    """
+    start_marker = f"{stage.marker_prefix}_READY"
+    end_marker = f"{stage.marker_prefix}_END"
+    start = output.find(start_marker)
+    if start == -1:
+        return None
+    start += len(start_marker)
+    end = output.find(end_marker, start)
+    if end == -1:
+        return None
+    return output[start:end].strip()
 
 
 def build_task_prompt(

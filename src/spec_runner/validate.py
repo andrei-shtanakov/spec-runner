@@ -10,7 +10,7 @@ import yaml
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
-from spec_runner.spec import LITE, StageProfile, load_profile, strip_frontmatter
+from spec_runner.spec import LITE, StageProfile, load_profile, stage_path, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
@@ -139,25 +139,29 @@ def validate_design(path: Path) -> ValidationResult:
 def _stage_path(stage: str, config: ExecutorConfig) -> Path:
     """Resolve the file path for ``stage`` from the config.
 
+    The three built-in stage names keep resolving via the config's own fixed
+    attributes (``requirements_file``/``design_file``/``tasks_file``),
+    preserving the original contract for configs that only carry those three
+    paths. Any other stage name falls back to the profile-agnostic
+    ``spec.stage_path`` convention (``config.spec_dir`` / ``config.spec_prefix``),
+    so a custom profile's stage names resolve too (M4).
+
     Args:
-        stage: One of ``"requirements"``, ``"design"``, ``"tasks"``.
+        stage: A stage name (built-in or custom-profile).
         config: Executor config providing the stage file paths.
 
     Returns:
         The path to the stage's spec file.
-
-    Raises:
-        ValueError: If ``stage`` has no known config file path.
     """
-    paths = {
-        "requirements": config.requirements_file,
-        "design": config.design_file,
-        "tasks": config.tasks_file,
+    known: dict[str, Path | None] = {
+        "requirements": getattr(config, "requirements_file", None),
+        "design": getattr(config, "design_file", None),
+        "tasks": getattr(config, "tasks_file", None),
     }
-    try:
-        return paths[stage]
-    except KeyError:
-        raise ValueError(f"unknown stage: {stage}") from None
+    resolved = known.get(stage)
+    if resolved is not None:
+        return resolved
+    return stage_path(config, stage)
 
 
 def validate_spec_stage(
