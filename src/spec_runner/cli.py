@@ -200,7 +200,7 @@ def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
     """
     if getattr(config, "spec_governance", "off") != "strict":
         return True, ""
-    meta = read_spec_meta(config.tasks_file)
+    meta = read_spec_meta(config.tasks_file, config.resolve_spec_profile().names())
     if meta is None:
         return True, ""  # unmanaged: backward-compatible
     if meta.status == "approved":

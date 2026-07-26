@@ -336,6 +336,34 @@ def downstream_stages(stage: str, graph: StageProfile | Sequence[str] = STAGES) 
     return [n for n in names if n in dependents]
 
 
+def ancestor_stages(stage: str, graph: StageProfile | Sequence[str] = STAGES) -> list[str]:
+    """Stages that ``stage`` depends on, directly or transitively (M4).
+
+    The mirror image of :func:`downstream_stages`: with a :class:`StageProfile`,
+    follows ``requires`` edges upward so a stage's generation context includes
+    every ancestor's output — not just its direct requires — while excluding
+    *siblings* (stages that merely share an ancestor but aren't on the path to
+    ``stage``). With a bare name sequence, keeps the historical "everything
+    before in list order" behavior. Results are returned in profile/list order,
+    which is a stable topological order for a well-formed profile (each
+    stage's own requires appear no later than the stage itself).
+    """
+    names, edges = _order_and_edges(graph)
+    if edges is None:
+        i = names.index(stage)
+        return list(names[:i])
+
+    ancestors: set[str] = set()
+    frontier = [stage]
+    while frontier:
+        current = frontier.pop()
+        for dep in edges.get(current, ()):
+            if dep not in ancestors:
+                ancestors.add(dep)
+                frontier.append(dep)
+    return [n for n in names if n in ancestors]
+
+
 def _deps_satisfied(deps: tuple[str, ...], metas: dict[str, SpecMeta | None]) -> bool:
     """True when every dependency in ``deps`` is present and approved."""
     return all((m := metas.get(d)) is not None and m.status == "approved" for d in deps)

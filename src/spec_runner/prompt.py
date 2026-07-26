@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
-from .spec import LITE, StageDef, StageProfile
+from .spec import LITE, StageDef, StageProfile, ancestor_stages
 from .state import RetryContext, TaskAttempt
 from .task import Task
 
@@ -310,11 +310,16 @@ def build_generation_prompt(
     return "\n".join(parts)
 
 
-_PRIOR_FOR: dict[str, list[str]] = {
-    "requirements": [],
-    "design": ["requirements"],
-    "tasks": ["requirements", "design"],
-}
+def _prior_heading(stage: str, status: str) -> str:
+    """Heading for one ancestor's context block, honest about its status.
+
+    ``approved`` keeps the historical wording so existing prompts (and the
+    C1 zero-behaviour goldens) are unchanged; anything else is marked
+    unapproved with its real status.
+    """
+    if status == "approved":
+        return f"## Approved {stage}"
+    return f"## Unapproved {stage} ({status})"
 
 
 def build_gated_generation_prompt(
@@ -324,35 +329,55 @@ def build_gated_generation_prompt(
     profile: StageProfile = LITE,
     spec_context: str | None = None,
     spec_rules: dict[str, list[str]] | None = None,
+    statuses: dict[str, str] | None = None,
 ) -> str:
     """Build a rich, template-driven generation prompt for one gated stage.
 
     Combines role instructions, the full bundled template for the stage,
-    the project description, any approved upstream stage outputs (e.g.
-    requirements when generating design), and the ``SPEC_<STAGE>_READY``/
-    ``_END`` markers the caller uses to extract the result.
+    the project description, the outputs of the stage's transitive ancestors
+    (e.g. requirements when generating design), and the
+    ``<MARKER_PREFIX>_READY``/``_END`` markers the caller uses to extract the
+    result.
 
     Args:
-        stage: One of 'requirements', 'design', 'tasks'.
+        stage: Any stage name of ``profile`` — not limited to the ``lite``
+            chain ('requirements'/'design'/'tasks'); custom profiles supply
+            their own stage names.
         description: Project description from the user.
-        context: Approved upstream stage outputs, keyed by stage name
-            (e.g. {'requirements': '...'}).
+        context: Upstream stage outputs, keyed by stage name
+            (e.g. {'requirements': '...'}). Ancestors absent from the mapping,
+            or mapped to an empty body, are skipped.
         profile: Stage profile supplying the marker prefix and template
             (default lite).
         spec_context: Optional project-wide context, injected as a
             ``<context>`` block after the header (M0). Falsy → omitted.
         spec_rules: Optional per-stage rules; only the entry matching
             ``stage`` is injected as a ``<rules>`` block (M0).
+        statuses: Optional ``{stage: status}`` for the context entries, used
+            to label each block honestly. A stage that is missing here is
+            assumed approved, so callers that do not track statuses render
+            exactly as before.
 
     Returns:
         The assembled prompt string.
     """
-    marker = _stage_def(stage, profile).marker_prefix
+    stage_def = _stage_def(stage, profile)
+    marker = stage_def.marker_prefix
     template = load_bundled_template(stage, profile)
 
+    # The prompt context is the full transitive ancestor closure (every stage
+    # this one depends on, directly or through another), not just the direct
+    # `requires` gated by the caller — a "tasks" stage needs to trace back to
+    # "requirements" even though its only direct requirement is "design".
+    # Each block is labelled by the ancestor's ACTUAL status. The gate checks
+    # only a stage's direct `requires`, so an ancestor further back can be a
+    # draft (reachable via `spec reject`, which does not cascade stale). Its
+    # body still belongs here — dropping it would lose the traceability the
+    # template asks for — but presenting a draft as "Approved" would lie to
+    # the model. Callers that pass no ``statuses`` render exactly as before.
     prior_parts = [
-        f"## Approved {prior}\n\n{context[prior]}"
-        for prior in _PRIOR_FOR[stage]
+        f"{_prior_heading(prior, (statuses or {}).get(prior, 'approved'))}\n\n{context[prior]}"
+        for prior in ancestor_stages(stage, profile)
         if context.get(prior)
     ]
     prior_block = "\n\n".join(prior_parts)
@@ -406,6 +431,25 @@ def parse_spec_marker(output: str, marker_name: str) -> str | None:
     if end_idx == -1:
         return None
     return output[start_idx:end_idx].strip()
+
+
+def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
+    """Extract content between a stage's own ``{marker_prefix}_READY``/``_END``.
+
+    ``StageDef.marker_prefix`` is the complete prefix (e.g. ``SPEC_TASKS``),
+    unlike :func:`parse_spec_marker`, which prepends ``SPEC_`` to a bare name
+    and stays unchanged for backward compatibility.
+    """
+    start_marker = f"{stage.marker_prefix}_READY"
+    end_marker = f"{stage.marker_prefix}_END"
+    start = output.find(start_marker)
+    if start == -1:
+        return None
+    start += len(start_marker)
+    end = output.find(end_marker, start)
+    if end == -1:
+        return None
+    return output[start:end].strip()
 
 
 def build_task_prompt(

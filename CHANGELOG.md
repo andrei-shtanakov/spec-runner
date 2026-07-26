@@ -10,6 +10,58 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Governance gate could be bypassed under a custom stage profile.**
+  `spec_run_gate_ok` read `tasks.md` via `read_spec_meta`'s default `lite`
+  stage tuple, so a managed spec whose stage is not part of `lite` resolved
+  to `None` (= unmanaged) and passed `run --strict` / `watch --strict` even
+  while in `draft`. Live in every released version since stage profiles
+  shipped in v2.9.0. The run gate now resolves stages from the configured
+  profile.
+- **`spec approve` / `reject` / `check` were profile-blind in the same way**
+  and wrongly reported a managed custom-profile stage as unmanaged (exit 2),
+  refusing to act on it. All four `read_spec_meta` calls in
+  `spec_commands.py` now resolve stages from the configured profile.
+- **`plan --gated` crashed on any non-`lite` profile.** `_MARKER` and
+  `_UPSTREAM` in `cli_plan.py` were module-level dicts hardcoded to the three
+  `lite` stages; `_generate_stage_draft` indexed them directly and raised
+  `KeyError` for any other profile. Both are gone: markers now come from
+  `StageDef.marker_prefix` via a new internal `_parse_stage_marker` (the
+  exported `parse_spec_marker` is unchanged, since it prepends `SPEC_` to a
+  bare name while `marker_prefix` is already the full prefix).
+- **`validate` could not resolve a custom stage's file path.** `validate.py`
+  had its own hardcoded three-key stage→file map and raised
+  `ValueError: unknown stage: <name>` for anything else; it now resolves the
+  path via the shared `spec.stage_path` convention.
+
+### Changed
+
+- **Gated generation now gates on a stage's *direct* `requires` only.** The
+  removed `_UPSTREAM` map demanded that both `requirements` and `design` be
+  approved before `tasks` could generate, while `lite.yaml` declares `tasks`
+  as requiring only `design`. The stage profile is the single source of
+  truth, and `requires` describes direct DAG edges, not the transitive
+  closure — which matters for branching profiles, where a hardcoded closure
+  is actively wrong. In a normal lifecycle nothing changes: re-approving an
+  upstream stales its downstream, so a staled `design` still blocks `tasks`.
+  What's newly allowed is reachable through `spec reject` alone, with no file
+  editing required: `cmd_spec_reject` writes only the rejected stage's own
+  file and does not cascade stale, so `spec reject requirements` after
+  `design` is already approved leaves `design` approved while `requirements`
+  returns to draft. Even then, `resolve_next_stage` still auto-resolves to
+  `requirements`, so only an explicit `plan --gated --stage tasks` reaches
+  the `tasks` generator in that state — and it produces a draft that still
+  needs `spec approve tasks` before `run --strict` will pass.
+- **The generation prompt's context is deliberately *not* narrowed to match.**
+  A new `ancestor_stages()` helper in `spec.py` (the mirror of the existing
+  `downstream_stages()`) computes the transitive closure of a stage's
+  ancestors, so the `tasks` generation prompt still embeds both the approved
+  requirements and design, in topological order — gate and prompt context are
+  now separate concerns fed by different graph walks. The default `lite`
+  pipeline's generated prompts stay byte-identical to before, reproven by the
+  unchanged C1 zero-behaviour golden fixtures.
+
 ## [2.10.0] — 2026-07-14
 
 OpenSpec-inspired spec lifecycle: this release delivers five milestones drawn

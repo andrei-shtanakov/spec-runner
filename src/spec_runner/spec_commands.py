@@ -11,6 +11,7 @@ from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .spec import (
     SpecMeta,
+    StageProfile,
     apply_approval,
     read_spec_body,
     read_spec_meta,
@@ -42,9 +43,19 @@ def _approver() -> str:
         return "unknown"
 
 
+def _profile(config: ExecutorConfig) -> StageProfile:
+    """Return the configured stage profile, for profile-aware validation."""
+    return config.resolve_spec_profile()
+
+
+def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
+    """Stage names of the configured profile, for profile-aware meta reads."""
+    return _profile(config).names()
+
+
 def _metas(config: ExecutorConfig) -> dict[str, SpecMeta | None]:
     """Read the frontmatter meta for every stage in the configured profile."""
-    names = config.resolve_spec_profile().names()
+    names = _stage_names(config)
     return {stage: read_spec_meta(stage_path(config, stage), names) for stage in names}
 
 
@@ -74,11 +85,11 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged (no frontmatter); run `spec adopt` first")
         return 2
-    result = validate_spec_stage(stage, config)
+    result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
     if verdict == "fail":
         print(f"{stage}: validation FAILED — not approved:")
@@ -86,7 +97,7 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
             print(f"  - {error}")
         return 1
     apply_approval(config, stage, approver=_approver(), now=_now(), fresh_validation=verdict)
-    new_meta = read_spec_meta(path)
+    new_meta = read_spec_meta(path, _stage_names(config))
     version = new_meta.version if new_meta is not None else "?"
     print(f"{stage}: approved (v{version})")
     return 0
@@ -96,7 +107,7 @@ def cmd_spec_reject(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Reopen ``args.stage`` as ``draft``."""
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged")
         return 2
@@ -120,7 +131,7 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
         print(f"{stage}: no file to adopt at {path}")
         return 2
     body = read_spec_body(path)  # strips frontmatter if somehow already present
-    result = validate_spec_stage(stage, config)
+    result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
     force = getattr(args, "force", False)
     if verdict == "fail" and not force:
@@ -148,11 +159,11 @@ def cmd_spec_check(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Refresh the cached ``validation`` field for ``args.stage``."""
     stage = args.stage
     path = stage_path(config, stage)
-    meta = read_spec_meta(path)
+    meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged")
         return 2
-    verdict = verdict_from_result(validate_spec_stage(stage, config))
+    verdict = verdict_from_result(validate_spec_stage(stage, config, _profile(config)))
     meta.validation = verdict
     write_spec(path, meta, read_spec_body(path), lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: validation={verdict}")
@@ -172,7 +183,7 @@ def run_checkpoint_menu(
     Returns one of: ``approved``, ``edit``, ``regenerate``, ``stop``, ``abort``.
     """
     while True:
-        verdict = verdict_from_result(validate_spec_stage(stage, config))
+        verdict = verdict_from_result(validate_spec_stage(stage, config, _profile(config)))
         approve_hint = "[a] approve" if verdict != "fail" else "[a] approve (blocked: fix errors)"
         print(f"{stage}.md — DRAFT, validation: {verdict.upper()}")
         prompt = f"{approve_hint}  [e] edit  [r] regenerate  [s] stop  [q] abort: "

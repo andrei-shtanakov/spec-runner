@@ -10,7 +10,7 @@ import yaml
 from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
-from spec_runner.spec import LITE, StageProfile, load_profile, strip_frontmatter
+from spec_runner.spec import LITE, StageProfile, load_profile, stage_path, strip_frontmatter
 from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
@@ -136,30 +136,6 @@ def validate_design(path: Path) -> ValidationResult:
     return result
 
 
-def _stage_path(stage: str, config: ExecutorConfig) -> Path:
-    """Resolve the file path for ``stage`` from the config.
-
-    Args:
-        stage: One of ``"requirements"``, ``"design"``, ``"tasks"``.
-        config: Executor config providing the stage file paths.
-
-    Returns:
-        The path to the stage's spec file.
-
-    Raises:
-        ValueError: If ``stage`` has no known config file path.
-    """
-    paths = {
-        "requirements": config.requirements_file,
-        "design": config.design_file,
-        "tasks": config.tasks_file,
-    }
-    try:
-        return paths[stage]
-    except KeyError:
-        raise ValueError(f"unknown stage: {stage}") from None
-
-
 def validate_spec_stage(
     stage: str, config: ExecutorConfig, profile: StageProfile = LITE
 ) -> ValidationResult:
@@ -190,7 +166,7 @@ def validate_spec_stage(
         raise ValueError(
             f"unknown validator_key: {stagedef.validator_key!r}; available: {sorted(VALIDATORS)}"
         ) from None
-    return validator(_stage_path(stage, config))
+    return validator(stage_path(config, stage))
 
 
 def validate_task_fields(tasks: list[Task]) -> ValidationResult:

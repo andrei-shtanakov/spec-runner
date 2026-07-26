@@ -430,3 +430,69 @@ class TestBuildGatedGenerationPrompt:
         p = build_gated_generation_prompt("design", "Build a widget", ctx)
         assert "REQ-001 the widget spins" in p
         assert "SPEC_DESIGN_READY" in p
+
+    def test_gated_prompt_tasks_includes_both_ancestors_once(self):
+        """ "tasks" only directly requires "design", but its prompt context is the
+        full transitive ancestor closure — it must still trace back to
+        "requirements", each block embedded exactly once (no duplication from
+        design also depending on requirements)."""
+        ctx = {
+            "requirements": "REQ-001 the widget spins",
+            "design": "DESIGN-001 spin motor traces [REQ-001]",
+        }
+        p = build_gated_generation_prompt("tasks", "Build a widget", ctx)
+        assert p.count("## Approved requirements") == 1
+        assert p.count("## Approved design") == 1
+        assert "REQ-001 the widget spins" in p
+        assert "DESIGN-001 spin motor traces [REQ-001]" in p
+
+    def test_gated_prompt_tasks_context_order_is_topological(self):
+        """Ancestor context blocks appear in a stable topological order:
+        requirements (no dependencies) before design (depends on requirements)."""
+        ctx = {
+            "requirements": "REQ-001 the widget spins",
+            "design": "DESIGN-001 spin motor",
+        }
+        p = build_gated_generation_prompt("tasks", "Build a widget", ctx)
+        assert p.index("## Approved requirements") < p.index("## Approved design")
+
+    def test_gated_prompt_labels_unapproved_ancestor_honestly(self):
+        """An ancestor that is not approved must not be labelled "Approved".
+
+        The gate checks only a stage's DIRECT requires, so an ancestor further
+        back can legitimately be a draft (reachable via `spec reject`, which
+        does not cascade stale). The body still belongs in the context, but
+        calling a draft "Approved" lies to the model.
+        """
+        ctx = {
+            "requirements": "REQ-001 the widget spins",
+            "design": "DESIGN-001 spin motor traces [REQ-001]",
+        }
+        p = build_gated_generation_prompt(
+            "tasks",
+            "Build a widget",
+            ctx,
+            statuses={"requirements": "draft", "design": "approved"},
+        )
+        # The draft body is still supplied — narrowing the context would lose
+        # the traceability the tasks template asks for.
+        assert "REQ-001 the widget spins" in p
+        # ...but it is not presented as approved.
+        assert "## Approved requirements" not in p
+        assert "## Unapproved requirements (draft)" in p
+        # The approved ancestor keeps its normal heading.
+        assert "## Approved design" in p
+
+    def test_gated_prompt_without_statuses_keeps_approved_labels(self):
+        """Omitting `statuses` preserves the pre-existing wording exactly.
+
+        Every caller that does not track statuses (and every golden fixture)
+        must render byte-identically to before the honest-labelling change.
+        """
+        ctx = {"requirements": "REQ-001 the widget spins"}
+        with_default = build_gated_generation_prompt("design", "Build a widget", ctx)
+        explicit = build_gated_generation_prompt(
+            "design", "Build a widget", ctx, statuses={"requirements": "approved"}
+        )
+        assert "## Approved requirements" in with_default
+        assert with_default == explicit

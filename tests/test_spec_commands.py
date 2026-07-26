@@ -1,9 +1,10 @@
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
 from spec_runner import spec_commands
 from spec_runner.config import ExecutorLock
-from spec_runner.spec import SpecMeta, read_spec_meta, write_spec
+from spec_runner.spec import SpecMeta, read_spec_meta, stage_path, write_spec
 
 
 def _cfg(tmp_path: Path):
@@ -143,3 +144,77 @@ def test_menu_abort_returns_abort(tmp_path):
     write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), GOOD_REQ)
     action = spec_commands.run_checkpoint_menu("requirements", cfg, input_fn=lambda _: "q")
     assert action == "abort"
+
+
+def test_spec_reject_sees_custom_profile_stage(tmp_path, monkeypatch, capsys, acceptance_profile):
+    """A managed custom-profile stage must not be reported as unmanaged."""
+    cfg = _cfg(tmp_path)
+    # Override the profile to use acceptance_profile which has "acceptance" stage.
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "approved"), "body\n")
+
+    rc = spec_commands.cmd_spec_reject(Namespace(stage="acceptance"), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"custom-profile stage reported unmanaged: {out}"
+    assert "re-opened as draft" in out
+
+
+ACCEPTANCE_TASKS_BODY = """\
+## Milestone 1: Core
+
+### TASK-001: First task
+🔴 P0 | ⬜ todo | Est: 1d
+
+**Checklist:**
+- [ ] Step one
+
+**Depends on:** —
+**Blocks:** —
+"""
+
+
+def test_spec_approve_validates_custom_profile_stage(tmp_path, capsys, acceptance_profile):
+    """`spec approve` on a custom-profile stage must validate, not raise.
+
+    Regression test for the bug where `validate_spec_stage` was always called
+    with the default (lite) profile: a stage absent from lite (like
+    "acceptance" here) raised `ValueError("unknown stage: ...")` instead of
+    validating against the configured profile.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "draft"), ACCEPTANCE_TASKS_BODY)
+
+    rc = spec_commands.cmd_spec_approve(Namespace(stage="acceptance", force=False), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected approve to succeed: {out}"
+    assert read_spec_meta(path, acceptance_profile.names()).status == "approved"
+
+
+def test_spec_check_validates_custom_profile_stage(tmp_path, capsys, acceptance_profile):
+    """`spec check` on a custom-profile stage must validate, not raise.
+
+    Regression test: same root cause as the approve test above, but through
+    the `cmd_spec_check` call site of `validate_spec_stage`.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "draft"), ACCEPTANCE_TASKS_BODY)
+
+    rc = spec_commands.cmd_spec_check(Namespace(stage="acceptance"), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected check to succeed: {out}"
+    assert "validation=fail" not in out
+    assert read_spec_meta(path, acceptance_profile.names()).validation in ("pass", "warn")

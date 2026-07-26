@@ -12,9 +12,10 @@ from pathlib import Path
 from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .prompt import (
+    _parse_stage_marker,
+    _stage_def,
     build_gated_generation_prompt,
     load_prompt_template,
-    parse_spec_marker,
     render_template,
     template_hash,
 )
@@ -25,6 +26,7 @@ from .runner import (
 )
 from .spec import (
     SpecMeta,
+    ancestor_stages,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -37,13 +39,6 @@ from .task import (
 from .validate import validate_spec_stage, verdict_from_result
 
 logger = get_logger("cli")
-
-_MARKER = {"requirements": "REQUIREMENTS", "design": "DESIGN", "tasks": "TASKS"}
-_UPSTREAM: dict[str, list[str]] = {
-    "requirements": [],
-    "design": ["requirements"],
-    "tasks": ["requirements", "design"],
-}
 
 
 def _harness(config) -> str:
@@ -93,20 +88,41 @@ def _generate_stage_draft(
         (non-zero CLI exit or missing marker); 2 when the upstream gate blocks
         generation.
     """
-    context: dict[str, str] = {}
-    for upstream in _UPSTREAM[stage]:
-        meta = read_spec_meta(stage_path(config, upstream))
+    profile = config.resolve_spec_profile()
+    stage_def = _stage_def(stage, profile)
+    stage_names = profile.names()
+
+    # Gate: only the DIRECT requires must be approved before generation runs
+    # (requires means direct DAG edges, not the transitive closure — ruling
+    # 2026-07-26). This is deliberately separate from the prompt context
+    # below: approving a stage's immediate prerequisite doesn't require every
+    # ancestor further back to still be approved.
+    for upstream in stage_def.upstream:
+        meta = read_spec_meta(stage_path(config, upstream), stage_names)
         if meta is None or meta.status != "approved":
             print(f"⛔ cannot generate {stage}: {upstream} must be APPROVED first")
             return 2
-        context[upstream] = read_spec_body(stage_path(config, upstream))
+
+    # Context: the full transitive ancestor closure, so e.g. "tasks" still
+    # sees "requirements" even though its only direct requirement is "design".
+    # Statuses ride along so the prompt can label each block honestly: the
+    # gate above clears only the DIRECT requires, so an ancestor further back
+    # may still be a draft and must not be presented as approved.
+    context: dict[str, str] = {}
+    statuses: dict[str, str] = {}
+    for ancestor in ancestor_stages(stage, profile):
+        context[ancestor] = read_spec_body(stage_path(config, ancestor))
+        ancestor_meta = read_spec_meta(stage_path(config, ancestor), stage_names)
+        statuses[ancestor] = ancestor_meta.status if ancestor_meta is not None else "unmanaged"
 
     prompt = build_gated_generation_prompt(
         stage,
         description,
         context,
+        profile=profile,
         spec_context=config.spec_context or None,
         spec_rules=config.spec_rules or None,
+        statuses=statuses,
     )
     cmd = build_cli_command(
         cmd=config.claude_command,
@@ -126,13 +142,13 @@ def _generate_stage_draft(
         print(f"generation failed at {stage}: {result.stderr[:300]}")
         return 1
 
-    body = parse_spec_marker(result.stdout, _MARKER[stage])
+    body = _parse_stage_marker(result.stdout, stage_def)
     if not body:
         print(f"no {stage} content produced (marker missing)")
         return 1
 
     path = stage_path(config, stage)
-    existing = read_spec_meta(path)
+    existing = read_spec_meta(path, stage_names)
     version = existing.version if existing is not None else 1
     meta = SpecMeta(
         spec_stage=stage,
@@ -140,12 +156,12 @@ def _generate_stage_draft(
         version=version,
         generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
         generated_at=_now_iso(),
-        source_prompt_version=template_hash(stage),
+        source_prompt_version=template_hash(stage, profile),
     )
     lock = ExecutorLock(config.spec_lock_file)
     write_spec(path, meta, body.rstrip("\n") + "\n", lock=lock)
 
-    verdict = verdict_from_result(validate_spec_stage(stage, config))
+    verdict = verdict_from_result(validate_spec_stage(stage, config, profile))
     meta.validation = verdict
     write_spec(path, meta, read_spec_body(path), lock=lock)
 
