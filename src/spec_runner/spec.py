@@ -188,6 +188,7 @@ class SpecMeta:
     validation: str = ""  # pass | fail | warn | ""
     approved_by: str | None = None
     approved_at: str | None = None
+    owner_role: str | None = None  # CODEOWNERS role(s), "@role[,@role]"; steward owns the semantics
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -248,7 +249,7 @@ _STR_FIELDS = frozenset(
         "validation",
     }
 )
-_NULLABLE_STR_FIELDS = frozenset({"approved_by"})
+_NULLABLE_STR_FIELDS = frozenset({"approved_by", "owner_role"})
 #: Timestamp wire fields: accept YAML's native date scalars and normalize them
 #: to a string, so a hand-written `generated_at: 2026-07-05` is not a hard
 #: error. ``approved_at`` is additionally nullable.
@@ -339,6 +340,12 @@ def _canonical_order() -> tuple[str, ...]:
     return tuple(f.name for f in fields(SpecMeta) if f.name != "extra")
 
 
+# Fields added in contract v2 and later are omitted when None, so existing
+# documents do not gain new null keys on their next write. The v1 nullable
+# fields (approved_by/approved_at) keep emitting null as they always have.
+_OMIT_WHEN_NONE = frozenset({"owner_role"})
+
+
 def meta_to_dict(m: SpecMeta) -> dict:
     """Serialize a SpecMeta to a flat frontmatter dict.
 
@@ -358,7 +365,10 @@ def meta_to_dict(m: SpecMeta) -> dict:
             raise SpecMetaError(f"extra frontmatter key {key!r} shadows a canonical field")
     out: dict[str, Any] = dict(m.extra)
     for name in _canonical_order():
-        out[name] = getattr(m, name)
+        value = getattr(m, name)
+        if value is None and name in _OMIT_WHEN_NONE:
+            continue
+        out[name] = value
     return out
 
 

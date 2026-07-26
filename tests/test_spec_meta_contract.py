@@ -201,3 +201,33 @@ def test_apply_approval_preserves_extras(tmp_path, monkeypatch):
     assert after is not None
     assert after.status == "approved"
     assert after.extra["traces_to"] == "REQ-001"
+
+
+def test_owner_role_round_trips():
+    again, _ = _round_trip(_base(owner_role="@platform,@sre"))
+    assert again["owner_role"] == "@platform,@sre"
+
+
+def test_owner_role_is_not_an_extra():
+    m = meta_from_dict(_base(owner_role="@platform"))
+    assert m.owner_role == "@platform"
+    assert "owner_role" not in m.extra
+
+
+def test_owner_role_none_is_omitted_from_output():
+    """v2+ optional fields must not appear as nulls, or every existing spec
+    file would gain 'owner_role: null' on its next write."""
+    text = _render(meta_from_dict(_base()), "# body\n")
+    assert "owner_role" not in text
+
+
+def test_v1_nullable_fields_still_render_as_null():
+    """approved_by/approved_at keep their historical behaviour."""
+    text = _render(meta_from_dict(_base()), "# body\n")
+    assert "approved_by:" in text
+    assert "approved_at:" in text
+
+
+def test_owner_role_rejects_non_string():
+    with pytest.raises(SpecMetaError, match="owner_role"):
+        meta_from_dict(_base(owner_role=["@a"]))
