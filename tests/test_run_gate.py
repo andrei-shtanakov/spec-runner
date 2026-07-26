@@ -10,10 +10,13 @@ from spec_runner.spec import SpecMeta, write_spec
 
 
 def _cfg(tmp_path, governance):
+    from spec_runner.spec import LITE
+
     spec = tmp_path / "spec"
     return SimpleNamespace(
         spec_governance=governance,
         tasks_file=spec / "tasks.md",
+        resolve_spec_profile=lambda: LITE,
     )
 
 
@@ -54,6 +57,17 @@ def test_gate_strict_allows_non_spec_frontmatter(tmp_path: Path):
     cfg.tasks_file.write_text("---\ntitle: notes\n---\n# Tasks\n")
     ok, _ = spec_run_gate_ok(cfg)
     assert ok
+
+
+def test_gate_strict_blocks_draft_under_custom_profile(tmp_path: Path, acceptance_profile):
+    """A managed draft on a non-lite stage must not read as unmanaged (bypass)."""
+    cfg = _cfg(tmp_path, "strict")
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+    write_spec(cfg.tasks_file, SpecMeta("acceptance", "draft"), "x\n")
+
+    ok, reason = spec_run_gate_ok(cfg)
+    assert not ok, "draft on a custom-profile stage bypassed the governance gate"
+    assert "draft" in reason.lower()
 
 
 class TestRetryGovernanceGate:
