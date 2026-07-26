@@ -10,13 +10,14 @@
 > отсутствие тега значит «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
-- 🚧 **v2.10.0 подготовлен, но НЕ опубликован** (обнаружено 2026-07-26): `pyproject.toml`
-  = `2.10.0` и в CHANGELOG есть `## [2.10.0] — 2026-07-14` (release commit `a24aba5`,
-  PR #47), но **тега `v2.10.0` нет** ни локально, ни на remote, последний GitHub Release
-  и последняя версия на PyPI — `2.9.0`. `publish.yml` висит на `on.push.tags: ["v*"]`,
-  то есть пайплайн просто ни разу не стартовал. Тот же класс промаха, что был с v2.4.0.
-  Содержимое релиза: OpenSpec-inspired spec lifecycle (M1…M3 — per-stage prompt context,
-  структурный парсер requirements, DAG stage profiles, change-as-folder, delta-spec merge).
+- ✅ **v2.11.0 зарелижен 2026-07-26** (PyPI + GitHub Release, тег `v2.11.0`, release commit
+  `7be192c`): SpecMeta contract v2 + профильная осведомлённость spec-поверхности. Собрал три
+  PR: #53 (обход governance-гейта + падение `plan --gated` на кастомных профилях), #54 (C2:
+  lossless frontmatter, `owner_role`, валидация, `SPEC_META_CONTRACT = 2`, замороженная
+  поверхность, `docs/CONTRACTS.md`), #55 (`requires-python` → `>=3.11`). Сьют 1129 → 1197.
+  Maestro-контракт не тронут.
+- ✅ **v2.10.0 дотегнут и опубликован 2026-07-26** — висел собранным, но без тега с 07-14
+  (третий раз подряд после v2.4.0 такого не будет: заведён CI-гард, см. ниже).
 - ✅ **Governance gate в CI** (`c2d59a6`, PR #51, 2026-07-16): `.github/workflows/governance.yml`
   дёргает переиспользуемый воркфлоу умбреллы, пиненый тегом `governance-v1`. На master
   включён ruleset: обязательный чек `governance / gate` + 1 approving review от code owner
@@ -32,8 +33,9 @@
   ruff/mypy чистые. Keystone steward Phase 1 — разблокирует governance-профили (steward G1/G2).
   Спека-бандл: `docs/plans/spec-runner-c1-stages-profile/`. Исполнено самим spec-runner (claude
   preset, 7/7 задач с первой попытки, $15.91) — dogfood gated+run пайплайна.
-- ⚠️ **Два бага `--spec-prefix` найдены при dogfood C1, всё ещё живы на master** (перепроверено
-  2026-07-26 на `5126476`) — вынесены в чекбоксы, см. «Активные задачи → Баги `--spec-prefix`».
+- ⚠️ **Два бага `--spec-prefix` всё ещё живы** — перепроверены на релизе `v2.11.0`; PR #53 их
+  НЕ чинил (он про профили). Единственная незакрытая пользовательская поломка: настройка
+  `spec-runner.specPrefix` в VSCode-расширении не работает вовсе. См. «Активные задачи».
 - ✅ **v2.8.1 зарелижен 2026-07-05** (PyPI + GitHub Release, тег `v2.8.1`): два фикса
   machine-JSON поверхностей для `spec-runner-vscode` — `costs --json` без `tasks.md`
   отдаёт валидный пустой payload (не прозу/hard-exit), и pre-init structlog default
@@ -88,13 +90,13 @@
 `generated_by` (`cli_plan.py:141`, `<harness>@<model>`). То есть текущий код **уже** совпадает
 с тем, что просит steward, и REQ-402 сводится к «задокументировать», а не «добавить поле».
 
-- [ ] Перенести бандл C2 в репо (`docs/plans/` + `spec/changes/`), переписав REQ-402 под факт @owner:andrei
-- [ ] `SpecMeta.owner_role: str = ""` — носитель CODEOWNERS-роли `"@role[,@role]"`, семантику владеет steward @owner:andrei
-- [ ] Ввести `SPEC_META_CONTRACT` (константы сейчас в коде нет вообще) и объявить v2 @owner:andrei
-- [ ] Зафиксировать в `docs/CONTRACTS.md`: `approved_by` = git-handle человека, `generated_by` = agent-id @owner:andrei
-- [ ] Golden-фикстура frontmatter v2 + round-trip тест; старый 9-полевой frontmatter читается без правок @owner:andrei
-- [ ] `upstream_hashes` как pass-through ключ (spec-runner игнорирует, интерпретирует steward) — опционально, не блокирует @owner:andrei
-- [ ] Сообщить steward, что можно ре-вендорить v2 и убрать обход в `meta.py` @owner:andrei @blocked_by:spec-runner#specmeta-v2
+- [x] Спека C2 перенесена в репо как `docs/superpowers/specs/2026-07-26-specmeta-contract-v2-design.md`; REQ-402 переписан под факт (`aa44e9f`, PR #54)
+- [x] `SpecMeta.owner_role` — вышел как `str | None = None`, не `str = ""` (лучше ложится на `parse_owner_roles` у steward) (`35f47ff`)
+- [x] `SPEC_META_CONTRACT = 2` объявлен апстримом впервые + заморожена публичная поверхность (`29d27a9`)
+- [x] `docs/CONTRACTS.md` создан: матрица полей, семантика `approved_by`/`generated_by`, политика бампа (`bede398`)
+- [x] Golden-фикстура в package data (`spec_runner.contract_fixtures`) + round-trip тест (`bede398`)
+- [x] `upstream_hashes` и любые чужие ключи сохраняются через `SpecMeta.extra` losslessly — шире, чем просили (`d3626c5`, `b1346d2`)
+- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:andrei
 
 ### Дотегать и опубликовать v2.10.0 (2026-07-26)
 
@@ -102,10 +104,10 @@
 триггерится исключительно по `on.push.tags: ["v*"]`. Пока тега нет, `pip install spec-runner`
 даёт 2.9.0 без M1…M3, и version-pin у потребителей (`spec-runner-vscode`, Maestro) нечестен.
 
-- [ ] Прогнать сьют + `doctor`, затем создать и запушить тег `v2.10.0` @owner:andrei
+- [x] `v2.10.0` тегнут и опубликован 2026-07-26 (тег на `58b4002`, PyPI 2.10.0)
       — на `a24aba5` либо на текущем HEAD, если решим включить `#48`/`#50`/`#51`
-- [ ] Убедиться, что `publish.yml` отработал и 2.10.0 есть на PyPI, оформить GitHub Release @owner:andrei @blocked_by:spec-runner#tag-v2.10.0
-- [ ] Защита от повтора: CI-чек «версия в pyproject имеет одноимённый тег» либо пункт в release-чеклисте @owner:andrei @trigger:"второй промах подряд — v2.4.0 и v2.10.0"
+- [x] `publish.yml` отработал, PyPI 2.10.0, GitHub Release оформлен
+- [x] CI-гард `.github/workflows/release-tag-guard.yml` — падает на master, если версия в pyproject не имеет одноимённого тега
 
 ### Баги `--spec-prefix` (найдены при dogfood C1, перепроверены 2026-07-26)
 
@@ -127,7 +129,7 @@
       — убрать дубль из top-level либо `default=argparse.SUPPRESS` в `common` с мержем поверх
 - [ ] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` @owner:andrei
 - [ ] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство @owner:andrei
-- [ ] Handoff в `spec-runner-vscode`: до фикса ставить флаг ПОСЛЕ субкоманды @owner:andrei @blocked_by:spec-runner#spec-prefix-fix
+- [ ] Отправить spec-runner-vscode handoff `../prograph-vault/authored/notes/2026-07-26-vscode-frontmatter-schema-opened.md` — ре-вендоринг открытой схемы + обход `--spec-prefix` до фикса @owner:andrei
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 

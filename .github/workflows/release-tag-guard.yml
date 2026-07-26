@@ -1,0 +1,47 @@
+# Catches the release half that publish.yml cannot see.
+#
+# publish.yml fires on a pushed tag and verifies the tag matches the pyproject
+# version. Nothing verified the reverse: a release commit landing on master with
+# a bumped version and no tag. That is the failure that actually happened —
+# twice (v2.4.0 and v2.10.0 both sat on master untagged, so PyPI lagged behind
+# for weeks and consumers pinning the published version stayed blocked).
+#
+# This runs on master only, never on pull requests, so a release PR stays green
+# while its tag legitimately does not exist yet. It goes red the moment the
+# release commit merges, and self-heals as soon as the tag is pushed. Between
+# releases every commit carries an already-tagged version, so it stays quiet.
+name: release-tag-guard
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  tag-exists:
+    name: pyproject version is tagged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Tags are not fetched by the default shallow checkout, and without
+          # them every run would report a missing tag.
+          fetch-depth: 0
+
+      - name: Verify the pyproject version has a matching tag
+        run: |
+          # Same extraction as publish.yml, deliberately — if the two ever
+          # disagree, one of them is checking the wrong string.
+          version="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ -z "$version" ]; then
+            echo "::error::could not read a version from pyproject.toml"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "✅ v${version} is tagged — release is complete"
+            exit 0
+          fi
+          echo "::error title=Release not cut::pyproject declares ${version} but no v${version} tag exists. The release commit merged without a tag, so publish.yml never ran and PyPI still serves the previous version. Fix: git switch master && git pull --ff-only && git tag -a v${version} -m 'v${version}' && git push origin v${version}"
+          exit 1
