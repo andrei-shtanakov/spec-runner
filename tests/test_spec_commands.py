@@ -161,3 +161,60 @@ def test_spec_reject_sees_custom_profile_stage(tmp_path, monkeypatch, capsys, ac
 
     assert rc == 0, f"custom-profile stage reported unmanaged: {out}"
     assert "re-opened as draft" in out
+
+
+ACCEPTANCE_TASKS_BODY = """\
+## Milestone 1: Core
+
+### TASK-001: First task
+🔴 P0 | ⬜ todo | Est: 1d
+
+**Checklist:**
+- [ ] Step one
+
+**Depends on:** —
+**Blocks:** —
+"""
+
+
+def test_spec_approve_validates_custom_profile_stage(tmp_path, capsys, acceptance_profile):
+    """`spec approve` on a custom-profile stage must validate, not raise.
+
+    Regression test for the bug where `validate_spec_stage` was always called
+    with the default (lite) profile: a stage absent from lite (like
+    "acceptance" here) raised `ValueError("unknown stage: ...")` instead of
+    validating against the configured profile.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "draft"), ACCEPTANCE_TASKS_BODY)
+
+    rc = spec_commands.cmd_spec_approve(Namespace(stage="acceptance", force=False), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected approve to succeed: {out}"
+    assert read_spec_meta(path, acceptance_profile.names()).status == "approved"
+
+
+def test_spec_check_validates_custom_profile_stage(tmp_path, capsys, acceptance_profile):
+    """`spec check` on a custom-profile stage must validate, not raise.
+
+    Regression test: same root cause as the approve test above, but through
+    the `cmd_spec_check` call site of `validate_spec_stage`.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.resolve_spec_profile = lambda: acceptance_profile
+
+    path = stage_path(cfg, "acceptance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_spec(path, SpecMeta("acceptance", "draft"), ACCEPTANCE_TASKS_BODY)
+
+    rc = spec_commands.cmd_spec_check(Namespace(stage="acceptance"), cfg)
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected check to succeed: {out}"
+    assert "validation=fail" not in out
+    assert read_spec_meta(path, acceptance_profile.names()).validation in ("pass", "warn")

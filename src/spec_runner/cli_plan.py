@@ -12,6 +12,8 @@ from pathlib import Path
 from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
 from .prompt import (
+    _parse_stage_marker,
+    _stage_def,
     build_gated_generation_prompt,
     load_prompt_template,
     render_template,
@@ -86,8 +88,6 @@ def _generate_stage_draft(
         (non-zero CLI exit or missing marker); 2 when the upstream gate blocks
         generation.
     """
-    from .prompt import _parse_stage_marker, _stage_def
-
     profile = config.resolve_spec_profile()
     stage_def = _stage_def(stage, profile)
     stage_names = profile.names()

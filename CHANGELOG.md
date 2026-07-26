@@ -45,9 +45,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
   closure — which matters for branching profiles, where a hardcoded closure
   is actively wrong. In a normal lifecycle nothing changes: re-approving an
   upstream stales its downstream, so a staled `design` still blocks `tasks`.
-  Only an artificially inconsistent state (`requirements` manually returned
-  to draft while `design` stayed approved) is now allowed where it was
-  previously blocked.
+  What's newly allowed is reachable through `spec reject` alone, with no file
+  editing required: `cmd_spec_reject` writes only the rejected stage's own
+  file and does not cascade stale, so `spec reject requirements` after
+  `design` is already approved leaves `design` approved while `requirements`
+  returns to draft. Even then, `resolve_next_stage` still auto-resolves to
+  `requirements`, so only an explicit `plan --gated --stage tasks` reaches
+  the `tasks` generator in that state — and it produces a draft that still
+  needs `spec approve tasks` before `run --strict` will pass.
 - **The generation prompt's context is deliberately *not* narrowed to match.**
   A new `ancestor_stages()` helper in `spec.py` (the mirror of the existing
   `downstream_stages()`) computes the transitive closure of a stage's
