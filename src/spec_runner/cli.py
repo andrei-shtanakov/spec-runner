@@ -47,7 +47,7 @@ from .preset_cmd import cmd_config
 from .runner import (
     log_progress,
 )
-from .spec import read_spec_meta
+from .spec import SpecMetaError, read_spec_meta
 from .state import (
     ExecutorState,
     check_stop_requested,
@@ -1370,64 +1370,67 @@ def main():
     signal.signal(signal.SIGQUIT, _pause_handler)
 
     # Dispatch
-    commands = {
-        "run": cmd_run,
-        "status": cmd_status,
-        "costs": cmd_costs,
-        "retry": cmd_retry,
-        "logs": cmd_logs,
-        "stop": cmd_stop,
-        "reset": cmd_reset,
-        "plan": cmd_plan,
-        "validate": cmd_validate,
-        "verify": cmd_verify,
-        "audit": cmd_audit,
-        "report": cmd_report,
-        "tui": cmd_tui,
-        "watch": cmd_watch,
-        "mcp": cmd_mcp,
-        "doctor": cmd_doctor,
-        "config": cmd_config,
-    }
+    try:
+        commands = {
+            "run": cmd_run,
+            "status": cmd_status,
+            "costs": cmd_costs,
+            "retry": cmd_retry,
+            "logs": cmd_logs,
+            "stop": cmd_stop,
+            "reset": cmd_reset,
+            "plan": cmd_plan,
+            "validate": cmd_validate,
+            "verify": cmd_verify,
+            "audit": cmd_audit,
+            "report": cmd_report,
+            "tui": cmd_tui,
+            "watch": cmd_watch,
+            "mcp": cmd_mcp,
+            "doctor": cmd_doctor,
+            "config": cmd_config,
+        }
 
-    # Handle unified task subcommand
-    if args.command == "task":
-        _dispatch_task_command(args)
-        return
+        # Handle unified task subcommand
+        if args.command == "task":
+            _dispatch_task_command(args)
+            return
 
-    # Handle change-as-folder subcommand (new/list/archive)
-    if args.command == "change":
-        from . import change_commands
+        # Handle change-as-folder subcommand (new/list/archive)
+        if args.command == "change":
+            from . import change_commands
 
-        handler = {
-            "new": change_commands.cmd_change_new,
-            "list": change_commands.cmd_change_list,
-            "archive": change_commands.cmd_change_archive,
-        }.get(args.change_command)
-        if handler is None:
-            # no sub-subcommand given -> default to `change list`
-            raise SystemExit(change_commands.cmd_change_list(args, config))
-        raise SystemExit(handler(args, config))
+            handler = {
+                "new": change_commands.cmd_change_new,
+                "list": change_commands.cmd_change_list,
+                "archive": change_commands.cmd_change_archive,
+            }.get(args.change_command)
+            if handler is None:
+                # no sub-subcommand given -> default to `change list`
+                raise SystemExit(change_commands.cmd_change_list(args, config))
+            raise SystemExit(handler(args, config))
 
-    # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
-    if args.command == "spec":
-        from . import spec_commands
+        # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
+        if args.command == "spec":
+            from . import spec_commands
 
-        handler = {
-            "status": spec_commands.cmd_spec_status,
-            "approve": spec_commands.cmd_spec_approve,
-            "reject": spec_commands.cmd_spec_reject,
-            "adopt": spec_commands.cmd_spec_adopt,
-            "check": spec_commands.cmd_spec_check,
-        }.get(args.spec_command)
-        if handler is None:
-            # no sub-subcommand given -> default to `spec status`
-            raise SystemExit(spec_commands.cmd_spec_status(args, config))
-        raise SystemExit(handler(args, config))
+            handler = {
+                "status": spec_commands.cmd_spec_status,
+                "approve": spec_commands.cmd_spec_approve,
+                "reject": spec_commands.cmd_spec_reject,
+                "adopt": spec_commands.cmd_spec_adopt,
+                "check": spec_commands.cmd_spec_check,
+            }.get(args.spec_command)
+            if handler is None:
+                # no sub-subcommand given -> default to `spec status`
+                raise SystemExit(spec_commands.cmd_spec_status(args, config))
+            raise SystemExit(handler(args, config))
 
-    cmd_func = commands.get(args.command)
-    if cmd_func:
-        cmd_func(args, config)
+        cmd_func = commands.get(args.command)
+        if cmd_func:
+            cmd_func(args, config)
+    except SpecMetaError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
 
 
 if __name__ == "__main__":

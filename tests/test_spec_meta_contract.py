@@ -323,3 +323,34 @@ def test_canonical_wire_fields_are_exactly_the_expected_set():
         "approved_at",
         "owner_role",
     }
+
+
+# --- CLI error boundary: SpecMetaError must exit cleanly, not traceback ---
+
+
+def test_spec_meta_error_exits_cleanly(tmp_path, monkeypatch):
+    """A malformed managed spec must exit non-zero without a traceback.
+
+    ``spec status`` reads every stage's frontmatter unconditionally via
+    ``cmd_spec_status`` -> ``_metas`` -> ``read_spec_meta`` (no governance
+    gate involved), so it reliably reaches ``SpecMetaError`` on a malformed
+    managed ``tasks.md``. Plain `status` does not: it only parses tasks.md
+    for task headers and never touches frontmatter.
+    """
+    from spec_runner.cli import main
+
+    project = tmp_path / "proj"
+    (project / "spec").mkdir(parents=True)
+    (project / "spec" / "tasks.md").write_text(
+        "---\nspec_stage: tasks\nstatus: draft\nversion: three\n---\n### TASK-001: x\n"
+    )
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(
+        "sys.argv", ["spec-runner", "spec", "--project-root", str(project), "status"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code not in (0, None)
+    assert "⛔" in str(exc.value.code)
