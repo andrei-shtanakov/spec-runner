@@ -1,10 +1,27 @@
-# TODO — spec-runner (план от 2026-04-16, обновлено 2026-05-23)
+# TODO — spec-runner (план от 2026-04-16, обновлено 2026-07-26)
 
 > Роль в экосистеме: единственная **работающая** кросс-проектная связка Maestro→spec-runner.
 > Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
-> Актуальный статус: `../prograph-vault/authored/notes/status/2026-05-22-status.md`
+> Актуальный статус: `../prograph-vault/authored/notes/status/2026-07-08-status.md`
+>
+> Открытые пункты размечены инлайн-тегами `@owner:` / `@blocked_by:` / `@trigger:` по
+> формату из `../_cowork_output/2026-07-26-plan-fields-and-todo-coverage-handoff.md` §3.
+> Теги опциональны и исключены из ключа идентичности пункта в Robin (robin-runtime#27),
+> отсутствие тега значит «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
+- 🚧 **v2.10.0 подготовлен, но НЕ опубликован** (обнаружено 2026-07-26): `pyproject.toml`
+  = `2.10.0` и в CHANGELOG есть `## [2.10.0] — 2026-07-14` (release commit `a24aba5`,
+  PR #47), но **тега `v2.10.0` нет** ни локально, ни на remote, последний GitHub Release
+  и последняя версия на PyPI — `2.9.0`. `publish.yml` висит на `on.push.tags: ["v*"]`,
+  то есть пайплайн просто ни разу не стартовал. Тот же класс промаха, что был с v2.4.0.
+  Содержимое релиза: OpenSpec-inspired spec lifecycle (M1…M3 — per-stage prompt context,
+  структурный парсер requirements, DAG stage profiles, change-as-folder, delta-spec merge).
+- ✅ **Governance gate в CI** (`c2d59a6`, PR #51, 2026-07-16): `.github/workflows/governance.yml`
+  дёргает переиспользуемый воркфлоу умбреллы, пиненый тегом `governance-v1`. На master
+  включён ruleset: обязательный чек `governance / gate` + 1 approving review от code owner
+  (`.github/CODEOWNERS` = `* @andrei-shtanakov`, `48934c1`). Практическое следствие:
+  PR, созданные **до** #51, висят `BLOCKED` навсегда, пока их не ребейзнут.
 - ✅ **v2.9.0 зарелижен 2026-07-07** (PyPI + GitHub Release, тег `v2.9.0`, release commit
   `538d570`): C1 loadable stage profiles. Additive/minor, дефолт `lite` = поведение 2.8.x.
 - ✅ **C1 «STAGES → загружаемый профиль» реализован 2026-07-06** (вошёл в v2.9.0):
@@ -15,10 +32,8 @@
   ruff/mypy чистые. Keystone steward Phase 1 — разблокирует governance-профили (steward G1/G2).
   Спека-бандл: `docs/plans/spec-runner-c1-stages-profile/`. Исполнено самим spec-runner (claude
   preset, 7/7 задач с первой попытки, $15.91) — dogfood gated+run пайплайна.
-- ⚠️ **Два бага `--spec-prefix` найдены при dogfood C1** (кандидаты в v2.8.2): (1) флаг ПЕРЕД
-  субкомандой (`spec-runner --spec-prefix=X run`) молча игнорируется — argparse parent-дефлт
-  затирает значение; **важно: VSCode-расширение ставит флаг именно так** → `spec-runner.specPrefix`
-  сейчас не работает. (2) Семейство `spec status/approve/...` вообще не принимает `--spec-prefix`.
+- ⚠️ **Два бага `--spec-prefix` найдены при dogfood C1, всё ещё живы на master** (перепроверено
+  2026-07-26 на `5126476`) — вынесены в чекбоксы, см. «Активные задачи → Баги `--spec-prefix`».
 - ✅ **v2.8.1 зарелижен 2026-07-05** (PyPI + GitHub Release, тег `v2.8.1`): два фикса
   machine-JSON поверхностей для `spec-runner-vscode` — `costs --json` без `tasks.md`
   отдаёт валидный пустой payload (не прозу/hard-exit), и pre-init structlog default
@@ -45,7 +60,9 @@
 - ✅ `--json-result` флаг для Maestro interop
 - ✅ R-04 (контракт с Maestro) заморожен 2026-04-17 — см. `docs/state-schema.md`, `schemas/`, `tests/test_json_result_contract.py`
 - ✅ **Cross-project observability v1 shipped** — spec-runner reference + Maestro M1/M2 + arbiter Rust + ATP (см. `../prograph-vault/authored/notes/status/2026-05-22-status.md`)
-- ⏸️ **Статус по weekly: `frozen by design`** — нет открытых задач на спринт, ждём Maestro M4
+- ✅ **Dependabot** — `mcp 1.26.0 → 1.28.1` влит 2026-07-26 (`5126476`, PR #50; в 1.27–1.28
+  задепрекейчены WebSocket-транспорт и experimental tasks API — `mcp_server.py` использует
+  только `FastMCP` поверх stdio, ни то ни другое не задето). Открытых Dependabot-PR нет.
 
 ## Правила ведения
 - После каждой выполненной задачи проставь `[x]` и добавь хеш коммита
@@ -54,6 +71,63 @@
 ---
 
 ## Активные задачи
+
+### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — блокирует steward
+
+**Единственный пункт, где кто-то реально ждёт spec-runner.** steward закрыл свою половину C2
+2026-07-15 (stale-cascade check REQ-206 на `upstream_hashes`) и держит вендоренную копию
+`steward/src/steward/_vendor/spec_meta.py` на v1 с временным обходом «читаем `owner_role` из
+сырого frontmatter-dict» (`steward/meta.py`). Формат принадлежит нам (DEC-003), поэтому
+разблокировать может только spec-runner. Ask: `../prograph-vault/authored/notes/2026-07-15-spec-runner-specmeta-v2-handoff.md`.
+Готовый спек-бандл (draft от 2026-07-05): `../_cowork_output/spec-runner-c2-specmeta-contract/`.
+
+⚠️ **Бандл и handoff расходятся в семантике approver — при переносе бандла в репо чинить.**
+`REQ-402` бандла исходит из того, что `approved_by` несёт agent-id, и предлагает добавить
+отдельное поле `approver` для человека. По факту (проверено 2026-07-26) это уже не так:
+`spec_commands.py:31 _approver()` возвращает `git config user.name`, а agent-id живёт в
+`generated_by` (`cli_plan.py:141`, `<harness>@<model>`). То есть текущий код **уже** совпадает
+с тем, что просит steward, и REQ-402 сводится к «задокументировать», а не «добавить поле».
+
+- [ ] Перенести бандл C2 в репо (`docs/plans/` + `spec/changes/`), переписав REQ-402 под факт @owner:andrei
+- [ ] `SpecMeta.owner_role: str = ""` — носитель CODEOWNERS-роли `"@role[,@role]"`, семантику владеет steward @owner:andrei
+- [ ] Ввести `SPEC_META_CONTRACT` (константы сейчас в коде нет вообще) и объявить v2 @owner:andrei
+- [ ] Зафиксировать в `docs/CONTRACTS.md`: `approved_by` = git-handle человека, `generated_by` = agent-id @owner:andrei
+- [ ] Golden-фикстура frontmatter v2 + round-trip тест; старый 9-полевой frontmatter читается без правок @owner:andrei
+- [ ] `upstream_hashes` как pass-through ключ (spec-runner игнорирует, интерпретирует steward) — опционально, не блокирует @owner:andrei
+- [ ] Сообщить steward, что можно ре-вендорить v2 и убрать обход в `meta.py` @owner:andrei @blocked_by:spec-runner#specmeta-v2
+
+### Дотегать и опубликовать v2.10.0 (2026-07-26)
+
+Код, версия и CHANGELOG уже в master (`a24aba5`), не хватает только тега — а `publish.yml`
+триггерится исключительно по `on.push.tags: ["v*"]`. Пока тега нет, `pip install spec-runner`
+даёт 2.9.0 без M1…M3, и version-pin у потребителей (`spec-runner-vscode`, Maestro) нечестен.
+
+- [ ] Прогнать сьют + `doctor`, затем создать и запушить тег `v2.10.0` @owner:andrei
+      — на `a24aba5` либо на текущем HEAD, если решим включить `#48`/`#50`/`#51`
+- [ ] Убедиться, что `publish.yml` отработал и 2.10.0 есть на PyPI, оформить GitHub Release @owner:andrei @blocked_by:spec-runner#tag-v2.10.0
+- [ ] Защита от повтора: CI-чек «версия в pyproject имеет одноимённый тег» либо пункт в release-чеклисте @owner:andrei @trigger:"второй промах подряд — v2.4.0 и v2.10.0"
+
+### Баги `--spec-prefix` (найдены при dogfood C1, перепроверены 2026-07-26)
+
+Оба воспроизводятся на master `5126476` через `_build_parser().parse_args(...)`:
+
+| Вызов | Ожидание | Факт |
+|---|---|---|
+| `spec-runner --spec-prefix=phase2- run` | `spec_prefix='phase2-'` | `''` — молча проглочен |
+| `spec-runner run --spec-prefix=phase2-` | `spec_prefix='phase2-'` | `'phase2-'` ✅ |
+| `spec-runner spec status --spec-prefix=phase2-` | работает | `SystemExit 2`, unrecognized |
+
+Причина (1): `--spec-prefix` объявлен и на top-level парсере, и в parent-парсере `common`
+(`cli.py:896`), которым отнаследованы субкоманды. Субпарсер применяет свой `default=""`
+**после** top-level и затирает значение. **Важно:** `spec-runner-vscode` ставит флаг именно
+перед субкомандой, то есть настройка `spec-runner.specPrefix` сейчас не работает вообще.
+Причина (2): семейство `spec` (`cli.py:1235`+) не отнаследовано от `common` и флага не имеет.
+
+- [ ] Починить проглатывание флага перед субкомандой @owner:andrei
+      — убрать дубль из top-level либо `default=argparse.SUPPRESS` в `common` с мержем поверх
+- [ ] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` @owner:andrei
+- [ ] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство @owner:andrei
+- [ ] Handoff в `spec-runner-vscode`: до фикса ставить флаг ПОСЛЕ субкоманды @owner:andrei @blocked_by:spec-runner#spec-prefix-fix
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 
@@ -73,7 +147,7 @@
 Дальнейшие шаги:
 - [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `../prograph-vault/authored/notes/status/2026-05-22-status.md`.
 - [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
-- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:andrei @blocked_by:maestro#log-schema-metrics @trigger:"в log-schema.json появилась секция метрик"
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
@@ -119,10 +193,10 @@ Maestro-сторона формализации описана в `../maestro/TO
 - [x] Тесты в `tests/test_plan_full.py` (resolve + парсер).
 - [x] README + CLAUDE.md задокументированы.
 
-### Release v2.4.0 (doctor) — см. память `project_pending_v240_release`
+### Release v2.4.0 (doctor) — ✅ ЗАКРЫТО (тег `v2.4.0`, CHANGELOG `## [2.4.0] — 2026-06-12`)
 
-doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в pyproject всё ещё
-`2.3.1`, на PyPI doctor нет. После теста — bump → `v2.4.0`, CHANGELOG, тег, publish.
+doctor влит в master 2026-06-11 (PR #14, `79d4607`) и опубликован в v2.4.0. Тот же промах
+«release-commit без тега» повторился на v2.10.0 — см. «Активные задачи».
 
 ### Cost tracking сломан для современного claude CLI (2026-06-11) — ✅ ИСПРАВЛЕНО (PR #16)
 
@@ -169,7 +243,7 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 а `pre_start` следующей задачи: `git checkout -- .` + `git clean -fd --exclude=spec/`
 (hooks.py ~108-117) затирает незакоммиченную работу предыдущей задачи при
 `create_git_branch=True` + `auto_commit=False`. Низкий приоритет (ниша `--no-commit`).
-- [ ] Решить: при `auto_commit=False` не чистить рабочее дерево / не создавать ветку,
+- [ ] Решить: при `auto_commit=False` не чистить рабочее дерево / не создавать ветку, @owner:andrei
       либо документировать, что `--no-commit` подразумевает `--no-branch`.
 
 ---
@@ -178,6 +252,13 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`), но версия в p
 
 - **Maestro → R-04**: создание `ExecutorState` Pydantic-модели; pin версии spec-runner в `maestro/pyproject.toml`
 - **Maestro → R-03**: когда Maestro начнёт вызывать arbiter, spec-runner потенциально получит информацию о маршрутизации через конфиг — сейчас не блокирует
+- **Maestro → `SpecRunnerConfig` gaps**: `to_executor_config()` (`maestro/models.py:1152,1184`)
+  прокидывает лишь узкое подмножество `ExecutorConfig` — модели (`claude_model`,
+  `review_command`, `review_model`), `personas`, `review_parallel`/`review_roles`, notify- и
+  budget-ключи в Maestro-запусках всегда падают на дефолты. Находка наша, правка на стороне
+  Maestro. Handoff: `../prograph-vault/authored/notes/2026-07-17-maestro-specrunnerconfig-gaps-handoff.md`
+- **steward → C2**: ждёт от нас `owner_role` + `SPEC_META_CONTRACT` v2, после чего ре-вендорит
+  контракт (см. «Активные задачи → C2»). Это мы блокируем steward, не наоборот.
 
 ---
 
