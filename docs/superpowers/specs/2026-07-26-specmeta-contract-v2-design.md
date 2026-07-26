@@ -176,6 +176,15 @@ lets the run gate be bypassed today.
 Already correct: `spec_commands.py:48`, `cli_plan.py:252`, `spec.py:450`
 (`mark_downstream_stale`), `spec.py:471` (`apply_approval`).
 
+**Same family, found while planning:** `_MARKER` and `_UPSTREAM` (`cli_plan.py:41-46`) are
+module-level dicts hardcoded to the three `lite` stages. `_generate_stage_draft` indexes
+them directly (`_UPSTREAM[stage]` at line 97, `_MARKER[stage]` at line 129), so a
+custom-profile stage raises `KeyError` before either `read_spec_meta` call is reached —
+`plan --gated --profile <custom>` crashes outright. `StageDef` already carries `upstream`
+and `marker_prefix`, and `prompt.py::_stage_def(stage, profile)` is the established lookup,
+so both dicts are replaced by profile lookups. This is a crash rather than a bypass, but it
+is the same profile-blindness and belongs in the same PR.
+
 **This ships first, as its own PR** (decision 2026-07-26). It is a behavioural bugfix that
 depends on nothing in the contract work — seven call sites plus a regression test — and the
 hole it closes is live in a released version. Shipping it ahead of C2 closes the bypass
