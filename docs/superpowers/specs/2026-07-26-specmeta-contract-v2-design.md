@@ -176,8 +176,15 @@ lets the run gate be bypassed today.
 Already correct: `spec_commands.py:48`, `cli_plan.py:252`, `spec.py:450`
 (`mark_downstream_stale`), `spec.py:471` (`apply_approval`).
 
-This is a behavioural bugfix independent of the contract work and gets its own regression
-test and CHANGELOG entry.
+**This ships first, as its own PR** (decision 2026-07-26). It is a behavioural bugfix that
+depends on nothing in the contract work — seven call sites plus a regression test — and the
+hole it closes is live in a released version. Shipping it ahead of C2 closes the bypass
+days earlier and keeps both reviews focused. C2 then builds on a tree where every call site
+is already profile-aware, which is what makes the new fail-loud policy enforceable rather
+than bypassable.
+
+Sequencing: PR 1 = profile-aware call sites + regression test + CHANGELOG (a patch
+release). PR 2 = the contract work in the rest of this document.
 
 ### 3.5 Version
 
