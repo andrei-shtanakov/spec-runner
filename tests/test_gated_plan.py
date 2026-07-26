@@ -282,6 +282,34 @@ def test_regenerate_draft_preserves_existing_version(tmp_path: Path):
     assert meta.status == "draft"
 
 
+def test_regenerate_draft_preserves_extras_and_owner_role(tmp_path: Path):
+    """Regenerating a stage must not erase steward's foreign keys or
+    owner_role — mirrors test_apply_approval_preserves_extras for the
+    plan --gated write path."""
+    cfg = _cfg(tmp_path)
+    write_spec(
+        cfg.requirements_file,
+        SpecMeta(
+            spec_stage="requirements",
+            status="approved",
+            version=3,
+            owner_role="@platform",
+            extra={"traces_to": "REQ-001"},
+        ),
+        GOOD_REQ_BODY,
+    )
+
+    rc = cli_plan._generate_stage_draft(
+        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
+    )
+
+    assert rc == 0
+    meta = read_spec_meta(cfg.requirements_file)
+    assert meta is not None
+    assert meta.owner_role == "@platform"
+    assert meta.extra["traces_to"] == "REQ-001"
+
+
 def test_gated_generation_handles_custom_profile_stage(tmp_path, monkeypatch, acceptance_profile):
     """A custom stage must not KeyError on the hardcoded lite marker/upstream maps."""
     cfg = _cfg(tmp_path)

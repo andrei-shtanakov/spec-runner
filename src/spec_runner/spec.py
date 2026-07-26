@@ -339,6 +339,8 @@ def meta_from_dict(d: dict) -> SpecMeta:
             known[key] = _coerce_canonical(key, value)
         else:
             extra[key] = value
+    if "spec_stage" not in known:
+        raise SpecMetaError("frontmatter is missing required field 'spec_stage'")
     return SpecMeta(**known, extra=extra)  # type: ignore[arg-type]
 
 

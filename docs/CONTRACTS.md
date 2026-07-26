@@ -78,6 +78,16 @@ A violation of any type or value rule above raises `SpecMetaError` once the
 document is recognized as managed (see
 [Managed boundary](#managed-boundary-and-fail-closed-parsing) below).
 
+`spec_stage` has no default: calling `meta_from_dict()` directly (bypassing
+`read_spec_meta`'s stage-recognition gate) with a dict that omits it raises
+`SpecMetaError("frontmatter is missing required field 'spec_stage'")` rather
+than the constructor's own `TypeError`, so a consumer that catches only
+`SpecMetaError` per this contract never sees an unrelated exception type.
+This path is unreachable through `read_spec_meta`, since a missing
+`spec_stage` there is treated as unmanaged (returns `None`) before
+`meta_from_dict` is ever called; it only matters for direct `meta_from_dict`
+use.
+
 ### `generated_at` / `approved_at`: the date-scalar exception
 
 These two fields alone accept YAML's native `datetime.date` /
@@ -125,6 +135,19 @@ original key order in the source file do **not** survive.
   does not gain a new `owner_role: null` key on its next write. The v1
   nullable fields (`approved_by`, `approved_at`) keep emitting `null` as they
   always have — changing that would itself be a round-trip break.
+
+### `validation`: the parser is more permissive than the published JSON schema
+
+`_coerce_canonical` type-checks `validation` only (any `str` passes) because
+the field is an advisory cache that drives no decision in spec-runner
+itself. `schemas/spec-frontmatter.schema.json`, by contrast, pins it to
+`enum: ["pass", "fail", "warn", ""]` for the benefit of downstream consumers
+(the VS Code extension) who *do* want to reject an out-of-vocabulary value.
+This divergence is deliberate and will not be reconciled: a hand-edited
+`validation: weird` round-trips cleanly through `meta_from_dict`/`meta_to_dict`
+(e.g. surviving a `spec reject`) but fails validation against the published
+schema. Treat the schema, not the parser, as authoritative for what a
+well-formed document's `validation` value should be.
 
 ## Managed boundary and fail-closed parsing
 

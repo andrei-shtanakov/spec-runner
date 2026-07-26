@@ -157,6 +157,8 @@ def _generate_stage_draft(
         generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
         generated_at=_now_iso(),
         source_prompt_version=template_hash(stage, profile),
+        owner_role=existing.owner_role if existing is not None else None,
+        extra=dict(existing.extra) if existing is not None else {},
     )
     lock = ExecutorLock(config.spec_lock_file)
     write_spec(path, meta, body.rstrip("\n") + "\n", lock=lock)

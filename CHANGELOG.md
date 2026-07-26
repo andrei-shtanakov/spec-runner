@@ -46,37 +46,6 @@ field table, the frozen public surface, and the contract changelog.
   package data (`importlib.resources`), so a consumer can validate its own
   parser against the exact same bytes spec-runner tests against.
 
-### Fixed
-
-- **Governance gate could be bypassed under a custom stage profile.**
-  `spec_run_gate_ok` read `tasks.md` via `read_spec_meta`'s default `lite`
-  stage tuple, so a managed spec whose stage is not part of `lite` resolved
-  to `None` (= unmanaged) and passed `run --strict` / `watch --strict` even
-  while in `draft`. Live in every released version since stage profiles
-  shipped in v2.9.0. The run gate now resolves stages from the configured
-  profile.
-- **`spec approve` / `reject` / `check` were profile-blind in the same way**
-  and wrongly reported a managed custom-profile stage as unmanaged (exit 2),
-  refusing to act on it. All four `read_spec_meta` calls in
-  `spec_commands.py` now resolve stages from the configured profile.
-- **`plan --gated` crashed on any non-`lite` profile.** `_MARKER` and
-  `_UPSTREAM` in `cli_plan.py` were module-level dicts hardcoded to the three
-  `lite` stages; `_generate_stage_draft` indexed them directly and raised
-  `KeyError` for any other profile. Both are gone: markers now come from
-  `StageDef.marker_prefix` via a new internal `_parse_stage_marker` (the
-  exported `parse_spec_marker` is unchanged, since it prepends `SPEC_` to a
-  bare name while `marker_prefix` is already the full prefix).
-- **`validate` could not resolve a custom stage's file path.** `validate.py`
-  had its own hardcoded three-key stage→file map and raised
-  `ValueError: unknown stage: <name>` for anything else; it now resolves the
-  path via the shared `spec.stage_path` convention.
-- **Custom-profile stages were rejected by the VS Code frontmatter schema.**
-  `spec_stage` carried an `enum` of the three `lite` stage names, so a spec
-  on any other stage profile failed the contract — a latent bug since stage
-  profiles shipped in v2.9.0. Stage membership is a runtime check against
-  the configured profile and cannot be expressed in JSON Schema without it,
-  so the schema now only requires a non-empty string.
-
 ### Changed
 
 - **Gated generation now gates on a stage's *direct* `requires` only.** The
@@ -132,6 +101,37 @@ field table, the frozen public surface, and the contract changelog.
   contradicts a deliberately extensible frontmatter; that protection moved
   to an exact canonical-field test, which is stricter. This is a cross-repo
   contract consumed by `spec-runner-vscode`.
+
+### Fixed
+
+- **Governance gate could be bypassed under a custom stage profile.**
+  `spec_run_gate_ok` read `tasks.md` via `read_spec_meta`'s default `lite`
+  stage tuple, so a managed spec whose stage is not part of `lite` resolved
+  to `None` (= unmanaged) and passed `run --strict` / `watch --strict` even
+  while in `draft`. Live in every released version since stage profiles
+  shipped in v2.9.0. The run gate now resolves stages from the configured
+  profile.
+- **`spec approve` / `reject` / `check` were profile-blind in the same way**
+  and wrongly reported a managed custom-profile stage as unmanaged (exit 2),
+  refusing to act on it. All four `read_spec_meta` calls in
+  `spec_commands.py` now resolve stages from the configured profile.
+- **`plan --gated` crashed on any non-`lite` profile.** `_MARKER` and
+  `_UPSTREAM` in `cli_plan.py` were module-level dicts hardcoded to the three
+  `lite` stages; `_generate_stage_draft` indexed them directly and raised
+  `KeyError` for any other profile. Both are gone: markers now come from
+  `StageDef.marker_prefix` via a new internal `_parse_stage_marker` (the
+  exported `parse_spec_marker` is unchanged, since it prepends `SPEC_` to a
+  bare name while `marker_prefix` is already the full prefix).
+- **`validate` could not resolve a custom stage's file path.** `validate.py`
+  had its own hardcoded three-key stage→file map and raised
+  `ValueError: unknown stage: <name>` for anything else; it now resolves the
+  path via the shared `spec.stage_path` convention.
+- **Custom-profile stages were rejected by the VS Code frontmatter schema.**
+  `spec_stage` carried an `enum` of the three `lite` stage names, so a spec
+  on any other stage profile failed the contract — a latent bug since stage
+  profiles shipped in v2.9.0. Stage membership is a runtime check against
+  the configured profile and cannot be expressed in JSON Schema without it,
+  so the schema now only requires a non-empty string.
 
 ## [2.10.0] — 2026-07-14
 
