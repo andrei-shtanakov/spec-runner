@@ -74,9 +74,9 @@
 
 ## Активные задачи
 
-### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — блокирует steward
+### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — ✅ отгружен в v2.11.0
 
-**Единственный пункт, где кто-то реально ждёт spec-runner.** steward закрыл свою половину C2
+**Был единственным пунктом, где кто-то реально ждал spec-runner.** steward закрыл свою половину C2
 2026-07-15 (stale-cascade check REQ-206 на `upstream_hashes`) и держит вендоренную копию
 `steward/src/steward/_vendor/spec_meta.py` на v1 с временным обходом «читаем `owner_role` из
 сырого frontmatter-dict» (`steward/meta.py`). Формат принадлежит нам (DEC-003), поэтому
@@ -97,6 +97,28 @@
 - [x] Golden-фикстура в package data (`spec_runner.contract_fixtures`) + round-trip тест (`bede398`)
 - [x] `upstream_hashes` и любые чужие ключи сохраняются через `SpecMeta.extra` losslessly — шире, чем просили (`d3626c5`, `b1346d2`)
 - [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:andrei
+
+#### Follow-up: форма `owner_role` устарела по DEC-007 (найдено 2026-07-26, после релиза)
+
+Пока шла реализация, владелец steward принял **DEC-007**: каноническая форма `owner_role` —
+**одна роль-slug без `@`** (`owner_role: product`), а не `"@role[,@role]"`. Решение отменяет
+форму значения из июльского ask'а, по которому мы и делали C2. Заметка:
+`../prograph-vault/authored/notes/2026-07-26-steward-owner-role-singular-handoff.md`,
+решение — `steward/spec/20-design.md` (DEC-007), каталог ролей — `steward/profiles/roles.yaml`.
+
+**Кода это не касается.** Тип поля не меняется, spec-runner значение не разбирает и не
+валидирует — «мы только носитель, семантика у steward» здесь сработало ровно как задумано.
+`reviewer_roles`/`allowed_approver_roles` из DEC-007 тоже ничего не требуют: они проходят
+через `extra` наравне с `upstream_hashes`.
+
+**Но v2.11.0 уехал с отменённой формой в документации**, и golden-фикстура шипуется как
+package data именно для сверки потребителями — то есть вводит в заблуждение активно.
+
+- [ ] `docs/CONTRACTS.md:104` — переписать описание `owner_role` под singular slug без `@`; сослаться на DEC-007 и `steward/profiles/roles.yaml` как SSOT формы @owner:andrei
+- [ ] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md:15` — `owner_role: '@platform,@sre'` → одиночный slug @owner:andrei
+- [ ] `src/spec_runner/spec.py:198` — инлайн-комментарий `# CODEOWNERS role(s), "@role[,@role]"` под ту же форму @owner:andrei
+- [ ] Решить, резать ли 2.11.1 ради того, чтобы исправленная фикстура доехала до потребителей, или ждать следующего релиза @owner:andrei @trigger:"фикстура — package data, потребители сверяются с ней"
+- [ ] Обновить заметку vault'а после фикса — сейчас она велит steward игнорировать примеры из фикстуры v2.11.0 @owner:andrei @blocked_by:spec-runner#dec007-doc-fix
 
 ### Дотегать и опубликовать v2.10.0 (2026-07-26)
 
