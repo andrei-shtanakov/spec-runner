@@ -15,6 +15,7 @@ from spec_runner.spec import (
     SpecMeta,
     StageDef,
     StageProfile,
+    ancestor_stages,
     downstream_stages,
     resolve_next_stage,
     stage_readiness,
@@ -55,6 +56,35 @@ class TestDownstreamGraph:
         # A plain Sequence[str] keeps the historical list-slice behavior.
         seq = ("proposal", "specs", "design", "tasks")
         assert downstream_stages("specs", seq) == ["design", "tasks"]
+
+
+class TestAncestorGraph:
+    """`ancestor_stages` is the mirror image of `downstream_stages`: it feeds
+    the gated-generation prompt's context (the FULL transitive ancestor
+    closure), separate from the approval gate (direct `requires` only)."""
+
+    def test_transitive_ancestors(self):
+        assert ancestor_stages("tasks", DAG) == ["proposal", "specs", "design"]
+
+    def test_sibling_not_ancestor(self):
+        # specs and design are siblings (both depend on proposal, neither on
+        # the other) — specs' ancestors must not include design, and vice
+        # versa. A naive "everything before it" list-order closure would
+        # wrongly include the sibling.
+        assert ancestor_stages("specs", DAG) == ["proposal"]
+        assert ancestor_stages("design", DAG) == ["proposal"]
+
+    def test_root_has_no_ancestors(self):
+        assert ancestor_stages("proposal", DAG) == []
+
+    def test_legacy_name_list_stays_linear(self):
+        # A plain Sequence[str] keeps the historical list-slice behavior.
+        seq = ("proposal", "specs", "design", "tasks")
+        assert ancestor_stages("tasks", seq) == ["proposal", "specs", "design"]
+
+    def test_lite_ancestors_match_linear(self):
+        for s in LITE.names():
+            assert ancestor_stages(s, LITE) == ancestor_stages(s, LITE.names())
 
 
 class TestLiteEquivalence:

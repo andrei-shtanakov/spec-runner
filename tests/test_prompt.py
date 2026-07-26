@@ -430,3 +430,28 @@ class TestBuildGatedGenerationPrompt:
         p = build_gated_generation_prompt("design", "Build a widget", ctx)
         assert "REQ-001 the widget spins" in p
         assert "SPEC_DESIGN_READY" in p
+
+    def test_gated_prompt_tasks_includes_both_ancestors_once(self):
+        """ "tasks" only directly requires "design", but its prompt context is the
+        full transitive ancestor closure — it must still trace back to
+        "requirements", each block embedded exactly once (no duplication from
+        design also depending on requirements)."""
+        ctx = {
+            "requirements": "REQ-001 the widget spins",
+            "design": "DESIGN-001 spin motor traces [REQ-001]",
+        }
+        p = build_gated_generation_prompt("tasks", "Build a widget", ctx)
+        assert p.count("## Approved requirements") == 1
+        assert p.count("## Approved design") == 1
+        assert "REQ-001 the widget spins" in p
+        assert "DESIGN-001 spin motor traces [REQ-001]" in p
+
+    def test_gated_prompt_tasks_context_order_is_topological(self):
+        """Ancestor context blocks appear in a stable topological order:
+        requirements (no dependencies) before design (depends on requirements)."""
+        ctx = {
+            "requirements": "REQ-001 the widget spins",
+            "design": "DESIGN-001 spin motor",
+        }
+        p = build_gated_generation_prompt("tasks", "Build a widget", ctx)
+        assert p.index("## Approved requirements") < p.index("## Approved design")

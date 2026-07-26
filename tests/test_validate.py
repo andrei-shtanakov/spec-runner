@@ -520,13 +520,22 @@ class TestValidateSpecStageDispatch:
 
     @staticmethod
     def _stage_cfg(tmp_path: Path):
-        """Create a mock config with stage file paths."""
+        """Create a mock config with stage file paths.
+
+        Includes ``spec_dir``/``spec_prefix`` alongside the three fixed file
+        attributes: on the real ``ExecutorConfig`` these are never independent
+        (``requirements_file`` etc. are themselves derived from ``spec_dir``/
+        ``spec_prefix``), and ``validate_spec_stage`` now resolves stage paths
+        via the shared ``spec.stage_path`` convention for every stage name.
+        """
         from types import SimpleNamespace
 
         return SimpleNamespace(
             requirements_file=tmp_path / "requirements.md",
             design_file=tmp_path / "design.md",
             tasks_file=tmp_path / "tasks.md",
+            spec_dir=tmp_path,
+            spec_prefix="",
         )
 
     def test_validate_spec_stage_requirements_dispatch(self, tmp_path: Path) -> None:
@@ -598,6 +607,8 @@ class TestValidatorRegistry:
             requirements_file=req,
             design_file=design,
             tasks_file=tmp_path / "tasks.md",
+            spec_dir=tmp_path,
+            spec_prefix="",
         )
         # A stage named "design" whose validator_key points at requirements:
         # the registry, not the stage name, must decide which validator runs.

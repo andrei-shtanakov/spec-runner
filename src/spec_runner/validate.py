@@ -136,34 +136,6 @@ def validate_design(path: Path) -> ValidationResult:
     return result
 
 
-def _stage_path(stage: str, config: ExecutorConfig) -> Path:
-    """Resolve the file path for ``stage`` from the config.
-
-    The three built-in stage names keep resolving via the config's own fixed
-    attributes (``requirements_file``/``design_file``/``tasks_file``),
-    preserving the original contract for configs that only carry those three
-    paths. Any other stage name falls back to the profile-agnostic
-    ``spec.stage_path`` convention (``config.spec_dir`` / ``config.spec_prefix``),
-    so a custom profile's stage names resolve too (M4).
-
-    Args:
-        stage: A stage name (built-in or custom-profile).
-        config: Executor config providing the stage file paths.
-
-    Returns:
-        The path to the stage's spec file.
-    """
-    known: dict[str, Path | None] = {
-        "requirements": getattr(config, "requirements_file", None),
-        "design": getattr(config, "design_file", None),
-        "tasks": getattr(config, "tasks_file", None),
-    }
-    resolved = known.get(stage)
-    if resolved is not None:
-        return resolved
-    return stage_path(config, stage)
-
-
 def validate_spec_stage(
     stage: str, config: ExecutorConfig, profile: StageProfile = LITE
 ) -> ValidationResult:
@@ -194,7 +166,7 @@ def validate_spec_stage(
         raise ValueError(
             f"unknown validator_key: {stagedef.validator_key!r}; available: {sorted(VALIDATORS)}"
         ) from None
-    return validator(_stage_path(stage, config))
+    return validator(stage_path(config, stage))
 
 
 def validate_task_fields(tasks: list[Task]) -> ValidationResult:

@@ -24,6 +24,7 @@ from .runner import (
 )
 from .spec import (
     SpecMeta,
+    ancestor_stages,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -91,13 +92,23 @@ def _generate_stage_draft(
     stage_def = _stage_def(stage, profile)
     stage_names = profile.names()
 
-    context: dict[str, str] = {}
+    # Gate: only the DIRECT requires must be approved before generation runs
+    # (requires means direct DAG edges, not the transitive closure — ruling
+    # 2026-07-26). This is deliberately separate from the prompt context
+    # below: approving a stage's immediate prerequisite doesn't require every
+    # ancestor further back to still be approved.
     for upstream in stage_def.upstream:
         meta = read_spec_meta(stage_path(config, upstream), stage_names)
         if meta is None or meta.status != "approved":
             print(f"⛔ cannot generate {stage}: {upstream} must be APPROVED first")
             return 2
-        context[upstream] = read_spec_body(stage_path(config, upstream))
+
+    # Context: the full transitive ancestor closure, so e.g. "tasks" still
+    # sees "requirements" even though its only direct requirement is "design".
+    context: dict[str, str] = {
+        ancestor: read_spec_body(stage_path(config, ancestor))
+        for ancestor in ancestor_stages(stage, profile)
+    }
 
     prompt = build_gated_generation_prompt(
         stage,

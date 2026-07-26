@@ -11,7 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from .config import ExecutorConfig
-from .spec import LITE, StageDef, StageProfile
+from .spec import LITE, StageDef, StageProfile, ancestor_stages
 from .state import RetryContext, TaskAttempt
 from .task import Task
 
@@ -344,9 +344,13 @@ def build_gated_generation_prompt(
     marker = stage_def.marker_prefix
     template = load_bundled_template(stage, profile)
 
+    # The prompt context is the full transitive ancestor closure (every stage
+    # this one depends on, directly or through another), not just the direct
+    # `requires` gated by the caller — a "tasks" stage needs to trace back to
+    # "requirements" even though its only direct requirement is "design".
     prior_parts = [
         f"## Approved {prior}\n\n{context[prior]}"
-        for prior in stage_def.upstream
+        for prior in ancestor_stages(stage, profile)
         if context.get(prior)
     ]
     prior_block = "\n\n".join(prior_parts)
