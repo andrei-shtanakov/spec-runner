@@ -103,6 +103,35 @@ managed document falls back into `None` and the fail-open hole stays open.
    - any malformed canonical field (e.g. `version: "three"`) → `SpecMetaError`.
 5. Unknown string keys → `extra`.
 
+**Validation matrix.** "Against declared types" is not specific enough — two implementers
+could legitimately ship different v2 contracts. The exact rules:
+
+| Field | Type rule | Value rule |
+|---|---|---|
+| `spec_stage` | `str` | member of the active profile's stage names (step 3) |
+| `status` | `str` | must be one of `draft` / `approved` / `stale` |
+| `version` | `type(v) is int` | none |
+| `generated_by`, `generated_at`, `source_prompt_version` | `str` | none |
+| `validation` | `str` | none |
+| `approved_by`, `approved_at` | `str \| None` | none |
+| `owner_role` | `str \| None` | none — steward owns role semantics |
+| `extra` keys | `str` | none |
+| `extra` values | any YAML value | none — opaque by definition |
+
+Three deliberate choices:
+
+- `version` uses `type(v) is int`, not `isinstance`, because `isinstance(True, int)` is
+  `True` and `version: true` must not slip through as `1`. **No range check** — the value
+  only ever increments from the default of 1, and a bound would reject hand-written files
+  for no governance benefit. Implementers should not add one.
+- `status` is value-checked because it drives the state machine: `stage_readiness`
+  (`spec.py:341,359,371,394,398,405`), `mark_downstream_stale` (`spec.py:451`) and the run
+  gate all compare it against literals, so an unrecognized value silently matches no branch
+  — another fail-open.
+- `validation` is type-checked only. It is written (`cli_plan.py:149`, `spec.py:479`,
+  `spec_commands.py:156`) and displayed (`spec_commands.py:61`), and drives no decision.
+  Constraining an advisory field would add breakage risk with no governance benefit.
+
 **What today actually does — verified, and worse than the handoff assumed.** There is no
 validation at all. `meta_from_dict` filters with `{k: v for k, v in d.items() if k in
 known}`, so a non-string key is *silently dropped* rather than raising. Dataclasses do not
@@ -120,6 +149,13 @@ The now-dead `except TypeError` is removed as part of the change.
 
 An unknown or invalid `spec_stage` stays unmanaged. That is the existing, deliberate
 profile semantics (`read_spec_meta`, DESIGN-303) and this design does not change it.
+
+**"Managed cannot degrade to `None`" is not a guarantee for syntactically invalid YAML.**
+`split_frontmatter` returns `(None, text)` on a `yaml.YAMLError`, so a document whose
+frontmatter does not parse is unmanaged before `spec_stage` can be examined at all — step 3
+is unreachable. That is existing policy and stays out of scope here; the fail-closed
+guarantee begins only once the frontmatter has parsed into a mapping and the stage has been
+recognized.
 
 `SpecMetaError` is a new exception alongside the existing `SpecLockError`.
 
@@ -205,8 +241,12 @@ Managed boundary:
 - unmanaged frontmatter with a non-string key → `None`;
 - valid managed `spec_stage` + non-string key → `SpecMetaError` (today: silently dropped);
 - valid managed stage + malformed canonical field → `SpecMetaError` (today: silently
-  accepted with the wrong type);
+  accepted with the wrong type) — one case per row of the validation matrix, including
+  `version: true` rejected by the `type(v) is int` rule and an unrecognized `status`;
+- `validation` with an unrecognized string value is accepted (type-only rule);
 - unknown `spec_stage` stays unmanaged;
+- syntactically invalid frontmatter YAML stays unmanaged (pins the documented limit of the
+  fail-closed guarantee);
 - every spec file and fixture in this repo still parses under the new validation.
 
 Bugfix and boundary:
