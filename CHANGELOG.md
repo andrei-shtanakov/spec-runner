@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.11.1] — 2026-08-04
+
 ### Added
 
 - **CI guard against an untagged release.** `publish.yml` fires on a pushed tag
@@ -25,6 +27,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
   linger until an unrelated commit landed, since a tag push does not re-run a
   branch-triggered workflow. `workflow_dispatch` is available for the case where
   the tag lands on an older commit than master's HEAD.
+
+### Fixed
+
+- **`mcp` ceiling-pinned to `<2`.** mcp 2.0.0 (released 2026-07-28) removed
+  `mcp.server.fastmcp`, which `mcp_server.py`'s `FastMCP` import depends on.
+  The previous unbounded floor (`mcp>=1.26.0`) meant a fresh install pulled
+  mcp 2.x and broke immediately — `src/spec_runner/__init__.py` imported the
+  MCP server eagerly at the time, so even `import spec_runner` crashed, not
+  just `spec-runner mcp`. Pinned `mcp>=1.26.0,<2` as an interim hotfix until
+  the SDK v2 migration lands (see `[2.12.0]`).
 
 ## [2.11.0] — 2026-07-26
 
@@ -624,7 +636,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.1...HEAD
+[2.11.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.8.1...v2.9.0
