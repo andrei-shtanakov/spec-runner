@@ -16,6 +16,7 @@ Usage as CLI:
 """
 
 from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING
 
 from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .executor import (
@@ -31,6 +32,10 @@ from .executor import (
 )
 from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh
 from .logging import get_logger, setup_logging
+
+if TYPE_CHECKING:
+    from .mcp_server import run_server as mcp_run_server
+
 from .plugins import (
     PluginHook,
     PluginInfo,
