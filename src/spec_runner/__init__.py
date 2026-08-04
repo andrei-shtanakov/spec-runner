@@ -31,7 +31,6 @@ from .executor import (
 )
 from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh
 from .logging import get_logger, setup_logging
-from .mcp_server import run_server as mcp_run_server
 from .plugins import (
     PluginHook,
     PluginInfo,
@@ -94,6 +93,17 @@ from .validate import (
     validate_config,
     validate_tasks,
 )
+
+
+def __getattr__(name: str) -> object:
+    """Lazy access to the MCP entry point so importing spec_runner never
+    requires (or breaks on) the mcp SDK."""
+    if name == "mcp_run_server":
+        from .mcp_server import run_server
+
+        return run_server
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 try:
     __version__ = version("spec-runner")
