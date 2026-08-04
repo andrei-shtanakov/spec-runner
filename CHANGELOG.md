@@ -10,6 +10,37 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-08-04
+
+### Changed
+
+- **`mcp` floor raised to `mcp>=2.0.0,<3`** — spec-runner now requires the MCP
+  Python SDK v2 line; SDK v1 (`mcp<2`, the `[2.11.1]` ceiling) is no longer
+  supported. This is a dependency-major bump for anyone pinning `mcp` directly
+  alongside spec-runner.
+- **`mcp_server.py` migrated from `FastMCP` to `MCPServer`.**
+  `from mcp.server.fastmcp import FastMCP` → `from mcp.server import
+  MCPServer`; `mcp_app = FastMCP("spec-runner")` → `mcp_app =
+  MCPServer("spec-runner")`. All `@mcp_app.tool()` decorators and
+  `mcp_app.run(transport="stdio")` are unchanged — the tool surface (status,
+  tasks, costs, logs, run_task, stop, next_tasks, task_detail) is identical.
+  Verified with a new in-memory wire test (`tests/test_mcp_v2_wire.py`) that
+  drives SDK v2's `Client(mcp_app)` directly against the server object and
+  asserts `list_tools()` returns all 8 tools — exercising the actual MCP
+  protocol surface rather than only the Python-level handler functions.
+
+### Fixed
+
+- **`import spec_runner` no longer requires (or can be broken by) the `mcp`
+  SDK.** `__init__.py` previously imported `mcp_server.run_server` eagerly at
+  module load, so any problem with the `mcp` package — including the exact
+  v1/v2 breakage this release line exists to fix — took down the whole
+  package, not just the MCP server. `mcp_run_server` is now resolved lazily
+  through `__getattr__`, imported only when actually accessed; a
+  `TYPE_CHECKING`-guarded import keeps the name visible to static analyzers
+  (resolving a pyrefly `bad-dunder-all` error) without importing `mcp` at
+  runtime.
+
 ## [2.11.1] — 2026-08-04
 
 ### Added
@@ -636,7 +667,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.12.0...HEAD
+[2.12.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.9.0...v2.10.0
