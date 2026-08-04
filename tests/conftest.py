@@ -41,6 +41,11 @@ def acceptance_profile() -> StageProfile:
     )
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 def pytest_addoption(parser) -> None:
     parser.addoption(
         "--update-golden",

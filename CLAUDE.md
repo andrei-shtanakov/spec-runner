@@ -130,7 +130,7 @@ All code is in `src/spec_runner/`:
 | `cli_plan.py` | ~325 | Interactive planning: `cmd_plan` with interactive, `--full`, and `--gated` (`run_gated_stage`: one-stage generate, upstream-approved gate, write DRAFT, validate, stop) pipeline modes |
 | `preset_cmd.py` | ~245 | `spec-runner config` CLI-profile presets: `Fragment` + 8 bundled `presets/*.yaml` (claude/codex/opencode/pi/ollama/llama-cli/qwen/copilot), `load_fragment`/`list_presets`/`compose` (→ 7 CLI-profile keys), `apply_to_config` (fresh static-template write / `--dry-run` / refuse / shape-preserving `--apply` merge with `.bak`), `cmd_config`. qwen/copilot carry `exec_template`/`review_template`; the rest rely on runner auto-detect |
 | `execution.py` | ~560 | `execute_task()`, retry strategy (`classify_retry_strategy`, `compute_retry_delay`, `run_with_retries`), Telegram notification on failure |
-| `mcp_server.py` | ~270 | MCP server (FastMCP, stdio): status, tasks, costs, logs, run_task, stop, next_tasks, task_detail tools; module-level security note |
+| `mcp_server.py` | ~270 | MCP server (`MCPServer`, stdio): status, tasks, costs, logs, run_task, stop, next_tasks, task_detail tools; module-level security note |
 | `config.py` | ~545 | ExecutorConfig, Persona, YAML loading, build_config; supports both `spec-runner.config.yaml` (v2.0) and `spec/executor.config.yaml` (legacy); `ExecutorLock` with PID diagnostics; `_detect_subdir_repo()` + subdir-project git-automation auto-default (OFF when project_root is a strict subdir of a larger git repo); `sync_deps` flag (under `hooks.pre_start`, default true); `spec_profile` (default `lite`) + `resolve_spec_profile()` → `StageProfile` (raises `ConfigError` listing available profiles on unknown name) |
 | `state.py` | ~855 | ExecutorState (context manager), TaskState, TaskAttempt, ErrorCode, ReviewVerdict, RetryContext, SQLite persistence with crash resilience; `_is_disk_full_error()` / `_enter_degraded_mode()` fallback; token fields, `total_cost()`, `task_cost()`, `total_tokens()`, `recover_stale_tasks()`; v2.3.0: `error_kind`/`error_stage` attempt columns, `set_meta`/`get_meta`, `reset_failed_to_pending()`, second-pass helpers (`add/get/clear_second_pass_fails`), `most_recent_failed_attempt()` |
 | `errors.py` | ~80 | Error classification (v2.3.0): `ErrorPattern` + `classify()` turn CLI stderr into human-readable failure reasons (codex usage-limit, generic rate-limit, auth, network, cli_error) with a last-5-lines stderr fallback |
@@ -218,7 +218,7 @@ Entry points (pyproject.toml): `spec-runner` → `executor:main`, `spec-task` �
 - **PyYAML** — YAML config loading
 - **structlog** — Structured logging (JSON + console renderers)
 - **textual** — Terminal UI dashboard for live task monitoring
-- **mcp** — Model Context Protocol server (FastMCP, stdio transport)
+- **mcp** — Model Context Protocol server (`MCPServer`, stdio transport)
 
 ## File Locations
 

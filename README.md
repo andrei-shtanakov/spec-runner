@@ -490,7 +490,7 @@ project/
 │       ├── events.py            # EventBus for streaming to TUI
 │       ├── notifications.py     # Telegram + webhook notifications
 │       ├── tui.py               # Textual TUI dashboard
-│       ├── mcp_server.py        # MCP server (FastMCP, stdio)
+│       ├── mcp_server.py        # MCP server (MCPServer, stdio)
 │       ├── init_cmd.py          # Skill installer
 │       ├── profiles/            # Bundled gated-spec stage profiles (lite.yaml)
 │       └── skills/

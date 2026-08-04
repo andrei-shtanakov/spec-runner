@@ -9,13 +9,13 @@ guidance.
 
 import json
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from .config import ExecutorConfig, build_config, load_config_from_yaml
 from .state import ExecutorState
 from .task import parse_tasks, resolve_dependencies
 
-mcp_app = FastMCP("spec-runner")
+mcp_app = MCPServer("spec-runner")
 
 
 def _build_config(spec_prefix: str = "") -> ExecutorConfig:
