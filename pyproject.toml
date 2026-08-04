@@ -79,6 +79,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "anyio>=4.0",
     "build>=1.4.0",
     "jsonschema>=4.26.0",
     "mypy>=1.19.1",

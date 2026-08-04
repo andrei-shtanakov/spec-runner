@@ -1392,6 +1392,7 @@ dev = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "anyio" },
     { name = "build" },
     { name = "jsonschema" },
     { name = "mypy" },
@@ -1419,6 +1420,7 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "anyio", specifier = ">=4.0" },
     { name = "build", specifier = ">=1.4.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "mypy", specifier = ">=1.19.1" },

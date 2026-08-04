@@ -60,7 +60,7 @@ flowchart TB
     subgraph entry["Entry points"]
         direction LR
         cli["cli.py<br/>argparse dispatcher<br/>cmd_run / cmd_watch<br/>build_task_json_result"]
-        mcp_server["mcp_server.py<br/>FastMCP, stdio"]
+        mcp_server["mcp_server.py<br/>MCPServer, stdio"]
         tui["tui.py<br/>Textual dashboard"]
         executor_mod["executor.py<br/>signal handlers<br/>re-exports"]
     end
