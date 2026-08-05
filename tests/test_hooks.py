@@ -130,9 +130,11 @@ class TestPreStartHook:
     """Tests for pre_start_hook."""
 
     @patch("spec_runner.hooks.subprocess.run")
-    def test_calls_uv_sync(self, mock_run):
+    def test_calls_uv_sync(self, mock_run, tmp_path):
         task = _make_task()
-        config = _make_config(create_git_branch=False)
+        # uv sync auto-runs only for Python projects (#70)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        config = _make_config(create_git_branch=False, project_root=tmp_path)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         result = pre_start_hook(task, config)
@@ -934,16 +936,29 @@ class TestRunParallelReview:
 
 class TestStageEmissionPreStart:
     @patch("spec_runner.hooks.subprocess.run")
-    def test_sync_deps_always_emitted(self, mock_run):
+    def test_sync_deps_emitted_for_python_project(self, mock_run, tmp_path):
         from spec_runner.stages import StageReporter
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        cfg = _make_config(create_git_branch=False)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        cfg = _make_config(create_git_branch=False, project_root=tmp_path)
         events: list[str] = []
         rep = StageReporter("T1", events.append)
         pre_start_hook(_make_task("T1"), cfg, reporter=rep)
         assert any("stage: sync_deps" in e for e in events)
         assert not any("stage: branch" in e for e in events)
+
+    @patch("spec_runner.hooks.subprocess.run")
+    def test_sync_deps_not_emitted_without_python_stack(self, mock_run, tmp_path):
+        """#70: no pyproject.toml and no sync command — the stage is skipped."""
+        from spec_runner.stages import StageReporter
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        cfg = _make_config(create_git_branch=False, project_root=tmp_path)
+        events: list[str] = []
+        rep = StageReporter("T1", events.append)
+        pre_start_hook(_make_task("T1"), cfg, reporter=rep)
+        assert not any("stage: sync_deps" in e for e in events)
 
     @patch("spec_runner.hooks.subprocess.run")
     def test_branch_emitted_when_enabled(self, mock_run):
