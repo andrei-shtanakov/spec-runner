@@ -80,8 +80,9 @@ def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
     """Build a single task's `--json-result` entry.
 
     Stable contract: see docs/state-schema.md and schemas/json-result.schema.json.
-    Golden-fixed by tests/test_json_result_contract.py. Any change here is a
-    breaking change requiring a major version bump.
+    Golden-fixed by tests/test_json_result_contract.py. Changes here follow the
+    breaking-change policy in docs/state-schema.md: removing/renaming/retyping a
+    key requires a major version bump; adding an optional key is non-breaking.
     """
     ts = state.get_task_state(task_id)
     entry: dict = {"task_id": task_id, "status": "unknown", "attempts": 0}
@@ -100,6 +101,10 @@ def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
         entry["review"] = last.review_status or "skipped"
         if last.error:
             entry["error"] = last.error[:200]
+        # v2.16.0 (#97): only emitted when true, so pre-existing consumers
+        # and golden fixtures are unaffected.
+        if last.no_op and ts.status == "success":
+            entry["no_op"] = True
     entry["exit_code"] = 0 if ts.status == "success" else 1
     return entry
 

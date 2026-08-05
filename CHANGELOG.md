@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **Explicit `no-op` completion marker** (battle-testing S2 finding F-20,
+  issue #97, maestro side maestro#123; PR #99). A task that completes with
+  nothing to commit (its work was already absorbed by earlier tasks) is now
+  visibly a no-op instead of looking like a silently-missing task: new
+  `no_op` column on `attempts` (idempotent migration), `"no_op": true` in
+  `--json-result` (additive, emitted only when true — existing consumers see
+  byte-identical output; new golden fixture `json-result-single-noop.json`),
+  `[no-op]` tag in `spec-runner status` task history, and a
+  `✔️ No-op: completed without changes` progress line. Non-breaking per the
+  change policy in `docs/state-schema.md`.
+
 ### Fixed
 
 - **Harness-written `spec/.gitignore` no longer lands in auto-commits**

@@ -260,7 +260,7 @@ class TestHarnessGitignoreNotCommitted:
             description="",
             checklist=[],
         )
-        ok, err, _, _ = post_done_hook(task, cfg, True)
+        ok, err, _, _, _ = post_done_hook(task, cfg, True)
         assert ok is True, err
 
         committed = _git(tmp_path, "show", "--name-only", "--format=", "HEAD").stdout
@@ -297,7 +297,7 @@ class TestPostDoneHookCommit:
             run_lint_on_done=False,
             run_review=False,
         )
-        ok, err, _, _ = post_done_hook(self._task(), cfg, True)
+        ok, err, _, _, _ = post_done_hook(self._task(), cfg, True)
         assert ok is True, err
 
         committed = _git(tmp_path, "show", "--name-only", "--format=", "HEAD").stdout
@@ -320,6 +320,6 @@ class TestPostDoneHookCommit:
             run_lint_on_done=False,
             run_review=False,
         )
-        ok, err, _, _ = post_done_hook(self._task(), cfg, True)
+        ok, err, _, _, _ = post_done_hook(self._task(), cfg, True)
         assert ok is True, err
         assert _git(tmp_path, "rev-parse", "HEAD").stdout.strip() == head_before

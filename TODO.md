@@ -88,6 +88,14 @@
       исключает файл из commit set, когда он не трекается в HEAD
       (harness-created); юзерский трекаемый файл ведёт себя по-старому и
       никогда не удаляется. Регресс: `TestHarnessGitignoreNotCommitted` (PR #98) @owner:andrei
+- [x] **#97 noop-completion-marker** — no-op задача (работа поглощена соседними
+      сабтасками, «No changes to commit») выглядела как недоделанная: maestro
+      показывал «DONE 4/5», оператор шёл в git-археологию. Проверено репро
+      (обычный и worktree-сценарий): в state DB задача ФИКСИРУЕТСЯ success —
+      «not-done» был гонкой чтения на стороне maestro (maestro#122, финальный
+      опрос). Наша часть: явный маркер — колонка `attempts.no_op`, `"no_op": true`
+      в `--json-result` (аддитивно, только когда true), `[no-op]` в `status`.
+      Тесты: `test_noop_marker.py` + golden `json-result-single-noop.json` (PR #99) @owner:andrei
 
 ### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — ✅ отгружен в v2.11.0
 

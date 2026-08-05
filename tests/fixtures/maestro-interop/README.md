@@ -13,6 +13,7 @@ bump and a `BREAKING` note in `CHANGELOG.md`. See `docs/state-schema.md`.
 |---|---|---|
 | `json-result-single-success.json` | `--json-result` single-task successful run | `test_json_result_contract.py::test_golden_single_success` |
 | `json-result-single-failure.json` | `--json-result` single-task failed run (includes `error`) | `test_json_result_contract.py::test_golden_single_failure` |
+| `json-result-single-noop.json` | `--json-result` single-task no-op completion (`"no_op": true`, v2.16.0/#97) | `test_json_result_contract.py::test_golden_single_noop` |
 | `json-result-multi.json` | `--json-result` multi-task run (mixed outcomes) | `test_json_result_contract.py::test_golden_multi` |
 | `json-result-empty.json` | `--json-result` when no tasks are ready | `test_json_result_contract.py::test_golden_empty` |
 | `json-result-legacy-json-state.json` | Legacy pre-2.0 `.executor-state.json` snapshot (read-only fallback for Maestro) | hand-curated |

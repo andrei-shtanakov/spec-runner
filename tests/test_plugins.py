@@ -437,7 +437,7 @@ class TestPluginIntegration:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, review_status, review_findings = post_done_hook(
+            success, error, review_status, review_findings, _no_op = post_done_hook(
                 task, config, success=True
             )
 
@@ -474,7 +474,7 @@ class TestPluginIntegration:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, review_status, review_findings = post_done_hook(
+            success, error, review_status, review_findings, _no_op = post_done_hook(
                 task, config, success=True
             )
 

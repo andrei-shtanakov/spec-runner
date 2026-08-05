@@ -260,7 +260,7 @@ class TestNoBranchMode:
         )
         task = Task(id="TASK-001", name="Test", priority="p1", status="todo", estimate="1d")
 
-        success, error, review_status, review_findings = post_done_hook(task, config, True)
+        success, error, review_status, review_findings, _no_op = post_done_hook(task, config, True)
 
         assert success is True
         assert review_status == "skipped"
@@ -508,7 +508,9 @@ class TestPostDoneHookReviewWiring:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, review_status, review_findings = post_done_hook(task, config, True)
+            success, error, review_status, review_findings, _no_op = post_done_hook(
+                task, config, True
+            )
         assert success is True
         assert review_status == "passed"
 
@@ -527,7 +529,9 @@ class TestPostDoneHookReviewWiring:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, review_status, review_findings = post_done_hook(task, config, True)
+            success, error, review_status, review_findings, _no_op = post_done_hook(
+                task, config, True
+            )
         assert success is True
         assert review_status == "skipped"
 
@@ -570,7 +574,9 @@ class TestPostDoneHookReviewWiring:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, review_status, review_findings = post_done_hook(task, config, True)
+            success, error, review_status, review_findings, _no_op = post_done_hook(
+                task, config, True
+            )
         assert success is True
         assert review_status == "passed"
 
@@ -634,7 +640,7 @@ class TestHitlReviewGate:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, status, findings = post_done_hook(task, config, True)
+            success, error, status, findings, _no_op = post_done_hook(task, config, True)
         assert success is False
         assert status == "rejected"
 
@@ -666,7 +672,7 @@ class TestHitlReviewGate:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, status, findings = post_done_hook(task, config, True)
+            success, error, status, findings, _no_op = post_done_hook(task, config, True)
         assert success is True
         assert status == "passed"
 
@@ -785,7 +791,7 @@ class TestPostDoneHookScopedTests:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, status, findings = post_done_hook(
+            success, error, status, findings, _no_op = post_done_hook(
                 task, config, True, changed_since=changed_since
             )
 
@@ -816,7 +822,7 @@ class TestPostDoneHookScopedTests:
             mock_state = MagicMock()
             mock_state.tasks = {}
             mock_state_cls.return_value = mock_state
-            success, error, status, findings = post_done_hook(task, config, True)
+            success, error, status, findings, _no_op = post_done_hook(task, config, True)
 
         assert success is True
         test_calls = [
@@ -1102,7 +1108,9 @@ class TestDoneStatusPersistence:
         (root / "code.py").write_text("changed\n")  # agent's change during the task
 
         config = self._make_config(root, create_git_branch=False, auto_commit=True)
-        success, _error, _status, _findings = post_done_hook(self._make_task(), config, True)
+        success, _error, _status, _findings, _no_op = post_done_hook(
+            self._make_task(), config, True
+        )
         assert success is True
 
         # The DONE status must be in the COMMITTED tasks.md (HEAD), not just the

@@ -1,0 +1,14 @@
+{
+  "attempts": 1,
+  "cost_usd": 0.05,
+  "duration_seconds": 30.0,
+  "exit_code": 0,
+  "no_op": true,
+  "review": "passed",
+  "status": "done",
+  "task_id": "TASK-004",
+  "tokens": {
+    "input": 900,
+    "output": 150
+  }
+}

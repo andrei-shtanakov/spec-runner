@@ -58,6 +58,7 @@ class TaskAttempt:
     review_findings: str | None = None
     error_kind: str | None = None  # v2.3.0: classified by errors.classify
     error_stage: str | None = None  # v2.3.0: stage when failure occurred
+    no_op: bool = False  # v2.16.0: task completed without any committable changes (#97)
 
 
 @dataclass
@@ -210,6 +211,9 @@ class ExecutorState:
         for col in ("error_kind", "error_stage"):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} TEXT")
+        # v2.16.0: no-op completion marker (#97; idempotent)
+        with contextlib.suppress(sqlite3.OperationalError):
+            self._conn.execute("ALTER TABLE attempts ADD COLUMN no_op INTEGER")
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -285,7 +289,7 @@ class ExecutorState:
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
             "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
-            "review_status, review_findings, error_kind, error_stage "
+            "review_status, review_findings, error_kind, error_stage, no_op "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -304,6 +308,7 @@ class ExecutorState:
                 review_findings,
                 error_kind,
                 error_stage,
+                no_op,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -322,6 +327,7 @@ class ExecutorState:
                 review_findings=review_findings,
                 error_kind=error_kind,
                 error_stage=error_stage,
+                no_op=bool(no_op),
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -375,8 +381,8 @@ class ExecutorState:
                         "error, error_code, claude_output, "
                         "input_tokens, output_tokens, cost_usd, "
                         "review_status, review_findings, "
-                        "error_kind, error_stage) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "error_kind, error_stage, no_op) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -392,6 +398,7 @@ class ExecutorState:
                             a.review_findings,
                             a.error_kind,
                             a.error_stage,
+                            int(a.no_op),
                         ),
                     )
             self._save_meta()
@@ -416,6 +423,7 @@ class ExecutorState:
         review_findings: str | None = None,
         error_kind: str | None = None,
         error_stage: str | None = None,
+        no_op: bool = False,
     ) -> None:
         """Record execution attempt with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
@@ -434,6 +442,7 @@ class ExecutorState:
             review_findings=review_findings,
             error_kind=error_kind,
             error_stage=error_stage,
+            no_op=no_op,
         )
         state.attempts.append(attempt)
         assert self._conn is not None
@@ -467,8 +476,8 @@ class ExecutorState:
                     "error, error_code, claude_output, "
                     "input_tokens, output_tokens, cost_usd, "
                     "review_status, review_findings, "
-                    "error_kind, error_stage) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "error_kind, error_stage, no_op) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task_id,
                         attempt.timestamp,
@@ -484,6 +493,7 @@ class ExecutorState:
                         attempt.review_findings,
                         attempt.error_kind,
                         attempt.error_stage,
+                        int(attempt.no_op),
                     ),
                 )
                 self._save_meta()

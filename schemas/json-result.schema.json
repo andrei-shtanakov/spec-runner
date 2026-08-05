@@ -60,6 +60,11 @@
           "type": "string",
           "maxLength": 200
         },
+        "no_op": {
+          "description": "Present (and true) when the task completed without any committable changes — its work was already absorbed by earlier tasks (v2.16.0, #97)",
+          "type": "boolean",
+          "enum": [true]
+        },
         "exit_code": {
           "type": "integer",
           "enum": [0, 1]

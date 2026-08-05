@@ -73,7 +73,7 @@ class TestExecuteTask:
         return_value=CliInvocation(["echo", "hi"], "text"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_success_returns_true(
@@ -131,7 +131,7 @@ class TestExecuteTask:
             stderr="",
             returncode=0,
         )
-        mock_post.return_value = (True, None, "skipped", "")
+        mock_post.return_value = (True, None, "skipped", "", False)
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)
@@ -223,7 +223,8 @@ class TestExecuteTask:
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
-        "spec_runner.execution.post_done_hook", return_value=(False, "tests failed", "skipped", "")
+        "spec_runner.execution.post_done_hook",
+        return_value=(False, "tests failed", "skipped", "", False),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -507,7 +508,7 @@ class TestErrorClassification:
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
-        return_value=(False, "Tests failed:\nFAILED test_x", "skipped", ""),
+        return_value=(False, "Tests failed:\nFAILED test_x", "skipped", "", False),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -543,7 +544,7 @@ class TestErrorClassification:
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
-        return_value=(False, "Lint errors (not auto-fixable):\nerr", "skipped", ""),
+        return_value=(False, "Lint errors (not auto-fixable):\nerr", "skipped", "", False),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -599,7 +600,7 @@ class TestTokenTrackingInExecutor:
         return_value=CliInvocation(["echo", "hi"], "text"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_tokens_parsed_from_stderr(
@@ -676,7 +677,7 @@ class TestTokenTrackingInExecutor:
         return_value=CliInvocation(["echo", "hi"], "text"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_no_tokens_in_stderr_stores_none(
@@ -734,7 +735,7 @@ class TestTokenTrackingInExecutor:
             stderr="input_tokens: 4000\noutput_tokens: 900\ncost: $0.06",
             returncode=0,
         )
-        mock_post.return_value = (False, "Tests failed:\nFAILED test_x", "skipped", "")
+        mock_post.return_value = (False, "Tests failed:\nFAILED test_x", "skipped", "", False)
         task = _make_task()
         config = _make_config(tmp_path)
         state = _make_state(config)
@@ -793,7 +794,7 @@ class TestReviewDataTracking:
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
-        return_value=(True, None, "passed", "All checks passed, code looks good"),
+        return_value=(True, None, "passed", "All checks passed, code looks good", False),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -834,7 +835,13 @@ class TestReviewDataTracking:
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
-        return_value=(False, "Tests failed:\nFAILED test_x", "failed", "Review found issues"),
+        return_value=(
+            False,
+            "Tests failed:\nFAILED test_x",
+            "failed",
+            "Review found issues",
+            False,
+        ),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -873,7 +880,7 @@ class TestReviewDataTracking:
         return_value=CliInvocation(["echo", "hi"], "text"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_empty_review_findings_stored_as_none(
@@ -912,7 +919,7 @@ class TestReviewDataTracking:
     @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
     @patch(
         "spec_runner.execution.post_done_hook",
-        return_value=(True, None, "passed", "x" * 5000),
+        return_value=(True, None, "passed", "x" * 5000, False),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
@@ -1598,7 +1605,7 @@ class TestSmartRetry:
 
 class TestStageReporterWiring:
     @patch("spec_runner.execution.update_task_status")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch(
         "spec_runner.execution.build_cli_invocation",
         return_value=CliInvocation(["echo", "hi"], "text"),
@@ -1722,7 +1729,7 @@ class TestClaudeJsonCost:
         return_value=CliInvocation(["claude", "-p", "x", "--output-format", "json"], "claude_json"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_cost_parsed_from_claude_json(
@@ -1766,7 +1773,7 @@ class TestClaudeJsonCost:
         return_value=CliInvocation(["claude", "-p", "x", "--output-format", "json"], "claude_json"),
     )
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
-    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", ""))
+    @patch("spec_runner.execution.post_done_hook", return_value=(True, None, "skipped", "", False))
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
     def test_is_error_json_forces_failure(

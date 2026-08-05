@@ -241,7 +241,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                 logger.info("Implicit success (return code 0)", task_id=task_id)
 
             # Post-done hook (tests, lint, review)
-            hook_success, hook_error, review_status, review_findings = post_done_hook(
+            hook_success, hook_error, review_status, review_findings, hook_no_op = post_done_hook(
                 task, config, True, reporter=reporter
             )
 
@@ -256,7 +256,10 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
                     cost_usd=cost_usd,
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
+                    no_op=hook_no_op,
                 )
+                if hook_no_op:
+                    log_progress("✔️ No-op: completed without changes", task_id)
                 # NOTE: tasks.md "done" status + checklist are now written inside
                 # post_done_hook (before the commit) so they get committed/merged.
                 log_progress(f"\u2705 Completed in {duration:.1f}s", task_id)
