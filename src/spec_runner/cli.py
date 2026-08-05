@@ -106,14 +106,18 @@ def _print_dry_run(tasks_to_run: list[Task], config: ExecutorConfig, state: Exec
     """Print what tasks would execute without running them."""
     data = []
     for t in tasks_to_run:
+        # Checklist tuples are (item, checked) — unpacking them as
+        # (done, _) counted truthy item TEXTS, reporting done == total
+        # for untouched tasks (#71). checklist_progress owns the order.
+        checklist_done, checklist_total = t.checklist_progress
         entry = {
             "task_id": t.id,
             "name": t.name,
             "priority": t.priority,
             "status": t.status,
             "depends_on": t.depends_on,
-            "checklist_total": len(t.checklist),
-            "checklist_done": sum(1 for done, _ in t.checklist if done),
+            "checklist_total": checklist_total,
+            "checklist_done": checklist_done,
         }
         ts = state.get_task_state(t.id)
         if ts:
