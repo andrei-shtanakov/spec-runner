@@ -355,6 +355,10 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             print(f"⛔ Refusing to run: {reason} ({detail})")
             if reason == "budget_exceeded":
                 print("   Raise budget_usd, or `spec-runner reset` to clear recorded costs.")
+            # Persist the refusal as this run's stop reason so `status`
+            # reports it instead of the previous run's outcome.
+            state.set_meta("last_run_stop_reason", reason)
+            state.set_meta("last_run_stop_detail", detail)
             state.audit_logger.record(
                 EVENT_RUN_ENDED,
                 completed=0,

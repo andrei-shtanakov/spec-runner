@@ -223,3 +223,7 @@ class TestStopRefusalDiagnostics:
         out = capsys.readouterr().out
         assert "budget_exceeded" in out
         assert "consecutive" not in out
+        # The refusal must become THIS run's stop reason (Copilot review):
+        # otherwise `status` keeps showing the previous run's outcome.
+        with ExecutorState(cfg) as state:
+            assert state.get_meta("last_run_stop_reason") == "budget_exceeded"

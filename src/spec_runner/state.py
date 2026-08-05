@@ -663,11 +663,13 @@ class ExecutorState:
                 "max_consecutive_failures",
                 f"{self.consecutive_failures}/{self.config.max_consecutive_failures}",
             )
-        if self.config.budget_usd is not None and self.total_cost() > self.config.budget_usd:
-            return (
-                "budget_exceeded",
-                f"total cost ${self.total_cost():.2f} > budget ${self.config.budget_usd:.2f}",
-            )
+        if self.config.budget_usd is not None:
+            cost = self.total_cost()
+            if cost > self.config.budget_usd:
+                return (
+                    "budget_exceeded",
+                    f"total cost ${cost:.2f} > budget ${self.config.budget_usd:.2f}",
+                )
         return None
 
     def should_stop(self) -> bool:
