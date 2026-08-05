@@ -375,6 +375,11 @@ hooks:
     review_parallel: false     # Run 5 review agents in parallel
     review_roles: [quality, implementation, testing]
 
+harness_guard: warn          # Harness-mutation tripwire: off | warn | strict
+                             # (agent editing pyproject/pytest.ini/CI files etc.)
+harness_files: []            # Extra harness paths to watch
+harness_allow: []            # Globs exempt from strict-mode violations
+
 commands:
   test: "uv run pytest tests/ -v"
   lint: "uv run ruff check ."

@@ -126,6 +126,12 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             skip_permissions=config.skip_permissions,
         )
 
+        # Harness tripwire (#64): snapshot the verification surface before
+        # the agent gets write access to it.
+        from .harness import harness_violations, snapshot_harness
+
+        harness_before = snapshot_harness(config)
+
         reporter.enter("exec")
         result = subprocess.run(
             invocation.argv,
@@ -194,6 +200,38 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         success = (
             has_complete_marker and not has_failed_marker and not cli_result.is_error
         ) or implicit_success
+
+        # Harness tripwire (#64): check BEFORE the gates run — a mutated
+        # oracle makes their verdict worthless. strict fails the attempt
+        # (the message feeds the retry prompt); warn logs provenance.
+        violations = harness_violations(config, harness_before)
+        if violations:
+            summary = ", ".join(violations)
+            if config.harness_guard == "strict":
+                error = (
+                    "Harness guard: the agent modified verification files: "
+                    f"{summary}. These files define how the task is verified "
+                    "and must not be changed by the task. Revert them or, if "
+                    "the change is intentional, exempt it via harness_allow."
+                )
+                log_progress(f"⛔ Harness guard: {summary}", task_id)
+                logger.error("Harness files mutated by agent", violations=violations)
+                state.record_attempt(
+                    task_id,
+                    False,
+                    duration,
+                    error=error,
+                    output=output,
+                    error_code=ErrorCode.TASK_FAILED,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
+                    error_stage=reporter.current,
+                )
+                send_callback(config.callback_url, task_id, "failed", duration, error)
+                return False
+            log_progress(f"⚠️ Harness files changed by agent: {summary}", task_id)
+            logger.warning("Harness files mutated by agent", violations=violations)
 
         if success:
             reporter.enter("parse")
