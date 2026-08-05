@@ -267,6 +267,16 @@ class ExecutorConfig:
     # injected only for the matching stage, wrapped in <rules>...</rules>.
     spec_rules: dict[str, list[str]] = field(default_factory=dict)
 
+    # Harness-mutation tripwire (#64): the verification harness (test/lint
+    # config, dependency manifests, CI workflows) is writable by the agent
+    # under test — an agent can satisfy the gates by patching the oracle.
+    # off | warn (log mutations) | strict (fail the attempt before gates).
+    harness_guard: str = "warn"
+    # Extra harness paths (project-root-relative files or dirs) to watch.
+    harness_files: list[str] = field(default_factory=list)
+    # Glob patterns exempt from strict-mode violations (e.g. ["uv.lock"]).
+    harness_allow: list[str] = field(default_factory=list)
+
     # False when no config file backed this run (CLI flags may still have
     # overridden individual defaults). Set by main() after load; execution
     # commands warn on it (#63) — a silently vanished config once flipped a
@@ -276,6 +286,21 @@ class ExecutorConfig:
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix/change_id."""
         self.project_root = self.project_root.resolve()
+
+        # Harness-guard config sanity (#64): a YAML typo must not silently
+        # degrade the guard or crash later (a bare string would iterate
+        # per-character as paths).
+        if self.harness_guard not in ("off", "warn", "strict"):
+            raise ConfigError(
+                f"invalid harness_guard {self.harness_guard!r}: "
+                "expected one of 'off', 'warn', 'strict'"
+            )
+        for attr in ("harness_files", "harness_allow"):
+            value = getattr(self, attr)
+            if isinstance(value, str):
+                setattr(self, attr, [value])
+            elif not isinstance(value, list):
+                raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
 
         if self.change_id:
             if self.spec_prefix:
@@ -560,6 +585,9 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "audit_log_path": executor_config.get("audit_log_path"),
             "audit_log_operator": executor_config.get("audit_log_operator"),
             "spec_governance": executor_config.get("spec_governance"),
+            "harness_guard": executor_config.get("harness_guard"),
+            "harness_files": executor_config.get("harness_files"),
+            "harness_allow": executor_config.get("harness_allow"),
             "spec_profile": executor_config.get("spec_profile"),
             "spec_context": executor_config.get("spec_context"),
             "spec_rules": executor_config.get("spec_rules"),
