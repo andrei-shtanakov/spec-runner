@@ -6,6 +6,7 @@ functions used by hooks during task execution.
 
 import contextlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -94,9 +95,14 @@ def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
 
 
 def get_task_branch_name(task: Task) -> str:
-    """Generate branch name for task"""
-    safe_name = task.name.lower().replace(" ", "-").replace("/", "-")[:30]
-    return f"task/{task.id.lower()}-{safe_name}"
+    """Generate branch name for task.
+
+    Slugging strips all punctuation (#74) — plain space/slash replacement
+    kept commas and '+' in branch names (`task/task-004-fake-executor-+-...`),
+    valid for git but brittle for tooling and URLs.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", task.name.lower()).strip("-")[:30].rstrip("-")
+    return f"task/{task.id.lower()}-{slug}" if slug else f"task/{task.id.lower()}"
 
 
 def get_main_branch(config: ExecutorConfig) -> str:

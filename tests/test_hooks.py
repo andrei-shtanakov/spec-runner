@@ -1116,3 +1116,24 @@ class TestDoneStatusPersistence:
         ).stdout
         assert "DONE" in head_tasks
         assert "IN_PROGRESS" not in head_tasks
+
+
+class TestBranchSlugPunctuation:
+    """#74: branch slugs must strip punctuation, not carry it into the name."""
+
+    def test_commas_stripped(self):
+        task = _make_task(task_id="TASK-002", name="Contract structs decision, res")
+        assert get_task_branch_name(task) == "task/task-002-contract-structs-decision-res"
+
+    def test_plus_and_commas_stripped(self):
+        task = _make_task(task_id="TASK-004", name="Fake executor + fake judge, sy")
+        assert get_task_branch_name(task) == "task/task-004-fake-executor-fake-judge-sy"
+
+    def test_no_trailing_dash_after_truncation(self):
+        task = _make_task(task_id="TASK-005", name="x" * 29 + ", and more words here")
+        name = get_task_branch_name(task)
+        assert not name.endswith("-")
+
+    def test_punctuation_only_name_falls_back_to_id(self):
+        task = _make_task(task_id="TASK-006", name="+++")
+        assert get_task_branch_name(task) == "task/task-006"

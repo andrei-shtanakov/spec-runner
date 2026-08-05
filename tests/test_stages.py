@@ -9,19 +9,19 @@ class TestStageReporter:
     def test_enter_updates_current_and_calls_mirror(self):
         events: list[str] = []
         rep = StageReporter("TASK-001", events.append)
-        rep.enter("codex")
-        assert rep.current == "codex"
-        assert events == ["[TASK-001] ⏳ stage: codex"]
+        rep.enter("exec")
+        assert rep.current == "exec"
+        assert events == ["[TASK-001] ⏳ stage: exec"]
 
     def test_multiple_enters_record_latest(self):
         events: list[str] = []
         rep = StageReporter("T1", events.append)
-        for s in ("sync_deps", "codex", "parse", "tests"):
+        for s in ("sync_deps", "exec", "parse", "tests"):
             rep.enter(s)
         assert rep.current == "tests"
         assert events == [
             "[T1] ⏳ stage: sync_deps",
-            "[T1] ⏳ stage: codex",
+            "[T1] ⏳ stage: exec",
             "[T1] ⏳ stage: parse",
             "[T1] ⏳ stage: tests",
         ]
@@ -36,18 +36,18 @@ class TestStageReporter:
         ev2: list[str] = []
         r1 = StageReporter("T1", ev1.append)
         r2 = StageReporter("T2", ev2.append)
-        r1.enter("codex")
+        r1.enter("exec")
         r2.enter("tests")
-        assert r1.current == "codex"
+        assert r1.current == "exec"
         assert r2.current == "tests"
-        assert ev1 == ["[T1] ⏳ stage: codex"]
+        assert ev1 == ["[T1] ⏳ stage: exec"]
         assert ev2 == ["[T2] ⏳ stage: tests"]
 
     def test_stages_tuple_contains_expected_values(self):
         for expected in (
             "sync_deps",
             "branch",
-            "codex",
+            "exec",
             "parse",
             "tests",
             "lint",

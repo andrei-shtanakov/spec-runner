@@ -1606,7 +1606,7 @@ class TestStageReporterWiring:
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
-    def test_codex_and_parse_stages_emitted(
+    def test_exec_and_parse_stages_emitted(
         self,
         mock_run,
         mock_pre,
@@ -1636,9 +1636,9 @@ class TestStageReporterWiring:
         with ExecutorState(cfg) as state:
             execute_task(task, cfg, state)
         joined = "\n".join(captured)
-        assert "stage: codex" in joined
+        assert "stage: exec" in joined
         assert "stage: parse" in joined
-        assert joined.index("stage: codex") < joined.index("stage: parse")
+        assert joined.index("stage: exec") < joined.index("stage: parse")
 
 
 class TestErrorStageRecorded:
@@ -1651,7 +1651,7 @@ class TestErrorStageRecorded:
     @patch("spec_runner.execution.build_task_prompt", return_value="p")
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution.subprocess.run")
-    def test_error_stage_is_codex_on_subprocess_failure(
+    def test_error_stage_is_exec_on_subprocess_failure(
         self,
         mock_run,
         mock_pre,
@@ -1673,7 +1673,7 @@ class TestErrorStageRecorded:
         with ExecutorState(cfg) as state:
             execute_task(task, cfg, state)
             attempt = state.get_task_state("T1").attempts[-1]
-            assert attempt.error_stage == "codex"
+            assert attempt.error_stage == "exec"
 
 
 class TestErrorClassificationInExecution:
