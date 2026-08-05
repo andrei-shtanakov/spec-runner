@@ -167,6 +167,107 @@ class TestEnsureRuntimeGitignore:
         assert offenders == [], offenders
 
 
+class TestHarnessGitignoreNotCommitted:
+    """#96: the harness-written spec/.gitignore must stay out of auto-commits.
+
+    Maestro's ex-post scope gate flags any file no agent chose to create;
+    committing our own .gitignore sent green workstreams to NEEDS_REVIEW.
+    """
+
+    def test_harness_created_gitignore_not_staged(self, tmp_path):
+        _init_repo(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        ensure_runtime_gitignore(_cfg(tmp_path))
+        (tmp_path / "code.py").write_text("x = 1\n")
+
+        assert stage_all_except_runtime(_cfg(tmp_path)) is True
+        staged = _staged_files(tmp_path)
+        assert "code.py" in staged
+        assert "spec/.gitignore" not in staged, staged
+
+    def test_only_gitignore_created_counts_as_no_changes(self, tmp_path):
+        """A no-op task whose sole diff is the harness file stays a no-op."""
+        _init_repo(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        ensure_runtime_gitignore(_cfg(tmp_path))
+
+        assert stage_all_except_runtime(_cfg(tmp_path)) is False
+
+    def test_user_tracked_gitignore_still_staged(self, tmp_path):
+        """A spec/.gitignore the user committed themselves keeps its old
+        behavior: modifications travel with auto-commits."""
+        _init_repo(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / ".gitignore").write_text("user-entry\n")
+        _git(tmp_path, "add", "-A")
+        _git(tmp_path, "commit", "-q", "-m", "user tracks spec/.gitignore")
+
+        ensure_runtime_gitignore(_cfg(tmp_path))  # appends runtime entries
+
+        assert stage_all_except_runtime(_cfg(tmp_path)) is True
+        assert "spec/.gitignore" in _staged_files(tmp_path)
+
+    def test_user_tracked_gitignore_not_deleted(self, tmp_path):
+        """The exclusion must never stage a deletion of a tracked file —
+        that would be another scope escape."""
+        _init_repo(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / ".gitignore").write_text("user-entry\n")
+        _git(tmp_path, "add", "-A")
+        _git(tmp_path, "commit", "-q", "-m", "user tracks spec/.gitignore")
+        (tmp_path / "code.py").write_text("x = 1\n")
+
+        assert stage_all_except_runtime(_cfg(tmp_path)) is True
+        _git(tmp_path, "commit", "-q", "-m", "task commit")
+        tracked = _git(tmp_path, "ls-files").stdout
+        assert "spec/.gitignore" in tracked
+
+    def test_fresh_repo_without_commits(self, tmp_path):
+        _git(tmp_path, "init", "-q", "-b", "main")
+        _git(tmp_path, "config", "user.email", "t@e.c")
+        _git(tmp_path, "config", "user.name", "T")
+        (tmp_path / "spec").mkdir()
+        ensure_runtime_gitignore(_cfg(tmp_path))
+        (tmp_path / "first.py").write_text("z = 3\n")
+
+        assert stage_all_except_runtime(_cfg(tmp_path)) is True
+        staged = _staged_files(tmp_path)
+        assert "first.py" in staged
+        assert "spec/.gitignore" not in staged, staged
+
+    def test_auto_commit_excludes_harness_gitignore(self, tmp_path):
+        """End-to-end through post_done_hook: the first task's commit must
+        not contain spec/.gitignore (the exact M-03/maestro#122 failure)."""
+        _init_repo(tmp_path)
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "feature.py").write_text("f = 1\n")
+
+        cfg = _cfg(
+            tmp_path,
+            auto_commit=True,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=False,
+        )
+        ensure_runtime_gitignore(cfg)  # what pre_start_hook does
+        task = Task(
+            id="TASK-001",
+            name="demo",
+            priority="p0",
+            status="in_progress",
+            estimate="",
+            description="",
+            checklist=[],
+        )
+        ok, err, _, _ = post_done_hook(task, cfg, True)
+        assert ok is True, err
+
+        committed = _git(tmp_path, "show", "--name-only", "--format=", "HEAD").stdout
+        assert "lib/feature.py" in committed
+        assert "spec/.gitignore" not in committed
+
+
 class TestPostDoneHookCommit:
     def _task(self) -> Task:
         return Task(

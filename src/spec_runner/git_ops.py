@@ -59,6 +59,16 @@ def stage_all_except_runtime(config: ExecutorConfig) -> bool:
             continue  # outside the repo — git never saw it
     if rels:
         _git(config, "rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", *rels)
+    # Harness-owned file (#96): spec/.gitignore is written by
+    # ensure_runtime_gitignore, not by the task's agent. Committing it put a
+    # file no agent chose to create into the workstream diff, which Maestro's
+    # ex-post scope gate rightly flags. Keep it out of the commit set — unless
+    # the user tracks it themselves (present in HEAD), in which case it keeps
+    # its old travels-with-the-spec behavior and is never deleted here.
+    gitignore_rel = "spec/.gitignore"
+    in_head = _git(config, "cat-file", "-e", f"HEAD:{gitignore_rel}").returncode == 0
+    if not in_head:
+        _git(config, "rm", "--cached", "-q", "--ignore-unmatch", "--", gitignore_rel)
     staged = _git(config, "diff", "--cached", "--quiet")
     return staged.returncode != 0
 
@@ -75,8 +85,10 @@ RUNTIME_GITIGNORE_ENTRIES = [
 def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
     """Make sure ``spec/.gitignore`` covers executor runtime files (#62).
 
-    Idempotent; only appends entries that are missing. The file is created
-    inside the spec dir so it travels with the spec in auto-commits.
+    Idempotent; only appends entries that are missing. The file lives inside
+    the spec dir but is harness-owned: auto-commits exclude it unless the
+    user tracks it themselves (#96). Staying untracked is safe — this hook
+    runs before every task and re-creates the file if it went missing.
     """
     spec_base = config.project_root / "spec"
     if not spec_base.is_dir():
