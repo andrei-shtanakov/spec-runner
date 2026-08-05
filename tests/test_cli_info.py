@@ -137,7 +137,7 @@ class TestSecondPassHint:
 class TestFileDoneReconciliation:
     """#68: file-DONE tasks never run by the executor are not 'Not started'."""
 
-    def _write_tasks(self, cfg, tmp_path):
+    def _write_tasks(self, tmp_path):
         spec = tmp_path / "spec"
         spec.mkdir(exist_ok=True)
         (spec / "tasks.md").write_text(
@@ -155,7 +155,7 @@ class TestFileDoneReconciliation:
     def test_file_done_shown_separately(self, tmp_path, capsys):
         cfg = _cfg(tmp_path)
         cfg.logs_dir.mkdir()
-        self._write_tasks(cfg, tmp_path)
+        self._write_tasks(tmp_path)
         print_status(cfg)
         out = capsys.readouterr().out
         assert "Done outside executor: 1" in out
