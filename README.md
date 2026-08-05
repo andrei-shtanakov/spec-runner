@@ -378,6 +378,8 @@ hooks:
 commands:
   test: "uv run pytest tests/ -v"
   lint: "uv run ruff check ."
+  sync: "mix deps.get"       # Dependency sync before each task. Empty/absent =
+                             # auto: `uv sync` when pyproject.toml exists, else skip
 
 paths:
   root: "."

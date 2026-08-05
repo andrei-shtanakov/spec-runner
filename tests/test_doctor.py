@@ -67,6 +67,8 @@ def test_pre_start_skips_uv_sync_when_disabled(tmp_path):
 
 
 def test_pre_start_runs_uv_sync_when_enabled(tmp_path):
+    # uv sync only auto-runs for Python projects (#70), so mark it as one.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
     cfg = ExecutorConfig(
         project_root=tmp_path,
         sync_deps=True,

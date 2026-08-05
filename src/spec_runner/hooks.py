@@ -55,18 +55,39 @@ def pre_start_hook(
     """Hook before starting task"""
     logger.info("Pre-start hook", task_id=task.id)
 
-    # Sync dependencies (skippable — doctor and other lightweight runs disable this)
+    # Sync dependencies (skippable — doctor and other lightweight runs disable
+    # this). A custom `commands.sync` always runs; the built-in `uv sync`
+    # default only runs when pyproject.toml exists — a hardcoded `uv sync`
+    # was per-run stderr noise on every non-Python project (#70).
     if config.sync_deps:
-        if reporter:
-            reporter.enter("sync_deps")
-        logger.info("Syncing dependencies")
-        result = subprocess.run(
-            ["uv", "sync"], capture_output=True, text=True, cwd=config.project_root
-        )
-        if result.returncode == 0:
-            logger.info("Dependencies synced")
+        if config.sync_command:
+            if reporter:
+                reporter.enter("sync_deps")
+            logger.info("Syncing dependencies", command=config.sync_command)
+            result = subprocess.run(
+                config.sync_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode == 0:
+                logger.info("Dependencies synced")
+            else:
+                logger.warning("Dependency sync warning", stderr=result.stderr[:200])
+        elif (config.project_root / "pyproject.toml").exists():
+            if reporter:
+                reporter.enter("sync_deps")
+            logger.info("Syncing dependencies")
+            result = subprocess.run(
+                ["uv", "sync"], capture_output=True, text=True, cwd=config.project_root
+            )
+            if result.returncode == 0:
+                logger.info("Dependencies synced")
+            else:
+                logger.warning("uv sync warning", stderr=result.stderr[:200])
         else:
-            logger.warning("uv sync warning", stderr=result.stderr[:200])
+            logger.debug("No pyproject.toml and no sync command — skipping dependency sync")
 
     # Keep executor runtime state out of git before any commit can happen (#62)
     if config.auto_commit or config.create_git_branch:

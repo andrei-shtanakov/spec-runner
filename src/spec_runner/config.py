@@ -182,7 +182,12 @@ class ExecutorConfig:
     # open a single PR at the end instead of self-merging tasks into main. For
     # repos with a remote where a human reviews/merges (never touches main).
     integration_pr: bool = False
-    sync_deps: bool = True  # Run `uv sync` in pre_start_hook (doctor disables this)
+    sync_deps: bool = True  # Run dependency sync in pre_start_hook (doctor disables this)
+    # Dependency sync command (commands.sync in YAML). Empty = auto: run
+    # `uv sync` only when pyproject.toml exists, else skip quietly — a
+    # hardcoded `uv sync` produced per-run stderr noise on every
+    # non-Python project (#70).
+    sync_command: str = ""
 
     # Code review
     run_review: bool = True  # Run code review after task completion
@@ -528,6 +533,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "test_command": commands.get("test"),
             "lint_command": commands.get("lint"),
             "lint_fix_command": commands.get("lint_fix"),
+            "sync_command": commands.get("sync"),
             "project_root": Path(paths["root"]) if paths.get("root") else None,
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
             "state_file": Path(paths["state"]) if paths.get("state") else None,
