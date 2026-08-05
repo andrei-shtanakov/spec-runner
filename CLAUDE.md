@@ -93,6 +93,8 @@ spec-runner costs --sort=cost              # Sort by cost descending
 spec-runner watch                          # Continuously execute ready tasks
 spec-runner watch --tui                    # Watch with live TUI dashboard
 spec-runner mcp                            # Launch MCP server (stdio)
+spec-runner sync                           # Post-merge closer: pull base, prune merged task/run branches, state check
+spec-runner sync --dry-run                 # Show what sync would do without changing anything
 spec-runner task list --status=todo        # List tasks by status (unified CLI)
 spec-runner task next                      # Show next ready tasks
 spec-runner task graph                     # ASCII dependency graph

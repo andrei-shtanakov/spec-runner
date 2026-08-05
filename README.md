@@ -125,6 +125,8 @@ spec-runner watch                          # Continuously execute ready tasks
 spec-runner watch --tui                    # Watch with live TUI dashboard
 spec-runner tui                            # Launch TUI status dashboard
 spec-runner validate                       # Validate config and tasks
+spec-runner sync                           # Post-merge sync: pull base, prune merged run/task branches
+spec-runner sync --dry-run                 # Preview without changing anything
 
 # Verification & Reporting (v2.0)
 spec-runner audit                          # Static pre-execution spec check
