@@ -15,14 +15,17 @@ HISTORY_FILE = Path("spec/.task-history.log")
 # Patterns
 TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
 # Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
-TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|✅|⏸️)\s+)?(\w+)")
+TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)")
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
 BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 
-STATUS_EMOJI = {"todo": "⬜", "in_progress": "🔄", "done": "✅", "blocked": "⏸️"}
+# "review" (🔍, #66): gates passed, code review/commit still running — an
+# interrupted run leaves this honest intermediate instead of a bare
+# in_progress or a premature DONE. Scheduled like in_progress (resumable).
+STATUS_EMOJI = {"todo": "⬜", "in_progress": "🔄", "review": "🔍", "done": "✅", "blocked": "⏸️"}
 
 STATUS_FROM_EMOJI = {v: k for k, v in STATUS_EMOJI.items()}
 
@@ -36,7 +39,7 @@ class Task:
     id: str
     name: str
     priority: str  # p0, p1, p2, p3
-    status: str  # todo, in_progress, done, blocked
+    status: str  # todo, in_progress, review, done, blocked
     estimate: str
     description: str = ""
     checklist: list = field(default_factory=list)
@@ -223,14 +226,14 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
                 # Emoji format: replace emoji and status text
                 new_line = line.replace(old_emoji, new_emoji)
                 new_line = re.sub(
-                    r"\| (⬜|🔄|✅|⏸️) \w+",
+                    r"\| (⬜|🔄|🔍|✅|⏸️) \w+",
                     f"| {new_emoji} {new_status.upper()}",
                     new_line,
                 )
             else:
                 # Plain format (no emoji): inject emoji and update status text
                 new_line = re.sub(
-                    r"\|\s*(TODO|IN_PROGRESS|DONE|BLOCKED)",
+                    r"\|\s*(TODO|IN_PROGRESS|REVIEW|DONE|BLOCKED)",
                     f"| {new_emoji} {new_status.upper()}",
                     line,
                     count=1,
@@ -460,7 +463,7 @@ def get_in_progress_tasks(tasks: list[Task]) -> list[Task]:
 
     These should be resumed before starting new tasks.
     """
-    in_progress = [t for t in tasks if t.status == "in_progress"]
+    in_progress = [t for t in tasks if t.status in ("in_progress", "review")]
     priority_order = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
     in_progress.sort(key=lambda t: priority_order.get(t.priority, 99))
     return in_progress

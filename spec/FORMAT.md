@@ -44,7 +44,12 @@ Pattern: `^(?:emoji\s+)?(P\d)\s*\|\s*(?:emoji\s+)?(\w+)`
 | Estimate | `Est: Nd`, `Est: N-Md`, `Est: Nh` | empty |
 
 Priority emoji mapping: 🔴=P0, 🟠=P1, 🟡=P2, 🟢=P3
-Status emoji mapping: ⬜=TODO, 🔄=IN_PROGRESS, ✅=DONE, ⏸️=BLOCKED
+Status emoji mapping: ⬜=TODO, 🔄=IN_PROGRESS, 🔍=REVIEW, ✅=DONE, ⏸️=BLOCKED
+
+`REVIEW` is written by the executor itself when a task's tests/lint gates
+passed and code review is still running — an interrupted run leaves this
+honest intermediate state instead of a premature DONE. Review-status tasks
+are resumed like IN_PROGRESS ones.
 
 ### Description (optional)
 

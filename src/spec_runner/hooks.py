@@ -332,6 +332,11 @@ def post_done_hook(
     if config.run_review:
         if reporter:
             reporter.enter("review")
+        # #66: gates passed, review starts — record the honest intermediate
+        # status. A run killed during review leaves 🔍 REVIEW in tasks.md
+        # (not a premature DONE); the task stays resumable like in_progress.
+        if config.tasks_file.exists():
+            update_task_status(config.tasks_file, task.id, "review")
         review_fn = run_parallel_review if config.review_parallel else run_code_review
         logger.info(
             "Running code review",

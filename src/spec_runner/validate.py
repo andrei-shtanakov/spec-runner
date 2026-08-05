@@ -15,7 +15,7 @@ from spec_runner.task import Task, parse_tasks
 
 log = get_logger("validate")
 
-VALID_STATUSES = {"todo", "in_progress", "done", "blocked"}
+VALID_STATUSES = {"todo", "in_progress", "review", "done", "blocked"}
 VALID_PRIORITIES = {"p0", "p1", "p2", "p3"}
 
 _REQ_ID = re.compile(r"\bREQ-\d+\b")
