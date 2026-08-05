@@ -94,6 +94,51 @@ def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
     logger.info("Updated spec/.gitignore with runtime-state entries", added=missing)
 
 
+def spec_dirty_paths(config: ExecutorConfig) -> list[str]:
+    """Spec/config files with uncommitted changes, as git-status lines (#69).
+
+    A run whose spec has no committed version predating execution has muddy
+    provenance: the auto-commit later mixes the spec and the task's code into
+    one commit, and an interrupted run leaves DONE edits in an uncommitted
+    file. Checks the spec content files (tasks/requirements/design/
+    constitution) and the config file.
+
+    Uses ``git status --porcelain``, which does not report ignored files —
+    so orchestrators that deliberately keep their generated specs untracked
+    via gitignore/info-exclude (Maestro does) are unaffected.
+
+    Returns [] when there is no git repo or no commits yet (fresh-repo
+    bootstrap must not be blocked).
+    """
+    if _git(config, "rev-parse", "--git-dir").returncode != 0:
+        return []
+    if _git(config, "rev-parse", "HEAD").returncode != 0:
+        return []
+
+    candidates = [
+        config.tasks_file,
+        config.requirements_file,
+        config.design_file,
+        config.constitution_file,
+        config.project_root / "spec-runner.config.yaml",
+        config.project_root / "spec" / "executor.config.yaml",  # legacy location
+    ]
+    rels: list[str] = []
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            rels.append(str(p.relative_to(config.project_root)))
+        except ValueError:
+            continue  # outside the repo
+    if not rels:
+        return []
+    status = _git(config, "status", "--porcelain", "--", *rels)
+    if status.returncode != 0:
+        return []
+    return [line for line in status.stdout.splitlines() if line.strip()]
+
+
 def get_task_branch_name(task: Task) -> str:
     """Generate branch name for task.
 
