@@ -88,7 +88,7 @@ CREATE TABLE executor_meta (
 | `review_status` | TEXT | stable | See `ReviewVerdict` values below |
 | `review_findings` | TEXT | experimental | Free-text review notes |
 | `error_kind` | TEXT | experimental | Added v2.3.0. Classified failure kind: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`; nullable |
-| `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `exec`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable. `exec` replaced `codex` in v2.12 — rows written by ≤2.11 may still carry `codex` |
+| `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `exec`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable. `exec` replaced `codex` in v2.13 — rows written by ≤2.12 may still carry `codex` |
 
 **Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
 
