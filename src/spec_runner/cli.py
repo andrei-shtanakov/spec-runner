@@ -1370,9 +1370,13 @@ def main():
         parser.print_help()
         return
 
-    # Load config from YAML file, then override with CLI args
-    yaml_config = load_config_from_yaml()
+    # Load config from YAML file, then override with CLI args. Resolve the
+    # path once — _resolve_config_path() prints a deprecation warning for the
+    # legacy location, which must not appear twice.
+    config_path = _resolve_config_path()
+    yaml_config = load_config_from_yaml(config_path)
     config = build_config(yaml_config, args)
+    config.config_found = config_path.exists()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile.
     from .config import ConfigError
@@ -1389,6 +1393,17 @@ def main():
     import structlog
 
     structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
+
+    # #63: a run without a config file silently used all defaults — including
+    # self-merge into main and a Python test command on non-Python repos.
+    # Warn loudly before any execution command proceeds.
+    if args.command in ("run", "watch", "retry"):
+        from .config import missing_config_warning
+
+        warning = missing_config_warning(config)
+        if warning is not None:
+            print(warning, file=sys.stderr)
+            logger.warning("No config file found — using built-in defaults")
 
     # Register signal handlers for graceful shutdown (late import to avoid circular)
     from .executor import _pause_handler, _signal_handler

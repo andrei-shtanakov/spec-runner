@@ -262,6 +262,12 @@ class ExecutorConfig:
     # injected only for the matching stage, wrapped in <rules>...</rules>.
     spec_rules: dict[str, list[str]] = field(default_factory=dict)
 
+    # False when no config file backed this run (CLI flags may still have
+    # overridden individual defaults). Set by main() after load; execution
+    # commands warn on it (#63) — a silently vanished config once flipped a
+    # run to self-merge + pytest on an Elixir repo.
+    config_found: bool = True
+
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix/change_id."""
         self.project_root = self.project_root.resolve()
@@ -430,6 +436,39 @@ def _resolve_config_path() -> Path:
         return LEGACY_CONFIG_FILE
 
     return CONFIG_FILE  # default (won't exist, returns empty config)
+
+
+def missing_config_warning(config: "ExecutorConfig") -> str | None:
+    """Operator-facing warning when a run proceeds without a config file (#63).
+
+    Returns None when a config file was found. The message names the
+    safety-relevant defaults that now apply (merge mode, test oracle, model);
+    if prior run state exists, the config likely vanished rather than never
+    existed, so the hint is sharper.
+    """
+    if config.config_found:
+        return None
+    # Report the EFFECTIVE values (defaults possibly overridden by CLI
+    # flags), not a hard-coded default list — a wrong claim here would be
+    # as misleading as the silence this warning replaces.
+    if config.integration_pr:
+        merge_desc = "integration branch + PR"
+    elif config.create_git_branch:
+        merge_desc = "self-merge into the main branch (no PR)"
+    else:
+        merge_desc = "no git branching"
+    lines = [
+        f"⚠️  No {CONFIG_FILE} found — running on defaults (CLI flags still apply):",
+        f"    • merge mode: {merge_desc}",
+        f"    • test command: {config.test_command!r}",
+        f"    • model: {config.claude_model or '(CLI default)'}",
+    ]
+    if config.state_file.exists():
+        lines.append(
+            "    A previous run's state exists here — if this project had a "
+            "config file, restore it before running."
+        )
+    return "\n".join(lines)
 
 
 def load_config_from_yaml(config_path: Path | None = None) -> dict:
