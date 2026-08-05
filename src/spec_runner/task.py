@@ -12,8 +12,16 @@ from .spec import split_frontmatter_raw, strip_frontmatter
 TASKS_FILE = Path("spec/tasks.md")
 HISTORY_FILE = Path("spec/.task-history.log")
 
-# Patterns
-TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
+# Patterns.
+# Task ids are `<PREFIX>-<number>` where PREFIX is any uppercase alnum run
+# (#72: external projects use native numbering — KAP-002, ABC-17 — not just
+# TASK-001). Headers are unambiguous (`### <id>: <name>` only introduces
+# tasks); cross-refs in Depends/Blocks are captured generically and filtered
+# after parsing against the prefixes actually used by task headers, so
+# [REQ-001]/[DESIGN-001] mentioned in those lines never become dependencies.
+ID_PATTERN = r"[A-Z][A-Z0-9]*-\d+"
+TASK_HEADER = re.compile(rf"^### ({ID_PATTERN}): (.+)$")
+TASK_REF = re.compile(rf"\[({ID_PATTERN})\]")
 # Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
 TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|✅|⏸️)\s+)?(\w+)")
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
@@ -163,19 +171,24 @@ def parse_tasks(filepath: Path) -> list[Task]:
         if depends_match:
             text = depends_match.group(1)
             if text.strip() != "—":
-                refs = re.findall(r"\[(TASK-\d+)\]", text)
-                current_task.depends_on = refs
+                current_task.depends_on = TASK_REF.findall(text)
             continue
 
         blocks_match = BLOCKS.search(line)
         if blocks_match:
             text = blocks_match.group(1)
             if text.strip() != "—":
-                refs = re.findall(r"\[(TASK-\d+)\]", text)
-                current_task.blocks = refs
+                current_task.blocks = TASK_REF.findall(text)
 
     if current_task:
         tasks.append(current_task)
+
+    # Keep only cross-refs that use a prefix some task header actually uses —
+    # a [REQ-001] mentioned in a Depends line is documentation, not a task.
+    prefixes = {t.id.rsplit("-", 1)[0] for t in tasks}
+    for t in tasks:
+        t.depends_on = [r for r in t.depends_on if r.rsplit("-", 1)[0] in prefixes]
+        t.blocks = [r for r in t.blocks if r.rsplit("-", 1)[0] in prefixes]
 
     return tasks
 

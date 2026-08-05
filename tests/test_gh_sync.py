@@ -652,3 +652,26 @@ class TestSyncFromGhConflicts:
         cmd_sync_from_gh(_make_args(), parse_tasks(tasks_file), tasks_file)
 
         assert tasks_file.read_text() == original
+
+
+class TestCustomPrefixTitles:
+    """#72: issue-title matching accepts native id prefixes, not only TASK-."""
+
+    def test_custom_prefix_issue_matched(self, monkeypatch):
+        from spec_runner import github_sync
+
+        issues = [
+            {"number": 7, "title": "[KAP-001] Bootstrap", "state": "OPEN", "labels": []},
+            {"number": 8, "title": "Unrelated title", "state": "OPEN", "labels": []},
+        ]
+
+        def fake_gh(args, capture=True):
+            import json as _json
+            import subprocess as _sp
+
+            return _sp.CompletedProcess(args, 0, stdout=_json.dumps(issues), stderr="")
+
+        monkeypatch.setattr(github_sync, "_gh_run", fake_gh)
+        mapping = github_sync._get_existing_issues()
+        assert set(mapping) == {"KAP-001"}
+        assert mapping["KAP-001"]["number"] == 7

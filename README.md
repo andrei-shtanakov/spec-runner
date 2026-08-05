@@ -73,7 +73,7 @@ spec-runner watch
 
 ## Task File Format
 
-Tasks are defined in `spec/tasks.md`:
+Tasks are defined in `spec/tasks.md`. Task ids are `<PREFIX>-<number>` — `TASK-001` by convention, but any uppercase prefix works (`KAP-002`, `ABC-17`); the parser recognizes whatever prefixes the task headers use:
 
 ```markdown
 ## Milestone 1: MVP
