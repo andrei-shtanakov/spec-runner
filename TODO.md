@@ -77,10 +77,13 @@
 
 ## Активные задачи
 
-### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05)
+### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 
 Две находки из kapelle S2 round 3 (maestro-оркестрация), заведены владельцем
-как issues #96/#97; maestro-стороны — maestro#122/maestro#123.
+как issues #96/#97; maestro-стороны — maestro#122/maestro#123 (наша сторона
+откомментирована там же). PR #98 и #99 влиты 2026-08-05, релиз **v2.16.0**.
+Maestro может дропнуть per-workstream workaround со `spec/.gitignore` в scope
+после пина spec-runner >= 2.16.
 
 - [x] **#96 harness-gitignore-out-of-autocommit** — `spec/.gitignore` (запись #62)
       попадал в первый auto-commit сабтаска; maestro ex-post scope gate валил

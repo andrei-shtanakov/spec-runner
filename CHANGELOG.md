@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.16.0] — 2026-08-05
+
+Battle-testing S2 round 3 (kapelle, Maestro orchestration): both findings
+fixed the day they were filed. The Maestro interop contract gains one
+additive `--json-result` key (`no_op`, emitted only when true) — non-breaking
+per the change policy in `docs/state-schema.md`; all pre-existing golden
+fixtures are byte-identical.
+
 ### Added
 
 - **Explicit `no-op` completion marker** (battle-testing S2 finding F-20,
