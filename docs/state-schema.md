@@ -100,7 +100,7 @@ CREATE TABLE executor_meta (
 | `total_completed` | int (stored as TEXT) | stable | Monotonic counter |
 | `total_failed` | int (stored as TEXT) | stable | Monotonic counter |
 | `second_pass_fail_tasks` | comma-joined TEXT | experimental | Added v2.3.0. Task IDs that failed again across runs; empty string when none |
-| `last_run_stop_reason` | TEXT | experimental | Added v2.3.0. One of `completed`, `max_consecutive_failures`, `error_<kind>` |
+| `last_run_stop_reason` | TEXT | experimental | Added v2.3.0. One of `completed`, `max_consecutive_failures`, `budget_exceeded`, `error_<kind>` |
 | `last_run_stop_detail` | TEXT | experimental | Added v2.3.0. Free-text detail for the stop reason (e.g. `12/2`, or an error message) |
 
 ### `ErrorCode` enum values

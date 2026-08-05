@@ -80,13 +80,19 @@ class TestRunAllResetSemantics:
             assert state.consecutive_failures == 0
 
     def test_no_reset_failed_flag_preserves_state(self, tmp_path):
+        import pytest
+
         cfg = _cfg(tmp_path, max_retries=1)
         cfg.logs_dir.mkdir()
         with ExecutorState(cfg) as state:
             state.record_attempt("T1", success=False, duration=1.0, error="x")
             state.consecutive_failures = 5
             state._save()
-        _run_tasks(_run_args(no_reset_failed=True), cfg)
+        # 5 preserved consecutive failures ≥ limit → the run refuses,
+        # loudly and with a non-zero exit (#67).
+        with pytest.raises(SystemExit) as excinfo:
+            _run_tasks(_run_args(no_reset_failed=True), cfg)
+        assert excinfo.value.code == 1
         with ExecutorState(cfg) as state:
             assert state.get_task_state("T1").status == "failed"
             assert state.consecutive_failures == 5
@@ -200,3 +206,20 @@ class TestStopReasonCapture:
         with ExecutorState(cfg) as state:
             assert state.get_meta("last_run_stop_reason") == "max_consecutive_failures"
             assert "/1" in (state.get_meta("last_run_stop_detail") or "")
+
+
+class TestStopRefusalDiagnostics:
+    """#67: pre-run refusal must name the actual cause and exit non-zero."""
+
+    def test_budget_refusal_names_cause_and_exits_nonzero(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path, budget_usd=0.5)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("T1", success=True, duration=1.0, cost_usd=0.74)
+        import pytest
+
+        with pytest.raises(SystemExit) as excinfo:
+            _run_tasks(_run_args(), cfg)
+        assert excinfo.value.code == 1
+        out = capsys.readouterr().out
+        assert "budget_exceeded" in out
+        assert "consecutive" not in out

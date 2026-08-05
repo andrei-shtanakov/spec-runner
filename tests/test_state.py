@@ -1213,3 +1213,45 @@ class TestAttemptErrorKindStage:
             a = state.get_task_state("T1").attempts[-1]
             assert a.error_kind == "rate_limit"
             assert a.error_stage == "codex"
+
+
+# --- stop_cause diagnostics (#67) ---
+
+
+class TestStopCause:
+    def test_none_when_ok(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        assert state.stop_cause() is None
+        state.close()
+
+    def test_consecutive_failures_cause(self, tmp_path):
+        config = _make_config(tmp_path, max_consecutive_failures=2, max_retries=10)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=False, duration=1.0, error="e1")
+        state.record_attempt("T2", success=False, duration=1.0, error="e2")
+        cause = state.stop_cause()
+        assert cause is not None
+        assert cause[0] == "max_consecutive_failures"
+        assert cause[1] == "2/2"
+        state.close()
+
+    def test_budget_cause_named_not_failures(self, tmp_path):
+        """Regression #67: a budget stop was reported as 'consecutive failures ... 0'."""
+        config = _make_config(tmp_path, budget_usd=0.5)
+        state = ExecutorState(config)
+        state.record_attempt("T1", success=True, duration=1.0, cost_usd=0.74)
+        cause = state.stop_cause()
+        assert cause is not None
+        assert cause[0] == "budget_exceeded"
+        assert "0.74" in cause[1] and "0.50" in cause[1]
+        assert state.consecutive_failures == 0
+        state.close()
+
+    def test_should_stop_delegates(self, tmp_path):
+        config = _make_config(tmp_path, budget_usd=0.5)
+        state = ExecutorState(config)
+        assert state.should_stop() is False
+        state.record_attempt("T1", success=True, duration=1.0, cost_usd=0.74)
+        assert state.should_stop() is True
+        state.close()

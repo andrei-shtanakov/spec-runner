@@ -248,6 +248,27 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
             finalize_integration_branch(config, integration)
 
 
+def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
+    """Resolve the (stop_reason, stop_detail) pair for a mid-run stop.
+
+    Budget stops are reported as such (#67 — they used to masquerade as
+    "max_consecutive_failures"); otherwise a classified error kind from the
+    most recent failed attempt wins over the generic counter.
+    """
+    cause = state.stop_cause()
+    if cause is not None and cause[0] == "budget_exceeded":
+        return cause
+    last = state.most_recent_failed_attempt()
+    if last and last.error_kind and last.error_kind != "unknown":
+        return f"error_{last.error_kind}", last.error or ""
+    if cause is not None:
+        return cause
+    return (
+        "max_consecutive_failures",
+        f"{state.consecutive_failures}/{config.max_consecutive_failures}",
+    )
+
+
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
@@ -324,13 +345,24 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             )
             sys.exit(1)
 
-        # Check failure limit
-        if state.should_stop():
-            logger.error(
-                "Stopped due to consecutive failures",
-                consecutive_failures=state.consecutive_failures,
+        # Check failure/budget limits — name the actual cause and exit
+        # non-zero (#67: this used to say "consecutive failures ... 0" on a
+        # budget stop and exit 0, stranding the operator without a diagnosis).
+        cause = state.stop_cause()
+        if cause is not None:
+            reason, detail = cause
+            logger.error("Refusing to run", reason=reason, detail=detail)
+            print(f"⛔ Refusing to run: {reason} ({detail})")
+            if reason == "budget_exceeded":
+                print("   Raise budget_usd, or `spec-runner reset` to clear recorded costs.")
+            state.audit_logger.record(
+                EVENT_RUN_ENDED,
+                completed=0,
+                failed=0,
+                remaining=len(tasks),
+                stop_reason=reason,
             )
-            return
+            sys.exit(1)
 
         # Determine which tasks to execute
         if args.task:
@@ -507,16 +539,8 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     continue
 
                 if result is False and state.should_stop():
-                    last = state.most_recent_failed_attempt()
-                    if last and last.error_kind and last.error_kind != "unknown":
-                        stop_reason = f"error_{last.error_kind}"
-                        stop_detail = last.error or ""
-                    else:
-                        stop_reason = "max_consecutive_failures"
-                        stop_detail = (
-                            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
-                        )
-                    logger.warning("Stopping: too many consecutive failures")
+                    stop_reason, stop_detail = _stop_reason_for(state, config)
+                    logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
                     break
         else:
             # For single task or milestone mode, execute the fixed list
@@ -550,16 +574,8 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     continue
 
                 if result is False and state.should_stop():
-                    last = state.most_recent_failed_attempt()
-                    if last and last.error_kind and last.error_kind != "unknown":
-                        stop_reason = f"error_{last.error_kind}"
-                        stop_detail = last.error or ""
-                    else:
-                        stop_reason = "max_consecutive_failures"
-                        stop_detail = (
-                            f"{state.consecutive_failures}/{config.max_consecutive_failures}"
-                        )
-                    logger.warning("Stopping: too many consecutive failures")
+                    stop_reason, stop_detail = _stop_reason_for(state, config)
+                    logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
                     break
 
         # v2.3.0: persist stop-reason for this run
@@ -774,6 +790,11 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         time.sleep(1)
 
 
+# Default probe budget for `doctor` when --budget is not given. Applied in
+# cmd_doctor (not via parser defaults) so it cannot leak into other subcommands.
+DOCTOR_DEFAULT_BUDGET_USD = 0.5
+
+
 def cmd_doctor(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Run the CLI/model compatibility probe and exit with its status code."""
     from .doctor import run_doctor
@@ -783,7 +804,7 @@ def cmd_doctor(args: argparse.Namespace, config: ExecutorConfig) -> None:
         cli=args.cli,
         model=args.model,
         with_review=args.with_review,
-        budget=args.budget,
+        budget=args.budget if args.budget is not None else DOCTOR_DEFAULT_BUDGET_USD,
         timeout_min=getattr(args, "timeout", None),
         assume_yes=args.yes,
         strict=args.strict,
@@ -1203,8 +1224,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     doctor_parser.add_argument("--json", action="store_true", help="Machine-readable output")
     doctor_parser.add_argument("--keep", action="store_true", help="Keep the scratch workspace")
-    # --budget is inherited from common (default None); override default to 0.50 for doctor
-    doctor_parser.set_defaults(budget=0.5)
+    # --budget is inherited from common (default None). Do NOT set_defaults(budget=...)
+    # here: argparse shares Action objects across subparsers built with
+    # parents=[common], so a doctor-local default would mutate the shared action
+    # and leak into every other subcommand (#68). cmd_doctor resolves
+    # None → DOCTOR_DEFAULT_BUDGET_USD itself.
 
     # spec (gated spec lifecycle: status, approve, reject, adopt, check)
     spec_parser = subparsers.add_parser(
