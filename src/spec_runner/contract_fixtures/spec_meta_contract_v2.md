@@ -12,7 +12,7 @@ source_prompt_version: sha256:0000000000000000
 validation: pass
 approved_by: andrei
 approved_at: '2026-07-26T00:00:00Z'
-owner_role: '@platform,@sre'
+owner_role: platform
 ---
 # Golden fixture for SpecMeta contract v2
 

@@ -101,10 +101,17 @@ subclasses `date`. Every other string-typed field rejects a date value.
 
 ### `owner_role`
 
-CODEOWNERS role(s) for the stage, formatted `"@role[,@role]"` (e.g.
-`"@platform,@sre"`). spec-runner validates only that it is a string or
-`None`; the role semantics (what a role means, who it maps to) belong to the
-consumer (steward), not to spec-runner.
+The accountable governance role for the stage: a **DEC-007 role slug** —
+exactly one role, no `@`, no comma-list (e.g. `platform`). The role catalog
+(steward `profiles/roles.yaml`) is the SSOT for role identity; multiplicity
+is modelled by separate fields on the steward side (`reviewer_roles`,
+`allowed_approver_roles`), never inside `owner_role`.
+
+spec-runner validates only that the value is a string or `None`; the role
+semantics belong to the consumer (steward), not to spec-runner. In
+particular, legacy pre-DEC-007 values (`"@role[,@role]"`, e.g.
+`"@platform,@sre"`) are still **carried verbatim** — steward's own data has
+not fully migrated, and rejecting them here would break round-trips.
 
 ### `approved_by` vs. `generated_by`
 

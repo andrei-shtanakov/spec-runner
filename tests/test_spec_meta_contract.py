@@ -112,7 +112,7 @@ def test_valid_meta_still_parses():
 
 def test_unknown_string_keys_land_in_extra():
     m = meta_from_dict(
-        _base(owner_role="@platform", traces_to="REQ-001", upstream_hashes={"design": "abc"})
+        _base(owner_role="platform", traces_to="REQ-001", upstream_hashes={"design": "abc"})
     )
     assert m.extra["traces_to"] == "REQ-001"
     assert m.extra["upstream_hashes"] == {"design": "abc"}
@@ -206,13 +206,24 @@ def test_apply_approval_preserves_extras(tmp_path, monkeypatch):
 
 
 def test_owner_role_round_trips():
+    again, _ = _round_trip(_base(owner_role="platform"))
+    assert again["owner_role"] == "platform"
+
+
+def test_legacy_owner_role_form_carried_verbatim():
+    """Pre-DEC-007 values ("@role[,@role]") must keep round-tripping.
+
+    steward's own data has not fully migrated to the DEC-007 single-slug
+    form; spec-runner is a carrier and must not reject or rewrite legacy
+    values.
+    """
     again, _ = _round_trip(_base(owner_role="@platform,@sre"))
     assert again["owner_role"] == "@platform,@sre"
 
 
 def test_owner_role_is_not_an_extra():
-    m = meta_from_dict(_base(owner_role="@platform"))
-    assert m.owner_role == "@platform"
+    m = meta_from_dict(_base(owner_role="platform"))
+    assert m.owner_role == "platform"
     assert "owner_role" not in m.extra
 
 
@@ -273,7 +284,7 @@ def test_golden_fixture_round_trips():
     parsed, body = split_frontmatter(text)
     meta = meta_from_dict(parsed)
 
-    assert meta.owner_role == "@platform,@sre"
+    assert meta.owner_role == "platform"
     assert meta.approved_by == "andrei"
     assert meta.version == 3
     assert meta.extra["traces_to"] == "REQ-001"
