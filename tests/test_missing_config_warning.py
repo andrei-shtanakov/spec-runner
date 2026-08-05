@@ -33,3 +33,16 @@ class TestMissingConfigWarning:
         msg = missing_config_warning(_cfg(tmp_path))
         assert msg is not None
         assert "previous run's state" not in msg
+
+
+class TestWarningReflectsEffectiveValues:
+    def test_integration_pr_mode_not_reported_as_self_merge(self, tmp_path):
+        msg = missing_config_warning(_cfg(tmp_path, integration_pr=True))
+        assert msg is not None
+        assert "self-merge" not in msg
+        assert "integration branch + PR" in msg
+
+    def test_no_branching_mode_reported(self, tmp_path):
+        msg = missing_config_warning(_cfg(tmp_path, create_git_branch=False))
+        assert msg is not None
+        assert "no git branching" in msg

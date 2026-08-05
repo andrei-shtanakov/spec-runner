@@ -1342,10 +1342,13 @@ def main():
         parser.print_help()
         return
 
-    # Load config from YAML file, then override with CLI args
-    yaml_config = load_config_from_yaml()
+    # Load config from YAML file, then override with CLI args. Resolve the
+    # path once — _resolve_config_path() prints a deprecation warning for the
+    # legacy location, which must not appear twice.
+    config_path = _resolve_config_path()
+    yaml_config = load_config_from_yaml(config_path)
     config = build_config(yaml_config, args)
-    config.config_found = _resolve_config_path().exists()
+    config.config_found = config_path.exists()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile.
     from .config import ConfigError
