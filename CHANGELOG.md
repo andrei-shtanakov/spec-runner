@@ -10,6 +10,62 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.14.0] — 2026-08-05
+
+Second battle-testing wave: the five enhancement/hardening issues from the
+2.11.0 field trial (#64, #66, #69, #72, #73). The Maestro interop contract
+(`.executor-state.db` schema, `--json-result` stdout) is unchanged; the one
+contract edit is an additive enum value on the VSCode read surface
+(`costs.schema.json`), updated in lockstep with its drift-guard test.
+
+### Added
+
+- **Fail-closed dirty-spec pre-run guard** (#69; PR #87). `run`/`watch`/
+  `retry` refuse (exit 1, offending `git status` lines printed) when the
+  spec content files or the config have uncommitted changes — an executed
+  spec now always has a committed version predating the run. Enforced only
+  when spec-runner's own git automation is on (subdir projects keep a
+  permanently dirty tasks.md by design); tracked deletions count as dirt; a
+  failing `git status` fails closed; `--allow-dirty-spec` overrides.
+  Orchestrators that keep generated specs gitignored (Maestro's
+  info/exclude pattern) see zero dirt — verified against Maestro's
+  workspace lifecycle before choosing the fail-closed default.
+- **Integration-PR closed loop** (#73; PR #88). When a run opens an
+  integration PR it now prints an explicit stderr block (merge required
+  before the next run) and persists `last_run_pr_url` in `executor_meta`;
+  `status` repeats the marker until the new **`spec-runner sync`** command
+  clears it. `sync` is the post-merge closer: no-active-run lock check,
+  clean worktree (executor runtime state never counts), switch to base,
+  `pull --ff-only` + `fetch --prune`, deletion of **merged-only** `task/*`
+  and `spec-runner/run-*` branches locally and on the remote
+  (ancestor-check, never force, foreign branches untouched), state sanity.
+  Each step reports ✓/✗ with detail; failed deletions fail the step;
+  `--dry-run` previews; non-zero exit when the tree can't host the next run.
+- **Task ids accept any uppercase prefix** (#72; PR #89). `### KAP-002:`
+  headers parse natively (`ID_PATTERN`); `Depends on:`/`Blocks:` refs are
+  filtered against the prefixes task headers actually use, so `[REQ-001]`
+  in those lines stays documentation. gh-sync title matching generalized.
+  Zero config — the proposed `task_id_prefix` key turned out unnecessary.
+- **Harness-mutation tripwire** (#64; PR #90). The verification harness
+  (dependency manifests, pytest/tox/setup configs, conftest.py,
+  package.json/mix.exs/Cargo.toml/go.mod, Makefile, CI workflows, plus
+  `harness_files` extras) is snapshotted before the agent runs;
+  created/modified/deleted files are violations checked BEFORE the gates.
+  `harness_guard: warn` (default) logs provenance; `strict` fails the
+  attempt with a retry-prompt-feeding error (exemptions via
+  `harness_allow` globs); `off` disables. Unreadable files get a sentinel
+  hash (a chmod-000 file cannot bypass the guard); config values are
+  validated at load.
+- **Intermediate `🔍 REVIEW` file status** (#66; PR #91). Written to
+  tasks.md when the tests/lint gates pass and code review starts — a run
+  killed during review leaves an honest intermediate state instead of a
+  premature DONE. Scheduled like IN_PROGRESS (resumable, not done for
+  dependents, skipped by `--restart`). Maestro is unaffected (it reads
+  only the SQLite state, whose vocabulary is untouched); the VSCode read
+  surface maps unknown statuses to an explicit `unknown`, and its vendored
+  `costs.schema.json` status enum gains `review` here in lockstep
+  (re-vendor requested via spec-runner-vscode#16).
+
 ## [2.13.0] — 2026-08-05
 
 Battle-testing release: every change comes from a field trial of 2.11.0 on an
@@ -753,7 +809,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.14.0...HEAD
+[2.14.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.0...v2.11.1
