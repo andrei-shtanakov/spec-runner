@@ -555,7 +555,10 @@ def test_doctor_parser_defaults():
     args = parser.parse_args(["doctor"])
     assert args.cli is None
     assert args.with_review is False
-    assert args.budget == 0.5
+    # None at the parser level; cmd_doctor resolves it to
+    # DOCTOR_DEFAULT_BUDGET_USD. A parser-level 0.5 default leaked into every
+    # other subcommand via the shared --budget action (#68).
+    assert args.budget is None
     assert args.yes is False
 
 
@@ -636,3 +639,39 @@ def test_run_probe_no_progress_file_pollution(tmp_path, monkeypatch):
 
         shutil.rmtree(root, ignore_errors=True)
     assert not (cwd / "spec" / ".executor-progress.txt").exists()
+
+
+class TestCmdDoctorBudgetDefault:
+    """cmd_doctor resolves --budget None → DOCTOR_DEFAULT_BUDGET_USD (not the parser)."""
+
+    def _invoke(self, budget):
+        import argparse
+        from unittest.mock import patch
+
+        from spec_runner import cli as cli_mod
+
+        args = argparse.Namespace(
+            cli=None,
+            model=None,
+            with_review=False,
+            budget=budget,
+            timeout=None,
+            yes=True,
+            strict=False,
+            json=False,
+            keep=False,
+        )
+        with (
+            patch("spec_runner.doctor.run_doctor", return_value=0) as mock_run,
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.cmd_doctor(args, ExecutorConfig())
+        return mock_run.call_args.kwargs["budget"]
+
+    def test_default_budget_applied(self):
+        from spec_runner.cli import DOCTOR_DEFAULT_BUDGET_USD
+
+        assert self._invoke(None) == DOCTOR_DEFAULT_BUDGET_USD
+
+    def test_explicit_budget_passthrough(self):
+        assert self._invoke(2.0) == 2.0

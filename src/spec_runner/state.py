@@ -650,11 +650,31 @@ class ExecutorState:
 
             get_logger("state").debug("Degraded-mode notification failed", error=str(exc))
 
+    def stop_cause(self) -> tuple[str, str] | None:
+        """Why execution should stop, or None if it may proceed.
+
+        Returns a ``(reason, detail)`` pair — reason is one of
+        ``max_consecutive_failures`` / ``budget_exceeded`` — so callers can
+        report the ACTUAL cause instead of a generic message (#67: a budget
+        stop used to be logged as "consecutive failures ... 0/2").
+        """
+        if self.consecutive_failures >= self.config.max_consecutive_failures:
+            return (
+                "max_consecutive_failures",
+                f"{self.consecutive_failures}/{self.config.max_consecutive_failures}",
+            )
+        if self.config.budget_usd is not None:
+            cost = self.total_cost()
+            if cost > self.config.budget_usd:
+                return (
+                    "budget_exceeded",
+                    f"total cost ${cost:.2f} > budget ${self.config.budget_usd:.2f}",
+                )
+        return None
+
     def should_stop(self) -> bool:
         """Check if we should stop (consecutive failures or budget exceeded)."""
-        if self.consecutive_failures >= self.config.max_consecutive_failures:
-            return True
-        return self.config.budget_usd is not None and self.total_cost() > self.config.budget_usd
+        return self.stop_cause() is not None
 
     def total_cost(self) -> float:
         """Sum of cost_usd across all attempts."""

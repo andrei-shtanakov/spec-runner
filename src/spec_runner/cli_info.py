@@ -55,6 +55,8 @@ def print_status(config: ExecutorConfig) -> None:
         if reason and reason != "completed":
             if reason == "max_consecutive_failures":
                 human = f"max_consecutive_failures reached ({detail})"
+            elif reason == "budget_exceeded":
+                human = f"budget exceeded ({detail})"
             elif reason.startswith("error_"):
                 kind = reason.removeprefix("error_")
                 human = f"{kind} — {detail}" if detail else kind

@@ -112,3 +112,40 @@ class TestSpecSubparser:
         ns = parser.parse_args(["spec"])
         assert ns.command == "spec"
         assert ns.spec_command is None
+
+
+class TestBudgetDefaultIsolation:
+    """Regression for #68/#67: doctor's 0.50 budget default must not leak.
+
+    argparse shares Action objects across subparsers built with
+    ``parents=[common]``, so ``doctor_parser.set_defaults(budget=...)``
+    mutated the shared ``--budget`` action and every subcommand inherited
+    a $0.50 default — overriding the YAML budget and blocking follow-up
+    runs once total cost crossed $0.50.
+    """
+
+    def test_run_budget_default_none(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["run", "--all"])
+        assert ns.budget is None
+
+    def test_status_budget_default_none(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["status"])
+        assert ns.budget is None
+
+    def test_costs_budget_default_none(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["costs"])
+        assert ns.budget is None
+
+    def test_doctor_budget_default_none(self):
+        # cmd_doctor resolves None → DOCTOR_DEFAULT_BUDGET_USD itself.
+        parser = _build_parser()
+        ns = parser.parse_args(["doctor"])
+        assert ns.budget is None
+
+    def test_run_budget_explicit_still_works(self):
+        parser = _build_parser()
+        ns = parser.parse_args(["run", "--budget", "2.5"])
+        assert ns.budget == 2.5
