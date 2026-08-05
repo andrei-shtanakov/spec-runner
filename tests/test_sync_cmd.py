@@ -155,3 +155,35 @@ class TestRunSync:
         sanity = _step(steps, "state sanity")
         assert sanity.ok is False
         assert "TASK-001" in sanity.detail
+
+
+class TestSyncStepHardening:
+    """Copilot review findings on #88."""
+
+    def test_lock_precondition_reported_as_step(self, tmp_path):
+        _, work = _setup_remote_pair(tmp_path)
+        steps = run_sync(_cfg(work))
+        assert steps[0].name == "no active run"
+        assert steps[0].ok is True
+
+    def test_failed_local_deletion_fails_the_step(self, tmp_path, monkeypatch):
+        _, work = _setup_remote_pair(tmp_path)
+        _make_branch(work, "task/task-009-x", "i.txt", merge=True, push=False)
+
+        import subprocess as sp
+
+        from spec_runner import sync_cmd
+
+        real_run = sp.run
+
+        def flaky(argv, **kwargs):
+            if argv[:3] == ["git", "branch", "-d"]:
+                return sp.CompletedProcess(argv, 1, stdout="", stderr="cannot delete")
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(sync_cmd.subprocess, "run", flaky)
+        steps = run_sync(_cfg(work))
+        local = _step(steps, "local managed branches")
+        assert local.ok is False
+        assert "FAILED to delete: task/task-009-x" in local.detail
+        assert not all(s.ok for s in steps)

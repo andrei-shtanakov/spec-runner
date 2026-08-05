@@ -76,8 +76,9 @@ def run_sync(config: ExecutorConfig, *, dry_run: bool = False) -> list[SyncStep]
     # 0. No active run — sync mutates the tree the executor may be using.
     lock = ExecutorLock(config.state_file.with_suffix(".lock"))
     if not lock.acquire():
-        held = getattr(lock, "_held_by", {})
+        held = lock._held_by
         return fail("no active run", f"executor lock held by PID {held.get('pid', '?')}")
+    steps.append(SyncStep("no active run", True))
     try:
         # 1. Git repo present.
         if _git(config, "rev-parse", "--git-dir").returncode != 0:
@@ -144,15 +145,22 @@ def run_sync(config: ExecutorConfig, *, dry_run: bool = False) -> list[SyncStep]
         local = _managed_branches(config, "refs/heads")
         merged_local = [b for b in local if b != base and _is_merged(config, b, base)]
         kept_local = [b for b in local if b not in merged_local]
+        failed_local: list[str] = []
         if dry_run:
             detail = f"would delete: {', '.join(merged_local) or '(none)'}"
         else:
+            deleted_local = []
             for b in merged_local:
-                _git(config, "branch", "-d", b)
-            detail = f"deleted: {', '.join(merged_local) or '(none)'}"
+                if _git(config, "branch", "-d", b).returncode == 0:
+                    deleted_local.append(b)
+                else:
+                    failed_local.append(b)
+            detail = f"deleted: {', '.join(deleted_local) or '(none)'}"
+            if failed_local:
+                detail += f"; FAILED to delete: {', '.join(failed_local)}"
         if kept_local:
             detail += f"; kept (unmerged): {', '.join(kept_local)}"
-        steps.append(SyncStep("local managed branches", True, detail))
+        steps.append(SyncStep("local managed branches", not failed_local, detail))
 
         if remote is not None:
             remote_branches = [
@@ -163,21 +171,28 @@ def run_sync(config: ExecutorConfig, *, dry_run: bool = False) -> list[SyncStep]
                 b for b in remote_branches if _is_merged(config, f"{remote}/{b}", base)
             ]
             kept_remote = [b for b in remote_branches if b not in merged_remote]
+            failed_remote: list[str] = []
             if dry_run:
                 detail = f"would delete: {', '.join(merged_remote) or '(none)'}"
             else:
+                deleted_remote = []
                 for b in merged_remote:
                     push = _git(config, "push", remote, "--delete", b)
-                    if push.returncode != 0:
+                    if push.returncode == 0:
+                        deleted_remote.append(b)
+                    else:
+                        failed_remote.append(b)
                         logger.warning(
                             "Could not delete remote branch",
                             branch=b,
                             stderr=push.stderr.strip()[:120],
                         )
-                detail = f"deleted: {', '.join(merged_remote) or '(none)'}"
+                detail = f"deleted: {', '.join(deleted_remote) or '(none)'}"
+                if failed_remote:
+                    detail += f"; FAILED to delete: {', '.join(failed_remote)}"
             if kept_remote:
                 detail += f"; kept (unmerged): {', '.join(kept_remote)}"
-            steps.append(SyncStep("remote managed branches", True, detail))
+            steps.append(SyncStep("remote managed branches", not failed_remote, detail))
 
         # 6. Executor state sanity + close the PR loop.
         with ExecutorState(config) as state:

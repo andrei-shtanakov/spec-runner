@@ -70,7 +70,9 @@ def print_status(config: ExecutorConfig) -> None:
             print(f"⚠️ Last run stopped: {human}")
 
         # Integration-PR loop marker (#73): repeated until `sync` clears it.
-        pr_url = state.get_meta("last_run_pr_url")
+        from .sync_cmd import PR_URL_META_KEY
+
+        pr_url = state.get_meta(PR_URL_META_KEY)
         if pr_url:
             print(f"🔗 Integration PR awaiting merge: {pr_url}")
             print("   Merge it, then run `spec-runner sync` before the next run.")
