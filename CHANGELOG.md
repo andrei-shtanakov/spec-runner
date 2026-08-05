@@ -10,6 +10,33 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.15.0] — 2026-08-05
+
+Long-tail cleanup after the two battle-testing waves: the oldest open user
+breakage (`--spec-prefix` swallowed by the CLI parser) and the DEC-007
+documentation drift. The Maestro interop contract is unchanged;
+`SPEC_META_CONTRACT` stays 2 (the golden fixture's example value changes,
+not the contract shape).
+
+### Fixed
+
+- **Common flags placed before the subcommand are no longer swallowed**
+  (TODO slug `spec-prefix-swallow`, found during the C1 dogfood; PR #93).
+  Every option of the shared `common` parent was declared on the top-level
+  parser AND on each subparser; the subparser re-applied its default after
+  the top-level parse, silently clobbering values given before the
+  subcommand — `spec-runner --spec-prefix=phase2- run` ran unprefixed, and
+  spec-runner-vscode emits exactly that argv order, so its `specPrefix`
+  setting never reached the CLI. The same swallow hit every common flag
+  (`--budget`, `--no-review`, …). The `spec status/approve/reject/adopt/
+  check` family additionally rejected the flag outright (not parented on
+  `common`). Fix: `common` uses SUPPRESS defaults and the top-level parser
+  restores documented defaults once after the full parse (with a build-time
+  drift-guard assertion); the `spec` family gains the common options. When
+  a flag is given both before and after the subcommand, the subcommand
+  position wins. The VSCode extension needs no changes — its argv order now
+  works as-is.
+
 ### Changed
 
 - **`owner_role` documentation aligned with DEC-007** (steward role catalog,
@@ -820,7 +847,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.14.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.15.0...HEAD
+[2.15.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.11.1...v2.12.0
