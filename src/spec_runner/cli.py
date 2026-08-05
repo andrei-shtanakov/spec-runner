@@ -41,6 +41,7 @@ from .git_ops import (
     ensure_on_main_branch,
     finalize_integration_branch,
     make_integration_branch_name,
+    spec_dirty_paths,
 )
 from .logging import get_logger
 from .preset_cmd import cmd_config
@@ -273,6 +274,37 @@ def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str,
     )
 
 
+def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
+    """Refuse to execute when spec/config files are uncommitted or dirty (#69).
+
+    Fail-closed: the spec is the run's contract, and executing an uncommitted
+    spec muddies provenance (the auto-commit mixes spec and code into one
+    commit; an interrupted run leaves DONE edits in an uncommitted file).
+    Only enforced when spec-runner's own git automation is on — without
+    auto-commit/branching there is no provenance to protect, and projects
+    with git automation auto-disabled (subdir repos) keep a permanently
+    dirty tasks.md by design. Override with --allow-dirty-spec. Gitignored
+    spec files (Maestro's generated specs) never count as dirt.
+    """
+    if getattr(args, "allow_dirty_spec", False):
+        return
+    automation_on = getattr(config, "auto_commit", False) or getattr(
+        config, "create_git_branch", False
+    )
+    if not automation_on:
+        return
+    dirty = spec_dirty_paths(config)
+    if not dirty:
+        return
+    logger.error("Refusing to run: spec/config files are not committed", files=dirty)
+    print("⛔ Refusing to run: spec/config files have uncommitted changes:")
+    for line in dirty:
+        print(f"   {line}")
+    print("   Commit them first (the spec is the run's contract), or override")
+    print("   with --allow-dirty-spec.")
+    sys.exit(1)
+
+
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
@@ -283,6 +315,8 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     if not allowed:
         print(f"⛔ spec governance: {reason}")
         return
+
+    _enforce_clean_spec(args, config)
 
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
@@ -642,6 +676,10 @@ def cmd_retry(args, config: ExecutorConfig):
         print(f"⛔ spec governance: {reason}")
         return
 
+    # Dirty-spec guard (#69) — retry executes tasks and runs the git
+    # automation hooks, so it must not bypass the guard either.
+    _enforce_clean_spec(args, config)
+
     tasks = parse_tasks(config.tasks_file)
 
     with ExecutorState(config) as state:
@@ -694,6 +732,10 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     if not allowed:
         print(f"⛔ spec governance: {reason}")
         return
+
+    # Dirty-spec guard (#69) — same enforcement as `run`, checked once
+    # before the loop starts (mid-run DONE writes dirty tasks.md by design).
+    _enforce_clean_spec(args, config)
 
     # Pre-run validation
     pre_result = validate_all(
@@ -1040,6 +1082,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable spec governance gate (default behavior)",
     )
+    run_parser.add_argument(
+        "--allow-dirty-spec",
+        action="store_true",
+        help="Execute even when spec/config files have uncommitted changes "
+        "(default: refuse when git automation is on)",
+    )
 
     # status
     status_parser = subparsers.add_parser("status", parents=[common], help="Show execution status")
@@ -1050,6 +1098,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # retry
     retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")
     retry_parser.add_argument("task_id", help="Task ID to retry")
+    retry_parser.add_argument(
+        "--allow-dirty-spec",
+        action="store_true",
+        help="Retry even when spec/config files have uncommitted changes "
+        "(default: refuse when git automation is on)",
+    )
     retry_parser.add_argument(
         "--fresh",
         action="store_true",
@@ -1196,6 +1250,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-strict",
         action="store_true",
         help="Disable spec governance gate (default behavior)",
+    )
+    watch_parser.add_argument(
+        "--allow-dirty-spec",
+        action="store_true",
+        help="Watch even when spec/config files have uncommitted changes "
+        "(default: refuse when git automation is on)",
     )
 
     # costs

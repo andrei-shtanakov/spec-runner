@@ -85,6 +85,9 @@ spec-runner run --log-level=DEBUG          # Set log verbosity (DEBUG/INFO/WARNI
 spec-runner run --log-json                 # Output logs as JSON (for pipelines)
 spec-runner run --all --hitl-review        # Interactive HITL approval gate after code review
 spec-runner run --force                    # Skip lock check (use when lock is stale)
+spec-runner run --allow-dirty-spec         # Skip the dirty-spec guard (default: refuse to run
+                                           # with uncommitted spec/config when git automation is on)
+spec-runner watch --allow-dirty-spec       # Same override for watch (and `retry` accepts it too)
 spec-runner run --budget=10.0              # Set global budget in USD
 spec-runner run --task-budget=2.0          # Set per-task budget in USD
 spec-runner costs                          # Cost breakdown per task
