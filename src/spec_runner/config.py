@@ -287,6 +287,21 @@ class ExecutorConfig:
         """Resolve project_root and namespace state/log paths by spec_prefix/change_id."""
         self.project_root = self.project_root.resolve()
 
+        # Harness-guard config sanity (#64): a YAML typo must not silently
+        # degrade the guard or crash later (a bare string would iterate
+        # per-character as paths).
+        if self.harness_guard not in ("off", "warn", "strict"):
+            raise ConfigError(
+                f"invalid harness_guard {self.harness_guard!r}: "
+                "expected one of 'off', 'warn', 'strict'"
+            )
+        for attr in ("harness_files", "harness_allow"):
+            value = getattr(self, attr)
+            if isinstance(value, str):
+                setattr(self, attr, [value])
+            elif not isinstance(value, list):
+                raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
+
         if self.change_id:
             if self.spec_prefix:
                 raise ConfigError(

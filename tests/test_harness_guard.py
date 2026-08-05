@@ -164,3 +164,40 @@ class TestExecuteTaskIntegration:
         cfg.logs_dir.mkdir()
         result, _ = self._run(cfg, tmp_path)
         assert result is True
+
+
+class TestGuardHardening:
+    """Copilot review findings on #90."""
+
+    def test_unreadable_created_file_still_flagged(self, tmp_path):
+        import os
+
+        cfg = _cfg(tmp_path)
+        before = snapshot_harness(cfg)
+        target = tmp_path / "pytest.ini"
+        target.write_text("[pytest]\n")
+        os.chmod(target, 0o000)
+        try:
+            assert harness_violations(cfg, before) == ["created pytest.ini"]
+        finally:
+            os.chmod(target, 0o644)
+
+    def test_invalid_harness_guard_value_rejected(self, tmp_path):
+        import pytest
+
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="harness_guard"):
+            _cfg(tmp_path, harness_guard="paranoid")
+
+    def test_string_harness_files_coerced_to_list(self, tmp_path):
+        cfg = _cfg(tmp_path, harness_files="scripts/verify.sh")
+        assert cfg.harness_files == ["scripts/verify.sh"]
+
+    def test_non_list_harness_allow_rejected(self, tmp_path):
+        import pytest
+
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="harness_allow"):
+            _cfg(tmp_path, harness_allow=42)

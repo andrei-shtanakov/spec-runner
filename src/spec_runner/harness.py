@@ -76,9 +76,13 @@ def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
     for rel in candidates:
         for f in _iter_files(config.project_root / rel):
             try:
-                snapshot[str(f.relative_to(config.project_root))] = _hash_file(f)
+                digest = _hash_file(f)
             except OSError:
-                continue
+                # An unreadable file must still exist in the snapshot —
+                # otherwise creating a chmod-000 file would bypass the
+                # guard entirely (Copilot finding on #90).
+                digest = "unreadable"
+            snapshot[str(f.relative_to(config.project_root))] = digest
     return snapshot
 
 
