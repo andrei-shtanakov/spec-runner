@@ -49,7 +49,7 @@
       "type": ["string", "null"]
     },
     "owner_role": {
-      "description": "CODEOWNERS role(s) for this stage, \"@role[,@role]\", or null when unset",
+      "description": "DEC-007 role slug for this stage (one accountable role, no @; e.g. \"platform\"); legacy \"@role[,@role]\" values are carried verbatim; null when unset",
       "type": ["string", "null"]
     }
   }

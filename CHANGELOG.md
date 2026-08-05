@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`owner_role` documentation aligned with DEC-007** (steward role catalog,
+  decided 2026-07-26). `docs/CONTRACTS.md`, the spec-frontmatter schema, the
+  inline comment and the **golden fixture shipped as package data** now show
+  the canonical single role-slug form (`platform` — one accountable role, no
+  `@`) instead of the retired `"@role[,@role]"`. No behaviour change:
+  spec-runner remains a pure carrier (string-or-None), and legacy values are
+  still round-tripped verbatim — pinned by a new regression test — because
+  steward's own data has not fully migrated. `SPEC_META_CONTRACT` stays 2.
+
 ## [2.14.0] — 2026-08-05
 
 Second battle-testing wave: the five enhancement/hardening issues from the

@@ -195,7 +195,9 @@ class SpecMeta:
     validation: str = ""  # pass | fail | warn | ""
     approved_by: str | None = None
     approved_at: str | None = None
-    owner_role: str | None = None  # CODEOWNERS role(s), "@role[,@role]"; steward owns the semantics
+    # DEC-007 role slug (one accountable role, no @); steward owns the
+    # semantics — legacy "@role[,@role]" values are carried verbatim.
+    owner_role: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

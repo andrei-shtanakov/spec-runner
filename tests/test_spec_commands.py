@@ -109,7 +109,7 @@ def test_adopt_preserves_extras_and_owner_role_on_managed_file(tmp_path: Path):
             spec_stage="tasks",
             status="approved",
             version=5,
-            owner_role="@platform",
+            owner_role="platform",
             extra={"traces_to": "REQ-001", "upstream_hashes": {"design": "abc"}},
         ),
         GOOD_REQ,
@@ -119,7 +119,7 @@ def test_adopt_preserves_extras_and_owner_role_on_managed_file(tmp_path: Path):
     assert rc == 0
     m = read_spec_meta(cfg.tasks_file)
     assert m is not None
-    assert m.owner_role == "@platform"
+    assert m.owner_role == "platform"
     assert m.extra["traces_to"] == "REQ-001"
     assert m.extra["upstream_hashes"] == {"design": "abc"}
 
