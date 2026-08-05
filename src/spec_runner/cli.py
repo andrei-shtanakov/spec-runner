@@ -5,7 +5,7 @@ import json
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -960,19 +960,68 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         read_commands[task_cmd](args, tasks)
 
 
+# Defaults for every option in the shared `common` parent parser. The parser
+# itself uses argparse.SUPPRESS (see _CommonDefaultsParser) so a value parsed
+# before the subcommand survives the subparser pass — with plain defaults the
+# subparser re-applied its own default AFTER the top-level parse and silently
+# swallowed e.g. `spec-runner --spec-prefix=phase2- run` (the exact argv order
+# spec-runner-vscode emits).
+_COMMON_DEFAULTS: dict[str, object] = {
+    "max_retries": None,
+    "timeout": None,
+    "no_tests": False,
+    "no_branch": False,
+    "no_commit": False,
+    "no_review": False,
+    "integration_pr": None,
+    "hitl_review": False,
+    "callback_url": "",
+    "spec_prefix": "",
+    "change": "",
+    "project_root": "",
+    "log_level": None,
+    "log_json": False,
+    "budget": None,
+    "task_budget": None,
+}
+
+
+class _CommonDefaultsParser(argparse.ArgumentParser):
+    """Top-level parser that fills common-option defaults after parsing.
+
+    The `common` parent is built with ``argument_default=SUPPRESS``: an option
+    the user did not pass sets no attribute at all, so a value parsed at one
+    level (before the subcommand) is never clobbered by another level's
+    default. The flip side is that unset options are missing from the
+    namespace — this hook restores the documented defaults exactly once,
+    after the full parse.
+    """
+
+    # The explicit signature documents intent, but typeshed's overloads for
+    # parse_args (generic over a caller-supplied namespace type) cannot be
+    # matched by a plain override — the ignore stays by necessity.
+    def parse_args(  # type: ignore[override]
+        self,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> argparse.Namespace:
+        parsed = super().parse_args(args, namespace)
+        for key, value in _COMMON_DEFAULTS.items():
+            if not hasattr(parsed, key):
+                setattr(parsed, key, value)
+        return parsed
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser.
 
     Extracted from main() to allow programmatic use and testing.
     """
-    # Shared options available to every subcommand
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--max-retries", type=int, default=None, help="Max retries per task (default: 3)"
-    )
-    common.add_argument(
-        "--timeout", type=int, default=None, help="Task timeout in minutes (default: 30)"
-    )
+    # Shared options available to every subcommand. SUPPRESS defaults — see
+    # _CommonDefaultsParser; real defaults live in _COMMON_DEFAULTS.
+    common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
+    common.add_argument("--max-retries", type=int, help="Max retries per task (default: 3)")
+    common.add_argument("--timeout", type=int, help="Task timeout in minutes (default: 30)")
     common.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
     common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
@@ -980,7 +1029,6 @@ def _build_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--integration-pr",
         action="store_true",
-        default=None,
         help="Collect all tasks on one branch and open a single PR (never merge into main)",
     )
     common.add_argument(
@@ -988,31 +1036,25 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable interactive approval gate after code review",
     )
-    common.add_argument(
-        "--callback-url", type=str, default="", help="URL to POST task status updates to"
-    )
+    common.add_argument("--callback-url", type=str, help="URL to POST task status updates to")
     common.add_argument(
         "--spec-prefix",
         type=str,
-        default="",
         help='Spec file prefix (e.g. "phase5-" for phase5-tasks.md)',
     )
     common.add_argument(
         "--change",
         type=str,
-        default="",
         help="Operate inside spec/changes/<id>/ (change-as-folder; see `change` command)",
     )
     common.add_argument(
         "--project-root",
         type=str,
-        default="",
         help="Project root directory (default: current directory)",
     )
     common.add_argument(
         "--log-level",
         type=str,
-        default=None,
         choices=["debug", "info", "warning", "error"],
         help="Log level (default: info)",
     )
@@ -1024,14 +1066,19 @@ def _build_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--budget",
         type=float,
-        default=None,
         help="Global budget in USD (stop when exceeded)",
     )
     common.add_argument(
         "--task-budget",
         type=float,
-        default=None,
         help="Per-task budget in USD (block task when exceeded)",
+    )
+    # Drift guard: with SUPPRESS defaults, a common option missing from
+    # _COMMON_DEFAULTS would silently vanish from the namespace and surface
+    # later as an AttributeError. Fail at parser-build time instead.
+    _common_dests = {a.dest for a in common._actions}
+    assert _common_dests == set(_COMMON_DEFAULTS), (
+        f"common options and _COMMON_DEFAULTS diverged: {_common_dests ^ set(_COMMON_DEFAULTS)}"
     )
 
     # Gated spec-generation profile selector (plan --gated and the spec family).
@@ -1043,7 +1090,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Gated spec-generation profile name (default: lite)",
     )
 
-    parser = argparse.ArgumentParser(
+    parser = _CommonDefaultsParser(
         description="spec-runner — task automation from markdown specs via Claude CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
@@ -1061,7 +1108,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the spec-runner version and exit",
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    # Subparsers stay plain ArgumentParser: the defaults-filling hook only
+    # needs to run once, on the top-level parse.
+    subparsers = parser.add_subparsers(
+        dest="command", help="Commands", parser_class=argparse.ArgumentParser
+    )
 
     # run
     run_parser = subparsers.add_parser("run", parents=[common], help="Execute tasks")
@@ -1343,25 +1394,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     spec_sub = spec_parser.add_subparsers(dest="spec_command", help="Spec lifecycle commands")
 
-    spec_sub.add_parser("status", parents=[profile_parent], help="Show per-stage status")
+    spec_sub.add_parser("status", parents=[profile_parent, common], help="Show per-stage status")
 
     spec_approve = spec_sub.add_parser(
-        "approve", parents=[profile_parent], help="Approve a spec stage"
+        "approve", parents=[profile_parent, common], help="Approve a spec stage"
     )
     spec_approve.add_argument("stage", choices=["requirements", "design", "tasks"])
 
     spec_reject = spec_sub.add_parser(
-        "reject", parents=[profile_parent], help="Reopen a spec stage as draft"
+        "reject", parents=[profile_parent, common], help="Reopen a spec stage as draft"
     )
     spec_reject.add_argument("stage", choices=["requirements", "design", "tasks"])
 
     spec_check = spec_sub.add_parser(
-        "check", parents=[profile_parent], help="Refresh cached validation for a stage"
+        "check", parents=[profile_parent, common], help="Refresh cached validation for a stage"
     )
     spec_check.add_argument("stage", choices=["requirements", "design", "tasks"])
 
     spec_adopt = spec_sub.add_parser(
-        "adopt", parents=[profile_parent], help="Adopt an unmanaged spec file"
+        "adopt", parents=[profile_parent, common], help="Adopt an unmanaged spec file"
     )
     spec_adopt.add_argument("stage", choices=["requirements", "design", "tasks"])
     spec_adopt.add_argument(

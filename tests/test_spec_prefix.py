@@ -339,3 +339,63 @@ class TestMultiPhaseE2E:
         # parse_tasks should be safe on missing file — not raise
         if ghost.tasks_file.exists():
             assert parse_tasks(ghost.tasks_file) == []
+
+
+class TestSpecPrefixFlagPositions:
+    """Both argv orders must work (the C1 dogfood bugs; TODO 'spec-prefix-swallow').
+
+    Bug 1: `--spec-prefix` was declared on the top-level parser AND on the
+    `common` parent of every subparser; the subparser re-applied its
+    `default=""` after the top-level parse and silently swallowed the value.
+    spec-runner-vscode puts the flag exactly there, so `spec-runner.specPrefix`
+    never reached the CLI. Bug 2: the `spec` family had no common flags at all
+    (`spec status --spec-prefix=…` → unrecognized arguments).
+    """
+
+    def _parse(self, argv):
+        from spec_runner.cli import _build_parser
+
+        return _build_parser().parse_args(argv)
+
+    def test_flag_before_subcommand_survives(self):
+        ns = self._parse(["--spec-prefix=phase2-", "run"])
+        assert ns.spec_prefix == "phase2-"
+
+    def test_flag_after_subcommand_still_works(self):
+        ns = self._parse(["run", "--spec-prefix=phase2-"])
+        assert ns.spec_prefix == "phase2-"
+
+    def test_subcommand_position_wins_when_both_given(self):
+        ns = self._parse(["--spec-prefix=a-", "run", "--spec-prefix=b-"])
+        assert ns.spec_prefix == "b-"
+
+    def test_default_empty_when_absent(self):
+        ns = self._parse(["run"])
+        assert ns.spec_prefix == ""
+
+    def test_spec_family_accepts_flag_after_subsubcommand(self):
+        ns = self._parse(["spec", "status", "--spec-prefix=phase2-"])
+        assert ns.spec_prefix == "phase2-"
+
+    def test_spec_approve_accepts_flag(self):
+        ns = self._parse(["spec", "approve", "tasks", "--spec-prefix=phase2-"])
+        assert ns.spec_prefix == "phase2-"
+        assert ns.stage == "tasks"
+
+    def test_flag_before_spec_family_survives(self):
+        ns = self._parse(["--spec-prefix=phase2-", "spec", "approve", "tasks"])
+        assert ns.spec_prefix == "phase2-"
+
+    def test_whole_common_class_fixed_not_only_spec_prefix(self):
+        """The swallow hit every common flag; --budget was bug-for-bug identical."""
+        ns = self._parse(["--budget", "2.5", "run"])
+        assert ns.budget == 2.5
+
+    def test_store_true_common_flag_before_subcommand(self):
+        ns = self._parse(["--no-review", "run"])
+        assert ns.no_review is True
+
+    def test_store_true_default_restored_when_absent(self):
+        ns = self._parse(["run"])
+        assert ns.no_review is False
+        assert ns.integration_pr is None  # its documented default is None, not False

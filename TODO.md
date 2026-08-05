@@ -33,9 +33,12 @@
   ruff/mypy чистые. Keystone steward Phase 1 — разблокирует governance-профили (steward G1/G2).
   Спека-бандл: `docs/plans/spec-runner-c1-stages-profile/`. Исполнено самим spec-runner (claude
   preset, 7/7 задач с первой попытки, $15.91) — dogfood gated+run пайплайна.
-- ⚠️ **Два бага `--spec-prefix` всё ещё живы** — перепроверены на релизе `v2.11.0`; PR #53 их
-  НЕ чинил (он про профили). Единственная незакрытая пользовательская поломка: настройка
-  `spec-runner.specPrefix` в VSCode-расширении не работает вовсе. См. «Активные задачи».
+- ✅ **Оба бага `--spec-prefix` починены 2026-08-05** (slug `spec-prefix-swallow`):
+  SUPPRESS-дефолты в `common` + `_CommonDefaultsParser` (мерж дефолтов после парса) —
+  флаг перед субкомандой больше не проглатывается (это чинит и все остальные common-флаги,
+  включая `--budget`), а семейство `spec status/approve/reject/adopt/check` получило
+  common-флаги. `spec-runner.specPrefix` в VSCode-расширении заработает без правок с их
+  стороны. Регресс-тесты: `tests/test_spec_prefix.py::TestSpecPrefixFlagPositions`.
 - ✅ **v2.8.1 зарелижен 2026-07-05** (PyPI + GitHub Release, тег `v2.8.1`): два фикса
   machine-JSON поверхностей для `spec-runner-vscode` — `costs --json` без `tasks.md`
   отдаёт валидный пустой payload (не прозу/hard-exit), и pre-init structlog default
@@ -147,11 +150,12 @@ package data именно для сверки потребителями — т�
 перед субкомандой, то есть настройка `spec-runner.specPrefix` сейчас не работает вообще.
 Причина (2): семейство `spec` (`cli.py:1235`+) не отнаследовано от `common` и флага не имеет.
 
-- [ ] Починить проглатывание флага перед субкомандой @owner:andrei
-      — убрать дубль из top-level либо `default=argparse.SUPPRESS` в `common` с мержем поверх
-- [ ] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` @owner:andrei
-- [ ] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство @owner:andrei
-- [ ] Отправить spec-runner-vscode handoff `../prograph-vault/authored/notes/2026-07-26-vscode-frontmatter-schema-opened.md` — ре-вендоринг открытой схемы + обход `--spec-prefix` до фикса @owner:andrei
+- [x] Починить проглатывание флага перед субкомандой (2026-08-05: SUPPRESS-вариант) @owner:andrei
+- [x] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` (2026-08-05) @owner:andrei
+- [x] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство (2026-08-05, `TestSpecPrefixFlagPositions`, 10 тестов) @owner:andrei
+- [x] Handoff vscode не нужен как обход: флаг починен на нашей стороне, их порядок argv
+      (флаг перед субкомандой) теперь работает как есть; ре-вендор схем шёл отдельно
+      (spec-runner-vscode#16, влит 2026-08-05) @owner:andrei
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 
