@@ -87,7 +87,8 @@ def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
 
     Idempotent; only appends entries that are missing. The file lives inside
     the spec dir but is harness-owned: auto-commits exclude it unless the
-    user tracks it themselves (#96) — it is regenerated on every run anyway.
+    user tracks it themselves (#96). Staying untracked is safe — this hook
+    runs before every task and re-creates the file if it went missing.
     """
     spec_base = config.project_root / "spec"
     if not spec_base.is_dir():
