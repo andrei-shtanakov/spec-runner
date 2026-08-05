@@ -10,6 +10,92 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.13.0] — 2026-08-05
+
+Battle-testing release: every change comes from a field trial of 2.11.0 on an
+external Elixir/Phoenix repo with the claude CLI (issues #62–#74). The Maestro
+interop contract (`.executor-state.db` schema, `--json-result` stdout) is
+unchanged — the one schema edit is additive on an experimental-tier column.
+
+### Fixed
+
+- **`doctor`'s $0.50 budget default leaked into every subcommand** (#68, #67;
+  PR #78). Subparsers are built with `parents=[common]`, so argparse shares
+  the `--budget` Action object across all of them —
+  `doctor_parser.set_defaults(budget=0.5)` mutated that shared action and
+  every command (`run`, `status`, `costs`, …) silently ran with a $0.50
+  budget, overriding the YAML `budget_usd`. Once a previous run's recorded
+  cost crossed $0.50, the next `run` refused to start. The doctor default now
+  lives in `cmd_doctor` (`DOCTOR_DEFAULT_BUDGET_USD`); the parser default is
+  `None` everywhere.
+- **A refused run now names its actual cause and exits non-zero** (#67;
+  PR #78). The pre-run `should_stop()` refusal always logged "Stopped due to
+  consecutive failures" — with a contradictory counter of 0 when the real
+  cause was the budget — and exited 0, so orchestrators read it as success.
+  New `ExecutorState.stop_cause()` distinguishes `max_consecutive_failures`
+  from `budget_exceeded`; the refusal prints the cause, persists it as
+  `last_run_stop_reason` (new meta value `budget_exceeded`, experimental
+  tier), records the audit event, and exits 1. Mid-run budget stops are
+  persisted as `budget_exceeded` too instead of masquerading as
+  `max_consecutive_failures`.
+- **Executor runtime state can no longer be committed** (#62, root cause of
+  #67's state loss; PR #79). `git add -A` in the auto-commit and in both
+  review-fix commit sites swept `spec/.executor-state.db` (+`-wal`/`-shm`),
+  the executor lock, progress file, task history and executor logs into the
+  task branch; the tracked DB was then reverted by the next branch switch
+  *under the open SQLite connection*, losing the run's success status and
+  costs (`status` showed `running: 1`, `costs` showed $0.00) and blocking
+  return-to-base in `integration_pr` mode. All commit sites now stage via
+  `git_ops.stage_all_except_runtime()`, which also untracks state files
+  committed by the old behavior; `pre_start_hook` maintains a
+  `spec/.gitignore` covering runtime files (spec-prefix and change-dir
+  aware); runtime-only churn no longer produces commits. The
+  return-to-base failure is a loud stderr error with recovery instructions
+  instead of a scrolled-away warning.
+- **Review fixes are gated again before commit** (#65; PR #80). A
+  `REVIEW_FIXED` verdict mutates the code after the tests/lint gates ran, so
+  a broken review fix could be committed and merged as a "successful" run.
+  `post_done_hook` now re-runs the full test suite and a strict lint check
+  (deliberately without auto-fix) after a FIXED verdict; red gates fail the
+  attempt with the usual `TEST_FAILURE`/`LINT_FAILURE` classification.
+- **`run --dry-run --json-result` reported `checklist_done == total` for
+  untouched tasks** (#71; PR #82). Checklist tuples are `(item, checked)` but
+  were unpacked as `(done, _)`, counting truthy item *strings*. Now derived
+  from `Task.checklist_progress`.
+- **`status` no longer shows file-DONE tasks as "Not started"** (#68;
+  PR #85). Tasks ticked ✅ DONE in `tasks.md` that the executor never ran
+  (manual bootstrap, another tool) appear under a new "Done outside
+  executor" bucket in the text display. `status --json` is a stable contract
+  surface and is untouched.
+
+### Added
+
+- **Loud warning when no config file backs an execution command** (#63;
+  PR #81). A missing `spec-runner.config.yaml` used to silently flip a run
+  to all defaults — including `integration_pr=false` (self-merge into the
+  main branch) and a Python test command on non-Python repos. `run`/`watch`/
+  `retry` now print an operator-facing stderr warning naming the *effective*
+  merge mode, test command and model; when prior run state exists (evidence
+  the config vanished rather than never existed) the hint is sharper.
+- **`commands.sync` config key + stack-aware dependency sync** (#70; PR #83).
+  `pre_start_hook` hardcoded `uv sync`, producing per-run stderr noise on
+  every non-Python project. A configured `commands.sync` (e.g.
+  `mix deps.get`) now runs instead; with no key set, `uv sync` runs only
+  when `pyproject.toml` exists, else the stage is skipped quietly.
+  `sync_deps: false` still disables the stage entirely.
+
+### Changed
+
+- **Execution stage renamed `codex` → `exec`** (#74; PR #84). Run logs said
+  `⏳ stage: codex` even when running the claude CLI. `error_stage` is an
+  experimental-tier column: the state schema lists `exec` and keeps `codex`
+  valid for rows written by ≤2.12.
+- **Branch slugs strip punctuation** (#74; PR #84). Task names with commas
+  or `+` produced branches like `task/task-004-fake-executor-+-fake-judge,-sy`
+  — valid for git, brittle for tooling/URLs. Slugging now collapses
+  non-alphanumeric runs into `-`, trims trailing dashes after truncation,
+  and falls back to the bare task id for punctuation-only names.
+
 ## [2.12.0] — 2026-08-04
 
 ### Changed

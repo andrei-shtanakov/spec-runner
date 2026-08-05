@@ -134,7 +134,7 @@
           "enum": ["rate_limit", "auth", "network", "cli_error", "unknown", null]
         },
         "error_stage": {
-          "description": "Sub-stage when the failure occurred (experimental, added v2.3.0). 'exec' replaced 'codex' as the agent-execution stage name in v2.12; 'codex' remains valid for rows written by <=2.11.",
+          "description": "Sub-stage when the failure occurred (experimental, added v2.3.0). 'exec' replaced 'codex' as the agent-execution stage name in v2.13; 'codex' remains valid for rows written by <=2.12.",
           "type": ["string", "null"],
           "enum": [
             "sync_deps",
