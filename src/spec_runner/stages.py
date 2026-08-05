@@ -12,7 +12,10 @@ from collections.abc import Callable
 STAGES: tuple[str, ...] = (
     "sync_deps",
     "branch",
-    "codex",
+    # CLI-agnostic name for the agent-execution stage. Was "codex" (≤2.11),
+    # which read as the codex CLI even on claude runs (#74); historical
+    # error_stage rows may still carry the old value.
+    "exec",
     "parse",
     "tests",
     "lint",

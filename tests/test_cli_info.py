@@ -49,12 +49,12 @@ class TestErrorDisplay:
         self._seed_failed(
             cfg,
             kind="rate_limit",
-            stage="codex",
+            stage="exec",
             msg="OpenAI usage limit — try again at 9:54 AM",
         )
         print_status(cfg)
         out = capsys.readouterr().out
-        assert "[at: codex]" in out
+        assert "[at: exec]" in out
         assert "[rate_limit]" in out
         assert "9:54 AM" in out
 
@@ -119,7 +119,7 @@ class TestSecondPassHint:
     def test_hint_rendered_for_listed_task(self, tmp_path, capsys):
         cfg = _cfg(tmp_path, max_retries=1)
         cfg.logs_dir.mkdir()
-        self._seed_failed(cfg, kind="rate_limit", stage="codex", second_pass=True)
+        self._seed_failed(cfg, kind="rate_limit", stage="exec", second_pass=True)
         print_status(cfg)
         out = capsys.readouterr().out
         assert "💡 Repeated failure across runs" in out

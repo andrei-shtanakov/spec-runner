@@ -126,7 +126,7 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
             skip_permissions=config.skip_permissions,
         )
 
-        reporter.enter("codex")
+        reporter.enter("exec")
         result = subprocess.run(
             invocation.argv,
             capture_output=True,
