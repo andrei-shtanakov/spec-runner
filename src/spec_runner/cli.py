@@ -55,6 +55,7 @@ from .state import (
     clear_stop_file,
     recover_stale_tasks,
 )
+from .sync_cmd import cmd_sync
 from .task import (
     Task,
     diff_task_statuses,
@@ -250,7 +251,33 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
         _run_tasks_inner(args, config, lock_held=lock_held)
     finally:
         if integration is not None:
-            finalize_integration_branch(config, integration)
+            pr_url = finalize_integration_branch(config, integration)
+            if pr_url:
+                _announce_integration_pr(config, pr_url)
+
+
+def _announce_integration_pr(config: ExecutorConfig, pr_url: str) -> None:
+    """Make the merge requirement explicit and durable (#73).
+
+    The "Opened integration PR" info-log line scrolls away; nothing told
+    the operator that the next run can only start from a merged base. The
+    announcement goes to stderr (stdout may carry --json-result), and the
+    URL is persisted so `status` keeps repeating it until `spec-runner
+    sync` clears it after the merge.
+    """
+    print(
+        f"\n🔗 Integration PR opened: {pr_url}\n"
+        "   Merge it before the next run (the base branch has neither the\n"
+        "   spec update nor the code until then), then run `spec-runner sync`.",
+        file=sys.stderr,
+    )
+    try:
+        from .sync_cmd import PR_URL_META_KEY
+
+        with ExecutorState(config) as state:
+            state.set_meta(PR_URL_META_KEY, pr_url)
+    except Exception as exc:  # pragma: no cover — announcement must not fail the run
+        logger.warning("Could not persist PR URL", error=str(exc))
 
 
 def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
@@ -1273,6 +1300,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # mcp
     subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
 
+    # sync (post-merge closer for the integration-PR loop, #73)
+    sync_parser = subparsers.add_parser(
+        "sync",
+        parents=[common],
+        help="Post-merge sync: pull base, prune merged run/task branches, check state",
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without changing anything",
+    )
+
     # doctor
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
@@ -1495,6 +1534,7 @@ def main():
             "watch": cmd_watch,
             "mcp": cmd_mcp,
             "doctor": cmd_doctor,
+            "sync": cmd_sync,
             "config": cmd_config,
         }
 
