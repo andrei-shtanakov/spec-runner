@@ -98,3 +98,73 @@ def test_mark_all_checklist_done_preserves_frontmatter(tmp_path: Path) -> None:
     assert "version: 2" in text
     assert "- [x] one" in text
     assert "- [x] two" in text
+
+
+class TestCustomIdPrefix:
+    """#72: external projects use native numbering (KAP-002), not just TASK-."""
+
+    def _write(self, tmp_path, body):
+        p = tmp_path / "tasks.md"
+        p.write_text(body)
+        return p
+
+    def test_custom_prefix_parses(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            "## Milestone 1: MVP\n\n"
+            "### KAP-001: Bootstrap\n"
+            "🔴 P0 | ✅ DONE | Est: 1d\n\n"
+            "**Checklist:**\n- [x] a\n\n"
+            "**Traces to:** [REQ-001]\n"
+            "**Depends on:** —\n"
+            "**Blocks:** [KAP-002]\n\n"
+            "### KAP-002: Feature\n"
+            "🟠 P1 | ⬜ TODO | Est: 2d\n\n"
+            "**Checklist:**\n- [ ] b\n\n"
+            "**Traces to:** [REQ-002]\n"
+            "**Depends on:** [KAP-001]\n",
+        )
+        tasks = parse_tasks(p)
+        assert [t.id for t in tasks] == ["KAP-001", "KAP-002"]
+        assert tasks[0].blocks == ["KAP-002"]
+        assert tasks[1].depends_on == ["KAP-001"]
+        assert tasks[0].traces_to == ["REQ-001"]
+
+    def test_foreign_prefix_refs_not_dependencies(self, tmp_path):
+        """[REQ-…]/[DESIGN-…] in a Depends line are docs, not task deps."""
+        p = self._write(
+            tmp_path,
+            "### KAP-001: Solo\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] a\n\n"
+            "**Depends on:** [REQ-001], [DESIGN-002]\n",
+        )
+        tasks = parse_tasks(p)
+        assert tasks[0].depends_on == []
+
+    def test_mixed_prefixes_both_recognized(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            "### TASK-001: Old style\n"
+            "🔴 P0 | ✅ DONE | Est: 1d\n\n"
+            "**Checklist:**\n- [x] a\n\n"
+            "### KAP-002: New style\n"
+            "🟠 P1 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] b\n\n"
+            "**Depends on:** [TASK-001]\n",
+        )
+        tasks = parse_tasks(p)
+        assert [t.id for t in tasks] == ["TASK-001", "KAP-002"]
+        assert tasks[1].depends_on == ["TASK-001"]
+
+    def test_default_task_prefix_unchanged(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            "### TASK-001: Classic\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] a\n\n"
+            "**Depends on:** —\n",
+        )
+        tasks = parse_tasks(p)
+        assert tasks[0].id == "TASK-001"
+        assert tasks[0].depends_on == []

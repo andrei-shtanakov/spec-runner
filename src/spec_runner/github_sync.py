@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .task import (
+    ID_PATTERN,
     STATUS_EMOJI,
     Task,
     update_task_status,
@@ -32,7 +33,7 @@ def _get_existing_issues() -> dict[str, dict]:
     issues = json.loads(result.stdout)
     mapping: dict[str, dict] = {}
     for issue in issues:
-        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
+        m = re.match(rf"\[({ID_PATTERN})\]", issue["title"])
         if m:
             mapping[m.group(1)] = issue
     return mapping
@@ -152,7 +153,7 @@ def cmd_sync_from_gh(args, tasks: list[Task], tasks_file: Path):
 
     status_map: dict[str, str] = {}
     for issue in issues:
-        m = re.match(r"\[(TASK-\d+)\]", issue["title"])
+        m = re.match(rf"\[({ID_PATTERN})\]", issue["title"])
         if m:
             status_map[m.group(1)] = _status_from_issue(issue)
 
