@@ -34,6 +34,7 @@ from .spec import (
     write_spec,
 )
 from .task import (
+    ID_PATTERN,
     parse_tasks,
 )
 from .validate import validate_spec_stage, verdict_from_result
@@ -296,7 +297,9 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
     raise SystemExit("plan: provide a description argument or --from-file PATH")
 
 
-_TASK_HEADER_VARIANT = re.compile(r"^#{2,4} (TASK-\d+)\s*[—–:-]\s*(.+)$", re.MULTILINE)
+# Generated specs use the TASK- convention, but adopted/edited ones may
+# carry a native prefix (#72) — normalize any recognized id shape.
+_TASK_HEADER_VARIANT = re.compile(rf"^#{{2,4}} ({ID_PATTERN})\s*[—–:-]\s*(.+)$", re.MULTILINE)
 
 
 def normalize_task_headers(text: str) -> str:
@@ -655,7 +658,7 @@ When done, respond with: PLAN_READY
 
                 # Extract task proposals
                 task_blocks = re.findall(
-                    r"### (TASK-\d+:.+?)(?=### TASK-|\Z|PLAN_READY)",
+                    rf"### ({ID_PATTERN}:.+?)(?=### [A-Z][A-Z0-9]*-|\Z|PLAN_READY)",
                     output,
                     re.DOTALL,
                 )
