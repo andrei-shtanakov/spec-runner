@@ -5,7 +5,7 @@ import json
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -997,12 +997,19 @@ class _CommonDefaultsParser(argparse.ArgumentParser):
     after the full parse.
     """
 
-    def parse_args(self, *args, **kwargs):  # type: ignore[override]
-        namespace = super().parse_args(*args, **kwargs)
+    # The explicit signature documents intent, but typeshed's overloads for
+    # parse_args (generic over a caller-supplied namespace type) cannot be
+    # matched by a plain override — the ignore stays by necessity.
+    def parse_args(  # type: ignore[override]
+        self,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> argparse.Namespace:
+        parsed = super().parse_args(args, namespace)
         for key, value in _COMMON_DEFAULTS.items():
-            if not hasattr(namespace, key):
-                setattr(namespace, key, value)
-        return namespace
+            if not hasattr(parsed, key):
+                setattr(parsed, key, value)
+        return parsed
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1065,6 +1072,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--task-budget",
         type=float,
         help="Per-task budget in USD (block task when exceeded)",
+    )
+    # Drift guard: with SUPPRESS defaults, a common option missing from
+    # _COMMON_DEFAULTS would silently vanish from the namespace and surface
+    # later as an AttributeError. Fail at parser-build time instead.
+    _common_dests = {a.dest for a in common._actions}
+    assert _common_dests == set(_COMMON_DEFAULTS), (
+        f"common options and _COMMON_DEFAULTS diverged: {_common_dests ^ set(_COMMON_DEFAULTS)}"
     )
 
     # Gated spec-generation profile selector (plan --gated and the spec family).
