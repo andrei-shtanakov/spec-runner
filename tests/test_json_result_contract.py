@@ -62,6 +62,7 @@ def _seed_task(
     error: str | None = None,
     error_code: ErrorCode | None = None,
     attempts: int = 1,
+    no_op: bool = False,
 ) -> None:
     ts = state.get_task_state(task_id)
     ts.status = "success" if success else "failed"
@@ -79,6 +80,7 @@ def _seed_task(
                 cost_usd=round(cost / attempts, 4),
                 review_status=review.value if last else None,
                 claude_output="stub",
+                no_op=no_op if last else False,
             )
         )
 
@@ -119,6 +121,7 @@ OPTIONAL_TASK_RESULT_FIELDS = {
     "duration_seconds",
     "review",
     "error",
+    "no_op",  # v2.16.0 (#97): emitted only when true
     "exit_code",
 }
 ALLOWED_TASK_RESULT_FIELDS = REQUIRED_TASK_RESULT_FIELDS | OPTIONAL_TASK_RESULT_FIELDS
@@ -166,6 +169,42 @@ class TestJsonResultGolden:
         _assert_field_set(result)
         _validate_against_schema(result, "json-result.schema.json")
         _assert_matches_golden(result, "json-result-single-success.json", update_golden)
+
+    def test_golden_single_noop(self, tmp_path: Path, update_golden: bool) -> None:
+        """v2.16.0 (#97): a no-op completion carries `"no_op": true`."""
+        state = _make_state(tmp_path)
+        _seed_task(
+            state,
+            "TASK-004",
+            success=True,
+            duration=30.0,
+            input_tokens=900,
+            output_tokens=150,
+            cost=0.05,
+            review=ReviewVerdict.PASSED,
+            no_op=True,
+        )
+        result = build_task_json_result("TASK-004", state)
+        _assert_field_set(result)
+        _validate_against_schema(result, "json-result.schema.json")
+        assert result["no_op"] is True
+        _assert_matches_golden(result, "json-result-single-noop.json", update_golden)
+
+    def test_no_op_absent_on_regular_success(self, tmp_path: Path) -> None:
+        """The key is only emitted when true — pre-existing consumers see
+        byte-identical output for non-noop tasks."""
+        state = _make_state(tmp_path)
+        _seed_task(
+            state,
+            "TASK-001",
+            success=True,
+            duration=10.0,
+            input_tokens=100,
+            output_tokens=50,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        assert "no_op" not in build_task_json_result("TASK-001", state)
 
     def test_golden_single_failure(self, tmp_path: Path, update_golden: bool) -> None:
         state = _make_state(tmp_path)

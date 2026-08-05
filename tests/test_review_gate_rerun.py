@@ -52,7 +52,7 @@ class TestRerunGatesAfterReviewFix:
             test_command=f'echo x >> "{counter}"; [ "$(wc -l < "{counter}")" -le 1 ]',
         )
         with _review(ReviewVerdict.FIXED):
-            ok, err, review_status, _ = post_done_hook(_task(), cfg, True)
+            ok, err, review_status, _, _ = post_done_hook(_task(), cfg, True)
         assert ok is False
         assert err is not None and err.startswith("Tests failed after review fixes")
         assert review_status == ReviewVerdict.FIXED.value
@@ -62,7 +62,7 @@ class TestRerunGatesAfterReviewFix:
         counter = tmp_path / "runs.txt"
         cfg = _cfg(tmp_path, test_command=f'echo x >> "{counter}"')
         with _review(ReviewVerdict.FIXED):
-            ok, err, _, _ = post_done_hook(_task(), cfg, True)
+            ok, err, _, _, _ = post_done_hook(_task(), cfg, True)
         assert ok is True, err
         assert counter.read_text().count("x") == 2
 
@@ -70,7 +70,7 @@ class TestRerunGatesAfterReviewFix:
         counter = tmp_path / "runs.txt"
         cfg = _cfg(tmp_path, test_command=f'echo x >> "{counter}"')
         with _review(ReviewVerdict.PASSED):
-            ok, _, _, _ = post_done_hook(_task(), cfg, True)
+            ok, _, _, _, _ = post_done_hook(_task(), cfg, True)
         assert ok is True
         assert counter.read_text().count("x") == 1
 
@@ -85,7 +85,7 @@ class TestRerunGatesAfterReviewFix:
             lint_command=(f'echo x >> "{lint_marker}"; [ "$(wc -l < "{lint_marker}")" -le 1 ]'),
         )
         with _review(ReviewVerdict.FIXED):
-            ok, err, _, _ = post_done_hook(_task(), cfg, True)
+            ok, err, _, _, _ = post_done_hook(_task(), cfg, True)
         assert ok is False
         assert err is not None and err.startswith("Lint errors after review fixes")
 
@@ -99,5 +99,5 @@ class TestRerunGatesAfterReviewFix:
             lint_command=(f'echo x >> "{lint_marker}"; [ "$(wc -l < "{lint_marker}")" -le 1 ]'),
         )
         with _review(ReviewVerdict.FIXED):
-            ok, err, _, _ = post_done_hook(_task(), cfg, True)
+            ok, err, _, _, _ = post_done_hook(_task(), cfg, True)
         assert ok is True, err

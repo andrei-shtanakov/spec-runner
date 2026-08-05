@@ -125,6 +125,10 @@ def print_status(config: ExecutorConfig) -> None:
                 stage_tag = ""
                 if ts.status == "failed" and ts.attempts and ts.attempts[-1].error_stage:
                     stage_tag = f" [at: {ts.attempts[-1].error_stage}]"
+                elif ts.status == "success" and ts.attempts and ts.attempts[-1].no_op:
+                    # #97: completed without committable changes — distinguish
+                    # a legit no-op from a task that produced work.
+                    stage_tag = " [no-op]"
                 print(f"   {icon} {ts.task_id}: {ts.status} ({attempts_info}){stage_tag}")
                 # Show review verdict from last attempt
                 if ts.attempts:

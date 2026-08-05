@@ -197,19 +197,21 @@ def post_done_hook(
     changed_since: float | None = None,
     *,
     reporter: StageReporter | None = None,
-) -> tuple[bool, str | None, str, str]:
+) -> tuple[bool, str | None, str, str, bool]:
     """Hook after task completion.
 
     Returns:
-        Tuple of (success, error_details, review_status, review_findings).
+        Tuple of (success, error_details, review_status, review_findings, no_op).
         error_details contains test/lint output on failure.
         review_status is the ReviewVerdict value string (e.g. "passed", "skipped").
         review_findings is the truncated review output (up to 2048 chars).
+        no_op is True when auto-commit found nothing to commit — the task
+        completed without changing anything committable (#97).
     """
     logger.info("Post-done hook", task_id=task.id, success=success)
 
     if not success:
-        return False, None, ReviewVerdict.SKIPPED.value, ""
+        return False, None, ReviewVerdict.SKIPPED.value, "", False
 
     # Run tests — capture output for review context
     test_output_str: str | None = None
@@ -255,6 +257,7 @@ def post_done_hook(
                 f"Tests failed:\n{result.stdout + result.stderr}",
                 ReviewVerdict.SKIPPED.value,
                 "",
+                False,
             )
         logger.info("Tests passed")
 
@@ -302,6 +305,7 @@ def post_done_hook(
                         f"Lint errors (not auto-fixable):\n{lint_output}",
                         ReviewVerdict.SKIPPED.value,
                         "",
+                        False,
                     )
                 else:
                     logger.warning("Lint warnings (non-blocking)")
@@ -372,6 +376,7 @@ def post_done_hook(
                 "Review rejected by human",
                 ReviewVerdict.REJECTED.value,
                 (review_output or "")[:2048],
+                False,
             )
         elif choice == "fix":
             logger.info("HITL requested fix-and-retry", task_id=task.id)
@@ -380,6 +385,7 @@ def post_done_hook(
                 f"Fix requested. Review findings:\n{(review_output or '')[:1024]}",
                 ReviewVerdict.REJECTED.value,
                 (review_output or "")[:2048],
+                False,
             )
         elif choice == "skip":
             review_verdict = ReviewVerdict.SKIPPED
@@ -410,6 +416,7 @@ def post_done_hook(
                     f"Tests failed after review fixes:\n{result.stdout + result.stderr}",
                     review_verdict.value,
                     (review_output or "")[:2048],
+                    False,
                 )
             logger.info("Tests passed after review fixes")
         if config.run_lint_on_done and config.lint_command:
@@ -430,6 +437,7 @@ def post_done_hook(
                         f"Lint errors after review fixes:\n{result.stdout + result.stderr}",
                         review_verdict.value,
                         (review_output or "")[:2048],
+                        False,
                     )
                 logger.warning("Lint warnings after review fixes (non-blocking)")
 
@@ -441,7 +449,11 @@ def post_done_hook(
         update_task_status(config.tasks_file, task.id, "done")
         mark_all_checklist_done(config.tasks_file, task.id)
 
-    # Auto-commit
+    # Auto-commit. no_op flips True when the task completed without any
+    # committable changes (#97): work already absorbed by earlier tasks. The
+    # marker is persisted so downstream displays (Maestro workstream
+    # progress) can tell 5/5-with-one-noop from 4/5-with-one-skipped.
+    no_op = False
     if config.auto_commit:
         if reporter:
             reporter.enter("commit")
@@ -449,7 +461,8 @@ def post_done_hook(
             # Stage everything except runtime state (#62); skip the commit when
             # nothing real is left (e.g. only the state DB changed).
             if not stage_all_except_runtime(config):
-                logger.info("No changes to commit")
+                logger.info("No changes to commit — marking task as no-op")
+                no_op = True
             else:
                 # Build commit message with task details
                 commit_title = f"{task.id}: {task.name}"
@@ -503,6 +516,7 @@ def post_done_hook(
                     None,
                     review_verdict.value,
                     (review_output or "")[:2048],
+                    no_op,
                 )
 
             # Switch to main
@@ -540,6 +554,7 @@ def post_done_hook(
                         None,
                         review_verdict.value,
                         (review_output or "")[:2048],
+                        no_op,
                     )
 
             # Merge task branch
@@ -585,6 +600,7 @@ def post_done_hook(
                     f"Blocking plugin '{name}' failed",
                     review_verdict.value,
                     (review_output or "")[:2048],
+                    False,
                 )
 
-    return True, None, review_verdict.value, (review_output or "")[:2048]
+    return True, None, review_verdict.value, (review_output or "")[:2048], no_op

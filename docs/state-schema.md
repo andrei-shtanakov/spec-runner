@@ -52,7 +52,9 @@ CREATE TABLE attempts (
     review_findings  TEXT,
     -- Added in v2.3.0 (detect via PRAGMA table_info):
     error_kind       TEXT,               -- classified failure kind (see errors.classify)
-    error_stage      TEXT                -- sub-stage when failure occurred
+    error_stage      TEXT,               -- sub-stage when failure occurred
+    -- Added in v2.16.0 (detect via PRAGMA table_info):
+    no_op            INTEGER             -- 1 when the task completed without committable changes
 );
 
 CREATE TABLE executor_meta (
@@ -89,8 +91,9 @@ CREATE TABLE executor_meta (
 | `review_findings` | TEXT | experimental | Free-text review notes |
 | `error_kind` | TEXT | experimental | Added v2.3.0. Classified failure kind: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`; nullable |
 | `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `exec`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable. `exec` replaced `codex` in v2.13 — rows written by ≤2.12 may still carry `codex` |
+| `no_op` | INTEGER | stable | Added v2.16.0 (#97). 1 when the attempt succeeded with nothing to commit (work already absorbed by earlier tasks); 0/null otherwise. Only meaningful with `auto_commit` on |
 
-**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
+**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`, `no_op`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
 
 ### `executor_meta` key-value pairs
 
@@ -208,6 +211,7 @@ Single task (one element list) → JSON object. Multiple tasks → JSON array.
 | `duration_seconds` | float | stable | Rounded to 1 decimal; sum across attempts |
 | `review` | string | stable | Last attempt's review verdict, or `skipped` |
 | `error` | string | stable | Present only on failure; truncated to 200 chars |
+| `no_op` | bool | stable | Added v2.16.0 (#97). Present **only when true**: the task completed successfully without any committable changes (work already absorbed by earlier tasks). Absent on every other task — consumers that don't know the key see unchanged output |
 | `exit_code` | int | stable | 0 on success, 1 on failure |
 
 ### Empty-tasks edge case

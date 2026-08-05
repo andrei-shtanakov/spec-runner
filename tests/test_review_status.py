@@ -119,7 +119,7 @@ class TestPostDoneHookWritesReview:
                 property(lambda self: tmp_path / "tasks.md"),
             ),
         ):
-            ok, err, _, _ = post_done_hook(task, cfg, True)
+            ok, err, _, _, _ = post_done_hook(task, cfg, True)
         assert ok is True, err
         assert observed["during_review"] == "review"
         assert parse_tasks(tasks_file)[0].status == "done"
