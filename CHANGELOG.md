@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Harness-written `spec/.gitignore` no longer lands in auto-commits**
+  (battle-testing S2 finding M-03, issue #96, counterpart of maestro#122;
+  PR #98). The #62 fix writes `spec/.gitignore` to protect executor runtime
+  state, but `git add -A` in `stage_all_except_runtime` swept it into the
+  first subtask's auto-commit — a file no agent chose to create in the
+  workstream diff, which Maestro's ex-post scope gate rightly flags as a
+  scope escape (both parallel kapelle S2 workstreams went NEEDS_REVIEW
+  with all subtasks green). The file is now excluded from the commit set
+  when it is not tracked in HEAD; a user-tracked `spec/.gitignore` keeps
+  the old travels-with-the-spec behavior and is never staged for deletion.
+
 ## [2.15.0] — 2026-08-05
 
 Long-tail cleanup after the two battle-testing waves: the oldest open user

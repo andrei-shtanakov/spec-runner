@@ -77,6 +77,18 @@
 
 ## Активные задачи
 
+### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05)
+
+Две находки из kapelle S2 round 3 (maestro-оркестрация), заведены владельцем
+как issues #96/#97; maestro-стороны — maestro#122/maestro#123.
+
+- [x] **#96 harness-gitignore-out-of-autocommit** — `spec/.gitignore` (запись #62)
+      попадал в первый auto-commit сабтаска; maestro ex-post scope gate валил
+      зелёные workstream'ы в NEEDS_REVIEW. Фикс: `stage_all_except_runtime`
+      исключает файл из commit set, когда он не трекается в HEAD
+      (harness-created); юзерский трекаемый файл ведёт себя по-старому и
+      никогда не удаляется. Регресс: `TestHarnessGitignoreNotCommitted` (PR #98) @owner:andrei
+
 ### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — ✅ отгружен в v2.11.0
 
 **Был единственным пунктом, где кто-то реально ждал spec-runner.** steward закрыл свою половину C2
