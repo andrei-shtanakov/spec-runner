@@ -41,6 +41,12 @@ def acceptance_profile() -> StageProfile:
     )
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    """Restrict anyio-marked async tests to the asyncio backend (no trio)."""
+    return "asyncio"
+
+
 def pytest_addoption(parser) -> None:
     parser.addoption(
         "--update-golden",
