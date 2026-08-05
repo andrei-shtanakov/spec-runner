@@ -354,6 +354,53 @@ def post_done_hook(
             logger.info("HITL skipped review", task_id=task.id)
         # "approve" falls through to normal commit flow
 
+    # REVIEW_FIXED mutates the code AFTER the tests/lint gates ran (#65):
+    # re-run both gates so a broken review fix cannot be committed and
+    # merged as a "successful" run. Full suite (not scoped) — a fix may
+    # touch anything; strict lint check without auto-fix — another mutation
+    # here would reopen the same hole.
+    if review_verdict == ReviewVerdict.FIXED:
+        if config.run_tests_on_done:
+            if reporter:
+                reporter.enter("tests")
+            logger.info("Re-running tests after review fixes", command=config.test_command)
+            result = subprocess.run(
+                config.test_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode != 0:
+                logger.error("Tests failed after review fixes")
+                return (
+                    False,
+                    f"Tests failed after review fixes:\n{result.stdout + result.stderr}",
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
+            logger.info("Tests passed after review fixes")
+        if config.run_lint_on_done and config.lint_command:
+            if reporter:
+                reporter.enter("lint")
+            result = subprocess.run(
+                config.lint_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode != 0:
+                if config.lint_blocking:
+                    logger.error("Lint errors after review fixes")
+                    return (
+                        False,
+                        f"Lint errors after review fixes:\n{result.stdout + result.stderr}",
+                        review_verdict.value,
+                        (review_output or "")[:2048],
+                    )
+                logger.warning("Lint warnings after review fixes (non-blocking)")
+
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the
     # old code did in execution.py) left the update in the working tree post-merge
