@@ -7,6 +7,7 @@ functions used by hooks during task execution.
 import contextlib
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -351,12 +352,15 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
                 branch=run.branch,
                 stderr=stderr,
             )
+            # stderr, not stdout: `run --json-result` prints its JSON to
+            # stdout after this returns, and a stray line would corrupt it.
             print(
                 f"❌ Could not return to base branch '{run.base}' "
                 f"(working copy left on '{run.branch}'):\n"
                 f"   {stderr}\n"
                 f"   Resolve manually: commit/stash local changes, "
-                f"then `git checkout {run.base}`."
+                f"then `git checkout {run.base}`.",
+                file=sys.stderr,
             )
 
 
