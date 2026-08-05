@@ -49,8 +49,9 @@ class TestReviewStatusParsing:
         assert "🔍" in content
         assert parse_tasks(p)[1].status == "review"
 
-    def test_review_roundtrips_to_done(self, tmp_path):
+    def test_review_to_done_transition(self, tmp_path):
         p = _write(tmp_path)
+        assert parse_tasks(p)[0].status == "review"  # fixture starts in review
         update_task_status(p, "TASK-001", "done")
         assert parse_tasks(p)[0].status == "done"
 

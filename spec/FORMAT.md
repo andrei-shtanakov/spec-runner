@@ -40,7 +40,7 @@ Pattern: `^(?:emoji\s+)?(P\d)\s*\|\s*(?:emoji\s+)?(\w+)`
 | Field | Values | Default |
 |-------|--------|---------|
 | Priority | `P0`, `P1`, `P2`, `P3` | `p0` |
-| Status | `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED` | `todo` |
+| Status | `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED` | `todo` |
 | Estimate | `Est: Nd`, `Est: N-Md`, `Est: Nh` | empty |
 
 Priority emoji mapping: 🔴=P0, 🟠=P1, 🟡=P2, 🟢=P3
