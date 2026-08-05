@@ -132,3 +132,36 @@ class TestSecondPassHint:
         print_status(cfg)
         out = capsys.readouterr().out
         assert "💡 Repeated failure" not in out
+
+
+class TestFileDoneReconciliation:
+    """#68: file-DONE tasks never run by the executor are not 'Not started'."""
+
+    def _write_tasks(self, tmp_path):
+        spec = tmp_path / "spec"
+        spec.mkdir(exist_ok=True)
+        (spec / "tasks.md").write_text(
+            "# Spec\n\n## M0\n\n"
+            "### TASK-000: Manual bootstrap\n"
+            "🟢 P0 | ✅ DONE | Est: 0.1d\n\n"
+            "**Description:** done by hand\n\n**Checklist:**\n- [x] a\n\n"
+            "**Traces to:** [REQ-0]\n**Depends on:** —\n\n"
+            "### TASK-001: Real work\n"
+            "🟢 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Description:** todo\n\n**Checklist:**\n- [ ] b\n\n"
+            "**Traces to:** [REQ-1]\n**Depends on:** —\n"
+        )
+
+    def test_file_done_shown_separately(self, tmp_path, capsys):
+        cfg = _cfg(tmp_path)
+        cfg.logs_dir.mkdir()
+        self._write_tasks(tmp_path)
+        print_status(cfg)
+        out = capsys.readouterr().out
+        assert "Done outside executor: 1" in out
+        assert "TASK-000" in out
+        assert "Tasks not started:     1" in out
+        # TASK-000 must appear under the done-outside section, not "Not started"
+        not_started_section = out.split("Not started", 1)[1]
+        assert "TASK-000" not in not_started_section
+        assert "TASK-001" in not_started_section
