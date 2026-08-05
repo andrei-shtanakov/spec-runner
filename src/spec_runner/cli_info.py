@@ -43,9 +43,14 @@ def print_status(config: ExecutorConfig) -> None:
             1 for ts in state.tasks.values() for a in ts.attempts if not a.success
         )
 
-        # Find tasks in spec but not in state (pending / never started)
+        # Find tasks in spec but not in state (pending / never started).
+        # Reconcile with the FILE status (#68): a task ticked ✅ DONE in
+        # tasks.md that the executor never ran (manual bootstrap, another
+        # tool) is not "Not started" — show it as done outside the executor.
         state_ids = set(state.tasks.keys())
-        not_started = [t for t in all_tasks if t.id not in state_ids]
+        not_in_state = [t for t in all_tasks if t.id not in state_ids]
+        done_outside = [t for t in not_in_state if t.status == "done"]
+        not_started = [t for t in not_in_state if t.status != "done"]
 
         print(f"\n📊 spec-runner v{__version__}")
 
@@ -68,6 +73,8 @@ def print_status(config: ExecutorConfig) -> None:
         print(f"Tasks failed:          {failed_tasks}")
         if running_tasks:
             print(f"Tasks in progress:     {len(running_tasks)}")
+        if done_outside:
+            print(f"Done outside executor: {len(done_outside)}")
         if not_started:
             print(f"Tasks not started:     {len(not_started)}")
         if failed_attempts > 0:
@@ -127,6 +134,10 @@ def print_status(config: ExecutorConfig) -> None:
                     print(f"         {config.logs_dir}/{ts.task_id}-*.log")
 
         # Show tasks not yet in executor state
+        if done_outside:
+            print(f"\n✅ Done outside executor ({len(done_outside)}):")
+            for t in done_outside:
+                print(f"   ✔️ {t.id}: {t.name}")
         if not_started:
             print(f"\n⏳ Not started ({len(not_started)}):")
             for t in not_started:
