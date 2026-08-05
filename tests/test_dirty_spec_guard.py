@@ -148,3 +148,38 @@ class TestAllowDirtySpecFlag:
     def test_watch_flag_parses(self):
         ns = _build_parser().parse_args(["watch", "--allow-dirty-spec"])
         assert ns.allow_dirty_spec is True
+
+
+class TestGuardHardening:
+    """Copilot review findings on #87."""
+
+    def test_tracked_deletion_is_dirty(self, tmp_path):
+        _init_repo(tmp_path)
+        _write_spec(tmp_path)
+        _commit_all(tmp_path)
+        (tmp_path / "spec" / "tasks.md").unlink()
+        dirty = spec_dirty_paths(_cfg(tmp_path))
+        assert any("tasks.md" in line for line in dirty)
+
+    def test_git_status_failure_fails_closed(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        _write_spec(tmp_path)
+        _commit_all(tmp_path)
+        import subprocess as sp
+
+        from spec_runner import git_ops
+
+        real_run = sp.run
+
+        def flaky(argv, **kwargs):
+            if argv[:2] == ["git", "status"]:
+                return sp.CompletedProcess(argv, 128, stdout="", stderr="boom")
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", flaky)
+        dirty = spec_dirty_paths(_cfg(tmp_path))
+        assert dirty and "git status failed" in dirty[0]
+
+    def test_retry_flag_parses(self):
+        ns = _build_parser().parse_args(["retry", "TASK-001", "--allow-dirty-spec"])
+        assert ns.allow_dirty_spec is True

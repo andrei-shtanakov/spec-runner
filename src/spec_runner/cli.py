@@ -288,7 +288,10 @@ def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
     """
     if getattr(args, "allow_dirty_spec", False):
         return
-    if not (config.auto_commit or config.create_git_branch):
+    automation_on = getattr(config, "auto_commit", False) or getattr(
+        config, "create_git_branch", False
+    )
+    if not automation_on:
         return
     dirty = spec_dirty_paths(config)
     if not dirty:
@@ -672,6 +675,10 @@ def cmd_retry(args, config: ExecutorConfig):
     if not allowed:
         print(f"⛔ spec governance: {reason}")
         return
+
+    # Dirty-spec guard (#69) — retry executes tasks and runs the git
+    # automation hooks, so it must not bypass the guard either.
+    _enforce_clean_spec(args, config)
 
     tasks = parse_tasks(config.tasks_file)
 
@@ -1091,6 +1098,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # retry
     retry_parser = subparsers.add_parser("retry", parents=[common], help="Retry failed task")
     retry_parser.add_argument("task_id", help="Task ID to retry")
+    retry_parser.add_argument(
+        "--allow-dirty-spec",
+        action="store_true",
+        help="Retry even when spec/config files have uncommitted changes "
+        "(default: refuse when git automation is on)",
+    )
     retry_parser.add_argument(
         "--fresh",
         action="store_true",

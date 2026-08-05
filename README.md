@@ -104,6 +104,7 @@ spec-runner run --all --no-reset-failed    # Keep failed tasks sticky (skip the 
 spec-runner run --all --hitl-review        # Interactive HITL approval gate
 spec-runner run --force                    # Skip lock check (stale lock)
 spec-runner run --allow-dirty-spec         # Skip the dirty-spec pre-run guard
+spec-runner watch --allow-dirty-spec       # Same override for watch/retry
 spec-runner run --tui                      # Execute with live TUI dashboard
 spec-runner run --dry-run                  # Show what would execute (JSON)
 spec-runner run --json-result              # Structured JSON output (Maestro interop)

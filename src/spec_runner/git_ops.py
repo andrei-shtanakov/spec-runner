@@ -123,10 +123,10 @@ def spec_dirty_paths(config: ExecutorConfig) -> list[str]:
         config.project_root / "spec-runner.config.yaml",
         config.project_root / "spec" / "executor.config.yaml",  # legacy location
     ]
+    # No existence filter: a tracked-but-deleted spec file is dirt too, and
+    # git status reports deletions for paths that are gone from the tree.
     rels: list[str] = []
     for p in candidates:
-        if not p.exists():
-            continue
         try:
             rels.append(str(p.relative_to(config.project_root)))
         except ValueError:
@@ -135,7 +135,10 @@ def spec_dirty_paths(config: ExecutorConfig) -> list[str]:
         return []
     status = _git(config, "status", "--porcelain", "--", *rels)
     if status.returncode != 0:
-        return []
+        # Fail closed: an unreadable repo state must not silently pass the
+        # guard (the two legitimate pass cases — no repo, no commits — were
+        # already handled above).
+        return [f"?? (git status failed: {status.stderr.strip()[:120]})"]
     return [line for line in status.stdout.splitlines() if line.strip()]
 
 
