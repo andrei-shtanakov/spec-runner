@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .config import ExecutorConfig
+from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
 from .runner import build_cli_command, check_error_patterns, log_progress
@@ -320,19 +321,19 @@ def run_code_review(
             return ReviewVerdict.PASSED, None, output
         elif "REVIEW_FIXED" in output_upper:
             log_progress("✅ Code review: issues fixed", task.id)
-            # Commit the fixes
-            subprocess.run(["git", "add", "-A"], capture_output=True, cwd=config.project_root)
-            commit_result = subprocess.run(
-                ["git", "commit", "-m", f"{task.id}: code review fixes"],
-                capture_output=True,
-                text=True,
-                cwd=config.project_root,
-            )
-            if commit_result.returncode != 0:
-                logger.warning(
-                    "Review fix commit failed",
-                    stderr=commit_result.stderr.strip()[:200],
+            # Commit the fixes — runtime state stays out of the commit (#62)
+            if stage_all_except_runtime(config):
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", f"{task.id}: code review fixes"],
+                    capture_output=True,
+                    text=True,
+                    cwd=config.project_root,
                 )
+                if commit_result.returncode != 0:
+                    logger.warning(
+                        "Review fix commit failed",
+                        stderr=commit_result.stderr.strip()[:200],
+                    )
             return ReviewVerdict.FIXED, None, output
         elif "REVIEW_FAILED" in output_upper:
             log_progress("❌ Code review found unresolved issues", task.id)
@@ -464,14 +465,14 @@ def run_parallel_review(
 
     if overall_verdict != ReviewVerdict.FAILED and has_fixed:
         overall_verdict = ReviewVerdict.FIXED
-        # Commit fixes from any review agent
-        subprocess.run(["git", "add", "-A"], capture_output=True, cwd=config.project_root)
-        subprocess.run(
-            ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
-            capture_output=True,
-            text=True,
-            cwd=config.project_root,
-        )
+        # Commit fixes from any review agent — minus runtime state (#62)
+        if stage_all_except_runtime(config):
+            subprocess.run(
+                ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
 
     combined_output = "\n\n".join(all_outputs)
     log_progress(f"🔍 Parallel review result: {overall_verdict.value}", task.id)

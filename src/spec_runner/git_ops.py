@@ -12,11 +12,84 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import ExecutorConfig
+from .config import PROGRESS_FILE, ExecutorConfig
 from .logging import get_logger
-from .task import Task
+from .task import Task, history_file_for
 
 logger = get_logger("git_ops")
+
+
+def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
+    """Executor runtime files that must never be committed (#62).
+
+    Committing the live SQLite state to a task branch is what broke run
+    finalization in the field: a later branch switch reverted the DB under
+    the open connection, losing the success status and all costs (#67).
+    """
+    state = config.state_file
+    return [
+        state,
+        state.with_name(state.name + "-wal"),
+        state.with_name(state.name + "-shm"),
+        state.with_suffix(".lock"),
+        config.logs_dir,
+        config.stop_file,
+        config.spec_lock_file,
+        config.project_root / PROGRESS_FILE,
+        history_file_for(config.tasks_file),
+    ]
+
+
+def stage_all_except_runtime(config: ExecutorConfig) -> bool:
+    """Stage all changes except executor runtime state.
+
+    ``git add -A`` followed by unstaging every runtime path. Uses
+    ``git rm --cached`` (not ``git reset``) so it also works in a fresh repo
+    without commits AND actively untracks runtime files that an earlier run
+    already committed. Returns True when anything is left staged.
+    """
+    _git(config, "add", "-A")
+    rels: list[str] = []
+    for p in runtime_state_paths(config):
+        try:
+            rels.append(str(p.relative_to(config.project_root)))
+        except ValueError:
+            continue  # outside the repo — git never saw it
+    if rels:
+        _git(config, "rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", *rels)
+    staged = _git(config, "diff", "--cached", "--quiet")
+    return staged.returncode != 0
+
+
+# Patterns are relative to the spec dir and slash-free, so they also cover
+# per-change dirs (spec/changes/<id>/) and --spec-prefix variants.
+RUNTIME_GITIGNORE_ENTRIES = [
+    ".executor-*",
+    ".*task-history.log",
+    ".*spec.lock",
+]
+
+
+def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
+    """Make sure ``spec/.gitignore`` covers executor runtime files (#62).
+
+    Idempotent; only appends entries that are missing. The file is created
+    inside the spec dir so it travels with the spec in auto-commits.
+    """
+    spec_base = config.project_root / "spec"
+    if not spec_base.is_dir():
+        return
+    gitignore = spec_base / ".gitignore"
+    existing = gitignore.read_text().splitlines() if gitignore.exists() else []
+    missing = [e for e in RUNTIME_GITIGNORE_ENTRIES if e not in existing]
+    if not missing:
+        return
+    lines = list(existing)
+    if not lines:
+        lines.append("# spec-runner runtime state — never commit (managed by spec-runner)")
+    lines.extend(missing)
+    gitignore.write_text("\n".join(lines) + "\n")
+    logger.info("Updated spec/.gitignore with runtime-state entries", added=missing)
 
 
 def get_task_branch_name(task: Task) -> str:
@@ -269,10 +342,21 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
     finally:
         back = _git(config, "checkout", run.base)
         if back.returncode != 0:
-            logger.warning(
+            # Loud, operator-facing failure (#62): a warning that scrolls away
+            # left operators stranded on the run branch with a dirty tree.
+            stderr = back.stderr.strip()[:200]
+            logger.error(
                 "integration_pr: could not return to base branch",
                 base=run.base,
-                stderr=back.stderr.strip()[:200],
+                branch=run.branch,
+                stderr=stderr,
+            )
+            print(
+                f"❌ Could not return to base branch '{run.base}' "
+                f"(working copy left on '{run.branch}'):\n"
+                f"   {stderr}\n"
+                f"   Resolve manually: commit/stash local changes, "
+                f"then `git checkout {run.base}`."
             )
 
 

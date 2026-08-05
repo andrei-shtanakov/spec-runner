@@ -9,10 +9,12 @@ import subprocess
 from .config import ExecutorConfig
 from .git_ops import (
     build_scoped_test_command,
+    ensure_runtime_gitignore,
     find_changed_source_files,
     get_main_branch,
     get_task_branch_name,
     map_source_to_test_files,
+    stage_all_except_runtime,
 )
 from .logging import get_logger
 from .review import (
@@ -65,6 +67,10 @@ def pre_start_hook(
             logger.info("Dependencies synced")
         else:
             logger.warning("uv sync warning", stderr=result.stderr[:200])
+
+    # Keep executor runtime state out of git before any commit can happen (#62)
+    if config.auto_commit or config.create_git_branch:
+        ensure_runtime_gitignore(config)
 
     # Create git branch
     if config.create_git_branch:
@@ -361,22 +367,11 @@ def post_done_hook(
         if reporter:
             reporter.enter("commit")
         try:
-            # Check if there are changes to commit
-            status_result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                cwd=config.project_root,
-            )
-            if not status_result.stdout.strip():
+            # Stage everything except runtime state (#62); skip the commit when
+            # nothing real is left (e.g. only the state DB changed).
+            if not stage_all_except_runtime(config):
                 logger.info("No changes to commit")
             else:
-                subprocess.run(
-                    ["git", "add", "-A"],
-                    cwd=config.project_root,
-                    capture_output=True,
-                    text=True,
-                )
                 # Build commit message with task details
                 commit_title = f"{task.id}: {task.name}"
                 commit_body_lines = []
