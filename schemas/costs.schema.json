@@ -47,6 +47,7 @@
             "skipped",
             "todo",
             "in_progress",
+            "review",
             "done",
             "blocked"
           ]
