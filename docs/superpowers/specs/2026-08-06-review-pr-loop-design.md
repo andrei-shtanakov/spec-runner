@@ -120,8 +120,15 @@ hook — invokes the same command and reads two stable surfaces:
   round). The command is idempotent — re-invocation resumes from
   persisted state and never replies twice.
 - **``--json`` report**: per-comment ``verdict``/``resolution``/
-  ``fix_sha``/``replied_at``, counts, and a top-level ``needs_human``
-  boolean.
+  ``fix_sha``/``replied_at``, counts, a top-level ``needs_human`` boolean,
+  and ``exit_code`` (mirrors the process exit code, so a stored report is
+  self-describing). With ``--json``, **stdout carries exactly one JSON
+  document on every exit path**, including fail-closed: every diagnostic —
+  limit stops, fail-closed messages, progress — goes to stderr
+  (spec-runner#116, requested by Maestro's wrapper, which stores the
+  report verbatim in an audit table). On exit ``1`` the document is
+  ``{repo, pr_number, error, exit_code}`` with ``repo``/``pr_number``
+  ``null`` when the ref could not be resolved.
 
 A Maestro hook maps exits ``0 → PR_REVIEWED`` and ``2 → NEEDS_REVIEW``;
 ``1`` is an infrastructure failure to surface, not a review outcome.

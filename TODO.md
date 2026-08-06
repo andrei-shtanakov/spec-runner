@@ -77,6 +77,16 @@
 
 ## Активные задачи
 
+### Входящие (ADR-ECO-006)
+
+- [x] **review-pr-json-purity** (inbox spec-runner#116, from maestro#post-pr-command):
+      при `--json` stdout несёт ровно один JSON-документ на всех путях выхода (0/1/2),
+      диагностика — только в stderr. Было: пути лимитов (`_apply_phase`) и fail-closed
+      печатали текст в stdout, а на exit 1 JSON не эмитился вовсе. Добавлен `exit_code`
+      в payload (self-describing отчёт для audit-таблицы maestro). Приёмка проверена
+      вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
+      Тесты: `TestJsonStdoutPurity` (6) (PR #117) @owner:andrei
+
 ### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 3/4 отгружено в v2.17.0 (#102 ждёт решения владельца)
 
 Четыре находки прогона TASK-007 на kapelle (F-21…F-24).
