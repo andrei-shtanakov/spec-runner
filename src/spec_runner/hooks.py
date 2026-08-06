@@ -196,23 +196,26 @@ def commit_task_work(task: Task, config: ExecutorConfig) -> str:
     Stages everything except executor runtime state (#62) and commits with
     a "TASK-XXX: <name>" message. Returns "committed", "empty" (nothing to
     commit), or "failed" — callers must not treat a failed commit as an
-    empty one (#97 no-op detection keys on "empty" only).
+    empty one (#97 no-op detection keys on "empty" only). A staging
+    failure (git add error) counts as "failed", not "empty".
     """
-    if not stage_all_except_runtime(config):
-        return "empty"
+    try:
+        if not stage_all_except_runtime(config):
+            return "empty"
+    except RuntimeError as exc:
+        logger.warning("Staging failed", error=str(exc))
+        return "failed"
     commit_title = f"{task.id}: {task.name}"
-    commit_body_lines = []
-    if task.checklist:
-        commit_body_lines.append("Completed:")
-        for item, checked in task.checklist:
-            if checked:
-                commit_body_lines.append(f"  - {item}")
+    done_items = [item for item, checked in task.checklist if checked]
+    sections = []
+    if done_items:
+        sections.append("Completed:\n" + "\n".join(f"  - {item}" for item in done_items))
     if task.milestone:
-        commit_body_lines.append(f"\nMilestone: {task.milestone}")
+        sections.append(f"Milestone: {task.milestone}")
 
     commit_msg = commit_title
-    if commit_body_lines:
-        commit_msg += "\n\n" + "\n".join(commit_body_lines)
+    if sections:
+        commit_msg += "\n\n" + "\n\n".join(sections)
 
     commit_result = subprocess.run(
         ["git", "commit", "-m", commit_msg],

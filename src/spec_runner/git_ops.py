@@ -49,8 +49,15 @@ def stage_all_except_runtime(config: ExecutorConfig) -> bool:
     ``git rm --cached`` (not ``git reset``) so it also works in a fresh repo
     without commits AND actively untracks runtime files that an earlier run
     already committed. Returns True when anything is left staged.
+
+    Raises RuntimeError when ``git add`` itself fails (index lock,
+    permissions): with a clean index that failure would otherwise be
+    indistinguishable from "nothing to commit" and flow into a false
+    no-op verdict (#97/#103).
     """
-    _git(config, "add", "-A")
+    add = _git(config, "add", "-A")
+    if add.returncode != 0:
+        raise RuntimeError(f"git add -A failed: {add.stderr.strip()[:200]}")
     rels: list[str] = []
     for p in runtime_state_paths(config):
         try:
