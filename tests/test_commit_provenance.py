@@ -142,6 +142,52 @@ class TestExecWorkCommittedBeforeReview:
         assert "feature.py" in commits[0][1]
 
 
+class TestCommitTaskWork:
+    """Copilot review on PR #105: staging failures and message hygiene."""
+
+    def test_staging_failure_returns_failed_not_empty(self, tmp_path):
+        """A git add failure must not masquerade as 'nothing to commit' —
+        that would flow into a false no-op verdict."""
+        from spec_runner.hooks import commit_task_work
+
+        _init_repo(tmp_path)
+        (tmp_path / "feature.py").write_text("f = 1\n")
+        cfg = _cfg(tmp_path)
+        with patch(
+            "spec_runner.hooks.stage_all_except_runtime",
+            side_effect=RuntimeError("git add -A failed: index locked"),
+        ):
+            assert commit_task_work(_task(), cfg) == "failed"
+
+    def test_no_empty_completed_section(self, tmp_path):
+        """Unchecked checklist (the pre-review commit case) must not emit a
+        dangling 'Completed:' header."""
+        from spec_runner.hooks import commit_task_work
+
+        _init_repo(tmp_path)
+        (tmp_path / "feature.py").write_text("f = 1\n")
+        cfg = _cfg(tmp_path)
+        assert commit_task_work(_task(), cfg) == "committed"
+        body = _git(tmp_path, "log", "-1", "--format=%B").stdout
+        assert "Completed:" not in body
+
+    def test_checked_items_and_milestone_formatting(self, tmp_path):
+        from spec_runner.hooks import commit_task_work
+
+        _init_repo(tmp_path)
+        (tmp_path / "feature.py").write_text("f = 1\n")
+        cfg = _cfg(tmp_path)
+        task = _task()
+        task.checklist = [("Build the feature", True), ("Skip me", False)]
+        task.milestone = "M1"
+        assert commit_task_work(task, cfg) == "committed"
+        body = _git(tmp_path, "log", "-1", "--format=%B").stdout
+        assert "Completed:\n  - Build the feature" in body
+        assert "Skip me" not in body
+        assert "Milestone: M1" in body
+        assert "\n\n\n" not in body  # no stray blank lines
+
+
 class TestNoOpInterplay:
     def test_task_with_work_not_flagged_noop(self, tmp_path):
         """Pre-review commit captures the work; the final commit stage
