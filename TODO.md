@@ -77,6 +77,32 @@
 
 ## Активные задачи
 
+### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0)
+
+Четыре находки прогона TASK-007 на kapelle (F-21…F-24).
+
+- [x] **#103 commit-provenance** — весь код фичи уезжал в коммит «code review fixes»,
+      таск-коммит получал только флип чекбокса в tasks.md (история лжёт о происхождении
+      кода). Фикс: exec-работа коммитится под таск-лейблом ДО review; review-коммит несёт
+      только свою дельту; no_op-детекция (#97) учитывает pre-review коммит.
+      Тесты: `test_commit_provenance.py` (PR #105) @owner:andrei
+- [x] **#104 run-summary-delta** — `Execution summary completed=2` на однозадачном ране:
+      summary печатал кумулятивные счётчики executor_meta как итог рана (то же в
+      run_complete-нотификации, audit-записи и failed_attempts). Фикс: снапшот до рана,
+      в summary — дельта. Тесты: `test_run_summary.py` (PR #106) @owner:andrei
+- [x] **#101 pr-opened-notification** — human-merge-гейт зависел от смотрящего в терминал.
+      Наша сторона: событие `pr_opened` в существующем notify-механизме
+      (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
+      Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
+      за экосистемой (PR #107) @owner:andrei
+- [ ] **#102 review-bot-loop** — цикл «PR открыт → комменты Copilot → верифицировать
+      каждый по коду → чинить обоснованные (TDD) → отвечать в тредах → перегонять гейты»
+      сегодня делает оператор вручную. **Нужно решение владельца**: post-PR стадия в
+      spec-runner vs хук/гейт в maestro (та же развилка, что expost approver_cmd).
+      Требования дистиллированы в issue из трёх живых PR (kapelle #1/#5/#6): не применять
+      вслепую, полный прогон гейтов после фикса, ограниченные итерации, обязательный ответ
+      в каждом треде @owner:andrei @trigger:"решение spec-runner vs maestro"
+
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 
 Две находки из kapelle S2 round 3 (maestro-оркестрация), заведены владельцем

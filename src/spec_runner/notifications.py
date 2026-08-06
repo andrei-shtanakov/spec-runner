@@ -1,7 +1,7 @@
 """Notifications for spec-runner.
 
 Sends notifications via Telegram Bot API and/or generic webhook
-on run_complete, task_failed, and budget_warning events.
+on run_complete, task_failed, state_degraded and pr_opened events.
 Best-effort — errors are logged, never raised.
 
 Notifications are ONLY sent when explicitly configured in the
@@ -173,6 +173,24 @@ def notify_task_failed(config: ExecutorConfig, task_id: str, error: str) -> bool
     context = _context_line(config)
     message = f"*{project}*: task `{task_id}` failed\n_{error[:200]}_\n{context}"
     return notify(config, "task_failed", message, task_id=task_id)
+
+
+def notify_pr_opened(config: ExecutorConfig, pr_url: str) -> bool:
+    """Notify that an integration PR was opened and awaits human review (#101).
+
+    The end-of-run terminal announcement (#73) only reaches an operator who
+    is watching; this pushes the human-merge gate through the configured
+    Telegram/webhook channels so external consoles (e.g. a dispatcher
+    inbox) can consume the event.
+    """
+    project = _project_label(config)
+    context = _context_line(config)
+    message = (
+        f"*{project}*: integration PR opened — awaiting human review\n"
+        f"{pr_url}\n"
+        f"Merge it, then run `spec-runner sync`.\n{context}"
+    )
+    return notify(config, "pr_opened", message)
 
 
 def notify_run_complete(

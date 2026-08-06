@@ -349,7 +349,7 @@ max_retry_cost_usd: 2.0        # Cap on retry cost only (attempts 2+)
 # Telegram notifications (optional)
 telegram_bot_token: ""         # Bot token from @BotFather
 telegram_chat_id: ""           # Chat ID to send notifications to
-notify_on: [run_complete, task_failed, state_degraded]
+notify_on: [run_complete, task_failed, state_degraded, pr_opened]
 
 # Generic webhook (optional — works with Slack, Discord, ntfy.sh, etc.)
 webhook_url: ""                # Webhook URL (empty = disabled)

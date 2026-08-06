@@ -10,6 +10,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`pr_opened` notification event** (battle-testing F-21, issue #101;
+  PR #107). When a run opens an integration PR, the event is now pushed
+  through the configured Telegram/webhook channels (and is in the default
+  `notify_on`), so the human-merge gate no longer depends on someone
+  watching the terminal. External consoles (e.g. a dispatcher inbox) can
+  consume the webhook.
+
+### Fixed
+
+- **Exec-stage work is committed under the task label before review runs**
+  (battle-testing F-23, issue #103; PR #105). The review stage commits its
+  own fixes, and with nothing committed before it, that commit swept the
+  entire feature under a "code review fixes" label while the final task
+  commit got only the tasks.md leftovers — git history inverted relative
+  to content (kapelle PR #6). The pre-review commit also protects the work
+  from the next task's pre-start cleanup, and the #97 no-op detection
+  accounts for it (a task whose work was captured pre-review is not
+  flagged no-op by the bookkeeping-only final commit).
+- **Execution summary reports this run's counts** (battle-testing F-24,
+  issue #104; PR #106). `completed`/`failed`/`failed_attempts` in the
+  end-of-run summary, the `run_complete` notification and the `run_ended`
+  audit record were cumulative across runs (monotonic executor_meta
+  counters and full attempt history); a single-task run could end with
+  `completed=2`. They now report the delta for the run; the cumulative
+  counters themselves are unchanged.
+
 ## [2.16.0] — 2026-08-05
 
 Battle-testing S2 round 3 (kapelle, Maestro orchestration): both findings

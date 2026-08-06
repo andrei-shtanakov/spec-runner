@@ -240,7 +240,7 @@ class ExecutorConfig:
     telegram_bot_token: str = ""  # Telegram bot token (empty = disabled)
     telegram_chat_id: str = ""  # Telegram chat ID to send notifications to
     notify_on: list[str] = field(
-        default_factory=lambda: ["run_complete", "task_failed", "state_degraded"]
+        default_factory=lambda: ["run_complete", "task_failed", "state_degraded", "pr_opened"]
     )
 
     # Generic webhook notifications
