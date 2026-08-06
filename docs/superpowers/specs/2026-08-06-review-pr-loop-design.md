@@ -1,8 +1,8 @@
 # `spec-runner review-pr` — the PR review-bot loop (issue #102)
 
 **Status:** design approved by the owner 2026-08-06 (decision recorded on
-[#102](https://github.com/andrei-shtanakov/spec-runner/issues/102)); not yet
-implemented.
+[#102](https://github.com/andrei-shtanakov/spec-runner/issues/102)).
+Delivered: M1 in v2.18.0 (PR #110), M2 in v2.19.0 (PR #112), M3 in PR #114.
 **Origin:** battle-testing finding F-22 (run d4d33ad0, TASK-007, v2.16.0).
 Live precedents: kapelle PRs #1, #5, #6 — the cycle "integration PR opened →
 Copilot leaves comments → verify each against the code → fix the justified
@@ -104,6 +104,36 @@ pattern from `attempts.no_op`).
     comment, force-push (head-SHA mismatch with stored state), and
     permission failures.
 11. **No auto-merge and no automatic approving review.** Ever.
+
+## External caller contract (M3)
+
+Anyone driving the loop from outside — an operator script, cron, or
+Maestro's future ``PR_CREATED → post_pr_command → PR_REVIEWED/NEEDS_REVIEW``
+hook — invokes the same command and reads two stable surfaces:
+
+- **Exit code**: ``0`` complete (every comment fixed-or-refuted AND
+  replied; in ``--verify-only`` mode: every comment verified
+  valid/refuted), ``1`` fail-closed (draft/closed PR, API failure, dirty
+  tree, head-SHA mismatch, force-push, push failure — nothing was
+  published), ``2`` NEEDS_HUMAN (uncertain/unverified/limit-stopped/
+  deleted comments; safe to re-invoke after human action or a new bot
+  round). The command is idempotent — re-invocation resumes from
+  persisted state and never replies twice.
+- **``--json`` report**: per-comment ``verdict``/``resolution``/
+  ``fix_sha``/``replied_at``, counts, and a top-level ``needs_human``
+  boolean.
+
+A Maestro hook maps exits ``0 → PR_REVIEWED`` and ``2 → NEEDS_REVIEW``;
+``1`` is an infrastructure failure to surface, not a review outcome.
+
+The optional **post-PR stage** wires the same call into spec-runner's own
+``integration_pr`` flow: ``review_pr.post_pr: off | verify | full``
+(default ``off`` — constraint 1 holds, the flow is byte-identical without
+configuration). ``verify`` runs the read-only triage; ``full`` checks the
+run branch out, runs the whole loop, and always returns to the base
+branch. ``post_pr_wait_seconds`` (default 120) gives the review bot time
+to comment. The stage never changes the run's exit status — its outcome
+lives in the loop's own report, the persisted state, and ``status``.
 
 ## Implementation phases
 
