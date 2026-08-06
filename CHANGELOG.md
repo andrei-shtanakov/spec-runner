@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.21.0] — 2026-08-06
+
+Unblocks Maestro's accepted `post-pr-command` work (design maestro#147):
+`review-pr --json` is now a clean machine interface on every exit path.
+Minor, not patch — the payload gains an additive `exit_code` key
+(same rule as `no_op` in 2.16.0). Maestro pins this version before
+shipping its wrapper.
+
 ### Fixed
 
 - **`review-pr --json`: stdout is exactly one JSON document** (inbox issue
@@ -1001,7 +1009,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...HEAD
+[2.21.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...v2.20.0
 [2.19.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...v2.18.0
