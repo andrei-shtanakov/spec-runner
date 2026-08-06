@@ -190,6 +190,46 @@ def pre_start_hook(
     return True
 
 
+def commit_task_work(task: Task, config: ExecutorConfig) -> str:
+    """Stage and commit the working tree under the task's label.
+
+    Stages everything except executor runtime state (#62) and commits with
+    a "TASK-XXX: <name>" message. Returns "committed", "empty" (nothing to
+    commit), or "failed" — callers must not treat a failed commit as an
+    empty one (#97 no-op detection keys on "empty" only). A staging
+    failure (git add error) counts as "failed", not "empty".
+    """
+    try:
+        if not stage_all_except_runtime(config):
+            return "empty"
+    except RuntimeError as exc:
+        logger.warning("Staging failed", error=str(exc))
+        return "failed"
+    commit_title = f"{task.id}: {task.name}"
+    done_items = [item for item, checked in task.checklist if checked]
+    sections = []
+    if done_items:
+        sections.append("Completed:\n" + "\n".join(f"  - {item}" for item in done_items))
+    if task.milestone:
+        sections.append(f"Milestone: {task.milestone}")
+
+    commit_msg = commit_title
+    if sections:
+        commit_msg += "\n\n" + "\n\n".join(sections)
+
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if commit_result.returncode == 0:
+        logger.info("Committed changes")
+        return "committed"
+    logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
+    return "failed"
+
+
 def post_done_hook(
     task: Task,
     config: ExecutorConfig,
@@ -315,6 +355,18 @@ def post_done_hook(
         else:
             lint_output_str = "clean"
             logger.info("Lint passed")
+
+    # Commit the exec-stage work under the task label BEFORE review runs
+    # (#103): the review stage commits its own fixes, and with nothing
+    # committed yet that commit swept the ENTIRE feature under a
+    # "code review fixes" label while the final task commit got only the
+    # tasks.md leftovers — history inverted relative to content. An early
+    # commit also protects the work from the next task's pre-start cleanup.
+    committed_pre_review = False
+    if config.auto_commit and config.run_review:
+        if reporter:
+            reporter.enter("commit")
+        committed_pre_review = commit_task_work(task, config) == "committed"
 
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
@@ -452,43 +504,17 @@ def post_done_hook(
     # Auto-commit. no_op flips True when the task completed without any
     # committable changes (#97): work already absorbed by earlier tasks. The
     # marker is persisted so downstream displays (Maestro workstream
-    # progress) can tell 5/5-with-one-noop from 4/5-with-one-skipped.
+    # progress) can tell 5/5-with-one-noop from 4/5-with-one-skipped. The
+    # pre-review commit counts as work (#103) — a final commit stage that
+    # finds only bookkeeping must not flag a task that produced code.
     no_op = False
     if config.auto_commit:
         if reporter:
             reporter.enter("commit")
         try:
-            # Stage everything except runtime state (#62); skip the commit when
-            # nothing real is left (e.g. only the state DB changed).
-            if not stage_all_except_runtime(config):
+            if commit_task_work(task, config) == "empty" and not committed_pre_review:
                 logger.info("No changes to commit — marking task as no-op")
                 no_op = True
-            else:
-                # Build commit message with task details
-                commit_title = f"{task.id}: {task.name}"
-                commit_body_lines = []
-                if task.checklist:
-                    commit_body_lines.append("Completed:")
-                    for item, checked in task.checklist:
-                        if checked:
-                            commit_body_lines.append(f"  - {item}")
-                if task.milestone:
-                    commit_body_lines.append(f"\nMilestone: {task.milestone}")
-
-                commit_msg = commit_title
-                if commit_body_lines:
-                    commit_msg += "\n\n" + "\n".join(commit_body_lines)
-
-                commit_result = subprocess.run(
-                    ["git", "commit", "-m", commit_msg],
-                    cwd=config.project_root,
-                    capture_output=True,
-                    text=True,
-                )
-                if commit_result.returncode == 0:
-                    logger.info("Committed changes")
-                else:
-                    logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
         except Exception as e:
             logger.error("Commit failed", error=str(e))
 
