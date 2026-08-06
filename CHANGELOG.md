@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs: the `review-pr` caller contract is consumer-agnostic** (PR #119).
+  Clarified that Maestro lifecycle mapping is consumer-owned and not part
+  of the `review-pr` CLI contract. The design doc's "External caller
+  contract" section now states only what spec-runner promises (invocation,
+  exit codes 0/1/2, one-JSON-document stdout, stderr diagnostics,
+  idempotent resume, mutating-mode preconditions) and points at the
+  consumer's own track instead of restating its lifecycle. The v2.20.0
+  release notes are left as the historical artifact they are.
+
 ## [2.21.0] — 2026-08-06
 
 Unblocks Maestro's accepted `post-pr-command` work (design maestro#147):
