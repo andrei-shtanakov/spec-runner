@@ -13,7 +13,7 @@ is a **breaking change** and requires a major version bump plus an entry here.
 ## [2.17.0] — 2026-08-06
 
 Battle-testing round 4 (kapelle TASK-007 on v2.16.0, run d4d33ad0):
-three of the four findings, fixed the day they were filed. The Maestro
+three of the four findings fixed the day they were filed. The Maestro
 interop contract is unchanged; the notification surface gains one event.
 The fourth finding (#102, review-bot loop) awaits an ownership decision.
 
