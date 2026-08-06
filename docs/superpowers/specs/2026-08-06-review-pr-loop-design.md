@@ -141,8 +141,8 @@ surfaces:
 
 Precondition for the mutating mode (anything other than the read-only
 ``--verify-only`` and ``--no-verify`` modes): a clean checkout with local
-``HEAD`` equal to the PR head. Otherwise the command fail-closes with exit ``1`` before touching
-anything.
+``HEAD`` equal to the PR head. Otherwise the command fail-closes with exit
+``1`` before touching anything.
 
 **Known consumer: Maestro.** Its invocation, lifecycle, persistence and
 outcome-mapping semantics are owned by Maestro — see maestro#147 and the
