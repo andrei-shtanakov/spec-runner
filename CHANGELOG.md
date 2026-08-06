@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.19.0] — 2026-08-06
+
+Phase M2 of the review-bot loop (issue #102): `review-pr` now closes the
+whole cycle — verify, fix, gate, push, reply — under hard limits and
+fail-closed rules. Only the optional post-PR stage (M3) remains. The
+Maestro interop contract is unchanged; the experimental review-pr state
+tables gain resolution/reply bookkeeping.
+
 ### Added
 
 - **`review-pr` phase M2 — fix + reply** (issue #102; PR #112). The default
@@ -958,7 +966,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...HEAD
+[2.19.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.15.0...v2.16.0
