@@ -466,7 +466,12 @@ def run_parallel_review(
     if overall_verdict != ReviewVerdict.FAILED and has_fixed:
         overall_verdict = ReviewVerdict.FIXED
         # Commit fixes from any review agent — minus runtime state (#62)
-        if stage_all_except_runtime(config):
+        try:
+            staged = stage_all_except_runtime(config)
+        except RuntimeError as exc:
+            logger.warning("Staging failed after parallel review fixes", error=str(exc))
+            staged = False
+        if staged:
             subprocess.run(
                 ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
                 capture_output=True,
