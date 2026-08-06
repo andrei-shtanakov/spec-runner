@@ -559,6 +559,11 @@ def _changed_lines_in_head(config: ExecutorConfig) -> int:
             for p in parts[:2]:
                 if p.isdigit():
                     total += int(p)
+                elif p == "-":
+                    # Binary change: numstat cannot count it, and a review
+                    # fix has no business introducing binaries — treat as
+                    # exceeding any cap so the fix is reverted.
+                    return 10**9
     return total
 
 
@@ -733,7 +738,8 @@ def _apply_phase(
     for row in todo:
         cid = row["comment_id"]
         if comment_map.get(cid) is None:
-            # Stored but no longer on the PR: deleted comment — fail-closed.
+            # Stored but no longer on the PR: recorded as deleted and left
+            # for a human (NEEDS_HUMAN exit) — never silently dropped.
             state.set_resolution(repo, pr_number, cid, "deleted")
             logger.warning("Stored comment no longer on the PR", comment_id=cid)
         elif row["verdict"] == VERDICT_REFUTED:
@@ -767,12 +773,22 @@ def _apply_phase(
             break
         cid = row["comment_id"]
         comment = comment_map[cid]
-        if spent_usd > config.review_pr_max_cost_usd:
-            logger.warning("review-pr cost limit hit — stopping fixes", spent=spent_usd)
-            break
         pre_fix_head = _git(config, "rev-parse", "HEAD").stdout.strip()
         ok, note, cost = run_fix_agent(comment, row["evidence"] or "", repo, pr_number, config)
         spent_usd += cost
+        if spent_usd > config.review_pr_max_cost_usd:
+            # Hard ceiling: the over-budget fix itself is discarded (money
+            # is spent either way, but pushing it would mean the limit
+            # changed the PR) and the loop stops — remaining comments stay
+            # unresolved → NEEDS_HUMAN.
+            _git(config, "reset", "--hard", pre_fix_head)
+            state.set_resolution(repo, pr_number, cid, "needs_human")
+            logger.warning(
+                "review-pr cost limit exceeded — fix reverted, stopping",
+                spent=round(spent_usd, 2),
+                limit=config.review_pr_max_cost_usd,
+            )
+            break
         if not ok:
             _git(config, "reset", "--hard", pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")

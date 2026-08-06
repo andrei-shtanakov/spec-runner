@@ -633,3 +633,52 @@ class TestStatusSurfacing:
         from spec_runner.review_pr import needs_human_rows
 
         assert needs_human_rows(_cfg(tmp_path)) == []
+
+    def test_binary_fix_reverted_by_diff_cap(self, tmp_path, monkeypatch):
+        """numstat reports '-' for binaries; that must count as over-cap."""
+        work, _, head = _init_repo_with_remote(tmp_path)
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        cfg = _m2_cfg(work)  # default generous line cap
+
+        def binary_agent(comment, evidence, repo, pr, config):
+            (work / "blob.bin").write_bytes(bytes(range(256)) * 4)
+            return True, "added binary", 0.01
+
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=binary_agent),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head
+        assert not (work / "blob.bin").exists()
+
+    def test_cost_overshoot_reverts_fix_and_stops(self, tmp_path, monkeypatch):
+        """A single fix that blows the cost cap is discarded, not pushed."""
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(
+                comments=[_comment_payload(1), _comment_payload(2)],
+                head_sha=head,
+                reply_log=reply_log,
+            ),
+        )
+        cfg = _m2_cfg(work, review_pr_max_cost_usd=5.0)
+
+        def pricey_agent(comment, evidence, repo, pr, config):
+            (work / "src.py").write_text("x = 3\n")
+            return True, "expensive", 10.0  # blows the 5.0 cap
+
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=pricey_agent) as mock_fix,
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        assert mock_fix.call_count == 1  # loop stopped, comment 2 untouched
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # reverted
+        assert (work / "src.py").read_text() == "x = 1\n"
+        assert reply_log == []
