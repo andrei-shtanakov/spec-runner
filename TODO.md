@@ -107,6 +107,15 @@
       только после push с SHA, лимиты на всё, fail-closed, no auto-merge/approve) и фазами
       M1 read-only → M2 fix+reply → M3 wiring:
       `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` @owner:andrei
+  - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots
+        фильтр) → verify (агент, fail-closed к uncertain, вердикт аннулируется
+        при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
+        в таблице `pr_review_comments`; exit-контракт 0/1/2. Тесты:
+        `test_review_pr.py` (26) (PR #110) @owner:andrei
+  - [ ] **M2 (fix + reply)**: TDD-фиксы отдельными коммитами с provenance,
+        перегон гейтов, push, ответы в тредах, bounded rounds @owner:andrei
+  - [ ] **M3 (wiring)**: опциональная post-PR стадия после integration_pr,
+        документированный exit-code контракт для maestro-хука @owner:andrei
 
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 

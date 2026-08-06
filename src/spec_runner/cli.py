@@ -1379,6 +1379,22 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("mcp", parents=[common], help="Launch read-only MCP server")
 
     # sync (post-merge closer for the integration-PR loop, #73)
+    review_pr_parser = subparsers.add_parser(
+        "review-pr",
+        parents=[common],
+        help="Collect + verify review-bot comments on a PR (read-only M1, #102)",
+    )
+    review_pr_parser.add_argument("pr_ref", help="PR URL or bare number (number = this repo)")
+    review_pr_parser.add_argument(
+        "--json", dest="json_output", action="store_true", help="Machine-readable report"
+    )
+    review_pr_parser.add_argument(
+        "--no-verify",
+        dest="no_verify",
+        action="store_true",
+        help="Collect and persist comments only; skip the verification agent",
+    )
+
     sync_parser = subparsers.add_parser(
         "sync",
         parents=[common],
@@ -1615,6 +1631,13 @@ def main():
             "sync": cmd_sync,
             "config": cmd_config,
         }
+
+        # review-pr (#102 M1): stable exit-code contract for external callers
+        # (0 = all verified, 1 = fail-closed, 2 = NEEDS_HUMAN)
+        if args.command == "review-pr":
+            from .review_pr import cmd_review_pr
+
+            raise SystemExit(cmd_review_pr(args, config))
 
         # Handle unified task subcommand
         if args.command == "task":

@@ -97,6 +97,9 @@ spec-runner watch                          # Continuously execute ready tasks
 spec-runner watch --tui                    # Watch with live TUI dashboard
 spec-runner mcp                            # Launch MCP server (stdio)
 spec-runner sync                           # Post-merge closer: pull base, prune merged task/run branches, state check
+spec-runner review-pr <url-or-number>      # Collect + verify review-bot comments on a PR (read-only M1; exit 0/1/2)
+spec-runner review-pr 6 --json             # Machine-readable verdict report
+spec-runner review-pr 6 --no-verify        # Collect + persist only, skip the verification agent
 spec-runner sync --dry-run                 # Show what sync would do without changing anything
 spec-runner task list --status=todo        # List tasks by status (unified CLI)
 spec-runner task next                      # Show next ready tasks
@@ -152,6 +155,7 @@ All code is in `src/spec_runner/`:
 | `spec_commands.py` | ~195 | `spec status/approve/reject/adopt/check` CLI handlers + `run_checkpoint_menu` TTY overlay; `approve` re-validates from scratch (never trusts cached `validation`), `adopt` validates-first (fail→draft unless `--force`), `reject`→draft |
 | `change_commands.py` | ~250 | Change-as-folder (M2+M3): `change new/list/archive` — a change is a self-rooted spec dir at `spec/changes/<id>/` (selected via `config.change_id` / `--change`); archive validates + merges the change's delta spec (`specs/requirements.md`) into flat `spec/requirements.md`, then moves to a dated `archive/` dir; refuses live runs/unfinished tasks/merge conflicts; `--dry-run` prints the merge plan |
 | `spec_merge.py` | ~135 | Delta merge engine (M3): `plan_merge` (dry-run ops/conflicts) + `apply_merge` (all-or-nothing ADDED/MODIFIED/REMOVED/RENAMED by requirement id, bootstrap on empty target) + `MergeConflictError` |
+| `review_pr.py` | ~380 | Review-bot loop M1 (#102, read-only): `parse_pr_ref`, `fetch_pr_meta`/`fetch_bot_comments` (gh CLI, allowed-bots filter), `ReviewPrState` (durable `pr_review_comments` table in the state DB — a stored comment is never re-processed), `verify_comment` (agent call, fail-closed to `uncertain`; verdict discarded if the verifier mutates the tree), `cmd_review_pr` (exit 0 = verified, 1 = fail-closed, 2 = NEEDS_HUMAN). Design: `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` |
 | `github_sync.py` | ~200 | GitHub Issues sync: `cmd_sync_to_gh` (local wins), `cmd_sync_from_gh` (remote wins), `export_gh` |
 | `audit.py` | ~280 | Pre-execution static audit: orphan tasks, dangling/uncovered refs, dead designs; text/JSON/CSV output |
 | `audit_log.py` | ~210 | Opt-in compliance audit-trail writer: JSON-Lines appender, `AuditLogger` + `NoOpAuditLogger`, thread-safe, `run_id` + operator attribution |
