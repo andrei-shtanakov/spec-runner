@@ -95,13 +95,18 @@
       (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
       Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
       за экосистемой (PR #107) @owner:andrei
-- [ ] **#102 review-bot-loop** — цикл «PR открыт → комменты Copilot → верифицировать
-      каждый по коду → чинить обоснованные (TDD) → отвечать в тредах → перегонять гейты»
-      сегодня делает оператор вручную. **Нужно решение владельца**: post-PR стадия в
-      spec-runner vs хук/гейт в maestro (та же развилка, что expost approver_cmd).
-      Требования дистиллированы в issue из трёх живых PR (kapelle #1/#5/#6): не применять
-      вслепую, полный прогон гейтов после фикса, ограниченные итерации, обязательный ответ
-      в каждом треде @owner:andrei @trigger:"решение spec-runner vs maestro"
+- [ ] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
+      spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
+      + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); Maestro
+      позже получит тонкий hook `PR_CREATED → post_pr_command → PR_REVIEWED/NEEDS_REVIEW`
+      и вызовет ту же команду. Граница: transport+verify/fix/reply loop → spec-runner;
+      когда/для какого PR → владелец lifecycle; approval policy → maestro approver_cmd
+      (maestro#137, не смешивать approval с mutation). Дизайн-док с state machine,
+      нормативными ограничениями (opt-in, allowed bots, verdict valid/refuted/uncertain,
+      uncertain→human, TDD-фиксы отдельными коммитами с provenance, гейты до push, ответ
+      только после push с SHA, лимиты на всё, fail-closed, no auto-merge/approve) и фазами
+      M1 read-only → M2 fix+reply → M3 wiring:
+      `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` @owner:andrei
 
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 
