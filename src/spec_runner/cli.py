@@ -391,6 +391,15 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         stop_reason: str = "completed"  # used by T18 stop-reason capture
         stop_detail: str = ""  # used by T18 stop-reason capture
 
+        # #104: total_completed/total_failed are cumulative ACROSS runs
+        # (monotonic executor_meta counters). The end-of-run summary must
+        # report THIS run's numbers, so snapshot the baseline here.
+        completed_before = state.total_completed
+        failed_before = state.total_failed
+        failed_attempts_before = sum(
+            1 for ts in state.tasks.values() for a in ts.attempts if not a.success
+        )
+
         # Pre-run validation
         from .validate import format_results, validate_all
 
@@ -660,16 +669,23 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         # Re-read tasks to get updated statuses after execution
         tasks = parse_tasks(config.tasks_file)
 
-        # Calculate statistics
-        failed_attempts = sum(
-            1 for ts in state.tasks.values() for a in ts.attempts if not a.success
+        # Calculate statistics (#104: this run's failed attempts, not history)
+        failed_attempts = (
+            sum(1 for ts in state.tasks.values() for a in ts.attempts if not a.success)
+            - failed_attempts_before
         )
         remaining = len([t for t in tasks if t.status == "todo"])
 
+        # #104: report this run's delta, not the cumulative meta counters —
+        # a single-task run used to end with "completed=2" because earlier
+        # runs' completions leaked into the summary.
+        run_completed = state.total_completed - completed_before
+        run_failed = state.total_failed - failed_before
+
         logger.info(
             "Execution summary",
-            completed=state.total_completed,
-            failed=state.total_failed,
+            completed=run_completed,
+            failed=run_failed,
             remaining=remaining,
             failed_attempts=failed_attempts if failed_attempts > 0 else None,
         )
@@ -680,15 +696,15 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         total_cost_val = state.total_cost()
         notify_run_complete(
             config,
-            completed=state.total_completed,
-            failed=state.total_failed,
+            completed=run_completed,
+            failed=run_failed,
             total_cost=total_cost_val if total_cost_val > 0 else None,
         )
 
         state.audit_logger.record(
             EVENT_RUN_ENDED,
-            completed=state.total_completed,
-            failed=state.total_failed,
+            completed=run_completed,
+            failed=run_failed,
             remaining=remaining,
             total_cost_usd=round(total_cost_val, 4),
         )
