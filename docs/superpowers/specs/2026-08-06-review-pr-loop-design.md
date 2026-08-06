@@ -139,9 +139,9 @@ surfaces:
   ``{repo, pr_number, error, exit_code}`` with ``repo``/``pr_number``
   ``null`` when the ref could not be resolved.
 
-Precondition for the mutating mode (anything other than ``--verify-only``
-/ ``--no-verify``): a clean checkout with local ``HEAD`` equal to the PR
-head. Otherwise the command fail-closes with exit ``1`` before touching
+Precondition for the mutating mode (anything other than the read-only
+``--verify-only`` and ``--no-verify`` modes): a clean checkout with local
+``HEAD`` equal to the PR head. Otherwise the command fail-closes with exit ``1`` before touching
 anything.
 
 **Known consumer: Maestro.** Its invocation, lifecycle, persistence and
