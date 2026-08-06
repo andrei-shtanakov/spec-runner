@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.20.0] — 2026-08-06
+
+Phase M3 completes the review-bot loop (issue #102, now closed): the
+optional post-PR stage wires `review-pr` into the run itself, and the
+external caller contract is documented for orchestrators. All three
+phases shipped the same day the design was approved (M1 v2.18.0,
+M2 v2.19.0, M3 here). Maestro interop contract unchanged.
+
 ### Added
 
 - **`review-pr` phase M3 — optional post-PR stage + external caller
@@ -980,7 +988,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...HEAD
+[2.20.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...v2.20.0
 [2.19.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.16.0...v2.17.0
