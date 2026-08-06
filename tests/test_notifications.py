@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from spec_runner.config import ExecutorConfig
 from spec_runner.notifications import (
     notify,
+    notify_pr_opened,
     notify_run_complete,
     notify_task_failed,
     send_telegram,
@@ -118,6 +119,52 @@ class TestNotifyRunComplete:
         config = ExecutorConfig()
         result = notify_run_complete(config, completed=1, failed=0)
         assert result is False
+
+
+class TestNotifyPrOpened:
+    """#101: the human-merge gate must not depend on a watched terminal."""
+
+    @patch("spec_runner.notifications.send_telegram", return_value=True)
+    def test_formats_pr_opened_message(self, mock_send):
+        config = ExecutorConfig(
+            telegram_bot_token="tok",
+            telegram_chat_id="123",
+        )
+        assert notify_pr_opened(config, "https://github.com/o/r/pull/6") is True
+        msg = mock_send.call_args[0][2]
+        assert "https://github.com/o/r/pull/6" in msg
+        assert "spec-runner sync" in msg
+        assert "human review" in msg
+
+    def test_pr_opened_in_default_notify_on(self):
+        assert "pr_opened" in ExecutorConfig().notify_on
+
+    @patch("spec_runner.notifications.send_telegram", return_value=True)
+    def test_respects_notify_on_opt_out(self, mock_send):
+        config = ExecutorConfig(
+            telegram_bot_token="tok",
+            telegram_chat_id="123",
+            notify_on=["run_complete"],
+        )
+        assert notify_pr_opened(config, "https://x/pr/1") is False
+        mock_send.assert_not_called()
+
+    def test_noop_when_not_configured(self):
+        assert notify_pr_opened(ExecutorConfig(), "https://x/pr/1") is False
+
+    @patch("spec_runner.notifications.send_telegram", return_value=True)
+    def test_announce_integration_pr_pushes_event(self, mock_send, tmp_path):
+        from spec_runner.cli import _announce_integration_pr
+
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+            telegram_bot_token="tok",
+            telegram_chat_id="123",
+        )
+        _announce_integration_pr(config, "https://github.com/o/r/pull/6")
+        assert mock_send.called
+        assert "https://github.com/o/r/pull/6" in mock_send.call_args[0][2]
 
 
 class TestWebhookNotifications:

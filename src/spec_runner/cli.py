@@ -268,7 +268,9 @@ def _announce_integration_pr(config: ExecutorConfig, pr_url: str) -> None:
     the operator that the next run can only start from a merged base. The
     announcement goes to stderr (stdout may carry --json-result), and the
     URL is persisted so `status` keeps repeating it until `spec-runner
-    sync` clears it after the merge.
+    sync` clears it after the merge. #101: the human-merge gate must not
+    depend on someone watching the terminal — the event is also pushed
+    through the configured notification channels (Telegram/webhook).
     """
     print(
         f"\n🔗 Integration PR opened: {pr_url}\n"
@@ -283,6 +285,10 @@ def _announce_integration_pr(config: ExecutorConfig, pr_url: str) -> None:
             state.set_meta(PR_URL_META_KEY, pr_url)
     except Exception as exc:  # pragma: no cover — announcement must not fail the run
         logger.warning("Could not persist PR URL", error=str(exc))
+
+    from .notifications import notify_pr_opened
+
+    notify_pr_opened(config, pr_url)
 
 
 def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
