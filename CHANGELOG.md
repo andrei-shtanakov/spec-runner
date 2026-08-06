@@ -10,6 +10,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.17.0] — 2026-08-06
+
+Battle-testing round 4 (kapelle TASK-007 on v2.16.0, run d4d33ad0):
+three of the four findings fixed the day they were filed. The Maestro
+interop contract is unchanged; the notification surface gains one event.
+The fourth finding (#102, review-bot loop) awaits an ownership decision.
+
 ### Added
 
 - **`pr_opened` notification event** (battle-testing F-21, issue #101;
@@ -909,7 +916,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.16.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...HEAD
+[2.17.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.15.0...v2.16.0
 [2.15.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.13.0...v2.14.0
