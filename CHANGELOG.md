@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`review-pr --json`: stdout is exactly one JSON document** (inbox issue
+  #116 from maestro's `post-pr-command`; PR #117). Limit stops and
+  fail-closed paths printed diagnostics to stdout before the report, and
+  exit 1 emitted no JSON at all — a consumer storing the report verbatim
+  (Maestro's `review-pr` wrapper, design maestro#147) could not parse it.
+  All diagnostics now go to stderr; every exit path (0/1/2) emits one JSON
+  document, and the payload gains `exit_code` so a stored report is
+  self-describing. On exit 1 the document is
+  `{repo, pr_number, error, exit_code}` (`repo`/`pr_number` `null` when the
+  ref could not be resolved). Text mode is unchanged.
+
 ## [2.20.0] — 2026-08-06
 
 Phase M3 completes the review-bot loop (issue #102, now closed): the

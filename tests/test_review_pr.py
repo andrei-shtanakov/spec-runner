@@ -238,7 +238,7 @@ class TestCmdReviewPr:
     def test_draft_pr_fails_closed(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(draft=True))
         assert cmd_review_pr(_args(), _cfg(tmp_path)) == EXIT_FAIL
-        assert "draft" in capsys.readouterr().out
+        assert "draft" in capsys.readouterr().err
 
     def test_closed_pr_fails_closed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rp, "_gh", _gh_router(pr_state="closed"))
@@ -250,7 +250,7 @@ class TestCmdReviewPr:
             cmd_review_pr(_args(pr_ref="https://github.com/o/r/pull/6"), _cfg(tmp_path))
             == EXIT_FAIL
         )
-        assert "⛔" in capsys.readouterr().out
+        assert "⛔" in capsys.readouterr().err
 
     def test_json_report_shape(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
@@ -500,7 +500,7 @@ class TestApplyPhase:
         with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
             code = cmd_review_pr(_args(), _m2_cfg(work))
         assert code == EXIT_FAIL
-        assert "not clean" in capsys.readouterr().out
+        assert "not clean" in capsys.readouterr().err
 
     def test_head_mismatch_fails_closed(self, tmp_path, monkeypatch, capsys):
         work, _, head = _init_repo_with_remote(tmp_path)
@@ -510,7 +510,7 @@ class TestApplyPhase:
         with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
             code = cmd_review_pr(_args(), _m2_cfg(work))
         assert code == EXIT_FAIL
-        assert "check out the PR branch" in capsys.readouterr().out
+        assert "check out the PR branch" in capsys.readouterr().err
 
     def test_push_failure_publishes_no_replies(self, tmp_path, monkeypatch, capsys):
         work, bare, head = _init_repo_with_remote(tmp_path)
@@ -529,7 +529,7 @@ class TestApplyPhase:
             code = cmd_review_pr(_args(), cfg)
         assert code == EXIT_FAIL
         assert reply_log == []
-        assert "push failed" in capsys.readouterr().out
+        assert "push failed" in capsys.readouterr().err
 
     def test_no_double_reply_on_rerun(self, tmp_path, monkeypatch):
         work, _, head = _init_repo_with_remote(tmp_path)
@@ -554,7 +554,7 @@ class TestApplyPhase:
         with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
             code = cmd_review_pr(_args(), cfg)
         assert code == EXIT_FAIL
-        assert "force-push" in capsys.readouterr().out
+        assert "force-push" in capsys.readouterr().err
 
     def test_round_limit_stops_fixes(self, tmp_path, monkeypatch):
         work, _, head = _init_repo_with_remote(tmp_path)
@@ -682,3 +682,82 @@ class TestStatusSurfacing:
         assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # reverted
         assert (work / "src.py").read_text() == "x = 1\n"
         assert reply_log == []
+
+
+class TestJsonStdoutPurity:
+    """#116 (inbox from maestro#post-pr-command): with --json, stdout must
+    carry exactly ONE JSON document on every exit path — Maestro's wrapper
+    stores the report verbatim in an audit table."""
+
+    @staticmethod
+    def _only_json(captured) -> dict:
+        """stdout parses as a single JSON document; diagnostics on stderr."""
+        return json.loads(captured.out)
+
+    def test_clean_exit_zero(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
+        with patch.object(rp, "verify_comment", return_value=("refuted", "ev")):
+            code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
+        payload = self._only_json(capsys.readouterr())
+        assert code == EXIT_OK
+        assert payload["exit_code"] == EXIT_OK
+
+    def test_needs_human_exit_two(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
+        with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
+            code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
+        payload = self._only_json(capsys.readouterr())
+        assert code == EXIT_NEEDS_HUMAN
+        assert payload["exit_code"] == EXIT_NEEDS_HUMAN
+        assert payload["needs_human"] is True
+
+    def test_draft_fail_closed_still_emits_json(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(rp, "_gh", _gh_router(draft=True))
+        code = cmd_review_pr(_args(json_output=True), _cfg(tmp_path))
+        captured = capsys.readouterr()
+        payload = self._only_json(captured)
+        assert code == EXIT_FAIL
+        assert payload["exit_code"] == EXIT_FAIL
+        assert "draft" in payload["error"]
+        assert "⛔" in captured.err  # human text went to stderr
+
+    def test_bad_ref_fail_closed_emits_json_without_repo(self, tmp_path, capsys):
+        code = cmd_review_pr(_args(pr_ref="not-a-pr", json_output=True), _cfg(tmp_path))
+        payload = self._only_json(capsys.readouterr())
+        assert code == EXIT_FAIL
+        assert payload["repo"] is None and payload["pr_number"] is None
+        assert payload["error"]
+
+    def test_comment_limit_diagnostic_not_on_stdout(self, tmp_path, monkeypatch, capsys):
+        """The exact path named in #116: a limit stop used to print text
+        before the JSON."""
+        work, _, head = _init_repo_with_remote(tmp_path)
+        payload_comments = [_comment_payload(i) for i in range(1, 4)]
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=payload_comments, head_sha=head))
+        cfg = _m2_cfg(work, review_pr_max_comments=2)
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+            code = cmd_review_pr(_args(json_output=True), cfg)
+        captured = capsys.readouterr()
+        payload = self._only_json(captured)
+        assert code == EXIT_NEEDS_HUMAN
+        assert payload["exit_code"] == EXIT_NEEDS_HUMAN
+        assert "comment limit exceeded" in captured.err
+
+    def test_round_limit_diagnostic_not_on_stdout(self, tmp_path, monkeypatch, capsys):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        cfg = _m2_cfg(work, review_pr_max_rounds=1)
+        with ReviewPrState(cfg) as st:
+            st.start_round(REPO, 6, head)  # round 1 already used
+        # A second head SHA opens round 2 > limit
+        (work / "src.py").write_text("x = 5\n")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "-m", "next round")
+        head2 = _git(work, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head2))
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+            code = cmd_review_pr(_args(json_output=True), cfg)
+        captured = capsys.readouterr()
+        self._only_json(captured)
+        assert code == EXIT_NEEDS_HUMAN
+        assert "round limit exceeded" in captured.err

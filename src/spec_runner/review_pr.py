@@ -25,6 +25,7 @@ import json
 import re
 import sqlite3
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -44,6 +45,38 @@ VERDICT_UNCERTAIN = "uncertain"
 
 class ReviewPrError(Exception):
     """Fail-closed condition — the loop must stop, not guess."""
+
+
+def _note(message: str) -> None:
+    """Operator-facing diagnostic → stderr.
+
+    stdout belongs to the report: with ``--json`` it must carry exactly one
+    JSON document on every exit path, or a consumer storing the report
+    verbatim (Maestro's `review-pr` wrapper, #116) cannot parse it.
+    """
+    print(message, file=sys.stderr)
+
+
+def _fail_closed(args, repo: str | None, pr_number: int | None, message: str) -> int:
+    """Report a fail-closed condition and return the exit code.
+
+    The human message goes to stderr; with ``--json`` stdout still gets one
+    JSON document, so every exit path is machine-readable (#116).
+    """
+    _note(f"⛔ review-pr: {message}")
+    if getattr(args, "json_output", False):
+        print(
+            json.dumps(
+                {
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "error": message,
+                    "exit_code": EXIT_FAIL,
+                },
+                indent=2,
+            )
+        )
+    return EXIT_FAIL
 
 
 @dataclass(frozen=True)
@@ -727,7 +760,7 @@ def _apply_phase(
     rows = state.rows(repo, pr_number)
     todo = [r for r in rows if r["verdict"] and not r["resolution"]]
     if len(todo) > config.review_pr_max_comments:
-        print(
+        _note(
             f"⚠️  comment limit exceeded ({len(todo)} > {config.review_pr_max_comments}) "
             "— NEEDS_HUMAN, no fixes applied"
         )
@@ -759,7 +792,7 @@ def _apply_phase(
                 rounds=round_count,
                 limit=config.review_pr_max_rounds,
             )
-            print(
+            _note(
                 f"⚠️  round limit exceeded ({round_count} > {config.review_pr_max_rounds}) "
                 "— NEEDS_HUMAN, no fixes applied"
             )
@@ -879,15 +912,22 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
     import time
 
     started_at = time.monotonic()
+    repo: str | None = None
+    pr_number: int | None = None
     try:
         repo, pr_number = parse_pr_ref(args.pr_ref, config)
         meta = fetch_pr_meta(config, repo, pr_number)
         if meta["draft"]:
-            print(f"⛔ PR {repo}#{pr_number} is a draft — review-pr is fail-closed on drafts")
-            return EXIT_FAIL
+            return _fail_closed(
+                args, repo, pr_number, f"PR {repo}#{pr_number} is a draft (fail-closed on drafts)"
+            )
         if meta["state"] != "open":
-            print(f"⛔ PR {repo}#{pr_number} is {meta['state']} — review-pr only runs on open PRs")
-            return EXIT_FAIL
+            return _fail_closed(
+                args,
+                repo,
+                pr_number,
+                f"PR {repo}#{pr_number} is {meta['state']} — review-pr only runs on open PRs",
+            )
 
         allowed = config.review_pr_allowed_bots
         comments = fetch_bot_comments(config, repo, pr_number, allowed)
@@ -951,7 +991,10 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
             needs_human = bool(counts["uncertain"] or counts["unverified"])
         else:
             needs_human = not all(_row_complete(r) for r in rows) if rows else False
+        exit_code = EXIT_NEEDS_HUMAN if needs_human else EXIT_OK
         if getattr(args, "json_output", False):
+            # Exactly one JSON document on stdout (#116) — every diagnostic
+            # above went to stderr.
             print(
                 json.dumps(
                     {
@@ -962,6 +1005,7 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
                         "comments": rows,
                         "counts": counts,
                         "needs_human": needs_human,
+                        "exit_code": exit_code,
                     },
                     indent=2,
                 )
@@ -969,8 +1013,7 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
         else:
             _print_text_report(repo, pr_number, rows, len(new))
 
-        return EXIT_NEEDS_HUMAN if needs_human else EXIT_OK
+        return exit_code
 
     except ReviewPrError as exc:
-        print(f"⛔ review-pr: {exc}")
-        return EXIT_FAIL
+        return _fail_closed(args, repo, pr_number, str(exc))
