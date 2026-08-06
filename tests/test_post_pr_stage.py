@@ -113,3 +113,19 @@ class TestPostPrStage:
         assert cfg.review_pr_post_pr == "verify"
         assert cfg.review_pr_post_pr_wait_seconds == 5
         assert ExecutorConfig().review_pr_post_pr == "off"
+
+    def test_full_mode_dirty_crash_stashes_and_returns(self, tmp_path):
+        """A loop crash that leaves modified TRACKED files must not strand
+        the repo on the run branch — leftovers are stashed, base restored."""
+        root, run = _repo_with_run_branch(tmp_path)
+
+        def dirty_crash(args, config):
+            (root / "f.py").write_text("mutated mid-fix\n")  # tracked file
+            raise RuntimeError("boom mid-fix")
+
+        with patch("spec_runner.review_pr.cmd_review_pr", side_effect=dirty_crash):
+            _post_pr_review_stage(_cfg(root, review_pr_post_pr="full"), PR_URL, run)
+        assert _git(root, "branch", "--show-current").stdout.strip() == "main"
+        assert (root / "f.py").read_text() == "x = 1\n"  # tree clean on base
+        stash_list = _git(root, "stash", "list").stdout
+        assert "post-PR review stage leftovers" in stash_list

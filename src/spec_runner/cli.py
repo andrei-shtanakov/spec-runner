@@ -333,15 +333,62 @@ def _post_pr_review_stage(config: ExecutorConfig, pr_url: str, integration) -> N
             )
         logger.info("post-PR review stage finished", mode=mode, exit_code=code)
     except Exception as exc:  # the stage must never break a finished run
-        logger.error("post-PR review stage failed", error=str(exc))
+        logger.error("post-PR review stage failed", error=str(exc), exc_info=True)
     finally:
         if checked_out:
+
+            def _stash_loop_leftovers() -> None:
+                # A loop crash mid-fix can leave uncommitted changes: either
+                # they block the checkout, or (identical blobs on both
+                # branches) the checkout silently carries them over. Both
+                # ways they are the crashed loop's dirt, not the operator's
+                # — stash them loudly rather than strand or pollute. Only
+                # the loop's leftovers are stashed: executor runtime state
+                # (the live state DB) is excluded via _dirty_paths.
+                from .review_pr import _dirty_paths
+
+                paths = [line[3:].strip().strip('"') for line in _dirty_paths(config)]
+                if not paths:
+                    return
+                stash = subprocess.run(
+                    [
+                        "git",
+                        "stash",
+                        "push",
+                        "--include-untracked",
+                        "-m",
+                        "spec-runner post-PR review stage leftovers",
+                        "--",
+                        *paths,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    cwd=config.project_root,
+                )
+                if stash.returncode == 0 and "No local changes" not in stash.stdout:
+                    print(
+                        "⚠️  post-PR review: the loop left uncommitted changes — "
+                        "stashed as 'spec-runner post-PR review stage leftovers' "
+                        "(inspect with `git stash list`)",
+                        file=sys.stderr,
+                    )
+
             back = subprocess.run(
                 ["git", "checkout", integration.base],
                 capture_output=True,
                 text=True,
                 cwd=config.project_root,
             )
+            if back.returncode != 0:
+                _stash_loop_leftovers()
+                back = subprocess.run(
+                    ["git", "checkout", integration.base],
+                    capture_output=True,
+                    text=True,
+                    cwd=config.project_root,
+                )
+            else:
+                _stash_loop_leftovers()
             if back.returncode != 0:
                 print(
                     f"❌ post-PR review: could not return to '{integration.base}' "
