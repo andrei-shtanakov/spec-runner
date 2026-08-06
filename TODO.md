@@ -112,8 +112,14 @@
         при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
         в таблице `pr_review_comments`; exit-контракт 0/1/2. Тесты:
         `test_review_pr.py` (26) (PR #110) @owner:andrei
-  - [ ] **M2 (fix + reply)**: TDD-фиксы отдельными коммитами с provenance,
-        перегон гейтов, push, ответы в тредах, bounded rounds @owner:andrei
+  - [x] **M2 (fix + reply)**: `_apply_phase` — TDD-фиксы отдельными коммитами
+        с трейлером `Review-Comment-Id`, гейты после каждой мутации (красный
+        гейт откатывает фикс), один push, ответы в тредах только после
+        успешного push (fix SHA / evidence опровержения), `uncertain` — никогда
+        не отвечаем; лимиты rounds/comments/lines/cost/wall → NEEDS_HUMAN;
+        fail-closed на dirty tree/head mismatch/force-push/push failure;
+        `[no-op]`-стиль индикация в `status` (needs_human_rows). Тесты:
+        `TestApplyPhase` (12) + `TestStatusSurfacing` (PR #112) @owner:andrei
   - [ ] **M3 (wiring)**: опциональная post-PR стадия после integration_pr,
         документированный exit-code контракт для maestro-хука @owner:andrei
 

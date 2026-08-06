@@ -10,6 +10,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`review-pr` phase M2 — fix + reply** (issue #102; PR #112). The default
+  invocation now runs the full loop: valid comments are fixed by a TDD
+  agent (each fix is a separate commit with a `Review-Comment-Id`
+  provenance trailer), the project gates (tests + lint) run after every
+  mutation and a failing gate reverts the fix, all fix commits are pushed
+  once, and only after a successful push does the loop reply in each
+  thread — with the actual fix SHA, or with the verification evidence for
+  refuted comments. `uncertain` comments are never fixed and never
+  auto-answered. Hard limits (`review_pr.max_rounds` / `max_comments` /
+  `max_changed_lines` / `max_cost_usd` / `max_wall_minutes`) stop the loop
+  with `NEEDS_HUMAN`; dirty tree, head-SHA mismatch, force-push and push
+  failures are fail-closed (exit 1, no replies). Reply idempotency is
+  persisted (`replied_at`) — re-invocations never answer twice.
+  `--verify-only` preserves the read-only M1 behavior and its exit
+  semantics; `spec-runner status` now surfaces comments awaiting a human.
+
 ## [2.18.0] — 2026-08-06
 
 Phase M1 of the review-bot loop (issue #102): the read-only

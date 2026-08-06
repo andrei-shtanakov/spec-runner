@@ -129,8 +129,9 @@ spec-runner tui                            # Launch TUI status dashboard
 spec-runner validate                       # Validate config and tasks
 spec-runner sync                           # Post-merge sync: pull base, prune merged run/task branches
 spec-runner sync --dry-run                 # Preview without changing anything
-spec-runner review-pr <url-or-number>      # Collect + verify review-bot comments on a PR (read-only)
-spec-runner review-pr 6 --json             # Machine-readable verdict report (exit 0/1/2)
+spec-runner review-pr <url-or-number>      # Review-bot loop: verify, fix valid, gate, push, reply
+spec-runner review-pr 6 --verify-only      # Verdicts only, read-only (exit 0/1/2)
+spec-runner review-pr 6 --json             # Machine-readable verdict/resolution report
 
 # Verification & Reporting (v2.0)
 spec-runner audit                          # Static pre-execution spec check

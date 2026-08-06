@@ -97,14 +97,17 @@ CREATE TABLE executor_meta (
 
 ### `pr_review_comments` (experimental, v2.18.0)
 
-Owned by `spec-runner review-pr` (#102, phase M1). One row per collected
-review-bot comment, keyed `UNIQUE(repo, pr_number, comment_id)` — the durable
-cursor that makes the command resumable. Columns: `repo`, `pr_number`,
+Owned by `spec-runner review-pr` (#102). One row per collected review-bot
+comment, keyed `UNIQUE(repo, pr_number, comment_id)` — the durable cursor
+that makes the command resumable. Columns: `repo`, `pr_number`,
 `comment_id`, `head_sha`, `author`, `path`, `line`, `body`, `url`, `verdict`
 (`valid`/`refuted`/`uncertain`; NULL = collected, not verified), `evidence`,
-`collected_at`, `verified_at`. Experimental: shape may change in minor
-releases while the loop is in phase M1/M2; external consumers should not
-depend on it yet.
+`collected_at`, `verified_at`, plus M2 (v2.19.0): `resolution`
+(`fixed`/`refuted`/`needs_human`/`deleted`; NULL = unresolved), `fix_sha`,
+`replied_at` (reply idempotency guard). A companion `pr_review_rounds` table
+(`UNIQUE(repo, pr_number, head_sha)`) counts bounded rounds. Experimental:
+shape may change in minor releases while the loop is in phase M2/M3;
+external consumers should not depend on it yet.
 
 ### `executor_meta` key-value pairs
 

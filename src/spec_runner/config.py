@@ -249,6 +249,13 @@ class ExecutorConfig:
     review_pr_allowed_bots: list[str] = field(
         default_factory=lambda: ["Copilot", "copilot-pull-request-reviewer[bot]"]
     )
+    # review-pr loop (#102, M2): hard limits — exceeding any of them stops
+    # the loop with NEEDS_HUMAN instead of grinding on.
+    review_pr_max_rounds: int = 3  # bounded rounds per PR (a new head SHA opens one)
+    review_pr_max_comments: int = 20  # per-invocation comment cap
+    review_pr_max_changed_lines: int = 300  # per-fix diff size cap (insertions+deletions)
+    review_pr_max_wall_minutes: int = 30  # per-invocation wall-clock cap
+    review_pr_max_cost_usd: float = 5.0  # per-invocation fix-agent cost cap
 
     # Generic webhook notifications
     webhook_url: str = ""  # Webhook URL (empty = disabled)
@@ -599,6 +606,15 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "spec_context": executor_config.get("spec_context"),
             "spec_rules": executor_config.get("spec_rules"),
             "review_pr_allowed_bots": (executor_config.get("review_pr") or {}).get("allowed_bots"),
+            "review_pr_max_rounds": (executor_config.get("review_pr") or {}).get("max_rounds"),
+            "review_pr_max_comments": (executor_config.get("review_pr") or {}).get("max_comments"),
+            "review_pr_max_changed_lines": (executor_config.get("review_pr") or {}).get(
+                "max_changed_lines"
+            ),
+            "review_pr_max_wall_minutes": (executor_config.get("review_pr") or {}).get(
+                "max_wall_minutes"
+            ),
+            "review_pr_max_cost_usd": (executor_config.get("review_pr") or {}).get("max_cost_usd"),
         }
     except Exception as e:
         from .logging import get_logger
