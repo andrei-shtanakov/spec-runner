@@ -110,7 +110,8 @@
       + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
       оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
       стороне Maestro отслеживается снаружи: maestro#147 / todo://maestro/post-pr-command
-      (форма, lifecycle и маппинг исхода — их канон, не наш). Граница: transport+verify/fix/reply loop → spec-runner;
+      (форма, lifecycle и маппинг исхода — их канон, не наш).
+      Граница: transport+verify/fix/reply loop → spec-runner;
       когда/для какого PR → владелец lifecycle; approval policy → maestro approver_cmd
       (maestro#137, не смешивать approval с mutation). Дизайн-док с state machine,
       нормативными ограничениями (opt-in, allowed bots, verdict valid/refuted/uncertain,
