@@ -10,6 +10,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`review-pr` phase M3 — optional post-PR stage + external caller
+  contract** (issue #102, final phase; PR #114). `review_pr.post_pr:
+  off | verify | full` (default `off` — the `integration_pr` flow stays
+  byte-identical without configuration) wires the loop into the run
+  itself: after the integration PR is announced, the stage waits
+  `post_pr_wait_seconds` (default 120) for the review bot, then runs the
+  read-only triage (`verify`) or checks the run branch out, runs the full
+  fix+reply loop, and always returns to the base branch (`full`). The
+  stage never changes the run's exit status. The external caller contract
+  (exit codes 0/1/2 + `--json` surface, Maestro hook mapping) is now
+  documented in the design doc. This completes #102.
+
 ## [2.19.0] — 2026-08-06
 
 Phase M2 of the review-bot loop (issue #102): `review-pr` now closes the

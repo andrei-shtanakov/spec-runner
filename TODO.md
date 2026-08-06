@@ -120,8 +120,13 @@
         fail-closed на dirty tree/head mismatch/force-push/push failure;
         `[no-op]`-стиль индикация в `status` (needs_human_rows). Тесты:
         `TestApplyPhase` (12) + `TestStatusSurfacing` (PR #112) @owner:andrei
-  - [ ] **M3 (wiring)**: опциональная post-PR стадия после integration_pr,
-        документированный exit-code контракт для maestro-хука @owner:andrei
+  - [x] **M3 (wiring)**: `review_pr.post_pr: off|verify|full` (дефолт off —
+        integration_pr без конфигурации байт-в-байт прежний); verify = read-only
+        триаж, full = checkout run-ветки → полный цикл → всегда возврат на base;
+        `post_pr_wait_seconds` даёт боту время откомментировать; стадия не меняет
+        exit-статус рана. Контракт внешнего вызова (0/1/2 + --json, маппинг для
+        maestro-хука PR_REVIEWED/NEEDS_REVIEW) задокументирован в дизайн-доке.
+        Тесты: `test_post_pr_stage.py` (8). **#102 закрыт** (PR #114) @owner:andrei
 
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 

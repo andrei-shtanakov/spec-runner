@@ -259,6 +259,96 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
             pr_url = finalize_integration_branch(config, integration)
             if pr_url:
                 _announce_integration_pr(config, pr_url)
+                _post_pr_review_stage(config, pr_url, integration)
+
+
+def _post_pr_review_stage(config: ExecutorConfig, pr_url: str, integration) -> None:
+    """Optional post-PR stage (#102 M3): invoke the review-pr loop.
+
+    Opt-in via ``review_pr.post_pr`` — ``off`` (default, integration_pr
+    behavior byte-identical), ``verify`` (read-only triage: verdicts land in
+    state and `status`), or ``full`` (check out the integration branch, run
+    the whole fix+reply loop, return to the base branch). Waits
+    ``post_pr_wait_seconds`` first so the review bot has a chance to
+    comment. The stage's outcome never changes the run's exit status — the
+    run already succeeded; the review loop reports through its own report,
+    the persisted state, and `status`.
+    """
+    import subprocess
+    import time as _time
+    from types import SimpleNamespace
+
+    mode = config.review_pr_post_pr
+    if mode == "off":
+        return
+    if mode not in ("verify", "full"):
+        logger.warning(
+            "Unknown review_pr.post_pr value — stage skipped",
+            value=mode,
+            allowed=["off", "verify", "full"],
+        )
+        return
+
+    from .review_pr import EXIT_NEEDS_HUMAN, cmd_review_pr
+
+    wait = config.review_pr_post_pr_wait_seconds
+    if wait > 0:
+        print(
+            f"\n🔍 post-PR review stage ({mode}): waiting {wait}s for the review bot…",
+            file=sys.stderr,
+        )
+        _time.sleep(wait)
+
+    stage_args = SimpleNamespace(
+        pr_ref=pr_url,
+        json_output=False,
+        no_verify=False,
+        verify_only=(mode == "verify"),
+    )
+    checked_out = False
+    try:
+        if mode == "full":
+            # The fix path needs local HEAD == PR head; the run left the
+            # working copy on the base branch, so check the run branch out
+            # and always return, whatever the loop does.
+            result = subprocess.run(
+                ["git", "checkout", integration.branch],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "post-PR stage: cannot check out the integration branch — skipped",
+                    branch=integration.branch,
+                    stderr=result.stderr.strip()[:200],
+                )
+                return
+            checked_out = True
+        code = cmd_review_pr(stage_args, config)
+        if code == EXIT_NEEDS_HUMAN:
+            print(
+                "🔍 post-PR review: comments await a human (see `spec-runner status`)",
+                file=sys.stderr,
+            )
+        logger.info("post-PR review stage finished", mode=mode, exit_code=code)
+    except Exception as exc:  # the stage must never break a finished run
+        logger.error("post-PR review stage failed", error=str(exc))
+    finally:
+        if checked_out:
+            back = subprocess.run(
+                ["git", "checkout", integration.base],
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if back.returncode != 0:
+                print(
+                    f"❌ post-PR review: could not return to '{integration.base}' "
+                    f"(working copy left on '{integration.branch}'):\n"
+                    f"   {back.stderr.strip()[:200]}",
+                    file=sys.stderr,
+                )
 
 
 def _announce_integration_pr(config: ExecutorConfig, pr_url: str) -> None:

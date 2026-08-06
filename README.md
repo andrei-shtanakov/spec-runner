@@ -358,6 +358,17 @@ notify_on: [run_complete, task_failed, state_degraded, pr_opened]
 webhook_url: ""                # Webhook URL (empty = disabled)
 webhook_template: '{"text": "{{event}}: {{message}}"}'
 
+# Review-bot loop (optional — spec-runner review-pr, issue #102)
+review_pr:
+  allowed_bots: [Copilot, "copilot-pull-request-reviewer[bot]"]
+  post_pr: off                 # off | verify | full — stage after integration_pr
+  post_pr_wait_seconds: 120    # let the review bot comment first
+  max_rounds: 3                # bounded rounds per PR (new head SHA = new round)
+  max_comments: 20
+  max_changed_lines: 300       # per-fix diff cap
+  max_cost_usd: 5.0
+  max_wall_minutes: 30
+
 # Compliance audit trail (optional — JSON Lines, opt-in)
 audit_log_path: ""             # e.g. "spec/.executor-audit.jsonl"; empty = disabled
 audit_log_operator: ""         # Override the auto-detected "user@host" tag

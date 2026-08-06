@@ -256,6 +256,11 @@ class ExecutorConfig:
     review_pr_max_changed_lines: int = 300  # per-fix diff size cap (insertions+deletions)
     review_pr_max_wall_minutes: int = 30  # per-invocation wall-clock cap
     review_pr_max_cost_usd: float = 5.0  # per-invocation fix-agent cost cap
+    # review-pr loop (#102, M3): optional post-PR stage after integration_pr.
+    # off (default — integration_pr behavior unchanged) | verify (read-only
+    # triage) | full (check out the run branch, run the fix+reply loop).
+    review_pr_post_pr: str = "off"
+    review_pr_post_pr_wait_seconds: int = 120  # let the review bot comment first
 
     # Generic webhook notifications
     webhook_url: str = ""  # Webhook URL (empty = disabled)
@@ -615,6 +620,10 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
                 "max_wall_minutes"
             ),
             "review_pr_max_cost_usd": (executor_config.get("review_pr") or {}).get("max_cost_usd"),
+            "review_pr_post_pr": (executor_config.get("review_pr") or {}).get("post_pr"),
+            "review_pr_post_pr_wait_seconds": (executor_config.get("review_pr") or {}).get(
+                "post_pr_wait_seconds"
+            ),
         }
     except Exception as e:
         from .logging import get_logger
