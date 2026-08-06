@@ -147,6 +147,17 @@ def print_status(config: ExecutorConfig) -> None:
                     print("      💡 Repeated failure across runs — review:")
                     print(f"         {config.logs_dir}/{ts.task_id}-*.log")
 
+        # review-pr (#102 M2): surface comments awaiting a human
+        from .review_pr import needs_human_rows
+
+        pending_reviews = needs_human_rows(config)
+        if pending_reviews:
+            print("\n🔍 review-pr — comments awaiting a human:")
+            for repo, pr_number, count in pending_reviews:
+                print(
+                    f"   ❓ {repo}#{pr_number}: {count} comment(s) — spec-runner review-pr {pr_number}"
+                )
+
         # Show tasks not yet in executor state
         if done_outside:
             print(f"\n✅ Done outside executor ({len(done_outside)}):")

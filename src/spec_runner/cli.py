@@ -1382,11 +1382,17 @@ def _build_parser() -> argparse.ArgumentParser:
     review_pr_parser = subparsers.add_parser(
         "review-pr",
         parents=[common],
-        help="Collect + verify review-bot comments on a PR (read-only M1, #102)",
+        help="Review-bot loop: collect, verify, fix valid, gate, push, reply (#102)",
     )
     review_pr_parser.add_argument("pr_ref", help="PR URL or bare number (number = this repo)")
     review_pr_parser.add_argument(
         "--json", dest="json_output", action="store_true", help="Machine-readable report"
+    )
+    review_pr_parser.add_argument(
+        "--verify-only",
+        dest="verify_only",
+        action="store_true",
+        help="Stop after per-comment verdicts — no fixes, no replies (read-only)",
     )
     review_pr_parser.add_argument(
         "--no-verify",

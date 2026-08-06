@@ -42,7 +42,7 @@ def _cfg(tmp_path: Path, **overrides) -> ExecutorConfig:
 
 
 def _args(**overrides) -> argparse.Namespace:
-    base: dict = {"pr_ref": "6", "json_output": False, "no_verify": False}
+    base: dict = {"pr_ref": "6", "json_output": False, "no_verify": False, "verify_only": False}
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -65,16 +65,33 @@ def _comment_payload(comment_id: int, author: str = "Copilot", body: str = "Bug 
     }
 
 
-def _gh_router(pr_state: str = "open", draft: bool = False, comments: list | None = None):
-    """Build a fake `_gh` answering the meta and comments endpoints."""
+def _gh_router(
+    pr_state: str = "open",
+    draft: bool = False,
+    comments: list | None = None,
+    head_sha: str = "abc123",
+    reply_log: list | None = None,
+    reply_rc: int = 0,
+):
+    """Build a fake `_gh` answering the meta, comments and reply endpoints."""
 
     def fake_gh(config, *args):
         joined = " ".join(args)
+        if "/replies" in joined:
+            if reply_log is not None:
+                reply_log.append(args)
+            return _proc(returncode=reply_rc, stderr="reply denied" if reply_rc else "")
         if joined.startswith("api repos/") and joined.endswith("/comments --paginate"):
             return _proc(stdout=json.dumps(comments or []))
         if joined.startswith("api repos/"):
             return _proc(
-                stdout=json.dumps({"state": pr_state, "draft": draft, "head": {"sha": "abc123"}})
+                stdout=json.dumps(
+                    {
+                        "state": pr_state,
+                        "draft": draft,
+                        "head": {"sha": head_sha, "ref": "feature-branch"},
+                    }
+                )
             )
         if joined.startswith("repo view"):
             return _proc(stdout=REPO + "\n")
@@ -162,7 +179,7 @@ class TestCmdReviewPr:
         )
         cfg = _cfg(tmp_path)
         with patch.object(rp, "verify_comment", side_effect=[("valid", "ev1"), ("refuted", "ev2")]):
-            code = cmd_review_pr(_args(), cfg)
+            code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         out = capsys.readouterr().out
         assert "2 bot comment(s), 2 new" in out
@@ -171,7 +188,7 @@ class TestCmdReviewPr:
     def test_uncertain_exits_needs_human(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
         with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
-            assert cmd_review_pr(_args(), _cfg(tmp_path)) == EXIT_NEEDS_HUMAN
+            assert cmd_review_pr(_args(verify_only=True), _cfg(tmp_path)) == EXIT_NEEDS_HUMAN
 
     def test_no_verify_leaves_unverified_and_needs_human(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
@@ -186,7 +203,7 @@ class TestCmdReviewPr:
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
         cfg = _cfg(tmp_path)
         with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as m1:
-            cmd_review_pr(_args(), cfg)
+            cmd_review_pr(_args(verify_only=True), cfg)
         assert m1.call_count == 1
 
         # Second run: same comment + one new
@@ -194,7 +211,7 @@ class TestCmdReviewPr:
             rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(9)])
         )
         with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as m2:
-            code = cmd_review_pr(_args(), cfg)
+            code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         assert m2.call_count == 1  # only comment 9
         assert m2.call_args.args[0].comment_id == 9
@@ -210,7 +227,7 @@ class TestCmdReviewPr:
             rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(2)])
         )
         with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as mock_verify:
-            code = cmd_review_pr(_args(), cfg)
+            code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         # Both the new comment AND the stranded one got verified
         verified_ids = {c.args[0].comment_id for c in mock_verify.call_args_list}
@@ -238,14 +255,21 @@ class TestCmdReviewPr:
     def test_json_report_shape(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
         with patch.object(rp, "verify_comment", return_value=("valid", "ev")):
-            code = cmd_review_pr(_args(json_output=True), _cfg(tmp_path))
+            code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
         assert code == EXIT_OK
         payload = json.loads(capsys.readouterr().out)
         assert payload["repo"] == REPO
         assert payload["pr_number"] == 6
         assert payload["head_sha"] == "abc123"
         assert payload["needs_human"] is False
-        assert payload["counts"] == {"valid": 1, "refuted": 0, "uncertain": 0, "unverified": 0}
+        assert payload["counts"] == {
+            "valid": 1,
+            "refuted": 0,
+            "uncertain": 0,
+            "unverified": 0,
+            "fixed": 0,
+            "replied": 0,
+        }
         assert payload["comments"][0]["comment_id"] == 1
         assert payload["comments"][0]["verdict"] == "valid"
 
@@ -261,7 +285,7 @@ class TestCmdReviewPr:
             return "valid", "trust me"
 
         with patch.object(rp, "verify_comment", side_effect=rogue_verifier):
-            code = cmd_review_pr(_args(), cfg)
+            code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_NEEDS_HUMAN
         with ReviewPrState(cfg) as st:
             row = st.rows(REPO, 6)[0]
@@ -320,3 +344,292 @@ class TestParserWiring:
         cfg_file.write_text("review_pr:\n  allowed_bots: [mybot]\n")
         cfg = build_config(load_config_from_yaml(cfg_file), argparse.Namespace(command="status"))
         assert cfg.review_pr_allowed_bots == ["mybot"]
+
+
+# --- M2: fix + reply -------------------------------------------------------
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=root, check=False)
+
+
+def _init_repo_with_remote(tmp_path: Path) -> tuple[Path, Path, str]:
+    """Local repo on `feature-branch` + a bare origin. Returns
+    (workdir, bare_remote, head_sha)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "feature-branch")
+    _git(work, "config", "user.email", "t@e.c")
+    _git(work, "config", "user.name", "T")
+    (work / "src.py").write_text("x = 1\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "init")
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    _git(work, "remote", "add", "origin", str(bare))
+    _git(work, "push", "-q", "origin", "feature-branch")
+    head = _git(work, "rev-parse", "HEAD").stdout.strip()
+    return work, bare, head
+
+
+def _m2_cfg(work: Path, **overrides) -> ExecutorConfig:
+    defaults: dict = {
+        "project_root": work,
+        "state_file": work / "state.db",
+        "logs_dir": work / "logs",
+        "run_tests_on_done": True,
+        "test_command": "true",
+        "run_lint_on_done": False,
+    }
+    defaults.update(overrides)
+    return ExecutorConfig(**defaults)
+
+
+def _fix_agent_factory(work: Path, content: str = "x = 2\n"):
+    """A fix agent that edits src.py and reports success."""
+
+    def agent(comment, evidence, repo, pr, config):
+        (work / "src.py").write_text(content)
+        return True, "changed x to 2", 0.01
+
+    return agent
+
+
+class TestApplyPhase:
+    def test_full_loop_fixes_pushes_and_replies(self, tmp_path, monkeypatch):
+        work, bare, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work)
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_OK
+
+        # Fix committed with provenance
+        log = _git(work, "log", "-1", "--format=%B").stdout
+        assert "Review-Comment-Id: 1" in log
+        # Pushed: remote tip == local tip
+        local = _git(work, "rev-parse", "HEAD").stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "feature-branch"], capture_output=True, text=True, cwd=bare
+        ).stdout.strip()
+        assert local == remote != head
+        # Replied with the actual SHA
+        assert len(reply_log) == 1
+        assert local in " ".join(reply_log[0])
+        with ReviewPrState(cfg) as st:
+            row = st.rows(REPO, 6)[0]
+        assert row["resolution"] == "fixed"
+        assert row["fix_sha"] == local
+        assert row["replied_at"]
+
+    def test_refuted_replies_without_commit(self, tmp_path, monkeypatch):
+        work, bare, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work)
+        with patch.object(rp, "verify_comment", return_value=("refuted", "disproven: test passes")):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_OK
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # no commit
+        assert len(reply_log) == 1
+        assert "disproven: test passes" in " ".join(reply_log[0])
+
+    def test_uncertain_gets_no_reply(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
+            code = cmd_review_pr(_args(), _m2_cfg(work))
+        assert code == EXIT_NEEDS_HUMAN
+        assert reply_log == []
+
+    def test_gate_failure_reverts_fix(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work, test_command="false")
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # reverted
+        assert (work / "src.py").read_text() == "x = 1\n"
+        assert reply_log == []
+        with ReviewPrState(cfg) as st:
+            assert st.rows(REPO, 6)[0]["resolution"] == "needs_human"
+
+    def test_diff_size_limit_reverts_fix(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        cfg = _m2_cfg(work, review_pr_max_changed_lines=1)
+        big = "".join(f"line{i} = {i}\n" for i in range(50))
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work, big)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head
+
+    def test_dirty_tree_fails_closed(self, tmp_path, monkeypatch, capsys):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        (work / "uncommitted.py").write_text("dirty\n")
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+            code = cmd_review_pr(_args(), _m2_cfg(work))
+        assert code == EXIT_FAIL
+        assert "not clean" in capsys.readouterr().out
+
+    def test_head_mismatch_fails_closed(self, tmp_path, monkeypatch, capsys):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        monkeypatch.setattr(
+            rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha="f" * 40)
+        )
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+            code = cmd_review_pr(_args(), _m2_cfg(work))
+        assert code == EXIT_FAIL
+        assert "check out the PR branch" in capsys.readouterr().out
+
+    def test_push_failure_publishes_no_replies(self, tmp_path, monkeypatch, capsys):
+        work, bare, head = _init_repo_with_remote(tmp_path)
+        _git(work, "remote", "set-url", "origin", str(tmp_path / "nonexistent.git"))
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work)
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_FAIL
+        assert reply_log == []
+        assert "push failed" in capsys.readouterr().out
+
+    def test_no_double_reply_on_rerun(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work)
+        with patch.object(rp, "verify_comment", return_value=("refuted", "no")):
+            assert cmd_review_pr(_args(), cfg) == EXIT_OK
+            assert cmd_review_pr(_args(), cfg) == EXIT_OK
+        assert len(reply_log) == 1  # replied_at guard held
+
+    def test_force_push_detected(self, tmp_path, monkeypatch, capsys):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        cfg = _m2_cfg(work)
+        with ReviewPrState(cfg) as st:
+            st.start_round(REPO, 6, "e" * 40)  # a SHA that is no ancestor
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_FAIL
+        assert "force-push" in capsys.readouterr().out
+
+    def test_round_limit_stops_fixes(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        # Two more real commits become past-round SHAs (ancestors of HEAD)
+        shas = []
+        for i in range(2):
+            (work / "src.py").write_text(f"x = {i + 10}\n")
+            _git(work, "add", "-A")
+            _git(work, "commit", "-q", "-m", f"round {i}")
+            shas.append(_git(work, "rev-parse", "HEAD").stdout.strip())
+        head = shas[-1]
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
+        cfg = _m2_cfg(work, review_pr_max_rounds=2)
+        with ReviewPrState(cfg) as st:
+            st.start_round(REPO, 6, shas[0])
+            st.start_round(REPO, 6, shas[1])
+        # current head == shas[1] → idempotent round insert keeps count at 2…
+        # simulate one MORE new head by using the first sha as "previous":
+        (work / "src.py").write_text("x = 99\n")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "-m", "round 3")
+        head3 = _git(work, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head3))
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent") as mock_fix,
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        mock_fix.assert_not_called()
+
+    def test_deleted_comment_marked(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        cfg = _m2_cfg(work)
+        # Stored earlier with a verdict, but the PR no longer has it
+        with ReviewPrState(cfg) as st:
+            st.record(REPO, 6, head, BotComment(77, "Copilot", "src.py", 1, "gone", "@@", "u"))
+            st.set_verdict(REPO, 6, 77, "valid", "ev")
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[], head_sha=head))
+        code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        with ReviewPrState(cfg) as st:
+            assert st.rows(REPO, 6)[0]["resolution"] == "deleted"
+
+    def test_comment_limit_stops_everything(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        payload = [_comment_payload(i) for i in range(1, 4)]
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=payload, head_sha=head))
+        cfg = _m2_cfg(work, review_pr_max_comments=2)
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "run_fix_agent") as mock_fix,
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        mock_fix.assert_not_called()
+
+
+class TestStatusSurfacing:
+    def test_needs_human_rows(self, tmp_path):
+        from spec_runner.review_pr import needs_human_rows
+
+        cfg = _cfg(tmp_path)
+        with ReviewPrState(cfg) as st:
+            st.record(REPO, 6, "abc", BotComment(1, "Copilot", "x", 1, "b", "@@", "u"))
+            st.set_verdict(REPO, 6, 1, "uncertain", "?")
+            st.record(REPO, 6, "abc", BotComment(2, "Copilot", "x", 2, "b", "@@", "u"))
+            st.set_verdict(REPO, 6, 2, "valid", "ev")
+            st.set_resolution(REPO, 6, 2, "needs_human")
+            st.record(REPO, 6, "abc", BotComment(3, "Copilot", "x", 3, "b", "@@", "u"))
+            st.set_verdict(REPO, 6, 3, "refuted", "no")
+            st.set_resolution(REPO, 6, 3, "refuted")
+        assert needs_human_rows(cfg) == [(REPO, 6, 2)]
+
+    def test_no_state_file_is_empty(self, tmp_path):
+        from spec_runner.review_pr import needs_human_rows
+
+        assert needs_human_rows(_cfg(tmp_path)) == []
