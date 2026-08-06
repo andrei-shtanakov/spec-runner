@@ -10,6 +10,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.18.0] — 2026-08-06
+
+Phase M1 of the review-bot loop (issue #102): the read-only
+`review-pr` command ships; fix/reply (M2) and the post-PR stage (M3)
+follow. The Maestro interop contract is unchanged — the new
+`pr_review_comments` state table is experimental and additive.
+
 ### Added
 
 - **`spec-runner review-pr <url-or-number>` — phase M1 of the review-bot
@@ -933,7 +940,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.15.0...v2.16.0
 [2.15.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.14.0...v2.15.0
