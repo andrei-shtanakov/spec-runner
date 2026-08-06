@@ -243,6 +243,13 @@ class ExecutorConfig:
         default_factory=lambda: ["run_complete", "task_failed", "state_degraded", "pr_opened"]
     )
 
+    # review-pr loop (#102, M1): bot identities whose PR comments the loop
+    # may process. Comments from anyone else — including humans — are
+    # ignored, never verified and (in later phases) never answered.
+    review_pr_allowed_bots: list[str] = field(
+        default_factory=lambda: ["Copilot", "copilot-pull-request-reviewer[bot]"]
+    )
+
     # Generic webhook notifications
     webhook_url: str = ""  # Webhook URL (empty = disabled)
     webhook_method: str = "POST"  # HTTP method
@@ -591,6 +598,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "spec_profile": executor_config.get("spec_profile"),
             "spec_context": executor_config.get("spec_context"),
             "spec_rules": executor_config.get("spec_rules"),
+            "review_pr_allowed_bots": (executor_config.get("review_pr") or {}).get("allowed_bots"),
         }
     except Exception as e:
         from .logging import get_logger

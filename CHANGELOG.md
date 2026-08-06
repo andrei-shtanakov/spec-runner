@@ -10,6 +10,23 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner review-pr <url-or-number>` — phase M1 of the review-bot
+  loop** (issue #102, battle-testing F-22; design:
+  `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md`; PR #110).
+  Read-only: collects inline PR comments from allowed bot identities
+  (`review_pr.allowed_bots` config, default Copilot), verifies each against
+  the codebase with an agent call, persists per-comment verdicts
+  (`valid`/`refuted`/`uncertain`) in a new `pr_review_comments` table — the
+  durable cursor makes re-invocations resume instead of re-processing — and
+  prints a text or `--json` report. Fail-closed throughout: draft/closed
+  PRs and API errors exit 1; missing verdict markers and verifiers that
+  mutate the working tree become `uncertain`; any uncertain/unverified
+  comment exits 2 (`NEEDS_HUMAN`). Stable exit-code contract (0/1/2) for
+  external callers (the future Maestro hook). No fixes, no replies, no
+  pushes in M1.
+
 ## [2.17.0] — 2026-08-06
 
 Battle-testing round 4 (kapelle TASK-007 on v2.16.0, run d4d33ad0):
