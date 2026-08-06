@@ -138,6 +138,19 @@ class TestParseVerdict:
         assert v == "uncertain"
         assert "No VERDICT marker" in e
 
+    def test_evidence_pairs_with_last_verdict(self):
+        """When the agent revises mid-answer, verdict AND evidence must
+        both come from the final block — no mismatched pairs."""
+        out = (
+            "VERDICT: VALID\nEVIDENCE: looked plausible at first\n"
+            "Wait — re-checking...\n"
+            "VERDICT: REFUTED\nEVIDENCE: ran the test, it passes on line 10"
+        )
+        v, e = parse_verdict(out)
+        assert v == "refuted"
+        assert "ran the test" in e
+        assert "plausible" not in e
+
     def test_empty_output_is_uncertain(self):
         assert parse_verdict("")[0] == "uncertain"
 
@@ -185,6 +198,25 @@ class TestCmdReviewPr:
         assert code == EXIT_OK
         assert m2.call_count == 1  # only comment 9
         assert m2.call_args.args[0].comment_id == 9
+
+    def test_no_verify_then_resume_verifies_stranded_comments(self, tmp_path, monkeypatch):
+        """A --no-verify collection run must not strand comments: the next
+        run without the flag verifies the previously collected ones."""
+        monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
+        cfg = _cfg(tmp_path)
+        assert cmd_review_pr(_args(no_verify=True), cfg) == EXIT_NEEDS_HUMAN
+
+        monkeypatch.setattr(
+            rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(2)])
+        )
+        with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as mock_verify:
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_OK
+        # Both the new comment AND the stranded one got verified
+        verified_ids = {c.args[0].comment_id for c in mock_verify.call_args_list}
+        assert verified_ids == {1, 2}
+        with ReviewPrState(cfg) as st:
+            assert st.unverified_ids(REPO, 6) == set()
 
     def test_draft_pr_fails_closed(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(draft=True))

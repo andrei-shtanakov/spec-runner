@@ -177,6 +177,16 @@ class ReviewPrState:
         ).fetchall()
         return {r[0] for r in rows}
 
+    def unverified_ids(self, repo: str, pr_number: int) -> set[int]:
+        """Collected comments with no verdict yet (e.g. from a --no-verify
+        run) — a later run must pick these up, not strand them."""
+        rows = self._conn.execute(
+            "SELECT comment_id FROM pr_review_comments "
+            "WHERE repo = ? AND pr_number = ? AND verdict IS NULL",
+            (repo, pr_number),
+        ).fetchall()
+        return {r[0] for r in rows}
+
     def record(self, repo: str, pr_number: int, head_sha: str, comment: BotComment) -> None:
         with self._conn:
             self._conn.execute(
@@ -266,15 +276,20 @@ def parse_verdict(output: str) -> tuple[str, str]:
     """Extract (verdict, evidence) from verifier output.
 
     Fail-closed: no marker or an unknown one → ``uncertain`` (a human
-    decides), never a guessed verdict.
+    decides), never a guessed verdict. The LAST verdict marker wins (an
+    agent may revise mid-answer), so the evidence is taken from the last
+    ``EVIDENCE:`` block too — pairing a final verdict with an earlier
+    draft's evidence would be misleading.
     """
     matches = re.findall(r"VERDICT:\s*(VALID|REFUTED|UNCERTAIN)", output, re.IGNORECASE)
     if not matches:
         tail = output.strip()[-200:] if output.strip() else "(empty output)"
         return VERDICT_UNCERTAIN, f"No VERDICT marker in verifier output; tail: {tail}"
     verdict = matches[-1].lower()
-    m = re.search(r"EVIDENCE:\s*(.+)", output, re.IGNORECASE | re.DOTALL)
-    evidence = m.group(1).strip()[:2000] if m else ""
+    evidence_blocks = re.findall(
+        r"EVIDENCE:\s*(.+?)(?=\nVERDICT:|\Z)", output, re.IGNORECASE | re.DOTALL
+    )
+    evidence = evidence_blocks[-1].strip()[:2000] if evidence_blocks else ""
     return verdict, evidence
 
 
@@ -377,18 +392,26 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
         with ReviewPrState(config) as state:
             known = state.known_ids(repo, pr_number)
             new = [c for c in comments if c.comment_id not in known]
+            # Comments collected earlier without a verdict (a --no-verify
+            # run, or a crash mid-verification) are re-queued — the cursor
+            # skips re-COLLECTING, never re-VERIFYING what has no verdict.
+            pending_ids = state.unverified_ids(repo, pr_number)
+            pending = [c for c in comments if c.comment_id in pending_ids]
             logger.info(
                 "review-pr collected",
                 repo=repo,
                 pr=pr_number,
                 total=len(comments),
                 new=len(new),
+                pending_unverified=len(pending),
                 allowed_bots=allowed,
             )
 
-            baseline = _worktree_fingerprint(config)
             for comment in new:
                 state.record(repo, pr_number, meta["head_sha"], comment)
+
+            baseline = _worktree_fingerprint(config)
+            for comment in new + pending:
                 if getattr(args, "no_verify", False):
                     continue
                 verdict, evidence = verify_comment(comment, repo, pr_number, config)
