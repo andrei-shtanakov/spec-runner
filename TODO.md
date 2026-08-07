@@ -4,10 +4,13 @@
 > Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
 > Актуальный статус: `../prograph-vault/authored/notes/status/2026-07-08-status.md`
 >
-> Открытые пункты размечены инлайн-тегами `@owner:` / `@blocked_by:` / `@trigger:` по
-> формату из `../_cowork_output/2026-07-26-plan-fields-and-todo-coverage-handoff.md` §3.
-> Теги опциональны и исключены из ключа идентичности пункта в Robin (robin-runtime#27),
-> отсутствие тега значит «неизвестно» — придумывать значение не надо.
+> Пункты размечаются на строке чекбокса тегами `@owner:<principal>` /
+> `@blocked_by:<reference>` / `@trigger:"…"` / `@id:<node-id>`. Канонические
+> владельцы: `github:<login>`, `github-team:<org>/<team>`,
+> `repo:<manifest-key>` или `TBD`; отсутствующий `@owner` (`missing`) отличается
+> от явно отложенного `@owner:TBD`. Канонический блокер —
+> `todo://<repo>/<id>`, legacy `<repo>#<slug>` поддерживается переходно. Теги
+> исключены из ключа идентичности пункта в Robin (robin-runtime#27).
 
 ## Текущее состояние
 - ✅ **v2.11.0 зарелижен 2026-07-26** (PyPI + GitHub Release, тег `v2.11.0`, release commit
@@ -79,34 +82,34 @@
 
 ### Входящие (ADR-ECO-006)
 
-- [x] **review-pr-json-purity** (inbox spec-runner#116, from maestro#post-pr-command):
+- [x] **review-pr-json-purity** (inbox spec-runner#116, from maestro#post-pr-command): @owner:github:andrei-shtanakov @id:review-pr-json-purity
       при `--json` stdout несёт ровно один JSON-документ на всех путях выхода (0/1/2),
       диагностика — только в stderr. Было: пути лимитов (`_apply_phase`) и fail-closed
       печатали текст в stdout, а на exit 1 JSON не эмитился вовсе. Добавлен `exit_code`
       в payload (self-describing отчёт для audit-таблицы maestro). Приёмка проверена
       вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
-      Тесты: `TestJsonStdoutPurity` (6) (PR #117) @owner:andrei
+      Тесты: `TestJsonStdoutPurity` (6) (PR #117)
 
 ### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 4/4 отгружено
 (#101/#103/#104 — в v2.17.0; #102 — цикл `review-pr` M1/M2/M3 в v2.18.0–v2.20.0)
 
 Четыре находки прогона TASK-007 на kapelle (F-21…F-24).
 
-- [x] **#103 commit-provenance** — весь код фичи уезжал в коммит «code review fixes»,
+- [x] **#103 commit-provenance** — весь код фичи уезжал в коммит «code review fixes», @owner:github:andrei-shtanakov @id:commit-provenance
       таск-коммит получал только флип чекбокса в tasks.md (история лжёт о происхождении
       кода). Фикс: exec-работа коммитится под таск-лейблом ДО review; review-коммит несёт
       только свою дельту; no_op-детекция (#97) учитывает pre-review коммит.
-      Тесты: `test_commit_provenance.py` (PR #105) @owner:andrei
-- [x] **#104 run-summary-delta** — `Execution summary completed=2` на однозадачном ране:
+      Тесты: `test_commit_provenance.py` (PR #105)
+- [x] **#104 run-summary-delta** — `Execution summary completed=2` на однозадачном ране: @owner:github:andrei-shtanakov @id:run-summary-delta
       summary печатал кумулятивные счётчики executor_meta как итог рана (то же в
       run_complete-нотификации, audit-записи и failed_attempts). Фикс: снапшот до рана,
-      в summary — дельта. Тесты: `test_run_summary.py` (PR #106) @owner:andrei
-- [x] **#101 pr-opened-notification** — human-merge-гейт зависел от смотрящего в терминал.
+      в summary — дельта. Тесты: `test_run_summary.py` (PR #106)
+- [x] **#101 pr-opened-notification** — human-merge-гейт зависел от смотрящего в терминал. @owner:github:andrei-shtanakov @id:pr-opened-notification
       Наша сторона: событие `pr_opened` в существующем notify-механизме
       (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
       Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
-      за экосистемой (PR #107) @owner:andrei
-- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
+      за экосистемой (PR #107)
+- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в @owner:github:andrei-shtanakov @id:review-bot-loop
       spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
       + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
       оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
@@ -119,31 +122,31 @@
       uncertain→human, TDD-фиксы отдельными коммитами с provenance, гейты до push, ответ
       только после push с SHA, лимиты на всё, fail-closed, no auto-merge/approve) и фазами
       M1 read-only → M2 fix+reply → M3 wiring:
-      `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` @owner:andrei
+      `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md`
       **Закрыт 2026-08-06**: M1/M2/M3 отгружены в v2.18.0/v2.19.0/v2.20.0, issue #102
       закрыт мержем PR #114; follow-up по границе caller-контракта — PR #119;
       блокер потребителя снят в v2.21.0 (inbox #116).
-  - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots
+  - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots @owner:github:andrei-shtanakov @id:review-pr-m1
         фильтр) → verify (агент, fail-closed к uncertain, вердикт аннулируется
         при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
         в таблице `pr_review_comments`; exit-контракт 0/1/2. Тесты:
-        `test_review_pr.py` (26) (PR #110) @owner:andrei
-  - [x] **M2 (fix + reply)**: `_apply_phase` — TDD-фиксы отдельными коммитами
+        `test_review_pr.py` (26) (PR #110)
+  - [x] **M2 (fix + reply)**: `_apply_phase` — TDD-фиксы отдельными коммитами @owner:github:andrei-shtanakov @id:review-pr-m2
         с трейлером `Review-Comment-Id`, гейты после каждой мутации (красный
         гейт откатывает фикс), один push, ответы в тредах только после
         успешного push (fix SHA / evidence опровержения), `uncertain` — никогда
         не отвечаем; лимиты rounds/comments/lines/cost/wall → NEEDS_HUMAN;
         fail-closed на dirty tree/head mismatch/force-push/push failure;
         `[no-op]`-стиль индикация в `status` (needs_human_rows). Тесты:
-        `TestApplyPhase` (12) + `TestStatusSurfacing` (PR #112) @owner:andrei
-  - [x] **M3 (wiring)**: `review_pr.post_pr: off|verify|full` (дефолт off —
+        `TestApplyPhase` (12) + `TestStatusSurfacing` (PR #112)
+  - [x] **M3 (wiring)**: `review_pr.post_pr: off|verify|full` (дефолт off — @owner:github:andrei-shtanakov @id:review-pr-m3
         integration_pr без конфигурации байт-в-байт прежний); verify = read-only
         триаж, full = checkout run-ветки → полный цикл → всегда возврат на base;
         `post_pr_wait_seconds` даёт боту время откомментировать; стадия не меняет
         exit-статус рана. Контракт внешнего вызова (0/1/2 + --json + предусловия
         mutating-режима) задокументирован в дизайн-доке; потребление отслеживается
         снаружи как maestro#147 / todo://maestro/post-pr-command.
-        Тесты: `test_post_pr_stage.py` (8). **#102 закрыт** (PR #114) @owner:andrei
+        Тесты: `test_post_pr_stage.py` (8). **#102 закрыт** (PR #114)
 
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
 
@@ -153,20 +156,20 @@
 Maestro может дропнуть per-workstream workaround со `spec/.gitignore` в scope
 после пина spec-runner >= 2.16.
 
-- [x] **#96 harness-gitignore-out-of-autocommit** — `spec/.gitignore` (запись #62)
+- [x] **#96 harness-gitignore-out-of-autocommit** — `spec/.gitignore` (запись #62) @owner:github:andrei-shtanakov @id:harness-gitignore-out-of-autocommit
       попадал в первый auto-commit сабтаска; maestro ex-post scope gate валил
       зелёные workstream'ы в NEEDS_REVIEW. Фикс: `stage_all_except_runtime`
       исключает файл из commit set, когда он не трекается в HEAD
       (harness-created); юзерский трекаемый файл ведёт себя по-старому и
-      никогда не удаляется. Регресс: `TestHarnessGitignoreNotCommitted` (PR #98) @owner:andrei
-- [x] **#97 noop-completion-marker** — no-op задача (работа поглощена соседними
+      никогда не удаляется. Регресс: `TestHarnessGitignoreNotCommitted` (PR #98)
+- [x] **#97 noop-completion-marker** — no-op задача (работа поглощена соседними @owner:github:andrei-shtanakov @id:noop-completion-marker
       сабтасками, «No changes to commit») выглядела как недоделанная: maestro
       показывал «DONE 4/5», оператор шёл в git-археологию. Проверено репро
       (обычный и worktree-сценарий): в state DB задача ФИКСИРУЕТСЯ success —
       «not-done» был гонкой чтения на стороне maestro (maestro#122, финальный
       опрос). Наша часть: явный маркер — колонка `attempts.no_op`, `"no_op": true`
       в `--json-result` (аддитивно, только когда true), `[no-op]` в `status`.
-      Тесты: `test_noop_marker.py` + golden `json-result-single-noop.json` (PR #99) @owner:andrei
+      Тесты: `test_noop_marker.py` + golden `json-result-single-noop.json` (PR #99)
 
 ### C2: SpecMeta contract v2 (`owner_role` + `SPEC_META_CONTRACT`) — ✅ отгружен в v2.11.0
 
@@ -190,7 +193,7 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 - [x] `docs/CONTRACTS.md` создан: матрица полей, семантика `approved_by`/`generated_by`, политика бампа (`bede398`)
 - [x] Golden-фикстура в package data (`spec_runner.contract_fixtures`) + round-trip тест (`bede398`)
 - [x] `upstream_hashes` и любые чужие ключи сохраняются через `SpecMeta.extra` losslessly — шире, чем просили (`d3626c5`, `b1346d2`)
-- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:andrei
+- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:github:andrei-shtanakov @id:steward-specmeta-v2-handoff
 
 #### Follow-up: форма `owner_role` устарела по DEC-007 (найдено 2026-07-26, после релиза)
 
@@ -208,11 +211,11 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 **Но v2.11.0 уехал с отменённой формой в документации**, и golden-фикстура шипуется как
 package data именно для сверки потребителями — то есть вводит в заблуждение активно.
 
-- [ ] `docs/CONTRACTS.md:104` — переписать описание `owner_role` под singular slug без `@`; сослаться на DEC-007 и `steward/profiles/roles.yaml` как SSOT формы @owner:andrei
-- [ ] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md:15` — `owner_role: '@platform,@sre'` → одиночный slug @owner:andrei
-- [ ] `src/spec_runner/spec.py:198` — инлайн-комментарий `# CODEOWNERS role(s), "@role[,@role]"` под ту же форму @owner:andrei
-- [ ] Решить, резать ли 2.11.1 ради того, чтобы исправленная фикстура доехала до потребителей, или ждать следующего релиза @owner:andrei @trigger:"фикстура — package data, потребители сверяются с ней"
-- [ ] Обновить заметку vault'а после фикса — сейчас она велит steward игнорировать примеры из фикстуры v2.11.0 @owner:andrei @blocked_by:spec-runner#dec007-doc-fix
+- [ ] `docs/CONTRACTS.md:104` — переписать описание `owner_role` под singular slug без `@`; сослаться на DEC-007 и `steward/profiles/roles.yaml` как SSOT формы @owner:github:andrei-shtanakov @id:dec007-doc-fix
+- [ ] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md:15` — `owner_role: '@platform,@sre'` → одиночный slug @owner:github:andrei-shtanakov @id:dec007-fixture
+- [ ] `src/spec_runner/spec.py:198` — инлайн-комментарий `# CODEOWNERS role(s), "@role[,@role]"` под ту же форму @owner:github:andrei-shtanakov @id:dec007-inline-comment
+- [ ] Решить, резать ли 2.11.1 ради того, чтобы исправленная фикстура доехала до потребителей, или ждать следующего релиза @owner:github:andrei-shtanakov @trigger:"фикстура — package data, потребители сверяются с ней" @id:dec007-patch-release-decision
+- [ ] Обновить заметку vault'а после фикса — сейчас она велит steward игнорировать примеры из фикстуры v2.11.0 @owner:github:andrei-shtanakov @blocked_by:spec-runner#dec007-doc-fix @id:dec007-vault-note-update
 
 ### Дотегать и опубликовать v2.10.0 (2026-07-26)
 
@@ -241,12 +244,12 @@ package data именно для сверки потребителями — т�
 перед субкомандой, то есть настройка `spec-runner.specPrefix` сейчас не работает вообще.
 Причина (2): семейство `spec` (`cli.py:1235`+) не отнаследовано от `common` и флага не имеет.
 
-- [x] Починить проглатывание флага перед субкомандой (2026-08-05: SUPPRESS-вариант) @owner:andrei
-- [x] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` (2026-08-05) @owner:andrei
-- [x] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство (2026-08-05, `TestSpecPrefixFlagPositions`, 10 тестов) @owner:andrei
-- [x] Handoff vscode не нужен как обход: флаг починен на нашей стороне, их порядок argv
+- [x] Починить проглатывание флага перед субкомандой (2026-08-05: SUPPRESS-вариант) @owner:github:andrei-shtanakov @id:spec-prefix-swallow
+- [x] Дать `--spec-prefix` семейству `spec status/approve/reject/adopt/check` (2026-08-05) @owner:github:andrei-shtanakov @id:spec-prefix-spec-family
+- [x] Регресс-тесты в `tests/test_spec_prefix.py`: обе позиции флага + `spec`-семейство (2026-08-05, `TestSpecPrefixFlagPositions`, 10 тестов) @owner:github:andrei-shtanakov @id:spec-prefix-regression-tests
+- [x] Handoff vscode не нужен как обход: флаг починен на нашей стороне, их порядок argv @owner:github:andrei-shtanakov @id:spec-prefix-vscode-handoff
       (флаг перед субкомандой) теперь работает как есть; ре-вендор схем шёл отдельно
-      (spec-runner-vscode#16, влит 2026-08-05) @owner:andrei
+      (spec-runner-vscode#16, влит 2026-08-05)
 
 ### Observability (`spec_runner.obs`) — reference-имплементация ecosystem-контракта
 
@@ -266,7 +269,7 @@ package data именно для сверки потребителями — т�
 Дальнейшие шаги:
 - [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `../prograph-vault/authored/notes/status/2026-05-22-status.md`.
 - [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
-- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:andrei @blocked_by:maestro#log-schema-metrics @trigger:"в log-schema.json появилась секция метрик"
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:github:andrei-shtanakov @blocked_by:maestro#log-schema-metrics @trigger:"в log-schema.json появилась секция метрик" @id:obs-runtime-metrics
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
@@ -362,7 +365,7 @@ doctor влит в master 2026-06-11 (PR #14, `79d4607`) и опубликова
 а `pre_start` следующей задачи: `git checkout -- .` + `git clean -fd --exclude=spec/`
 (hooks.py ~108-117) затирает незакоммиченную работу предыдущей задачи при
 `create_git_branch=True` + `auto_commit=False`. Низкий приоритет (ниша `--no-commit`).
-- [ ] Решить: при `auto_commit=False` не чистить рабочее дерево / не создавать ветку, @owner:andrei
+- [ ] Решить: при `auto_commit=False` не чистить рабочее дерево / не создавать ветку, @owner:github:andrei-shtanakov @id:no-commit-work-loss
       либо документировать, что `--no-commit` подразумевает `--no-branch`.
 
 ---
