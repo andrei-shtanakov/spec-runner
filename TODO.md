@@ -87,7 +87,8 @@
       вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
       Тесты: `TestJsonStdoutPurity` (6) (PR #117) @owner:andrei
 
-### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 3/4 отгружено в v2.17.0 (#102 ждёт решения владельца)
+### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 4/4 отгружено
+(#101/#103/#104 — в v2.17.0; #102 — цикл `review-pr` M1/M2/M3 в v2.18.0–v2.20.0)
 
 Четыре находки прогона TASK-007 на kapelle (F-21…F-24).
 
