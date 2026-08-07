@@ -87,7 +87,8 @@
       вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
       Тесты: `TestJsonStdoutPurity` (6) (PR #117) @owner:andrei
 
-### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 3/4 отгружено в v2.17.0 (#102 ждёт решения владельца)
+### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 4/4 отгружено
+(#101/#103/#104 — в v2.17.0; #102 — цикл `review-pr` M1/M2/M3 в v2.18.0–v2.20.0)
 
 Четыре находки прогона TASK-007 на kapelle (F-21…F-24).
 
@@ -105,7 +106,7 @@
       (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
       Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
       за экосистемой (PR #107) @owner:andrei
-- [ ] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
+- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
       spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
       + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
       оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
@@ -119,6 +120,9 @@
       только после push с SHA, лимиты на всё, fail-closed, no auto-merge/approve) и фазами
       M1 read-only → M2 fix+reply → M3 wiring:
       `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` @owner:andrei
+      **Закрыт 2026-08-06**: M1/M2/M3 отгружены в v2.18.0/v2.19.0/v2.20.0, issue #102
+      закрыт мержем PR #114; follow-up по границе caller-контракта — PR #119;
+      блокер потребителя снят в v2.21.0 (inbox #116).
   - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots
         фильтр) → verify (агент, fail-closed к uncertain, вердикт аннулируется
         при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
