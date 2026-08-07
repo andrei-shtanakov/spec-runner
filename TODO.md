@@ -105,7 +105,7 @@
       (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
       Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
       за экосистемой (PR #107) @owner:andrei
-- [ ] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
+- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
       spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
       + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
       оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
@@ -119,6 +119,9 @@
       только после push с SHA, лимиты на всё, fail-closed, no auto-merge/approve) и фазами
       M1 read-only → M2 fix+reply → M3 wiring:
       `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` @owner:andrei
+      **Закрыт 2026-08-06**: M1/M2/M3 отгружены в v2.18.0/v2.19.0/v2.20.0, issue #102
+      закрыт мержем PR #114; follow-up по границе caller-контракта — PR #119;
+      блокер потребителя снят в v2.21.0 (inbox #116).
   - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots
         фильтр) → verify (агент, fail-closed к uncertain, вердикт аннулируется
         при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
