@@ -48,19 +48,19 @@ after `integration_pr` simply invokes it.
 | When and for which PR to run it | lifecycle owner (spec-runner post-PR stage, or Maestro) |
 | Approval policy | Maestro `approver_cmd` (maestro#137) — never this command |
 
-Maestro later gets a thin hook —
-`PR_CREATED → external post_pr_command → PR_REVIEWED / NEEDS_REVIEW` —
-and can invoke the same `spec-runner review-pr` without re-implementing the
-loop. One mechanism serves both modes without turning Maestro into a
-GitHub-review client.
+One mechanism serves both modes: an external orchestrator invokes the same
+`spec-runner review-pr` instead of re-implementing the loop, and never has
+to become a GitHub-review client. **How** it invokes it — and what it does
+with the outcome — is that consumer's design, not this document's (see
+"External caller contract" below).
 
 ## Why not inline in `run`
 
 Review bots are asynchronous: comments may appear minutes later, again
 after a push, or never. Inlining a poll into `run` would turn it into a
 long-lived fragile process. Instead the command is a **durable state
-machine** that can be invoked repeatedly (by an operator, a cron, a
-Maestro hook) and resumes from persisted state:
+machine** that can be invoked repeatedly (by an operator, a cron, an
+external orchestrator) and resumes from persisted state:
 
 ```
 WAITING_REVIEW
@@ -107,18 +107,27 @@ pattern from `attempts.no_op`).
 
 ## External caller contract (M3)
 
-Anyone driving the loop from outside — an operator script, cron, or
-Maestro's future ``PR_CREATED → post_pr_command → PR_REVIEWED/NEEDS_REVIEW``
-hook — invokes the same command and reads two stable surfaces:
+This section is the whole of what spec-runner promises to an external
+caller. It deliberately says nothing about how any particular consumer
+invokes the command or maps its outcome — that belongs to the consumer
+(see the pointer at the end).
 
-- **Exit code**: ``0`` complete (every comment fixed-or-refuted AND
-  replied; in ``--verify-only`` mode: every comment verified
-  valid/refuted), ``1`` fail-closed (draft/closed PR, API failure, dirty
-  tree, head-SHA mismatch, force-push, push failure — nothing was
-  published), ``2`` NEEDS_HUMAN (uncertain/unverified/limit-stopped/
-  deleted comments; safe to re-invoke after human action or a new bot
-  round). The command is idempotent — re-invocation resumes from
-  persisted state and never replies twice.
+Invocation: ``spec-runner review-pr <url-or-number> --json``. Two stable
+surfaces:
+
+- **Exit code**:
+  - ``0`` — processing complete (every comment fixed-or-refuted AND
+    replied; in ``--verify-only`` mode: every comment verified
+    valid/refuted).
+  - ``1`` — infrastructure or protocol failure, **not** a review verdict
+    (draft/closed PR, API failure, dirty tree, head-SHA mismatch,
+    force-push, push failure). Nothing was published.
+  - ``2`` — a human decision is required (uncertain, unverified,
+    limit-stopped or deleted comments). Re-invocation is safe.
+
+  Persisted state makes re-invocation idempotent: the loop resumes where
+  it stopped, never re-verifies what already has a verdict, and never
+  replies to a comment twice.
 - **``--json`` report**: per-comment ``verdict``/``resolution``/
   ``fix_sha``/``replied_at``, counts, a top-level ``needs_human`` boolean,
   and ``exit_code`` (mirrors the process exit code, so a stored report is
@@ -130,8 +139,24 @@ hook — invokes the same command and reads two stable surfaces:
   ``{repo, pr_number, error, exit_code}`` with ``repo``/``pr_number``
   ``null`` when the ref could not be resolved.
 
-A Maestro hook maps exits ``0 → PR_REVIEWED`` and ``2 → NEEDS_REVIEW``;
-``1`` is an infrastructure failure to surface, not a review outcome.
+Precondition for the mutating mode (anything other than the read-only
+``--verify-only`` and ``--no-verify`` modes): a clean checkout with local
+``HEAD`` equal to the PR head. Otherwise the command fail-closes with exit
+``1`` before touching anything.
+
+**Known consumer: Maestro.** Its invocation, lifecycle, persistence and
+outcome-mapping semantics are owned by Maestro — see maestro#147 and the
+accepted ``post-pr-command`` track. They are not part of this contract.
+The link is deliberately a pointer, not a copy: restating a neighbour's
+lifecycle here is how this document went stale within a day of being
+written.
+
+A pinned JSON schema is **not** part of this arrangement today. While a
+consumer only invokes the CLI behind a version gate, the stable public
+contract above plus that pointer are enough. If the ``--json`` envelope
+ever becomes a formally validated cross-repo contract, spec-runner owns
+the schema and consumers vendor a pinned copy — the rule this repo already
+follows for the Maestro state/interop schemas.
 
 The optional **post-PR stage** wires the same call into spec-runner's own
 ``integration_pr`` flow: ``review_pr.post_pr: off | verify | full``
@@ -152,7 +177,7 @@ lives in the loop's own report, the persisted state, and ``status``.
 - **M2 — fix + reply:** TDD fixes, gate re-runs, push, thread replies,
   bounded rounds, `NEEDS_HUMAN` surfacing in `status`.
 - **M3 — wiring:** optional post-PR stage after `integration_pr`; document
-  the exit-code contract for external callers (the future Maestro hook).
+  the exit-code contract for external callers.
 
 ## Non-goals
 

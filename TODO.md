@@ -107,9 +107,11 @@
       за экосистемой (PR #107) @owner:andrei
 - [ ] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в
       spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
-      + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); Maestro
-      позже получит тонкий hook `PR_CREATED → post_pr_command → PR_REVIEWED/NEEDS_REVIEW`
-      и вызовет ту же команду. Граница: transport+verify/fix/reply loop → spec-runner;
+      + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
+      оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
+      стороне Maestro отслеживается снаружи: maestro#147 / todo://maestro/post-pr-command
+      (форма, lifecycle и маппинг исхода — их канон, не наш).
+      Граница: transport+verify/fix/reply loop → spec-runner;
       когда/для какого PR → владелец lifecycle; approval policy → maestro approver_cmd
       (maestro#137, не смешивать approval с mutation). Дизайн-док с state machine,
       нормативными ограничениями (opt-in, allowed bots, verdict valid/refuted/uncertain,
@@ -134,8 +136,9 @@
         integration_pr без конфигурации байт-в-байт прежний); verify = read-only
         триаж, full = checkout run-ветки → полный цикл → всегда возврат на base;
         `post_pr_wait_seconds` даёт боту время откомментировать; стадия не меняет
-        exit-статус рана. Контракт внешнего вызова (0/1/2 + --json, маппинг для
-        maestro-хука PR_REVIEWED/NEEDS_REVIEW) задокументирован в дизайн-доке.
+        exit-статус рана. Контракт внешнего вызова (0/1/2 + --json + предусловия
+        mutating-режима) задокументирован в дизайн-доке; потребление отслеживается
+        снаружи как maestro#147 / todo://maestro/post-pr-command.
         Тесты: `test_post_pr_stage.py` (8). **#102 закрыт** (PR #114) @owner:andrei
 
 ### Battle-testing S2 round 3 — новые находки (issues от 2026-08-05) — ✅ отгружено в v2.16.0
