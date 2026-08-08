@@ -4,13 +4,15 @@
 > Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
 > Актуальный статус: `../prograph-vault/authored/notes/status/2026-07-08-status.md`
 >
-> Пункты размечаются на строке чекбокса тегами `@owner:<principal>` /
+> Пункты могут быть размечены опциональными тегами на строке чекбокса:
+> `@owner:<principal>` /
 > `@blocked_by:<reference>` / `@trigger:"…"` / `@id:<node-id>`. Канонические
 > владельцы: `github:<login>`, `github-team:<org>/<team>`,
 > `repo:<manifest-key>` или `TBD`; отсутствующий `@owner` (`missing`) отличается
 > от явно отложенного `@owner:TBD`. Канонический блокер —
 > `todo://<repo>/<id>`, legacy `<repo>#<slug>` поддерживается переходно. Теги
 > исключены из ключа идентичности пункта в Robin (robin-runtime#27).
+> Отсутствующий тег означает «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
 - ✅ **v2.11.0 зарелижен 2026-07-26** (PyPI + GitHub Release, тег `v2.11.0`, release commit
@@ -109,8 +111,8 @@
       (Telegram/webhook, в дефолтном `notify_on`); диспетчер может съедать webhook.
       Вопрос агрегации (dispatcher-консоль поверх maestro+spec-runner) остаётся
       за экосистемой (PR #107)
-- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: реализуем в @owner:github:andrei-shtanakov @id:review-bot-loop
-      spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
+- [x] **#102 review-bot-loop** — **решение владельца принято 2026-08-06**: @owner:github:andrei-shtanakov @id:review-bot-loop
+      реализуем в spec-runner как отдельную resumable-команду `spec-runner review-pr <url-or-number>`
       + опциональную post-PR стадию (НЕ maestro-only hook и НЕ inline в `run`); внешний
       оркестратор вызывает ту же команду вместо своей реализации цикла. Потребление на
       стороне Maestro отслеживается снаружи: maestro#147 / todo://maestro/post-pr-command
@@ -126,8 +128,8 @@
       **Закрыт 2026-08-06**: M1/M2/M3 отгружены в v2.18.0/v2.19.0/v2.20.0, issue #102
       закрыт мержем PR #114; follow-up по границе caller-контракта — PR #119;
       блокер потребителя снят в v2.21.0 (inbox #116).
-  - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots @owner:github:andrei-shtanakov @id:review-pr-m1
-        фильтр) → verify (агент, fail-closed к uncertain, вердикт аннулируется
+  - [x] **M1 (read-only)**: команда `review-pr` — collect (gh CLI, allowed-bots фильтр) @owner:github:andrei-shtanakov @id:review-pr-m1
+        → verify (агент, fail-closed к uncertain, вердикт аннулируется
         при мутации дерева верификатором) → отчёт text/`--json`; durable cursor
         в таблице `pr_review_comments`; exit-контракт 0/1/2. Тесты:
         `test_review_pr.py` (26) (PR #110)
@@ -139,8 +141,8 @@
         fail-closed на dirty tree/head mismatch/force-push/push failure;
         `[no-op]`-стиль индикация в `status` (needs_human_rows). Тесты:
         `TestApplyPhase` (12) + `TestStatusSurfacing` (PR #112)
-  - [x] **M3 (wiring)**: `review_pr.post_pr: off|verify|full` (дефолт off — @owner:github:andrei-shtanakov @id:review-pr-m3
-        integration_pr без конфигурации байт-в-байт прежний); verify = read-only
+  - [x] **M3 (wiring)**: `review_pr.post_pr: off|verify|full` (дефолт off — integration_pr без конфигурации байт-в-байт прежний) @owner:github:andrei-shtanakov @id:review-pr-m3
+        Режим verify = read-only
         триаж, full = checkout run-ветки → полный цикл → всегда возврат на base;
         `post_pr_wait_seconds` даёт боту время откомментировать; стадия не меняет
         exit-статус рана. Контракт внешнего вызова (0/1/2 + --json + предусловия
@@ -162,9 +164,8 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
       исключает файл из commit set, когда он не трекается в HEAD
       (harness-created); юзерский трекаемый файл ведёт себя по-старому и
       никогда не удаляется. Регресс: `TestHarnessGitignoreNotCommitted` (PR #98)
-- [x] **#97 noop-completion-marker** — no-op задача (работа поглощена соседними @owner:github:andrei-shtanakov @id:noop-completion-marker
-      сабтасками, «No changes to commit») выглядела как недоделанная: maestro
-      показывал «DONE 4/5», оператор шёл в git-археологию. Проверено репро
+- [x] **#97 noop-completion-marker** — no-op задача (работа поглощена соседними сабтасками, «No changes to commit») выглядела как недоделанная: @owner:github:andrei-shtanakov @id:noop-completion-marker
+      maestro показывал «DONE 4/5», оператор шёл в git-археологию. Проверено репро
       (обычный и worktree-сценарий): в state DB задача ФИКСИРУЕТСЯ success —
       «not-done» был гонкой чтения на стороне maestro (maestro#122, финальный
       опрос). Наша часть: явный маркер — колонка `attempts.no_op`, `"no_op": true`
