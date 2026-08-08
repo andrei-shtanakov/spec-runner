@@ -10,7 +10,7 @@ find meta for, and (b) let `TASK-001` match inside `TASK-0011`.
 
 from pathlib import Path
 
-from spec_runner.task import history_file_for, update_task_status
+from spec_runner.task import Task, history_file_for, update_task_status
 
 
 def test_unrecognized_meta_does_not_repaint_next_task(tmp_path: Path) -> None:
@@ -98,3 +98,29 @@ def test_live_incident_scenario_bullet_then_bare_meta(tmp_path: Path) -> None:
     task_002_line = text.split("\n")[3]
     assert "TODO" in task_002_line
     assert "DONE" not in task_002_line
+
+
+def test_history_not_logged_when_confirm_fails(tmp_path: Path, monkeypatch) -> None:
+    """Copilot review (PR #126): `log_change` used to fire unconditionally
+    right after the write, before the post-write confirm — a write that
+    landed but then failed confirm still left a history entry asserting a
+    status change that the very next check reported as unconfirmed. The
+    history log must only be written once the confirm actually succeeds.
+
+    Forces the confirm to disagree via the module-level `parse_tasks`
+    (rather than a particular parser/regex edge case) so this test is
+    about the log-vs-confirm ordering specifically, not about how a
+    confirm failure can arise.
+    """
+    p = tmp_path / "tasks.md"
+    p.write_text("### TASK-001: First\n🔴 P0 | ⬜ TODO | Est: 1d\n")
+
+    from spec_runner import task as task_mod
+
+    stale = Task(id="TASK-001", name="First", priority="p0", status="todo", estimate="1d")
+    monkeypatch.setattr(task_mod, "parse_tasks", lambda filepath: [stale])
+
+    assert update_task_status(p, "TASK-001", "in_progress") is False
+
+    history_file = history_file_for(p)
+    assert not history_file.exists()

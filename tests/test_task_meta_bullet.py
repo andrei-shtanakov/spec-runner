@@ -212,3 +212,23 @@ def test_bundled_template_update_task_status_bullet_round_trip(tmp_path, templat
     task_002 = template_module.get_task_by_id(tasks, "TASK-002")
     assert task_001.status == "in_progress"
     assert task_002.status == "todo"
+
+
+def test_bundled_template_history_not_logged_when_confirm_fails(
+    tmp_path, template_module, monkeypatch
+) -> None:
+    """Template parallel of the runtime log-vs-confirm-ordering fix
+    (Copilot review, PR #126): `log_change` must only fire once the
+    post-write confirm succeeds, in the bundled copy too."""
+    p = tmp_path / "tasks.md"
+    p.write_text("### TASK-001: First\n🔴 P0 | ⬜ TODO | Est: 1d\n")
+
+    stale = template_module.Task(
+        id="TASK-001", name="First", priority="p0", status="todo", estimate="1d"
+    )
+    monkeypatch.setattr(template_module, "parse_tasks", lambda filepath: [stale])
+
+    assert template_module.update_task_status(p, "TASK-001", "in_progress") is False
+
+    history_file = template_module.history_file_for(p)
+    assert not history_file.exists()

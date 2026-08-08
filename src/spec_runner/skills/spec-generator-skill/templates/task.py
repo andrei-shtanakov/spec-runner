@@ -267,14 +267,12 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     lines[meta_index] = new_line
 
     filepath.write_text("\n".join(lines))
-    log_change(
-        task_id,
-        f"status -> {new_status}",
-        history_file_for(filepath),
-    )
 
     # Re-read and confirm the write actually landed on the target task — a
     # write that silently missed its mark must not be reported as success.
+    # The history log is only written once this confirms (Copilot review,
+    # PR #126): logging before the confirm let a failed confirm leave a
+    # history entry asserting a status change that never actually stuck.
     verify_tasks = parse_tasks(filepath)
     updated_task = get_task_by_id(verify_tasks, task_id)
     if updated_task is None or updated_task.status != new_status:
@@ -285,6 +283,11 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
         )
         return False
 
+    log_change(
+        task_id,
+        f"status -> {new_status}",
+        history_file_for(filepath),
+    )
     return True
 
 

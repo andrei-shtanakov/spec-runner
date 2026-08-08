@@ -243,7 +243,10 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     between the write and the re-read), returning False with no rollback
     of the write already made. Callers must treat False as a failure
     regardless of whether the write landed — never infer success from a
-    False return just because the file was touched.
+    False return just because the file was touched. The history log is
+    written only once the confirm succeeds, so a False return — from
+    either cause above — never leaves a history entry asserting a status
+    change that didn't (confirmedly) happen.
     """
     fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
@@ -299,14 +302,13 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     lines[meta_index] = new_line
 
     filepath.write_text(fm + "\n".join(lines))
-    log_change(
-        task_id,
-        f"status -> {new_status}",
-        history_file_for(filepath),
-    )
 
     # Re-read and confirm the write actually landed on the target task —
     # a write that silently missed its mark must not be reported as success.
+    # The history log must only record a CONFIRMED change (Copilot review,
+    # PR #126): logging here, before the confirm, let a failed confirm leave
+    # a history entry asserting a status change that the re-read just showed
+    # never actually stuck.
     verify_tasks = parse_tasks(filepath)
     updated_task = get_task_by_id(verify_tasks, task_id)
     if updated_task is None or updated_task.status != new_status:
@@ -318,6 +320,11 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
         )
         return False
 
+    log_change(
+        task_id,
+        f"status -> {new_status}",
+        history_file_for(filepath),
+    )
     return True
 
 
