@@ -302,8 +302,9 @@ def update_checklist_item(
     checklist_count = 0
 
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line):
-            in_task = task_id in line
+        m = TASK_HEADER.match(line)
+        if m:
+            in_task = m.group(1) == task_id
             checklist_count = 0
             continue
 

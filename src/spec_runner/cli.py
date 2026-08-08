@@ -765,10 +765,22 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     nonterminal_tasks = [t for t in all_tasks if t.status != "done"]
                     if nonterminal_tasks:
                         done_ids = {t.id for t in all_tasks if t.status == "done"}
+                        present_ids = {t.id for t in all_tasks}
                         success_ids = {
                             task_id for task_id, ts in state.tasks.items() if ts.status == "success"
                         }
-                        missing = success_ids - done_ids
+                        # A success ID absent from tasks.md entirely (the task
+                        # was removed from the spec, not merely left non-done)
+                        # has nothing to reconcile against — intersect with
+                        # present_ids before comparing to done_ids. The
+                        # orphaned row is still surfaced, just not fatal.
+                        orphaned = success_ids - present_ids
+                        if orphaned:
+                            logger.warning(
+                                "success in state-DB but task no longer present in tasks.md",
+                                task_ids=sorted(orphaned),
+                            )
+                        missing = (success_ids & present_ids) - done_ids
                         if missing:
                             _exit_on_state_spec_mismatch(
                                 state,
@@ -814,7 +826,8 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                 # a mid-run edit by the agent itself is caught immediately,
                 # not after the run reports a misleading "completed".
                 if state.get_task_state(task.id).status == "success":
-                    reread = get_task_by_id(parse_tasks(config.tasks_file), task.id)
+                    reread_tasks = parse_tasks(config.tasks_file)
+                    reread = get_task_by_id(reread_tasks, task.id)
                     if reread is None or reread.status != "done":
                         _exit_on_state_spec_mismatch(
                             state,
@@ -824,7 +837,9 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             ),
                             completed=state.total_completed - completed_before,
                             failed=state.total_failed - failed_before,
-                            remaining=len(parse_tasks(config.tasks_file)),
+                            # Same "remaining" definition as gate 2's backstop:
+                            # tasks not yet done, not a raw file count.
+                            remaining=len([t for t in reread_tasks if t.status != "done"]),
                         )
 
                 # v2.3.0: detect tasks that fail again on a second pass.

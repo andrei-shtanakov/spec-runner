@@ -1,12 +1,14 @@
 """`TASK_META` bullet-prefix support (issue #123, disputatio D3).
 
-`spec-runner plan --full` itself generates a leading `- ` bullet on some
-meta lines (observed live in the disputatio forensic snapshots: a task's
-meta line gains a `- ` prefix between one snapshot and the next, while
-sibling tasks keep the bare `🔴 P0 | ...` form in the same file). The old
-`TASK_META` regex didn't recognize the bullet-prefixed form at all, which
-is what let `update_task_status` (fixed task-bounded in #123 part 1) walk
-straight past an unrecognized meta line.
+Agents editing `tasks.md` mid-run introduce a leading `- ` bullet on some
+meta lines (confirmed forensically via git-status correlation on the
+disputatio snapshots: a task's meta line gains a `- ` prefix between one
+snapshot and the next, while sibling tasks keep the bare `🔴 P0 | ...`
+form in the same file — the generator templates themselves emit the bare
+form). The old `TASK_META` regex didn't recognize the bullet-prefixed
+form at all, which is what let `update_task_status` (fixed task-bounded
+in #123 part 1) walk straight past an unrecognized meta line. The parser
+must accept both formats regardless of source.
 
 This module locks down: (1) the allowed bullet prefix (`-`/`*`, optionally
 indented) is accepted without turning `TASK_META` into a match-anything
@@ -23,7 +25,9 @@ import pytest
 
 from spec_runner.task import TASK_META, get_task_by_id, parse_tasks, update_task_status
 
-GOLDEN_FIXTURE = Path("tests/fixtures/maestro-interop/alternating-bullet-tasks.md")
+GOLDEN_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "maestro-interop" / "alternating-bullet-tasks.md"
+)
 
 # id -> (priority, status) exactly as authored in the golden fixture: TASK-001
 # carries the `- ` bullet prefix (mid-incident artifact), TASK-002..011 are
@@ -138,7 +142,10 @@ def test_update_task_status_bare_format_task_round_trip(tmp_path: Path) -> None:
 # bundled copy is what `spec-runner plan --full` ships to *generated*
 # projects, so it needs the fix independently of the runtime module).
 
-TEMPLATE_PATH = Path("src/spec_runner/skills/spec-generator-skill/templates/task.py")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE_PATH = (
+    REPO_ROOT / "src" / "spec_runner" / "skills" / "spec-generator-skill" / "templates" / "task.py"
+)
 
 
 def _load_template_module():

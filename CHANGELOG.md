@@ -38,10 +38,13 @@ disputatio run (D3, 2026-08-08; maestro#164) whose forensic snapshot
   or the history log, instead of falling through onto a neighboring task's
   meta line (the incident: updating `TASK-001` repainted `TASK-002`).
 - **`TASK_META` recognizes bullet-prefixed meta lines** (issue #123).
-  `plan --full` itself sometimes emits meta as `- 🔴 P0 | ...` /
-  `* P0 | ...`; the parser and `update_task_status` previously only matched
-  the bare form, so those tasks' meta was invisible to both. The bullet
-  prefix requires the `P\d |` form immediately after it, so plain
+  Agents editing `tasks.md` mid-run introduce a bullet prefix on meta lines
+  (`- 🔴 P0 | ...` / `* P0 | ...`), confirmed forensically via git-status
+  correlation on the incident snapshot — not the generator templates,
+  which emit the bare form. The parser and `update_task_status` previously
+  only matched the bare form, so those tasks' meta was invisible to both;
+  the parser must now accept both formats regardless of source. The
+  bullet prefix requires the `P\d |` form immediately after it, so plain
   description bullets and checklist items stay unaffected. The bundled
   `spec-generator-skill` template copy of both fixes was kept in sync.
 - **`run --all` fails closed on a state-DB/tasks.md mismatch** (issue #124).

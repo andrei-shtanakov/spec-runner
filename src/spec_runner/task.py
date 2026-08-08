@@ -25,10 +25,13 @@ TASK_HEADER = re.compile(rf"^### ({ID_PATTERN}): (.+)$")
 TASK_REF = re.compile(rf"\[({ID_PATTERN})\]")
 # Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO", each
 # optionally preceded by a markdown bullet prefix ("- "/"* ", optionally
-# indented — #123: `plan --full` itself emits this on some meta lines, and
-# the old pattern didn't recognize it). The bullet prefix requires the
-# `P\d |` form right after it, so plain description bullets ("- some
-# prose") and checklist items ("- [ ] ...") never match.
+# indented — #123: agents editing tasks.md mid-run introduce the bullet
+# prefix (forensic: git-status correlation on the incident snapshot; the
+# generator templates themselves emit the bare form), and the old pattern
+# didn't recognize it. The parser must accept both formats regardless of
+# source. The bullet prefix requires the `P\d |` form right after it, so
+# plain description bullets ("- some prose") and checklist items
+# ("- [ ] ...") never match.
 TASK_META = re.compile(
     r"^(?:[ \t]*[-*]\s+)?"
     r"(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)"
@@ -234,6 +237,13 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     EOF). If no meta line is found in that window, nothing is written and
     no history entry is logged — a neighboring task's meta is never
     mistaken for the target's.
+
+    A half-state is possible: the write itself can land while the
+    post-write confirm still fails (e.g. a concurrent edit shifts lines
+    between the write and the re-read), returning False with no rollback
+    of the write already made. Callers must treat False as a failure
+    regardless of whether the write landed — never infer success from a
+    False return just because the file was touched.
     """
     fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
@@ -320,8 +330,9 @@ def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked
     checklist_count = 0
 
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line):
-            in_task = task_id in line
+        m = TASK_HEADER.match(line)
+        if m:
+            in_task = m.group(1) == task_id
             checklist_count = 0
             continue
 
@@ -354,13 +365,10 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
     marked_count = 0
 
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line):
-            in_task = task_id in line
+        m = TASK_HEADER.match(line)
+        if m:
+            in_task = m.group(1) == task_id
             continue
-
-        # Stop when reaching next task
-        if in_task and line.startswith("### TASK-"):
-            break
 
         if in_task and CHECKLIST_ITEM.match(line) and "[ ]" in line:
             lines[i] = line.replace("[ ]", "[x]")

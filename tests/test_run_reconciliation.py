@@ -161,6 +161,55 @@ class TestGate2Backstop:
             assert "TASK-001" in detail
 
 
+class TestGate2OrphanedSuccessNotFatal:
+    """F1 (final review): a state-DB success whose task ID is no longer
+    present in tasks.md at all (removed, not merely left non-done) must not
+    trip gate 2 — there is nothing in the file to reconcile against. The
+    signal isn't dropped silently though: it is surfaced as a warning."""
+
+    def test_orphaned_success_id_does_not_stop_run_but_warns(self, tmp_path, monkeypatch):
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        tasks_md = spec_dir / "tasks.md"
+        # TASK-999 (recorded success in the state DB) is absent from
+        # tasks.md entirely — deleted, e.g. by a spec edit mid-run.
+        tasks_md.write_text("# Spec\n\n## M0\n\n" + _task_block("TASK-000", "Blocker"))
+        cfg = _cfg(tmp_path)
+
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-999", success=True, duration=1.0)
+
+        import spec_runner.cli as cli_mod
+        from spec_runner.task import update_task_status
+
+        def _fake_run_with_retries(task, config, state):
+            assert task.id == "TASK-000"
+            state.record_attempt(task.id, success=False, duration=1.0, error="boom")
+            update_task_status(config.tasks_file, task.id, "blocked")
+            return "SKIP"
+
+        monkeypatch.setattr(cli_mod, "run_with_retries", _fake_run_with_retries)
+
+        # Capture the warning directly on the module logger — asserting via
+        # capsys/stderr is order-dependent on global structlog sink state
+        # set up by other test modules in a full-suite run.
+        warnings: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            cli_mod.logger,
+            "warning",
+            lambda event, **kw: warnings.append((event, kw)),
+        )
+
+        # No SystemExit — an orphaned success (ID absent from tasks.md) is
+        # not a mismatch to fail closed on.
+        _run_tasks(_run_args(), cfg)
+
+        with ExecutorState(cfg) as state:
+            assert state.get_meta("last_run_stop_reason") == "completed"
+
+        assert any("TASK-999" in kw.get("task_ids", []) for _event, kw in warnings)
+
+
 class TestLegitimateBlockUnchanged:
     """Test 3: TODO tasks blocked by a genuinely failed dependency (the
     default on_task_failure=skip flow) must keep exiting exactly as before

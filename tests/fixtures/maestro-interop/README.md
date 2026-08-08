@@ -6,6 +6,8 @@ that its `ExecutorState` / `SpecRunnerJsonResult` parsers accept them byte-for-b
 
 **Any change to these files is a breaking change** requiring a major version
 bump and a `BREAKING` note in `CHANGELOG.md`. See `docs/state-schema.md`.
+Exception: `alternating-bullet-tasks.md` is an internal regression fixture —
+not part of the Maestro contract surface, so it isn't covered by that rule.
 
 ## Files
 
