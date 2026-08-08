@@ -270,7 +270,9 @@ package data именно для сверки потребителями — т�
 Дальнейшие шаги:
 - [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `../prograph-vault/authored/notes/status/2026-05-22-status.md`.
 - [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
-- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:github:andrei-shtanakov @blocked_by:maestro#log-schema-metrics @trigger:"в log-schema.json появилась секция метрик" @id:obs-runtime-metrics
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:github:andrei-shtanakov @trigger:"в log-schema.json появилась секция метрик" @id:obs-runtime-metrics
+  - `maestro#log-schema-metrics` снят как blocker: принятого узла/issue с таким slug
+    нет; готовность полностью определяется изменением контракта из trigger выше
 
 ### R-04 (spec-runner side): стабилизация контракта с Maestro
 
