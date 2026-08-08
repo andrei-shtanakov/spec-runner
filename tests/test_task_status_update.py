@@ -16,7 +16,10 @@ from spec_runner.task import history_file_for, update_task_status
 def test_unrecognized_meta_does_not_repaint_next_task(tmp_path: Path) -> None:
     """Target task's meta isn't in a format `TASK_META` recognizes.
 
-    Old TASK_META doesn't match a `- ` bullet-prefixed meta line. The old
+    `TASK_META` was later taught to recognize `- `/`* ` bullet-prefixed meta
+    lines (#123 part 2 — `plan --full` itself emits that form), so a
+    genuinely *unrecognized* format is needed here: `+ ` is not an allowed
+    bullet char, so this meta line still doesn't match. The old
     implementation kept scanning past TASK-001's (unmatched) meta line,
     found TASK-002's bare meta line, and repainted TASK-002 instead. The
     fix must refuse entirely: no write, no history entry.
@@ -24,7 +27,7 @@ def test_unrecognized_meta_does_not_repaint_next_task(tmp_path: Path) -> None:
     p = tmp_path / "tasks.md"
     p.write_text(
         "### TASK-001: First\n"
-        "- 🔴 P0 | ⬜ TODO | Est: 1d\n"
+        "+ 🔴 P0 | ⬜ TODO | Est: 1d\n"
         "### TASK-002: Second\n"
         "🔴 P0 | ⬜ TODO | Est: 1d\n"
     )
@@ -74,14 +77,16 @@ def test_successful_update_changes_exactly_one_line(tmp_path: Path) -> None:
 
 
 def test_live_incident_scenario_bullet_then_bare_meta(tmp_path: Path) -> None:
-    """Repeat the live scenario: bullet-meta TASK-001, bare-meta TASK-002.
+    """Repeat the live scenario: unrecognized-meta TASK-001, bare-meta TASK-002.
 
+    `+ ` isn't an allowed bullet char (see the test above for why `- ` no
+    longer serves this role), so TASK-001's meta is still unrecognized here.
     Updating TASK-001 must never repaint TASK-002.
     """
     p = tmp_path / "tasks.md"
     p.write_text(
         "### TASK-001: First\n"
-        "- 🔴 P0 | ⬜ TODO | Est: 1d\n"
+        "+ 🔴 P0 | ⬜ TODO | Est: 1d\n"
         "### TASK-002: Second\n"
         "🔴 P0 | ⬜ TODO | Est: 1d\n"
     )

@@ -17,6 +17,7 @@ bump and a `BREAKING` note in `CHANGELOG.md`. See `docs/state-schema.md`.
 | `json-result-multi.json` | `--json-result` multi-task run (mixed outcomes) | `test_json_result_contract.py::test_golden_multi` |
 | `json-result-empty.json` | `--json-result` when no tasks are ready | `test_json_result_contract.py::test_golden_empty` |
 | `json-result-legacy-json-state.json` | Legacy pre-2.0 `.executor-state.json` snapshot (read-only fallback for Maestro) | hand-curated |
+| `alternating-bullet-tasks.md` | `tasks.md` snapshot with alternating bullet-prefixed (`- 🔴 P0 \| ...`) and bare (`🔴 P0 \| ...`) meta lines in the same file, all-TODO/IN_PROGRESS statuses, 11 tasks | copied byte-for-byte from the live disputatio D3 incident forensic snapshot `w-contracts/tasks-193159.md` (issues #123/#124) — used by `test_task_meta_bullet.py` (`parse_tasks`/`update_task_status` bullet-prefix regression) |
 
 ## Regenerating
 

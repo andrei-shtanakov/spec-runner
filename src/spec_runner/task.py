@@ -23,8 +23,16 @@ HISTORY_FILE = Path("spec/.task-history.log")
 ID_PATTERN = r"[A-Z][A-Z0-9]*-\d+"
 TASK_HEADER = re.compile(rf"^### ({ID_PATTERN}): (.+)$")
 TASK_REF = re.compile(rf"\[({ID_PATTERN})\]")
-# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
-TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)")
+# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO", each
+# optionally preceded by a markdown bullet prefix ("- "/"* ", optionally
+# indented — #123: `plan --full` itself emits this on some meta lines, and
+# the old pattern didn't recognize it). The bullet prefix requires the
+# `P\d |` form right after it, so plain description bullets ("- some
+# prose") and checklist items ("- [ ] ...") never match.
+TASK_META = re.compile(
+    r"^(?:[ \t]*[-*]\s+)?"
+    r"(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)"
+)
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")

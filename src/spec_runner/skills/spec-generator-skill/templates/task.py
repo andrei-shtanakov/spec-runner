@@ -31,7 +31,11 @@ HISTORY_FILE = Path("spec/.task-history.log")
 
 # Patterns
 TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
-TASK_META = re.compile(r"^(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) (\w+)")
+# Optionally preceded by a markdown bullet prefix ("- "/"* ", optionally
+# indented — #123: some meta lines end up bullet-prefixed; the pattern still
+# requires the emoji + `P\d |` form right after it, so plain description
+# bullets and checklist items never match.
+TASK_META = re.compile(r"^(?:[ \t]*[-*]\s+)?(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) (\w+)")
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
@@ -207,43 +211,81 @@ def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
 
 
 def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
-    """Update task status in the file"""
+    """Update task status in the file.
+
+    Fail-closed and task-bounded (#123): the target header must match
+    `task_id` exactly (not as a substring — `TASK-001` must not match
+    `TASK-0011`), and the meta line to rewrite is only searched for
+    strictly between that header and the next `### TASK-...` header (or
+    EOF). If no meta line is found in that window, nothing is written and
+    no history entry is logged — a neighboring task's meta is never
+    mistaken for the target's.
+    """
     content = filepath.read_text()
     lines = content.split("\n")
 
-    found = False
+    header_index = None
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line) and task_id in line:
-            found = True
-            continue
+        header_match = TASK_HEADER.match(line)
+        if header_match and header_match.group(1) == task_id:
+            header_index = i
+            break
 
-        if found and TASK_META.match(line):
-            # Replace status
-            old_emoji = None
-            for emoji in STATUS_EMOJI.values():
-                if emoji in line:
-                    old_emoji = emoji
-                    break
+    if header_index is None:
+        return False
 
-            if old_emoji:
-                new_emoji = STATUS_EMOJI[new_status]
-                new_line = line.replace(old_emoji, new_emoji)
-                new_line = re.sub(
-                    r"\| (⬜|🔄|✅|⏸️) \w+",
-                    f"| {new_emoji} {new_status.upper()}",
-                    new_line,
-                )
-                lines[i] = new_line
+    meta_index = None
+    for j in range(header_index + 1, len(lines)):
+        if TASK_HEADER.match(lines[j]):
+            break
+        if TASK_META.match(lines[j]):
+            meta_index = j
+            break
 
-                filepath.write_text("\n".join(lines))
-                log_change(
-                    task_id,
-                    f"status -> {new_status}",
-                    history_file_for(filepath),
-                )
-                return True
+    if meta_index is None:
+        return False
 
-    return False
+    line = lines[meta_index]
+
+    # Replace status
+    old_emoji = None
+    for emoji in STATUS_EMOJI.values():
+        if emoji in line:
+            old_emoji = emoji
+            break
+
+    if not old_emoji:
+        return False
+
+    new_emoji = STATUS_EMOJI[new_status]
+    new_line = line.replace(old_emoji, new_emoji)
+    new_line = re.sub(
+        r"\| (⬜|🔄|✅|⏸️) \w+",
+        f"| {new_emoji} {new_status.upper()}",
+        new_line,
+    )
+    lines[meta_index] = new_line
+
+    filepath.write_text("\n".join(lines))
+    log_change(
+        task_id,
+        f"status -> {new_status}",
+        history_file_for(filepath),
+    )
+
+    # Re-read and confirm the write actually landed on the target task — a
+    # write that silently missed its mark must not be reported as success.
+    verify_tasks = parse_tasks(filepath)
+    updated_task = get_task_by_id(verify_tasks, task_id)
+    if updated_task is None or updated_task.status != new_status:
+        print(
+            f"⚠️  update_task_status: post-write verification failed for {task_id} "
+            f"(expected {new_status}, got "
+            f"{updated_task.status if updated_task else None})"
+        )
+        return False
+
+    return True
 
 
 def update_checklist_item(
