@@ -21,6 +21,38 @@ is a **breaking change** and requires a major version bump plus an entry here.
   consumer's own track instead of restating its lifecycle. The v2.20.0
   release notes are left as the historical artifact they are.
 
+## [2.21.1] — 2026-08-08
+
+Three fail-closed fixes for task-status integrity, found by a live
+disputatio run (D3, 2026-08-08; maestro#164) whose forensic snapshot
+(`tasks-193159.md`) is now this release's golden regression fixture
+(`tests/fixtures/maestro-interop/alternating-bullet-tasks.md`).
+
+### Fixed
+
+- **`update_task_status` is task-bounded** (issue #123). The status rewrite
+  now matches the target task's header by exact ID — not substring, so
+  `TASK-001` no longer matches `TASK-0011` — and only searches for a meta
+  line between that header and the next one. A write that can't find its
+  own task's meta in that window returns `False` without touching the file
+  or the history log, instead of falling through onto a neighboring task's
+  meta line (the incident: updating `TASK-001` repainted `TASK-002`).
+- **`TASK_META` recognizes bullet-prefixed meta lines** (issue #123).
+  `plan --full` itself sometimes emits meta as `- 🔴 P0 | ...` /
+  `* P0 | ...`; the parser and `update_task_status` previously only matched
+  the bare form, so those tasks' meta was invisible to both. The bullet
+  prefix requires the `P\d |` form immediately after it, so plain
+  description bullets and checklist items stay unaffected. The bundled
+  `spec-generator-skill` template copy of both fixes was kept in sync.
+- **`run --all` fails closed on a state-DB/tasks.md mismatch** (issue #124).
+  Two gates now stop the run non-zero (`state_spec_mismatch`) instead of
+  reporting exit 0: immediately after each task, if the state DB just
+  recorded success but tasks.md doesn't show `done`; and as a backstop when
+  the loop runs out of ready tasks, if any state-DB success was never
+  reflected in tasks.md. A legitimate block (a TODO waiting on a documented
+  failed/skipped dependency) leaves both sets in agreement and is
+  unaffected.
+
 ## [2.21.0] — 2026-08-06
 
 Unblocks Maestro's accepted `post-pr-command` work (design maestro#147):
@@ -1020,7 +1052,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.1...HEAD
+[2.21.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...v2.21.1
 [2.21.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...v2.20.0
 [2.19.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...v2.19.0
