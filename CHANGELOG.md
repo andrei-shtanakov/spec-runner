@@ -76,15 +76,21 @@ matrix below).
   completed". **Exit code is unchanged (still 0)** — this is diagnostics
   only; making it non-zero is a separate interop follow-up. The reason now
   also reaches the `run_ended` audit event and the `run_complete`
-  notification (both already carried other stop reasons the same way; this
-  fill in the one gap in the loop-exit path).
+  notification's message (a "Stop reason: ..." line, appended whenever the
+  reason isn't `completed` — not just for this new one) — both already
+  carried other stop reasons the same way; this fills the one gap in the
+  loop-exit path. Note: Maestro doesn't read `stop_reason` today (it isn't
+  wired to consume that meta key), so this is a spec-runner-side fix only —
+  picking it up needs work on Maestro's side too, which reinforces the
+  min-gate recommendation below.
 
 ### Exit-behavior matrix for `run --all` (this release)
 
 | Situation | Exit code before 2.22.0 | Exit code in 2.22.0 | `stop_reason` |
 |---|---|---|---|
 | Every task reaches `done` | 0 | 0 (unchanged) | `completed` |
-| A task is `blocked`/stuck after `on_task_failure="skip"` gives up | 0 | 0 (unchanged) | `completed` → **`dependency_blocked_after_skip`** |
+| A task is `blocked`/stuck after `on_task_failure="skip"` gives up, and no task is left `todo` | 0 | 0 (unchanged) | `completed` → **`dependency_blocked_after_skip`** |
+| Downstream TODOs remain unreachable behind a failed/blocked dependency | 0 | 0 (unchanged) | `completed` (unchanged — see the `on_task_failure: stop` recommendation below) |
 | State-DB records success but tasks.md never shows `done` for that task | 0 | **1** | `completed` → **`state_spec_mismatch`** |
 | State-DB success for a task ID no longer in tasks.md at all | 0 | 0 (unchanged, now with a warning) | unaffected |
 

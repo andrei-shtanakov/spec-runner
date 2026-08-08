@@ -810,11 +810,14 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                         # interrupted "review") after on_task_failure="skip"
                         # gave up on it. That is not the same as a clean
                         # finish, so it must not be reported as "All tasks
-                        # completed"/stop_reason="completed" — Maestro and the
-                        # `status` display both key off `last_run_stop_reason`.
-                        # Exit code intentionally stays 0 here (a separate
-                        # interop follow-up decides whether to make this
-                        # non-zero); only the diagnostics change.
+                        # completed"/stop_reason="completed" — the `status`
+                        # display keys off `last_run_stop_reason`. Exit code
+                        # intentionally stays 0 here (a separate interop
+                        # follow-up decides whether to make this non-zero).
+                        # Before this branch existed, this case fell into the
+                        # "all done" branch below (todo_tasks was empty) and
+                        # still got ensure_on_main_branch — keep that git
+                        # side effect so only the diagnostics change.
                         stuck_ids = sorted(t.id for t in nonterminal_tasks)
                         stop_reason = "dependency_blocked_after_skip"
                         stop_detail = f"blocked/skipped tasks remain: {stuck_ids}"
@@ -822,6 +825,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             "Stopping run: tasks blocked after skip",
                             blocked_tasks=stuck_ids,
                         )
+                        ensure_on_main_branch(config)
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
