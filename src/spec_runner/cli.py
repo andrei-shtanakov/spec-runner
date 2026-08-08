@@ -449,6 +449,38 @@ def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str,
     )
 
 
+def _exit_on_state_spec_mismatch(
+    state: ExecutorState,
+    *,
+    detail: str,
+    completed: int,
+    failed: int,
+    remaining: int,
+) -> None:
+    """Record `state_spec_mismatch` as this run's stop reason and exit non-zero.
+
+    Shared tail for both reconciliation gates (#124): a state-DB "success"
+    that tasks.md never reflects as "done" is a hard integrity failure, not
+    a normal stop — the run must not report the same exit-0 "completed" a
+    caller like Maestro reads as a finished workstream. Funnels through the
+    same `last_run_stop_reason`/audit-log plumbing every other refusal
+    already uses, rather than a parallel mechanism.
+    """
+    from .audit_log import EVENT_RUN_ENDED
+
+    logger.error("Stopping run: state/spec mismatch", detail=detail)
+    state.set_meta("last_run_stop_reason", "state_spec_mismatch")
+    state.set_meta("last_run_stop_detail", detail)
+    state.audit_logger.record(
+        EVENT_RUN_ENDED,
+        completed=completed,
+        failed=failed,
+        remaining=remaining,
+        stop_reason="state_spec_mismatch",
+    )
+    sys.exit(1)
+
+
 def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
     """Refuse to execute when spec/config files are uncommitted or dirty (#69).
 
@@ -720,6 +752,35 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     # Show why we're stopping
                     all_tasks = parse_tasks(config.tasks_file)
                     todo_tasks = [t for t in all_tasks if t.status == "todo"]
+
+                    # Backstop (#124, state_spec_mismatch): gate 1 above only
+                    # checks the task it just ran — a task the loop never
+                    # touched this run (e.g. a stale success row left over
+                    # from an earlier run/crash) would slip past it. Before
+                    # accepting "nothing more to do", confirm every state-DB
+                    # success is reflected as done in tasks.md. A legitimate
+                    # block (TODO waiting on a documented failure/skip) never
+                    # recorded a success in the first place, so it leaves
+                    # both sets in agreement and does not trip this check.
+                    nonterminal_tasks = [t for t in all_tasks if t.status != "done"]
+                    if nonterminal_tasks:
+                        done_ids = {t.id for t in all_tasks if t.status == "done"}
+                        success_ids = {
+                            task_id for task_id, ts in state.tasks.items() if ts.status == "success"
+                        }
+                        missing = success_ids - done_ids
+                        if missing:
+                            _exit_on_state_spec_mismatch(
+                                state,
+                                detail=(
+                                    "success in state-DB but not done in "
+                                    f"tasks.md: {sorted(missing)}"
+                                ),
+                                completed=state.total_completed - completed_before,
+                                failed=state.total_failed - failed_before,
+                                remaining=len(nonterminal_tasks),
+                            )
+
                     if todo_tasks:
                         blocked_info = {
                             t.id: ", ".join(t.depends_on) if t.depends_on else "none"
@@ -743,6 +804,28 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
                 result = run_with_retries(task, config, state)
                 last_activity = time.monotonic()
+
+                # Gate 1 (#124, state_spec_mismatch): the state DB just
+                # recorded "success" for the task that ran — tasks.md must
+                # agree it is "done" before the loop moves on. Reread from
+                # disk rather than trusting the stale `tasks` list, so a
+                # write that silently missed its mark (Task 1's
+                # confirm-after-write can return False without writing) or
+                # a mid-run edit by the agent itself is caught immediately,
+                # not after the run reports a misleading "completed".
+                if state.get_task_state(task.id).status == "success":
+                    reread = get_task_by_id(parse_tasks(config.tasks_file), task.id)
+                    if reread is None or reread.status != "done":
+                        _exit_on_state_spec_mismatch(
+                            state,
+                            detail=(
+                                f"{task.id}: state-DB=success but tasks.md="
+                                f"{reread.status if reread else 'missing'}"
+                            ),
+                            completed=state.total_completed - completed_before,
+                            failed=state.total_failed - failed_before,
+                            remaining=len(parse_tasks(config.tasks_file)),
+                        )
 
                 # v2.3.0: detect tasks that fail again on a second pass.
                 # Use the persisted task status (set to "failed" when retries
