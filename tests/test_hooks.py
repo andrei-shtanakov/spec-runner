@@ -1126,6 +1126,65 @@ class TestDoneStatusPersistence:
         assert "IN_PROGRESS" not in head_tasks
 
 
+class TestDoneStatusUpdateFailureLogged:
+    """F3 (final review, leshan ledger-3): `update_task_status` returning
+    False for the final DONE write must be logged (task-scoped, with the
+    file path) so the failure signal isn't silently dropped — semantics
+    unchanged, the run still proceeds either way."""
+
+    def _make_task(self) -> Task:
+        return Task(
+            id="TASK-001",
+            name="Test task",
+            priority="p0",
+            status="in_progress",
+            estimate="1d",
+        )
+
+    def _make_config(self, root: Path, **overrides) -> ExecutorConfig:
+        base = {
+            "project_root": root,
+            "run_tests_on_done": False,
+            "run_lint_on_done": False,
+            "run_review": False,
+            "sync_deps": False,
+            "create_git_branch": False,
+            "auto_commit": False,
+        }
+        base.update(overrides)
+        return ExecutorConfig(**base)
+
+    def test_logs_error_when_write_does_not_land(self, tmp_path, monkeypatch):
+        root = tmp_path
+        (root / "spec").mkdir()
+        # TASK-001 has no header in tasks.md at all — update_task_status
+        # returns False immediately (header_index is None).
+        (root / "spec" / "tasks.md").write_text("### TASK-002: Other\n🔴 P0 | ⬜ TODO | Est: 1d\n")
+        config = self._make_config(root)
+
+        # Capture the error directly on the module logger — asserting via
+        # capsys/stderr is order-dependent on global structlog sink state
+        # set up by other test modules in a full-suite run.
+        from spec_runner import hooks as hooks_mod
+
+        errors: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            hooks_mod.logger,
+            "error",
+            lambda event, **kw: errors.append((event, kw)),
+        )
+
+        success, _error, _status, _findings, _no_op = post_done_hook(
+            self._make_task(), config, True
+        )
+        assert success is True  # semantics unchanged — the run still proceeds
+
+        assert any(
+            kw.get("task_id") == "TASK-001" and kw.get("file") == str(config.tasks_file)
+            for _event, kw in errors
+        )
+
+
 class TestBranchSlugPunctuation:
     """#74: branch slugs must strip punctuation, not carry it into the name."""
 

@@ -449,6 +449,38 @@ def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str,
     )
 
 
+def _exit_on_state_spec_mismatch(
+    state: ExecutorState,
+    *,
+    detail: str,
+    completed: int,
+    failed: int,
+    remaining: int,
+) -> None:
+    """Record `state_spec_mismatch` as this run's stop reason and exit non-zero.
+
+    Shared tail for both reconciliation gates (#124): a state-DB "success"
+    that tasks.md never reflects as "done" is a hard integrity failure, not
+    a normal stop — the run must not report the same exit-0 "completed" a
+    caller like Maestro reads as a finished workstream. Funnels through the
+    same `last_run_stop_reason`/audit-log plumbing every other refusal
+    already uses, rather than a parallel mechanism.
+    """
+    from .audit_log import EVENT_RUN_ENDED
+
+    logger.error("Stopping run: state/spec mismatch", detail=detail)
+    state.set_meta("last_run_stop_reason", "state_spec_mismatch")
+    state.set_meta("last_run_stop_detail", detail)
+    state.audit_logger.record(
+        EVENT_RUN_ENDED,
+        completed=completed,
+        failed=failed,
+        remaining=remaining,
+        stop_reason="state_spec_mismatch",
+    )
+    sys.exit(1)
+
+
 def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
     """Refuse to execute when spec/config files are uncommitted or dirty (#69).
 
@@ -720,6 +752,47 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     # Show why we're stopping
                     all_tasks = parse_tasks(config.tasks_file)
                     todo_tasks = [t for t in all_tasks if t.status == "todo"]
+
+                    # Backstop (#124, state_spec_mismatch): gate 1 above only
+                    # checks the task it just ran — a task the loop never
+                    # touched this run (e.g. a stale success row left over
+                    # from an earlier run/crash) would slip past it. Before
+                    # accepting "nothing more to do", confirm every state-DB
+                    # success is reflected as done in tasks.md. A legitimate
+                    # block (TODO waiting on a documented failure/skip) never
+                    # recorded a success in the first place, so it leaves
+                    # both sets in agreement and does not trip this check.
+                    nonterminal_tasks = [t for t in all_tasks if t.status != "done"]
+                    if nonterminal_tasks:
+                        done_ids = {t.id for t in all_tasks if t.status == "done"}
+                        present_ids = {t.id for t in all_tasks}
+                        success_ids = {
+                            task_id for task_id, ts in state.tasks.items() if ts.status == "success"
+                        }
+                        # A success ID absent from tasks.md entirely (the task
+                        # was removed from the spec, not merely left non-done)
+                        # has nothing to reconcile against — intersect with
+                        # present_ids before comparing to done_ids. The
+                        # orphaned row is still surfaced, just not fatal.
+                        orphaned = success_ids - present_ids
+                        if orphaned:
+                            logger.warning(
+                                "success in state-DB but task no longer present in tasks.md",
+                                task_ids=sorted(orphaned),
+                            )
+                        missing = (success_ids & present_ids) - done_ids
+                        if missing:
+                            _exit_on_state_spec_mismatch(
+                                state,
+                                detail=(
+                                    "success in state-DB but not done in "
+                                    f"tasks.md: {sorted(missing)}"
+                                ),
+                                completed=state.total_completed - completed_before,
+                                failed=state.total_failed - failed_before,
+                                remaining=len(nonterminal_tasks),
+                            )
+
                     if todo_tasks:
                         blocked_info = {
                             t.id: ", ".join(t.depends_on) if t.depends_on else "none"
@@ -730,6 +803,29 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             blocked_count=len(todo_tasks),
                             blocked_tasks=blocked_info,
                         )
+                    elif nonterminal_tasks:
+                        # Blocked-after-skip (owner decision, round 2): nothing
+                        # is "todo" anymore, but not everything is "done"
+                        # either — the remainder is stuck (blocked, or an
+                        # interrupted "review") after on_task_failure="skip"
+                        # gave up on it. That is not the same as a clean
+                        # finish, so it must not be reported as "All tasks
+                        # completed"/stop_reason="completed" — the `status`
+                        # display keys off `last_run_stop_reason`. Exit code
+                        # intentionally stays 0 here (a separate interop
+                        # follow-up decides whether to make this non-zero).
+                        # Before this branch existed, this case fell into the
+                        # "all done" branch below (todo_tasks was empty) and
+                        # still got ensure_on_main_branch — keep that git
+                        # side effect so only the diagnostics change.
+                        stuck_ids = sorted(t.id for t in nonterminal_tasks)
+                        stop_reason = "dependency_blocked_after_skip"
+                        stop_detail = f"blocked/skipped tasks remain: {stuck_ids}"
+                        logger.warning(
+                            "Stopping run: tasks blocked after skip",
+                            blocked_tasks=stuck_ids,
+                        )
+                        ensure_on_main_branch(config)
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
@@ -743,6 +839,31 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
                 result = run_with_retries(task, config, state)
                 last_activity = time.monotonic()
+
+                # Gate 1 (#124, state_spec_mismatch): the state DB just
+                # recorded "success" for the task that ran — tasks.md must
+                # agree it is "done" before the loop moves on. Reread from
+                # disk rather than trusting the stale `tasks` list, so a
+                # write that silently missed its mark (Task 1's
+                # confirm-after-write can return False without writing) or
+                # a mid-run edit by the agent itself is caught immediately,
+                # not after the run reports a misleading "completed".
+                if state.get_task_state(task.id).status == "success":
+                    reread_tasks = parse_tasks(config.tasks_file)
+                    reread = get_task_by_id(reread_tasks, task.id)
+                    if reread is None or reread.status != "done":
+                        _exit_on_state_spec_mismatch(
+                            state,
+                            detail=(
+                                f"{task.id}: state-DB=success but tasks.md="
+                                f"{reread.status if reread else 'missing'}"
+                            ),
+                            completed=state.total_completed - completed_before,
+                            failed=state.total_failed - failed_before,
+                            # Same "remaining" definition as gate 2's backstop:
+                            # tasks not yet done, not a raw file count.
+                            remaining=len([t for t in reread_tasks if t.status != "done"]),
+                        )
 
                 # v2.3.0: detect tasks that fail again on a second pass.
                 # Use the persisted task status (set to "failed" when retries
@@ -842,14 +963,21 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             completed=run_completed,
             failed=run_failed,
             total_cost=total_cost_val if total_cost_val > 0 else None,
+            stop_reason=stop_reason,
         )
 
+        # stop_reason= matches the kwarg every other EVENT_RUN_ENDED call site
+        # already carries (validation_failed/budget refusal/state_spec_mismatch
+        # above) — this loop-exit tail was the one place missing it, so every
+        # stop reason (not just blocked-after-skip) is now visible in the
+        # audit trail, not just in the `last_run_stop_reason` meta key.
         state.audit_logger.record(
             EVENT_RUN_ENDED,
             completed=run_completed,
             failed=run_failed,
             remaining=remaining,
             total_cost_usd=round(total_cost_val, 4),
+            stop_reason=stop_reason,
         )
 
         # --json-result: structured JSON result per task (for Maestro interop)

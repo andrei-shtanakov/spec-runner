@@ -100,6 +100,47 @@ def test_mark_all_checklist_done_preserves_frontmatter(tmp_path: Path) -> None:
     assert "- [x] two" in text
 
 
+class TestChecklistFunctionsExactTaskIdMatch:
+    """F5 (final review): checklist mutators must match the task header by
+    exact ID, not substring — `TASK-001` is a substring of `TASK-0011`, so a
+    naive `task_id in line` check treats TASK-0011's header as a match for
+    TASK-001 and corrupts the wrong task's checklist."""
+
+    def test_update_checklist_item_exact_id_not_substring(self, tmp_path: Path) -> None:
+        p = tmp_path / "tasks.md"
+        p.write_text(
+            "### TASK-0011: Eleven\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] eleven's item\n\n"
+            "### TASK-001: One\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] one's item\n"
+        )
+
+        assert update_checklist_item(p, "TASK-001", 0, True) is True
+
+        text = p.read_text()
+        assert "- [x] one's item" in text
+        assert "- [ ] eleven's item" in text  # untouched by the TASK-001 update
+
+    def test_mark_all_checklist_done_exact_id_not_substring(self, tmp_path: Path) -> None:
+        p = tmp_path / "tasks.md"
+        p.write_text(
+            "### TASK-0011: Eleven\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] eleven's item\n\n"
+            "### TASK-001: One\n"
+            "🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Checklist:**\n- [ ] one's item\n"
+        )
+
+        assert mark_all_checklist_done(p, "TASK-001") == 1
+
+        text = p.read_text()
+        assert "- [x] one's item" in text
+        assert "- [ ] eleven's item" in text  # untouched by the TASK-001 update
+
+
 class TestCustomIdPrefix:
     """#72: external projects use native numbering (KAP-002), not just TASK-."""
 

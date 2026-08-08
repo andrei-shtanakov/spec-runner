@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .logging import get_logger
 from .spec import split_frontmatter_raw, strip_frontmatter
 
 # Configuration
@@ -22,8 +23,19 @@ HISTORY_FILE = Path("spec/.task-history.log")
 ID_PATTERN = r"[A-Z][A-Z0-9]*-\d+"
 TASK_HEADER = re.compile(rf"^### ({ID_PATTERN}): (.+)$")
 TASK_REF = re.compile(rf"\[({ID_PATTERN})\]")
-# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO"
-TASK_META = re.compile(r"^(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)")
+# Supports both emoji format "🔴 P0 | ⬜ TODO" and plain "P0 | TODO", each
+# optionally preceded by a markdown bullet prefix ("- "/"* ", optionally
+# indented — #123: agents editing tasks.md mid-run introduce the bullet
+# prefix (forensic: git-status correlation on the incident snapshot; the
+# generator templates themselves emit the bare form), and the old pattern
+# didn't recognize it. The parser must accept both formats regardless of
+# source. The bullet prefix requires the `P\d |` form right after it, so
+# plain description bullets ("- some prose") and checklist items
+# ("- [ ] ...") never match.
+TASK_META = re.compile(
+    r"^(?:[ \t]*[-*]\s+)?"
+    r"(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)"
+)
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
@@ -216,53 +228,104 @@ def log_change(task_id: str, change: str, history_file: Path = HISTORY_FILE):
 
 
 def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
-    """Update task status in file"""
+    """Update task status in file.
+
+    Fail-closed and task-bounded (#123): the target header must match
+    `task_id` exactly (not as a substring — `TASK-001` must not match
+    `TASK-0011`), and the meta line to rewrite is only searched for
+    strictly between that header and the next `### <id>: ...` header (or
+    EOF). If no meta line is found in that window, nothing is written and
+    no history entry is logged — a neighboring task's meta is never
+    mistaken for the target's.
+
+    A half-state is possible: the write itself can land while the
+    post-write confirm still fails (e.g. a concurrent edit shifts lines
+    between the write and the re-read), returning False with no rollback
+    of the write already made. Callers must treat False as a failure
+    regardless of whether the write landed — never infer success from a
+    False return just because the file was touched. The history log is
+    written only once the confirm succeeds, so a False return — from
+    either cause above — never leaves a history entry asserting a status
+    change that didn't (confirmedly) happen.
+    """
     fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
 
-    found = False
+    header_index = None
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line) and task_id in line:
-            found = True
-            continue
+        header_match = TASK_HEADER.match(line)
+        if header_match and header_match.group(1) == task_id:
+            header_index = i
+            break
 
-        if found and TASK_META.match(line):
-            # Replace status — supports both emoji and plain format
-            new_emoji = STATUS_EMOJI[new_status]
-            old_emoji = None
-            for emoji in STATUS_EMOJI.values():
-                if emoji in line:
-                    old_emoji = emoji
-                    break
+    if header_index is None:
+        return False
 
-            if old_emoji:
-                # Emoji format: replace emoji and status text
-                new_line = line.replace(old_emoji, new_emoji)
-                new_line = re.sub(
-                    r"\| (⬜|🔄|🔍|✅|⏸️) \w+",
-                    f"| {new_emoji} {new_status.upper()}",
-                    new_line,
-                )
-            else:
-                # Plain format (no emoji): inject emoji and update status text
-                new_line = re.sub(
-                    r"\|\s*(TODO|IN_PROGRESS|REVIEW|DONE|BLOCKED)",
-                    f"| {new_emoji} {new_status.upper()}",
-                    line,
-                    count=1,
-                    flags=re.IGNORECASE,
-                )
-            lines[i] = new_line
+    meta_index = None
+    for j in range(header_index + 1, len(lines)):
+        if TASK_HEADER.match(lines[j]):
+            break
+        if TASK_META.match(lines[j]):
+            meta_index = j
+            break
 
-            filepath.write_text(fm + "\n".join(lines))
-            log_change(
-                task_id,
-                f"status -> {new_status}",
-                history_file_for(filepath),
-            )
-            return True
+    if meta_index is None:
+        return False
 
-    return False
+    line = lines[meta_index]
+
+    # Replace status — supports both emoji and plain format
+    new_emoji = STATUS_EMOJI[new_status]
+    old_emoji = None
+    for emoji in STATUS_EMOJI.values():
+        if emoji in line:
+            old_emoji = emoji
+            break
+
+    if old_emoji:
+        # Emoji format: replace emoji and status text
+        new_line = line.replace(old_emoji, new_emoji)
+        new_line = re.sub(
+            r"\| (⬜|🔄|🔍|✅|⏸️) \w+",
+            f"| {new_emoji} {new_status.upper()}",
+            new_line,
+        )
+    else:
+        # Plain format (no emoji): inject emoji and update status text
+        new_line = re.sub(
+            r"\|\s*(TODO|IN_PROGRESS|REVIEW|DONE|BLOCKED)",
+            f"| {new_emoji} {new_status.upper()}",
+            line,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    lines[meta_index] = new_line
+
+    filepath.write_text(fm + "\n".join(lines))
+
+    # Re-read and confirm the write actually landed on the target task —
+    # a write that silently missed its mark must not be reported as success.
+    # The history log must only record a CONFIRMED change (Copilot review,
+    # PR #126): logging here, before the confirm, let a failed confirm leave
+    # a history entry asserting a status change that the re-read just showed
+    # never actually stuck.
+    verify_tasks = parse_tasks(filepath)
+    updated_task = get_task_by_id(verify_tasks, task_id)
+    if updated_task is None or updated_task.status != new_status:
+        get_logger("task").warning(
+            "update_task_status: post-write verification failed",
+            task_id=task_id,
+            expected_status=new_status,
+            actual_status=updated_task.status if updated_task else None,
+        )
+        return False
+
+    log_change(
+        task_id,
+        f"status -> {new_status}",
+        history_file_for(filepath),
+    )
+    return True
 
 
 def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked: bool) -> bool:
@@ -274,8 +337,9 @@ def update_checklist_item(filepath: Path, task_id: str, item_index: int, checked
     checklist_count = 0
 
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line):
-            in_task = task_id in line
+        m = TASK_HEADER.match(line)
+        if m:
+            in_task = m.group(1) == task_id
             checklist_count = 0
             continue
 
@@ -308,13 +372,10 @@ def mark_all_checklist_done(filepath: Path, task_id: str) -> int:
     marked_count = 0
 
     for i, line in enumerate(lines):
-        if TASK_HEADER.match(line):
-            in_task = task_id in line
+        m = TASK_HEADER.match(line)
+        if m:
+            in_task = m.group(1) == task_id
             continue
-
-        # Stop when reaching next task
-        if in_task and line.startswith("### TASK-"):
-            break
 
         if in_task and CHECKLIST_ITEM.match(line) and "[ ]" in line:
             lines[i] = line.replace("[ ]", "[x]")

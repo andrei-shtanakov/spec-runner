@@ -498,7 +498,12 @@ def post_done_hook(
     # old code did in execution.py) left the update in the working tree post-merge
     # where it was never committed and got clobbered by the next task's branch.
     if config.tasks_file.exists():
-        update_task_status(config.tasks_file, task.id, "done")
+        if not update_task_status(config.tasks_file, task.id, "done"):
+            logger.error(
+                "Could not record DONE status in tasks.md",
+                task_id=task.id,
+                file=str(config.tasks_file),
+            )
         mark_all_checklist_done(config.tasks_file, task.id)
 
     # Auto-commit. no_op flips True when the task completed without any

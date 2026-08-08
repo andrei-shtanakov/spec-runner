@@ -21,6 +21,88 @@ is a **breaking change** and requires a major version bump plus an entry here.
   consumer's own track instead of restating its lifecycle. The v2.20.0
   release notes are left as the historical artifact they are.
 
+## [2.22.0] — 2026-08-08
+
+Task-status integrity: fail-closed fixes plus honest stop-reason
+diagnostics, found by a live disputatio run (D3, 2026-08-08; maestro#164)
+whose forensic snapshot (`tasks-193159.md`) is now this release's golden
+regression fixture (`tests/fixtures/maestro-interop/alternating-bullet-tasks.md`).
+Minor, not patch: `run --all` now exits non-zero on a state/spec
+disagreement it used to silently report as success (see the exit-behavior
+matrix below).
+
+### Fixed
+
+- **`update_task_status` is task-bounded** (issue #123). The status rewrite
+  now matches the target task's header by exact ID — not substring, so
+  `TASK-001` no longer matches `TASK-0011` — and only searches for a meta
+  line between that header and the next one. A write that can't find its
+  own task's meta in that window returns `False` without touching the file
+  or the history log, instead of falling through onto a neighboring task's
+  meta line (the incident: updating `TASK-001` repainted `TASK-002`).
+  `update_checklist_item`/`mark_all_checklist_done` got the same exact-ID
+  fix. The bundled `spec-generator-skill` template copy was kept in sync.
+- **`TASK_META` recognizes bullet-prefixed meta lines** (issue #123).
+  Agents editing `tasks.md` mid-run introduce a bullet prefix on meta lines
+  (`- 🔴 P0 | ...` / `* P0 | ...`), confirmed forensically via git-status
+  correlation on the incident snapshot — not the generator templates,
+  which emit the bare form. The parser and `update_task_status` previously
+  only matched the bare form, so those tasks' meta was invisible to both;
+  the parser must now accept both formats regardless of source. The
+  bullet prefix requires the `P\d |` form immediately after it, so plain
+  description bullets and checklist items stay unaffected. The bundled
+  `spec-generator-skill` template copy of both fixes was kept in sync.
+- **`run --all` fails closed on a state-DB/tasks.md mismatch** (issue #124).
+  Two gates now stop the run non-zero (`state_spec_mismatch`) instead of
+  reporting exit 0: immediately after each task, if the state DB just
+  recorded success but tasks.md doesn't show `done`; and as a backstop when
+  the loop runs out of ready tasks, if any state-DB success was never
+  reflected in tasks.md. A legitimate block (a TODO waiting on a documented
+  failed/skipped dependency) leaves both sets in agreement and is
+  unaffected. A state-DB success whose task ID isn't in tasks.md *at all*
+  (removed from the spec, not merely left non-done) has nothing to
+  reconcile against — that case only warns, it doesn't fail the run closed.
+
+### Changed
+
+- **Honest `stop_reason` for blocked-after-skip runs.** `run --all` used to
+  report `stop_reason="completed"` (the default, unchanged) whenever
+  nothing was left `todo` — even when the reason nothing was left `todo`
+  was that `on_task_failure="skip"` gave up on a task and left it `blocked`.
+  The "no more ready tasks" branch now tells the two apart: if every
+  remaining task is non-`todo` *and* non-`done` (blocked, or an interrupted
+  `review`), `stop_reason` becomes `dependency_blocked_after_skip` with the
+  stuck task IDs in `stop_detail`, instead of the misleading "All tasks
+  completed". **Exit code is unchanged (still 0)** — this is diagnostics
+  only; making it non-zero is a separate interop follow-up. The reason now
+  also reaches the `run_ended` audit event and the `run_complete`
+  notification's message (a "Stop reason: ..." line, appended whenever the
+  reason isn't `completed` — not just for this new one) — both already
+  carried other stop reasons the same way; this fills the one gap in the
+  loop-exit path. Note: Maestro doesn't read `stop_reason` today (it isn't
+  wired to consume that meta key), so this is a spec-runner-side fix only —
+  picking it up needs work on Maestro's side too, which reinforces the
+  min-gate recommendation below.
+
+### Exit-behavior matrix for `run --all` (this release)
+
+| Situation | Exit code before 2.22.0 | Exit code in 2.22.0 | `stop_reason` |
+|---|---|---|---|
+| Every task reaches `done` | 0 | 0 (unchanged) | `completed` |
+| A task is `blocked`/stuck after `on_task_failure="skip"` gives up, and no task is left `todo` | 0 | 0 (unchanged) | `completed` → **`dependency_blocked_after_skip`** |
+| Downstream TODOs remain unreachable behind a failed/blocked dependency | 0 | 0 (unchanged) | `completed` (unchanged — see the `on_task_failure: stop` recommendation below) |
+| State-DB records success but tasks.md never shows `done` for that task | 0 | **1** | `completed` → **`state_spec_mismatch`** |
+| State-DB success for a task ID no longer in tasks.md at all | 0 | 0 (unchanged, now with a warning) | unaffected |
+
+Orchestrator guidance: callers that must not silently absorb a stuck run
+(Maestro and similar) should set `on_task_failure: stop` rather than the
+default `skip` — `stop` surfaces a failing task as a non-zero exit
+immediately instead of leaving it `blocked` for a caller to discover later
+via `stop_reason`. Maestro should raise its minimum/capability gate to
+require spec-runner ≥ 2.22.0 for the `state_spec_mismatch` exit=1 behavior
+(#124) — a caller pinned below this version will keep reading a real
+state/tasks disagreement as a successful run.
+
 ## [2.21.0] — 2026-08-06
 
 Unblocks Maestro's accepted `post-pr-command` work (design maestro#147):
@@ -1020,7 +1102,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.22.0...HEAD
+[2.22.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...v2.22.0
 [2.21.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...v2.20.0
 [2.19.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.18.0...v2.19.0
