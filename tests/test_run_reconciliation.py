@@ -201,11 +201,15 @@ class TestGate2OrphanedSuccessNotFatal:
         )
 
         # No SystemExit — an orphaned success (ID absent from tasks.md) is
-        # not a mismatch to fail closed on.
+        # not a mismatch to fail closed on. TASK-000 itself ends up blocked
+        # (the fake retries fail it), so the honest stop_reason here is
+        # "dependency_blocked_after_skip" (round 2, not "state_spec_mismatch"
+        # — the two are independent: this test's point is that the orphan
+        # alone never escalates to the fail-closed exit=1 path).
         _run_tasks(_run_args(), cfg)
 
         with ExecutorState(cfg) as state:
-            assert state.get_meta("last_run_stop_reason") == "completed"
+            assert state.get_meta("last_run_stop_reason") == "dependency_blocked_after_skip"
 
         assert any("TASK-999" in kw.get("task_ids", []) for _event, kw in warnings)
 

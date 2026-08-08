@@ -17,9 +17,9 @@ def test_unrecognized_meta_does_not_repaint_next_task(tmp_path: Path) -> None:
     """Target task's meta isn't in a format `TASK_META` recognizes.
 
     `TASK_META` was later taught to recognize `- `/`* ` bullet-prefixed meta
-    lines (#123 part 2 — `plan --full` itself emits that form), so a
-    genuinely *unrecognized* format is needed here: `+ ` is not an allowed
-    bullet char, so this meta line still doesn't match. The old
+    lines (#123 part 2 — agents editing tasks.md mid-run introduce that
+    form), so a genuinely *unrecognized* format is needed here: `+ ` is not
+    an allowed bullet char, so this meta line still doesn't match. The old
     implementation kept scanning past TASK-001's (unmatched) meta line,
     found TASK-002's bare meta line, and repainted TASK-002 instead. The
     fix must refuse entirely: no write, no history entry.

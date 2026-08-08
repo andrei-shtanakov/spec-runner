@@ -198,8 +198,15 @@ def notify_run_complete(
     completed: int,
     failed: int,
     total_cost: float | None = None,
+    stop_reason: str | None = None,
 ) -> bool:
-    """Notify about run completion with project context."""
+    """Notify about run completion with project context.
+
+    stop_reason is surfaced whenever it's not the default "completed" (e.g.
+    "dependency_blocked_after_skip", "max_consecutive_failures", an
+    error_<kind> stop) — a caller watching only this channel would otherwise
+    read a stuck run as an ordinary finish.
+    """
     project = _project_label(config)
     context = _context_line(config)
     parts = [f"*{project}*: run complete — {completed} done, {failed} failed"]
@@ -207,5 +214,7 @@ def notify_run_complete(
     if total_cost is not None and total_cost > 0:
         cost_str = f"${total_cost:.2f}"
         parts.append(f"Cost: {cost_str}")
+    if stop_reason and stop_reason != "completed":
+        parts.append(f"Stop reason: {stop_reason}")
     parts.append(context)
     return notify(config, "run_complete", "\n".join(parts), cost=cost_str)

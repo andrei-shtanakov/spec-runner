@@ -803,6 +803,25 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             blocked_count=len(todo_tasks),
                             blocked_tasks=blocked_info,
                         )
+                    elif nonterminal_tasks:
+                        # Blocked-after-skip (owner decision, round 2): nothing
+                        # is "todo" anymore, but not everything is "done"
+                        # either — the remainder is stuck (blocked, or an
+                        # interrupted "review") after on_task_failure="skip"
+                        # gave up on it. That is not the same as a clean
+                        # finish, so it must not be reported as "All tasks
+                        # completed"/stop_reason="completed" — Maestro and the
+                        # `status` display both key off `last_run_stop_reason`.
+                        # Exit code intentionally stays 0 here (a separate
+                        # interop follow-up decides whether to make this
+                        # non-zero); only the diagnostics change.
+                        stuck_ids = sorted(t.id for t in nonterminal_tasks)
+                        stop_reason = "dependency_blocked_after_skip"
+                        stop_detail = f"blocked/skipped tasks remain: {stuck_ids}"
+                        logger.warning(
+                            "Stopping run: tasks blocked after skip",
+                            blocked_tasks=stuck_ids,
+                        )
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
@@ -940,14 +959,21 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             completed=run_completed,
             failed=run_failed,
             total_cost=total_cost_val if total_cost_val > 0 else None,
+            stop_reason=stop_reason,
         )
 
+        # stop_reason= matches the kwarg every other EVENT_RUN_ENDED call site
+        # already carries (validation_failed/budget refusal/state_spec_mismatch
+        # above) — this loop-exit tail was the one place missing it, so every
+        # stop reason (not just blocked-after-skip) is now visible in the
+        # audit trail, not just in the `last_run_stop_reason` meta key.
         state.audit_logger.record(
             EVENT_RUN_ENDED,
             completed=run_completed,
             failed=run_failed,
             remaining=remaining,
             total_cost_usd=round(total_cost_val, 4),
+            stop_reason=stop_reason,
         )
 
         # --json-result: structured JSON result per task (for Maestro interop)
