@@ -271,13 +271,19 @@ def _current_metas(config) -> dict[str, SpecMeta | None]:
     return {s: read_spec_meta(stage_path(config, s), names) for s in names}
 
 
-def resolve_plan_description(description: str | None, from_file: str | None) -> str:
+def resolve_plan_description(
+    description: str | None, from_file: str | None, *, required: bool = True
+) -> str:
     """Resolve the plan description from --from-file (preferred) or the positional
     argument. Exits with an error if neither is usable.
 
     Args:
         description: the positional description (may be None when --from-file is used).
         from_file: path to a file whose contents are the description.
+        required: when False, "nothing given" resolves to an empty string instead of
+            exiting — gated mode decides per stage whether a description is needed
+            (a downstream stage inherits it from its approved upstream). An
+            unusable ``--from-file`` is still fatal: the caller asked for a file.
     """
     if from_file:
         path = Path(from_file)
@@ -294,7 +300,43 @@ def resolve_plan_description(description: str | None, from_file: str | None) -> 
         return text
     if description and description.strip():
         return description
+    if not required:
+        return ""
     raise SystemExit("plan: provide a description argument or --from-file PATH")
+
+
+# The stand-in description a downstream stage runs with when the operator gave
+# none. It is not a placeholder for missing information: the approved upstream
+# document is reproduced in the very same prompt, so this line's whole job is to
+# point the model at it instead of letting "## DESCRIPTION" render empty.
+_INHERITED_DESCRIPTION = (
+    "No separate description was given for this stage. Derive it entirely from the "
+    "upstream stage(s) reproduced below ({upstream}) — the approved upstream document "
+    "is the source of truth for scope and intent."
+)
+
+
+def _gated_description(description: str, stage: str, profile) -> str:
+    """Resolve the description for one gated stage, inheriting it when it is absent.
+
+    README documents `spec-runner plan --gated --stage design` without a
+    description, and steward's live V1 run hit the mismatch: every stage demanded
+    one (#134 item 2). A stage with an approved upstream does not need it — the
+    upstream body is already the richer input — so an absent description is
+    inherited there and only the first stage of the chain still insists on one.
+
+    Raises:
+        SystemExit: the stage has no upstream to inherit from.
+    """
+    if description.strip():
+        return description
+    upstream = _stage_def(stage, profile).upstream
+    if not upstream:
+        raise SystemExit(
+            f"plan --gated: '{stage}' is the first stage — provide a description "
+            "argument or --from-file PATH"
+        )
+    return _INHERITED_DESCRIPTION.format(upstream=", ".join(upstream))
 
 
 # Generated specs use the TASK- convention, but adopted/edited ones may
@@ -383,24 +425,37 @@ def cmd_plan(args, config: ExecutorConfig):
     requirements, design, and tasks files from a description.
     """
 
-    description = resolve_plan_description(args.description, getattr(args, "from_file", None))
+    gated = getattr(args, "gated", False)
+    # Gated mode resolves "no description given" per stage (see
+    # `_gated_description`), so the usage error is deferred until the stage is
+    # known; every other mode still needs one up front.
+    description = resolve_plan_description(
+        args.description, getattr(args, "from_file", None), required=not gated
+    )
 
-    if getattr(args, "gated", False):
+    if gated:
+        profile = config.resolve_spec_profile()
         explicit_stage = getattr(args, "stage", None)
         if explicit_stage:
             # Single-stage request: never auto-continue, never show the menu —
             # this is the same behavior regardless of TTY/--no-interactive.
-            raise SystemExit(run_gated_stage(explicit_stage, description, config))
+            raise SystemExit(
+                run_gated_stage(
+                    explicit_stage,
+                    _gated_description(description, explicit_stage, profile),
+                    config,
+                )
+            )
 
         interactive = sys.stdout.isatty() and not getattr(args, "no_interactive", False)
 
         if not interactive:
-            action, stage = resolve_next_stage(
-                _current_metas(config), config.resolve_spec_profile()
-            )
+            action, stage = resolve_next_stage(_current_metas(config), profile)
             if _print_gate_status(action, stage):
                 return
-            raise SystemExit(run_gated_stage(stage, description, config))
+            raise SystemExit(
+                run_gated_stage(stage, _gated_description(description, stage, profile), config)
+            )
 
         # Interactive auto-continue: generate -> checkpoint menu -> next stage.
         # Terminates in at most len(STAGES) generate-iterations: each generated
@@ -409,12 +464,15 @@ def cmd_plan(args, config: ExecutorConfig):
         # resolves to a terminal action that _print_gate_status breaks on at
         # the top of the loop.
         while True:
-            action, stage = resolve_next_stage(
-                _current_metas(config), config.resolve_spec_profile()
-            )
+            action, stage = resolve_next_stage(_current_metas(config), profile)
             if _print_gate_status(action, stage):
                 break
-            rc = run_gated_stage(stage, description, config, interactive=True)
+            rc = run_gated_stage(
+                stage,
+                _gated_description(description, stage, profile),
+                config,
+                interactive=True,
+            )
             if rc != 0:
                 break
         return

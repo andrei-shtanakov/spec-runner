@@ -25,13 +25,13 @@ Requirements:
 # Install Claude Code skills (creates .claude/skills in current project)
 spec-runner-init
 
-# Execute next ready task
+# Execute ONE task — the next ready one — and stop
 spec-runner run
 
 # Execute specific task
 spec-runner run --task=TASK-001
 
-# Execute all ready tasks
+# Drain the queue: keep executing while tasks become ready
 spec-runner run --all
 
 # Execute with live TUI dashboard
@@ -97,9 +97,10 @@ Tasks are defined in `spec/tasks.md`. Task ids are `<PREFIX>-<number>` — `TASK
 
 ```bash
 # Execution
-spec-runner run                            # Execute next ready task
+spec-runner run                            # Execute ONE task (the next ready one) and stop
 spec-runner run --task=TASK-001            # Execute specific task
-spec-runner run --all                      # Execute all ready tasks (resets failed→pending by default)
+spec-runner run --all                      # Drain the queue, re-evaluating readiness after each
+                                           # task (resets failed→pending by default)
 spec-runner run --all --no-reset-failed    # Keep failed tasks sticky (skip the default reset)
 spec-runner run --all --hitl-review        # Interactive HITL approval gate
 spec-runner run --force                    # Skip lock check (stale lock)
@@ -164,6 +165,13 @@ spec-runner doctor --strict                     # Exit non-zero on DEGRADED too
 spec-runner mcp                            # Launch MCP server (stdio)
 ```
 
+> **One task per `run`.** A bare `spec-runner run` (and `run --task`/`--milestone`)
+> executes a single task and exits — a fully approved `tasks.md` with twelve ready
+> tasks finishes one of them and reports `completed=1, remaining=11`. Only
+> `run --all` re-evaluates readiness after each task and drains the queue;
+> `watch` does the same, continuously. This is by design: a single `run` is the
+> unit of work an orchestrator schedules.
+
 ### Task Management (unified in v2.0)
 
 ```bash
@@ -216,6 +224,7 @@ between stages:
 ```bash
 spec-runner plan --gated "description"     # Generate the next stage as DRAFT (auto-resolved)
 spec-runner plan --gated --stage design    # ...or a specific stage (upstream must be approved)
+spec-runner plan --gated --no-interactive  # Skip the TTY checkpoint menu (CI / non-TTY runs)
 spec-runner spec status                    # Show each stage's status + the recommended next action
 # edit the generated file if needed, then:
 spec-runner spec approve requirements      # Re-validates the body, then approves (bumps version)
@@ -223,6 +232,13 @@ spec-runner plan --gated --stage design    # Repeat per stage: requirements -> d
 spec-runner spec approve tasks
 spec-runner run                            # Or `spec-runner run --strict` to enforce the gate below
 ```
+
+Only the **first** stage of the chain needs a description: every later stage
+inherits it from its approved upstream document, which is reproduced in the
+generation prompt anyway. So `plan --gated --stage design` runs bare, exactly as
+shown above. On a TTY, `plan --gated` opens a checkpoint menu after each draft
+(approve / edit / regenerate / stop) and auto-continues to the next stage;
+`--no-interactive` (or a non-TTY stdout) generates one stage and stops.
 
 Each managed spec file carries a small YAML frontmatter block tracking one of
 three statuses:

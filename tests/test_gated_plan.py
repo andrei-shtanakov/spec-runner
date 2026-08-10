@@ -180,14 +180,19 @@ def test_interactive_regenerate_then_stop_invokes_again(tmp_path: Path):
     assert meta is not None and meta.status == "draft"
 
 
-def _plan_args(*, no_interactive: bool = False) -> SimpleNamespace:
+def _plan_args(
+    *,
+    no_interactive: bool = False,
+    description: str | None = "Build X",
+    stage: str | None = None,
+) -> SimpleNamespace:
     """Build the argparse-shaped namespace `cmd_plan` reads for `--gated`."""
     return SimpleNamespace(
-        description="Build X",
+        description=description,
         from_file=None,
         full=False,
         gated=True,
-        stage=None,
+        stage=stage,
         no_interactive=no_interactive,
     )
 
@@ -406,3 +411,67 @@ def test_open_editor_splits_editor_with_args(monkeypatch, tmp_path: Path):
     cli_plan._open_editor(path)
 
     assert captured["argv"] == ["myed", "--wait", str(path)]
+
+
+# --- #134 п.2: a downstream stage inherits its description from upstream -------
+
+
+def _spy_run_gated_stage(monkeypatch) -> list[tuple[str, str]]:
+    """Record the (stage, description) pairs `cmd_plan` hands to generation."""
+    seen: list[tuple[str, str]] = []
+
+    def _fake(stage, description, config, invoke=None, **kwargs):
+        seen.append((stage, description))
+        return 0
+
+    monkeypatch.setattr(cli_plan, "run_gated_stage", _fake)
+    return seen
+
+
+def test_gated_downstream_stage_runs_without_a_description(tmp_path, monkeypatch):
+    """`spec-runner plan --gated --stage design` — exactly as README shows it —
+    must run with no description argument: the approved upstream stage IS the
+    description (steward's live V1 run, #134 item 2)."""
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "approved"), GOOD_REQ_BODY)
+    seen = _spy_run_gated_stage(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_plan.cmd_plan(_plan_args(description=None, stage="design"), cfg)
+
+    assert exc_info.value.code == 0
+    assert len(seen) == 1
+    stage, description = seen[0]
+    assert stage == "design"
+    # The inherited description must name the upstream it defers to, so the
+    # generation prompt never reads as if the project had no description.
+    assert "requirements" in description
+
+
+def test_gated_first_stage_still_requires_a_description(tmp_path, monkeypatch):
+    """The first stage has no upstream to inherit from — refuse loudly instead of
+    generating requirements out of thin air."""
+    cfg = _cfg(tmp_path)
+    seen = _spy_run_gated_stage(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_plan.cmd_plan(_plan_args(description=None, stage="requirements"), cfg)
+
+    assert exc_info.value.code != 0
+    assert "description" in str(exc_info.value.code)
+    assert seen == []
+
+
+def test_gated_auto_resolved_downstream_stage_inherits_too(tmp_path, monkeypatch):
+    """The same holds without --stage: when the auto-resolved next stage is
+    downstream, a missing description is inherited rather than fatal."""
+    cfg = _cfg(tmp_path)
+    write_spec(cfg.requirements_file, SpecMeta("requirements", "approved"), GOOD_REQ_BODY)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    seen = _spy_run_gated_stage(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_plan.cmd_plan(_plan_args(description=None), cfg)
+
+    assert exc_info.value.code == 0
+    assert [stage for stage, _ in seen] == ["design"]
