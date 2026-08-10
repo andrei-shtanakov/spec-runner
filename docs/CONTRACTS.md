@@ -156,6 +156,40 @@ This divergence is deliberate and will not be reconciled: a hand-edited
 schema. Treat the schema, not the parser, as authoritative for what a
 well-formed document's `validation` value should be.
 
+## Authored extras: `traces_to` and `upstream_hashes` (DEC-008)
+
+These two keys are **not** canonical fields — they belong to steward's
+governance vocabulary and ride through `SpecMeta.extra` like any other foreign
+key. What changed with DEC-008 (issue #135) is that spec-runner, as the
+authoring side, now **writes** them: steward is the validator of these fields
+and never rewrites a generated artifact, so a field nobody wrote stayed empty
+and every spec-runner-authored bundle came back `GC-TRACE-EMPTY` +
+`GC-STALE-UNPINNED`.
+
+| Key | Shape | Written when |
+|---|---|---|
+| `traces_to` | list of id strings: the stage's **direct** upstream stage name(s) first, then id tokens (`REQ-001`, `DESIGN-207`) that occur in the downstream body **and** resolve in the upstream text | whenever content is authored — `plan --gated` draft, `spec approve`, `spec adopt` |
+| `upstream_hashes` | mapping `{direct upstream stage: git blob hash}`, reproducible as `git hash-object <upstream file>` over the whole file (frontmatter included) | at approval only — `spec approve`, `spec adopt` when it lands on `approved` |
+
+Rules that follow from the consumer's checks, not from taste:
+
+- **Direct upstream only.** A pin for a transitive ancestor is reported as
+  `GC-STALE-KEY`; a `traces_to` entry that resolves to nothing is a `GC-TRACE`
+  **error**, which is worse than the empty-link warning. Derived id tokens are
+  therefore verified against the upstream body and dropped when absent.
+- **Absent, never empty.** A first stage (no upstream) gets neither key. An
+  upstream file that does not exist is left unpinned rather than pinned to a
+  value that was never its content.
+- **Additive, not authoritative.** An existing `traces_to` value is kept —
+  entries in their original order, derived ones appended, a legacy scalar
+  normalized into the list steward's reader requires. spec-runner materializes
+  what it can prove from the stage chain and deletes nobody else's claim. Where
+  it can prove nothing (a first stage), it leaves the field untouched.
+- **Pins are not refreshed behind your back.** Only the approval of *that* stage
+  restamps its pins. Re-approving an upstream cascades `stale` downstream and
+  deliberately leaves the old pin in place — that mismatch is exactly the signal
+  steward's stale-cascade reads.
+
 ## Managed boundary and fail-closed parsing
 
 `read_spec_meta(path, stages)` returns `None` for an **unmanaged** document
@@ -205,6 +239,10 @@ text = (files("spec_runner.contract_fixtures") / "spec_meta_contract_v2.md").rea
 See `tests/test_spec_meta_contract.py::test_golden_fixture_round_trips` for
 the reference assertions (extras present, `owner_role` present, round-trip
 stability).
+
+Its two governance extras were corrected with DEC-008: the fixture used to show
+`traces_to` as a scalar and pin a transitive ancestor, neither of which a
+consumer's reader accepts. It now shows what spec-runner actually writes.
 
 ## Contract changelog
 

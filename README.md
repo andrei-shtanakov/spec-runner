@@ -232,6 +232,12 @@ three statuses:
 - **stale** — an upstream stage was re-approved after this one was generated,
   so this stage may be out of sync and should be regenerated or re-reviewed.
 
+Generation and approval also record where a stage came from: `traces_to` lists
+its direct upstream stage plus the requirement/design ids it actually inherits,
+and `spec approve` pins `upstream_hashes` — the `git hash-object` value of the
+upstream file as approved, so a later upstream edit is detectable and not merely
+assumed. Both are documented in `docs/CONTRACTS.md`.
+
 Other useful commands: `spec-runner spec reject <stage>` reopens an approved/stale
 stage as draft; `spec-runner spec adopt <stage>` stamps frontmatter onto an
 existing unmanaged file (validates first — a failing file is adopted as draft

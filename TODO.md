@@ -232,15 +232,23 @@ A/B — дефекты подтверждённого поведения, C — 
       `allowed_approver_roles[]`, которые пока достаточно пропускать через `extra`.
       Их триггер на убийство legacy-пути — `SPEC_META_CONTRACT = 2` в master (уже есть).
       Действие: сослаться на #125 в тех пунктах, отдельного трека не заводить.
-- [ ] **#135 authoring-contract-traces-pins** (inbox, from steward, DEC-008) @owner:github:andrei-shtanakov @id:authoring-contract-traces-pins
+- [x] **#135 authoring-contract-traces-pins** (inbox, from steward, DEC-008) @owner:github:andrei-shtanakov @id:authoring-contract-traces-pins
       Канонические имена стадий признаны нашими (steward переименовал `task` → `tasks`
-      у себя, без alias). Остаток шва за нами как владельцем формата:
-      (1) `traces_to` — gated-генерация/approve материализует связь downstream ↔ upstream
-      (минимум id стадии по цепочке профиля, лучше реальные REQ-/DESIGN-id);
-      сейчас поле не пишется вовсе → `GC-TRACE-EMPTY` на каждом нашем бандле.
-      (2) `upstream_hashes` — при `spec approve <stage>` пиновать git blob-хеши upstream
-      (`git hash-object <file>`); без них stale-cascade steward слеп (`GC-STALE-UNPINNED`).
-      steward — только валидатор, артефакты не переписывает.
+      у себя, без alias). Остаток шва — за нами как владельцем формата, сделано:
+      `spec.stamp_authoring_links` (+ `derive_traces_to` / `upstream_pins` /
+      `git_blob_hash`) зовётся из `plan --gated`, `spec approve` и `spec adopt`.
+      (1) `traces_to` — **список**: сначала прямой upstream по цепочке профиля,
+      затем реальные id из тела, которые действительно резолвятся в upstream-тексте
+      (нерезолвящийся id у steward — `GC-TRACE` **error**, хуже исходного warn'а).
+      (2) `upstream_hashes` — `{прямой upstream: git blob hash}` при approve;
+      считаем локально (`sha1("blob <len>\0"+bytes)`), воспроизводится
+      `git hash-object`. Пин НЕ обновляется при re-approve upstream — расхождение
+      и есть сигнал stale-cascade.
+      Контракт не бампается: оба ключа — extras (pass-through), не canonical.
+      Попутно: golden-фикстура шипилась с **невалидным** для steward примером
+      (`traces_to` скаляром и пином транзитивного предка `requirements` на стадии
+      `tasks` → `GC-STALE-KEY`) — исправлена; формы описаны в `docs/CONTRACTS.md`.
+      Тесты: `tests/test_authoring_links.py` (15).
 
 #### E. Крупные спеки D7 — нужен scope-решение владельца, не «сделать»
 

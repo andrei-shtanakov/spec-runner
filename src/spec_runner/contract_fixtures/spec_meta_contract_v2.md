@@ -1,8 +1,9 @@
 ---
-traces_to: REQ-001
+traces_to:
+- design
+- REQ-001
 upstream_hashes:
-  requirements: 5f2a9c1
-  design: 8b3e7d0
+  design: 8b3e7d0a1c2f4e6b8d0a2c4e6f8a0b2d4e6f8a0b
 spec_stage: tasks
 status: approved
 version: 3
@@ -19,3 +20,8 @@ owner_role: platform
 Consumers (steward) parse this file and compare against the documented field
 table in docs/CONTRACTS.md. Extras appear first, canonical fields last —
 that ordering is part of the render contract.
+
+The two governance extras show the shapes spec-runner writes since DEC-008:
+`traces_to` is a LIST (the direct upstream stage, then ids that resolve in it)
+and `upstream_hashes` maps the DIRECT upstream stage to a full git blob hash —
+the value `git hash-object <file>` prints for the bytes that were approved.
