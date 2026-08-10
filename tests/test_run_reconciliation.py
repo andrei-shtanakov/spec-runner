@@ -200,13 +200,15 @@ class TestGate2OrphanedSuccessNotFatal:
             lambda event, **kw: warnings.append((event, kw)),
         )
 
-        # No SystemExit — an orphaned success (ID absent from tasks.md) is
-        # not a mismatch to fail closed on. TASK-000 itself ends up blocked
-        # (the fake retries fail it), so the honest stop_reason here is
-        # "dependency_blocked_after_skip" (round 2, not "state_spec_mismatch"
-        # — the two are independent: this test's point is that the orphan
-        # alone never escalates to the fail-closed exit=1 path).
-        _run_tasks(_run_args(), cfg)
+        # An orphaned success (ID absent from tasks.md) is not a mismatch to
+        # fail closed on — it stays a warning. TASK-000 itself ends up blocked
+        # (the fake retries fail it), and since #136 that alone exits 1 under
+        # "dependency_blocked_after_skip". The two remain independent: the
+        # orphan never escalates to "state_spec_mismatch", which is what this
+        # test is about.
+        with pytest.raises(SystemExit) as exc:
+            _run_tasks(_run_args(), cfg)
+        assert exc.value.code == 1
 
         with ExecutorState(cfg) as state:
             assert state.get_meta("last_run_stop_reason") == "dependency_blocked_after_skip"
@@ -216,9 +218,14 @@ class TestGate2OrphanedSuccessNotFatal:
 
 class TestLegitimateBlockUnchanged:
     """Test 3: TODO tasks blocked by a genuinely failed dependency (the
-    default on_task_failure=skip flow) must keep exiting exactly as before
-    — state-DB and tasks.md agree (nothing succeeded, nothing is done), so
-    neither gate should fire."""
+    default on_task_failure=skip flow) must not trip the *mismatch* gate —
+    state-DB and tasks.md agree (nothing succeeded, nothing is done).
+
+    This is the #136 shape exactly: a blocker gives up, its dependent waits
+    forever. Until #136 the run reported `completed`/0 here, and this test
+    asserted it — the bug was pinned as the contract. The mismatch gate still
+    must not fire (there is nothing inconsistent), but the run is no longer a
+    clean finish: reason `dependency_blocked_after_skip`, exit 1."""
 
     def test_failed_dependency_blocks_without_mismatch(self, tmp_path, monkeypatch):
         spec_dir = tmp_path / "spec"
@@ -243,11 +250,13 @@ class TestLegitimateBlockUnchanged:
 
         monkeypatch.setattr(cli_mod, "run_with_retries", _fake_run_with_retries)
 
-        # No SystemExit — behavior must be unchanged from before Task 3.
-        _run_tasks(_run_args(), cfg)
+        with pytest.raises(SystemExit) as exc:
+            _run_tasks(_run_args(), cfg)
+        assert exc.value.code == 1, "blocker failed, dependent stranded — this is not success"
 
         with ExecutorState(cfg) as state:
-            assert state.get_meta("last_run_stop_reason") == "completed"
+            # NOT state_spec_mismatch: nothing is inconsistent, work is stuck.
+            assert state.get_meta("last_run_stop_reason") == "dependency_blocked_after_skip"
 
         text = tasks_md.read_text()
         assert "TASK-000" in text and "BLOCKED" in text

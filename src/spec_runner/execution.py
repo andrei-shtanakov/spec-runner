@@ -484,8 +484,12 @@ def _fail_for_budget(
         error=message,
         error_code=ErrorCode.BUDGET_EXCEEDED,
     )
-    # LABS-41: budget exhaustion is terminal, not a dependency wait.
-    update_task_status(config.tasks_file, task.id, "failed")
+    # LABS-41: budget exhaustion is terminal, not a dependency wait. That
+    # distinction lives in the state DB (status "failed", error_code
+    # BUDGET_EXCEEDED) — tasks.md has a five-status vocabulary and no "failed"
+    # in it, so writing one raised KeyError and took the whole run tail with
+    # it (#127). "blocked" is what every other terminal failure writes here.
+    update_task_status(config.tasks_file, task.id, "blocked")
 
 
 def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:

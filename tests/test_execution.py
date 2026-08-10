@@ -1041,8 +1041,19 @@ class TestBudgetEnforcement:
         mock_status,
         tmp_path,
     ):
-        """LABS-41: budget exhaustion must mark the task `failed` in tasks.md,
-        not `blocked` (blocked implies dependency wait, which is misleading)."""
+        """Budget exhaustion is terminal, and the terminal record lives in the
+        state DB (status `failed`, error_code `BUDGET_EXCEEDED`).
+
+        LABS-41 originally wrote `failed` into tasks.md too, to distinguish it
+        from a dependency wait. That status does not exist in the tasks.md
+        vocabulary (`STATUS_EMOJI` = todo/in_progress/review/done/blocked), so
+        the write raised `KeyError` and took the run's whole reporting tail
+        with it (#127) — invisible here because this test mocks
+        `update_task_status`, which is precisely how the intent survived
+        review while never once working. `blocked` is what every other
+        terminal failure writes, and unlike a hypothetical `failed` it stays
+        recoverable: `resolve_dependencies` promotes it back to todo once the
+        budget is raised."""
         config = _make_config(tmp_path, max_retries=5, task_budget_usd=0.05)
         state = _make_state(config)
         task = _make_task()
@@ -1061,10 +1072,13 @@ class TestBudgetEnforcement:
         mock_exec.side_effect = side_effect
         run_with_retries(task, config, state)
 
-        # Verify update_task_status was called with "failed", never "blocked"
+        # tasks.md gets a status it can actually represent...
         statuses = [c.args[2] for c in mock_status.call_args_list]
-        assert "failed" in statuses
-        assert "blocked" not in statuses
+        assert "blocked" in statuses
+        assert "failed" not in statuses
+        # ...while the terminal, budget-specific truth stays in the state DB.
+        attempt = state.get_task_state(task.id).attempts[-1]
+        assert attempt.error_code == ErrorCode.BUDGET_EXCEEDED
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")

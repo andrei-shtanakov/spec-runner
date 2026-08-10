@@ -9,6 +9,8 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import cmd_watch
 from spec_runner.spec import SpecMeta, write_spec
@@ -296,7 +298,10 @@ class TestWatchGovernanceGate:
         config = _make_config(tmp_path, spec_governance="strict")
         write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
 
-        cmd_watch(_make_args(), config)
+        # #134: the refusal exits non-zero (same gate as `run`/`retry`).
+        with pytest.raises(SystemExit) as exc:
+            cmd_watch(_make_args(), config)
+        assert exc.value.code == 1
 
         mock_validate.assert_not_called()
         mock_run.assert_not_called()
