@@ -120,7 +120,11 @@ def test_adopt_preserves_extras_and_owner_role_on_managed_file(tmp_path: Path):
     m = read_spec_meta(cfg.tasks_file)
     assert m is not None
     assert m.owner_role == "platform"
-    assert m.extra["traces_to"] == "REQ-001"
+    # DEC-008 (#135): adopt materializes traces_to too, keeping the existing
+    # claim (normalized from the legacy scalar) and appending the derived link.
+    assert m.extra["traces_to"] == ["REQ-001", "design"]
+    # This file adopts as DRAFT (the body fails tasks validation), and pins are
+    # stamped at approval only — so the pre-existing pin is carried untouched.
     assert m.extra["upstream_hashes"] == {"design": "abc"}
 
 

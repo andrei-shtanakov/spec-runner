@@ -1,4 +1,7 @@
 ---
+traces_to:
+- requirements
+- REQ-001
 spec_stage: design
 status: approved
 version: 1

@@ -17,6 +17,7 @@ from .spec import (
     read_spec_meta,
     resolve_next_stage,
     stage_path,
+    stamp_authoring_links,
     write_spec,
 )
 from .validate import validate_spec_stage, verdict_from_result
@@ -152,6 +153,12 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
         approved_at=_now() if status == "approved" else None,
         owner_role=existing.owner_role if existing is not None else None,
         extra=dict(existing.extra) if existing is not None else {},
+    )
+    # `adopt` is the other door into APPROVED, so it stamps the authoring
+    # contract exactly like `approve` does — an adopted bundle that skipped the
+    # pins would reach steward as GC-STALE-UNPINNED (DEC-008, #135).
+    stamp_authoring_links(
+        meta, config, stage, body, _profile(config), pin_upstream=status == "approved"
     )
     write_spec(path, meta, body, lock=ExecutorLock(config.spec_lock_file))
     print(f"{stage}: adopted ({status})")

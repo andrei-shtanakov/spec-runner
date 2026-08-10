@@ -31,6 +31,7 @@ from .spec import (
     read_spec_meta,
     resolve_next_stage,
     stage_path,
+    stamp_authoring_links,
     write_spec,
 )
 from .task import (
@@ -161,8 +162,13 @@ def _generate_stage_draft(
         owner_role=existing.owner_role if existing is not None else None,
         extra=dict(existing.extra) if existing is not None else {},
     )
+    body = body.rstrip("\n") + "\n"
+    # A draft already knows what it was derived from, so the traceability link is
+    # stamped here; the upstream pins wait for approval, which is what they
+    # record (DEC-008, #135).
+    stamp_authoring_links(meta, config, stage, body, profile, pin_upstream=False)
     lock = ExecutorLock(config.spec_lock_file)
-    write_spec(path, meta, body.rstrip("\n") + "\n", lock=lock)
+    write_spec(path, meta, body, lock=lock)
 
     verdict = verdict_from_result(validate_spec_stage(stage, config, profile))
     meta.validation = verdict

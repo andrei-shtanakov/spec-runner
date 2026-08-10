@@ -202,7 +202,12 @@ def test_apply_approval_preserves_extras(tmp_path, monkeypatch):
     after = read_spec_meta(path, LITE.names())
     assert after is not None
     assert after.status == "approved"
-    assert after.extra["traces_to"] == "REQ-001"
+    # Since DEC-008 (#135) approve also MATERIALIZES traces_to, so the value is
+    # no longer carried byte-for-byte: the pre-existing claim is kept (and its
+    # legacy scalar shape normalized to the list steward's reader requires) with
+    # the derived upstream link appended. Nothing is erased — that is the part
+    # this test guards.
+    assert after.extra["traces_to"] == ["REQ-001", "design"]
 
 
 def test_owner_role_round_trips():
@@ -287,11 +292,12 @@ def test_golden_fixture_round_trips():
     assert meta.owner_role == "platform"
     assert meta.approved_by == "andrei"
     assert meta.version == 3
-    assert meta.extra["traces_to"] == "REQ-001"
-    assert meta.extra["upstream_hashes"] == {
-        "requirements": "5f2a9c1",
-        "design": "8b3e7d0",
-    }
+    # The shapes steward's reader requires (and the ones spec-runner writes
+    # since DEC-008): a LIST of ids, and a mapping keyed by the DIRECT upstream
+    # only — the fixture used to carry a scalar and a transitive-ancestor key,
+    # both of which that reader rejects or flags.
+    assert meta.extra["traces_to"] == ["design", "REQ-001"]
+    assert meta.extra["upstream_hashes"] == {"design": "8b3e7d0a1c2f4e6b8d0a2c4e6f8a0b2d4e6f8a0b"}
     assert body.startswith("# Golden fixture for SpecMeta contract v2")
     assert meta_to_dict(meta_from_dict(meta_to_dict(meta))) == meta_to_dict(meta)
 

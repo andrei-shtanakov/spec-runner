@@ -13,6 +13,10 @@ that surface so any future drift in `lite` is caught:
 
 The one-time proof that `lite == pre-C1` was a git-worktree diff of the pre-C1
 commit against HEAD; these tests keep the invariant from regressing.
+
+The invariant is about the *stage model*, not about the frontmatter never
+growing: DEC-008 (#135) added the authored `traces_to` link to generated stages,
+so the pipeline goldens carry it deliberately. Any other drift is a regression.
 """
 
 from __future__ import annotations

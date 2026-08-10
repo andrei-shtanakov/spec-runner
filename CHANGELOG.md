@@ -10,6 +10,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **Gated authoring now materializes `traces_to` and `upstream_hashes`**
+  (#135, DEC-008). Both are steward-owned governance keys that already rode
+  through `SpecMeta.extra` as pass-through — nobody ever wrote them, so every
+  spec-runner-authored bundle reached steward's gate as `GC-TRACE-EMPTY` +
+  `GC-STALE-UNPINNED`. spec-runner is the only party that knows, at generation
+  and approval time, what a stage was derived from and what the upstream bytes
+  were, so it writes them now:
+  - `traces_to` — a list: the stage's **direct** upstream stage name(s), then id
+    tokens (`REQ-001`, `DESIGN-207`) carried by the body that actually resolve in
+    the upstream text. Stamped whenever content is authored (`plan --gated`
+    draft, `spec approve`, `spec adopt`). An existing value is kept and appended
+    to, never replaced; a legacy scalar is normalized into the list shape.
+  - `upstream_hashes` — `{direct upstream stage: git blob hash}`, reproducible
+    with `git hash-object <file>`. Stamped at approval only, since that is what
+    it records. Re-approving an upstream deliberately leaves the downstream pin
+    alone: the mismatch *is* the stale signal.
+  - No `SPEC_META_CONTRACT` bump: these are extras, not canonical fields.
+  - The shipped golden fixture is corrected — it showed `traces_to` as a scalar
+    and pinned a transitive ancestor, neither of which a consumer's reader
+    accepts. `docs/CONTRACTS.md` documents both shapes and the rules behind them.
+
 ### Fixed
 
 - **`harness_guard: strict` is no longer disarmed by a retry** (#137,

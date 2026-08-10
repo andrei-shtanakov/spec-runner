@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field, fields
@@ -627,6 +629,136 @@ def mark_downstream_stale(
             write_spec(ds_path, ds_meta, read_spec_body(ds_path), lock=lock)
 
 
+# --- authoring contract: traceability links and upstream pins (DEC-008) ------
+#
+# `traces_to` and `upstream_hashes` are steward-owned governance fields: they
+# ride through `SpecMeta.extra` as pass-through and are NOT part of spec-runner's
+# canonical set, so materializing them costs no `SPEC_META_CONTRACT` bump. What
+# spec-runner owns is the authoring act — it is the only party that knows, at
+# generation and approval time, which upstream a stage was derived from and what
+# its bytes were. steward validates these fields and never rewrites an artifact
+# (DEC-008), so a field nobody writes stayed empty forever: every spec-runner
+# authored bundle came back GC-TRACE-EMPTY + GC-STALE-UNPINNED (issue #135).
+
+# An id token as specs write them: REQ-001, DESIGN-207, TASK-012. Bounded by
+# non-word/non-hyphen on both sides, the same way steward resolves the token
+# against upstream text, so REQ-1 never matches inside REQ-10.
+_ID_TOKEN = re.compile(r"(?<![\w-])[A-Z][A-Z0-9]*-\d+(?![\w-])")
+
+
+def git_blob_hash(data: bytes) -> str:
+    """Return the git blob SHA-1 of ``data`` — the value ``git hash-object`` prints.
+
+    Computed locally (``sha1("blob <len>\\0" + data)``) rather than by shelling
+    out: the pin must be reproducible in a directory that is not a git
+    repository, and steward reproduces it with ``git hash-object <file>``.
+    """
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data).hexdigest()  # noqa: S324 — git's own digest
+
+
+def upstream_pins(config: ExecutorConfig, stage: str, profile: StageProfile) -> dict[str, str]:
+    """Return ``{direct upstream stage: git blob hash of its file}`` for ``stage``.
+
+    Only the DIRECT upstream is pinned. steward keys the stale-cascade off its
+    graph edges and reports any extra key as ``GC-STALE-KEY``, so pinning the
+    transitive ancestors would trade one warning for another. An upstream whose
+    file does not exist is skipped: no pin (a warning steward can act on) beats a
+    pin to bytes that were never there.
+    """
+    pins: dict[str, str] = {}
+    for upstream in profile.edges().get(stage, ()):
+        path = stage_path(config, upstream)
+        if path.exists():
+            pins[upstream] = git_blob_hash(path.read_bytes())
+    return pins
+
+
+def derive_traces_to(
+    body: str, config: ExecutorConfig, stage: str, profile: StageProfile
+) -> list[str]:
+    """Return the traceability links for ``stage``: upstream stage ids, then real ids.
+
+    steward accepts an entry that either names a direct upstream node or occurs
+    as a token in that upstream's text. The direct upstream stage ids always come
+    first, so the link is never empty for a downstream stage; id tokens carried by
+    ``body`` (``[REQ-001]``, ``DESIGN-207``) are added only when they actually
+    occur upstream — an id that resolves to nothing is a ``GC-TRACE`` *error*
+    there, which would be worse than the empty-link warning this fixes.
+
+    A stage with no upstream gets an empty list, and callers omit the key
+    entirely rather than writing one.
+    """
+    upstream_names = profile.edges().get(stage, ())
+    if not upstream_names:
+        return []
+    upstream_text = "\n".join(
+        read_spec_body(stage_path(config, name))
+        for name in upstream_names
+        if stage_path(config, name).exists()
+    )
+    resolved = sorted(
+        {
+            token
+            for token in _ID_TOKEN.findall(body)
+            if re.search(rf"(?<![\w-]){re.escape(token)}(?![\w-])", upstream_text)
+        }
+    )
+    return [*upstream_names, *resolved]
+
+
+def _merge_traces(existing: Any, derived: list[str]) -> list[str]:
+    """Merge an already-present ``traces_to`` value with the derived links.
+
+    Entries a human (or another tool) put there are kept, in their order, with
+    the derived ones appended — spec-runner materializes what it can prove from
+    the stage chain, but a link it cannot derive is still somebody's claim, and
+    deleting it would silently narrow the traceability graph steward checks. A
+    legacy scalar is normalized into the list shape steward's reader requires;
+    any other shape is replaced, since it could not have been read anyway.
+
+    Only ever called with a non-empty ``derived``: where spec-runner has nothing
+    of its own to add (a first stage), it leaves the field exactly as it found
+    it rather than reshaping a value it did not author.
+    """
+    if isinstance(existing, str):
+        existing_entries = [existing] if existing.strip() else []
+    elif isinstance(existing, list):
+        existing_entries = [e for e in existing if isinstance(e, str) and e.strip()]
+    else:
+        existing_entries = []
+    return existing_entries + [t for t in derived if t not in existing_entries]
+
+
+def stamp_authoring_links(
+    meta: SpecMeta,
+    config: ExecutorConfig,
+    stage: str,
+    body: str,
+    profile: StageProfile,
+    *,
+    pin_upstream: bool,
+) -> None:
+    """Materialize ``traces_to`` (and, when approving, ``upstream_hashes``) on ``meta``.
+
+    Mutates ``meta.extra`` in place; the caller writes the file. ``pin_upstream``
+    separates the two acts: a link describes what the stage was derived from and
+    is stamped whenever content is authored, while a pin records the exact
+    upstream bytes that were signed off and therefore belongs to approval alone
+    (DEC-008). Keys are omitted, never emptied, when there is nothing to record —
+    a first stage has no upstream, and an absent key is the state steward reads
+    as "no claim made".
+    """
+    derived = derive_traces_to(body, config, stage, profile)
+    if derived:
+        meta.extra["traces_to"] = _merge_traces(meta.extra.get("traces_to"), derived)
+    if not pin_upstream:
+        return
+    pins = upstream_pins(config, stage, profile)
+    if pins:
+        meta.extra["upstream_hashes"] = pins
+
+
 def apply_approval(
     config: ExecutorConfig,
     stage: str,
@@ -639,6 +771,10 @@ def apply_approval(
     Always cascades a ``stale`` status to every downstream stage that isn't
     already stale, since approval bumps the version and any generated
     downstream content may now be out of sync with the newly approved stage.
+
+    Approval is also where the authoring contract is stamped: the approved body's
+    ``traces_to`` links and the ``upstream_hashes`` pins of the exact upstream
+    bytes being signed off (DEC-008, see :func:`stamp_authoring_links`).
     """
     profile = config.resolve_spec_profile()
     path = stage_path(config, stage)
@@ -646,10 +782,12 @@ def apply_approval(
     if meta is None:
         raise ValueError(f"{stage} is unmanaged (no frontmatter)")
     lock = _spec_lock(config)
+    body = read_spec_body(path)
     meta.status = "approved"
     meta.version += 1
     meta.approved_by = approver
     meta.approved_at = now
     meta.validation = fresh_validation
-    write_spec(path, meta, read_spec_body(path), lock=lock)
+    stamp_authoring_links(meta, config, stage, body, profile, pin_upstream=True)
+    write_spec(path, meta, body, lock=lock)
     mark_downstream_stale(config, stage, lock, profile)

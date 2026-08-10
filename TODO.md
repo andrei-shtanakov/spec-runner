@@ -263,24 +263,39 @@ A/B — дефекты подтверждённого поведения, C — 
 
 #### D. Контракт авторинга SpecMeta (steward)
 
-- [ ] **#125 specmeta-owner-role-canonical** (inbox, from steward) — **уже в плане**: @owner:github:andrei-shtanakov @id:specmeta-owner-role-canonical
-      ask совпадает с блоком «Follow-up: форма `owner_role` устарела по DEC-007»
-      ниже (пункты `dec007-doc-fix` / `dec007-fixture` / `dec007-inline-comment` /
-      `dec007-patch-release-decision` / `dec007-vault-note-update`). Issue уточняет
-      грамматику (`^[a-z][a-z0-9-]{1,31}$`, ровно одна роль, `@` не входит в значение)
-      и подтверждает, что множественность — это будущие `reviewer_roles[]` /
-      `allowed_approver_roles[]`, которые пока достаточно пропускать через `extra`.
-      Их триггер на убийство legacy-пути — `SPEC_META_CONTRACT = 2` в master (уже есть).
-      Действие: сослаться на #125 в тех пунктах, отдельного трека не заводить.
-- [ ] **#135 authoring-contract-traces-pins** (inbox, from steward, DEC-008) @owner:github:andrei-shtanakov @id:authoring-contract-traces-pins
+- [x] **#125 specmeta-owner-role-canonical** (inbox, from steward) — **ask уже удовлетворён @owner:github:andrei-shtanakov @id:specmeta-owner-role-canonical
+      отгруженным кодом**, проверено по артефактам 2026-08-10:
+      `docs/CONTRACTS.md` («exactly one role, no `@`, no comma-list», SSOT формы —
+      steward `profiles/roles.yaml`), фикстура (`owner_role: platform`) и
+      инлайн-комментарий `spec.py` — все три под DEC-007 с PR #94, вышли в **v2.15.0**;
+      триаж 08-10 переоткрыл пункты по устаревшему снимку TODO, а не по коду.
+      **Писать нам нечего**: spec-runner `owner_role` не генерирует — только носит из
+      уже существующего frontmatter, так что legacy-форму мы не производим. Грамматику
+      (`^[a-z][a-z0-9-]{1,31}$`) сознательно НЕ валидируем: данные steward не
+      мигрированы, а носитель обязан round-trip'ить legacy `"@a,@b"` дословно
+      (пинится `test_legacy_owner_role_form_carried_verbatim`). `reviewer_roles[]` /
+      `allowed_approver_roles[]` уже проходят через `extra` (их же vendor-тест это
+      подтверждает). `SPEC_META_CONTRACT` остаётся 2.
+      Остаток — не наш код: заметка в vault всё ещё велит steward игнорировать примеры
+      из фикстуры v2.11.0 (см. `dec007-vault-note-update` ниже; после #135 фикстура
+      меняется снова, так что обновлять её стоит один раз, после релиза).
+- [x] **#135 authoring-contract-traces-pins** (inbox, from steward, DEC-008) @owner:github:andrei-shtanakov @id:authoring-contract-traces-pins
       Канонические имена стадий признаны нашими (steward переименовал `task` → `tasks`
-      у себя, без alias). Остаток шва за нами как владельцем формата:
-      (1) `traces_to` — gated-генерация/approve материализует связь downstream ↔ upstream
-      (минимум id стадии по цепочке профиля, лучше реальные REQ-/DESIGN-id);
-      сейчас поле не пишется вовсе → `GC-TRACE-EMPTY` на каждом нашем бандле.
-      (2) `upstream_hashes` — при `spec approve <stage>` пиновать git blob-хеши upstream
-      (`git hash-object <file>`); без них stale-cascade steward слеп (`GC-STALE-UNPINNED`).
-      steward — только валидатор, артефакты не переписывает.
+      у себя, без alias). Остаток шва — за нами как владельцем формата, сделано:
+      `spec.stamp_authoring_links` (+ `derive_traces_to` / `upstream_pins` /
+      `git_blob_hash`) зовётся из `plan --gated`, `spec approve` и `spec adopt`.
+      (1) `traces_to` — **список**: сначала прямой upstream по цепочке профиля,
+      затем реальные id из тела, которые действительно резолвятся в upstream-тексте
+      (нерезолвящийся id у steward — `GC-TRACE` **error**, хуже исходного warn'а).
+      (2) `upstream_hashes` — `{прямой upstream: git blob hash}` при approve;
+      считаем локально (`sha1("blob <len>\0"+bytes)`), воспроизводится
+      `git hash-object`. Пин НЕ обновляется при re-approve upstream — расхождение
+      и есть сигнал stale-cascade.
+      Контракт не бампается: оба ключа — extras (pass-through), не canonical.
+      Попутно: golden-фикстура шипилась с **невалидным** для steward примером
+      (`traces_to` скаляром и пином транзитивного предка `requirements` на стадии
+      `tasks` → `GC-STALE-KEY`) — исправлена; формы описаны в `docs/CONTRACTS.md`.
+      Тесты: `tests/test_authoring_links.py` (15).
 
 #### E. Крупные спеки D7 — нужен scope-решение владельца, не «сделать»
 
@@ -442,11 +457,14 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 **Но v2.11.0 уехал с отменённой формой в документации**, и golden-фикстура шипуется как
 package data именно для сверки потребителями — то есть вводит в заблуждение активно.
 
-- [ ] `docs/CONTRACTS.md:104` — переписать описание `owner_role` под singular slug без `@`; сослаться на DEC-007 и `steward/profiles/roles.yaml` как SSOT формы @owner:github:andrei-shtanakov @id:dec007-doc-fix
-- [ ] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md:15` — `owner_role: '@platform,@sre'` → одиночный slug @owner:github:andrei-shtanakov @id:dec007-fixture
-- [ ] `src/spec_runner/spec.py:198` — инлайн-комментарий `# CODEOWNERS role(s), "@role[,@role]"` под ту же форму @owner:github:andrei-shtanakov @id:dec007-inline-comment
-- [ ] Решить, резать ли 2.11.1 ради того, чтобы исправленная фикстура доехала до потребителей, или ждать следующего релиза @owner:github:andrei-shtanakov @trigger:"фикстура — package data, потребители сверяются с ней" @id:dec007-patch-release-decision
-- [ ] Обновить заметку vault'а после фикса — сейчас она велит steward игнорировать примеры из фикстуры v2.11.0 @owner:github:andrei-shtanakov @blocked_by:spec-runner#dec007-doc-fix @id:dec007-vault-note-update
+Все три правки отгружены **PR #94 → v2.15.0 (2026-08-05)**; проверено по файлам
+2026-08-10 при разборе #125. Триаж 08-10 переоткрыл их по устаревшему снимку TODO.
+
+- [x] `docs/CONTRACTS.md` — описание `owner_role` под singular slug без `@`, DEC-007 и `steward/profiles/roles.yaml` названы SSOT формы (`46e5b0e`) @owner:github:andrei-shtanakov @id:dec007-doc-fix
+- [x] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md` — `owner_role: platform` (`46e5b0e`) @owner:github:andrei-shtanakov @id:dec007-fixture
+- [x] `src/spec_runner/spec.py` — инлайн-комментарий переписан под DEC-007 (`46e5b0e`) @owner:github:andrei-shtanakov @id:dec007-inline-comment
+- [x] Вопрос патч-релиза снят: правка доехала до потребителей в **v2.15.0** (`1adec1f`), отдельная 2.11.1 не понадобилась @owner:github:andrei-shtanakov @id:dec007-patch-release-decision
+- [ ] Обновить заметку vault'а — она всё ещё велит steward игнорировать примеры из фикстуры v2.11.0. Ждать релиза с #135: фикстура там меняется снова (`traces_to` списком, пин только прямого upstream), и переписывать заметку дважды смысла нет @owner:github:andrei-shtanakov @blocked_by:todo://spec-runner/authoring-contract-traces-pins @id:dec007-vault-note-update
 
 ### Дотегать и опубликовать v2.10.0 (2026-07-26)
 

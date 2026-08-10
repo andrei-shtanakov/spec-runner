@@ -1,4 +1,8 @@
 ---
+traces_to:
+- design
+- DESIGN-001
+- REQ-001
 spec_stage: tasks
 status: approved
 version: 1
