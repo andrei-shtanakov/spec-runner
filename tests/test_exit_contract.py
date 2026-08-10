@@ -256,6 +256,25 @@ class TestBlockedRemainderExit:
         assert exc.value.code != 0, "1 of 2 tasks done, dependent stuck — exited 0"
         assert _stop_reason(cfg) == "dependency_blocked_after_skip"
 
+    def test_nothing_ready_closes_the_audit_pair(self, tmp_path):
+        """The "no tasks ready" early return recorded EVENT_RUN_STARTED and
+        then returned, leaving a dangling start in the audit trail (Copilot,
+        PR #144). It stays exit 0 — see the comment at that branch — but the
+        trail must not be left half-open.
+        """
+        import json as _json
+
+        _write_tasks(tmp_path, _task_block("TASK-001", "root", status="DONE"))
+        trail = tmp_path / "audit.jsonl"
+        cfg = _cfg(tmp_path, audit_log_path=str(trail))
+
+        _run_tasks(_run_args(), cfg)  # must not raise
+
+        events = [_json.loads(line)["event"] for line in trail.read_text().splitlines() if line]
+        assert events.count("run_started") == events.count("run_ended") == 1, (
+            f"audit pair not closed: {events}"
+        )
+
     def test_all_done_still_exits_zero(self, tmp_path):
         """The clean finish must stay clean — no false alarms."""
         _write_tasks(

@@ -772,22 +772,35 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
         if not tasks_to_run:
             logger.info("No tasks ready to execute")
-            # Same verdict as the loop's "no more ready tasks" branch (#136):
-            # a run that finds nothing to do because the remaining work is
-            # blocked has not completed anything, and this early return —
-            # taken whenever the *first* pass finds no ready task — never even
-            # reached the reconciliation below. Re-running a spec whose root
-            # task gave up landed here and reported completed/0.
+            # Deliberately NOT the `_idle_stop_verdict` treatment the loop's
+            # "no more ready tasks" branch gets. Two reasons this path must
+            # stay a quiet exit 0:
+            #   - `--task`/`--milestone` narrow the selection, so an empty
+            #     `tasks_to_run` routinely coexists with blocked work outside
+            #     the filter — failing there would be a false alarm about
+            #     tasks this invocation never claimed to run;
+            #   - a blocked task whose dependencies are satisfied is promoted
+            #     back to todo by `resolve_dependencies`, so it is *ready*,
+            #     not stuck, and never reaches this branch anyway.
+            # The stuck-work verdict therefore belongs to the loop, which
+            # observes what actually happened this run.
             _warn_orphaned_successes(state, tasks)
-            stop_reason, stop_detail, exit_code = _idle_stop_verdict(state, tasks)
-            if exit_code:
-                logger.warning("No ready tasks and blocked work remains", detail=stop_detail)
             if getattr(args, "json_result", False):
                 print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
             state.set_meta("last_run_stop_reason", stop_reason)
             state.set_meta("last_run_stop_detail", stop_detail)
-            if exit_code:
-                sys.exit(exit_code)
+            # Close the audit pair: EVENT_RUN_STARTED was recorded above, and
+            # returning here left a dangling start in the trail (Copilot,
+            # PR #144). No notification — "nothing to do" is the one outcome
+            # an owner does not need pinged about, and `watch` reaches this
+            # branch on every idle poll.
+            state.audit_logger.record(
+                EVENT_RUN_ENDED,
+                completed=0,
+                failed=0,
+                remaining=len([t for t in tasks if t.status != "done"]),
+                stop_reason=stop_reason,
+            )
             return
 
         # --dry-run: show what would execute and exit
