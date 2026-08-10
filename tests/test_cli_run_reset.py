@@ -3,6 +3,8 @@
 import argparse
 from pathlib import Path
 
+import pytest
+
 from spec_runner.cli import _run_tasks
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ExecutorState
@@ -148,7 +150,11 @@ class TestSecondPassDetection:
                 stderr="ERROR: hit your usage limit. try again at 9:54 AM\n",
             ),
         )
-        _run_tasks(_run_args(max_retries=1), cfg)
+        # #136: a run that stopped on consecutive failures exits non-zero —
+        # the pre-run refusal for the same cause already did (#67), the
+        # mid-run stop was the inconsistent one.
+        with pytest.raises(SystemExit):
+            _run_tasks(_run_args(max_retries=1), cfg)
         with ExecutorState(cfg) as state:
             assert "TASK-001" in state.get_second_pass_fails()
         # log_progress writes to the structlog "runner" logger via logger.info().
@@ -202,10 +208,28 @@ class TestStopReasonCapture:
                 args=["x"], returncode=1, stdout="", stderr="boom\n"
             ),
         )
-        _run_tasks(_run_args(max_retries=1), cfg)
+        with pytest.raises(SystemExit) as exc:
+            _run_tasks(_run_args(max_retries=1), cfg)
+        assert exc.value.code == 1
         with ExecutorState(cfg) as state:
-            assert state.get_meta("last_run_stop_reason") == "max_consecutive_failures"
-            assert "/1" in (state.get_meta("last_run_stop_detail") or "")
+            # #136: `on_task_failure=stop` now names itself. This config sets
+            # both `stop` and max_consecutive_failures=1; the run used to fall
+            # through to the generic counter only because `stop` did not stop.
+            # The more specific reason wins, and it fires one failure earlier.
+            assert state.get_meta("last_run_stop_reason") == "task_failed_stop"
+            assert "TASK-001" in (state.get_meta("last_run_stop_detail") or "")
+
+    def test_stop_reason_for_falls_back_to_consecutive_failures(self, tmp_path):
+        """The generic counter reason is still produced by `_stop_reason_for`
+        (reachable mid-run in `ask`-mode quit, and pre-run via stop_cause)."""
+        from spec_runner.cli import _stop_reason_for
+
+        cfg = _cfg(tmp_path, max_consecutive_failures=1)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", success=False, duration=1.0, error="boom")
+            reason, detail = _stop_reason_for(state, cfg)
+        assert reason == "max_consecutive_failures"
+        assert "/1" in detail
 
 
 class TestStopRefusalDiagnostics:

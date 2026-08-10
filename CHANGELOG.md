@@ -10,6 +10,54 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`run` no longer exits 0 when the run did not finish** (issues #127, #129,
+  #130, #131, #132, #134, #136). One class of defect with several entry
+  points: the process exit code — the single signal an orchestrator like
+  Maestro actually reads — said success while work was blocked, refused, or
+  never executed. **Read this before upgrading if you consume the exit code:**
+  runs that previously exited 0 in these situations now exit 1. The
+  `stop_reason` vocabulary is unchanged apart from one addition, so a consumer
+  reading `last_run_stop_reason` sees the same strings.
+  - `on_task_failure: stop` now actually stops the run, immediately and
+    non-zero, with `stop_reason=task_failed_stop` (#136). It marked the task
+    blocked and returned `False`, but leaving the loop depended on
+    `should_stop()` — "consecutive failures ≥ `max_consecutive_failures`
+    (default 2) OR budget exhausted" — which a single failed task never
+    tripped. Since v2.22.0's release notes recommend exactly this setting to
+    orchestrator-managed runs, the documented remedy was a placebo: a
+    production workstream followed it, closed DONE at 1 of 11 tasks, and was
+    merged and turned into a PR.
+  - Leftover blocked/failed work reports `dependency_blocked_after_skip` and
+    exits 1 whether or not TODO tasks are still waiting (#131, #136). v2.22.0
+    fired this only when *nothing* was todo, so the common shape — one blocked
+    task, ten dependents waiting on it — took the plain "no more ready tasks"
+    path and reported `completed`/0. The same verdict now also covers the
+    early return taken when the *first* pass finds nothing ready, so
+    re-running a spec whose root task gave up no longer reports success.
+  - A mid-run stop on `max_consecutive_failures`/budget exits non-zero, like
+    the pre-run refusal for the same cause already did (#67).
+  - `run`/`watch`/`retry` refusing on the spec-governance gate exit 1 and
+    write their diagnostics to **stderr**, not stdout (#134, found by
+    steward's live V1 run of the gated cycle). A policy rejection was
+    indistinguishable from an empty queue, and the prose could land in the
+    middle of `--json-result` output.
+  - `--tui` propagates the exit code out of the run thread (#129). `sys.exit`
+    inside a daemon thread is discarded by the interpreter, so every
+    fail-closed gate was advisory under the TUI.
+  - `state_spec_mismatch` sends the `run_complete` notification before
+    exiting (#130) — the heaviest stop there is was the one Telegram/webhook
+    owners never heard about.
+  - The orphaned-success warning fires even when every task is done (#132);
+    it used to be nested under "unfinished work exists".
+  - Budget exhaustion no longer crashes with `KeyError` (#127). It wrote
+    status `failed` into tasks.md, which has no such status — the terminal
+    outcome stays in the state DB (`error_code=BUDGET_EXCEEDED`) and the file
+    gets `blocked`, like every other terminal failure and, unlike `failed`,
+    recoverable once the budget is raised. `update_task_status` now refuses an
+    unknown status with `False` instead of raising.
+
 ### Changed
 
 - **Docs: the `review-pr` caller contract is consumer-agnostic** (PR #119).

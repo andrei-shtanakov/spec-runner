@@ -188,14 +188,30 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
             app = SpecRunnerApp(config=config)
 
+            # #129: the run lives in a daemon thread, and `sys.exit(1)` there
+            # raises SystemExit *in that thread* — the interpreter discards it
+            # and the process still exits 0. Every fail-closed gate
+            # (state_spec_mismatch, governance refusal, on_task_failure=stop)
+            # was therefore advisory under --tui. Carry the code across the
+            # thread boundary and re-raise it once the TUI has released the
+            # screen.
+            thread_exit: list[int] = []
+
             def _start_execution() -> None:
-                t = threading.Thread(
-                    target=lambda: _run_tasks(args, config, lock_held=lock_held), daemon=True
-                )
+                def _target() -> None:
+                    try:
+                        _run_tasks(args, config, lock_held=lock_held)
+                    except SystemExit as exc:
+                        code = exc.code
+                        thread_exit.append(code if isinstance(code, int) else 1)
+
+                t = threading.Thread(target=_target, daemon=True)
                 t.start()
 
             app.call_later(_start_execution)
             app.run()
+            if thread_exit and thread_exit[0]:
+                sys.exit(thread_exit[0])
         else:
             _run_tasks(args, config, lock_held=lock_held)
     finally:
@@ -220,6 +236,23 @@ def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
         f"tasks.md is {meta.status} (v{meta.version}); "
         f"approve with `spec-runner spec approve tasks` or run with --no-strict"
     )
+
+
+def _enforce_spec_governance(config: ExecutorConfig) -> None:
+    """Refuse the run when the governance gate blocks it — fail-closed (#134).
+
+    A policy rejection used to print to stdout and return, i.e. exit 0: for a
+    CI caller it was indistinguishable from "there was nothing to execute"
+    (found on steward's live V1 run of the gated cycle). The refusal now exits
+    non-zero, and its diagnostics go to stderr — stdout is reserved for
+    machine payloads like ``--json-result``.
+    """
+    allowed, reason = spec_run_gate_ok(config)
+    if allowed:
+        return
+    logger.error("Refusing to run: spec governance gate", reason=reason)
+    print(f"⛔ spec governance: {reason}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _maybe_start_integration(args, config: ExecutorConfig):
@@ -428,6 +461,70 @@ def _announce_integration_pr(config: ExecutorConfig, pr_url: str) -> None:
     notify_pr_opened(config, pr_url)
 
 
+# Stop reasons a run can persist as `last_run_stop_reason`. `status` renders
+# them and external callers (Maestro's audit table) key off them, so the
+# vocabulary is part of the interop surface: add freely, rename with a
+# CHANGELOG note. Error-classified reasons are dynamic (`error_<kind>`) and
+# therefore not enumerable here.
+RUN_STOP_REASONS: tuple[str, ...] = (
+    "completed",
+    "task_failed_stop",
+    "dependency_blocked_after_skip",
+    "state_spec_mismatch",
+    "max_consecutive_failures",
+    "budget_exceeded",
+    "validation_failed",
+)
+
+
+def _warn_orphaned_successes(state: ExecutorState, all_tasks: list) -> set[str]:
+    """Report state-DB successes whose task id is gone from tasks.md.
+
+    A success ID absent from tasks.md entirely (the task was removed from the
+    spec, not merely left non-done) has nothing to reconcile against, so it is
+    surfaced but not fatal. Returns the ids present in tasks.md that the DB
+    calls successful, for the caller's `missing` comparison.
+    """
+    present_ids = {t.id for t in all_tasks}
+    success_ids = {task_id for task_id, ts in state.tasks.items() if ts.status == "success"}
+    orphaned = success_ids - present_ids
+    if orphaned:
+        logger.warning(
+            "success in state-DB but task no longer present in tasks.md",
+            task_ids=sorted(orphaned),
+        )
+    return success_ids & present_ids
+
+
+def _idle_stop_verdict(state: ExecutorState, all_tasks: list) -> tuple[str, str, int]:
+    """Classify "nothing (more) to run" as a clean finish or stuck work.
+
+    Returns ``(stop_reason, stop_detail, exit_code)``. Work is stuck when a
+    task gave up — blocked in tasks.md, or terminally failed in the state DB —
+    because nothing in the run can revive it and its dependents wait forever.
+    That is not the same as "everything is done", and reporting it as
+    completed/0 is how a production workstream closed DONE at 1/11 and got
+    merged (#136). Anything else — including todo tasks merely filtered out by
+    a milestone — stays a clean exit 0.
+    """
+    present_ids = {t.id for t in all_tasks}
+    stuck = sorted(
+        {t.id for t in all_tasks if t.status == "blocked"}
+        | {
+            task_id
+            for task_id, ts in state.tasks.items()
+            if ts.status == "failed" and task_id in present_ids
+        }
+    )
+    if stuck:
+        return (
+            "dependency_blocked_after_skip",
+            f"blocked/skipped tasks remain: {stuck}",
+            1,
+        )
+    return "completed", "", 0
+
+
 def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
     """Resolve the (stop_reason, stop_detail) pair for a mid-run stop.
 
@@ -452,6 +549,7 @@ def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str,
 def _exit_on_state_spec_mismatch(
     state: ExecutorState,
     *,
+    config: ExecutorConfig,
     detail: str,
     completed: int,
     failed: int,
@@ -478,6 +576,24 @@ def _exit_on_state_spec_mismatch(
         remaining=remaining,
         stop_reason="state_spec_mismatch",
     )
+    # #130: this exit used to happen before the run's notify tail, so the
+    # owners of the Telegram/webhook channel heard about every ordinary finish
+    # and nothing about the heaviest stop there is. Notify on the same terms as
+    # a normal run end — best-effort: a dead webhook must not swallow the
+    # integrity failure we are exiting on.
+    from .notifications import notify_run_complete
+
+    try:
+        total_cost_val = state.total_cost()
+        notify_run_complete(
+            config,
+            completed=completed,
+            failed=failed,
+            total_cost=total_cost_val if total_cost_val > 0 else None,
+            stop_reason="state_spec_mismatch",
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("run_complete notification failed", error=str(exc))
     sys.exit(1)
 
 
@@ -518,10 +634,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     lock_held: True when the caller holds the exclusive executor lock, so any
     orphaned 'running' task can be safely reset regardless of age.
     """
-    allowed, reason = spec_run_gate_ok(config)
-    if not allowed:
-        print(f"⛔ spec governance: {reason}")
-        return
+    _enforce_spec_governance(config)
 
     _enforce_clean_spec(args, config)
 
@@ -565,6 +678,11 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             state._save()
         stop_reason: str = "completed"  # used by T18 stop-reason capture
         stop_detail: str = ""  # used by T18 stop-reason capture
+        # Process exit code for the run, decided by the loop and applied once
+        # at the very end — after notify/audit/--json-result have run. A
+        # mid-loop sys.exit() would skip exactly the reporting a caller needs
+        # in order to understand the failure it is being told about.
+        exit_code: int = 0
 
         # #104: total_completed/total_failed are cumulative ACROSS runs
         # (monotonic executor_meta counters). The end-of-run summary must
@@ -654,10 +772,22 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
         if not tasks_to_run:
             logger.info("No tasks ready to execute")
+            # Same verdict as the loop's "no more ready tasks" branch (#136):
+            # a run that finds nothing to do because the remaining work is
+            # blocked has not completed anything, and this early return —
+            # taken whenever the *first* pass finds no ready task — never even
+            # reached the reconciliation below. Re-running a spec whose root
+            # task gave up landed here and reported completed/0.
+            _warn_orphaned_successes(state, tasks)
+            stop_reason, stop_detail, exit_code = _idle_stop_verdict(state, tasks)
+            if exit_code:
+                logger.warning("No ready tasks and blocked work remains", detail=stop_detail)
             if getattr(args, "json_result", False):
                 print(json.dumps({"tasks": [], "message": "No tasks ready to execute"}))
             state.set_meta("last_run_stop_reason", stop_reason)
             state.set_meta("last_run_stop_detail", stop_detail)
+            if exit_code:
+                sys.exit(exit_code)
             return
 
         # --dry-run: show what would execute and exit
@@ -763,27 +893,19 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     # recorded a success in the first place, so it leaves
                     # both sets in agreement and does not trip this check.
                     nonterminal_tasks = [t for t in all_tasks if t.status != "done"]
+                    done_ids = {t.id for t in all_tasks if t.status == "done"}
+                    # #132: the orphan warning used to sit inside `if
+                    # nonterminal_tasks`, so the "everything done + an orphaned
+                    # success row" case — the spec edited under a finished run
+                    # — passed silently. It does not depend on unfinished work
+                    # existing, so it is reported unconditionally.
+                    present_success_ids = _warn_orphaned_successes(state, all_tasks)
                     if nonterminal_tasks:
-                        done_ids = {t.id for t in all_tasks if t.status == "done"}
-                        present_ids = {t.id for t in all_tasks}
-                        success_ids = {
-                            task_id for task_id, ts in state.tasks.items() if ts.status == "success"
-                        }
-                        # A success ID absent from tasks.md entirely (the task
-                        # was removed from the spec, not merely left non-done)
-                        # has nothing to reconcile against — intersect with
-                        # present_ids before comparing to done_ids. The
-                        # orphaned row is still surfaced, just not fatal.
-                        orphaned = success_ids - present_ids
-                        if orphaned:
-                            logger.warning(
-                                "success in state-DB but task no longer present in tasks.md",
-                                task_ids=sorted(orphaned),
-                            )
-                        missing = (success_ids & present_ids) - done_ids
+                        missing = present_success_ids - done_ids
                         if missing:
                             _exit_on_state_spec_mismatch(
                                 state,
+                                config=config,
                                 detail=(
                                     "success in state-DB but not done in "
                                     f"tasks.md: {sorted(missing)}"
@@ -804,32 +926,36 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             blocked_tasks=blocked_info,
                         )
                     elif nonterminal_tasks:
-                        # Blocked-after-skip (owner decision, round 2): nothing
-                        # is "todo" anymore, but not everything is "done"
-                        # either — the remainder is stuck (blocked, or an
-                        # interrupted "review") after on_task_failure="skip"
-                        # gave up on it. That is not the same as a clean
-                        # finish, so it must not be reported as "All tasks
-                        # completed"/stop_reason="completed" — the `status`
-                        # display keys off `last_run_stop_reason`. Exit code
-                        # intentionally stays 0 here (a separate interop
-                        # follow-up decides whether to make this non-zero).
                         # Before this branch existed, this case fell into the
                         # "all done" branch below (todo_tasks was empty) and
-                        # still got ensure_on_main_branch — keep that git
-                        # side effect so only the diagnostics change.
-                        stuck_ids = sorted(t.id for t in nonterminal_tasks)
-                        stop_reason = "dependency_blocked_after_skip"
-                        stop_detail = f"blocked/skipped tasks remain: {stuck_ids}"
-                        logger.warning(
-                            "Stopping run: tasks blocked after skip",
-                            blocked_tasks=stuck_ids,
-                        )
+                        # still got ensure_on_main_branch — keep that git side
+                        # effect so only the diagnostics change.
                         ensure_on_main_branch(config)
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
                         ensure_on_main_branch(config)
+
+                    # Blocked-after-skip (#131/#136 item 2): work is left over
+                    # and none of it can ever become ready — a task gave up
+                    # (blocked/failed) and its dependents are waiting on a
+                    # corpse. That is not a clean finish.
+                    #
+                    # The v2.22.0 version of this check lived in the `elif`
+                    # above, so it only fired once *nothing* was todo: one
+                    # blocked task plus ten waiting TODOs took the plain "No
+                    # more ready tasks" path and reported completed/0. That is
+                    # exactly how a production workstream closed DONE at 1/11
+                    # and got merged. Exit code is now non-zero — the interop
+                    # question #131 deferred, answered by the incident.
+                    idle_reason, idle_detail, idle_code = _idle_stop_verdict(state, all_tasks)
+                    if idle_code:
+                        stop_reason, stop_detail, exit_code = idle_reason, idle_detail, idle_code
+                        logger.warning(
+                            "Stopping run: tasks blocked after skip",
+                            detail=idle_detail,
+                            waiting_tasks=sorted(t.id for t in todo_tasks) or None,
+                        )
                     break
 
                 task = ready_tasks[0]
@@ -854,6 +980,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     if reread is None or reread.status != "done":
                         _exit_on_state_spec_mismatch(
                             state,
+                            config=config,
                             detail=(
                                 f"{task.id}: state-DB=success but tasks.md="
                                 f"{reread.status if reread else 'missing'}"
@@ -885,9 +1012,29 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                 if result == "SKIP":
                     continue
 
+                # #136: `on_task_failure: stop` must actually stop, and must
+                # not report success. It marked the task blocked and returned
+                # False, but leaving the loop hung on `should_stop()` —
+                # "consecutive failures >= max_consecutive_failures (default 2)
+                # OR budget exhausted". One failed task never tripped that, so
+                # the run drifted on and finished as completed/0. This is the
+                # setting release notes 2.22.0 recommend to orchestrators
+                # precisely so a failure halts the workstream, so the gap made
+                # the documented remedy a placebo.
+                if result is False and config.on_task_failure == "stop":
+                    stop_reason = "task_failed_stop"
+                    stop_detail = f"{task.id} failed and on_task_failure=stop"
+                    exit_code = 1
+                    logger.warning(
+                        "Stopping run: task failed under on_task_failure=stop",
+                        task_id=task.id,
+                    )
+                    break
+
                 if result is False and state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
+                    exit_code = 1
                     break
         else:
             # For single task or milestone mode, execute the fixed list
@@ -920,9 +1067,29 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                 if result == "SKIP":
                     continue
 
+                # #136: `on_task_failure: stop` must actually stop, and must
+                # not report success. It marked the task blocked and returned
+                # False, but leaving the loop hung on `should_stop()` —
+                # "consecutive failures >= max_consecutive_failures (default 2)
+                # OR budget exhausted". One failed task never tripped that, so
+                # the run drifted on and finished as completed/0. This is the
+                # setting release notes 2.22.0 recommend to orchestrators
+                # precisely so a failure halts the workstream, so the gap made
+                # the documented remedy a placebo.
+                if result is False and config.on_task_failure == "stop":
+                    stop_reason = "task_failed_stop"
+                    stop_detail = f"{task.id} failed and on_task_failure=stop"
+                    exit_code = 1
+                    logger.warning(
+                        "Stopping run: task failed under on_task_failure=stop",
+                        task_id=task.id,
+                    )
+                    break
+
                 if result is False and state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
+                    exit_code = 1
                     break
 
         # v2.3.0: persist stop-reason for this run
@@ -985,15 +1152,20 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             results = [build_task_json_result(t.id, state) for t in tasks_to_run]
             print(json.dumps(results if len(results) > 1 else results[0], indent=2))
 
+    # #136: apply the run's exit code last, outside the state context manager,
+    # so the DB is closed cleanly and every consumer-facing artifact (summary,
+    # notification, audit record, --json-result) has already been produced. A
+    # caller that only reads the exit code still learns the run did not
+    # finish; a caller that reads the payload gets the reason too.
+    if exit_code:
+        sys.exit(exit_code)
+
 
 def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
     # Spec governance gate — must run before any task execution/lock so a
     # blocked retry has zero side effects (same bypass class as `watch`).
-    allowed, reason = spec_run_gate_ok(config)
-    if not allowed:
-        print(f"⛔ spec governance: {reason}")
-        return
+    _enforce_spec_governance(config)
 
     # Dirty-spec guard (#69) — retry executes tasks and runs the git
     # automation hooks, so it must not bypass the guard either.
@@ -1047,10 +1219,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # branch, before pre-run validation, before any lock/stop-file handling)
     # so a blocked watch has zero side effects. `run` gates via `_run_tasks`;
     # `watch` has its own loop and previously bypassed the gate entirely.
-    allowed, reason = spec_run_gate_ok(config)
-    if not allowed:
-        print(f"⛔ spec governance: {reason}")
-        return
+    _enforce_spec_governance(config)
 
     # Dirty-spec guard (#69) — same enforcement as `run`, checked once
     # before the loop starts (mid-run DONE writes dirty tasks.md by design).

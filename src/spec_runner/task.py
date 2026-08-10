@@ -247,7 +247,21 @@ def update_task_status(filepath: Path, task_id: str, new_status: str) -> bool:
     written only once the confirm succeeds, so a False return — from
     either cause above — never leaves a history entry asserting a status
     change that didn't (confirmedly) happen.
+
+    A status outside the tasks.md vocabulary (`STATUS_EMOJI`) is a caller bug,
+    not a file problem: it returns False like any other failed write instead of
+    raising `KeyError` from the emoji lookup half-way through. `_fail_for_budget`
+    passed "failed" for exactly this reason (#127) and crashed the run tail.
     """
+    if new_status not in STATUS_EMOJI:
+        get_logger("task").error(
+            "Refusing to write unknown task status",
+            task_id=task_id,
+            status=new_status,
+            known=sorted(STATUS_EMOJI),
+        )
+        return False
+
     fm, content = split_frontmatter_raw(filepath.read_text())
     lines = content.split("\n")
 

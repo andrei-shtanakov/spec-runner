@@ -8,12 +8,17 @@ and the task never recovered). The run's `last_run_stop_reason` stayed the
 default "completed", so a caller (Maestro) reading `status`/the audit trail
 had no way to tell a clean finish from a stuck one.
 
-Exit code is intentionally unchanged (still 0) — this is diagnostics only.
-A future interop change to make this non-zero is a separate follow-up.
+The exit code was intentionally left at 0 in v2.22.0 — diagnostics only, with
+the interop question deferred to #131. #136 answered it the expensive way: a
+production workstream was reported DONE at 1/11 tasks and merged, because the
+one signal Maestro reads (the exit code) still said success. Leftover
+blocked/failed work now exits non-zero; the reason strings are unchanged.
 """
 
 import argparse
 from pathlib import Path
+
+import pytest
 
 from spec_runner.cli import _run_tasks
 from spec_runner.config import ExecutorConfig
@@ -72,8 +77,8 @@ def _task_block(task_id: str, name: str) -> str:
 
 class TestBlockedAfterSkipHonestStopReason:
     """(a) A task left `blocked` with nothing else todo must be reported
-    honestly — not as "All tasks completed" — without raising the exit
-    code."""
+    honestly — not as "All tasks completed" — and, since #136, with a
+    non-zero exit code to match."""
 
     def test_blocked_task_reports_dependency_blocked_after_skip(self, tmp_path, monkeypatch):
         spec_dir = tmp_path / "spec"
@@ -93,8 +98,12 @@ class TestBlockedAfterSkipHonestStopReason:
 
         monkeypatch.setattr(cli_mod, "run_with_retries", _fake_run_with_retries)
 
-        # No SystemExit — exit code stays 0, only the diagnostics change.
-        _run_tasks(_run_args(), cfg)
+        # #136: the exit code now follows the diagnostics. v2.22.0 deliberately
+        # left this at 0 pending an interop discussion (#131); a production
+        # false-DONE — a workstream merged at 1/11 tasks — settled it.
+        with pytest.raises(SystemExit) as exc:
+            _run_tasks(_run_args(), cfg)
+        assert exc.value.code == 1
 
         with ExecutorState(cfg) as state:
             assert state.get_meta("last_run_stop_reason") == "dependency_blocked_after_skip"

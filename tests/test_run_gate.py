@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from spec_runner.cli import cmd_retry, spec_run_gate_ok
 from spec_runner.spec import SpecMeta, write_spec
 
@@ -86,7 +88,11 @@ class TestRetryGovernanceGate:
         cfg = _cfg(tmp_path, "strict")
         write_spec(cfg.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
 
-        cmd_retry(Namespace(task_id="task-001", fresh=False), cfg)
+        # #134: the refusal exits non-zero — a policy rejection must not look
+        # like "there was nothing to retry" to a CI caller.
+        with pytest.raises(SystemExit) as exc:
+            cmd_retry(Namespace(task_id="task-001", fresh=False), cfg)
+        assert exc.value.code == 1
 
         mock_parse_tasks.assert_not_called()
         mock_execute_task.assert_not_called()
