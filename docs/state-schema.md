@@ -124,7 +124,15 @@ external consumers should not depend on it yet.
 
 Source: `src/spec_runner/state.py:ErrorCode`.
 
-Stable: `TIMEOUT`, `RATE_LIMIT`, `TEST_FAILURE`, `LINT_FAILURE`, `TASK_FAILED`, `HOOK_FAILURE`, `BUDGET_EXCEEDED`, `REVIEW_REJECTED`, `INTERRUPTED`, `UNKNOWN`.
+Stable: `TIMEOUT`, `RATE_LIMIT`, `TEST_FAILURE`, `LINT_FAILURE`, `TASK_FAILED`, `TASK_BLOCKED`, `HOOK_FAILURE`, `BUDGET_EXCEEDED`, `REVIEW_REJECTED`, `INTERRUPTED`, `UNKNOWN`.
+
+`TASK_BLOCKED` (added #140) is a *deliberate* escalation: the agent emitted
+`TASK_BLOCKED: <reason>` to say the task cannot be done within the rules it was
+given and needs an operator — as opposed to `TASK_FAILED`, "I did not manage
+it". It is terminal (never retried) and `error` carries the agent's own wording
+verbatim. A consumer distinguishing "needs a human" from "worth another run"
+should key off this code; per the note above, unknown codes must be treated as
+`UNKNOWN` rather than raising.
 
 Consumers should treat unknown values as `UNKNOWN` rather than raising — new codes may be added in minor releases.
 

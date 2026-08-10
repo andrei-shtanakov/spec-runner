@@ -625,6 +625,12 @@ When complete, respond with:
 - Any issues or notes
 - "TASK_COMPLETE" if successful, or "TASK_FAILED: <reason>" if not
 
+If the task cannot be done within the rules you were given — the only correct
+next step is forbidden to you and needs a human — say "TASK_BLOCKED: <reason>"
+instead of "TASK_FAILED". That is not a lesser outcome: it is the honest one,
+it is not retried, and the reason goes to the operator verbatim. Use it rather
+than looking for a way around a constraint you were told to respect.
+
 {attempts_section}
 Begin implementation:
 """

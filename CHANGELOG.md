@@ -56,6 +56,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`TASK_BLOCKED: <reason>` — a refusal the harness does not retry**
+  (issue #140). Retry policy could not tell "I did not manage it" from "this
+  cannot be done within the rules, an operator is needed": both produced
+  `TASK_FAILED` and both got the full `max_retries` cycle. Observed in
+  production: an agent hit a conflict between two byte-locked tests, behaved
+  exactly as the project constitution prescribes — refused to edit an
+  assertion for green, named the reason, stopped — and the harness answered
+  with attempt 2 of 3 and "Do not repeat the same mistake", although the only
+  non-erroneous path was forbidden to it. Attempts 2 and 3 were structurally
+  doomed, and on one task attempt 2 crossed a scope boundary that attempt 1
+  had correctly escalated about: the barrier held once and was removed by a
+  retry, the same mechanism as #137.
+  - The marker outranks the other two: `TASK_COMPLETE` alongside it does not
+    close the task, and `TASK_FAILED` alongside it does not earn retries. A
+    bare `TASK_BLOCKED` with no reason is terminal too — refusing to retry a
+    stated refusal is the safe side of that ambiguity.
+  - New `ErrorCode.TASK_BLOCKED`, classified fatal; `error` carries the
+    agent's own wording verbatim, because the operator has to act on it.
+    Documented in `docs/state-schema.md` for consumers separating "needs a
+    human" from "worth another run".
+  - The built-in task prompt now teaches the marker. Note that a project with
+    its own `spec/prompts/task.*` overrides the built-in prompt **wholesale**,
+    so such projects must add the instruction to their template themselves —
+    there is no inheritance (see #153).
 - **Gated authoring now materializes `traces_to` and `upstream_hashes`**
   (#135, DEC-008). Both are steward-owned governance keys that already rode
   through `SpecMeta.extra` as pass-through — nobody ever wrote them, so every

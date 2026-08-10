@@ -210,11 +210,23 @@ def execute_task(
         # 2. Return code 0 and no TASK_FAILED (Claude forgot the marker)
         has_complete_marker = "TASK_COMPLETE" in output
         has_failed_marker = "TASK_FAILED" in output
+        # #140: a deliberate escalation — "this cannot be done within the
+        # rules, an operator is needed" — as opposed to "I did not manage it".
+        # It outranks both other markers: an agent that says COMPLETE and
+        # BLOCKED has not finished, and one that says FAILED and BLOCKED has
+        # given a reason no retry can resolve.
+        has_blocked_marker = "TASK_BLOCKED" in output
         implicit_success = (
-            result.returncode == 0 and not has_failed_marker and not cli_result.is_error
+            result.returncode == 0
+            and not has_failed_marker
+            and not has_blocked_marker
+            and not cli_result.is_error
         )
         success = (
-            has_complete_marker and not has_failed_marker and not cli_result.is_error
+            has_complete_marker
+            and not has_failed_marker
+            and not has_blocked_marker
+            and not cli_result.is_error
         ) or implicit_success
 
         # Harness tripwire (#64): check BEFORE the gates run — a mutated
@@ -335,8 +347,20 @@ def execute_task(
                 return False
         else:
             # Claude reported failure
+            blocked_match = re.search(r"TASK_BLOCKED:\s*(.+)", output)
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
-            if error_match:
+            if has_blocked_marker:
+                # The agent's own words, verbatim: the operator has to act on
+                # this escalation, and a paraphrase is not actionable (#140).
+                # A bare marker with no reason is still terminal — refusing to
+                # retry a stated refusal is the safe side of that ambiguity.
+                error = (
+                    blocked_match.group(1)
+                    if blocked_match
+                    else "agent reported TASK_BLOCKED without a reason"
+                )
+                error_kind = "blocked"
+            elif error_match:
                 error = error_match.group(1)
                 error_kind = "cli_error"
             else:
@@ -347,7 +371,9 @@ def execute_task(
                 duration,
                 error=error,
                 output=output,
-                error_code=ErrorCode.TASK_FAILED,
+                error_code=(
+                    ErrorCode.TASK_BLOCKED if has_blocked_marker else ErrorCode.TASK_FAILED
+                ),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
@@ -413,6 +439,12 @@ def execute_task(
 _FATAL_ERRORS = frozenset(
     {
         ErrorCode.HOOK_FAILURE,
+        # #140: retrying a deliberate escalation spends time and tokens on the
+        # knowingly impossible, and the "do not repeat the same mistake" retry
+        # prompt pushes the agent to work around the very rule it just
+        # honoured — on TASK-025 attempt 2 crossed a scope boundary that
+        # attempt 1 had correctly escalated about.
+        ErrorCode.TASK_BLOCKED,
         ErrorCode.REVIEW_REJECTED,
         ErrorCode.BUDGET_EXCEEDED,
         ErrorCode.INTERRUPTED,
