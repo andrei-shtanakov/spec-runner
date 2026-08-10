@@ -32,9 +32,19 @@ TASK_REF = re.compile(rf"\[({ID_PATTERN})\]")
 # source. The bullet prefix requires the `P\d |` form right after it, so
 # plain description bullets ("- some prose") and checklist items
 # ("- [ ] ...") never match.
+#
+# The status is one of five words, never "any word" (#128). With `(\w+)` any
+# prose starting `P0 | ...` parsed as a meta line — and the bullet allowance
+# above widened that to description bullets, which is where it bites: the
+# hijacked line is the one `update_task_status` then rewrites. An unrecognized
+# meta is not silently tolerated either; `validate_task_fields` refuses a task
+# whose meta never matched, because the parse defaults (p0/todo) look exactly
+# like a ready task (#133).
+TASK_STATUS_WORDS = ("TODO", "IN_PROGRESS", "REVIEW", "DONE", "BLOCKED")
 TASK_META = re.compile(
     r"^(?:[ \t]*[-*]\s+)?"
-    r"(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?(\w+)"
+    r"(?:(?:🔴|🟠|🟡|🟢)\s+)?(P\d)\s*\|\s*(?:(?:⬜|🔄|🔍|✅|⏸️)\s+)?"
+    rf"((?i:{'|'.join(TASK_STATUS_WORDS)}))\b"
 )
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
@@ -68,6 +78,13 @@ class Task:
     blocks: list = field(default_factory=list)
     milestone: str = ""
     line_number: int = 0
+    # "priority and status are what someone actually stated". Defaults True
+    # because a Task built in code carries values its caller supplied; only
+    # `parse_tasks` can know it fell back, and it sets this False until a line
+    # under the header matches TASK_META (#133). A defaulted p0/todo is
+    # indistinguishable from a real one by value, so the fact is tracked
+    # separately and refused in `validate_task_fields` rather than guessed at.
+    has_meta: bool = True
 
     @property
     def checklist_progress(self) -> tuple[int, int]:
@@ -116,6 +133,10 @@ def parse_tasks(filepath: Path) -> list[Task]:
                 estimate="",
                 milestone=current_milestone,
                 line_number=i + 1,
+                # Flipped to True by the TASK_META branch below; a task whose
+                # meta never matched keeps these placeholder values and is
+                # refused by validation rather than run as a ready p0/todo.
+                has_meta=False,
             )
             in_checklist = False
             in_tests = False
@@ -130,6 +151,7 @@ def parse_tasks(filepath: Path) -> list[Task]:
             priority, status_text = meta_match.groups()
             current_task.priority = priority.lower()
             current_task.status = status_text.lower()
+            current_task.has_meta = True
 
             est_match = ESTIMATE.search(line)
             if est_match:

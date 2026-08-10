@@ -10,6 +10,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `tasks.md` meta line is recognized exactly, or the spec is refused**
+  (issues #128, #133). Two symptoms, one defect — the parser guessing instead
+  of refusing.
+  - `TASK_META` read the status as `(\w+)`, so any prose starting `P0 | …`
+    parsed as a meta line: `- P0 | high priority stuff` yielded the status
+    `high` (#128). v2.22.0's bullet allowance widened the exposure to
+    description bullets, and the damage is not cosmetic — `update_task_status`
+    rewrites the *first* meta match under a header, so a prose bullet ahead of
+    the real meta silently took the status write. The status is now one of
+    `TODO|IN_PROGRESS|REVIEW|DONE|BLOCKED` (any case); every previously valid
+    form — bare, bulleted, emoji — still parses.
+  - A task whose meta line matched *nothing* is now a **validation error**
+    rather than silent defaults (#133). `plan --full` has been observed
+    emitting at least three meta orderings in a single pilot; the unrecognized
+    ones left the task at its parse defaults (`p0`/`todo`), which read as
+    perfectly ready — validation passed, dependencies resolved off invented
+    statuses, and the run died on the first task at the 2.22.0 reconciliation
+    gate. `Task.has_meta` records whether the values were stated or defaulted;
+    the status/priority checks now only vouch for values that were actually
+    read. The two halves ship together on purpose: tightening the pattern
+    alone would have turned more unparseable metas into ready-looking TODOs.
+  - The bundled `spec-generator-skill` template copy was kept in sync.
+
 ### Added
 
 - **Gated authoring now materializes `traces_to` and `upstream_hashes`**

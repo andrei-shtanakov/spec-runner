@@ -11,7 +11,7 @@ from spec_runner.config import ExecutorConfig
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
 from spec_runner.spec import LITE, StageProfile, load_profile, stage_path, strip_frontmatter
-from spec_runner.task import Task, parse_tasks
+from spec_runner.task import TASK_STATUS_WORDS, Task, parse_tasks
 
 log = get_logger("validate")
 
@@ -200,13 +200,32 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
 
     for task in tasks:
         # --- Errors ---
-        if task.status not in VALID_STATUSES:
+        # #133: no line under this header matched TASK_META, so priority and
+        # status below are parse defaults (p0/todo) — which read as a perfectly
+        # ready task. Left as a warning the run would start, resolve
+        # dependencies off invented statuses and die on the first task at the
+        # 2.22.0 reconciliation gate; the generator emitting an unparseable
+        # ordering must be caught before an agent is paid to run.
+        meta_parsed = getattr(task, "has_meta", True)
+        if not meta_parsed:
+            result.errors.append(
+                f"{task.id}: meta line not recognized — expected "
+                f"`🔴 P0 | ⬜ TODO | Est: 1d` (priority, then status, "
+                f"one of {', '.join(TASK_STATUS_WORDS)}); "
+                f"priority/status are defaults, not what the spec says"
+            )
+
+        # Only meaningful against a meta line that was actually read: on a
+        # default the values would always be the valid `todo`/`p0` and the
+        # checks would silently vouch for a task nobody described. Everything
+        # below this point comes from other lines and still applies.
+        if meta_parsed and task.status not in VALID_STATUSES:
             result.errors.append(
                 f"{task.id}: invalid status '{task.status}' "
                 f"(expected one of {sorted(VALID_STATUSES)})"
             )
 
-        if task.priority not in VALID_PRIORITIES:
+        if meta_parsed and task.priority not in VALID_PRIORITIES:
             result.errors.append(
                 f"{task.id}: invalid priority '{task.priority}' "
                 f"(expected one of {sorted(VALID_PRIORITIES)})"

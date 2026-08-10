@@ -35,7 +35,14 @@ TASK_HEADER = re.compile(r"^### (TASK-\d+): (.+)$")
 # indented — #123: some meta lines end up bullet-prefixed; the pattern still
 # requires the emoji + `P\d |` form right after it, so plain description
 # bullets and checklist items never match.
-TASK_META = re.compile(r"^(?:[ \t]*[-*]\s+)?(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) (\w+)")
+# The status is one of five known words, not `(\w+)` (#128): with any word,
+# prose that happens to start like a meta line parses as one, and it is that
+# line `update_task_status` then rewrites.
+TASK_STATUS_WORDS = ("TODO", "IN_PROGRESS", "REVIEW", "DONE", "BLOCKED")
+TASK_META = re.compile(
+    r"^(?:[ \t]*[-*]\s+)?(🔴|🟠|🟡|🟢) (P\d) \| (⬜|🔄|✅|⏸️) "
+    rf"((?i:{'|'.join(TASK_STATUS_WORDS)}))\b"
+)
 CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
