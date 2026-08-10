@@ -72,8 +72,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
     recoverable once the budget is raised. `update_task_status` now refuses an
     unknown status with `False` instead of raising.
 
+- **`plan --gated` no longer demands a description for every stage** (#134
+  item 2). README documents `spec-runner plan --gated --stage design` bare, but
+  the command exited with "plan: provide a description argument or --from-file
+  PATH" for stages past the first — found on steward's live V1 run of the gated
+  cycle. A stage whose upstream is approved now inherits its description from
+  that upstream (whose body is reproduced in the generation prompt anyway); only
+  the first stage of the chain still requires one, and it says so by name.
+
 ### Changed
 
+- **Docs: `run` executes one task; `run --all` drains the queue** (#134 item
+  3). The same live run read `completed=1, remaining=11` on a fully approved
+  `tasks.md` as a defect. The behavior is by design — a single `run` is the unit
+  an orchestrator schedules — and README now says so where the commands are
+  listed. Also names `--no-interactive` next to the gated checkpoint menu, which
+  the docs described without ever giving its flag.
 - **Docs: the `review-pr` caller contract is consumer-agnostic** (PR #119).
   Clarified that Maestro lifecycle mapping is consumer-owned and not part
   of the `review-pr` CLI contract. The design doc's "External caller
