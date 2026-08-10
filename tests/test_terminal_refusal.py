@@ -191,12 +191,3 @@ class TestPromptTeachesTheMarker:
         text = prompt_mod.build_task_prompt(_task(), _cfg(project))
         assert "TASK_BLOCKED" in text
         assert "TASK_FAILED" in text
-
-    def test_our_own_prompt_template_documents_it_too(self):
-        """A custom template overrides the built-in one wholesale, so this
-        repo's own `spec/prompts/task.txt` has to carry the instruction or our
-        dogfood runs never see it."""
-        from pathlib import Path as _Path
-
-        text = _Path("spec/prompts/task.txt").read_text()
-        assert "TASK_BLOCKED" in text

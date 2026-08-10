@@ -32,9 +32,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
     agent's own wording verbatim, because the operator has to act on it.
     Documented in `docs/state-schema.md` for consumers separating "needs a
     human" from "worth another run".
-  - The built-in task prompt now teaches the marker (a template projects
-    override wholesale still has to carry it themselves; this repo's own
-    `spec/prompts/task.txt` was updated in lockstep).
+  - The built-in task prompt now teaches the marker. Note that a project with
+    its own `spec/prompts/task.*` overrides the built-in prompt **wholesale**,
+    so such projects must add the instruction to their template themselves —
+    there is no inheritance (see #153).
 - **Gated authoring now materializes `traces_to` and `upstream_hashes`**
   (#135, DEC-008). Both are steward-owned governance keys that already rode
   through `SpecMeta.extra` as pass-through — nobody ever wrote them, so every
