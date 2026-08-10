@@ -10,8 +10,68 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.23.0] — 2026-08-10
+
+Refusals that used to look like success. Every entry below comes from a live
+run — the disputatio pilot and steward's V1 gated-cycle run — and the batch has
+one theme: a gate that could not fail, a marker that was guessed at, or an exit
+code that said "done" when nothing was.
+
+**Read before upgrading if you consume the exit code**: `run` now exits 1 in
+situations that previously exited 0 (see the first Fixed entry). The
+`--json-result` payload and the state-DB schema are unchanged, and the
+`stop_reason` vocabulary only gained one string, so a caller reading either of
+those sees no difference.
+
+
 ### Fixed
 
+- **`run` no longer exits 0 when the run did not finish** (issues #127, #129,
+  #130, #131, #132, #134, #136). One class of defect with several entry
+  points: the process exit code — the single signal an orchestrator like
+  Maestro actually reads — said success while work was blocked, refused, or
+  never executed. **Read this before upgrading if you consume the exit code:**
+  runs that previously exited 0 in these situations now exit 1. The
+  `stop_reason` vocabulary is unchanged apart from one addition, so a consumer
+  reading `last_run_stop_reason` sees the same strings.
+  - `on_task_failure: stop` now actually stops the run, immediately and
+    non-zero, with `stop_reason=task_failed_stop` (#136). It marked the task
+    blocked and returned `False`, but leaving the loop depended on
+    `should_stop()` — "consecutive failures ≥ `max_consecutive_failures`
+    (default 2) OR budget exhausted" — which a single failed task never
+    tripped. Since v2.22.0's release notes recommend exactly this setting to
+    orchestrator-managed runs, the documented remedy was a placebo: a
+    production workstream followed it, closed DONE at 1 of 11 tasks, and was
+    merged and turned into a PR.
+  - Leftover blocked/failed work reports `dependency_blocked_after_skip` and
+    exits 1 whether or not TODO tasks are still waiting (#131, #136). v2.22.0
+    fired this only when *nothing* was todo, so the common shape — one blocked
+    task, ten dependents waiting on it — took the plain "no more ready tasks"
+    path and reported `completed`/0. The verdict belongs to the run loop,
+    which observes what actually happened; the "nothing was ready to begin
+    with" early return deliberately stays a quiet exit 0, because `--task` and
+    `--milestone` routinely leave blocked work outside the selection.
+  - A mid-run stop on `max_consecutive_failures`/budget exits non-zero, like
+    the pre-run refusal for the same cause already did (#67).
+  - `run`/`watch`/`retry` refusing on the spec-governance gate exit 1 and
+    write their diagnostics to **stderr**, not stdout (#134, found by
+    steward's live V1 run of the gated cycle). A policy rejection was
+    indistinguishable from an empty queue, and the prose could land in the
+    middle of `--json-result` output.
+  - `--tui` propagates the exit code out of the run thread (#129). `sys.exit`
+    inside a daemon thread is discarded by the interpreter, so every
+    fail-closed gate was advisory under the TUI.
+  - `state_spec_mismatch` sends the `run_complete` notification before
+    exiting (#130) — the heaviest stop there is was the one Telegram/webhook
+    owners never heard about.
+  - The orphaned-success warning fires even when every task is done (#132);
+    it used to be nested under "unfinished work exists".
+  - Budget exhaustion no longer crashes with `KeyError` (#127). It wrote
+    status `failed` into tasks.md, which has no such status — the terminal
+    outcome stays in the state DB (`error_code=BUDGET_EXCEEDED`) and the file
+    gets `blocked`, like every other terminal failure and, unlike `failed`,
+    recoverable once the budget is raised. `update_task_status` now refuses an
+    unknown status with `False` instead of raising.
 - **A `tasks.md` meta line is recognized exactly, or the spec is refused**
   (issues #128, #133). Two symptoms, one defect — the parser guessing instead
   of refusing.
@@ -53,6 +113,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
   - New `scoped_tests` config key (default `true`) forbids narrowing outright,
     for contracts where a subset is not a proof — workstream acceptance, a
     release gate.
+- **`harness_guard: strict` is no longer disarmed by a retry** (#137,
+  Critical). The guard snapshotted the oracle surface *inside each attempt*,
+  so a forbidden edit that outlived a failed attempt became the next
+  attempt's baseline and was legalised — the barrier held exactly once. Seen
+  in production: attempt 1 failed with "the agent modified verification
+  files: modified pyproject.toml", the edit stayed in the working tree,
+  attempt 2 re-snapshotted the mutated file, passed, and the edit reached the
+  history. With the default `max_retries: 3` the documented guarantee "the
+  oracle surface is immutable" did not hold, and from the outside the run was
+  indistinguishable from a clean one — one FAIL line, then green. The
+  snapshot now belongs to the task's lifecycle (`harness.HarnessBaseline`,
+  captured once after `pre_start_hook` so `uv sync` is still not a violation)
+  and a divergence blocks every attempt regardless of its number.
+- **`plan --gated` no longer demands a description for every stage** (#134
+  item 2). README documents `spec-runner plan --gated --stage design` bare, but
+  the command exited with "plan: provide a description argument or --from-file
+  PATH" for stages past the first — found on steward's live V1 run of the gated
+  cycle. A stage whose upstream is approved now inherits its description from
+  that upstream (whose body is reproduced in the generation prompt anyway); only
+  the first stage of the chain still requires one, and it says so by name.
 
 ### Added
 
@@ -100,76 +180,6 @@ is a **breaking change** and requires a major version bump plus an entry here.
   - The shipped golden fixture is corrected — it showed `traces_to` as a scalar
     and pinned a transitive ancestor, neither of which a consumer's reader
     accepts. `docs/CONTRACTS.md` documents both shapes and the rules behind them.
-
-### Fixed
-
-- **`harness_guard: strict` is no longer disarmed by a retry** (#137,
-  Critical). The guard snapshotted the oracle surface *inside each attempt*,
-  so a forbidden edit that outlived a failed attempt became the next
-  attempt's baseline and was legalised — the barrier held exactly once. Seen
-  in production: attempt 1 failed with "the agent modified verification
-  files: modified pyproject.toml", the edit stayed in the working tree,
-  attempt 2 re-snapshotted the mutated file, passed, and the edit reached the
-  history. With the default `max_retries: 3` the documented guarantee "the
-  oracle surface is immutable" did not hold, and from the outside the run was
-  indistinguishable from a clean one — one FAIL line, then green. The
-  snapshot now belongs to the task's lifecycle (`harness.HarnessBaseline`,
-  captured once after `pre_start_hook` so `uv sync` is still not a violation)
-  and a divergence blocks every attempt regardless of its number.
-- **`run` no longer exits 0 when the run did not finish** (issues #127, #129,
-  #130, #131, #132, #134, #136). One class of defect with several entry
-  points: the process exit code — the single signal an orchestrator like
-  Maestro actually reads — said success while work was blocked, refused, or
-  never executed. **Read this before upgrading if you consume the exit code:**
-  runs that previously exited 0 in these situations now exit 1. The
-  `stop_reason` vocabulary is unchanged apart from one addition, so a consumer
-  reading `last_run_stop_reason` sees the same strings.
-  - `on_task_failure: stop` now actually stops the run, immediately and
-    non-zero, with `stop_reason=task_failed_stop` (#136). It marked the task
-    blocked and returned `False`, but leaving the loop depended on
-    `should_stop()` — "consecutive failures ≥ `max_consecutive_failures`
-    (default 2) OR budget exhausted" — which a single failed task never
-    tripped. Since v2.22.0's release notes recommend exactly this setting to
-    orchestrator-managed runs, the documented remedy was a placebo: a
-    production workstream followed it, closed DONE at 1 of 11 tasks, and was
-    merged and turned into a PR.
-  - Leftover blocked/failed work reports `dependency_blocked_after_skip` and
-    exits 1 whether or not TODO tasks are still waiting (#131, #136). v2.22.0
-    fired this only when *nothing* was todo, so the common shape — one blocked
-    task, ten dependents waiting on it — took the plain "no more ready tasks"
-    path and reported `completed`/0. The verdict belongs to the run loop,
-    which observes what actually happened; the "nothing was ready to begin
-    with" early return deliberately stays a quiet exit 0, because `--task` and
-    `--milestone` routinely leave blocked work outside the selection.
-  - A mid-run stop on `max_consecutive_failures`/budget exits non-zero, like
-    the pre-run refusal for the same cause already did (#67).
-  - `run`/`watch`/`retry` refusing on the spec-governance gate exit 1 and
-    write their diagnostics to **stderr**, not stdout (#134, found by
-    steward's live V1 run of the gated cycle). A policy rejection was
-    indistinguishable from an empty queue, and the prose could land in the
-    middle of `--json-result` output.
-  - `--tui` propagates the exit code out of the run thread (#129). `sys.exit`
-    inside a daemon thread is discarded by the interpreter, so every
-    fail-closed gate was advisory under the TUI.
-  - `state_spec_mismatch` sends the `run_complete` notification before
-    exiting (#130) — the heaviest stop there is was the one Telegram/webhook
-    owners never heard about.
-  - The orphaned-success warning fires even when every task is done (#132);
-    it used to be nested under "unfinished work exists".
-  - Budget exhaustion no longer crashes with `KeyError` (#127). It wrote
-    status `failed` into tasks.md, which has no such status — the terminal
-    outcome stays in the state DB (`error_code=BUDGET_EXCEEDED`) and the file
-    gets `blocked`, like every other terminal failure and, unlike `failed`,
-    recoverable once the budget is raised. `update_task_status` now refuses an
-    unknown status with `False` instead of raising.
-
-- **`plan --gated` no longer demands a description for every stage** (#134
-  item 2). README documents `spec-runner plan --gated --stage design` bare, but
-  the command exited with "plan: provide a description argument or --from-file
-  PATH" for stages past the first — found on steward's live V1 run of the gated
-  cycle. A stage whose upstream is approved now inherits its description from
-  that upstream (whose body is reproduced in the generation prompt anyway); only
-  the first stage of the chain still requires one, and it says so by name.
 
 ### Changed
 
@@ -1269,7 +1279,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.22.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.23.0...HEAD
+[2.23.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.22.0...v2.23.0
 [2.22.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...v2.22.0
 [2.21.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...v2.21.0
 [2.20.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.19.0...v2.20.0
