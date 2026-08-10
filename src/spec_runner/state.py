@@ -24,6 +24,10 @@ class ErrorCode(str, Enum):
     TEST_FAILURE = "TEST_FAILURE"
     LINT_FAILURE = "LINT_FAILURE"
     TASK_FAILED = "TASK_FAILED"
+    # A refusal the agent issued deliberately: the task cannot be done within
+    # the rules and needs an operator, as opposed to "I did not manage it"
+    # (#140). Terminal — never retried.
+    TASK_BLOCKED = "TASK_BLOCKED"
     HOOK_FAILURE = "HOOK_FAILURE"
     UNKNOWN = "UNKNOWN"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
