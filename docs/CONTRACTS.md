@@ -168,7 +168,7 @@ and every spec-runner-authored bundle came back `GC-TRACE-EMPTY` +
 
 | Key | Shape | Written when |
 |---|---|---|
-| `traces_to` | list of id strings: the stage's **direct** upstream stage name(s) first, then id tokens (`REQ-001`, `DESIGN-207`) that occur in the downstream body **and** resolve in the upstream text | whenever content is authored — `plan --gated` draft, `spec approve`, `spec adopt` |
+| `traces_to` | list of id strings. What spec-runner *derives* is the stage's **direct** upstream stage name(s) first, then id tokens (`REQ-001`, `DESIGN-207`) that occur in the downstream body **and** resolve in the upstream text. That is the whole list only when the field was absent or empty; entries already present keep their positions ahead of it (see "Additive, not authoritative") | whenever content is authored — `plan --gated` draft, `spec approve`, `spec adopt` |
 | `upstream_hashes` | mapping `{direct upstream stage: git blob hash}`, reproducible as `git hash-object <upstream file>` over the whole file (frontmatter included) | at approval only — `spec approve`, `spec adopt` when it lands on `approved` |
 
 Rules that follow from the consumer's checks, not from taste:
@@ -181,8 +181,11 @@ Rules that follow from the consumer's checks, not from taste:
   upstream file that does not exist is left unpinned rather than pinned to a
   value that was never its content.
 - **Additive, not authoritative.** An existing `traces_to` value is kept —
-  entries in their original order, derived ones appended, a legacy scalar
-  normalized into the list steward's reader requires. spec-runner materializes
+  entries in their original order, derived ones appended after them (so the
+  derived ordering in the table governs the appended part, not the whole list),
+  a legacy scalar normalized into the list steward's reader requires. Consumers
+  should therefore treat the list as a set plus a stable prefix, not as a
+  positional contract. spec-runner materializes
   what it can prove from the stage chain and deletes nobody else's claim. Where
   it can prove nothing (a first stage), it leaves the field untouched.
 - **Pins are not refreshed behind your back.** Only the approval of *that* stage
