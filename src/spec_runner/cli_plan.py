@@ -593,7 +593,7 @@ def cmd_plan(args, config: ExecutorConfig):
         existing_tasks = "\n".join(task_lines) if task_lines else "No tasks yet"
 
     # Load template
-    template = load_prompt_template("plan")
+    template = load_prompt_template("plan", prompts_dir=config.prompts_dir)
 
     if template:
         prompt = render_template(

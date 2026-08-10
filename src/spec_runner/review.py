@@ -130,7 +130,7 @@ def build_review_prompt(
         full_diff = ""
 
     # Try to load CLI-specific or custom template
-    template = load_prompt_template("review", cli_name=cli_name)
+    template = load_prompt_template("review", cli_name=cli_name, prompts_dir=config.prompts_dir)
 
     if template:
         variables = {

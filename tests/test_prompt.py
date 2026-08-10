@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import spec_runner.prompt as prompt_mod
 from spec_runner.config import ExecutorConfig
 from spec_runner.prompt import (
     build_gated_generation_prompt,
@@ -100,40 +99,34 @@ class TestExtractTestFailures:
 
 class TestLoadPromptTemplate:
     def test_returns_none_for_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
-        result = load_prompt_template("nonexistent")
+        result = load_prompt_template("nonexistent", prompts_dir=tmp_path)
         assert result is None
 
     def test_loads_md_template(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
         (tmp_path / "task.md").write_text("# Task Template\n")
-        result = load_prompt_template("task")
+        result = load_prompt_template("task", prompts_dir=tmp_path)
         assert result == "# Task Template"
 
     def test_cli_specific_template_has_priority(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
         (tmp_path / "review.md").write_text("generic review")
         (tmp_path / "review.codex.md").write_text("codex review")
-        result = load_prompt_template("review", cli_name="codex")
+        result = load_prompt_template("review", cli_name="codex", prompts_dir=tmp_path)
         assert result == "codex review"
 
     def test_falls_back_to_generic_when_no_cli_template(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
         (tmp_path / "review.md").write_text("generic review")
-        result = load_prompt_template("review", cli_name="codex")
+        result = load_prompt_template("review", cli_name="codex", prompts_dir=tmp_path)
         assert result == "generic review"
 
     def test_strips_comments_from_txt(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
         (tmp_path / "task.txt").write_text("# comment\nactual content\n")
-        result = load_prompt_template("task")
+        result = load_prompt_template("task", prompts_dir=tmp_path)
         assert result == "actual content"
         assert "# comment" not in result
 
     def test_cli_name_path_extraction(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path)
         (tmp_path / "task.claude.md").write_text("claude template")
-        result = load_prompt_template("task", cli_name="/usr/bin/claude")
+        result = load_prompt_template("task", cli_name="/usr/bin/claude", prompts_dir=tmp_path)
         assert result == "claude template"
 
 
@@ -162,21 +155,18 @@ class TestBuildTaskPrompt:
         return ExecutorConfig(project_root=tmp_path)
 
     def test_includes_task_id(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         task = self._make_task()
         config = self._make_config(tmp_path)
         result = build_task_prompt(task, config)
         assert "TASK-042" in result
 
     def test_includes_task_name(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         task = self._make_task()
         config = self._make_config(tmp_path)
         result = build_task_prompt(task, config)
         assert "Implement feature X" in result
 
     def test_includes_checklist_items(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         task = self._make_task()
         config = self._make_config(tmp_path)
         result = build_task_prompt(task, config)
@@ -184,10 +174,9 @@ class TestBuildTaskPrompt:
         assert "Implement code" in result
 
     def test_uses_custom_template_when_available(self, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "prompts"
-        prompts_dir.mkdir()
+        prompts_dir = tmp_path / "spec" / "prompts"
+        prompts_dir.mkdir(parents=True)
         (prompts_dir / "task.md").write_text("Custom: {{TASK_ID}} - {{TASK_NAME}} (${PRIORITY})")
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", prompts_dir)
 
         task = self._make_task()
         config = self._make_config(tmp_path)
@@ -195,7 +184,6 @@ class TestBuildTaskPrompt:
         assert result == "Custom: TASK-042 - Implement feature X (P1)"
 
     def test_includes_previous_attempt_errors(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         task = self._make_task()
         config = self._make_config(tmp_path)
         attempts = [
@@ -211,7 +199,6 @@ class TestBuildTaskPrompt:
         assert "AssertionError in test_foo" in result
 
     def test_extracts_related_requirements(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         spec_dir = tmp_path / "spec"
         spec_dir.mkdir(exist_ok=True)
         (spec_dir / "requirements.md").write_text(
@@ -251,7 +238,6 @@ class TestRetryContextRendering:
 
     def test_retry_context_in_prompt(self, tmp_path, monkeypatch):
         """build_task_prompt with RetryContext shows structured error info."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         ctx = RetryContext(
@@ -269,7 +255,6 @@ class TestRetryContextRendering:
 
     def test_no_retry_context_no_retry_section(self, tmp_path, monkeypatch):
         """Without RetryContext, no structured retry section."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         prompt = build_task_prompt(task, config)
@@ -277,7 +262,6 @@ class TestRetryContextRendering:
 
     def test_retry_context_timeout(self, tmp_path, monkeypatch):
         """TIMEOUT error code renders correctly."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         ctx = RetryContext(
@@ -296,7 +280,6 @@ class TestRetryContextRendering:
 
     def test_retry_context_without_test_failures(self, tmp_path, monkeypatch):
         """RetryContext without test_failures doesn't show that section."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         ctx = RetryContext(
@@ -313,7 +296,6 @@ class TestRetryContextRendering:
 
     def test_constitution_included_when_file_exists(self, tmp_path, monkeypatch):
         """Constitution guardrails injected into prompt when file exists."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         constitution_file = config.constitution_file
         constitution_file.write_text("Never delete migrations\nAll endpoints must have auth")
@@ -325,7 +307,6 @@ class TestRetryContextRendering:
 
     def test_constitution_absent_when_no_file(self, tmp_path, monkeypatch):
         """No constitution section when file does not exist."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         prompt = build_task_prompt(task, config)
@@ -333,10 +314,9 @@ class TestRetryContextRendering:
 
     def test_constitution_in_custom_template(self, tmp_path, monkeypatch):
         """Constitution available as {{CONSTITUTION}} in custom templates."""
-        prompts_dir = tmp_path / "prompts"
-        prompts_dir.mkdir()
+        prompts_dir = tmp_path / "spec" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "task.md").write_text("Rules: {{CONSTITUTION}}")
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", prompts_dir)
         config = self._make_config(tmp_path)
         config.constitution_file.write_text("No force push")
         task = self._make_task()
@@ -347,7 +327,6 @@ class TestRetryContextRendering:
         """Implementer persona system_prompt injected into built-in prompt."""
         from spec_runner.config import Persona
 
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         config.personas = {
             "implementer": Persona(system_prompt="You are a senior Python developer")
@@ -358,7 +337,6 @@ class TestRetryContextRendering:
 
     def test_persona_prompt_absent_when_not_configured(self, tmp_path, monkeypatch):
         """No persona section when personas not configured."""
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-prompts")
         config = self._make_config(tmp_path)
         task = self._make_task()
         prompt = build_task_prompt(task, config)
@@ -368,10 +346,9 @@ class TestRetryContextRendering:
         """Persona available as {{PERSONA_PROMPT}} in custom templates."""
         from spec_runner.config import Persona
 
-        prompts_dir = tmp_path / "prompts"
-        prompts_dir.mkdir()
+        prompts_dir = tmp_path / "spec" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "task.md").write_text("Role: {{PERSONA_PROMPT}}")
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", prompts_dir)
         config = self._make_config(tmp_path)
         config.personas = {"implementer": Persona(system_prompt="Be concise")}
         task = self._make_task()
