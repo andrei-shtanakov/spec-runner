@@ -260,27 +260,45 @@ def post_done_hook(
             reporter.enter("tests")
         test_cmd = config.test_command
 
-        # Scope tests to changed files when running in parallel mode
+        # Scope tests to changed files when running in parallel mode.
+        # `scope_reason` is not decoration: when the gate narrows, it runs a
+        # different set than the config declares, and the run's evidence has
+        # to say so (#139) — a full-suite contract is not proven by a subset.
+        scope_reason = "not parallel mode"
         if changed_since is not None:
-            changed_files = find_changed_source_files(config.project_root, changed_since)
-            if changed_files:
-                test_files = map_source_to_test_files(changed_files, config.project_root)
-                if test_files:
-                    test_cmd = build_scoped_test_command(
-                        config.test_command,
-                        test_files,
-                        config.project_root,
-                    )
-                    logger.info(
-                        "Running scoped tests",
-                        test_files=[str(f) for f in test_files],
-                    )
-                else:
-                    logger.info("No matching test files, running full suite")
+            if not getattr(config, "scoped_tests", True):
+                scope_reason = "disabled by scoped_tests: false"
             else:
-                logger.info("No changed source files, running full suite")
+                changed_files = find_changed_source_files(config.project_root, changed_since)
+                if not changed_files:
+                    scope_reason = "no changed source files"
+                else:
+                    test_files = map_source_to_test_files(changed_files, config.project_root)
+                    if not test_files:
+                        scope_reason = "no matching test files"
+                    else:
+                        test_cmd = build_scoped_test_command(
+                            config.test_command,
+                            test_files,
+                            config.project_root,
+                        )
+                        if test_cmd == config.test_command:
+                            # build_scoped_test_command refused — composite
+                            # command it cannot narrow without guessing.
+                            scope_reason = "composite test_command"
+                        else:
+                            scope_reason = f"{len(test_files)} changed test file(s)"
 
-        logger.info("Running tests", command=test_cmd)
+        scoped = test_cmd != config.test_command
+        # One line, always emitted, carrying the mode. Previously only the
+        # scoped branch logged anything, so "ran the full suite" and "narrowed
+        # it" were indistinguishable in the record.
+        logger.info(
+            "Running tests",
+            command=test_cmd,
+            scope="scoped" if scoped else "full",
+            scope_reason=scope_reason,
+        )
         result = subprocess.run(
             test_cmd,
             shell=True,

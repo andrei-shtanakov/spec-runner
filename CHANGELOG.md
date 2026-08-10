@@ -34,6 +34,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
     read. The two halves ship together on purpose: tightening the pattern
     alone would have turned more unparseable metas into ready-looking TODOs.
   - The bundled `spec-generator-skill` template copy was kept in sync.
+- **Test scoping no longer corrupts a composite `test_command`, and says when
+  it narrowed the gate** (issue #139). `test_command` is a shell string, and
+  real ones chain several programs:
+  `pin_check.py && uv run pytest -q && uv run pyrefly check`. With no `tests/`
+  token to substitute, the mapped test paths were appended to the end of the
+  *whole* chain — i.e. handed to `pyrefly check`; the substitution branch was
+  no safer, replacing the first `tests/` substring wherever it occurred.
+  Composite commands are now left untouched (running the full declared gate is
+  always safe; guessing which program takes test paths is not), and a
+  non-composite command has its test-path *argument* replaced wholesale, so
+  `pytest tests/unit` narrows properly instead of becoming
+  `pytest <files>unit`. Scoping only ever applies in parallel mode.
+  - The run's evidence now records the mode: one `Running tests` line always
+    carries `scope=scoped|full` plus the reason. Before, only the scoped
+    branch logged at all, so "ran the full suite" and "quietly ran a subset"
+    looked identical in the record.
+  - New `scoped_tests` config key (default `true`) forbids narrowing outright,
+    for contracts where a subset is not a proof — workstream acceptance, a
+    release gate.
 
 ### Added
 
