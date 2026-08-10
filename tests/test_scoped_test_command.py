@@ -97,6 +97,23 @@ class TestTokenReplacement:
         out = build_scoped_test_command("uv run pytest", test_files, tmp_path)
         assert out == "uv run pytest tests/test_a.py tests/test_b.py"
 
+    @pytest.mark.parametrize("name", ["a\\tb.py", "x\\1y.py", "back\\\\slash.py"])
+    def test_paths_are_inserted_literally(self, tmp_path, name):
+        """`re.sub` interprets escapes in a string replacement (Copilot, PR #150).
+
+        A path containing a backslash was mangled (`\\t` became a tab) or crashed
+        the run outright (`\\1` → "invalid group reference"). Rare on POSIX,
+        legal everywhere, and this function has no business editing the bytes
+        it was handed.
+        """
+        d = tmp_path / "tests"
+        d.mkdir(exist_ok=True)
+        f = d / name
+        f.write_text("")
+        out = build_scoped_test_command("uv run pytest tests/ -v", [f], tmp_path)
+        assert str(f.relative_to(tmp_path)) in out
+        assert "\t" not in out
+
     def test_no_files_returns_base_unchanged(self, tmp_path):
         assert build_scoped_test_command("uv run pytest tests/", [], tmp_path) == (
             "uv run pytest tests/"

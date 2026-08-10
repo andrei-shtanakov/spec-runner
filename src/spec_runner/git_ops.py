@@ -295,7 +295,11 @@ _TEST_PATH_ARG = re.compile(r"(?<!\S)tests(?:/\S*)?(?!\S)")
 
 
 def is_composite_shell_command(command: str) -> bool:
-    """True when ``command`` chains several programs (``&&``, ``||``, ``;``, ``|``)."""
+    """True when ``command`` chains several programs.
+
+    Recognizes ``&&``, ``||``, ``;``, ``|`` and a newline — a multi-line
+    ``test_command`` from YAML block scalars is several programs too.
+    """
     return bool(_SHELL_CHAIN.search(command))
 
 
@@ -326,7 +330,12 @@ def build_scoped_test_command(
     if is_composite_shell_command(base_command):
         return base_command
     rel_paths = " ".join(str(f.relative_to(project_root)) for f in test_files)
-    scoped, replaced = _TEST_PATH_ARG.subn(rel_paths, base_command, count=1)
+    # Insert via a callable: `re.sub` interprets escapes in a *string*
+    # replacement, so a path containing a backslash would be mangled (`\t`
+    # becomes a tab) or crash outright (`\1` raises "invalid group reference").
+    # Backslashes in paths are rare on POSIX but perfectly legal, and this
+    # function has no business editing the bytes it was handed.
+    scoped, replaced = _TEST_PATH_ARG.subn(lambda _m: rel_paths, base_command, count=1)
     if replaced:
         return scoped
     return f"{base_command} {rel_paths}"
