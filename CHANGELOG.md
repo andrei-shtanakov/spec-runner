@@ -12,6 +12,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`harness_guard: strict` is no longer disarmed by a retry** (#137,
+  Critical). The guard snapshotted the oracle surface *inside each attempt*,
+  so a forbidden edit that outlived a failed attempt became the next
+  attempt's baseline and was legalised — the barrier held exactly once. Seen
+  in production: attempt 1 failed with "the agent modified verification
+  files: modified pyproject.toml", the edit stayed in the working tree,
+  attempt 2 re-snapshotted the mutated file, passed, and the edit reached the
+  history. With the default `max_retries: 3` the documented guarantee "the
+  oracle surface is immutable" did not hold, and from the outside the run was
+  indistinguishable from a clean one — one FAIL line, then green. The
+  snapshot now belongs to the task's lifecycle (`harness.HarnessBaseline`,
+  captured once after `pre_start_hook` so `uv sync` is still not a violation)
+  and a divergence blocks every attempt regardless of its number.
 - **`run` no longer exits 0 when the run did not finish** (issues #127, #129,
   #130, #131, #132, #134, #136). One class of defect with several entry
   points: the process exit code — the single signal an orchestrator like
@@ -33,9 +46,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
     exits 1 whether or not TODO tasks are still waiting (#131, #136). v2.22.0
     fired this only when *nothing* was todo, so the common shape — one blocked
     task, ten dependents waiting on it — took the plain "no more ready tasks"
-    path and reported `completed`/0. The same verdict now also covers the
-    early return taken when the *first* pass finds nothing ready, so
-    re-running a spec whose root task gave up no longer reports success.
+    path and reported `completed`/0. The verdict belongs to the run loop,
+    which observes what actually happened; the "nothing was ready to begin
+    with" early return deliberately stays a quiet exit 0, because `--task` and
+    `--milestone` routinely leave blocked work outside the selection.
   - A mid-run stop on `max_consecutive_failures`/budget exits non-zero, like
     the pre-run refusal for the same cause already did (#67).
   - `run`/`watch`/`retry` refusing on the spec-governance gate exit 1 and

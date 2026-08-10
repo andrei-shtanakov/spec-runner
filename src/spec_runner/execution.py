@@ -7,6 +7,7 @@ from datetime import datetime
 
 from .config import ExecutorConfig
 from .errors import classify
+from .harness import HarnessBaseline
 from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
@@ -34,8 +35,20 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:
+def execute_task(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    harness_baseline: HarnessBaseline | None = None,
+) -> bool | str:
     """Execute a single task via Claude CLI.
+
+    Args:
+        harness_baseline: the task's harness snapshot holder, shared across
+            retries (#137). Omit it and this attempt takes its own snapshot —
+            fine for a one-shot call, wrong inside a retry loop, where a
+            per-attempt snapshot lets a forbidden edit survive one failure and
+            become the next attempt's baseline.
 
     Returns:
         True if successful, False if failed (including rate limits),
@@ -127,10 +140,13 @@ def execute_task(task: Task, config: ExecutorConfig, state: ExecutorState) -> bo
         )
 
         # Harness tripwire (#64): snapshot the verification surface before
-        # the agent gets write access to it.
-        from .harness import harness_violations, snapshot_harness
+        # the agent gets write access to it. Taken here — after
+        # pre_start_hook — so `uv sync` rewriting uv.lock is not an agent
+        # mutation. #137: the snapshot belongs to the task, not the attempt,
+        # so a retry cannot re-baseline a forbidden edit into legitimacy.
+        from .harness import harness_violations
 
-        harness_before = snapshot_harness(config)
+        harness_before = (harness_baseline or HarnessBaseline()).capture(config)
 
         reporter.enter("exec")
         result = subprocess.run(
@@ -492,14 +508,33 @@ def _fail_for_budget(
     update_task_status(config.tasks_file, task.id, "blocked")
 
 
-def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -> bool | str:
+def run_with_retries(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    harness_baseline: HarnessBaseline | None = None,
+) -> bool | str:
     """Execute task with retries.
+
+    Args:
+        harness_baseline: normally omitted — one baseline is created here and
+            shared by every attempt of this task (#137). It is a parameter
+            only so the operator-driven "retry" branch below can carry the
+            same baseline into its recursive call instead of re-snapshotting a
+            working tree the previous attempt may have left dirty.
 
     Returns:
         True if successful, False if failed, or "SKIP" if task was skipped.
     """
 
     task_state = state.get_task_state(task.id)
+    # One snapshot per task lifecycle, captured lazily on the first attempt
+    # (after its pre_start_hook) and replayed for every retry. A per-attempt
+    # snapshot let a forbidden harness edit that survived a failed attempt
+    # become the next attempt's baseline — the guard blocked exactly once and
+    # was disarmed by persistence (#137).
+    if harness_baseline is None:
+        harness_baseline = HarnessBaseline()
 
     for attempt in range(task_state.attempt_count, config.max_retries):
         # Pre-attempt budget check (LABS-41): stop BEFORE burning another
@@ -511,7 +546,7 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
 
         log_progress(f"\U0001f4cd Attempt {attempt + 1}/{config.max_retries}", task.id)
 
-        result = execute_task(task, config, state)
+        result = execute_task(task, config, state, harness_baseline=harness_baseline)
 
         # Hook error -- always fatal, stop immediately (no error_code recorded)
         if result == "HOOK_ERROR":
@@ -588,7 +623,7 @@ def run_with_retries(task: Task, config: ExecutorConfig, state: ExecutorState) -
             # Reset attempts and retry
             task_state.attempts = []
             state._save()
-            return run_with_retries(task, config, state)
+            return run_with_retries(task, config, state, harness_baseline=harness_baseline)
         elif choice == "q":
             update_task_status(config.tasks_file, task.id, "blocked")
             return False
