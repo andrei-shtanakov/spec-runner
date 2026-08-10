@@ -15,6 +15,13 @@
 > Отсутствующий тег означает «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
+- ⏳ **Не выпущено: 2.22.0 + класс A + #137.** master (`9a2267a`) несёт три влитых
+  PR поверх нетегнутого v2.22.0 — то есть накопились две ступени. `[Unreleased]`
+  содержит фикс #137 и весь класс A; последний **меняет exit-коды** (раны, которые
+  рапортовали 0 при заблокированной/отклонённой работе, теперь дают 1). Это не
+  формат `--json-result` и не схема state DB, но для потребителя видимо; прецедент
+  2.22.0 («Minor, not patch: `run --all` now exits non-zero on a state/spec
+  mismatch») говорит, что это **minor** → v2.23.0. Решение о выпуске за владельцем.
 - 🔴 **v2.22.0 собран, но не тегнут — CI-гард падает на master с 2026-08-08.**
   `pyproject.toml` = `2.22.0`, `CHANGELOG` = `## [2.22.0] — 2026-08-08`, последний тег и
   GitHub Release — `v2.21.0`. `release-tag-guard` (заведённый ровно против этого после
@@ -119,13 +126,23 @@
 A/B — дефекты подтверждённого поведения, C — решения о политике, D — контракт
 авторинга, E — крупные спеки, которым нужен scope от владельца.
 
-#### A. Ложно-зелёный выход: exit 0 там, где ран отказал (боевой класс)
+#### A. Ложно-зелёный выход: exit 0 там, где ран отказал (боевой класс) — ✅ отгружено PR #144 (`8da6155`)
 
 Шесть входов в один класс: потребитель (maestro, CI) читает успех там, где
 исполнения не было или оно не доделано. Не гипотеза — пойман вживую: workstream
 `w-adapters` закрылся DONE при 1/11 задач и уехал в merge + PR (#136).
 
-- [ ] **#136 on-task-failure-stop-does-not-stop** (inbox, from disputatio) @owner:github:andrei-shtanakov @id:on-task-failure-stop-does-not-stop
+Закрыто всё, кроме остатка #134 (п.2-4 — документация и пересечение с #138).
+Тесты: `tests/test_exit_contract.py` — 15 тест-функций, 17 кейсов (governance-отказ
+параметризован по `run`/`watch`/`retry`). Попутно выровнены два входа того же
+класса, которых в issues не было: остановка по `max_consecutive_failures`/бюджету
+в середине рана (предрановый отказ по той же причине уже давал ненулевой, #67) и
+закрытие audit-пары на ветке «нет готовых задач» (находка ревью Copilot).
+**Ранний возврат «нечего исполнять» сознательно оставлен тихим exit 0**: `--task`/
+`--milestone` штатно оставляют blocked-работу вне выборки, и вердикт там был бы
+ложной тревогой — он принадлежит циклу, который видит, что реально произошло.
+
+- [x] **#136 on-task-failure-stop-does-not-stop** (inbox, from disputatio) @owner:github:andrei-shtanakov @id:on-task-failure-stop-does-not-stop
       `on_task_failure: stop` помечает задачу `blocked` и возвращает `False`
       (`execution.py:571`), но выход из цикла висит на `state.should_stop()`
       (`cli.py:888`) = «≥ max_consecutive_failures ИЛИ бюджет». Одна упавшая
@@ -134,7 +151,7 @@ A/B — дефекты подтверждённого поведения, C — 
       Подтверждено чтением кода. **Рекомендация из release notes 2.22.0 («для
       orchestrator-managed запусков ставьте `on_task_failure: stop`») не работает** —
       пилот её выполнил и всё равно получил ложный DONE.
-- [ ] **#134 gated-run-v1-findings** (inbox, from steward) — п.1 главный: @owner:github:andrei-shtanakov @id:gated-run-v1-findings
+- [ ] **#134 gated-run-v1-findings** (inbox, from steward) — **п.1 исправлен** (PR #144): @owner:github:andrei-shtanakov @id:gated-run-v1-findings
       `run --strict` при неаппрувнутом `tasks.md` печатает `⛔ spec governance: …`
       **в stdout** и делает `return` → exit 0 (`cli.py:521-524`, тот же паттерн в
       `cmd_retry:993` и `cmd_watch:1050`). Для CI policy-отказ неотличим от «нечего
@@ -142,20 +159,20 @@ A/B — дефекты подтверждённого поведения, C — 
       либо наследовать, либо править README), п.3 (одиночный `run` = одна волна —
       документировать), п.4 (упавшее ревью замаскировано «No-op» — пересекается
       с #138), мелочь про `--no-interactive` в доке.
-- [ ] **#129 tui-thread-exit-swallow** — `cmd_run --tui` крутит `_run_tasks` @owner:github:andrei-shtanakov @id:tui-thread-exit-swallow
+- [x] **#129 tui-thread-exit-swallow** — `cmd_run --tui` крутит `_run_tasks` @owner:github:andrei-shtanakov @id:tui-thread-exit-swallow
       в daemon-треде (`cli.py:191-198`); `sys.exit(1)` в треде гаснет молча →
       все fail-closed гейты в TUI-режиме дают процессный exit 0.
-- [ ] **#130 notify-on-mismatch-exit** — `_exit_on_state_spec_mismatch` @owner:github:andrei-shtanakov @id:notify-on-mismatch-exit
+- [x] **#130 notify-on-mismatch-exit** — `_exit_on_state_spec_mismatch` @owner:github:andrei-shtanakov @id:notify-on-mismatch-exit
       (`cli.py:452-481`) завершает ран до `notify_run_complete` → владельцы
       Telegram/webhook не получают уведомление о самой тяжёлой остановке.
-- [ ] **#132 orphaned-success-warning-scope** — warning об осиротевших success-строках @owner:github:andrei-shtanakov @id:orphaned-success-warning-scope
+- [x] **#132 orphaned-success-warning-scope** — warning об осиротевших success-строках @owner:github:andrei-shtanakov @id:orphaned-success-warning-scope
       живёт внутри `if nonterminal_tasks` (`cli.py:766`); кейс «всё done + осиротевшая
       строка» проходит молча. Поднять выше `if`.
-- [ ] **#127 status-emoji-failed-keyerror** — `_fail_for_budget` (`execution.py:488`) @owner:github:andrei-shtanakov @id:status-emoji-failed-keyerror
+- [x] **#127 status-emoji-failed-keyerror** — `_fail_for_budget` (`execution.py:488`) @owner:github:andrei-shtanakov @id:status-emoji-failed-keyerror
       зовёт `update_task_status(..., "failed")`, а `STATUS_EMOJI` (`task.py:48`) ключа
       `failed` не имеет → `KeyError` на `task.py:278`. Найдено ревью, эмпирически
       не прогонялось; нужен тест budget-пути.
-- [ ] **#131 blocked-after-skip-exit-policy** — политика exit для blocked-after-skip. @owner:github:andrei-shtanakov @id:blocked-after-skip-exit-policy
+- [x] **#131 blocked-after-skip-exit-policy** — политика exit для blocked-after-skip. @owner:github:andrei-shtanakov @id:blocked-after-skip-exit-policy
       В 2.22.0 сознательно оставлен exit 0 + честный `stop_reason`; #136 показывает,
       что откладывать «до когда-нибудь» нельзя — решается вместе с ним.
       Отдельный вход: maestro не читает `stop_reason` (`_load_meta` отбрасывает не-int),
@@ -182,7 +199,7 @@ A/B — дефекты подтверждённого поведения, C — 
 
 #### C. Целостность оракула и политика ретраев (решения владельца по составу)
 
-- [ ] **#137 harness-guard-retry-bypass** (inbox, Critical, from disputatio) @owner:github:andrei-shtanakov @id:harness-guard-retry-bypass
+- [x] **#137 harness-guard-retry-bypass** (inbox, Critical, from disputatio) @owner:github:andrei-shtanakov @id:harness-guard-retry-bypass
       `harness_guard: strict` снимает snapshot **внутри каждой попытки**
       (`execution.py:133`, вызывается из `run_with_retries` по попытке) → запрещённая
       правка, пережившая упавшую попытку, попадает в baseline следующей и
@@ -190,11 +207,26 @@ A/B — дефекты подтверждённого поведения, C — 
       дереве → attempt 2 PASS → правка в истории. Гейт блокирует ровно один раз и
       разоружается ретраем; при дефолтном `max_retries: 3` заявленная гарантия
       «оракульная поверхность неизменна» не выполняется.
-      Сопутствующее (можно отдельными пунктами): control-plane
-      (`spec-runner.config.yaml`) не в `HARNESS_CANDIDATES`; текст гейта предлагает
-      обойти себя через `harness_allow` и уходит в retry-промпт; `harness_allow`
-      глобален (нет task-scoped исключений); нет preflight'а на пересечение scope
-      задачи с оракульными файлами.
+      **Исправлено PR #145 (`9a2267a`)**: `harness.HarnessBaseline` — снимок привязан
+      к lifecycle задачи и переиспользуется всеми попытками, включая рекурсию
+      операторского `retry`. Захват остался ленивым, ПОСЛЕ `pre_start_hook`, иначе
+      `uv sync` стал бы нарушением на каждом ране. Тесты:
+      `tests/test_harness_guard_retry.py` (6); проверено, что два ключевых краснеют
+      без фикса.
+- [ ] **harness-guard-companions** — четыре сопутствующих пункта из #137, @owner:github:andrei-shtanakov @id:harness-guard-companions
+      каждый самостоятельный (issue закрыт по главному дефекту, эти — нет):
+      1. **Control-plane не защищён** — `spec-runner.config.yaml` не входит ни в
+         `HARNESS_CANDIDATES`, ни в дефолтный `harness_files`: агент, работающий в
+         worktree, может изменить саму политику, которой его проверяют.
+      2. **Текст гейта предлагает себя обойти** — «...or, if the change is
+         intentional, exempt it via `harness_allow`» уходит в retry-промпт
+         author-агенту. Самый дешёвый из четырёх и, пожалуй, самый неприятный: мы
+         буквально подсказываем, как снять барьер.
+      3. **`harness_allow` глобален** — task-scoped исключений нет, разрешив файл
+         ради одной задачи, оператор открывает его всем последующим.
+      4. **Нет preflight'а** на пересечение declared scope задачи с оракульными
+         файлами. TASK-022 была невыполнимым контрактом с самого начала — это
+         выявляется статически, за секунды, до запуска агента.
 - [ ] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.
       Три пути: таймаут → `FAILED`, но `hooks.py:415` явным комментарием делает его
