@@ -1,4 +1,4 @@
-# TODO — spec-runner (план от 2026-04-16, обновлено 2026-07-26)
+# TODO — spec-runner (план от 2026-04-16, обновлено 2026-08-10)
 
 > Роль в экосистеме: единственная **работающая** кросс-проектная связка Maestro→spec-runner.
 > Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
@@ -15,6 +15,12 @@
 > Отсутствующий тег означает «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
+- ⚠️ **Триаж 17 issues 2026-08-10** (см. «Активные задачи → Триаж 2026-08-10»). Главное:
+  класс **ложно-зелёного выхода** пойман вживую (#136 — false-DONE при 1/11 уехал в merge
+  и PR), и рекомендация из release notes 2.22.0 против него не помогает, потому что
+  `on_task_failure: stop` не останавливает ран. Рядом — #137 (Critical): `harness_guard:
+  strict` разоружается обычным ретраем. Отказов по ADR-ECO-006 нет: все находки
+  перепроверены по коду и подтвердились.
 - ✅ **v2.11.0 зарелижен 2026-07-26** (PyPI + GitHub Release, тег `v2.11.0`, release commit
   `7be192c`): SpecMeta contract v2 + профильная осведомлённость spec-поверхности. Собрал три
   PR: #53 (обход governance-гейта + падение `plan --gated` на кастомных профилях), #54 (C2:
@@ -91,6 +97,165 @@
       в payload (self-describing отчёт для audit-таблицы maestro). Приёмка проверена
       вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
       Тесты: `TestJsonStdoutPurity` (6) (PR #117)
+
+### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
+
+Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),
+**steward** (живой V1-прогон gated-цикла на чистом клоне тега v2.21.0) и финальное
+ревью PR #126. Каждое фактическое утверждение перепроверено по коду на master
+`de9a31c` — **ни одно не оказалось неточным**, поэтому отказов (ADR-ECO-006,
+«закрыть как not planned») в этом триаже нет. Разбивка по классам, не по номерам:
+A/B — дефекты подтверждённого поведения, C — решения о политике, D — контракт
+авторинга, E — крупные спеки, которым нужен scope от владельца.
+
+#### A. Ложно-зелёный выход: exit 0 там, где ран отказал (боевой класс)
+
+Шесть входов в один класс: потребитель (maestro, CI) читает успех там, где
+исполнения не было или оно не доделано. Не гипотеза — пойман вживую: workstream
+`w-adapters` закрылся DONE при 1/11 задач и уехал в merge + PR (#136).
+
+- [ ] **#136 on-task-failure-stop-does-not-stop** (inbox, from disputatio) @owner:github:andrei-shtanakov @id:on-task-failure-stop-does-not-stop
+      `on_task_failure: stop` помечает задачу `blocked` и возвращает `False`
+      (`execution.py:571`), но выход из цикла висит на `state.should_stop()`
+      (`cli.py:888`) = «≥ max_consecutive_failures ИЛИ бюджет». Одна упавшая
+      задача стопа не даёт → следующая итерация видит пустой ready при непустом
+      todo → ветка «No more ready tasks» → `break` → exit 0, `stop_reason=completed`.
+      Подтверждено чтением кода. **Рекомендация из release notes 2.22.0 («для
+      orchestrator-managed запусков ставьте `on_task_failure: stop`») не работает** —
+      пилот её выполнил и всё равно получил ложный DONE.
+- [ ] **#134 gated-run-v1-findings** (inbox, from steward) — п.1 главный: @owner:github:andrei-shtanakov @id:gated-run-v1-findings
+      `run --strict` при неаппрувнутом `tasks.md` печатает `⛔ spec governance: …`
+      **в stdout** и делает `return` → exit 0 (`cli.py:521-524`, тот же паттерн в
+      `cmd_retry:993` и `cmd_watch:1050`). Для CI policy-отказ неотличим от «нечего
+      исполнять». Сопутствующие п.2 (стадии после первой требуют description —
+      либо наследовать, либо править README), п.3 (одиночный `run` = одна волна —
+      документировать), п.4 (упавшее ревью замаскировано «No-op» — пересекается
+      с #138), мелочь про `--no-interactive` в доке.
+- [ ] **#129 tui-thread-exit-swallow** — `cmd_run --tui` крутит `_run_tasks` @owner:github:andrei-shtanakov @id:tui-thread-exit-swallow
+      в daemon-треде (`cli.py:191-198`); `sys.exit(1)` в треде гаснет молча →
+      все fail-closed гейты в TUI-режиме дают процессный exit 0.
+- [ ] **#130 notify-on-mismatch-exit** — `_exit_on_state_spec_mismatch` @owner:github:andrei-shtanakov @id:notify-on-mismatch-exit
+      (`cli.py:452-481`) завершает ран до `notify_run_complete` → владельцы
+      Telegram/webhook не получают уведомление о самой тяжёлой остановке.
+- [ ] **#132 orphaned-success-warning-scope** — warning об осиротевших success-строках @owner:github:andrei-shtanakov @id:orphaned-success-warning-scope
+      живёт внутри `if nonterminal_tasks` (`cli.py:766`); кейс «всё done + осиротевшая
+      строка» проходит молча. Поднять выше `if`.
+- [ ] **#127 status-emoji-failed-keyerror** — `_fail_for_budget` (`execution.py:488`) @owner:github:andrei-shtanakov @id:status-emoji-failed-keyerror
+      зовёт `update_task_status(..., "failed")`, а `STATUS_EMOJI` (`task.py:48`) ключа
+      `failed` не имеет → `KeyError` на `task.py:278`. Найдено ревью, эмпирически
+      не прогонялось; нужен тест budget-пути.
+- [ ] **#131 blocked-after-skip-exit-policy** — политика exit для blocked-after-skip. @owner:github:andrei-shtanakov @id:blocked-after-skip-exit-policy
+      В 2.22.0 сознательно оставлен exit 0 + честный `stop_reason`; #136 показывает,
+      что откладывать «до когда-нибудь» нельзя — решается вместе с ним.
+      Отдельный вход: maestro не читает `stop_reason` (`_load_meta` отбрасывает не-int),
+      т.е. одного честного reason'а потребителю недостаточно (maestro#124).
+
+#### B. Producer/parser: спека проходит валидацию и падает в рантайме
+
+- [ ] **#133 plan-meta-normalizer** — третья наблюдённая форма meta-строки от @owner:github:andrei-shtanakov @id:plan-meta-normalizer
+      `plan --full` за один пилот (`- TASK-023 | 🔄 IN_PROGRESS | P0 | …`, ID и статус
+      перед приоритетом). `TASK_META` её не узнаёт → статусы дефолтятся в TODO →
+      `update_task_status` fail-closed возвращает False → гейт 2.22.0 честно валит ран.
+      Цепочка отработала; корень — producer. Два предложения: канонический
+      нормализатор на выходе генерации + validate-правило «задача без распознанной
+      TASK_META = error» (сейчас такой файл валидацию проходит).
+- [ ] **#128 task-meta-status-whitelist** — `TASK_META` парсит статус как `(\w+)`: @owner:github:andrei-shtanakov @id:task-meta-status-whitelist
+      `- P0 | high priority stuff` даст статус `high`. Bullet-допуск 2.22.0 расширил
+      поверхность. Сузить до альтернации известных статусов, осторожно с обратной
+      совместимостью (см. также #133 — тот же шов с другой стороны).
+- [ ] **#139 scoped-test-command** — `build_scoped_test_command` (`git_ops.py:286`) @owner:github:andrei-shtanakov @id:scoped-test-command
+      дописывает пути тестов в конец **всей** shell-цепочки: при
+      `pytest -q && pyrefly check` пути уедут в `pyrefly`. Плюс деградация полного
+      suite до выборочного не видна в evidence. Оговорка автора: найдено чтением
+      кода, на 5 прогонах scoping не активировался ни разу.
+
+#### C. Целостность оракула и политика ретраев (решения владельца по составу)
+
+- [ ] **#137 harness-guard-retry-bypass** (inbox, Critical, from disputatio) @owner:github:andrei-shtanakov @id:harness-guard-retry-bypass
+      `harness_guard: strict` снимает snapshot **внутри каждой попытки**
+      (`execution.py:133`, вызывается из `run_with_retries` по попытке) → запрещённая
+      правка, пережившая упавшую попытку, попадает в baseline следующей и
+      легализуется. Боевое наблюдение: TASK-022, attempt 1 FAIL → правка осталась в
+      дереве → attempt 2 PASS → правка в истории. Гейт блокирует ровно один раз и
+      разоружается ретраем; при дефолтном `max_retries: 3` заявленная гарантия
+      «оракульная поверхность неизменна» не выполняется.
+      Сопутствующее (можно отдельными пунктами): control-plane
+      (`spec-runner.config.yaml`) не в `HARNESS_CANDIDATES`; текст гейта предлагает
+      обойти себя через `harness_allow` и уходит в retry-промпт; `harness_allow`
+      глобален (нет task-scoped исключений); нет preflight'а на пересечение scope
+      задачи с оракульными файлами.
+- [ ] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open
+      не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.
+      Три пути: таймаут → `FAILED`, но `hooks.py:415` явным комментарием делает его
+      advisory; **нет маркера в выводе → `PASSED`** (`review.py:343` — пустой вывод
+      агента засчитывается как успешное ревью); порядок стадий
+      `tests → lint → commit → review` — ревью застаёт код уже закоммиченным.
+      Замеренная цена: 6 таймаутов по 15 минут на 26 задачах — полтора часа стены
+      за советы, которых не было, все шесть задач закрыты DONE.
+      Решить: различать в evidence «прошло / не состоялось / нашло проблемы»,
+      блокирующий режим вне HITL, порядок ревью относительно commit.
+- [ ] **#140 terminal-refusal-no-retry** (inbox, from disputatio) — ретраи не отличают @owner:github:andrei-shtanakov @id:terminal-refusal-no-retry
+      переходный сбой от осознанной эскалации к оператору: агент, честно
+      остановившийся по конституции проекта, получает попытки 2-3 с припиской
+      «Do not repeat the same mistake», хотя единственный неошибочный путь ему
+      запрещён самим харнессом. На TASK-025 попытка 2 из-за этого перешла границу
+      чужого scope, которую попытка 1 корректно соблюла — **барьер выдержал один раз
+      и был снят ретраем** (тот же механизм, что в #137). Предложение: маркер
+      `TASK_BLOCKED: <причина>` рядом с `TASK_FAILED`, такие не ретраить.
+
+#### D. Контракт авторинга SpecMeta (steward)
+
+- [ ] **#125 specmeta-owner-role-canonical** (inbox, from steward) — **уже в плане**: @owner:github:andrei-shtanakov @id:specmeta-owner-role-canonical
+      ask совпадает с блоком «Follow-up: форма `owner_role` устарела по DEC-007»
+      ниже (пункты `dec007-doc-fix` / `dec007-fixture` / `dec007-inline-comment` /
+      `dec007-patch-release-decision` / `dec007-vault-note-update`). Issue уточняет
+      грамматику (`^[a-z][a-z0-9-]{1,31}$`, ровно одна роль, `@` не входит в значение)
+      и подтверждает, что множественность — это будущие `reviewer_roles[]` /
+      `allowed_approver_roles[]`, которые пока достаточно пропускать через `extra`.
+      Их триггер на убийство legacy-пути — `SPEC_META_CONTRACT = 2` в master (уже есть).
+      Действие: сослаться на #125 в тех пунктах, отдельного трека не заводить.
+- [ ] **#135 authoring-contract-traces-pins** (inbox, from steward, DEC-008) @owner:github:andrei-shtanakov @id:authoring-contract-traces-pins
+      Канонические имена стадий признаны нашими (steward переименовал `task` → `tasks`
+      у себя, без alias). Остаток шва за нами как владельцем формата:
+      (1) `traces_to` — gated-генерация/approve материализует связь downstream ↔ upstream
+      (минимум id стадии по цепочке профиля, лучше реальные REQ-/DESIGN-id);
+      сейчас поле не пишется вовсе → `GC-TRACE-EMPTY` на каждом нашем бандле.
+      (2) `upstream_hashes` — при `spec approve <stage>` пиновать git blob-хеши upstream
+      (`git hash-object <file>`); без них stale-cascade steward слеп (`GC-STALE-UNPINNED`).
+      steward — только валидатор, артефакты не переписывает.
+
+#### E. Крупные спеки D7 — нужен scope-решение владельца, не «сделать»
+
+Обе поданы disputatio как inbox-issues и намеренно разделены: связать в один PR
+значило бы, что при провале непонятно, что сломалось. Объём каждой — уровень
+minor-релиза, а не багфикса.
+
+- [ ] **#141 D7-A tdd-execution-mode** — `execution_mode: standard | tdd` @owner:TBD @id:tdd-execution-mode
+      как контракт исполнителя: фазы `RED_AUTHORING → RED_VERIFYING → GREEN_* →
+      REFACTORING`, переход в green запрещён без **подтверждённого** red (селектор
+      реально прогонялся и упал), типизированные per-phase вердикты
+      (`PASS|EXPECTED_FAIL|UNEXPECTED_FAIL|ERROR|WAIVED`), durable checkpoints
+      `(commit SHA, полный pytest node-id, baseline SHA, namespace)`, evidence в state
+      с append-only историей. `standard` обязан остаться byte-identical.
+      Вход достоверный: пилот прогнал 100 leaf-задач через TDD-дисциплину,
+      построенную **вне** spec-runner (плагин + 1500 строк скрипта), и все упоры
+      однотипны — у задачи нет фаз. Их же выводы, без которых контракт неполон:
+      байт-замок на все заклеймленные файлы (не только текущий), операторские remedy
+      `abandon`/`repair` записью а не прозой в коммите, lint фиксируемого файла в `red`,
+      типовая проверка в пер-тасковом гейте, и #140.
+      Известный блокирующий вход: `post_done` срабатывает **после** commit/merge,
+      т.е. фазовая проверка не может стоять до коммита (пересекается с #138 п.3).
+- [ ] **#142 D7-B greenfield-preflight-bootstrap** — нулевого этапа у spec-runner нет. @owner:TBD @id:greenfield-preflight-bootstrap
+      Две раздельные команды: `preflight` (только диагностика, JSON-вывод для
+      оркестратора) и `bootstrap --check|--plan|--apply` (создание, стековые detectors
+      + **явные** presets, не эвристика). Главное из пилота: bootstrap обязан оставить
+      **сертифицированный** оракул — baseline-тест (пустой suite даёт `0 passed` и
+      exit 0, т.е. зелёный гейт на пустом проекте не доказывает ничего) и mutation
+      probe. Отдельное правило оттуда же: exit code берётся у проверяемой команды,
+      а не у последнего элемента пайпа (`... | tail -1` сделал ветку ERROR
+      недостижимой). Границы: preflight Maestro не смешивать с нашим, авторинг-гейты
+      steward не при чём. Пересекается с #133 (fail-closed валидация сгенерированной
+      спеки как часть стартового контура).
 
 ### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 4/4 отгружено
 (#101/#103/#104 — в v2.17.0; #102 — цикл `review-pr` M1/M2/M3 в v2.18.0–v2.20.0)
@@ -203,6 +368,13 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 форму значения из июльского ask'а, по которому мы и делали C2. Заметка:
 `../prograph-vault/authored/notes/2026-07-26-steward-owner-role-singular-handoff.md`,
 решение — `steward/spec/20-design.md` (DEC-007), каталог ролей — `steward/profiles/roles.yaml`.
+
+**Подтверждено issue #125** (inbox, 2026-08-08, `slug: specmeta-owner-role-canonical`):
+грамматика слага — `^[a-z][a-z0-9-]{1,31}$`, ровно одна роль, `@` в значение не входит;
+множественность выражается будущими `reviewer_roles[]` / `allowed_approver_roles[]`
+(добавлять в v2 только по согласованию — пока достаточно pass-through через `extra`).
+Триггер steward на убийство legacy-пути `"@a,@b"` — `SPEC_META_CONTRACT = 2` в master,
+он уже выполнен, так что legacy держится только нашей документацией.
 
 **Кода это не касается.** Тип поля не меняется, spec-runner значение не разбирает и не
 валидирует — «мы только носитель, семантика у steward» здесь сработало ровно как задумано.
