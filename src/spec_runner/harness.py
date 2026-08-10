@@ -86,6 +86,35 @@ def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
     return snapshot
 
 
+class HarnessBaseline:
+    """A task's harness snapshot, captured once and reused by every attempt.
+
+    The guard used to snapshot inside each attempt, so a forbidden edit that
+    outlived a failed attempt silently became the next attempt's baseline: the
+    barrier held once and was disarmed by a plain retry (#137, seen in
+    production with the default ``max_retries: 3``). Binding the baseline to
+    the task's lifecycle instead means a divergence blocks every attempt,
+    whatever its number.
+
+    Capture stays lazy because it must happen *after* ``pre_start_hook`` —
+    ``uv sync`` legitimately rewrites `uv.lock`/`pyproject.toml`, and counting
+    that as an agent mutation would make dependency sync a violation.
+    """
+
+    __slots__ = ("_snapshot", "_captured")
+
+    def __init__(self) -> None:
+        self._snapshot: dict[str, str] | None = None
+        self._captured = False
+
+    def capture(self, config: ExecutorConfig) -> dict[str, str] | None:
+        """Snapshot on first call; every later call replays the same one."""
+        if not self._captured:
+            self._snapshot = snapshot_harness(config)
+            self._captured = True
+        return self._snapshot
+
+
 def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) -> list[str]:
     """Compare the harness surface against `before`; return violation lines.
 

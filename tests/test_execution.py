@@ -974,7 +974,7 @@ class TestBudgetEnforcement:
 
         call_count = 0
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             nonlocal call_count
             call_count += 1
             st.record_attempt(
@@ -1010,7 +1010,7 @@ class TestBudgetEnforcement:
         state = _make_state(config)
         task = _make_task()
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             st.record_attempt(
                 t.id,
                 False,
@@ -1058,7 +1058,7 @@ class TestBudgetEnforcement:
         state = _make_state(config)
         task = _make_task()
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             st.record_attempt(
                 t.id,
                 False,
@@ -1131,7 +1131,7 @@ class TestBudgetEnforcement:
         state = _make_state(config)
         task = _make_task()
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             st.record_attempt(
                 t.id,
                 False,
@@ -1173,7 +1173,7 @@ class TestBudgetEnforcement:
 
         attempt_costs = iter([0.50, 0.06, 0.07])  # attempt 1, retry 1, retry 2
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             cost = next(attempt_costs)
             st.record_attempt(
                 t.id,
@@ -1213,7 +1213,7 @@ class TestBudgetEnforcement:
         state = _make_state(config)
         task = _make_task()
 
-        def side_effect(t, cfg, st):
+        def side_effect(t, cfg, st, **kwargs):
             st.record_attempt(
                 t.id,
                 False,
