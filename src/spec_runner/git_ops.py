@@ -283,20 +283,52 @@ def map_source_to_test_files(source_files: list[Path], project_root: Path) -> li
     return mapped
 
 
+# Shell metacharacters that chain or redirect commands. Their presence means
+# `test_command` is more than one program, and no textual edit of the string
+# can know which component takes test paths (#139).
+_SHELL_CHAIN = re.compile(r"&&|\|\||[;|\n]")
+
+# A whitespace-delimited argument that is the test directory: `tests`,
+# `tests/`, or `tests/<anything>`. Anchored on both sides so `contests/x` and
+# `--ignore=vendor/tests` are not mistaken for it.
+_TEST_PATH_ARG = re.compile(r"(?<!\S)tests(?:/\S*)?(?!\S)")
+
+
+def is_composite_shell_command(command: str) -> bool:
+    """True when ``command`` chains several programs (``&&``, ``||``, ``;``, ``|``)."""
+    return bool(_SHELL_CHAIN.search(command))
+
+
 def build_scoped_test_command(
     base_command: str,
     test_files: list[Path],
     project_root: Path,
 ) -> str:
-    """Replace generic test path with specific file paths."""
+    """Narrow a test command to specific files, or return it untouched.
+
+    Returns ``base_command`` unchanged when it cannot be narrowed safely:
+
+    - **no test files** — nothing to narrow to;
+    - **a composite command** (#139) — `test_command` is a shell string, and
+      real ones chain a pin check, pytest and a type checker. Appending paths
+      put them on the *last* component (`pyrefly check`), and substituting the
+      first `tests/` substring hit whichever component happened to contain it.
+      Running the full declared gate is always safe; guessing which program
+      accepts test paths is not, so this refuses instead.
+
+    Otherwise the test-path argument is replaced wholesale — `pytest
+    tests/unit` narrows to the mapped files rather than becoming
+    `pytest <files>unit` — or the paths are appended when the command names no
+    path at all.
+    """
     if not test_files:
         return base_command
+    if is_composite_shell_command(base_command):
+        return base_command
     rel_paths = " ".join(str(f.relative_to(project_root)) for f in test_files)
-    # Replace common patterns: "tests/" or "tests" at end of command
-    for pattern in ["tests/ ", "tests/", "tests "]:
-        if pattern in base_command:
-            return base_command.replace(pattern, rel_paths + " ", 1)
-    # Append test files if no pattern matched
+    scoped, replaced = _TEST_PATH_ARG.subn(rel_paths, base_command, count=1)
+    if replaced:
+        return scoped
     return f"{base_command} {rel_paths}"
 
 

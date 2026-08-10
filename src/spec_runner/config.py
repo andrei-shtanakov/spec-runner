@@ -216,6 +216,11 @@ class ExecutorConfig:
 
     # Test command (using uv)
     test_command: str = "uv run pytest tests/ -v -m 'not slow'"
+    # Narrow the test command to the files a task touched, in parallel mode
+    # only. Set False where the contract is the whole suite — a workstream
+    # acceptance or a release gate proves nothing if the gate quietly ran a
+    # subset (#139). Composite `test_command`s are never narrowed regardless.
+    scoped_tests: bool = True
     lint_command: str = "uv run ruff check ."
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     run_lint_on_done: bool = True  # Run lint on completion
