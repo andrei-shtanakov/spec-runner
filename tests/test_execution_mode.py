@@ -125,9 +125,10 @@ class TestTheTasksFileDeclaration:
         tasks = self._tasks(tmp_path, "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\nEst: 1d\n")
         assert tasks[0].execution_mode is None
 
-    def test_an_unknown_word_is_carried_verbatim_not_swallowed(self, tmp_path):
-        """The parser records what was written; `resolve_execution_mode`
-        refuses it. Normalising a typo to `standard` here would hide it."""
+    def test_an_unknown_word_survives_parsing_unmapped(self, tmp_path):
+        """Case and whitespace are folded; meaning is not. An unknown word
+        survives to `resolve_execution_mode`, which refuses it — mapping it to
+        `standard` at parse time would hide the typo."""
         tasks = self._tasks(
             tmp_path, "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n**Mode:** rgr\nEst: 1d\n"
         )
@@ -154,12 +155,21 @@ class TestNothingBranchesOnItYet:
     def test_no_execution_path_consults_the_mode(self):
         import subprocess
 
+        repo_root = Path(__file__).resolve().parent.parent
         out = subprocess.run(
             ["git", "grep", "-l", "execution_mode", "--", "src/spec_runner"],
             capture_output=True,
             text=True,
+            cwd=repo_root,
         )
+        # `git grep` exits 1 when it matches nothing; anything else means the
+        # search itself failed, and an empty stdout would let this guard pass
+        # while checking nothing.
+        assert out.returncode in (0, 1), f"git grep failed ({out.returncode}): {out.stderr}"
         touched = {Path(line.strip()).name for line in out.stdout.splitlines() if line.strip()}
+        assert {"config.py", "task.py"} <= touched, (
+            "the guard found no declaration sites — it is not searching what it thinks it is"
+        )
         branching = touched & set(self.EXECUTION_PATH)
         assert not branching, (
             f"{sorted(branching)} reads execution_mode — 1a declares the mode, "

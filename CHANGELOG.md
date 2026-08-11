@@ -22,9 +22,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
     `resolve_execution_mode` at run time, naming the task when the task carries
     the typo. Silently defaulting a typo to `standard` is how a project comes
     to believe it is under the TDD contract while running without it.
-  - The parser records `**Mode:**` verbatim and does not normalise it; deciding
-    what a word means is the resolver's job, and normalising here would hide
-    the typo the resolver exists to catch.
+  - The parser trims and case-folds `**Mode:**` (`TDD` and `tdd` are the same
+    word) but never interprets it: an unknown word is stored as written and
+    refused by the resolver. Mapping it to a known mode at parse time would
+    hide exactly the typo the resolver exists to catch.
   - **Nothing branches on it.** A test asserts that no module on the execution
     path (`execution`, `hooks`, `runner`, `review`, `gates`, `cli`) so much as
     mentions the key — a claim that stays checkable, unlike a promise. It is to

@@ -51,9 +51,10 @@ TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
 BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
 # #141 slice 1a: a task may declare its execution mode alongside its other
-# metadata. Parsed verbatim — validating it here would either duplicate
-# `ExecutorConfig.resolve_execution_mode` or, worse, normalise a typo into a
-# mode nobody asked for.
+# metadata. Trimmed and case-folded — `TDD` and `tdd` are the same word — but
+# never *interpreted*: an unknown word is stored as written and refused later
+# by `ExecutorConfig.resolve_execution_mode`. Mapping it to a known mode here
+# would hide exactly the typo the resolver exists to catch.
 MODE = re.compile(r"\*\*Mode:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 
