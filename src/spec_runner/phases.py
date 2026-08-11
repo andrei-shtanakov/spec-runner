@@ -35,8 +35,10 @@ _CAN_BE_SILENT = _CAN_FAIL | {PhaseOutcome.NOT_RUN}
 ALLOWED_OUTCOMES: dict[str, frozenset[PhaseOutcome]] = {
     "sync_deps": _CAN_FAIL,
     "branch": _CAN_FAIL,
-    # The agent can also simply not answer.
-    "exec": _CAN_BE_SILENT,
+    # `exec` reports on the process, not on the work: it completed, it broke,
+    # or it never ran. "Failed some other way" is `parse`'s to say, so
+    # UNEXPECTED_FAIL is deliberately not admissible here.
+    "exec": _ALWAYS | {PhaseOutcome.NOT_RUN},
     "parse": _CAN_BE_SILENT,
     # EXPECTED_FAIL lands here when the TDD slices arrive: a confirmed red is a
     # test run that failed on purpose.

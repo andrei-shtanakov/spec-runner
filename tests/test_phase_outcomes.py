@@ -302,3 +302,74 @@ class TestRecordingNeverMovesTheCurrentStage:
         with ExecutorState(cfg) as state:
             execution.execute_task(task, cfg, state)
             assert state.get_task_state("TASK-001").attempts[-1].error_stage == "exec"
+
+
+class TestRecordedEvidenceMatchesTheVerdict:
+    """The point of the slice is an accurate record. Two ways it was not
+    (Copilot, PR #167): an `exec` outcome read from the return code alone, and
+    a `parse` detail that called a deliberate escalation "no completion
+    marker".
+    """
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, *, stdout="", returncode=0):
+        import subprocess
+
+        from spec_runner import execution
+        from spec_runner.task import Task
+
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / "tasks.md").write_text(
+            "# S\n\n## M0\n\n### TASK-001: x\n🔴 P0 | ⬜ TODO | Est: 1d\n\n"
+            "**Description:** x\n\n**Checklist:**\n- [ ] a\n\n"
+            "**Traces to:** [REQ-1]\n**Depends on:** —\n"
+        )
+        cfg = _cfg(tmp_path, harness_guard="off", run_tests_on_done=False, run_review=False)
+        monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
+        monkeypatch.setattr(
+            execution, "post_done_hook", lambda *a, **k: (True, None, "skipped", "", False)
+        )
+        monkeypatch.setattr(
+            execution.subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(["x"], returncode, stdout, ""),
+        )
+        task = Task(id="TASK-001", name="x", priority="p0", status="todo", estimate="1d")
+        with ExecutorState(cfg) as state:
+            execution.execute_task(task, cfg, state)
+            return {r.phase: r for r in state.phase_history("TASK-001")}
+
+    def test_a_rate_limit_is_not_recorded_as_a_passing_exec(self, tmp_path, monkeypatch):
+        """The API-error path aborts the attempt but arrives with exit 0."""
+        rows = self._run(tmp_path, monkeypatch, stdout="rate limit exceeded\n", returncode=0)
+        assert rows["exec"].outcome is PhaseOutcome.ERROR
+        assert "rate limit" in rows["exec"].detail.lower()
+
+    def test_a_clean_exec_is_still_a_pass(self, tmp_path, monkeypatch):
+        rows = self._run(tmp_path, monkeypatch, stdout="TASK_COMPLETE\n")
+        assert rows["exec"].outcome is PhaseOutcome.PASS
+
+    def test_a_nonzero_exit_is_an_error_not_a_failure(self, tmp_path, monkeypatch):
+        """`exec` reports on the process, not on the work: a CLI that did not
+        finish is a broken instrument, the same call #138 made for review.
+        Whether the *work* failed is `parse`'s to say."""
+        rows = self._run(tmp_path, monkeypatch, stdout="nope\n", returncode=1)
+        assert rows["exec"].outcome is PhaseOutcome.ERROR
+        assert "exit 1" in rows["exec"].detail
+
+    def test_exec_cannot_report_unexpected_fail_at_all(self):
+        assert PhaseOutcome.UNEXPECTED_FAIL not in ALLOWED_OUTCOMES["exec"]
+
+    @pytest.mark.parametrize(
+        "stdout,detail",
+        [
+            ("TASK_BLOCKED: operator must release the claim\n", "blocked marker"),
+            ("TASK_FAILED: nope\n", "failure marker"),
+            ("just some prose\n", "no completion marker"),
+        ],
+    )
+    def test_parse_detail_distinguishes_blocked_failed_and_silent(
+        self, tmp_path, monkeypatch, stdout, detail
+    ):
+        rows = self._run(tmp_path, monkeypatch, stdout=stdout, returncode=1)
+        assert rows["parse"].detail == detail
