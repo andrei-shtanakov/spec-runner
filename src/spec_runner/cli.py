@@ -1950,12 +1950,24 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("task_id", help="Task whose checkpoint is being remedied")
         sub.add_argument(
             "--checkpoint",
-            required=True,
-            help="The checkpoint id this remedy applies to (compare-and-swap)",
+            help=(
+                "The checkpoint id this remedy applies to (compare-and-swap). "
+                "Optional when exactly one is active — the chosen id is printed"
+            ),
         )
         sub.add_argument("--reason", required=True, help="Why — recorded, and not optional")
         sub.add_argument("--actor", help="Who (default: git user.email)")
     tdd_repair.add_argument("--commit", required=True, help="Commit carrying the repaired bytes")
+
+    tdd_status = tdd_sub.add_parser(
+        "status", parents=[common], help="Show checkpoints, claims and remedies (#141)"
+    )
+    tdd_checkpoints = tdd_sub.add_parser(
+        "checkpoints", parents=[common], help="List active checkpoint ids"
+    )
+    for sub in (tdd_status, tdd_checkpoints):
+        sub.add_argument("task_id", nargs="?", help="Limit to one task")
+        sub.add_argument("--json", action="store_true", help="Machine-readable output")
 
     # doctor
     doctor_parser = subparsers.add_parser(
@@ -2211,6 +2223,12 @@ def main():
 
         # tdd remedies: a refusal is an operator-facing message, not a traceback
         if args.command == "tdd":
+            if args.tdd_command in ("status", "checkpoints"):
+                from .tdd_status import cmd_tdd_checkpoints, cmd_tdd_status
+
+                handler = cmd_tdd_status if args.tdd_command == "status" else cmd_tdd_checkpoints
+                raise SystemExit(handler(args, config))
+
             from .remedy import cmd_tdd
 
             raise SystemExit(cmd_tdd(args, config))

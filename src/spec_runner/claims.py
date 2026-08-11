@@ -155,17 +155,24 @@ def record_claims(
 ) -> list[Claim]:
     """Claim the files ``checkpoint``'s selector depends on.
 
-    Re-claiming the same path at the same bytes is idempotent: a re-run must
-    not be a violation and must not stack duplicate rows.
+    Identity is ``(task, lineage, path, bytes)`` — **not** ``(path, bytes)``.
+    Two tasks can legitimately depend on the same file at the same content, and
+    keying on the bytes alone meant the second one recorded nothing: its
+    dependency was invisible, so the first task's `abandon` released a file the
+    second still needed (F-3). Re-claiming within one lineage is still
+    idempotent; a re-run must not stack duplicate rows.
     """
     root = Path(config.project_root)
     ensure_claimable(config, checkpoint.selector)
-    existing = {(c.path, c.blob_sha) for c in state.active_claims(checkpoint.namespace)}
+    existing = {
+        (c.task_id, c.checkpoint_id, c.path, c.blob_sha)
+        for c in state.active_claims(checkpoint.namespace)
+    }
     recorded: list[Claim] = []
 
     for path in claim_paths_for(checkpoint.selector):
         blob = claim_blob_sha(root, path)
-        if (path, blob) in existing:
+        if (checkpoint.task_id, checkpoint.checkpoint_id, path, blob) in existing:
             continue
         claim = Claim(
             namespace=checkpoint.namespace,

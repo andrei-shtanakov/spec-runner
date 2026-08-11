@@ -122,7 +122,9 @@ def abandon(
 
     active = _swap(state, namespace, task_id, checkpoint_id)
     state.set_checkpoint_status(namespace, active.checkpoint_id, CheckpointStatus.ABANDONED)
-    state.supersede_claims(namespace, task_id, ClaimStatus.ABANDONED)
+    state.supersede_claims(
+        namespace, task_id, ClaimStatus.ABANDONED, checkpoint_id=active.checkpoint_id
+    )
     _record(
         state, namespace, task_id, checkpoint_id, RemedyOperation.ABANDON, reason, actor, config
     )
@@ -199,7 +201,9 @@ def repair(
             raise RemedyError(f"the repaired red cannot be locked: {exc}") from exc
 
     state.set_checkpoint_status(namespace, active.checkpoint_id, CheckpointStatus.SUPERSEDED)
-    state.supersede_claims(namespace, task_id, ClaimStatus.SUPERSEDED)
+    state.supersede_claims(
+        namespace, task_id, ClaimStatus.SUPERSEDED, checkpoint_id=active.checkpoint_id
+    )
     # Claims before the checkpoint, for the reason spelled out in
     # `run_red_phase`: a crash between the two must not leave a confirmed red
     # with no lock.
@@ -239,6 +243,31 @@ def _guard(config: ExecutorConfig, reason: str) -> str:
         raise RemedyError("a remedy needs a reason; an unexplained one is unreviewable")
     _refuse_if_running(config)
     return resolve_namespace(config)
+
+
+def resolve_checkpoint(
+    state: ExecutorState, namespace: str, task_id: str, given: str | None
+) -> tuple[str, str | None]:
+    """The checkpoint a remedy applies to, and a line to print about it.
+
+    An explicit id always wins. With none given the id is inferred **only when
+    exactly one lineage is active**, and the chosen id is printed — an operator
+    must be able to see what their command was aimed at. With several, this
+    fails closed rather than picking the newest: "probably that one" is not a
+    thing to guess about an authority decision (F-5).
+    """
+    if given:
+        return given, None
+    active = state.active_checkpoints(namespace, task_id)
+    if not active:
+        raise RemedyError(f"{task_id} has no active checkpoint in this workstream")
+    if len(active) > 1:
+        listed = ", ".join(cp.checkpoint_id for cp in active)
+        raise RemedyError(
+            f"{task_id} has {len(active)} active checkpoints ({listed}); name one with --checkpoint"
+        )
+    chosen = active[0].checkpoint_id
+    return chosen, f"Using the only active checkpoint for {task_id}: {chosen}"
 
 
 def _swap(state: ExecutorState, namespace: str, task_id: str, checkpoint_id: str) -> RedCheckpoint:
@@ -350,12 +379,20 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
 
     try:
         with ExecutorState(config) as state:
+            checkpoint_id, note = resolve_checkpoint(
+                state,
+                resolve_namespace(config),
+                args.task_id,
+                getattr(args, "checkpoint", None),
+            )
+            if note:
+                print(f"ℹ️  {note}")
             if args.tdd_command == "abandon":
                 result = abandon(
                     config,
                     state,
                     args.task_id,
-                    args.checkpoint,
+                    checkpoint_id,
                     reason=args.reason,
                     actor=getattr(args, "actor", None),
                 )
@@ -364,7 +401,7 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
                     config,
                     state,
                     args.task_id,
-                    args.checkpoint,
+                    checkpoint_id,
                     args.commit,
                     reason=args.reason,
                     actor=getattr(args, "actor", None),
@@ -414,6 +451,7 @@ __all__ = [
     "RemedyResult",
     "abandon",
     "cmd_tdd",
+    "resolve_checkpoint",
     "repair",
     "resolve_actor",
 ]
