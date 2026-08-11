@@ -263,9 +263,16 @@ def _tree_blobs(root: Path, sha: str) -> dict[str, str] | None:
 
 
 def describe_violations(violations: list[ClaimViolation]) -> str:
-    """One line an operator can act on."""
+    """One line an operator can act on.
+
+    Includes each violation's detail — without it a rename reads as
+    "renamed tests/x.py" and does not say *where to*, which throws away the
+    reason the kinds are distinguished at all.
+    """
     return "; ".join(
-        f"{v.kind.value} {v.path} (claimed by {v.task_id}, checkpoint {v.checkpoint_id})"
+        f"{v.kind.value} {v.path} (claimed by {v.task_id}, checkpoint {v.checkpoint_id}"
+        + (f"; {v.detail}" if v.detail else "")
+        + ")"
         for v in violations
     )
 
