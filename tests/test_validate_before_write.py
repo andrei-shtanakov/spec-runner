@@ -37,24 +37,24 @@ BAD_REQ = "# Requirements\n\nSome prose the model felt like writing.\n"
 def _cfg(tmp_path: Path, **overrides):
     spec = tmp_path / "spec"
     spec.mkdir(parents=True, exist_ok=True)
-    defaults = dict(
-        project_root=tmp_path,
-        requirements_file=spec / "requirements.md",
-        design_file=spec / "design.md",
-        tasks_file=spec / "tasks.md",
-        spec_lock_file=spec / ".spec.lock",
-        spec_dir=spec,
-        claude_command="claude",
-        claude_model="",
-        command_template="",
-        skip_permissions=True,
-        task_timeout_minutes=1,
-        spec_context="",
-        spec_rules={},
-        spec_prefix="",
-        spec_repair_attempts=2,
-        resolve_spec_profile=lambda: LITE,
-    )
+    defaults = {
+        "project_root": tmp_path,
+        "requirements_file": spec / "requirements.md",
+        "design_file": spec / "design.md",
+        "tasks_file": spec / "tasks.md",
+        "spec_lock_file": spec / ".spec.lock",
+        "spec_dir": spec,
+        "claude_command": "claude",
+        "claude_model": "",
+        "command_template": "",
+        "skip_permissions": True,
+        "task_timeout_minutes": 1,
+        "spec_context": "",
+        "spec_rules": {},
+        "spec_prefix": "",
+        "spec_repair_attempts": 2,
+        "resolve_spec_profile": lambda: LITE,
+    }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
