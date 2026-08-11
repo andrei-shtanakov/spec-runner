@@ -341,35 +341,6 @@ class TestPersistence:
         assert found.execution_mode == "tdd" and found.config_hash == "h1"
 
 
-class TestNothingIsWiredYet:
-    """1b is the machinery. Enforcement lands with the gate (1c) so `tdd` mode
-    never exists in a state where a red is recorded but green runs anyway."""
-
-    #: Modules that decide what a run does. `state.py` storing a checkpoint is
-    #: not that — persistence is the machinery. This list is the claim: while
-    #: none of these names `tdd`, no run can behave differently because of it.
-    EXECUTION_PATH = ("execution.py", "hooks.py", "runner.py", "review.py", "cli.py", "gates.py")
-
-    def test_no_execution_path_uses_tdd(self):
-        repo_root = Path(__file__).resolve().parent.parent
-        out = subprocess.run(
-            ["git", "grep", "-l", "--untracked", "tdd", "--", "src/spec_runner"],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-        assert out.returncode in (0, 1), f"git grep failed ({out.returncode}): {out.stderr}"
-        touched = {Path(line.strip()).name for line in out.stdout.splitlines() if line.strip()}
-        assert {"tdd.py", "state.py"} <= touched, (
-            "the guard found neither the module nor its storage — it is not searching"
-        )
-        wired = touched & set(self.EXECUTION_PATH)
-        assert not wired, (
-            f"{sorted(wired)} uses tdd — 1b is standalone machinery, and wiring belongs "
-            "with the gate in 1c so the mode never half-enforces. Delete this guard there."
-        )
-
-
 @pytest.mark.slow
 class TestTheSelectorIsUntrustedInput:
     """The selector comes from an agent's output. Interpolated raw into a

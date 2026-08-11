@@ -106,6 +106,7 @@ class GateContext:
 #: verdicts on an unrelated edit and train people to ignore staleness.
 POLICY_KEYS: set[str] = {
     "review_policy",
+    "execution_mode",
     "gate_recovery_attempts",
 }
 
@@ -326,6 +327,82 @@ def _review_gate(ctx: GateContext) -> GateResult:
     return GateResult(status, outcome, " ".join(parts))
 
 
+def _red_gate(ctx: GateContext) -> GateResult:
+    """Does a confirmed RED cover the tree about to be built on or merged?
+
+    Evaluated at two moments and answering the same question at both: before
+    implementing (do not write code without a demonstrated red) and before
+    merging (do not merge a task that never had one).
+    """
+    from .tdd import RedOutcome, resolve_namespace
+
+    mode = ctx.facts.get("execution_mode")
+    if mode is None:
+        # The site failing to report is our bug. Laundering it into a verdict
+        # about the code is the failure mode #138 was about.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run reported no execution_mode to the gate",
+        )
+    if mode != "tdd":
+        # The per-task opt-out has to reach here, or it is not an opt-out.
+        return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
+    if ctx.state is None:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, "no state to read a checkpoint from"
+        )
+
+    checkpoint = ctx.state.red_checkpoint(ctx.task_id, resolve_namespace(ctx.config))
+    if checkpoint is None:
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.NOT_RUN,
+            "no confirmed red for this task in this workstream",
+        )
+    if checkpoint.outcome is RedOutcome.UNVERIFIABLE:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            f"the red could not be verified: {checkpoint.selector}",
+        )
+    if checkpoint.outcome is not RedOutcome.EXPECTED_FAIL:
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.UNEXPECTED_FAIL,
+            f"the claimed red did not fail on replay: {checkpoint.selector}",
+        )
+    if not _descends_from(ctx.config, checkpoint.commit_sha, ctx.checkpoint_sha):
+        # #164 criterion 5 in this track's terms. Descent, not equality: green
+        # *is* commits on top of the red, so demanding the same SHA would make
+        # the gate unsatisfiable the moment the work it gates happens.
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.NOT_RUN,
+            f"the confirmed red is on a different tree ({checkpoint.commit_sha[:12]})",
+        )
+    return GateResult(
+        GateStatus.SATISFIED,
+        PhaseOutcome.EXPECTED_FAIL,
+        f"red confirmed: {checkpoint.selector} at {checkpoint.commit_sha[:12]} "
+        f"in {checkpoint.environment_id}",
+    )
+
+
+def _descends_from(config: ExecutorConfig, ancestor: str, descendant: str) -> bool:
+    import subprocess
+
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+
+
 def register_builtin_gates(
     config: ExecutorConfig,
     registry: GateRegistry | None = None,
@@ -343,6 +420,25 @@ def register_builtin_gates(
         reg.register("review", "review", _review_gate)
     else:
         reg.unregister("review", "review")
+    # #141: registered when the *project* runs under tdd. A task can also opt
+    # in on its own, which registration cannot know at startup — `execute_task`
+    # calls `ensure_red_gate` when it resolves such a task. Either way the gate
+    # re-checks the effective mode from `facts`, since it is per task.
+    if getattr(config, "execution_mode", "standard") == "tdd":
+        reg.register("tdd.red", "tests", _red_gate)
+    else:
+        reg.unregister("tdd.red", "tests")
+
+
+def ensure_red_gate(registry: GateRegistry | None = None) -> None:
+    """Attach the RED gate for a task that opted in by itself (#141).
+
+    Idempotent, because `register` replaces by id — `watch` puts many tasks
+    through one process and a gate counted twice would double-count its own
+    verdict.
+    """
+    reg = registry if registry is not None else REGISTRY
+    reg.register("tdd.red", "tests", _red_gate)
 
 
 def has_gates(registry: GateRegistry | None = None) -> bool:
@@ -386,6 +482,7 @@ __all__ = [
     "GateResult",
     "GateStatus",
     "evaluate_gates",
+    "ensure_red_gate",
     "evaluate_pre_terminal",
     "has_gates",
     "register_builtin_gates",

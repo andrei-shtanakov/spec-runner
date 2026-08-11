@@ -33,6 +33,7 @@ Design: ``docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md`` §3.3, §3
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -66,6 +67,11 @@ LOCKFILES = (
     "go.sum",
     "mix.lock",
 )
+
+#: How the authoring pass reports which test it wrote. A marker, not
+#: inference: guessing the node id from a diff would make the checkpoint's
+#: most load-bearing field a heuristic.
+SELECTOR_MARKER = re.compile(r"^\s*TDD_SELECTOR:\s*(\S+)\s*$", re.MULTILINE)
 
 #: How long a replay may take before it is abandoned as unverifiable. A hung
 #: test run must not hang the executor.
@@ -300,12 +306,155 @@ def record_red_checkpoint(state: ExecutorState, checkpoint: RedCheckpoint) -> No
 
 __all__ = [
     "LOCKFILES",
+    "SELECTOR_MARKER",
     "REPLAY_TIMEOUT_SECONDS",
     "RedCheckpoint",
     "RedOutcome",
+    "RedPhaseResult",
     "RedVerification",
     "environment_id",
     "record_red_checkpoint",
     "resolve_namespace",
+    "run_red_phase",
     "verify_red",
 ]
+
+
+@dataclass(frozen=True)
+class RedPhaseResult:
+    """What the RED phase established, and the checkpoint it recorded."""
+
+    outcome: RedOutcome
+    detail: str | None = None
+    checkpoint: RedCheckpoint | None = None
+
+
+def run_red_phase(
+    task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    *,
+    log_progress=None,
+) -> RedPhaseResult:
+    """Author a failing test, commit it, and replay it to confirm the red.
+
+    Every *replayed* outcome becomes a checkpoint, including a refuted claim:
+    "the agent said red and the replay disagreed" is evidence, and dropping it
+    would leave the next run unable to see that this already happened.
+
+    The two failures that happen *before* a replay — no `TDD_SELECTOR` marker,
+    and an authoring pass that changed nothing — record no checkpoint, because
+    a `RedCheckpoint` is a statement about a commit and there is no commit for
+    them to be about. They are not lost: they are returned to the caller, and
+    the gate that follows records the `tests` phase outcome in the append-only
+    `phase_results` history like any other.
+    """
+    from .prompt import build_red_prompt
+
+    def _say(line: str) -> None:
+        if log_progress:
+            log_progress(line)
+
+    baseline = _head(config)
+    if not baseline:
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE, "no commit to author a red against (fresh repo)"
+        )
+
+    _say("\U0001f534 RED: authoring a failing test")
+    output = _run_agent(config, build_red_prompt(task, config))
+
+    marker = SELECTOR_MARKER.search(output or "")
+    if not marker:
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE,
+            "the authoring pass reported no TDD_SELECTOR marker, so there is nothing to replay",
+        )
+    selector = marker.group(1)
+
+    sha = _commit_red(config, task, selector)
+    if not sha:
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE,
+            "the authoring pass changed nothing, so there is no red commit to replay",
+        )
+
+    _say(f"\U0001f50d RED: replaying {selector}")
+    verification = verify_red(config, sha=sha, selector=selector, baseline_sha=baseline)
+    checkpoint = RedCheckpoint(
+        task_id=task.id,
+        namespace=resolve_namespace(config),
+        commit_sha=sha,
+        baseline_sha=baseline,
+        selector=selector,
+        environment_id=verification.environment_id,
+        execution_mode="tdd",
+        config_hash=_config_hash(config),
+        outcome=verification.outcome,
+        timestamp=datetime.now().isoformat(),
+    )
+    state.record_red_checkpoint(checkpoint)
+    return RedPhaseResult(verification.outcome, verification.detail, checkpoint)
+
+
+def _config_hash(config: ExecutorConfig) -> str:
+    """The policy this checkpoint was produced under (owner amendment 4)."""
+    from .gates import GateContext
+
+    return GateContext(task_id="", checkpoint_sha="", config=config).config_hash
+
+
+def _run_agent(config: ExecutorConfig, prompt: str) -> str:
+    """Run the coding agent once and return its text. Seam for tests."""
+    from .runner import build_cli_invocation, parse_cli_result
+
+    invocation = build_cli_invocation(
+        cmd=config.claude_command,
+        prompt=prompt,
+        model=config.get_model_for_role("implementer"),
+        template=config.command_template,
+        skip_permissions=config.skip_permissions,
+        json_output=True,
+    )
+    result = subprocess.run(
+        invocation.argv,
+        capture_output=True,
+        text=True,
+        timeout=config.task_timeout_minutes * 60,
+        cwd=config.project_root,
+    )
+    return parse_cli_result(
+        invocation.result_format, result.stdout, result.stderr, result.returncode
+    ).text
+
+
+def _head(config: ExecutorConfig) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _commit_red(config: ExecutorConfig, task, selector: str) -> str:
+    """Commit the authored red. Returns the SHA, or "" when nothing changed.
+
+    A separate commit, not folded into the task's: it is the tree the replay
+    judges, and its provenance is the point.
+    """
+    from .git_ops import stage_all_except_runtime
+
+    if not stage_all_except_runtime(config):
+        return ""
+    committed = subprocess.run(
+        ["git", "commit", "-m", f"{task.id}: red for {selector}"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if committed.returncode != 0:
+        logger.warning("Red commit failed", stderr=committed.stderr.strip()[:200])
+        return ""
+    return _head(config)

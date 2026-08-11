@@ -636,6 +636,10 @@ def post_done_hook(
             facts={
                 "review_verdict": review_verdict.value,
                 "review_checkpoint_sha": review_checkpoint_sha,
+                # The RED gate is evaluated here too: "do not merge a task that
+                # never had a confirmed red" is the same question it answers
+                # before the implementation pass.
+                "execution_mode": config.resolve_execution_mode(task),
             },
         )
         if blocked is not None:

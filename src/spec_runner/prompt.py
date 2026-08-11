@@ -487,6 +487,61 @@ def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
     return output[start:end].strip()
 
 
+def build_red_prompt(task: "Task", config: "ExecutorConfig") -> str:
+    """Prompt for the RED authoring pass (#141): write the failing test only.
+
+    Two instructions carry the contract. **Write no implementation** — a red
+    that passes because the code was written alongside it demonstrates
+    nothing. And **report the full node id** via a marker: the selector is the
+    checkpoint's most load-bearing field, and inferring it from a diff would
+    make it a heuristic. The claim is replayed either way, so a wrong or
+    missing selector fails verification rather than sliding through.
+    """
+    requirements = ""
+    if config.requirements_file.exists():
+        requirements = config.requirements_file.read_text()
+
+    related = []
+    for ref in task.traces_to:
+        if ref.startswith("REQ-"):
+            match = re.search(rf"#### {ref}:.*?(?=####|\Z)", requirements, re.DOTALL)
+            if match:
+                related.append(match.group(0).strip())
+
+    checklist = "\n".join(f"- {'[x]' if done else '[ ]'} {item}" for item, done in task.checklist)
+    context = "\n\n".join(related)
+
+    return f"""# RED phase: {task.id} — {task.name}
+
+You are writing **one failing test** and nothing else.
+
+## Task
+
+{task.description or task.name}
+
+{f"## Checklist{chr(10)}{chr(10)}{checklist}" if checklist else ""}
+
+{f"## Requirements{chr(10)}{chr(10)}{context}" if context else ""}
+
+## Rules
+
+1. Write **exactly one** test that fails because the behaviour does not exist yet.
+2. Write **no implementation**. A test that passes because you also wrote the
+   code proves nothing, and this test will be replayed on its own commit.
+3. The test must fail for the *right* reason — an assertion about the missing
+   behaviour, not an import error or a syntax error. A test that cannot be
+   collected demonstrates nothing.
+4. Report the test's **full node id** on its own line, exactly:
+
+   TDD_SELECTOR: path/to/test_file.py::TestClass::test_name
+
+   Not a `-k` expression and not a bare name: those match several tests, and a
+   checkpoint that matches several proves nothing about the one.
+
+The test command is: `{config.test_command}`
+"""
+
+
 def build_task_prompt(
     task: Task,
     config: ExecutorConfig,
