@@ -10,6 +10,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **A typed outcome per phase, recorded append-only** (slice 0 of the lifecycle
+  contract, #164 / #141 Part A). Until now a stage said only where it was, and
+  — if it died — where it died: a stage either fell over or it did not. One
+  phase already grew a real vocabulary under pressure (`review`, #138, because
+  "no verdict" was being recorded as `passed`); this generalizes it.
+  - `PhaseOutcome`: `pass` · `expected_fail` · `unexpected_fail` · `not_run` ·
+    `error` · `skipped`. Six, because each implies a different move by whoever
+    reads it — proceed; proceed (in TDD); fix the work; investigate the agent;
+    fix the environment; nothing to do.
+  - The vocabulary is a **base** set: admissible outcomes are declared per
+    stage (`phases.ALLOWED_OUTCOMES`), so `expected_fail` is available to a
+    test run and rejected for `commit` as a caller bug.
+  - New `phase_results` (append-only) and `phase_waivers` tables. A **waiver is
+    not an outcome**: it is an operator overriding one, it requires an actor
+    and a reason, the harness never writes it, and the observed result stays —
+    a report showing green for a waived phase can show that it was waived.
+  - `ReviewVerdict` is readable as outcome + detail
+    (`phases.review_verdict_to_phase`): `passed` and `fixed` are both `pass`.
+    The stored wire values are unchanged — a reading, not a migration.
+  - **Nothing gates on any of this.** The guarantee is the design's:
+    *execution, terminal state and external contracts do not change* —
+    deliberately not "byte identical", since these very rows make byte identity
+    impossible. Recording is best-effort: a storage failure is logged and
+    swallowed rather than able to fail a task.
+
+
 ## [2.24.0] — 2026-08-11
 
 Instruments that could not report failure. Every entry is a place where the

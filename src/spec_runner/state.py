@@ -54,6 +54,66 @@ class ReviewVerdict(str, Enum):
     ERROR = "error"
 
 
+class PhaseOutcome(str, Enum):
+    """What a phase actually did (slice 0 of the lifecycle contract).
+
+    Six values, because each implies a different move by whoever reads it:
+    proceed; proceed (in TDD); fix the work; investigate the agent; fix the
+    environment; nothing to do.
+
+    Lives here beside `ErrorCode` and `ReviewVerdict` because it is state
+    vocabulary; the per-stage rules and the review mapping are in `phases.py`.
+    """
+
+    #: ran; its expectation held
+    PASS = "pass"
+    #: ran; failed exactly as it was supposed to (TDD's confirmed red)
+    EXPECTED_FAIL = "expected_fail"
+    #: ran; failed some other way. A test failing on a typo in an import looks
+    #: exactly like an honest red, and without this split it *becomes* one.
+    UNEXPECTED_FAIL = "unexpected_fail"
+    #: ran, but produced no usable verdict — a timeout, an empty response,
+    #: output with no marker. Not a pass and not a failure; recording it as
+    #: either is the defect #138 was built to remove.
+    NOT_RUN = "not_run"
+    #: could not run — the instrument itself broke. A different fix and a
+    #: different owner than a failure of the work.
+    ERROR = "error"
+    #: deliberately not executed (disabled by config, or unreachable because an
+    #: earlier phase already failed). A non-event, not a gap in the evidence.
+    SKIPPED = "skipped"
+
+    #: There is deliberately no WAIVED: a result is what the instrument
+    #: observed, a waiver is an operator overriding it. See
+    #: `ExecutorState.record_waiver`.
+
+
+@dataclass(frozen=True)
+class PhaseRecord:
+    """One observed outcome of one phase, as stored. Append-only."""
+
+    phase: str
+    outcome: PhaseOutcome
+    detail: str | None
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class PhaseWaiver:
+    """An operator overriding an observed outcome (never the harness).
+
+    The waived outcome is kept: a report that shows green for a waived phase
+    must be able to show that it was waived, and by whom.
+    """
+
+    phase: str
+    waived_outcome: PhaseOutcome
+    reason: str
+    actor: str
+    timestamp: str
+    provenance: str | None = None
+
+
 @dataclass
 class TaskAttempt:
     """Task execution attempt"""
@@ -227,6 +287,34 @@ class ExecutorState:
         # v2.16.0: no-op completion marker (#97; idempotent)
         with contextlib.suppress(sqlite3.OperationalError):
             self._conn.execute("ALTER TABLE attempts ADD COLUMN no_op INTEGER")
+        # Slice 0 of the lifecycle contract (#164/#141 Part A): a typed outcome
+        # per phase, append-only — a phase runs again on a retry and the earlier
+        # verdicts are evidence, not noise. Nothing gates on these yet.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS phase_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                detail TEXT,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        # A waiver is not an outcome: it is an operator overriding one, and it
+        # carries who, why and when precisely because that is the information a
+        # waiver exists to preserve.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS phase_waivers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                waived_outcome TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                provenance TEXT
+            )
+        """)
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -420,6 +508,110 @@ class ExecutorState:
         if task_id not in self.tasks:
             self.tasks[task_id] = TaskState(task_id=task_id, status="pending")
         return self.tasks[task_id]
+
+    # === Phase results (slice 0; nothing gates on these yet) ===
+
+    def _insert_phase_row(self, sql: str, params: tuple) -> None:
+        """Single write seam, so recording can be faulted in tests."""
+        assert self._conn is not None
+        with self._conn:
+            self._conn.execute(sql, params)
+
+    def record_phase(
+        self,
+        task_id: str,
+        phase: str,
+        outcome: "PhaseOutcome",
+        detail: str | None = None,
+    ) -> None:
+        """Append one observed outcome for ``phase``.
+
+        Append-only: a phase runs again on a retry, and the earlier verdicts
+        are evidence, not noise.
+
+        Raises ``ValueError`` for an unknown phase or an outcome that phase
+        cannot produce — that is a caller bug and should be loud. A *storage*
+        failure is not: recording is additive bookkeeping and must never be
+        able to fail a task, so it is logged and swallowed, the same posture as
+        degraded mode.
+        """
+        from .phases import check_outcome
+
+        check_outcome(phase, outcome)
+        try:
+            self._insert_phase_row(
+                "INSERT INTO phase_results (task_id, phase, outcome, detail, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, phase, outcome.value, detail, datetime.now().isoformat()),
+            )
+        except Exception as exc:  # never fail a run over bookkeeping
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record phase outcome",
+                task_id=task_id,
+                phase=phase,
+                error=str(exc),
+            )
+
+    def record_waiver(
+        self,
+        task_id: str,
+        phase: str,
+        waived_outcome: "PhaseOutcome",
+        reason: str,
+        actor: str,
+        provenance: str | None = None,
+    ) -> None:
+        """Record an operator overriding an observed outcome.
+
+        Never called by the harness: a waiver is an authority decision, and
+        ``actor``/``reason`` are required precisely because "who decided, and
+        why" is the information a waiver exists to preserve. The observed
+        outcome stays in ``phase_results`` — a waiver annotates history, it
+        does not rewrite it.
+        """
+        if not actor.strip():
+            raise ValueError("a waiver needs an actor: an unattributed override is not a decision")
+        if not reason.strip():
+            raise ValueError("a waiver needs a reason")
+        from .phases import check_outcome
+
+        check_outcome(phase, waived_outcome)
+        self._insert_phase_row(
+            "INSERT INTO phase_waivers "
+            "(task_id, phase, waived_outcome, reason, actor, timestamp, provenance) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                task_id,
+                phase,
+                waived_outcome.value,
+                reason,
+                actor,
+                datetime.now().isoformat(),
+                provenance,
+            ),
+        )
+
+    def phase_history(self, task_id: str) -> list[PhaseRecord]:
+        """Every recorded outcome for ``task_id``, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT phase, outcome, detail, timestamp FROM phase_results "
+            "WHERE task_id = ? ORDER BY id",
+            (task_id,),
+        ).fetchall()
+        return [PhaseRecord(r[0], PhaseOutcome(r[1]), r[2], r[3]) for r in rows]
+
+    def phase_waivers(self, task_id: str) -> list[PhaseWaiver]:
+        """Operator waivers recorded for ``task_id``, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT phase, waived_outcome, reason, actor, timestamp, provenance "
+            "FROM phase_waivers WHERE task_id = ? ORDER BY id",
+            (task_id,),
+        ).fetchall()
+        return [PhaseWaiver(r[0], PhaseOutcome(r[1]), r[2], r[3], r[4], r[5]) for r in rows]
 
     def record_attempt(
         self,

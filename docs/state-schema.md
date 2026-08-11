@@ -109,6 +109,41 @@ that makes the command resumable. Columns: `repo`, `pr_number`,
 shape may change in minor releases while the loop is in phase M2/M3;
 external consumers should not depend on it yet.
 
+### `phase_results` / `phase_waivers` (experimental, slice 0)
+
+Added by slice 0 of the lifecycle contract (#164 / #141 Part A). **Nothing
+gates on them yet** — they are additive record-keeping, and a project that opts
+into nothing sees unchanged execution, terminal state and external contracts.
+
+`phase_results` is **append-only**: one row per observed outcome of one phase.
+A phase runs again on a retry, and the earlier verdicts are evidence, not
+noise. Columns: `task_id`, `phase` (one of the `error_stage` vocabulary),
+`outcome`, `detail`, `timestamp`.
+
+`outcome` is a `PhaseOutcome`:
+
+| Value | Means |
+|---|---|
+| `pass` | ran; its expectation held |
+| `expected_fail` | ran; failed exactly as it was supposed to (TDD's confirmed red) |
+| `unexpected_fail` | ran; failed some other way |
+| `not_run` | ran, but produced no usable verdict (timeout, empty, no marker) |
+| `error` | could not run — the instrument itself broke |
+| `skipped` | deliberately not executed |
+
+Not every phase can produce every value: the admissible set is declared per
+stage in `spec_runner.phases.ALLOWED_OUTCOMES` (`expected_fail` is meaningful
+for a test run and meaningless for `commit`).
+
+`phase_waivers` records an **operator** overriding an observed outcome —
+`task_id`, `phase`, `waived_outcome`, `reason`, `actor`, `timestamp`,
+`provenance`. A waiver is not an outcome: the observed result stays in
+`phase_results`, so a report showing green for a waived phase can show that it
+was waived and by whom. The harness never writes one.
+
+Experimental: shape may change while the later slices land; external consumers
+should not depend on it yet.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |
@@ -159,6 +194,12 @@ Before #138 a review that produced no recognizable marker was recorded as
 `passed`, and a timeout as `failed`; both are now `not_run`. As with
 `ErrorCode`, treat an unknown value as "unknown" rather than raising — new
 values may be added in minor releases.
+
+Since slice 0, `ReviewVerdict` is also **readable as a phase outcome plus a
+review-specific detail** (`spec_runner.phases.review_verdict_to_phase`):
+`passed` and `fixed` are both `pass`, differing only in detail, so a consumer
+that just needs "did the phase hold" reads the outcome and stops. The stored
+wire values here are unchanged — this is a reading, not a migration.
 
 ### Read-only access pattern
 

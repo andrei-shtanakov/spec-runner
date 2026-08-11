@@ -26,7 +26,7 @@ from .review import (
     run_parallel_review,
 )
 from .stages import StageReporter
-from .state import ReviewVerdict
+from .state import PhaseOutcome, ReviewVerdict
 from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
@@ -75,6 +75,11 @@ def pre_start_hook(
                 logger.info("Dependencies synced")
             else:
                 logger.warning("Dependency sync warning", stderr=result.stderr[:200])
+            if reporter:
+                reporter.record(
+                    PhaseOutcome.PASS if result.returncode == 0 else PhaseOutcome.UNEXPECTED_FAIL,
+                    f"exit {result.returncode}",
+                )
         elif (config.project_root / "pyproject.toml").exists():
             if reporter:
                 reporter.enter("sync_deps")
@@ -86,6 +91,11 @@ def pre_start_hook(
                 logger.info("Dependencies synced")
             else:
                 logger.warning("uv sync warning", stderr=result.stderr[:200])
+            if reporter:
+                reporter.record(
+                    PhaseOutcome.PASS if result.returncode == 0 else PhaseOutcome.UNEXPECTED_FAIL,
+                    f"uv sync, exit {result.returncode}",
+                )
         else:
             logger.debug("No pyproject.toml and no sync command — skipping dependency sync")
 
@@ -307,6 +317,11 @@ def post_done_hook(
             cwd=config.project_root,
         )
         test_output_str = (result.stdout + result.stderr)[:2048]
+        if reporter:
+            reporter.record(
+                PhaseOutcome.PASS if result.returncode == 0 else PhaseOutcome.UNEXPECTED_FAIL,
+                f"{'scoped' if scoped else 'full'} suite, exit {result.returncode}",
+            )
         if result.returncode != 0:
             logger.error("Tests failed")
             logger.error("Test stderr", stderr=result.stderr[:500])
@@ -358,6 +373,8 @@ def post_done_hook(
                 if config.lint_blocking:
                     lint_output = recheck.stdout + "\n" + recheck.stderr
                     logger.error("Lint errors remain after auto-fix")
+                    if reporter:
+                        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "errors remain after fix")
                     return (
                         False,
                         f"Lint errors (not auto-fixable):\n{lint_output}",
@@ -367,12 +384,18 @@ def post_done_hook(
                     )
                 else:
                     logger.warning("Lint warnings (non-blocking)")
+                    if reporter:
+                        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "non-blocking warnings")
             else:
                 lint_output_str = "auto-fixed"
                 logger.info("Lint auto-fixed")
+                if reporter:
+                    reporter.record(PhaseOutcome.PASS, "auto-fixed")
         else:
             lint_output_str = "clean"
             logger.info("Lint passed")
+            if reporter:
+                reporter.record(PhaseOutcome.PASS, "lint clean")
 
     # Commit the exec-stage work under the task label BEFORE review runs
     # (#103): the review stage commits its own fixes, and with nothing
@@ -436,6 +459,11 @@ def post_done_hook(
         # Blocking behaviour is deliberately unchanged here: outside HITL all
         # of these stay advisory, and whether a review may fail a task is a
         # policy decision tracked separately.
+        if reporter:
+            from .phases import review_verdict_to_phase
+
+            outcome, detail = review_verdict_to_phase(review_verdict)
+            reporter.record(outcome, detail or review_error)
         if review_verdict == ReviewVerdict.FAILED:
             logger.warning("Review found issues", error=review_error)
         elif review_verdict == ReviewVerdict.NOT_RUN:
