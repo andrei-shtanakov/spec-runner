@@ -236,10 +236,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             ts = state.tasks.get(t.id)
             cost = state.task_cost(t.id)
             if ts:
-                inp_tokens = sum(a.input_tokens for a in ts.attempts if a.input_tokens is not None)
-                out_tokens = sum(
-                    a.output_tokens for a in ts.attempts if a.output_tokens is not None
-                )
+                # Same source as `task_cost` — attempts plus the agent-call
+                # ledger. Reading tokens from attempts alone while cost came
+                # from both reported $0.73 spent on 10,000 tokens when 15,600
+                # were used (#141 F-6, caught re-running the battle matrix).
+                inp_tokens, out_tokens = state.task_tokens(t.id)
                 task_rows.append(
                     {
                         "task_id": t.id,
@@ -253,17 +254,25 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                     }
                 )
             else:
+                # No `tasks` row does not mean no spend. `record_agent_call`
+                # creates no task row, so a RED authoring call that failed
+                # before any attempt was recorded leaves ledger-only money —
+                # which the old hard-coded zeros hid behind a `--` (Copilot,
+                # PR #187). Same shape as F-9: spend that exists and is not
+                # shown. `no_state` now means "nothing to report", not "no
+                # attempts".
+                inp_tokens, out_tokens = state.task_tokens(t.id)
                 task_rows.append(
                     {
                         "task_id": t.id,
                         "name": t.name,
                         "status": t.status,
-                        "cost": 0.0,
+                        "cost": cost,
                         "attempts": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "no_state": True,
+                        "input_tokens": inp_tokens,
+                        "output_tokens": out_tokens,
+                        "total_tokens": inp_tokens + out_tokens,
+                        "no_state": not (cost or inp_tokens or out_tokens),
                     }
                 )
 

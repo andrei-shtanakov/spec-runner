@@ -1510,8 +1510,38 @@ class ExecutorState:
         attempts = sum(a.cost_usd for a in ts.attempts if a.cost_usd is not None) if ts else 0.0
         return attempts + self._ledger_cost(task_id)
 
+    def _ledger_tokens(self, task_id: str | None = None) -> tuple[int, int]:
+        """Tokens from the agent-call ledger, mirroring `_ledger_cost`.
+
+        Cost and tokens must come from the same places or a report shows
+        $0.73 spent on 10,000 tokens when 15,600 were used — which is how the
+        re-run of the battle matrix found this half-done.
+        """
+        sql = (
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
+            "FROM agent_calls"
+        )
+        params: list[object] = []
+        if task_id:
+            sql += " WHERE task_id = ?"
+            params.append(task_id)
+        try:
+            assert self._conn is not None
+            row = self._conn.execute(sql, params).fetchone()
+            return int(row[0] or 0), int(row[1] or 0)
+        except Exception:
+            return 0, 0
+
+    def task_tokens(self, task_id: str) -> tuple[int, int]:
+        """(input, output) for one task — attempts plus ledger."""
+        ts = self.tasks.get(task_id)
+        inp = sum(a.input_tokens for a in ts.attempts if a.input_tokens is not None) if ts else 0
+        out = sum(a.output_tokens for a in ts.attempts if a.output_tokens is not None) if ts else 0
+        ledger_in, ledger_out = self._ledger_tokens(task_id)
+        return inp + ledger_in, out + ledger_out
+
     def total_tokens(self) -> tuple[int, int]:
-        """(total_input_tokens, total_output_tokens) across all attempts."""
+        """(input, output) across the persisted state — attempts plus ledger."""
         inp = sum(
             a.input_tokens
             for ts in self.tasks.values()
@@ -1524,7 +1554,8 @@ class ExecutorState:
             for a in ts.attempts
             if a.output_tokens is not None
         )
-        return inp, out
+        ledger_in, ledger_out = self._ledger_tokens()
+        return inp + ledger_in, out + ledger_out
 
     def set_meta(self, key: str, value: str) -> None:
         """Insert or replace a key in executor_meta."""

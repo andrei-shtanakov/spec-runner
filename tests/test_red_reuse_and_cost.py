@@ -265,3 +265,52 @@ class TestTheRedPassIsPaidForVisibly:
         assert [c["provenance"] for c in calls] == ["red_authoring"]
         assert calls[0]["cost_usd"] == pytest.approx(0.25)
         assert calls[0]["input_tokens"] == 1000
+
+    def test_tokens_and_cost_come_from_the_same_places(self, tmp_path, monkeypatch):
+        """Found by re-running the battle matrix: cost summed attempts plus the
+        ledger while tokens summed attempts alone, so `costs` reported $0.73
+        spent on 10,000 tokens when 15,600 were used. A report that contradicts
+        itself is worse than one that under-reports consistently."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _agent(monkeypatch, [], cost=0.42)
+
+        with ExecutorState(cfg) as state:
+            run_red_phase(_task(), cfg, state)
+            state.record_attempt(
+                "TASK-001", True, 1.0, input_tokens=8000, output_tokens=2000, cost_usd=0.31
+            )
+            inp, out = state.task_tokens("TASK-001")
+            total_in, total_out = state.total_tokens()
+            cost = state.task_cost("TASK-001")
+
+        assert cost == pytest.approx(0.73)
+        assert (inp, out) == (9000, 2200), "the RED pass's tokens must be in the task total"
+        assert (total_in, total_out) == (9000, 2200)
+
+    def test_ledger_only_spend_is_reported(self, tmp_path, monkeypatch, capsys):
+        """Copilot on #187, and the same shape as F-9: a RED authoring call
+        that fails before any attempt is recorded leaves money in the ledger
+        and no `tasks` row, which the costs table hid behind a `--`."""
+        import argparse
+
+        from spec_runner import tdd
+        from spec_runner.cli_info import cmd_costs
+
+        root = _repo(tmp_path)
+        (root / "spec").mkdir(exist_ok=True)
+        (root / "spec" / "tasks.md").write_text(
+            "# Tasks\n\n### TASK-001: t\n🟠 P1 | ⬜ TODO\nEst: 1d\n\n- [ ] x\n"
+        )
+        cfg = _cfg(root)
+
+        def _no_marker(config, prompt, **kwargs):
+            return tdd.AgentCall(text="no marker here", input_tokens=900, cost_usd=0.37)
+
+        monkeypatch.setattr(tdd, "_run_agent", _no_marker)
+        with ExecutorState(cfg) as state:
+            run_red_phase(_task(), cfg, state)
+
+        cmd_costs(argparse.Namespace(json=False, sort="id"), cfg)
+        out = capsys.readouterr().out
+        assert "0.37" in out, f"ledger-only spend was hidden:\n{out}"

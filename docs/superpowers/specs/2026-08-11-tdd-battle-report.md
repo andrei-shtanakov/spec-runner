@@ -175,3 +175,80 @@ surface. Designing GREEN on top of this would have inherited both.
 **Recommended before 4a:** F-1 and F-2 (blocking correctness), then F-3 and
 F-5. F-4 and F-6 are worth doing in the same pass since they touch the same
 code. F-7 and F-8 are independent and can wait.
+
+
+---
+
+# Round 2 — re-run on a build from master (2026-08-12)
+
+**Subject:** a build of master (`f9b8645`, after PRs #183–#186) installed with
+`uv tool install .` into `~/.local/share/uv/tools/spec-runner/` — an installed
+artifact, not the editable checkout. Same disposable-repo method and scripted
+agent as round 1.
+
+## Results
+
+| # | Scenario | Round 1 | Round 2 |
+|---|---|---|---|
+| 1 | Happy path | pass | **pass** — DONE, exit 0 |
+| 2 | Claimed test modified | fail | **pass** — `claim violated — modified`, IN_PROGRESS, exit 1 |
+| 3 | Deleted / renamed | fail | **pass** — both distinguishable, exit 1 |
+| 4a | Conflicting claims | pass | **pass** — refused, names the owner |
+| 4b | Identical bytes | fail | **pass** — two independent claims |
+| 5 | `abandon` | pass | **pass** — id inferred and printed; the other task's lock stands |
+| 6 | `repair` | pass | **pass** — new lineage, red re-confirmed, trail readable |
+| 7 | Crash / restart | fail | **pass** — see below |
+| 8 | `standard` control | pass | **pass** — no RED phase, one commit, DONE |
+
+## Exit criteria
+
+| Criterion | |
+|---|---|
+| No byte-lock bypass via retry/resume | **met** — modify/delete/rename all blocked; retry reuses rather than re-authors |
+| A stale verdict does not clear a new SHA | **met** — and now also enforced between gate and merge by the drift check |
+| Remedies idempotent | **met** |
+| A blocked task is not marked DONE | **met** — IN_PROGRESS, exit 1, candidate commit intact |
+| Evidence reconstructs checkpoint → claim → remedy → new checkpoint | **met** — `tdd status` shows the whole chain without touching SQLite |
+| Cost and manual interventions recorded | **met** after one more fix, below |
+| Findings classified | below |
+
+## Crash / restart, measured rather than assumed
+
+Three PRs changed the ordering this depends on, so it was re-measured:
+
+- a GREEN pass failing three times inside one run: **1** authoring call, 2
+  reuses, **1** red commit, **1** active checkpoint (round 1: 3 and 3);
+- across runs, `spec-runner retry TASK-001` reused the confirmed red
+  (`authoring=0, reuse=1`) and completed the task, exit 0;
+- `spec-runner reset` still wipes state and therefore re-authors — correct, it
+  is a reset, not a resume, and worth knowing which is which.
+
+## One new finding, fixed in the same pass
+
+**F-9 — `costs` contradicted itself.** Cost summed attempts *plus* the new
+agent-call ledger while tokens summed attempts alone, so the table reported
+**$0.73 spent on 10,000 tokens** when 15,600 were used. Half of F-6, done.
+Tokens now come from the same two places as cost (`task_tokens` /
+`_ledger_tokens`).
+
+A report that contradicts itself is worse than one that under-reports
+consistently: the second is a known gap, the first destroys trust in both
+numbers.
+
+Verified end to end with an agent that reports usage the way a priced CLI does:
+
+```
+agent_calls: [('red_authoring', 12500, 3100, 0.42)]
+attempts   : [(8000, 2000, 0.31)]
+costs      : TASK-001 … $0.73 … 15.6K
+```
+
+The RED pass's $0.42 was invisible before F-6; it is now in both totals.
+
+## Status of the earlier findings
+
+F-1, F-2, F-3, F-4, F-5, F-6 — **closed and re-measured**. F-7 is filed as
+issue #182 and not yet fixed. F-8 (a gate-blocked task leaves the spec dirty,
+so the next run refuses) is unchanged and still deferred.
+
+**Slice 4a is unblocked** on the criteria listed at the top of this report.
