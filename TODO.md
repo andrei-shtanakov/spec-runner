@@ -407,7 +407,25 @@ minor-релиза, а не багфикса.
       невозможной); допустимые outcomes задаются по типу стадии; ReviewVerdict
       становится outcome + detail; `execution_mode` — проектный дефолт с
       переопределением задачи, в чекпоинт пишется effective mode и хеш конфига.
-      **Блокер — #164**, а не #157: prerequisite вынесен отдельно. @blocked_by:todo://spec-runner/checkpoint-and-pre-terminal-gates
+      **Блокер — #164** снят: механизм влит (PR #168).
+      **Slice 0 отгружен** (PR #167): `PhaseOutcome` + append-only `phase_results`/
+      `phase_waivers`. **Slice 1 отгружен целиком** тремя PR:
+      1a #171 — поверхность `execution_mode` (проектный дефолт + `**Mode:**` в
+      задаче, переопределение в обе стороны, отказ на неизвестном значении в
+      `validate` и в резолвере);
+      1b #172 — `src/spec_runner/tdd.py`: `verify_red()` переигрывает заявленный
+      red против его **коммита** в одноразовом worktree, три исхода
+      (`expected_fail`/`not_red`/**`unverifiable`**), таблица `red_checkpoints`
+      с `(commit, selector, baseline, namespace)` + identity окружения по
+      лок-файлу. Коды выхода pytest **измерены**, а не вспомнены: нерезолвящийся
+      node-id и синтаксическая ошибка дают 4, не 5;
+      1c #173 — гейт: `_red_gate` зарегистрирован на фазу `tests`, оценивается
+      дважды (перед реализацией и на pre-terminal), сопоставление с деревом по
+      **происхождению, не равенству** SHA. `run_red_phase` наблюдает, гейт решает.
+      **Осталось (не заказано владельцем):** slice 2 (байт-замок на заклеймленные
+      файлы), slice 3 (операторские remedy `abandon`/`repair`), slice 4
+      (GREEN/REFACTOR). Машина состояний §3.2 неполна — обеспечен один переход,
+      несущий контракт.
 - [x] **bootstrap-product-boundary** (#159) — решение принято 2026-08-11: @owner:github:andrei-shtanakov @id:bootstrap-product-boundary
       **scaffolding в core не берём** (spec-runner исполняет спеки, а не
       выбирает layout, package manager, линтер и типчекер; presets быстро
