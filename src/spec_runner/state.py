@@ -1482,7 +1482,12 @@ class ExecutorState:
         return self.stop_cause() is not None
 
     def total_cost(self) -> float:
-        """Every dollar this run can account for.
+        """Every dollar in the **persisted state**, not just this run.
+
+        Both sources are cumulative across runs: attempts are loaded from the
+        state file at startup, and the ledger is queried whole. That matters
+        because the budget check reads this — a `--budget` is a ceiling on the
+        state file's lifetime spend, not on one invocation.
 
         Attempts carry the exec pass; `agent_calls` carries the ones that never
         had a home — the TDD RED authoring pass, whose cost used to be parsed
@@ -1500,7 +1505,7 @@ class ExecutorState:
         )
 
     def task_cost(self, task_id: str) -> float:
-        """Sum of cost_usd for a specific task, attempts plus ledger."""
+        """A task's lifetime cost — attempts plus ledger, across runs."""
         ts = self.tasks.get(task_id)
         attempts = sum(a.cost_usd for a in ts.attempts if a.cost_usd is not None) if ts else 0.0
         return attempts + self._ledger_cost(task_id)
