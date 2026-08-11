@@ -427,9 +427,14 @@ def _claims_gate(ctx: GateContext) -> GateResult:
             GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, "no state to read claims from"
         )
 
-    violations = check_claims(
-        ctx.config, ctx.state, resolve_namespace(ctx.config), ctx.checkpoint_sha
-    )
+    from .claims import ClaimCheckError
+
+    try:
+        violations = check_claims(
+            ctx.config, ctx.state, resolve_namespace(ctx.config), ctx.checkpoint_sha
+        )
+    except ClaimCheckError as exc:
+        return GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, str(exc))
     if not violations:
         return GateResult(GateStatus.SATISFIED, PhaseOutcome.PASS, "claims intact")
     return GateResult(

@@ -37,6 +37,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
     times in one of the pilot's waves.
   - A red whose commit violates someone else's active claim is refused, and
     adds no claims of its own.
+  - **Fails closed in three places**, because a byte-lock that silently does
+    not exist is worse than none — the run believes it is there. A claim that
+    cannot be persisted raises rather than logging and continuing (unlike the
+    other bookkeeping writers, the gate *reads* claims); a candidate commit
+    that cannot be read raises rather than reporting "no violations"; and both
+    reach the gate as an instrument error rather than a pass.
+  - Claim paths must be **project-relative and canonical**. An absolute path,
+    or one carrying `.`/`..`, could never match its own `git ls-tree` entry and
+    would read as a deletion on a tree where the file is untouched — a false
+    violation blocks work for a reason that is not true.
   - Known and documented limitation: a selector names exactly one file, so a
     test depending on a `conftest.py` fixture does **not** claim that conftest.
     Editing the fixture can turn the red green and is not blocked. Widening the

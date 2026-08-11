@@ -20,6 +20,7 @@ Contract: ``docs/superpowers/specs/2026-08-11-claim-and-remedy-contracts.md`` §
 
 from __future__ import annotations
 
+import posixpath
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,6 +37,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tdd import RedCheckpoint
 
 logger = get_logger("claims")
+
+
+class ClaimCheckError(RuntimeError):
+    """The claims could not be checked. Never confused with "no violations"."""
 
 
 class ClaimStatus(str, Enum):
@@ -103,12 +108,23 @@ def validate_claim_path(project_root: Path, path: str) -> str | None:
     there is nothing to check it against.
     """
     root = Path(project_root).resolve()
-    candidate = (root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
 
+    # Project-relative and canonical, or nothing. A claim's `path` is compared
+    # against `git ls-tree` keys, which are always canonical and relative — so
+    # an absolute path, or one carrying `.`/`..`, would never match its own
+    # entry and would read as DELETED on a tree where the file is untouched.
+    # A false violation is worse than a refusal: it blocks work for a reason
+    # that is not true.
+    if Path(path).is_absolute():
+        return f"{path!r} is absolute; a claim path must be project-relative"
+    if path != posixpath.normpath(path) or path.startswith("../"):
+        return f"{path!r} is not canonical; a claim path must be normalised and inside the tree"
+
+    candidate = (root / path).resolve()
     if root not in candidate.parents and candidate != root:
         return f"{path!r} resolves outside the repository"
     # `is_symlink` on the unresolved path: `resolve()` has already followed it.
-    unresolved = root / path if not Path(path).is_absolute() else Path(path)
+    unresolved = root / path
     if unresolved.is_symlink():
         return f"{path!r} is a symlink; a claim must name the bytes it freezes"
     if not candidate.exists():
@@ -173,8 +189,10 @@ def check_claims(
     root = Path(config.project_root)
     tree = _tree_blobs(root, candidate_sha)
     if tree is None:
-        logger.warning("Cannot read the candidate commit; claims unchecked", sha=candidate_sha[:12])
-        return []
+        # Same fail-closed reasoning as `record_claim`: "we could not read the
+        # tree" is not "the claims are intact". Returning [] here would make an
+        # unreadable commit look like a clean one and pass the gate.
+        raise ClaimCheckError(f"cannot read the candidate commit {candidate_sha[:12]}")
     by_blob: dict[str, list[str]] = {}
     for path, blob in tree.items():
         by_blob.setdefault(blob, []).append(path)
@@ -254,6 +272,7 @@ def describe_violations(violations: list[ClaimViolation]) -> str:
 
 __all__ = [
     "Claim",
+    "ClaimCheckError",
     "ClaimStatus",
     "ClaimViolation",
     "ViolationKind",

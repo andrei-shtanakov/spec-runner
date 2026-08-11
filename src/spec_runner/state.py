@@ -811,26 +811,28 @@ class ExecutorState:
         )
 
     def record_claim(self, claim: "ClaimT") -> None:
-        """Persist one file claim (#141 slice 2)."""
-        try:
-            self._insert_phase_row(
-                "INSERT INTO tdd_claims (namespace, task_id, checkpoint_id, checkpoint_sha, "
-                "path, blob_sha, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    claim.namespace,
-                    claim.task_id,
-                    claim.checkpoint_id,
-                    claim.checkpoint_sha,
-                    claim.path,
-                    claim.blob_sha,
-                    claim.created_at,
-                    getattr(claim.status, "value", claim.status),
-                ),
-            )
-        except Exception as exc:  # bookkeeping must not fail a run
-            from .logging import get_logger
+        """Persist one file claim (#141 slice 2). **Raises** on failure.
 
-            get_logger("state").warning("Could not record claim", path=claim.path, error=str(exc))
+        Deliberately not the swallow-and-log posture of the other bookkeeping
+        writers. Nothing gates on a `phase_results` row, so losing one costs
+        visibility; the gate *does* read claims, so a lost claim is not a
+        missing note — it is a byte-lock that silently does not exist while the
+        run believes it does. Fail closed.
+        """
+        self._insert_phase_row(
+            "INSERT INTO tdd_claims (namespace, task_id, checkpoint_id, checkpoint_sha, "
+            "path, blob_sha, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                claim.namespace,
+                claim.task_id,
+                claim.checkpoint_id,
+                claim.checkpoint_sha,
+                claim.path,
+                claim.blob_sha,
+                claim.created_at,
+                getattr(claim.status, "value", claim.status),
+            ),
+        )
 
     def active_claims(self, namespace: str) -> list["ClaimT"]:
         """Every claim still in force in ``namespace``, whoever made it.

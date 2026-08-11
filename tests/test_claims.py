@@ -147,7 +147,25 @@ class TestPathValidation:
 
     def test_a_path_outside_the_repo_is_rejected(self, tmp_path):
         root = _repo(tmp_path)
-        assert "outside" in (validate_claim_path(root, "../elsewhere.py") or "")
+        assert validate_claim_path(root, "../elsewhere.py") is not None
+
+    def test_a_non_canonical_path_is_rejected(self, tmp_path):
+        """`git ls-tree` keys are canonical, so `tests/./test_x.py` would never
+        match its own entry and would read as DELETED on a tree where the file
+        is untouched. A false violation blocks work for a reason that is not
+        true, which is worse than a refusal."""
+        root = _repo(tmp_path)
+        _commit(root, {"tests/test_x.py": "x\n"})
+        assert "canonical" in (validate_claim_path(root, "tests/./test_x.py") or "")
+        assert "canonical" in (validate_claim_path(root, "tests/../tests/test_x.py") or "")
+
+    def test_an_absolute_path_inside_the_repo_is_still_rejected(self, tmp_path):
+        """Being inside the tree does not make it comparable to a ls-tree key."""
+        root = _repo(tmp_path)
+        _commit(root, {"tests/test_x.py": "x\n"})
+        assert "project-relative" in (
+            validate_claim_path(root, str(root / "tests" / "test_x.py")) or ""
+        )
 
     def test_an_absolute_path_escaping_the_repo_is_rejected(self, tmp_path):
         root = _repo(tmp_path)
@@ -510,3 +528,68 @@ class TestTheRedPhaseFreezesAndRefuses:
         with ExecutorState(cfg) as state:
             result = run_red_phase(self._task(), cfg, state)
         assert result.outcome is RO.EXPECTED_FAIL
+
+
+class TestFailingClosed:
+    """Three places where "we could not find out" must not read as "all clear".
+    A byte-lock that silently does not exist is worse than no byte-lock, because
+    the run believes it is there."""
+
+    def test_a_claim_that_cannot_be_persisted_raises(self, tmp_path):
+        import sqlite3
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        with ExecutorState(cfg) as state:
+            state._conn.execute("DROP TABLE tdd_claims")
+            with pytest.raises(sqlite3.Error):
+                state.record_claim(
+                    Claim(
+                        namespace="ns",
+                        task_id="TASK-001",
+                        checkpoint_id="cp",
+                        checkpoint_sha="a" * 40,
+                        path="tests/test_x.py",
+                        blob_sha="b" * 40,
+                        created_at="2026-08-11T00:00:00",
+                    )
+                )
+
+    def test_an_unreadable_candidate_commit_is_not_all_clear(self, tmp_path):
+        from spec_runner.claims import ClaimCheckError
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        sha = _commit(root, {"tests/test_x.py": "a\n"})
+        with ExecutorState(cfg) as state:
+            record_claims(cfg, state, _checkpoint(cfg, sha))
+            with pytest.raises(ClaimCheckError):
+                check_claims(cfg, state, resolve_namespace(cfg), "0" * 40)
+
+    def test_the_gate_reports_that_as_an_instrument_error(self, tmp_path):
+        from spec_runner.gates import (
+            GateContext,
+            GateRegistry,
+            GateStatus,
+            evaluate_gates,
+            register_builtin_gates,
+        )
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        sha = _commit(root, {"tests/test_x.py": "a\n"})
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+        with ExecutorState(cfg) as state:
+            record_claims(cfg, state, _checkpoint(cfg, sha))
+            state.record_red_checkpoint(_checkpoint(cfg, sha))
+            ctx = GateContext(
+                task_id="TASK-001",
+                checkpoint_sha="0" * 40,
+                config=cfg,
+                state=state,
+                facts={"execution_mode": "tdd"},
+            )
+            outcome = evaluate_gates("tests", ctx, registry=registry)
+        assert outcome.status is not GateStatus.SATISFIED
+        assert any(r.status is GateStatus.INSTRUMENT_ERROR for r in outcome.results)
