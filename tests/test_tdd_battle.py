@@ -81,7 +81,7 @@ def _agent(monkeypatch, *, selector: str, writes: dict[str, str]):
             path = Path(config.project_root) / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body)
-        return f"TDD_SELECTOR: {selector}\nTASK_COMPLETE"
+        return tdd.AgentCall(text=f"TDD_SELECTOR: {selector}\nTASK_COMPLETE")
 
     monkeypatch.setattr(tdd, "_run_agent", _fake)
 
@@ -430,7 +430,7 @@ class TestAnUnlockableRedIsRefused:
         def _agent_symlinks(config, prompt, **kwargs):
             link = Path(config.project_root) / "tests" / "test_link.py"
             link.symlink_to(Path(config.project_root) / "tests" / "real.py")
-            return "TDD_SELECTOR: tests/test_link.py::test_y\nTASK_COMPLETE"
+            return tdd.AgentCall(text="TDD_SELECTOR: tests/test_link.py::test_y\nTASK_COMPLETE")
 
         from spec_runner import tdd
 

@@ -252,7 +252,7 @@ class TestTheRedPhaseEndToEnd:
         def _fake(config, prompt, **kwargs):
             for name, body in (writes or {}).items():
                 (Path(config.project_root) / name).write_text(body)
-            return output
+            return tdd.AgentCall(text=output)
 
         monkeypatch.setattr(tdd, "_run_agent", _fake)
 
@@ -391,7 +391,7 @@ class TestExecutionRefusesToImplementWithoutARed:
         def _fake_red_agent(config, prompt, **kwargs):
             for name, body in (red_writes or {}).items():
                 (Path(config.project_root) / name).write_text(body)
-            return red_output
+            return tdd.AgentCall(text=red_output)
 
         monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
 
@@ -469,7 +469,7 @@ class TestPreReplayFailuresAreStillDurable:
         def _agent(config, prompt, **kwargs):
             for name, body in (writes or {}).items():
                 (Path(config.project_root) / name).write_text(body)
-            return output
+            return tdd.AgentCall(text=output)
 
         monkeypatch.setattr(tdd, "_run_agent", _agent)
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)

@@ -422,7 +422,7 @@ class TestTheRedPhaseFreezesAndRefuses:
                 path = Path(config.project_root) / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(body)
-            return output
+            return tdd.AgentCall(text=output)
 
         monkeypatch.setattr(tdd, "_run_agent", _fake)
 
