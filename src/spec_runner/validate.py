@@ -392,8 +392,24 @@ def validate_config(config_path: Path) -> ValidationResult:
 
     _validate_spec_context_rules(executor_section, result)
     _validate_review_policy(executor_section, result)
+    _validate_execution_mode(executor_section, result)
 
     return result
+
+
+def _validate_execution_mode(section: dict, result: "ValidationResult") -> None:
+    """Refuse an unrecognised `execution_mode` before a run starts (#141).
+
+    A typo silently meaning `standard` is how a project believes it is under
+    the TDD contract while running without it.
+    """
+    from .config import EXECUTION_MODES
+
+    mode = section.get("execution_mode")
+    if mode is not None and mode not in EXECUTION_MODES:
+        result.errors.append(
+            f"execution_mode must be one of {', '.join(EXECUTION_MODES)} (got {mode!r})"
+        )
 
 
 #: `review_policy` values the runtime understands (#157).

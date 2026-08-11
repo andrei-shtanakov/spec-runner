@@ -12,6 +12,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`execution_mode: standard | tdd`** (#141, slice 1a) — the mode surface,
+  **declared but not yet enforced**. A project default plus an optional
+  per-task `**Mode:**` line in tasks.md, overriding in both directions: a
+  single task can opt into the contract without converting a repo, and out
+  while the project is `tdd`. A one-way override would let one unsuitable task
+  force the whole project back.
+  - An unrecognised mode is refused — by `validate` before a run, and by
+    `resolve_execution_mode` at run time, naming the task when the task carries
+    the typo. Silently defaulting a typo to `standard` is how a project comes
+    to believe it is under the TDD contract while running without it.
+  - The parser trims and case-folds `**Mode:**` (`TDD` and `tdd` are the same
+    word) but never interprets it: an unknown word is stored as written and
+    refused by the resolver. Mapping it to a known mode at parse time would
+    hide exactly the typo the resolver exists to catch.
+  - **Nothing branches on it.** A test asserts that no module on the execution
+    path (`execution`, `hooks`, `runner`, `review`, `gates`, `cli`) so much as
+    mentions the key — a claim that stays checkable, unlike a promise. It is to
+    be deleted when the RED checkpoint (1b/1c) arrives, not widened.
+    Design: `docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md` §3.1.
+
 - **`review_policy: advisory | required`** (#157) — review can finally withhold
   completion, and the default (`advisory`) leaves every existing project
   untouched. First consumer of the #164 gate mechanism, which it does not own.
