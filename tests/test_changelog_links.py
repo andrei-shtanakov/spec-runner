@@ -6,13 +6,21 @@ are the same oversight: the link block lives ~1700 lines from the section being
 cut, so the edit looks complete. A check is cheaper than a third catch.
 """
 
-import sys
+import importlib.util
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from check_changelog_links import check  # noqa: E402
+# Loaded by path rather than via `sys.path.insert`: `scripts/` is not a package
+# and mutating the import path at collection time leaks into every test that
+# runs afterwards.
+_spec = importlib.util.spec_from_file_location(
+    "check_changelog_links",
+    Path(__file__).resolve().parent.parent / "scripts" / "check_changelog_links.py",
+)
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+check = _module.check
 
 REPO = "https://github.com/andrei-shtanakov/spec-runner"
 
@@ -88,3 +96,23 @@ class TestTheOtherWaysToGetItWrong:
         is what makes it a guard rather than a checklist item."""
         changelog = _changelog(current=version, previous="2.23.0")
         assert check(_project(tmp_path, version, changelog)) == []
+
+
+class TestTheGuardFailsLegibly:
+    """Its own failure mode matters: a guard that ends in a traceback teaches
+    people to ignore what it prints."""
+
+    def test_a_missing_pyproject_is_a_problem_not_a_crash(self, tmp_path):
+        [problem] = check(tmp_path)
+        assert "pyproject.toml" in problem and "repository root" in problem
+
+    def test_a_missing_changelog_is_a_problem_not_a_crash(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text('[project]\nversion = "2.25.0"\n')
+        [problem] = check(tmp_path)
+        assert "CHANGELOG.md" in problem
+
+    def test_the_files_are_read_as_utf8(self, tmp_path):
+        """The CHANGELOG is full of em-dashes; a runner's locale is not ours to
+        assume."""
+        root = _project(tmp_path, "2.25.0", _changelog().replace("something", "— dashed —"))
+        assert check(root) == []

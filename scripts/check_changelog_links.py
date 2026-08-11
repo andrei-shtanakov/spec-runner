@@ -29,15 +29,33 @@ SECTION_RE = re.compile(r"^## \[(?P<v>\d+\.\d+\.\d+)\]", re.MULTILINE)
 LINK_RE = re.compile(r"^\[(?P<label>Unreleased|\d+\.\d+\.\d+)\]:\s*(?P<url>\S+)\s*$", re.MULTILINE)
 
 
+def _read(path: Path) -> str | None:
+    """File contents as UTF-8, or None when it is not there.
+
+    A guard whose failure mode is a traceback teaches people to ignore its
+    output, so a missing file becomes a stated problem like any other. UTF-8 is
+    explicit because a CI runner's locale is not ours to assume, and this file
+    is full of em-dashes.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def check(root: Path) -> list[str]:
     """Return a list of problems; empty means the links are consistent."""
-    pyproject = (root / "pyproject.toml").read_text()
+    pyproject = _read(root / "pyproject.toml")
+    if pyproject is None:
+        return [f"cannot read {root / 'pyproject.toml'} — is this the repository root?"]
     match = VERSION_RE.search(pyproject)
     if not match:
         return ["could not read a version from pyproject.toml"]
     current = match.group("v")
 
-    changelog = (root / "CHANGELOG.md").read_text()
+    changelog = _read(root / "CHANGELOG.md")
+    if changelog is None:
+        return [f"cannot read {root / 'CHANGELOG.md'} — is this the repository root?"]
     sections = SECTION_RE.findall(changelog)
     links = {m.group("label"): m.group("url") for m in LINK_RE.finditer(changelog)}
     problems: list[str] = []
