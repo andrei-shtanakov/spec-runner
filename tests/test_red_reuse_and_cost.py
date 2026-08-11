@@ -287,3 +287,30 @@ class TestTheRedPassIsPaidForVisibly:
         assert cost == pytest.approx(0.73)
         assert (inp, out) == (9000, 2200), "the RED pass's tokens must be in the task total"
         assert (total_in, total_out) == (9000, 2200)
+
+    def test_ledger_only_spend_is_reported(self, tmp_path, monkeypatch, capsys):
+        """Copilot on #187, and the same shape as F-9: a RED authoring call
+        that fails before any attempt is recorded leaves money in the ledger
+        and no `tasks` row, which the costs table hid behind a `--`."""
+        import argparse
+
+        from spec_runner import tdd
+        from spec_runner.cli_info import cmd_costs
+
+        root = _repo(tmp_path)
+        (root / "spec").mkdir(exist_ok=True)
+        (root / "spec" / "tasks.md").write_text(
+            "# Tasks\n\n### TASK-001: t\n🟠 P1 | ⬜ TODO\nEst: 1d\n\n- [ ] x\n"
+        )
+        cfg = _cfg(root)
+
+        def _no_marker(config, prompt, **kwargs):
+            return tdd.AgentCall(text="no marker here", input_tokens=900, cost_usd=0.37)
+
+        monkeypatch.setattr(tdd, "_run_agent", _no_marker)
+        with ExecutorState(cfg) as state:
+            run_red_phase(_task(), cfg, state)
+
+        cmd_costs(argparse.Namespace(json=False, sort="id"), cfg)
+        out = capsys.readouterr().out
+        assert "0.37" in out, f"ledger-only spend was hidden:\n{out}"

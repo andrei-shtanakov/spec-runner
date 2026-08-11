@@ -254,17 +254,25 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                     }
                 )
             else:
+                # No `tasks` row does not mean no spend. `record_agent_call`
+                # creates no task row, so a RED authoring call that failed
+                # before any attempt was recorded leaves ledger-only money —
+                # which the old hard-coded zeros hid behind a `--` (Copilot,
+                # PR #187). Same shape as F-9: spend that exists and is not
+                # shown. `no_state` now means "nothing to report", not "no
+                # attempts".
+                inp_tokens, out_tokens = state.task_tokens(t.id)
                 task_rows.append(
                     {
                         "task_id": t.id,
                         "name": t.name,
                         "status": t.status,
-                        "cost": 0.0,
+                        "cost": cost,
                         "attempts": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "no_state": True,
+                        "input_tokens": inp_tokens,
+                        "output_tokens": out_tokens,
+                        "total_tokens": inp_tokens + out_tokens,
+                        "no_state": not (cost or inp_tokens or out_tokens),
                     }
                 )
 
