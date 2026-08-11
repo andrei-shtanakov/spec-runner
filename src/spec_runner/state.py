@@ -897,21 +897,34 @@ class ExecutorState:
             for r in rows
         ]
 
-    def supersede_claims(self, namespace: str, task_id: str, status: "ClaimStatusT") -> int:
-        """Retire a task's active claims. Nothing is deleted — the row stays
-        with its new status, because a retired claim is still evidence."""
+    def supersede_claims(
+        self,
+        namespace: str,
+        task_id: str,
+        status: "ClaimStatusT",
+        checkpoint_id: str | None = None,
+    ) -> int:
+        """Retire claims. Nothing is deleted — the row stays with its new
+        status, because a retired claim is still evidence.
+
+        ``checkpoint_id`` scopes it to one **lineage**. A task can hold claims
+        from more than one after a repair, and a remedy aimed at a specific
+        checkpoint must not sweep claims belonging to another (F-3).
+        """
         assert self._conn is not None
         from .claims import ClaimStatus
 
-        cursor = self._conn.execute(
-            "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? AND status = ?",
-            (
-                getattr(status, "value", status),
-                namespace,
-                task_id,
-                ClaimStatus.ACTIVE.value,
-            ),
-        )
+        sql = "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? AND status = ?"
+        params: list[object] = [
+            getattr(status, "value", status),
+            namespace,
+            task_id,
+            ClaimStatus.ACTIVE.value,
+        ]
+        if checkpoint_id is not None:
+            sql += " AND checkpoint_id = ?"
+            params.append(checkpoint_id)
+        cursor = self._conn.execute(sql, params)
         self._conn.commit()
         return cursor.rowcount
 
@@ -950,6 +963,71 @@ class ExecutorState:
             if candidate.checkpoint_id == checkpoint_id:
                 return candidate
         return None
+
+    def active_checkpoints(
+        self, namespace: str, task_id: str | None = None
+    ) -> list["RedCheckpointT"]:
+        """Every **active** checkpoint, newest first.
+
+        `red_checkpoint` returns only the latest, which hides the case an
+        operator most needs to see: more than one active lineage for a task,
+        where a remedy must not guess which is meant (F-5).
+        """
+        from .tdd import RedCheckpoint, RedOutcome
+
+        assert self._conn is not None
+        sql = (
+            "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
+            "execution_mode, config_hash, outcome, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? AND status = 'active'"
+        )
+        params: list[object] = [namespace]
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        rows = self._conn.execute(sql + " ORDER BY id DESC", params).fetchall()
+        return [
+            RedCheckpoint(
+                task_id=r[0],
+                namespace=r[1],
+                commit_sha=r[2],
+                baseline_sha=r[3],
+                selector=r[4],
+                environment_id=r[5],
+                execution_mode=r[6],
+                config_hash=r[7],
+                outcome=RedOutcome(r[8]),
+                timestamp=r[9],
+            )
+            for r in rows
+        ]
+
+    def retired_checkpoints(self, namespace: str, task_id: str | None = None) -> list[tuple]:
+        """``(task_id, checkpoint status, outcome, selector, timestamp)`` for
+        checkpoints no longer active — the trail a remedy leaves behind."""
+        assert self._conn is not None
+        sql = (
+            "SELECT task_id, status, outcome, selector, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? AND status != 'active'"
+        )
+        params: list[object] = [namespace]
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        return self._conn.execute(sql + " ORDER BY id", params).fetchall()
+
+    def claims_for(self, namespace: str, task_id: str | None = None) -> list[tuple]:
+        """``(task_id, path, blob_sha, status, checkpoint_id)``, all statuses."""
+        assert self._conn is not None
+        sql = (
+            "SELECT task_id, path, blob_sha, status, checkpoint_id FROM tdd_claims "
+            "WHERE namespace = ?"
+        )
+        params: list[object] = [namespace]
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        return self._conn.execute(sql + " ORDER BY id", params).fetchall()
 
     def set_checkpoint_status(self, namespace: str, checkpoint_id: str, status) -> int:
         """Retire a checkpoint. Nothing is deleted — the row keeps its history

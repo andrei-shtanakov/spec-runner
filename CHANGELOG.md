@@ -10,7 +10,35 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner tdd status` and `tdd checkpoints`** (F-5). The remedies
+  require a `--checkpoint <id>` that **no command printed**: running them in
+  the battle test meant reading SQLite and re-deriving a SHA-256 by hand.
+  Evidence nobody can reach is not evidence.
+  - Both take an optional `TASK-ID` and `--json`, from one reader, so the text
+    a person sees and the payload a script parses cannot drift apart.
+  - They show the lifecycle rather than the attempt history, which is why
+    plain `status` said `✅ success` after an abandon — true of the last
+    attempt, misleading about a task that has no confirmed red.
+  - `--checkpoint` is now **optional when exactly one lineage is active**, and
+    the chosen id is printed — never silently assumed. With several it fails
+    closed and names them: "probably that one" is not a thing to guess about an
+    authority decision.
+
 ### Fixed
+
+- **A claim belonged to a byte pattern rather than to a task** (F-3). A second
+  task authoring the *same* content on the same file recorded **no claim of its
+  own**, so `tdd abandon` by the first released a file the second's confirmed
+  red still depended on — the contract's "one task's remedy does not release
+  another task's independent claim" defeated not by the remedy but by the
+  missing record.
+  - Claim identity is now `(task, lineage, path, bytes)`. Re-claiming inside
+    one lineage is still idempotent.
+  - A remedy retires only **its own lineage's** claims, so a task holding
+    claims from more than one after a repair does not lose the others.
+  - The file stays locked while any active claim remains.
 
 - **The pre-terminal gate judged a tree without the work** (F-1, found by the
   battle test of published v2.25.0). With review off, a task could rewrite,
