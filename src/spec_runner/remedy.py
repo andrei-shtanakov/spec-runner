@@ -29,7 +29,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from .claims import ClaimStatus, record_claims
+from .claims import ClaimRefused, ClaimStatus, ensure_claimable, record_claims
 from .logging import get_logger
 from .tdd import RedCheckpoint, RedOutcome, resolve_namespace, verify_red
 
@@ -189,11 +189,23 @@ def repair(
         timestamp=datetime.now().isoformat(),
     )
 
+    if verification.outcome is RedOutcome.EXPECTED_FAIL:
+        # Refuse before touching anything: a lineage recorded as a confirmed
+        # red whose file cannot be locked is the same hole in a different
+        # doorway, and by then the old lock would already be gone.
+        try:
+            ensure_claimable(config, lineage.selector)
+        except ClaimRefused as exc:
+            raise RemedyError(f"the repaired red cannot be locked: {exc}") from exc
+
     state.set_checkpoint_status(namespace, active.checkpoint_id, CheckpointStatus.SUPERSEDED)
     state.supersede_claims(namespace, task_id, ClaimStatus.SUPERSEDED)
-    state.record_red_checkpoint(lineage)
+    # Claims before the checkpoint, for the reason spelled out in
+    # `run_red_phase`: a crash between the two must not leave a confirmed red
+    # with no lock.
     if verification.outcome is RedOutcome.EXPECTED_FAIL:
         record_claims(config, state, lineage)
+    state.record_red_checkpoint(lineage)
     _record(
         state,
         namespace,

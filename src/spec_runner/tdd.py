@@ -44,7 +44,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .claims import check_claims, describe_violations, record_claims
+from .claims import check_claims, describe_violations, ensure_claimable, record_claims
 from .git_ops import is_composite_shell_command
 from .logging import get_logger
 
@@ -438,6 +438,7 @@ def run_red_phase(
     # recorded as evidence and locks nothing.
     if verification.outcome is RedOutcome.EXPECTED_FAIL:
         try:
+            ensure_claimable(config, selector)
             record_claims(config, state, checkpoint)
         except Exception as exc:
             logger.error("Could not claim the red's files", task_id=task.id, error=str(exc))

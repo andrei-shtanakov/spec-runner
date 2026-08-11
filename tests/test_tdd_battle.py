@@ -411,3 +411,66 @@ class TestTheEvidenceReadsBack:
         assert all(r.actor and r.reason for r in records)
         assert claim_statuses == ["abandoned", "superseded"]
         assert checkpoint_statuses == ["abandoned", "superseded"]
+
+
+class TestAnUnlockableRedIsRefused:
+    """Copilot's finding on #179: the same hole by a different route. A path
+    the claim contract refuses — a symlink, say — was skipped with a warning,
+    so the checkpoint was recorded anyway and the gate passed over a file
+    nobody was protecting."""
+
+    def test_a_symlinked_test_file_does_not_yield_a_confirmed_red(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        (root / "tests").mkdir()
+        (root / "tests" / "real.py").write_text(FAILING)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "the real test")
+
+        def _agent_symlinks(config, prompt, **kwargs):
+            link = Path(config.project_root) / "tests" / "test_link.py"
+            link.symlink_to(Path(config.project_root) / "tests" / "real.py")
+            return "TDD_SELECTOR: tests/test_link.py::test_y\nTASK_COMPLETE"
+
+        from spec_runner import tdd
+
+        monkeypatch.setattr(tdd, "_run_agent", _agent_symlinks)
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task("TASK-001"), cfg, state)
+            checkpoint = state.red_checkpoint("TASK-001", resolve_namespace(cfg))
+            claims = state.active_claims(resolve_namespace(cfg))
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert checkpoint is None, "an unlockable red must not be recorded as confirmed"
+        assert claims == []
+
+    def test_a_repair_whose_file_cannot_be_locked_keeps_the_old_lock(self, tmp_path, monkeypatch):
+        """The sharp version: the repaired commit **does** re-establish a red,
+        but its file cannot be claimed. Refusing must not cost the operator the
+        lock they already had."""
+        from spec_runner.remedy import RemedyError
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        checkpoint = _establish_red(cfg, monkeypatch, task_id="TASK-001")
+
+        # Replace the frozen test with a symlink to a genuinely failing test:
+        # pytest follows it and reports a red, so the replay confirms — and the
+        # claim contract still refuses the path.
+        (root / "tests" / "actual.py").write_text(FAILING)
+        _git(root, "rm", "-q", "tests/test_x.py")
+        (root / "tests" / "test_x.py").symlink_to(root / "tests" / "actual.py")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "replace the test with a symlink")
+        fixed = _head(root)
+
+        with ExecutorState(cfg) as state:
+            with pytest.raises(RemedyError):
+                repair(cfg, state, "TASK-001", checkpoint.checkpoint_id, fixed, reason="sneaky")
+            claims = state.active_claims(resolve_namespace(cfg))
+            still_active = state.red_checkpoint("TASK-001", resolve_namespace(cfg))
+
+        assert [c.task_id for c in claims] == ["TASK-001"], (
+            "a refused repair must not release the lock it failed to replace"
+        )
+        assert still_active is not None
