@@ -232,9 +232,7 @@ def verify_red(
                 worktree=str(worktree),
                 error=removed.stderr.strip()[:200],
             )
-            subprocess.run(
-                ["git", "worktree", "prune"], cwd=root, capture_output=True, text=True
-            )
+            subprocess.run(["git", "worktree", "prune"], cwd=root, capture_output=True, text=True)
 
 
 def _run_selector(
