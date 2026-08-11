@@ -140,7 +140,25 @@ Consumers should treat unknown values as `UNKNOWN` rather than raising — new c
 
 Source: `src/spec_runner/state.py:ReviewVerdict`.
 
-Stable: `passed`, `fixed`, `failed`, `skipped`, `rejected`. (Lowercase — stored as-is.)
+Stable: `passed`, `fixed`, `failed`, `skipped`, `rejected`, `not_run`, `error`.
+(Lowercase — stored as-is.)
+
+`not_run` and `error` were added in #138 and are the reason a consumer must not
+read "not `failed`" as "reviewed and fine":
+
+| Value | Means |
+|---|---|
+| `passed` | the reviewer answered and found nothing |
+| `fixed` | the reviewer answered, found issues, and fixed them |
+| `failed` | the reviewer answered and found issues it did not fix |
+| `not_run` | **no verdict** — timed out, returned nothing, or said nothing recognizable |
+| `error` | the review machinery failed (CLI error, rate limit, exception) |
+| `skipped` | the stage was deliberately not run |
+
+Before #138 a review that produced no recognizable marker was recorded as
+`passed`, and a timeout as `failed`; both are now `not_run`. As with
+`ErrorCode`, treat an unknown value as "unknown" rather than raising — new
+values may be added in minor releases.
 
 ### Read-only access pattern
 

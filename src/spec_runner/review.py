@@ -296,23 +296,28 @@ def run_code_review(
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
         if error_pattern:
-            log_progress(f"⚠️ Review API error: {error_pattern}", task.id)
-            return ReviewVerdict.FAILED, f"API error: {error_pattern}", output
+            log_progress(f"💥 Code review error: {error_pattern}", task.id)
+            return ReviewVerdict.ERROR, f"API error: {error_pattern}", output
 
-        # Check for empty or failed response
-        if result.returncode != 0 and not output.strip():
+        # A non-zero exit means the reviewer did not finish, so whatever it
+        # managed to print is not a considered verdict — including a marker
+        # (Copilot, PR #156). The guard used to require empty output too, so a
+        # process that crashed after printing REVIEW_PASSED was believed. The
+        # output is still returned: discarding the verdict must not discard
+        # what was said.
+        if result.returncode != 0:
             log_progress(
-                f"⚠️ Review process failed (exit code {result.returncode})",
+                f"💥 Code review error: process exited with code {result.returncode}",
                 task.id,
             )
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
             error_msg = f"Review process exited with code {result.returncode}"
-            return ReviewVerdict.FAILED, error_msg, None
+            return ReviewVerdict.ERROR, error_msg, output or None
 
         if not output.strip():
-            log_progress("⚠️ Review returned empty response", task.id)
-            return ReviewVerdict.FAILED, "Review returned empty response", None
+            log_progress("⚠️ Code review produced no verdict: empty response", task.id)
+            return ReviewVerdict.NOT_RUN, "Review returned empty response", None
 
         # Check review result (case-insensitive, check both stdout and stderr)
         output_upper = combined_output.upper()
@@ -341,18 +346,25 @@ def run_code_review(
             log_progress(f"   Review output (last 300 chars): {preview}", task.id)
             return ReviewVerdict.FAILED, "Review found issues", output
         else:
-            # No explicit marker — treat as passed but log for visibility
+            # #138: this used to return PASSED — "the agent said nothing I
+            # recognize" was recorded, and displayed with a tick, as a clean
+            # review. Silence is not approval: the reviewer may have produced
+            # prose, hit its context limit, or misunderstood the protocol, and
+            # none of those is evidence about the code.
             preview = output.strip()[-200:] if output.strip() else "(empty)"
-            log_progress("✅ Code review completed (no explicit status marker)", task.id)
+            log_progress("⚠️ Code review produced no verdict: no status marker", task.id)
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
-            return ReviewVerdict.PASSED, None, output
+            return ReviewVerdict.NOT_RUN, "Review produced no verdict marker", output
 
     except subprocess.TimeoutExpired:
-        log_progress(f"⏰ Review timeout after {config.review_timeout_minutes}m", task.id)
-        return ReviewVerdict.FAILED, "Review timed out", None
+        log_progress(
+            f"⏰ Code review produced no verdict: timed out after {config.review_timeout_minutes}m",
+            task.id,
+        )
+        return ReviewVerdict.NOT_RUN, "Review timed out", None
     except Exception as e:
-        log_progress(f"💥 Review error: {e}", task.id)
-        return ReviewVerdict.FAILED, str(e), None
+        log_progress(f"💥 Code review error: {e}", task.id)
+        return ReviewVerdict.ERROR, str(e), None
 
 
 def _run_single_role_review(
@@ -383,16 +395,23 @@ def _run_single_role_review(
             cwd=config.project_root,
         )
         output = result.stdout + "\n" + result.stderr
+        if result.returncode != 0:
+            # Same rule as the single path: a crashed role has no verdict.
+            return role, ReviewVerdict.ERROR, output
         output_upper = output.upper()
         if "REVIEW_FAILED" in output_upper:
             return role, ReviewVerdict.FAILED, output
         elif "REVIEW_FIXED" in output_upper:
             return role, ReviewVerdict.FIXED, output
-        return role, ReviewVerdict.PASSED, output
+        elif "REVIEW_PASSED" in output_upper:
+            return role, ReviewVerdict.PASSED, output
+        # Same rule as the single-review path (#138): no marker means this role
+        # produced no verdict, not that it approved.
+        return role, ReviewVerdict.NOT_RUN, output
     except subprocess.TimeoutExpired:
-        return role, ReviewVerdict.FAILED, f"Review timeout ({role})"
+        return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
     except Exception as e:
-        return role, ReviewVerdict.FAILED, str(e)
+        return role, ReviewVerdict.ERROR, str(e)
 
 
 def run_parallel_review(
@@ -451,20 +470,51 @@ def run_parallel_review(
         for future in futures:
             results.append(future.result())
 
-    # Aggregate verdicts
+    # Aggregate verdicts. Precedence (#138): concrete findings first, then a
+    # broken reviewer, then one that produced nothing — a role that never
+    # answered must never be averaged away into an overall "passed".
     all_outputs: list[str] = []
-    overall_verdict = ReviewVerdict.PASSED
-    has_fixed = False
+    has_failed = has_error = has_not_run = has_fixed = False
     for role, verdict, output in results:
         log_progress(f"  📋 {role}: {verdict.value}", task.id)
         all_outputs.append(f"=== {role.upper()} REVIEW ===\n{output[:2000]}")
         if verdict == ReviewVerdict.FAILED:
-            overall_verdict = ReviewVerdict.FAILED
+            has_failed = True
+        elif verdict == ReviewVerdict.ERROR:
+            has_error = True
+        elif verdict == ReviewVerdict.NOT_RUN:
+            has_not_run = True
         elif verdict == ReviewVerdict.FIXED:
             has_fixed = True
 
-    if overall_verdict != ReviewVerdict.FAILED and has_fixed:
+    # Precedence: findings first, then fixes, then a reviewer that broke or
+    # never answered. FIXED outranks ERROR/NOT_RUN deliberately (Copilot,
+    # PR #156): it is the verdict the pipeline acts on — `post_done_hook`
+    # re-runs tests and lint on FIXED — and a role that edited the tree must
+    # get those gates regardless of what the *other* roles managed to return.
+    # Ranking a silent role above it left the fixes to be swept up by the
+    # general auto-commit later, ungated. The silent roles are not lost: each
+    # is logged above and named in the returned reason.
+    silent = [
+        f"{role}: {verdict.value}"
+        for role, verdict, _ in results
+        if verdict in (ReviewVerdict.NOT_RUN, ReviewVerdict.ERROR)
+    ]
+    if has_failed:
+        overall_verdict = ReviewVerdict.FAILED
+    elif has_fixed:
         overall_verdict = ReviewVerdict.FIXED
+    elif has_error:
+        overall_verdict = ReviewVerdict.ERROR
+    elif has_not_run:
+        overall_verdict = ReviewVerdict.NOT_RUN
+    else:
+        overall_verdict = ReviewVerdict.PASSED
+
+    if has_fixed:
+        # Committing is driven by "a role changed the tree", not by the overall
+        # verdict: leaving the edits uncommitted here hands them to the general
+        # auto-commit, which runs no gates.
         # Commit fixes from any review agent — minus runtime state (#62)
         try:
             staged = stage_all_except_runtime(config)
@@ -482,7 +532,15 @@ def run_parallel_review(
     combined_output = "\n\n".join(all_outputs)
     log_progress(f"🔍 Parallel review result: {overall_verdict.value}", task.id)
 
-    error = "Review found issues" if overall_verdict == ReviewVerdict.FAILED else None
+    # The reason keeps every role that produced nothing, whatever the overall
+    # verdict turned out to be — otherwise a silent reviewer disappears from
+    # the record the moment another role has something to say.
+    reasons: list[str] = []
+    if overall_verdict == ReviewVerdict.FAILED:
+        reasons.append("Review found issues")
+    if silent:
+        reasons.append("no verdict from " + ", ".join(silent))
+    error = "; ".join(reasons) or None
     return overall_verdict, error, combined_output
 
 

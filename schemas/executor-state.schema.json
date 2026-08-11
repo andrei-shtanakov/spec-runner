@@ -120,9 +120,9 @@
           "minimum": 0
         },
         "review_status": {
-          "description": "Last review verdict (ReviewVerdict)",
+          "description": "Last review verdict (ReviewVerdict). not_run/error added in #138: a review that produced no verdict, and one whose machinery failed — neither may be read as passed",
           "type": ["string", "null"],
-          "enum": ["passed", "fixed", "failed", "skipped", "rejected", null]
+          "enum": ["passed", "fixed", "failed", "skipped", "rejected", "not_run", "error", null]
         },
         "review_findings": {
           "description": "Free-text review notes (experimental)",

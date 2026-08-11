@@ -430,10 +430,24 @@ def post_done_hook(
             lint_output=lint_output_str,
             previous_error=previous_error,
         )
+        # #138: the four outcomes are four different facts and are recorded as
+        # such — "found issues", "never produced a verdict" and "the reviewer
+        # itself broke" used to be one warning line or, worse, none at all.
+        # Blocking behaviour is deliberately unchanged here: outside HITL all
+        # of these stay advisory, and whether a review may fail a task is a
+        # policy decision tracked separately.
         if review_verdict == ReviewVerdict.FAILED:
             logger.warning("Review found issues", error=review_error)
-            # Non-HITL mode: review failures are advisory only (warn but don't block).
-            # HITL mode handles this below via the interactive prompt.
+        elif review_verdict == ReviewVerdict.NOT_RUN:
+            logger.warning(
+                "Review produced no verdict — this task was not reviewed",
+                reason=review_error,
+            )
+        elif review_verdict == ReviewVerdict.ERROR:
+            logger.error(
+                "Review could not run — nothing was learned about this code",
+                error=review_error,
+            )
 
     # HITL approval gate
     if config.hitl_review and review_output:
