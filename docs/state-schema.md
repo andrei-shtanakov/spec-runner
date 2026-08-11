@@ -258,7 +258,13 @@ construction, since a verdict is keyed on the tree it judged.
 
 Source: `src/spec_runner/state.py:ErrorCode`.
 
-Stable: `TIMEOUT`, `RATE_LIMIT`, `TEST_FAILURE`, `LINT_FAILURE`, `TASK_FAILED`, `TASK_BLOCKED`, `HOOK_FAILURE`, `BUDGET_EXCEEDED`, `REVIEW_REJECTED`, `INTERRUPTED`, `UNKNOWN`.
+Stable: `TIMEOUT`, `RATE_LIMIT`, `TEST_FAILURE`, `LINT_FAILURE`, `TASK_FAILED`, `TASK_BLOCKED`, `HOOK_FAILURE`, `INFRASTRUCTURE`, `BUDGET_EXCEEDED`, `REVIEW_REJECTED`, `INTERRUPTED`, `UNKNOWN`.
+
+`INFRASTRUCTURE` (added F-2) means **the instrument broke** — a pre-terminal
+policy gate could not answer, so the run cannot say whether the work is good.
+Distinct from `HOOK_FAILURE`, which is a gate that *said no*. A run whose only
+failures are `INFRASTRUCTURE` exits **2**; one with any concrete failure exits
+1, because something actionable is the more useful thing to report.
 
 `TASK_BLOCKED` (added #140) is a *deliberate* escalation: the agent emitted
 `TASK_BLOCKED: <reason>` to say the task cannot be done within the rules it was
