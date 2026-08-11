@@ -112,6 +112,23 @@ class TestPrecedence:
         text = load_prompt_template("review", cli_name="/usr/bin/codex", prompts_dir=d)
         assert text is not None and "CODEX-SPECIFIC" in text
 
+    @pytest.mark.parametrize(
+        "cli_name,expected",
+        [
+            ("/usr/bin/codex", "codex"),
+            ("codex", "codex"),
+            # Suffixes are kept, not stripped as `Path.stem` would: a versioned
+            # binary is the common case and `claude-3.5` must not look for
+            # `task.claude-3.md` (Copilot, PR #155).
+            ("/opt/bin/claude-3.5", "claude-3.5"),
+        ],
+    )
+    def test_cli_base_name_extraction(self, tmp_path, cli_name, expected):
+        d = tmp_path / "spec" / "prompts"
+        _write_template(d, "CLI-SPECIFIC", name=f"task.{expected}.md")
+        text = load_prompt_template("task", cli_name=cli_name, prompts_dir=d)
+        assert text is not None and "CLI-SPECIFIC" in text
+
     def test_missing_directory_is_not_an_error(self, tmp_path):
         assert load_prompt_template("task", prompts_dir=tmp_path / "nope") is None
 
@@ -166,14 +183,52 @@ def test_module_level_prompts_dir_is_gone():
     assert not hasattr(prompt_mod, "PROMPTS_DIR")
 
 
-@pytest.mark.parametrize("caller", ["review", "plan"])
-def test_other_callers_also_resolve_from_the_project(caller):
-    """`review` and `plan` load templates through the same loader; neither may
-    keep an implicit CWD lookup."""
-    import inspect
+class _LoaderReached(Exception):
+    """Raised by the spy to abort right after the loader call."""
 
-    from spec_runner import cli_plan, review
 
-    src = inspect.getsource(review if caller == "review" else cli_plan)
-    assert "load_prompt_template(" in src
-    assert "prompts_dir=" in src, f"{caller} calls the loader without a directory"
+def _spy(recorder: list[tuple[str, object]]):
+    def _fake(name, cli_name="", *, prompts_dir=None):
+        recorder.append((name, prompts_dir))
+        raise _LoaderReached
+
+    return _fake
+
+
+class TestEveryCallerPassesTheProjectDirectory:
+    """`review` and `plan` load templates through the same loader, and neither
+    may fall back to an implicit lookup.
+
+    Behavioural, not source-grepping (Copilot, PR #155): the spy records what
+    the caller passed and aborts, so a refactor that keeps the behaviour keeps
+    the test, and one that drops `prompts_dir` fails it.
+    """
+
+    def test_review_passes_the_project_prompts_dir(self, tmp_path, monkeypatch):
+        from spec_runner import review as review_mod
+
+        seen: list[tuple[str, object]] = []
+        monkeypatch.setattr(review_mod, "load_prompt_template", _spy(seen))
+        cfg = _cfg(tmp_path)
+
+        with pytest.raises(_LoaderReached):
+            review_mod.build_review_prompt(_task(), cfg, cli_name="codex")
+
+        assert seen == [("review", cfg.prompts_dir)]
+
+    def test_plan_passes_the_project_prompts_dir(self, tmp_path, monkeypatch):
+        import argparse
+
+        from spec_runner import cli_plan as plan_mod
+
+        seen: list[tuple[str, object]] = []
+        monkeypatch.setattr(plan_mod, "load_prompt_template", _spy(seen))
+        cfg = _cfg(tmp_path)
+        args = argparse.Namespace(
+            description="add dark mode", from_file=None, gated=False, full=False
+        )
+
+        with pytest.raises(_LoaderReached):
+            plan_mod.cmd_plan(args, cfg)
+
+        assert seen == [("plan", cfg.prompts_dir)]

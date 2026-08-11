@@ -8,7 +8,7 @@ for use with Claude CLI and other LLM tools.
 import hashlib
 import re
 from importlib import resources
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .config import ExecutorConfig
 from .logging import get_logger
@@ -111,8 +111,13 @@ def load_prompt_template(
 
     candidates: list[Path] = []
     if cli_name:
-        # Base name only, so "/usr/bin/codex" matches review.codex.md
-        cli_base = cli_name.lower().split("/")[-1]
+        # Last path component only, so "/usr/bin/codex" matches review.codex.md.
+        # Suffixes are deliberately kept rather than taken as `Path.stem`:
+        # versioned binaries are the common case here and `claude-3.5` would
+        # become `claude-3`, silently missing the template it names. (The
+        # package is POSIX-only — `config.py` imports fcntl unconditionally —
+        # so a Windows-style separator never reaches this.)
+        cli_base = PurePosixPath(cli_name.lower()).name
         candidates += [
             prompts_dir / f"{name}.{cli_base}.md",
             prompts_dir / f"{name}.{cli_base}.txt",
