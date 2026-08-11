@@ -920,13 +920,16 @@ class ExecutorState:
         from .tdd import RedCheckpoint, RedOutcome
 
         assert self._conn is not None
-        rows = self._conn.execute(
+        # Iterate the cursor rather than `fetchall()`: the loop returns on the
+        # first match, so materialising every checkpoint in the namespace only
+        # to discard it is waste that grows with the workstream's history.
+        cursor = self._conn.execute(
             "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
             "execution_mode, config_hash, outcome, timestamp FROM red_checkpoints "
             "WHERE namespace = ? ORDER BY id DESC",
             (namespace,),
-        ).fetchall()
-        for r in rows:
+        )
+        for r in cursor:
             candidate = RedCheckpoint(
                 task_id=r[0],
                 namespace=r[1],
