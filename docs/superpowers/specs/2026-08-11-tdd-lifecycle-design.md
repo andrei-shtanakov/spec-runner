@@ -361,6 +361,13 @@ every later slice depends on the earlier ones being real.
 | 3 | **Operator remedies** | `abandon` / `repair` write typed records with provenance; history is never rewritten to fix a frozen test |
 | 4 | **GREEN / REFACTOR** | the remaining transitions, per-task type check in the gate |
 
+**Slices 2–4 are specified in an amendment** (owner, 2026-08-11):
+[`2026-08-11-claim-and-remedy-contracts.md`](2026-08-11-claim-and-remedy-contracts.md).
+It defines the claim and remedy contracts, couples slice 2 to slice 3 as one
+release block, and splits slice 4 — the GREEN transitions ship without an
+automatic refactor pass, and `REFACTORING` stays `SKIPPED` until evidence says
+what it should do.
+
 **Slice 0 ships separately, as general hardening** (owner ruling): not as part
 of this track. It has no TDD surface at all, and if the lifecycle is never
 built it is still worth having — which is the test of whether the split is
