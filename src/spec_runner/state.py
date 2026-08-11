@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .gates import GateStatus as GateStatusT
 
 from .config import ExecutorConfig
 
@@ -94,6 +98,18 @@ class PhaseRecord:
 
     phase: str
     outcome: PhaseOutcome
+    detail: str | None
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    """A stored gate answer, bound to the tree and policy it judged."""
+
+    gate_id: str
+    checkpoint_sha: str
+    config_hash: str
+    status: "GateStatusT"
     detail: str | None
     timestamp: str
 
@@ -313,6 +329,22 @@ class ExecutorState:
                 actor TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 provenance TEXT
+            )
+        """)
+        # #164: a gate verdict is a statement about a specific tree under a
+        # specific policy — hence the (checkpoint_sha, config_hash) key. A
+        # verdict for another pair is not this one's, which is what stops
+        # evidence from before a change legitimising the change.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS gate_verdicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                gate_id TEXT NOT NULL,
+                checkpoint_sha TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT,
+                timestamp TEXT NOT NULL
             )
         """)
         self._conn.commit()
@@ -612,6 +644,64 @@ class ExecutorState:
             (task_id,),
         ).fetchall()
         return [PhaseWaiver(r[0], PhaseOutcome(r[1]), r[2], r[3], r[4], r[5]) for r in rows]
+
+    def record_gate_verdict(
+        self,
+        task_id: str,
+        gate_id: str,
+        checkpoint_sha: str,
+        config_hash: str,
+        status: "GateStatusT",
+        detail: str | None = None,
+    ) -> None:
+        """Store one gate verdict, bound to the tree and policy it judged."""
+        try:
+            self._insert_phase_row(
+                "INSERT INTO gate_verdicts "
+                "(task_id, gate_id, checkpoint_sha, config_hash, status, detail, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    gate_id,
+                    checkpoint_sha,
+                    config_hash,
+                    getattr(status, "value", status),
+                    detail,
+                    datetime.now().isoformat(),
+                ),
+            )
+        except Exception as exc:  # bookkeeping must not fail a run
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record gate verdict", task_id=task_id, gate=gate_id, error=str(exc)
+            )
+
+    def gate_verdict(
+        self,
+        task_id: str,
+        gate_id: str,
+        checkpoint_sha: str,
+        config_hash: str,
+    ) -> "GateVerdict | None":
+        """The latest verdict **for this exact tree and policy**, or None.
+
+        Deliberately not "the latest verdict for this task": a stale answer
+        about an older SHA, or one taken under a different policy, must not
+        clear the current one (#164 criterion 5).
+        """
+        from .gates import GateStatus
+
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT gate_id, checkpoint_sha, config_hash, status, detail, timestamp "
+            "FROM gate_verdicts WHERE task_id = ? AND gate_id = ? "
+            "AND checkpoint_sha = ? AND config_hash = ? ORDER BY id DESC LIMIT 1",
+            (task_id, gate_id, checkpoint_sha, config_hash),
+        ).fetchone()
+        if row is None:
+            return None
+        return GateVerdict(row[0], row[1], row[2], GateStatus(row[3]), row[4], row[5])
 
     def record_attempt(
         self,

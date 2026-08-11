@@ -212,6 +212,11 @@ class ExecutorConfig:
     # Not unlimited: an LLM that cannot satisfy the validator twice will not
     # satisfy it on the tenth try either, and each attempt costs money.
     spec_repair_attempts: int = 2
+    # Bounded recovery when a pre-terminal policy gate cannot answer (#164).
+    # An instrument error is not a defect in the work, so it is retried — but
+    # boundedly, and then reported as an infrastructure error rather than
+    # escalated to a human on the first stumble.
+    gate_recovery_attempts: int = 1
 
     # Change-as-folder id (M2): scope every spec path to
     # spec/changes/<change_id>/ (CLI --change). Empty = flat spec/ layout.

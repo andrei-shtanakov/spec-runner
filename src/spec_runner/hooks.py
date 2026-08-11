@@ -7,6 +7,7 @@ code review, testing, linting, and plugin execution around task runs.
 import subprocess
 
 from .config import ExecutorConfig
+from .gates import GateContext, GateStatus, evaluate_pre_terminal, has_gates
 from .git_ops import (
     build_scoped_test_command,
     ensure_runtime_gitignore,
@@ -238,6 +239,51 @@ def commit_task_work(task: Task, config: ExecutorConfig) -> str:
         return "committed"
     logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
     return "failed"
+
+
+def _run_pre_terminal_gates(task: Task, config: ExecutorConfig) -> str | None:
+    """Evaluate registered gates against HEAD. Returns a reason, or None to pass.
+
+    An unsatisfied gate does not get its own terminal state: it reuses the
+    existing "this attempt did not finish" path, which keeps the task
+    resumable and leaves the checkpoint commit in place. An exhausted
+    instrument error is reported as infrastructure — the work was never
+    judged, which is a different sentence from "the work is wrong".
+    """
+    from .state import ExecutorState
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if head.returncode != 0:
+        # No commit to judge. Refusing here would block fresh-repo bootstrap
+        # over bookkeeping, so the gates simply have nothing to run against.
+        logger.warning("No checkpoint commit — pre-terminal gates skipped", task_id=task.id)
+        return None
+
+    with ExecutorState(config) as state:
+        outcome = evaluate_pre_terminal(
+            GateContext(
+                task_id=task.id,
+                checkpoint_sha=head.stdout.strip(),
+                config=config,
+                state=state,
+            )
+        )
+    if outcome.status is GateStatus.SATISFIED:
+        return None
+
+    detail = "; ".join(
+        f"{r.gate_id}: {r.detail}" for r in outcome.results if r.status is not GateStatus.SATISFIED
+    )
+    if outcome.status is GateStatus.INSTRUMENT_ERROR:
+        logger.error("Pre-terminal gate could not answer", task_id=task.id, detail=detail)
+        return f"Pre-terminal gate infrastructure error: {detail}"
+    logger.warning("Pre-terminal gate unsatisfied — not merging", task_id=task.id, detail=detail)
+    return f"Pre-terminal gate unsatisfied: {detail}"
 
 
 def post_done_hook(
@@ -582,6 +628,17 @@ def post_done_hook(
                 no_op = True
         except Exception as e:
             logger.error("Commit failed", error=str(e))
+
+    # Pre-terminal policy gates (#164). The checkpoint commit above has already
+    # happened — that is the point: a gate is evaluated *against* a stable SHA.
+    # What it withholds is progress past the checkpoint, i.e. merge and DONE.
+    # Dormant until a consumer registers: `has_gates` is checked before any SHA
+    # is resolved or the state DB is opened, so a project that enables nothing
+    # cannot tell this code is here (criterion 8).
+    if has_gates():
+        blocked = _run_pre_terminal_gates(task, config)
+        if blocked is not None:
+            return (False, blocked, review_verdict.value, (review_output or "")[:2048], no_op)
 
     # Merge branch to main
     if config.create_git_branch:

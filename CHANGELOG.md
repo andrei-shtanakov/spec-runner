@@ -12,6 +12,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Pre-terminal policy gates** (#164) — the mechanism the review policy (#157)
+  and TDD's confirmed red (#141) will both hang off, so that the second
+  consumer does not arrive as a special case inside the first one's code.
+  - The naming trap this exists to avoid: a gate does **not** withhold the
+    checkpoint commit. That commit always happens — a stable SHA is precisely
+    what the gate is evaluated *against*, and replay without a commit to replay
+    against is trust in whatever is in the working tree. What an unsatisfied
+    gate withholds is progress past the checkpoint: merge and terminal
+    completion.
+  - Three statuses, not two: `satisfied`, `unsatisfied`, `instrument_error`.
+    "The gate says no" and "the gate could not answer" have different owners.
+    Only the latter is retried (`gate_recovery_attempts`, default 1, per gate);
+    exhausting the bound is an *infrastructure error*, not NEEDS_HUMAN.
+  - A verdict is bound to `(checkpoint_sha, config_hash)` and stored in a new
+    `gate_verdicts` table. A stale verdict never clears a new tree — the
+    harness-guard bypass of #137, one level up. `config_hash` covers only the
+    policy-bearing keys (`gates.POLICY_KEYS`), so an unrelated config edit does
+    not invalidate a verdict and a relevant one does.
+  - **Dormant.** With nothing registered, no SHA is resolved, no state is
+    opened, no row is written, and behaviour is unchanged. No consumer ships
+    here: `review_policy` joins `POLICY_KEYS` with #157.
+  - An unsatisfied gate deliberately adds no exit-code surface: it takes the
+    existing "this attempt did not succeed" path, leaving the task resumable
+    and the checkpoint in place. Design and the resolved open questions:
+    `docs/superpowers/specs/2026-08-11-checkpoint-and-pre-terminal-gates-design.md`.
 - **A typed outcome per phase, recorded append-only** (slice 0 of the lifecycle
   contract, #164 / #141 Part A). Until now a stage said only where it was, and
   — if it died — where it died: a stage either fell over or it did not. One
