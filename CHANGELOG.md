@@ -10,6 +10,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner preflight [--json]` — read-only readiness diagnostics**
+  (issue #142, first slice). There was no zero stage: on a greenfield repo
+  "what do I need before tasks can run" was answered one task failure at a
+  time, and a gate that is green on an empty project answers nothing at all —
+  an empty suite exits 0, and so does a linter with no files.
+  - Eight checks (spec present, spec validates, agent CLI, test runner, test
+    suite, lint runner, git, state dir), each with a status and a **separate**
+    `blocking` flag: whether a missing thing stops a run depends on the config,
+    and no git is not a blocker when git automation is off.
+  - Six statuses, because "the tool is absent", "the suite is empty", "the
+    oracle is broken" and "cannot be established" are four different
+    situations: `ok`, `missing`, `empty`, `broken`, `unavailable`, `skipped`.
+  - **An empty suite is a blocker, never `ok`** — `0 passed` and exit 0 is
+    exactly the green that proves nothing.
+  - **Never guesses.** A composite `test_command` is reported `unavailable`
+    rather than inspected by picking a component (the #139 rule), as is an
+    unrecognized runner.
+  - `--json` is pinned by `schemas/preflight-result.schema.json` with a
+    `schema_version` for consumers, and stdout carries exactly one document.
+    Exit codes: 0 ready, 1 blocked.
+  - Deliberately **not** included: `bootstrap` (creating a layout and choosing
+    a toolchain is a separate product decision — it would make spec-runner a
+    project scaffolder) and the mutation probe (certifying an oracle by
+    breaking it belongs in a disposable worktree, not in diagnostics of the
+    working tree). Preflight writes nothing at all; a test asserts no file in
+    the tree is created, removed or touched.
+
+
 ### Fixed
 
 - **A review that did not happen no longer reports as one that passed**

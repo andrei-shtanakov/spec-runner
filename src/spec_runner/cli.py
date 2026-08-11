@@ -44,6 +44,7 @@ from .git_ops import (
     spec_dirty_paths,
 )
 from .logging import get_logger
+from .preflight import cmd_preflight
 from .preset_cmd import cmd_config
 from .runner import (
     log_progress,
@@ -1741,6 +1742,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="Fail on warnings (missing traceability)"
     )
 
+    # preflight (read-only readiness diagnostics, #142a)
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        parents=[common],
+        help="Read-only check of what is missing before tasks can run",
+    )
+    preflight_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Machine-readable report (schemas/preflight-result.schema.json)",
+    )
+
     # audit (pre-execution compliance)
     audit_parser = subparsers.add_parser(
         "audit",
@@ -2076,6 +2089,7 @@ def main():
             "validate": cmd_validate,
             "verify": cmd_verify,
             "audit": cmd_audit,
+            "preflight": cmd_preflight,
             "report": cmd_report,
             "tui": cmd_tui,
             "watch": cmd_watch,

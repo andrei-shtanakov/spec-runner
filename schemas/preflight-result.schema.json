@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/preflight-result.schema.json",
+  "title": "spec-runner preflight --json",
+  "description": "Read-only readiness report (#142a). Stable surface: pin `schema_version`. Preflight writes nothing and never guesses — a fact it cannot establish is reported as `unavailable`, never as `ok`.",
+  "type": "object",
+  "required": ["schema_version", "verdict", "exit_code", "blockers", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Bumped when this payload changes shape",
+      "type": "integer",
+      "minimum": 1
+    },
+    "verdict": {
+      "description": "ready = nothing blocks a run; blocked = at least one blocking check",
+      "type": "string",
+      "enum": ["ready", "blocked"]
+    },
+    "exit_code": {
+      "description": "The process exit code that accompanied this payload: 0 ready, 1 blocked",
+      "type": "integer",
+      "enum": [0, 1]
+    },
+    "blockers": {
+      "description": "Ids of the checks that block, for callers that only need the headline",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "required": ["id", "status", "blocking", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Stable check identifier, e.g. tests.suite",
+          "type": "string"
+        },
+        "status": {
+          "description": "ok = fine; missing = tool/file absent; empty = a suite with no tests (never proof of health); broken = present but unusable (e.g. collection errors); unavailable = could not be established honestly; skipped = disabled by config",
+          "type": "string",
+          "enum": ["ok", "missing", "empty", "broken", "unavailable", "skipped"]
+        },
+        "blocking": {
+          "description": "Whether this prevents a run under the current config — a missing git is not blocking when git automation is off",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "Human-readable reason; always present",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
