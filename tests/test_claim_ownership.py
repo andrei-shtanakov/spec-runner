@@ -289,3 +289,39 @@ class TestTheOperatorCanSeeAndUseTheState:
 
         with pytest.raises(SystemExit):
             _build_parser().parse_args(["tdd", "abandon", "TASK-001"])
+
+    def test_an_older_active_checkpoint_can_still_be_named(self, tmp_path):
+        """Copilot's finding: `tdd checkpoints` lists every active lineage and
+        the ambiguity error says "name one" — but CAS compared only against the
+        newest, so naming any other was refused and recovery needed SQLite."""
+        from spec_runner.remedy import abandon
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        sha_a = _commit(root, {"tests/test_a.py": SAME_BYTES})
+        sha_b = _commit(root, {"tests/test_b.py": SAME_BYTES})
+        older = _checkpoint(
+            cfg, sha_a, task="TASK-001", selector="tests/test_a.py::test_thing", stamp="01"
+        )
+        newer = _checkpoint(
+            cfg, sha_b, task="TASK-001", selector="tests/test_b.py::test_thing", stamp="02"
+        )
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(older)
+            state.record_red_checkpoint(newer)
+            result = abandon(cfg, state, "TASK-001", older.checkpoint_id, reason="the older one")
+            still_active = [
+                cp.checkpoint_id for cp in state.active_checkpoints(resolve_namespace(cfg))
+            ]
+
+        assert result.checkpoint_id == older.checkpoint_id
+        assert still_active == [newer.checkpoint_id], "only the named lineage should retire"
+
+    def test_an_unknown_checkpoint_is_still_refused(self, tmp_path):
+        """Loosening CAS to a set must not loosen it to anything."""
+        from spec_runner.remedy import RemedyError, abandon
+
+        root, cfg, first, _second = _two_tasks_same_bytes(tmp_path)
+        with ExecutorState(cfg) as state, pytest.raises(RemedyError) as exc:
+            abandon(cfg, state, "TASK-001", "deadbeefcafe", reason="r")
+        assert "not an active checkpoint" in str(exc.value)

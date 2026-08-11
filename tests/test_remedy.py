@@ -111,7 +111,10 @@ class TestCompareAndSwap:
         root, cfg, cp = _establish(tmp_path)
         with ExecutorState(cfg) as state, pytest.raises(RemedyError) as exc:
             abandon(cfg, state, "TASK-001", "deadbeef1234", reason="r")
-        assert "not the active checkpoint" in str(exc.value)
+        # "an active checkpoint", not "the": CAS compares against the whole
+        # active set, since a task can hold more than one lineage and the
+        # operator must be able to name any of them (#185).
+        assert "not an active checkpoint" in str(exc.value)
 
     def test_a_task_with_no_checkpoint_is_refused(self, tmp_path):
         root = _repo(tmp_path)

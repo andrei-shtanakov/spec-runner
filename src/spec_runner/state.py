@@ -964,7 +964,9 @@ class ExecutorState:
                 return candidate
         return None
 
-    def active_checkpoints(self, namespace: str, task_id: str | None = None) -> list:
+    def active_checkpoints(
+        self, namespace: str, task_id: str | None = None
+    ) -> list["RedCheckpointT"]:
         """Every **active** checkpoint, newest first.
 
         `red_checkpoint` returns only the latest, which hides the case an

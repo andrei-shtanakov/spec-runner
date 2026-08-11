@@ -296,7 +296,7 @@ class TestTheRemedyLoopEndToEnd:
             repair(cfg, state, "TASK-001", checkpoint.checkpoint_id, fixed, reason="typo")
             with pytest.raises(RemedyError) as exc:
                 abandon(cfg, state, "TASK-001", checkpoint.checkpoint_id, reason="second thoughts")
-        assert "not the active checkpoint" in str(exc.value)
+        assert "not an active checkpoint" in str(exc.value)
 
 
 class TestCrashResume:

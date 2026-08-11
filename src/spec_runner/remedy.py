@@ -271,18 +271,27 @@ def resolve_checkpoint(
 
 
 def _swap(state: ExecutorState, namespace: str, task_id: str, checkpoint_id: str) -> RedCheckpoint:
-    """Compare-and-swap against the active checkpoint."""
-    active = state.red_checkpoint(task_id, namespace)
-    if active is None:
+    """Compare-and-swap against the **set** of active checkpoints.
+
+    Not only against the newest. A task can have more than one active lineage
+    today, `tdd checkpoints` lists them all, and the ambiguity error tells the
+    operator to "name one with --checkpoint" — so refusing every id but the
+    newest would point them at an action the code rejects, leaving no way out
+    but editing SQLite (Copilot, PR #185).
+
+    CAS still holds where it matters: a retired or unknown id is refused,
+    because it is no longer the thing the operator thinks it is.
+    """
+    active = state.active_checkpoints(namespace, task_id)
+    if not active:
         raise RemedyError(f"{task_id} has no active checkpoint in this workstream")
-    if active.checkpoint_id != checkpoint_id:
-        # Compare-and-swap. Without it a remedy issued against what the
-        # operator last saw silently applies to whatever arrived since.
-        raise RemedyError(
-            f"{checkpoint_id} is not the active checkpoint for {task_id} "
-            f"(active: {active.checkpoint_id})"
-        )
-    return active
+    for candidate in active:
+        if candidate.checkpoint_id == checkpoint_id:
+            return candidate
+    listed = ", ".join(cp.checkpoint_id for cp in active)
+    raise RemedyError(
+        f"{checkpoint_id} is not an active checkpoint for {task_id} (active: {listed})"
+    )
 
 
 def _refuse_if_agent() -> None:

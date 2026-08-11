@@ -102,7 +102,7 @@ spec-runner mcp                            # Launch MCP server (stdio)
 spec-runner tdd abandon TASK-001 --checkpoint <id> --reason "..."   # Give up on a red (#141)
 spec-runner tdd repair TASK-001 --checkpoint <id> --commit <sha> --reason "..."  # New lineage
 spec-runner tdd status [TASK-ID] [--json]  # Checkpoints, claims, remedies, lifecycle
-spec-runner tdd checkpoints [--json]       # Active checkpoint ids (for --checkpoint)
+spec-runner tdd checkpoints [TASK-ID] [--json]  # Active checkpoint ids (for --checkpoint)
 spec-runner sync                           # Post-merge closer: pull base, prune merged task/run branches, state check
 spec-runner review-pr <url-or-number>      # Review-bot loop: collect, verify, fix valid, gate, push, reply (exit 0/1/2)
 spec-runner review-pr 6 --verify-only      # Stop after per-comment verdicts (read-only)
