@@ -1,0 +1,33 @@
+# The other half of release hygiene, and the half a human keeps missing.
+#
+# release-tag-guard catches a release commit that merged without a tag. Nothing
+# caught the CHANGELOG's compare links, which live ~1700 lines below the section
+# being cut — so the cut looks complete on screen while the links still point at
+# the previous release. Twice now: PR #100 left the version link definitions
+# stale, PR #180 left `[Unreleased]` comparing from the previous tag, so it
+# claimed everything the release contained.
+#
+# Unlike the tag guard this DOES run on pull requests, because the invariant
+# holds at every commit — not just at a release — and catching it on the release
+# PR is the entire point.
+name: changelog-links
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: CHANGELOG compare links match the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_changelog_links.py

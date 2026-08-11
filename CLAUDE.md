@@ -39,6 +39,7 @@ make test                                  # Run tests (non-slow)
 make lint                                  # Lint + format check
 make typecheck                             # mypy
 make format                                # Auto-format + fix
+python scripts/check_changelog_links.py    # Release hygiene: CHANGELOG compare links match the version
 ```
 
 ### CLI entry points (defined in pyproject.toml)
