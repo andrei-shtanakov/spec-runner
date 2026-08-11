@@ -191,6 +191,10 @@ class ExecutorConfig:
 
     # Code review
     run_review: bool = True  # Run code review after task completion
+    # #157: whether the review verdict may withhold terminal completion.
+    # `advisory` (default) keeps review a report; `required` makes it a
+    # pre-terminal gate — see `gates.register_builtin_gates`.
+    review_policy: str = "advisory"
     hitl_review: bool = False  # Interactive approval gate after code review
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
@@ -594,6 +598,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "lint_blocking": post_done.get("lint_blocking"),
             "auto_commit": post_done.get("auto_commit"),
             "run_review": post_done.get("run_review"),
+            "review_policy": executor_config.get("review_policy"),
             "hitl_review": executor_config.get("hitl_review"),
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),

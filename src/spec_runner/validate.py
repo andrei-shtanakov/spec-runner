@@ -391,8 +391,41 @@ def validate_config(config_path: Path) -> ValidationResult:
             result.warnings.append(f"Top-level key '{key}' is not supported and will be ignored")
 
     _validate_spec_context_rules(executor_section, result)
+    _validate_review_policy(executor_section, result)
 
     return result
+
+
+#: `review_policy` values the runtime understands (#157).
+REVIEW_POLICIES = ("advisory", "required")
+
+
+def _validate_review_policy(section: dict, result: "ValidationResult") -> None:
+    """Catch a `review_policy` that cannot mean what it says.
+
+    ``required`` with ``run_review: false`` demands a review while switching
+    review off. The honest moment to say so is before a run starts — not at the
+    merge gate, after the work is already done and the only remaining options
+    are bad ones.
+    """
+    policy = section.get("review_policy")
+    if policy is None:
+        return
+    if policy not in REVIEW_POLICIES:
+        result.errors.append(
+            f"review_policy must be one of {', '.join(REVIEW_POLICIES)} (got {policy!r})"
+        )
+        return
+    if policy != "required":
+        return
+
+    post_done = section.get("hooks", {}).get("post_done", {}) if isinstance(section, dict) else {}
+    run_review = post_done.get("run_review") if isinstance(post_done, dict) else None
+    if run_review is False:
+        result.errors.append(
+            "review_policy is 'required' but hooks.post_done.run_review is false — "
+            "a required review that never runs can only ever block"
+        )
 
 
 # OpenSpec caps injected context at 50KB; mirror that (M0).

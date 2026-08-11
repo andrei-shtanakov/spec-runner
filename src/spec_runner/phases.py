@@ -94,7 +94,13 @@ def review_verdict_to_phase(verdict: ReviewVerdict | str) -> tuple[PhaseOutcome,
         key = ReviewVerdict(verdict) if isinstance(verdict, str) else verdict
     except ValueError:
         return PhaseOutcome.ERROR, str(verdict)
-    return _REVIEW_MAP.get(key, (PhaseOutcome.ERROR, str(key.value)))
+    mapped = _REVIEW_MAP.get(key)
+    if mapped is not None:
+        return mapped
+    # Not `.get(key, (ERROR, str(key.value)))`: the default is built eagerly,
+    # so a caller passing something that is not a ReviewVerdict at all would
+    # raise here rather than get the ERROR this function promises.
+    return PhaseOutcome.ERROR, str(getattr(key, "value", key))
 
 
 __all__ = [
