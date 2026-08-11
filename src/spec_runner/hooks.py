@@ -268,6 +268,22 @@ def _detect_candidate_drift(config: ExecutorConfig, gated_sha: str, task_id: str
     if not head or head == gated_sha:
         return None
 
+    # Ancestry first, explicitly. `git log A..B` exits 0 even when A is not an
+    # ancestor of B — it just lists what B has and A does not — so a diverged
+    # or rewritten branch would slip through as "no foreign commits" (measured,
+    # not assumed: verified in a scratch repo).
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", gated_sha, head],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if ancestry.returncode != 0:
+        return (
+            f"the tree no longer descends from the gated commit {gated_sha[:12]} "
+            "(rewritten or moved elsewhere); refusing to merge"
+        )
+
     # Commits between the gate and now. Ours is the bookkeeping commit and
     # carries the task label; anything else did not come from this run.
     subjects = subprocess.run(
@@ -277,9 +293,7 @@ def _detect_candidate_drift(config: ExecutorConfig, gated_sha: str, task_id: str
         cwd=config.project_root,
     )
     if subjects.returncode != 0:
-        # `gated_sha` is not an ancestor of HEAD at all — the branch moved
-        # somewhere else entirely.
-        return f"the tree moved after the gate approved {gated_sha[:12]}; refusing to merge"
+        return f"cannot inspect commits after {gated_sha[:12]}; refusing to merge"
     foreign = [
         line
         for line in subjects.stdout.strip().splitlines()

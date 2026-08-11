@@ -253,3 +253,35 @@ class TestReviewFixesProduceANewCandidate:
 
         tree = _git(root, "ls-tree", "-r", "--name-only", seen[-1]).stdout.split()
         assert "fixed.py" in tree, "the gate judged the tree from before the review fixes"
+
+    def test_a_diverged_branch_is_caught_even_though_git_log_succeeds(self, tmp_path):
+        """Copilot's finding: `git log A..B` exits 0 when A is not an ancestor
+        of B — it just lists what B has — so ancestry has to be asked
+        explicitly or a rewritten branch passes as "no foreign commits"."""
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        gated = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+        # Move the branch somewhere that does not descend from `gated`.
+        _git(root, "checkout", "-q", "--orphan", "elsewhere")
+        (root / "other.py").write_text("y = 2\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "TASK-001: looks like ours")
+
+        drift = hooks._detect_candidate_drift(cfg, gated, "TASK-001")
+        assert drift is not None, "a branch that does not descend from the verdict must refuse"
+        assert "descends" in drift
+
+    def test_our_own_bookkeeping_commit_is_not_drift(self, tmp_path):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        gated = _git(root, "rev-parse", "HEAD").stdout.strip()
+        (root / "note.txt").write_text("bookkeeping\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "TASK-001: t")
+
+        assert hooks._detect_candidate_drift(cfg, gated, "TASK-001") is None
