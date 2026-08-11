@@ -10,36 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-### Changed
+## [2.24.0] — 2026-08-11
 
-- **`plan --gated` writes a stage only after it validates, and repairs
-  boundedly** (issue #160, the remainder of #133). The order was generate →
-  write → validate → stamp the verdict onto the file just written, so an
-  invalid spec landed on disk and stayed there: a DRAFT that looks like an
-  artifact and is not one.
-  - Validation now runs on the candidate **before** it is committed, using the
-    same validator the run enforces — not a lookalike, which would drift and
-    let a spec pass here and fail there. A rejected candidate leaves the stage
-    exactly as it was: the previous draft is restored byte for byte, and a
-    stage that had no file still has none.
-  - On failure the stage is regenerated up to `spec_repair_attempts` times
-    (default 2) with **the actual validation errors** in the prompt — "try
-    again" is not a diagnostic. Bounded on purpose: a model that cannot
-    satisfy the validator twice will not satisfy it on the tenth try, and each
-    attempt costs money.
-  - When no attempt validates, the command exits non-zero and writes nothing,
-    where it used to exit 0 with `validation=fail` on disk.
-  - The rollback itself is atomic (temp file + `os.replace`, shared with
-    `write_spec` as `spec.atomic_write_bytes`): a plain write truncates first,
-    so an interruption mid-restore would destroy the very draft the rollback
-    exists to protect.
-  - **No canonicalizing normalizer.** The alternative proposal — parse the
-    generated file and rewrite it into canonical form — was rejected: a tool
-    that guesses the meaning of an unfamiliar LLM format and then canonicalizes
-    its own guess makes the mistake invisible. Unrecognized output is
-    rejected, never rewritten; the written body is byte-identical to what was
-    generated.
+Instruments that could not report failure. Every entry is a place where the
+run's record said "fine" without having established it: a review that never
+produced a verdict, a spec that never validated, a prompt from whichever
+project happened to be the working directory. Plus the first read-only answer
+to "what is missing before tasks can run at all".
 
+Nothing here changes what a passing run does. The exit-code surface is
+unchanged since 2.23.0 with one exception, called out under Changed.
 
 ### Added
 
@@ -69,7 +49,6 @@ is a **breaking change** and requires a major version bump plus an entry here.
     breaking it belongs in a disposable worktree, not in diagnostics of the
     working tree). Preflight writes nothing at all; a test asserts no file in
     the tree is created, removed or touched.
-
 
 ### Fixed
 
@@ -136,6 +115,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
   - Inheritance of the built-in prompt by a custom template is **not** part of
     this fix — it is a separate composition contract, and mixing it in here
     would have hidden the isolation bug behind a feature.
+
+### Changed
+
+- **`plan --gated` writes a stage only after it validates, and repairs
+  boundedly** (issue #160, the remainder of #133). The order was generate →
+  write → validate → stamp the verdict onto the file just written, so an
+  invalid spec landed on disk and stayed there: a DRAFT that looks like an
+  artifact and is not one.
+  - Validation now runs on the candidate **before** it is committed, using the
+    same validator the run enforces — not a lookalike, which would drift and
+    let a spec pass here and fail there. A rejected candidate leaves the stage
+    exactly as it was: the previous draft is restored byte for byte, and a
+    stage that had no file still has none.
+  - On failure the stage is regenerated up to `spec_repair_attempts` times
+    (default 2) with **the actual validation errors** in the prompt — "try
+    again" is not a diagnostic. Bounded on purpose: a model that cannot
+    satisfy the validator twice will not satisfy it on the tenth try, and each
+    attempt costs money.
+  - When no attempt validates, the command exits non-zero and writes nothing,
+    where it used to exit 0 with `validation=fail` on disk.
+  - The rollback itself is atomic (temp file + `os.replace`, shared with
+    `write_spec` as `spec.atomic_write_bytes`): a plain write truncates first,
+    so an interruption mid-restore would destroy the very draft the rollback
+    exists to protect.
+  - **No canonicalizing normalizer.** The alternative proposal — parse the
+    generated file and rewrite it into canonical form — was rejected: a tool
+    that guesses the meaning of an unfamiliar LLM format and then canonicalizes
+    its own guess makes the mistake invisible. Unrecognized output is
+    rejected, never rewritten; the written body is byte-identical to what was
+    generated.
 
 ## [2.23.0] — 2026-08-10
 
@@ -1406,7 +1415,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.23.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.24.0...HEAD
+[2.24.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.23.0...v2.24.0
 [2.23.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.22.0...v2.23.0
 [2.22.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.21.0...v2.22.0
 [2.21.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.20.0...v2.21.0
