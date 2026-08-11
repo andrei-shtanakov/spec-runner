@@ -12,6 +12,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The pre-terminal gate judged a tree without the work** (F-1, found by the
+  battle test of published v2.25.0). With review off, a task could rewrite,
+  delete or rename its own claimed test and reach **DONE**: both gate
+  evaluations judged the *red* commit, and the mutation landed in the task
+  commit created after the gate.
+  - Cause was the #170 fix. Moving the gate before the DONE write was right —
+    a blocked task must not be labelled done first — but it also moved the gate
+    before the commit containing the work. The `#103` pre-review commit
+    happened to cover the review-on path, so the byte-lock held exactly when an
+    unrelated feature was enabled.
+  - The order is now: deterministic checks → **candidate commit** (no DONE in
+    it) → pre-terminal gates against that SHA → bookkeeping/status commit →
+    merge → DONE. A blocked task keeps its candidate commit, so the refusal is
+    resumable and the work is committed rather than left dirty.
+  - **An external commit between the gate and the merge is now caught.** The
+    verdict is about a tree; if anything this run did not create lands in
+    between, the merge is refused rather than authorised by a verdict that no
+    longer describes it.
+  - The candidate commit is made only when something will judge it — review, or
+    a registered gate. With neither, the single task commit of #103 is
+    unchanged: a project that opts into nothing must not find its history split
+    in two.
+  - `no_op` is decided from the candidate rather than from the final commit
+    being empty, since that commit now always carries the DONE bookkeeping.
+
 - **`run` reported success for a run that did not finish** (F-2, found by the
   battle test of published v2.25.0). `run --task=X` exited **0** after the task
   failed every attempt, while `run --all` on the same repository exited 1.

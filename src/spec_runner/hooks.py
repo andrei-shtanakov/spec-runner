@@ -256,9 +256,70 @@ def _head_sha(config: ExecutorConfig) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _detect_candidate_drift(config: ExecutorConfig, gated_sha: str, task_id: str) -> str | None:
+    """Has anything but us moved the tree since the gate approved ``gated_sha``?
+
+    Returns a refusal, or None when HEAD is the gated commit or a descendant
+    this run created. The check is a compare-and-swap in spirit: the merge is
+    authorised for a specific tree, and a tree that has since acquired
+    someone else's commit is a different one.
+    """
+    head = _head_sha(config)
+    if not head or head == gated_sha:
+        return None
+
+    # Ancestry first, explicitly. `git log A..B` exits 0 even when A is not an
+    # ancestor of B — it just lists what B has and A does not — so a diverged
+    # or rewritten branch would slip through as "no foreign commits" (measured,
+    # not assumed: verified in a scratch repo).
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", gated_sha, head],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if ancestry.returncode != 0:
+        return (
+            f"the tree no longer descends from the gated commit {gated_sha[:12]} "
+            "(rewritten or moved elsewhere); refusing to merge"
+        )
+
+    # Commits between the gate and now. Ours is the bookkeeping commit and
+    # carries the task label; anything else did not come from this run.
+    subjects = subprocess.run(
+        ["git", "log", "--format=%H %s", f"{gated_sha}..{head}"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if subjects.returncode != 0:
+        return f"cannot inspect commits after {gated_sha[:12]}; refusing to merge"
+    foreign = [
+        line
+        for line in subjects.stdout.strip().splitlines()
+        if line and not _is_our_bookkeeping_commit(line, task_id)
+    ]
+    if foreign:
+        return (
+            f"the tree changed after the gate approved {gated_sha[:12]}: "
+            f"{len(foreign)} commit(s) this run did not make "
+            f"({foreign[0].split(' ', 1)[-1][:60]}); refusing to merge"
+        )
+    return None
+
+
+def _is_our_bookkeeping_commit(log_line: str, task_id: str) -> bool:
+    """Ours are labelled with the task id — `commit_task_work` writes
+    ``"<TASK-ID>: <name>"``. Anything else between the gate and the merge came
+    from somewhere this run does not control."""
+    subject = log_line.split(" ", 1)[-1]
+    return subject.startswith(f"{task_id}:")
+
+
 def _run_pre_terminal_gates(
     task: Task,
     config: ExecutorConfig,
+    candidate_sha: str | None = None,
     facts: dict[str, object] | None = None,
 ) -> str | None:
     """Evaluate registered gates against HEAD. Returns a reason, or None to pass.
@@ -271,7 +332,7 @@ def _run_pre_terminal_gates(
     """
     from .state import ExecutorState
 
-    merge_candidate = _head_sha(config)
+    merge_candidate = candidate_sha or _head_sha(config)
     if not merge_candidate:
         # No commit to judge. Refusing here would block fresh-repo bootstrap
         # over bookkeeping, so the gates simply have nothing to run against.
@@ -467,15 +528,28 @@ def post_done_hook(
     # "code review fixes" label while the final task commit got only the
     # tasks.md leftovers — history inverted relative to content. An early
     # commit also protects the work from the next task's pre-start cleanup.
+    # F-1: this commit is the **candidate** — the tree the policy gates judge and
+    # the tree that will be merged. It is made whenever auto-commit is on, not
+    # only when review is on. Gating it on review was the whole defect: with
+    # review off nothing committed the work before the gate, so the gate judged
+    # a tree without it and a task could rewrite its own claimed test and reach
+    # DONE. The lock held exactly when an unrelated feature happened to be
+    # enabled.
     committed_pre_review = False
     review_checkpoint_sha = ""
-    if config.auto_commit and config.run_review:
+    #
+    # Made when something will actually judge the tree — review, or a
+    # registered gate. With neither, nothing is going to look at it, so the
+    # single task commit of #103 stays exactly as it was: a project that opts
+    # into nothing must not find its history split in two.
+    wants_candidate = config.auto_commit and (config.run_review or has_gates())
+    if wants_candidate:
         if reporter:
             reporter.enter("commit")
         committed_pre_review = commit_task_work(task, config) == "committed"
         # #157 §2.1: the tree review is about to judge. Recorded only when a
         # gate will actually use it — the dormant path stays free of git calls.
-        if has_gates():
+        if has_gates() and config.run_review:
             review_checkpoint_sha = _head_sha(config)
 
     # Get previous error for review context (local import to avoid circular dependency)
@@ -636,10 +710,18 @@ def post_done_hook(
     # Dormant until a consumer registers: `has_gates` is checked before any SHA
     # is resolved or the state DB is opened, so a project that enables nothing
     # cannot tell this code is here (criterion 8).
+    # The candidate SHA: HEAD after the work (and any review fixes) is
+    # committed. A no-op task has one too — HEAD as it stands — so the gate is
+    # never asked about nothing in particular.
+    # Resolved only when something will use it — a gate to judge, or a merge to
+    # protect. An unconditional `rev-parse` would be a git call on the path of
+    # a project that enabled neither.
+    gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
     if has_gates():
         blocked = _run_pre_terminal_gates(
             task,
             config,
+            candidate_sha=gated_sha,
             facts={
                 "review_verdict": review_verdict.value,
                 "review_checkpoint_sha": review_checkpoint_sha,
@@ -650,8 +732,9 @@ def post_done_hook(
             },
         )
         if blocked is not None:
-            # tasks.md still says `review` (or `in_progress`), the checkpoint
-            # commit stands, and nothing was merged — the task stays resumable.
+            # tasks.md still says `review` (or `in_progress`), the candidate
+            # commit stands, and nothing was merged — the task stays resumable,
+            # and the work is committed rather than left dirty.
             return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
@@ -678,11 +761,33 @@ def post_done_hook(
         if reporter:
             reporter.enter("commit")
         try:
-            if commit_task_work(task, config) == "empty" and not committed_pre_review:
-                logger.info("No changes to commit — marking task as no-op")
-                no_op = True
+            final = commit_task_work(task, config)
         except Exception as e:
             logger.error("Commit failed", error=str(e))
+            final = "failed"
+        if wants_candidate:
+            # The candidate carried the work, so this commit only ever carries
+            # bookkeeping — "was it empty?" no longer answers the question. The
+            # task produced nothing exactly when the candidate found nothing
+            # and review committed no fixes of its own.
+            no_op = not committed_pre_review and review_verdict != ReviewVerdict.FIXED
+        else:
+            # Single-commit shape (#97/#103): the one commit is the work, so an
+            # empty one means there was none.
+            no_op = final == "empty"
+        if no_op:
+            logger.info("No changes to commit — marking task as no-op")
+
+    # The verdict was about a tree. If the tree moved under us between the gate
+    # and the merge — another process, a hook, a person — the verdict no longer
+    # describes what would be merged, so it must not authorise the merge.
+    # Everything we do ourselves in between (the bookkeeping commit) is known
+    # and allowed; anything else is not.
+    if gated_sha:
+        drift = _detect_candidate_drift(config, gated_sha, task.id)
+        if drift is not None:
+            logger.error("Refusing to merge", task_id=task.id, reason=drift)
+            return (False, drift, review_verdict.value, (review_output or "")[:2048], no_op)
 
     # Merge branch to main
     if config.create_git_branch:
