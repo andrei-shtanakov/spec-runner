@@ -338,9 +338,16 @@ def run_red_phase(
 ) -> RedPhaseResult:
     """Author a failing test, commit it, and replay it to confirm the red.
 
-    Every outcome is recorded, including a refuted claim: "the agent said red
-    and the replay disagreed" is evidence, and dropping it would leave the next
-    run unable to see that this already happened.
+    Every *replayed* outcome becomes a checkpoint, including a refuted claim:
+    "the agent said red and the replay disagreed" is evidence, and dropping it
+    would leave the next run unable to see that this already happened.
+
+    The two failures that happen *before* a replay — no `TDD_SELECTOR` marker,
+    and an authoring pass that changed nothing — record no checkpoint, because
+    a `RedCheckpoint` is a statement about a commit and there is no commit for
+    them to be about. They are not lost: they are returned to the caller, and
+    the gate that follows records the `tests` phase outcome in the append-only
+    `phase_results` history like any other.
     """
     from .prompt import build_red_prompt
 

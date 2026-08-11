@@ -449,3 +449,67 @@ class TestExecutionRefusesToImplementWithoutARed:
             execution_mod.execute_task(self._task(execution_mode="standard"), cfg, state)
 
         assert implemented == [1], "a standard task went through the RED phase"
+
+
+@pytest.mark.slow
+class TestPreReplayFailuresAreStillDurable:
+    """A `RedCheckpoint` is a statement about a commit, so the failures that
+    happen before there is one cannot be checkpoints. They must still survive
+    the run — in the append-only phase history, like every other observation."""
+
+    def _run(self, tmp_path, monkeypatch, *, output, writes):
+        from spec_runner import execution, tdd
+        from spec_runner.task import Task
+
+        root = _repo(tmp_path)
+        cfg = _cfg(
+            root, test_command="python -m pytest", create_git_branch=False, auto_commit=False
+        )
+
+        def _agent(config, prompt, **kwargs):
+            for name, body in (writes or {}).items():
+                (Path(config.project_root) / name).write_text(body)
+            return output
+
+        monkeypatch.setattr(tdd, "_run_agent", _agent)
+        monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
+        monkeypatch.setattr(execution, "update_task_status", lambda *a, **k: True)
+
+        def _stop(*a, **k):
+            raise _ReachedImplementation
+
+        monkeypatch.setattr(execution, "build_task_prompt", _stop)
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1h")
+        with ExecutorState(cfg) as state:
+            result = execution.execute_task(task, cfg, state)
+            history = state.phase_history("TASK-001")
+            checkpoint = state.red_checkpoint("TASK-001", resolve_namespace(cfg))
+        return result, history, checkpoint
+
+    def test_a_missing_marker_leaves_no_checkpoint_but_does_leave_history(
+        self, tmp_path, monkeypatch
+    ):
+        result, history, checkpoint = self._run(
+            tmp_path,
+            monkeypatch,
+            output="I wrote a failing test, honest.",
+            writes={"test_thing.py": "def test_thing():\n    assert False\n"},
+        )
+        assert result is False
+        assert checkpoint is None, "there is no commit for a checkpoint to be about"
+        assert any(r.phase == "tests" for r in history), (
+            "the refusal must survive the run somewhere, or the next run relearns it"
+        )
+
+    def test_an_authoring_pass_that_writes_nothing_is_recorded_the_same_way(
+        self, tmp_path, monkeypatch
+    ):
+        result, history, checkpoint = self._run(
+            tmp_path,
+            monkeypatch,
+            output="TDD_SELECTOR: test_thing.py::test_thing",
+            writes={},
+        )
+        assert result is False
+        assert checkpoint is None
+        assert any(r.phase == "tests" for r in history)
