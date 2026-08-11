@@ -1,6 +1,7 @@
 # TDD lifecycle as an executor contract — design
 
-**Status:** design only. No code ships with this document.
+**Status:** approved with amendments (owner, 2026-08-11). Design only — no code
+ships with this document.
 **Issue:** #141 (D7-A, from the disputatio pilot)
 **Owner decision this follows:** accept #141 as a *design track*, not a minor
 release. Build the general phase-result contract first, then design the full
@@ -102,6 +103,17 @@ model rambled.
 config, or unreachable because an earlier phase already failed, is a
 non-event — it must not read as a gap in the evidence.
 
+### 2.2.0 Not every stage supports every outcome
+
+`PhaseOutcome` is the **base** vocabulary, not a set every stage must
+implement (owner amendment 2). The admissible outcomes are declared **per stage
+type**, and a stage producing one outside its set is a bug, not a surprise.
+
+`EXPECTED_FAIL` is the clearest case: it is meaningful for RED verification and
+meaningless for `commit` — nothing about a commit is supposed to fail. Declaring
+the per-stage set makes that a checkable property instead of a convention, and
+gives consumers something to switch on without a catch-all branch.
+
 ### 2.2.1 Convergence with what already exists
 
 Two surfaces already carry most of this vocabulary; the contract has to absorb
@@ -120,11 +132,20 @@ That the two arrived independently at the same three-way split — passed /
 could-not-establish / broken — is the main evidence that this shape is right
 and not invented for TDD.
 
-**Convergence requirement:** `ReviewVerdict` must not remain a second,
-overlapping vocabulary. Either it becomes an alias of the phase result or it is
-explicitly documented as the review-specific refinement of it (`fixed` is a
-genuine refinement; it has no phase-level meaning). Two vocabularies for the
-same idea drift, and the drift shows up in consumers.
+**Convergence requirement (owner amendment 3):** `ReviewVerdict` does **not**
+stay a parallel enum. Review reports the shared outcome plus a
+review-specific detail:
+
+```
+outcome: PASS
+detail:  passed | fixed
+```
+
+So `fixed` stops being a peer of `passed` at the phase level — it is what kind
+of pass it was — and every consumer that only cares whether the phase held can
+read `outcome` and stop. The wire values already in the state DB and in
+`docs/state-schema.md` keep working; the migration is that they are read as
+`(outcome, detail)` rather than as one flat enum.
 
 ### 2.3 `WAIVED` is not a result
 
@@ -158,9 +179,12 @@ This is additive to the interop contract (new table, `schema_version` bumped in
 
 ### 2.5 Acceptance for Part A
 
-- Every existing stage records a typed result; `standard` mode behaviour is
-  **byte-identical** (the results are additive record-keeping, nothing gates on
-  them yet).
+- Every existing stage records a typed result, and `standard` mode keeps the
+  guarantee stated in §3.1: **execution, terminal state and external contracts
+  do not change**. Note that this is the section where byte identity would be
+  violated — Part A is exactly the append-only record-keeping that makes it
+  impossible — so the weaker, true guarantee is the one to hold Part A to.
+  Nothing gates on the new results yet.
 - `review` uses the shared vocabulary or is documented as a refinement of it,
   and `not_run` keeps meaning what it means today — the generalization must not
   quietly drop the distinction #138 was built to introduce.
@@ -175,12 +199,26 @@ Design only. Depends on Part A.
 
 ### 3.1 Mode
 
-`execution_mode: standard | tdd`, per task or per config.
+`execution_mode: standard | tdd` — **project-level default with an optional
+per-task override** (owner amendment 4).
 
-**`standard` stays byte-identical.** This is a requirement, not an aspiration:
-the mode exists to be opt-in, and a project that does not opt in must not be
-able to tell the feature shipped. Enforced the way C1 was — a golden
-zero-behaviour-change test.
+The checkpoint records the **effective mode and the hash of the config that
+produced it**. Without that, a checkpoint written under one policy is
+indistinguishable from one written under another, and replay silently
+re-interprets old evidence under today's rules — which is the same class of
+error as re-baselining a harness snapshot between attempts (#137).
+
+**The `standard`-mode guarantee, stated precisely** (owner amendment 1):
+**execution, terminal state and external contracts do not change.** Not
+"byte-identical" — Part A adds append-only rows to the state DB, which makes
+byte identity impossible by construction, so promising it would be a promise
+we break on day one.
+
+Concretely, for a project that does not opt in: the same commands run in the
+same order, a task reaches the same terminal state for the same reasons, and
+`--json-result`, `status --json` and the exit-code surface are unchanged. New
+phase-result rows are additive record-keeping and nothing gates on them.
+Enforced the way C1 was — a golden no-observable-change test.
 
 ### 3.2 Phases
 
@@ -246,32 +284,48 @@ nowhere else; it should not be reproduced as a design.
    (#140) — in `tdd` mode it is critical rather than merely correct, because
    every escalation there is structural.
 
-### 3.6 Known blocking input
+### 3.6 Prerequisite (not owned by review)
 
 `post_done` fires **after** commit/merge, so a phase check cannot sit before the
-commit. For TDD that is fatal: RED_VERIFYING must gate the commit, not follow
+commit. For TDD that is fatal: `RED_VERIFYING` must gate the commit, not follow
 it.
 
-This is the same seam as #157 (can review block a task, and where does the
-stage sit relative to the commit). The owner's shape there applies here
-unchanged: **keep the checkpoint commit** — it exists for a stable SHA and
-provenance, which TDD needs even more than review does — but do not treat the
-task as terminally DONE until the phase policy allows it, with subsequent work
-as separate commits on top.
+The mechanism this needs — **checkpoint commit + pre-terminal policy gates** —
+is its own thing, tracked as **#164**, and *not* a part of the review policy
+(owner amendment 5). Review (#157) and TDD (#141) are its two **consumers**.
 
-**#141 cannot be implemented before #157 is decided.** Recording that as a hard
-dependency rather than discovering it in slice 1.
+That separation is not tidiness. If the prerequisite lived inside #157, a later
+edit to `review_policy` would silently be an edit to the TDD contract, and the
+two have different owners and different reasons to change.
 
-### 3.7 Open questions
+Shared shape, from #164:
 
-- **Replay isolation.** The pilot replays red in a temporary worktree outside
-  the repository, sharing the project `.venv`; the temp repo is not a uv
-  project, so commands have to be substituted with module constants. Own
-  environment per worktree, or shared? Owning it is cleaner and much slower.
-- **Mutation-probe threshold.** "Break the implementation, the test must fail"
-  catches vacuum tests but costs time. From what task size is it mandatory?
-  Related: the probe belongs in a disposable worktree (#159), not in the
-  working tree.
+```
+execute → deterministic gates → checkpoint commit → policy gates
+→ fixes as separate commit → repeat deterministic gates
+→ policy satisfied → merge → DONE
+```
+
+The checkpoint commit is kept — it exists for a stable SHA and provenance,
+which TDD needs even more than review does — but it is **not merged and does
+not mean DONE**, and a task whose policy is unsatisfied stays **resumable and
+non-terminal**.
+
+**#141 cannot be implemented before #164 exists.** #157 is a sibling consumer,
+not a gate on this track.
+
+### 3.7 Open questions — resolved (owner, 2026-08-11)
+
+- **Replay isolation.** A **disposable worktree with an environment identified
+  by lockfile hash** — not an arbitrary shared `.venv`. The pilot shared the
+  project venv and had to substitute commands with module constants because the
+  temp repo was not a uv project; that makes the replay environment
+  unidentifiable, and a replay you cannot identify proves nothing about the run
+  it claims to reproduce.
+- **Mutation-probe threshold.** **Out of TDD v1.** A confirmed RED is
+  mandatory; additional mutation testing becomes a separate policy. (Related
+  boundary: certification by breaking something lives in a disposable worktree
+  and is its own untriggered track — see #159, closed.)
 
 ---
 
@@ -282,14 +336,16 @@ every later slice depends on the earlier ones being real.
 
 | # | Slice | Done when |
 |---|---|---|
-| 0 | **Phase result contract** (Part A) | every stage records a typed result; `standard` byte-identical; waivers are operator-only records |
+| 0 | **Phase result contract** (Part A) | every stage records a typed result; `standard` unchanged in execution, terminal state and external contracts (§3.1 — *not* byte identity, which Part A's own rows preclude); waivers are operator-only records |
 | 1 | **RED checkpoint** | `(SHA, selector, baseline, namespace)` persisted and replayable; green refused without a confirmed `EXPECTED_FAIL` |
 | 2 | **Immutable claimed files** | byte-lock across *all* claimed files, enforced by the instrument; red lints the file it freezes |
 | 3 | **Operator remedies** | `abandon` / `repair` write typed records with provenance; history is never rewritten to fix a frozen test |
 | 4 | **GREEN / REFACTOR** | the remaining transitions, per-task type check in the gate |
 
-Slice 0 ships without any TDD surface at all. If the lifecycle is never built,
-slice 0 is still worth having — that is the test of whether the split is real.
+**Slice 0 ships separately, as general hardening** (owner ruling): not as part
+of this track. It has no TDD surface at all, and if the lifecycle is never
+built it is still worth having — which is the test of whether the split is
+real. The order of the remaining slices stands as written.
 
 ---
 
@@ -307,13 +363,18 @@ slice 0 is still worth having — that is the test of whether the split is real.
 
 ---
 
-## 6. What this document does not decide
+## 6. Decisions taken (was: open for the owner)
 
-Deliberately open, for the owner:
+Answered 2026-08-11; kept here so the reasoning is not lost:
 
-1. Whether slice 0 ships as part of this track or as ordinary hardening of the
-   existing stages (it is useful either way).
-2. Whether `execution_mode` is a task-level field, a config key, or both.
-3. Whether `ReviewVerdict` is aliased to the phase result or documented as a
-   refinement.
-4. The two open questions in §3.7.
+1. **Slice 0 ships separately**, as ordinary hardening of the existing stages,
+   not as part of the TDD track.
+2. **`execution_mode`** is a project-level default with an optional per-task
+   override; the checkpoint records the effective mode and the config hash.
+3. **`ReviewVerdict`** becomes `outcome` + review-specific `detail`, not a
+   parallel enum.
+4. **Replay** uses a disposable worktree with a lockfile-hash-identified
+   environment; the **mutation probe** is out of v1.
+
+Still open, deliberately: nothing in this document. The next decision point is
+#164 (the prerequisite), which this track consumes rather than owns.

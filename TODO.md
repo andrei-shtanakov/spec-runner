@@ -328,7 +328,10 @@ minor-релиза, а не багфикса.
       реально прогонялся и упал), типизированные per-phase вердикты
       (`PASS|EXPECTED_FAIL|UNEXPECTED_FAIL|ERROR|WAIVED`), durable checkpoints
       `(commit SHA, полный pytest node-id, baseline SHA, namespace)`, evidence в state
-      с append-only историей. `standard` обязан остаться byte-identical.
+      с append-only историей. Формулировка issue «`standard` обязан остаться
+      byte-identical» уточнена владельцем 2026-08-11 до «execution, terminal
+      state и внешние контракты не меняются» — append-only записи делают
+      байтовую идентичность невозможной по построению (см. дизайн-док §3.1).
       Вход достоверный: пилот прогнал 100 leaf-задач через TDD-дисциплину,
       построенную **вне** spec-runner (плагин + 1500 строк скрипта), и все упоры
       однотипны — у задачи нет фаз. Их же выводы, без которых контракт неполон:
@@ -351,6 +354,21 @@ minor-релиза, а не багфикса.
 
 #### F. Дизайн-треки (решения владельца приняты, код не начат)
 
+- [ ] **checkpoint-and-pre-terminal-gates** (#164) — общий prerequisite: @owner:github:andrei-shtanakov @id:checkpoint-and-pre-terminal-gates
+      checkpoint-коммит (не мержится, не означает DONE) + policy-гейты между
+      ним и терминальным состоянием. Вынесен из #157 намеренно: иначе правка
+      `review_policy` случайно становилась бы правкой TDD-контракта.
+      Потребители — #157 (review) и #141 (TDD). Блокирует оба.
+- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @blocked_by:todo://spec-runner/checkpoint-and-pre-terminal-gates
+      2026-08-11: `review_policy: advisory | required`, дефолт advisory.
+      В required блокируют `failed` и **`not_run`** («не знаю» ≠ «нормально»),
+      `error` — bounded retry и затем infrastructure error, а не NEEDS_HUMAN.
+      Таблица вердиктов и lifecycle записаны в issue. Закрывает п.4 из #134.
+- [ ] **certify-oracle** — сертификация оракула отдельным направлением @owner:TBD @id:certify-oracle @trigger:"владелец решил, что пора; bootstrap при этом НЕ берём"
+      после закрытия #159: только disposable worktree, фактический
+      `test_command`, baseline принадлежит проекту (spec-runner его не
+      создаёт), проверяются и mutation, и восстановление, evidence несёт SHA,
+      команду, идентичность окружения и результат. Не запланировано.
 - [ ] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design
       `execution_mode: tdd` добавляет state machine, durable-чекпоинты, модель
       evidence, replay, операторские remedy, миграцию состояния и новую
@@ -359,15 +377,18 @@ minor-релиза, а не багфикса.
       Порядок: (0) общий контракт результата фазы, независимый от TDD и
       полезный сам по себе → (1) RED-чекпоинт → (2) байт-замок на все
       заклеймленные файлы → (3) операторские remedy → (4) GREEN/REFACTOR.
-      **Жёсткая зависимость:** нельзя начинать раньше решения по #157 —
-      `post_done` срабатывает после commit/merge, а RED_VERIFYING обязан
-      гейтить коммит, а не следовать за ним. @blocked_by:todo://spec-runner/review-policy-and-lifecycle
-- [ ] **review-policy-and-lifecycle** (#157) — может ли review блокировать @owner:TBD @id:review-policy-and-lifecycle
-      задачу вне HITL и где стадия стоит относительно commit. Не переносить
-      «просто до commit»: checkpoint-коммит существует ради стабильного SHA и
-      provenance. Закрывает попутно п.4 из #134.
-- [ ] **bootstrap-product-boundary** (#159) — берём ли мы на себя scaffolding. @owner:TBD @id:bootstrap-product-boundary
-      Плюс открытый вопрос: где живёт mutation probe, если bootstrap не берём.
+      Дизайн одобрен с пятью уточнениями (2026-08-11): гарантия standard-режима
+      сформулирована как «execution, terminal state и внешние контракты не
+      меняются» вместо байтовой идентичности (append-only записи делают её
+      невозможной); допустимые outcomes задаются по типу стадии; ReviewVerdict
+      становится outcome + detail; `execution_mode` — проектный дефолт с
+      переопределением задачи, в чекпоинт пишется effective mode и хеш конфига.
+      **Блокер — #164**, а не #157: prerequisite вынесен отдельно. @blocked_by:todo://spec-runner/checkpoint-and-pre-terminal-gates
+- [x] **bootstrap-product-boundary** (#159) — решение принято 2026-08-11: @owner:github:andrei-shtanakov @id:bootstrap-product-boundary
+      **scaffolding в core не берём** (spec-runner исполняет спеки, а не
+      выбирает layout, package manager, линтер и типчекер; presets быстро
+      стали бы вторым scaffold-фреймворком; read-only `preflight` уже покрывает
+      честную диагностику). Сертификация оракула отделена — см. `certify-oracle`.
 
 ### Battle-testing round 4 — находки с v2.16.0 (issues от 2026-08-06, run d4d33ad0) — ✅ 4/4 отгружено
 (#101/#103/#104 — в v2.17.0; #102 — цикл `review-pr` M1/M2/M3 в v2.18.0–v2.20.0)
