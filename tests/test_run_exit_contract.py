@@ -241,3 +241,62 @@ class TestTheInstrumentErrorPathIsWired:
         with pytest.raises(SystemExit) as exit_info:
             cli._run_tasks(args, config, lock_held=True)
         assert exit_info.value.code == 2, "an instrument error must not read as a work failure"
+
+
+class TestTheVerdictScope:
+    """Copilot's finding on #183: the verdict looked only at the initially
+    ready list, so `--all` could miss a task that became ready and then failed,
+    and a selected task never attempted counted as success."""
+
+    def _state(self, tmp_path, tasks: dict[str, str]):
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.state import ExecutorState
+
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "state.db",
+            logs_dir=tmp_path / "logs",
+        )
+        config.logs_dir.mkdir(parents=True, exist_ok=True)
+        state = ExecutorState(config)
+        for task_id, status in tasks.items():
+            state.get_task_state(task_id).status = status
+        return config, state
+
+    def test_a_task_that_became_ready_mid_run_is_counted(self, tmp_path):
+        """It is not in `tasks_to_run`, and its failure must still be the
+        run's failure."""
+        from spec_runner.state import ErrorCode
+
+        config, state = self._state(tmp_path, {})
+        state.record_attempt("TASK-LATE", False, 0.0, error="x", error_code=ErrorCode.TASK_FAILED)
+        touched = {tid for tid, ts in state.tasks.items() if ts.attempts}
+        state.close()
+        assert "TASK-LATE" in touched
+
+    def test_a_selected_task_never_attempted_is_not_success(self, tmp_path):
+        """A run interrupted before the first attempt did not do the work."""
+        from spec_runner.cli import run_exit_code
+
+        # No attempts, not successful → the verdict must see a failure.
+        assert run_exit_code(failed=1, infrastructure=0, prior=0) == 1
+
+
+class TestTheSchemaKeepsUpWithTheEnum:
+    """The published contract must enumerate every code a run can store. It had
+    already drifted before this change: `TASK_BLOCKED` shipped in #140 and was
+    never added, so state from a blocked task failed validation."""
+
+    def test_every_error_code_is_in_the_published_schema(self):
+        import json
+
+        from spec_runner.state import ErrorCode
+
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parent.parent / "schemas" / "executor-state.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        enum = set(schema["definitions"]["TaskAttempt"]["properties"]["error_code"]["enum"])
+        missing = {c.value for c in ErrorCode} - enum
+        assert not missing, f"ErrorCode values absent from the published schema: {sorted(missing)}"

@@ -1139,20 +1139,28 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
         # One verdict for both selectors (F-2). Counts THIS run's outcomes:
         # a task left unfinished is not a success, however the loop ended.
+        #
+        # Scope is every task this run *touched or promised to touch* — not
+        # `tasks_to_run`, which in `--all` mode is only the initially-ready
+        # list, so a task that became ready and then failed mid-loop would have
+        # gone unnoticed (Copilot, PR #183).
+        touched = {
+            tid for tid, ts in state.tasks.items() if len(ts.attempts) > attempts_before.get(tid, 0)
+        }
+        considered = touched | {t.id for t in tasks_to_run}
         run_failures = 0
         run_infrastructure = 0
-        for task in tasks_to_run:
-            ts = state.tasks.get(task.id)
-            if ts is None:
+        for task_id in sorted(considered):
+            ts = state.tasks.get(task_id)
+            if ts is not None and ts.status == "success":
                 continue
-            attempts = ts.attempts[attempts_before.get(task.id, 0) :]
-            if ts.status == "success" and not any(not a.success for a in attempts):
-                continue
-            if ts.status == "success":
-                continue
+            attempts = ts.attempts[attempts_before.get(task_id, 0) :] if ts else []
             if any(a.error_code == ErrorCode.INFRASTRUCTURE for a in attempts):
                 run_infrastructure += 1
-            elif attempts:
+            else:
+                # Includes a selected task with no attempts at all — a run
+                # interrupted before it started did not do the work, and
+                # "resumable" is not "success".
                 run_failures += 1
         exit_code = run_exit_code(
             failed=run_failures, infrastructure=run_infrastructure, prior=exit_code

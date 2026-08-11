@@ -30,9 +30,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
     and CI can act on the difference. Carried by a new
     `ErrorCode.INFRASTRUCTURE` on the attempt. A concrete failure outranks it:
     something actionable is the more useful thing to report.
+  - The verdict covers every task the run **touched or promised to touch**,
+    not the initially-ready list: in `--all` mode a task that became ready and
+    then failed mid-loop would otherwise go unnoticed, and a selected task
+    never attempted would count as success.
   - Tested through the real CLI entrypoint, because the defect lived in the
     wiring between the loop and `sys.exit` — every test that called the helper
     directly passed throughout.
+- **The published state schema had drifted from `ErrorCode`.** It never gained
+  `TASK_BLOCKED` (shipped in #140), so state from a deliberately blocked task
+  failed validation against the contract this repo publishes. Added, along with
+  the new `INFRASTRUCTURE`, and a test now compares the enum to the schema so
+  the two cannot part again.
 
 ## [2.25.0] - 2026-08-11
 
