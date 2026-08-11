@@ -62,11 +62,17 @@ distinctions the pilot needs.
 ### 2.2 The vocabulary
 
 ```
-PASS             the phase ran and its expectation held
-EXPECTED_FAIL    the phase ran and failed exactly as it was supposed to
-UNEXPECTED_FAIL  the phase ran and failed some other way
-ERROR            the phase could not produce a verdict
+PASS             ran; its expectation held
+EXPECTED_FAIL    ran; failed exactly as it was supposed to
+UNEXPECTED_FAIL  ran; failed some other way
+NOT_RUN          ran, but produced no usable verdict
+ERROR            could not run — the instrument itself broke
+SKIPPED          deliberately not executed
 ```
+
+Six, because each one implies a different move by whoever reads it: proceed;
+proceed (in TDD); fix the work; investigate the agent; fix the environment;
+nothing to do.
 
 **`EXPECTED_FAIL` vs `UNEXPECTED_FAIL` is the load-bearing distinction.** A test
 that fails because of a typo in an import looks exactly like an honest red, and
@@ -75,20 +81,50 @@ required" and lets the task proceed to green against a test that never
 exercised anything. The pilot hit this and it is the reason the split is first
 in their list.
 
-**`ERROR` is separate from failure for the same reason `not_run` is separate
-from `failed` in #138.** A broken environment or ambiguous evidence is the
-instrument failing, not the work. Silently mapping it to FAIL hides an
-instrument failure behind a work failure, and the operator debugs the wrong
-thing. We already made this mistake once with review timeouts.
+**`NOT_RUN` is not a nicety, it is the whole point of #138.** A phase that
+executed and produced nothing usable — a timeout, an empty response, output
+with no verdict marker — is not a pass and not a failure. Recording it as
+either is precisely the defect that shipped in #138: silence was being written
+down as `passed`. Generalizing the vocabulary while dropping `not_run` would
+re-open that hole for every other phase (Copilot, PR #162).
 
-`PASS`/`ERROR` map onto today's review verdicts directly; `failed` splits into
-`EXPECTED_FAIL`/`UNEXPECTED_FAIL` only where an expectation exists (in
-`standard` mode nothing expects failure, so `failed` ≡ `UNEXPECTED_FAIL`).
+The name is inherited from the shipped `ReviewVerdict` value rather than
+invented here. It is imperfect — the phase *did* run — but a second name for a
+value already in the state DB and in `docs/state-schema.md` would cost more
+than the imprecision.
+
+**`ERROR` vs `NOT_RUN`**: the instrument broke, versus the instrument ran and
+said nothing. Different fix, different owner. Collapsing them makes the
+operator debug the agent when the CLI is missing, or the environment when the
+model rambled.
+
+**`SKIPPED` vs `NOT_RUN`**: deliberate versus disappointing. A phase disabled by
+config, or unreachable because an earlier phase already failed, is a
+non-event — it must not read as a gap in the evidence.
+
+### 2.2.1 Convergence with what already exists
+
+Two surfaces already carry most of this vocabulary; the contract has to absorb
+them rather than become a third:
+
+| Phase result | `ReviewVerdict` (#138) | `preflight` status (#142a) |
+|---|---|---|
+| `PASS` | `passed` (also `fixed`) | `ok` |
+| `UNEXPECTED_FAIL` | `failed` | `empty` (an empty suite is a real, wrong answer) |
+| `NOT_RUN` | `not_run` | `unavailable` |
+| `ERROR` | `error` | `broken`, `missing` |
+| `SKIPPED` | `skipped` | `skipped` |
+| `EXPECTED_FAIL` | — (review never expects failure) | — |
+
+That the two arrived independently at the same three-way split — passed /
+could-not-establish / broken — is the main evidence that this shape is right
+and not invented for TDD.
 
 **Convergence requirement:** `ReviewVerdict` must not remain a second,
 overlapping vocabulary. Either it becomes an alias of the phase result or it is
-explicitly documented as the review-specific refinement of it. Two vocabularies
-for the same idea drift, and the drift shows up in consumers.
+explicitly documented as the review-specific refinement of it (`fixed` is a
+genuine refinement; it has no phase-level meaning). Two vocabularies for the
+same idea drift, and the drift shows up in consumers.
 
 ### 2.3 `WAIVED` is not a result
 
@@ -125,7 +161,9 @@ This is additive to the interop contract (new table, `schema_version` bumped in
 - Every existing stage records a typed result; `standard` mode behaviour is
   **byte-identical** (the results are additive record-keeping, nothing gates on
   them yet).
-- `review` uses the shared vocabulary or is documented as a refinement of it.
+- `review` uses the shared vocabulary or is documented as a refinement of it,
+  and `not_run` keeps meaning what it means today — the generalization must not
+  quietly drop the distinction #138 was built to introduce.
 - A waiver cannot be created by an agent, and a waived phase is never displayed
   as a plain pass.
 
