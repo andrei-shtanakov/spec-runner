@@ -135,6 +135,8 @@ spec-runner review-pr 6 --verify-only      # Verdicts only, read-only (exit 0/1/
 spec-runner review-pr 6 --json             # Machine-readable verdict/resolution report
 
 # Verification & Reporting (v2.0)
+spec-runner preflight                      # Read-only: what is missing before tasks can run
+spec-runner preflight --json               # Machine-readable readiness report
 spec-runner audit                          # Static pre-execution spec check
 spec-runner audit --strict                 # Fail on warnings (orphans, uncovered)
 spec-runner audit --json                   # JSON findings output (for CI)

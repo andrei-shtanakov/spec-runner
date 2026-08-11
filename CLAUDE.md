@@ -72,6 +72,8 @@ spec-runner verify                         # Verify post-execution compliance
 spec-runner verify --task=TASK-001         # Verify specific task
 spec-runner verify --json                  # JSON compliance output
 spec-runner verify --strict                # Fail on warnings too
+spec-runner preflight                      # Read-only: what is missing before tasks can run
+spec-runner preflight --json               # Machine-readable readiness report
 spec-runner audit                          # Static pre-execution spec audit
 spec-runner audit --strict                 # Treat orphans/uncovered as failures
 spec-runner audit --json|--csv             # Machine-readable output for CI
@@ -158,6 +160,7 @@ All code is in `src/spec_runner/`:
 | `spec_merge.py` | ~135 | Delta merge engine (M3): `plan_merge` (dry-run ops/conflicts) + `apply_merge` (all-or-nothing ADDED/MODIFIED/REMOVED/RENAMED by requirement id, bootstrap on empty target) + `MergeConflictError` |
 | `review_pr.py` | ~840 | Review-bot loop M1+M2 (#102): collect (gh CLI, allowed-bots filter) → `verify_comment` (fail-closed to `uncertain`; verdict discarded if the verifier mutates the tree) → `_apply_phase` (fix valid via `run_fix_agent` TDD agent, per-comment commits with `Review-Comment-Id` trailers, `_run_gates` before push, single push, thread replies with fix SHA / refutation evidence; `uncertain` never auto-answered). `ReviewPrState`: durable `pr_review_comments` (+ `resolution`/`fix_sha`/`replied_at`) and `pr_review_rounds` tables. Limits (rounds/comments/diff-lines/cost/wall) → NEEDS_HUMAN; fail-closed on dirty tree, head mismatch, force-push, push failure. `needs_human_rows` feeds `status`. Exit 0/1/2. Design: `docs/superpowers/specs/2026-08-06-review-pr-loop-design.md` |
 | `github_sync.py` | ~200 | GitHub Issues sync: `cmd_sync_to_gh` (local wins), `cmd_sync_from_gh` (remote wins), `export_gh` |
+| `preflight.py` | ~250 | Read-only readiness diagnostics (#142a): `run_preflight` returns typed `Check`s (`ok`/`missing`/`empty`/`broken`/`unavailable`/`skipped`) with a separate `blocking` flag; writes nothing, never guesses (composite `test_command` → `unavailable`), and treats an empty suite as a blocker rather than health. `--json` pinned by `schemas/preflight-result.schema.json`. Not `doctor` (which probes a CLI with a real mini-task) and not `validate` (spec contents) |
 | `audit.py` | ~280 | Pre-execution static audit: orphan tasks, dangling/uncovered refs, dead designs; text/JSON/CSV output |
 | `audit_log.py` | ~210 | Opt-in compliance audit-trail writer: JSON-Lines appender, `AuditLogger` + `NoOpAuditLogger`, thread-safe, `run_id` + operator attribution |
 | `verify.py` | ~230 | Post-execution compliance verification: traceability check, coverage, review verdicts |
