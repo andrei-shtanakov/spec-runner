@@ -68,9 +68,16 @@ def _by_id(report, check_id: str) -> Check:
 
 class TestReadOnly:
     def test_nothing_is_written(self, project, monkeypatch):
-        """A diagnostic that edits the tree cannot be trusted as a gate."""
+        """A diagnostic that edits the tree cannot be trusted as a gate.
+
+        Every external process is stubbed (Copilot, PR #158) so this does not
+        depend on the machine's uv/pytest/git — but they are stubbed *present*
+        rather than the checks disabled, so each code path still executes and
+        the assertion still means something.
+        """
+        _fake_collect(monkeypatch, returncode=0, stdout="3 tests collected\n")
         before = {p: p.stat().st_mtime_ns for p in project.rglob("*") if p.is_file()}
-        run_preflight(_cfg(project))
+        run_preflight(_cfg(project, create_git_branch=True))
         after = {p: p.stat().st_mtime_ns for p in project.rglob("*") if p.is_file()}
         assert set(after) == set(before), "preflight created or removed files"
         assert after == before, "preflight modified a file"
@@ -155,6 +162,25 @@ class TestEmptySuiteIsNotHealth:
         assert not check.blocking
         assert "composite" in check.detail.lower()
 
+    def test_composite_command_leaves_the_runner_unavailable_too(self, project):
+        """The runner check took the first program of the chain — itself a
+        guess, and the opposite of what the suite check does (Copilot, PR #158)."""
+        cfg = _cfg(project, test_command="pin_check.py && uv run pytest -q")
+        assert _by_id(run_preflight(cfg), "tests.runner").status == "unavailable"
+
+    def test_suite_is_not_collected_when_the_runner_is_missing(self, project, monkeypatch):
+        """Running a command already known to be absent turns "tool missing"
+        into "broken oracle" — command-not-found is not a collection error."""
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        ran: list[object] = []
+        from spec_runner import preflight as pf
+
+        monkeypatch.setattr(pf.subprocess, "run", lambda *a, **k: ran.append(a) or None)
+
+        check = _by_id(run_preflight(_cfg(project)), "tests.suite")
+        assert check.status == "unavailable"
+        assert not ran, "collection ran despite a missing runner"
+
     def test_non_pytest_command_is_unavailable(self, project):
         cfg = _cfg(project, test_command="cargo test")
         assert _by_id(run_preflight(cfg), "tests.suite").status == "unavailable"
@@ -165,6 +191,32 @@ class TestEmptySuiteIsNotHealth:
             check = _by_id(run_preflight(cfg), check_id)
             assert check.status == "skipped"
             assert not check.blocking
+
+
+class TestStateDirWritability:
+    def test_unwritable_ancestor_is_not_ok(self, project):
+        """`state_file.parent` may not exist yet — the executor creates it with
+        `mkdir(parents=True)`. Falling back to `project_root` reported ok even
+        when the directory that would actually be created cannot be
+        (Copilot, PR #158)."""
+        import os
+        import stat
+
+        locked = project / "locked"
+        locked.mkdir()
+        cfg = _cfg(project, state_file=locked / "sub" / "state.db")
+        os.chmod(locked, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            check = _by_id(run_preflight(cfg), "state.writable")
+        finally:
+            os.chmod(locked, stat.S_IRWXU)
+        assert check.status == "broken"
+        assert check.blocking
+        assert "locked" in check.detail
+
+    def test_creatable_directory_is_ok(self, project):
+        cfg = _cfg(project, state_file=project / "fresh" / "deeper" / "state.db")
+        assert _by_id(run_preflight(cfg), "state.writable").status == "ok"
 
 
 class TestGitUnavailable:

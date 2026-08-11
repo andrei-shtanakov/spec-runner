@@ -133,6 +133,46 @@ def _check_tool(check_id: str, command: str, *, blocking: bool, label: str) -> C
     return Check(check_id, "ok", False, f"{label} {program!r} found")
 
 
+def _check_tests(config: ExecutorConfig) -> list[Check]:
+    """Runner and suite together — the two answers have to agree (#158 review).
+
+    Three inconsistencies came from deciding them independently: the runner
+    check took the first program of a *chain* (a guess, exactly what the suite
+    check refuses to make); a missing runner still had its command executed;
+    and command-not-found then surfaced as a broken oracle rather than an
+    absent tool.
+    """
+    command = config.test_command
+    if is_composite_shell_command(command):
+        why = (
+            "composite test_command: several programs, and picking one to call "
+            "the runner would be a guess"
+        )
+        return [
+            Check("tests.runner", "unavailable", False, why),
+            Check(
+                "tests.suite",
+                "unavailable",
+                False,
+                "composite test_command: the suite was not inspected rather "
+                "than inspected by guesswork",
+            ),
+        ]
+
+    runner = _check_tool("tests.runner", command, blocking=True, label="test runner")
+    if runner.status != "ok":
+        return [
+            runner,
+            Check(
+                "tests.suite",
+                "unavailable",
+                False,
+                f"not collected: {runner.detail}",
+            ),
+        ]
+    return [runner, _check_suite(config)]
+
+
 def _check_suite(config: ExecutorConfig) -> Check:
     """Is there a test suite, and can it even be collected?
 
@@ -224,15 +264,28 @@ def _check_git(config: ExecutorConfig) -> Check:
 
 
 def _check_state_dir(config: ExecutorConfig) -> Check:
+    """Can the state directory be written — or created, as the executor will?
+
+    `state.py` does `mkdir(parents=True)`, so the question is about the nearest
+    *existing* ancestor, not about `project_root` (Copilot, PR #158): falling
+    back to the project root reported ok even when the directory that would
+    actually be created sits under an unwritable one.
+    """
     import os
 
     target = config.state_file.parent
-    probe = target if target.exists() else config.project_root
+    probe = target
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
     if not probe.exists():
         return Check("state.writable", "missing", True, f"{probe} does not exist")
-    if not os.access(probe, os.W_OK):
-        return Check("state.writable", "broken", True, f"{probe} is not writable")
-    return Check("state.writable", "ok", False, f"{probe} is writable")
+    # Creating a subdirectory needs both write and search permission here.
+    if not os.access(probe, os.W_OK | os.X_OK):
+        where = "is not writable" if probe == target else f"cannot hold {target}: not writable"
+        return Check("state.writable", "broken", True, f"{probe} {where}")
+    if probe == target:
+        return Check("state.writable", "ok", False, f"{target} is writable")
+    return Check("state.writable", "ok", False, f"{target} can be created under {probe}")
 
 
 def run_preflight(config: ExecutorConfig) -> PreflightReport:
@@ -241,10 +294,7 @@ def run_preflight(config: ExecutorConfig) -> PreflightReport:
     checks.append(_check_tool("agent.cli", config.claude_command, blocking=True, label="agent CLI"))
 
     if getattr(config, "run_tests_on_done", True):
-        checks.append(
-            _check_tool("tests.runner", config.test_command, blocking=True, label="test runner")
-        )
-        checks.append(_check_suite(config))
+        checks.extend(_check_tests(config))
     else:
         reason = "run_tests_on_done is false"
         checks.append(Check("tests.runner", "skipped", False, reason))
