@@ -28,6 +28,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`costs` contradicted itself** (F-9, found re-running the battle matrix on a
+  build from master). Cost summed attempts plus the new agent-call ledger while
+  tokens summed attempts alone, so the table reported **$0.73 spent on 10,000
+  tokens** when 15,600 were used — half of F-6, done. Tokens now come from the
+  same two sources as cost. A report that contradicts itself is worse than one
+  that under-reports consistently.
+
 - **Every retry re-authored the RED** (F-4). A task whose GREEN pass failed
   three times ran the whole RED phase three times, leaving three red commits
   and three `active` checkpoints for one task — an agent call per retry that
