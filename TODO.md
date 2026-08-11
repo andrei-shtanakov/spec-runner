@@ -277,6 +277,26 @@ A/B — дефекты подтверждённого поведения, C — 
       заранее, но бампать пин (`SPEC_RUNNER_REQUIRED_VERSION = "2.16.0"`) им
       не по чему, пока тега нет.
 
+#### F. Дизайн-треки (решения владельца приняты, код не начат)
+
+- [ ] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design
+      `execution_mode: tdd` добавляет state machine, durable-чекпоинты, модель
+      evidence, replay, операторские remedy, миграцию состояния и новую
+      терминальную семантику — каждый пункт со своим радиусом поражения.
+      Дизайн-документ: `docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md`.
+      Порядок: (0) общий контракт результата фазы, независимый от TDD и
+      полезный сам по себе → (1) RED-чекпоинт → (2) байт-замок на все
+      заклеймленные файлы → (3) операторские remedy → (4) GREEN/REFACTOR.
+      **Жёсткая зависимость:** нельзя начинать раньше решения по #157 —
+      `post_done` срабатывает после commit/merge, а RED_VERIFYING обязан
+      гейтить коммит, а не следовать за ним. @blocked_by:todo://spec-runner/review-policy-and-lifecycle
+- [ ] **review-policy-and-lifecycle** (#157) — может ли review блокировать @owner:TBD @id:review-policy-and-lifecycle
+      задачу вне HITL и где стадия стоит относительно commit. Не переносить
+      «просто до commit»: checkpoint-коммит существует ради стабильного SHA и
+      provenance. Закрывает попутно п.4 из #134.
+- [ ] **bootstrap-product-boundary** (#159) — берём ли мы на себя scaffolding. @owner:TBD @id:bootstrap-product-boundary
+      Плюс открытый вопрос: где живёт mutation probe, если bootstrap не берём.
+
 #### D. Контракт авторинга SpecMeta (steward)
 
 - [x] **#125 specmeta-owner-role-canonical** (inbox, from steward) — **ask уже удовлетворён @owner:github:andrei-shtanakov @id:specmeta-owner-role-canonical
