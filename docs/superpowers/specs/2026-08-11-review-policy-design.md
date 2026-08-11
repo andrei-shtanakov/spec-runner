@@ -24,7 +24,7 @@ Under `required`:
 | `not_run` | **blocks** | the review did not happen. "I don't know" is not "fine" — this is the #138 defect one level up |
 | `error` | bounded retry, then **infrastructure error** | the instrument broke. Not a defect in the work, and not NEEDS_HUMAN |
 | `passed` / `fixed` | proceeds | `fixed` is a kind of pass, per slice 0's reading |
-| `skipped` | config error, or an explicit operator waiver | see §5 — silently allowing it is how `required` becomes decorative |
+| `skipped` | config error, or an explicit operator waiver | see §3 — silently allowing it is how `required` becomes decorative |
 
 Lifecycle:
 
