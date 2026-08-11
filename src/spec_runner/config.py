@@ -205,6 +205,10 @@ class ExecutorConfig:
     # may override it with `**Mode:**` in tasks.md. Slice 1a declares and
     # resolves it — nothing branches on it yet.
     execution_mode: str = "standard"
+    # Which workstream a RED checkpoint belongs to (#141). Empty = derive it
+    # from the resolved project root + spec_prefix. An orchestrator that knows
+    # its own workstream identity should state it rather than have it inferred.
+    tdd_namespace: str = ""
     hitl_review: bool = False  # Interactive approval gate after code review
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
@@ -630,6 +634,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "run_review": post_done.get("run_review"),
             "review_policy": executor_config.get("review_policy"),
             "execution_mode": executor_config.get("execution_mode"),
+            "tdd_namespace": executor_config.get("tdd_namespace"),
             "hitl_review": executor_config.get("hitl_review"),
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),

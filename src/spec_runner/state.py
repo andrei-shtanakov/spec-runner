@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .gates import GateStatus as GateStatusT
+    from .tdd import RedCheckpoint as RedCheckpointT
 
 from .config import ExecutorConfig
 
@@ -335,6 +336,32 @@ class ExecutorState:
         # specific policy — hence the (checkpoint_sha, config_hash) key. A
         # verdict for another pair is not this one's, which is what stops
         # evidence from before a change legitimising the change.
+        # #141: a verified RED. Keyed by (task_id, namespace) on read because
+        # identical TASK-NNN ids from different workstreams collide once their
+        # branches meet — the pilot nearly restored one task's claim from
+        # another's honest red.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS red_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                baseline_sha TEXT NOT NULL,
+                selector TEXT NOT NULL,
+                environment_id TEXT NOT NULL,
+                execution_mode TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        # Reads are always (task_id, namespace) → latest, so give that pattern
+        # an index rather than let it become a table scan as TDD mode
+        # accumulates a row per task per retry.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_red_checkpoints_lookup "
+            "ON red_checkpoints (task_id, namespace, id DESC)"
+        )
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS gate_verdicts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -702,6 +729,63 @@ class ExecutorState:
         if row is None:
             return None
         return GateVerdict(row[0], row[1], row[2], GateStatus(row[3]), row[4], row[5])
+
+    def record_red_checkpoint(self, checkpoint: "RedCheckpointT") -> None:
+        """Persist a verified RED checkpoint (#141). Append-only."""
+        try:
+            self._insert_phase_row(
+                "INSERT INTO red_checkpoints (task_id, namespace, commit_sha, baseline_sha, "
+                "selector, environment_id, execution_mode, config_hash, outcome, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    checkpoint.task_id,
+                    checkpoint.namespace,
+                    checkpoint.commit_sha,
+                    checkpoint.baseline_sha,
+                    checkpoint.selector,
+                    checkpoint.environment_id,
+                    checkpoint.execution_mode,
+                    checkpoint.config_hash,
+                    getattr(checkpoint.outcome, "value", checkpoint.outcome),
+                    checkpoint.timestamp or datetime.now().isoformat(),
+                ),
+            )
+        except Exception as exc:  # bookkeeping must not fail a run
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record red checkpoint", task_id=checkpoint.task_id, error=str(exc)
+            )
+
+    def red_checkpoint(self, task_id: str, namespace: str) -> "RedCheckpointT | None":
+        """The latest checkpoint for this task **in this workstream**, or None.
+
+        Deliberately namespaced: a checkpoint from another workstream is not
+        this task's evidence, however identical the id.
+        """
+        from .tdd import RedCheckpoint, RedOutcome
+
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
+            "execution_mode, config_hash, outcome, timestamp FROM red_checkpoints "
+            "WHERE task_id = ? AND namespace = ? ORDER BY id DESC LIMIT 1",
+            (task_id, namespace),
+        ).fetchone()
+        if row is None:
+            return None
+        return RedCheckpoint(
+            task_id=row[0],
+            namespace=row[1],
+            commit_sha=row[2],
+            baseline_sha=row[3],
+            selector=row[4],
+            environment_id=row[5],
+            execution_mode=row[6],
+            config_hash=row[7],
+            outcome=RedOutcome(row[8]),
+            timestamp=row[9],
+        )
 
     def record_attempt(
         self,

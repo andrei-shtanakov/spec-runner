@@ -172,6 +172,32 @@ is the review policy (#157), the second TDD's confirmed red (#141).
 Experimental: shape may change while the consumers land; external consumers
 should not depend on it yet.
 
+### `red_checkpoints` (experimental, #141)
+
+A durable, **verified** claim that one test failed on one tree. Columns:
+`task_id`, `namespace`, `commit_sha`, `baseline_sha`, `selector`,
+`environment_id`, `execution_mode`, `config_hash`, `outcome`, `timestamp`.
+
+Each field earns its place:
+
+| Field | Why |
+|---|---|
+| `commit_sha` | without it replay is impossible, and "red confirmed" is trust in the agent's report — the thing the checkpoint replaces |
+| `selector` | the **full** node id. `-k`-style names match several tests, and a checkpoint matching several proves nothing about the one |
+| `baseline_sha` | red *against what* |
+| `namespace` | identical `TASK-NNN` ids from different workstreams collide once their branches meet |
+| `environment_id` | `<lockfile>:<hash>`, or `unpinned`. A replay you cannot identify proves nothing about the run it claims to reproduce |
+| `execution_mode` + `config_hash` | a checkpoint written under one policy must be distinguishable from one written under another, or replay silently re-interprets old evidence under today's rules |
+
+Reads are keyed on `(task_id, namespace)`: a checkpoint from another
+workstream is not this task's evidence, however identical the id.
+
+`outcome` is a `RedOutcome` — `expected_fail`, `not_red`, or `unverifiable`.
+Three, not two: "the test passes" is a fact about the code, "we could not find
+out" is a fact about us, and only the first refutes the claim.
+
+Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |
