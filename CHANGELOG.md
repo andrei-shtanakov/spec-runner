@@ -33,8 +33,6 @@ is a **breaking change** and requires a major version bump plus an entry here.
     rather than raised, so the machine cannot become a second and weaker
     enforcement point beside them.
 
-### Added
-
 - **`spec-runner tdd status` and `tdd checkpoints`** (F-5). The remedies
   require a `--checkpoint <id>` that **no command printed**: running them in
   the battle test meant reading SQLite and re-deriving a SHA-256 by hand.

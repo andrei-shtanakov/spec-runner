@@ -1251,6 +1251,26 @@ class ExecutorState:
         ).fetchall()
         return [{"phase": r[0], "detail": r[1], "timestamp": r[2]} for r in rows]
 
+    def tdd_phase_histories(self, namespace: str, task_ids: list[str]) -> dict[str, list[dict]]:
+        """Phase history for several tasks in one query.
+
+        `tdd status` needs every task's history at once; asking per task turned
+        one read into N (Copilot, PR #188).
+        """
+        assert self._conn is not None
+        if not task_ids:
+            return {}
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = self._conn.execute(
+            f"SELECT task_id, phase, detail, timestamp FROM tdd_phases "  # noqa: S608
+            f"WHERE namespace = ? AND task_id IN ({placeholders}) ORDER BY id",
+            [namespace, *task_ids],
+        ).fetchall()
+        grouped: dict[str, list[dict]] = {tid: [] for tid in task_ids}
+        for task_id, phase, detail, timestamp in rows:
+            grouped[task_id].append({"phase": phase, "detail": detail, "timestamp": timestamp})
+        return grouped
+
     def record_attempt(
         self,
         task_id: str,

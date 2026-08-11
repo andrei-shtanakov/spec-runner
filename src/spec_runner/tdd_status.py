@@ -36,12 +36,12 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
         active = state.active_checkpoints(namespace, task_id)
         retired = state.retired_checkpoints(namespace, task_id)
         claims = state.claims_for(namespace, task_id)
-        phases = {
-            tid: state.tdd_phase_history(tid, namespace)
-            for tid in {cp.task_id for cp in active}
+        phase_tasks = sorted(
+            {cp.task_id for cp in active}
             | {row[0] for row in retired}
             | ({task_id} if task_id else set())
-        }
+        )
+        phases = state.tdd_phase_histories(namespace, phase_tasks)
         remedies = (
             [
                 {
