@@ -260,6 +260,30 @@ for a run that had made an extra paid call per task. A failed authoring
 attempt is recorded too — money spent on a call that produced nothing usable
 is still spent.
 
+### `tdd_phases` (experimental, #141)
+
+The TDD lifecycle as a recorded machine. Columns: `task_id`, `namespace`,
+`phase`, `detail`, `timestamp`. Append-only: where a task has *been* is
+evidence, and that includes refused transitions, recorded as
+`refused:<target>`.
+
+```
+ready → red_authoring → red_verifying → green_implementing
+      → green_verifying → refactoring (skipped) → done
+```
+
+Two properties worth knowing before reading it:
+
+- **`refactoring` is materialised and never executed.** Its `detail` is
+  `skipped`, so a reader is not left wondering whether something ran. An
+  automatic refactor pass was deliberately not approved.
+- **Backwards transitions are legal.** A remedy sends a task back to authoring
+  and a retry re-enters implementation; only reaching a GREEN phase without a
+  red is refused, because that is the one transition the contract is about.
+
+Bookkeeping, not enforcement: the gates decide and read checkpoints and claims,
+which are written fail-closed. This table remembers.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |

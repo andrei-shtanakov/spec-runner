@@ -12,6 +12,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **The TDD lifecycle is a recorded state machine** (#141, slice 4a):
+  `ready → red_authoring → red_verifying → green_implementing →
+  green_verifying → refactoring → done`, persisted append-only in a new
+  `tdd_phases` table and shown by `tdd status`. Slices 1–3 built the parts;
+  where a task *was* still lived in inference.
+  - **`refactoring` is materialised and never executed.** Its record says
+    `skipped` — the vocabulary already has the word, and it is honest about a
+    stage deliberately not run. An automatic refactor pass was **not
+    approved**: under that one word a new expensive and ill-defined agent stage
+    could otherwise arrive without anyone choosing it. A test asserts nothing
+    resembling one exists.
+  - **Backwards transitions are legal**, because a remedy sends a task back to
+    authoring and a retry re-enters implementation. Only reaching a GREEN phase
+    without a red is refused — the one transition the contract is about — and
+    a refusal is itself recorded, so the history is not a record of successes
+    only.
+  - Bookkeeping, not enforcement: the gates decide and read checkpoints and
+    claims, which are written fail-closed. A refused transition here is logged
+    rather than raised, so the machine cannot become a second and weaker
+    enforcement point beside them.
+
+### Added
+
 - **`spec-runner tdd status` and `tdd checkpoints`** (F-5). The remedies
   require a `--checkpoint <id>` that **no command printed**: running them in
   the battle test meant reading SQLite and re-deriving a SHA-256 by hand.

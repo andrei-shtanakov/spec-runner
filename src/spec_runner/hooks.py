@@ -17,6 +17,7 @@ from .git_ops import (
     map_source_to_test_files,
     stage_all_except_runtime,
 )
+from .lifecycle import TddPhase
 from .logging import get_logger
 from .review import (
     REVIEW_ROLES,
@@ -254,6 +255,28 @@ def _head_sha(config: ExecutorConfig) -> str:
         cwd=config.project_root,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _record_tdd_phase(config: ExecutorConfig, task: Task, phase, detail=None) -> None:
+    """Record a lifecycle transition when the task runs under `tdd`.
+
+    Opens its own short-lived state handle: `post_done_hook` does not hold one,
+    and a phase record must not become a reason to restructure the hook.
+    Bookkeeping only — the gates decide, this remembers.
+    """
+    if config.resolve_execution_mode(task) != "tdd":
+        return
+    from .lifecycle import IllegalTransition, advance
+    from .state import ExecutorState
+    from .tdd import resolve_namespace
+
+    try:
+        with ExecutorState(config) as state:
+            advance(state, resolve_namespace(config), task.id, phase, detail)
+    except IllegalTransition as exc:
+        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
+    except Exception as exc:  # never fail a task over bookkeeping
+        logger.warning("Could not record lifecycle phase", task_id=task.id, error=str(exc))
 
 
 def _detect_candidate_drift(config: ExecutorConfig, gated_sha: str, task_id: str) -> str | None:
@@ -716,6 +739,11 @@ def post_done_hook(
     # Resolved only when something will use it — a gate to judge, or a merge to
     # protect. An unconditional `rev-parse` would be a git call on the path of
     # a project that enabled neither.
+    # #141 4a: the deterministic checks and the candidate commit are what
+    # "verifying the green" means; the phase is recorded here, once, after they
+    # have all run and before anything decides on them.
+    _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
+
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
     if has_gates():
         blocked = _run_pre_terminal_gates(
@@ -736,6 +764,12 @@ def post_done_hook(
             # commit stands, and nothing was merged — the task stays resumable,
             # and the work is committed rather than left dirty.
             return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
+
+    # Materialised, never executed (3a). The phase exists so the machine is
+    # complete and a later decision has somewhere to land; running an agent
+    # here was not approved, and the record says `skipped` rather than leaving
+    # a reader to wonder whether something ran.
+    _record_tdd_phase(config, task, TddPhase.REFACTORING)
 
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the
