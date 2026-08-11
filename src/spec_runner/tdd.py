@@ -479,7 +479,7 @@ def _config_hash(config: ExecutorConfig) -> str:
 
 def _run_agent(config: ExecutorConfig, prompt: str) -> str:
     """Run the coding agent once and return its text. Seam for tests."""
-    from .runner import build_cli_invocation, parse_cli_result
+    from .runner import agent_env, build_cli_invocation, parse_cli_result
 
     invocation = build_cli_invocation(
         cmd=config.claude_command,
@@ -495,6 +495,7 @@ def _run_agent(config: ExecutorConfig, prompt: str) -> str:
         text=True,
         timeout=config.task_timeout_minutes * 60,
         cwd=config.project_root,
+        env=agent_env(),
     )
     return parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode

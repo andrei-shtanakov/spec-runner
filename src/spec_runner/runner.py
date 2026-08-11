@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -123,6 +124,19 @@ def parse_cli_result(
         cost_usd=cost,
         is_error=returncode != 0,
     )
+
+
+def agent_env() -> dict[str, str]:
+    """Environment for an agent subprocess.
+
+    Carries `SPEC_RUNNER_AGENT=1` so operator-only commands (`tdd abandon` /
+    `tdd repair`, #141 slice 3) can refuse to run from inside an agent. A
+    **guardrail, not a boundary**: the agent runs arbitrary shell and can unset
+    it. What actually holds is that a remedy carries an operator's name.
+    """
+    env = dict(os.environ)
+    env["SPEC_RUNNER_AGENT"] = "1"
+    return env
 
 
 def log_progress(message: str, task_id: str | None = None):

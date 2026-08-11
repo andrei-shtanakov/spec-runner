@@ -1872,6 +1872,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show what would be done without changing anything",
     )
 
+    # tdd — operator remedies for a frozen red (#141 slice 3)
+    tdd_parser = subparsers.add_parser(
+        "tdd", parents=[common], help="TDD operator remedies (abandon / repair a red checkpoint)"
+    )
+    tdd_sub = tdd_parser.add_subparsers(dest="tdd_command", required=True)
+
+    tdd_abandon = tdd_sub.add_parser(
+        "abandon", parents=[common], help="This red was no good; start again (commit stays)"
+    )
+    tdd_repair = tdd_sub.add_parser(
+        "repair",
+        parents=[common],
+        help="The edit to the locked file is legitimate; open a new lineage from a commit",
+    )
+    for sub in (tdd_abandon, tdd_repair):
+        sub.add_argument("task_id", help="Task whose checkpoint is being remedied")
+        sub.add_argument(
+            "--checkpoint",
+            required=True,
+            help="The checkpoint id this remedy applies to (compare-and-swap)",
+        )
+        sub.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+        sub.add_argument("--actor", help="Who (default: git user.email)")
+    tdd_repair.add_argument("--commit", required=True, help="Commit carrying the repaired bytes")
+
     # doctor
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
@@ -2123,6 +2148,12 @@ def main():
             from .review_pr import cmd_review_pr
 
             raise SystemExit(cmd_review_pr(args, config))
+
+        # tdd remedies: a refusal is an operator-facing message, not a traceback
+        if args.command == "tdd":
+            from .remedy import cmd_tdd
+
+            raise SystemExit(cmd_tdd(args, config))
 
         # Handle unified task subcommand
         if args.command == "task":
