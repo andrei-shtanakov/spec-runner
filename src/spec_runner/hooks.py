@@ -241,7 +241,22 @@ def commit_task_work(task: Task, config: ExecutorConfig) -> str:
     return "failed"
 
 
-def _run_pre_terminal_gates(task: Task, config: ExecutorConfig) -> str | None:
+def _head_sha(config: ExecutorConfig) -> str:
+    """Current HEAD, or "" when there is no commit yet."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _run_pre_terminal_gates(
+    task: Task,
+    config: ExecutorConfig,
+    facts: dict[str, object] | None = None,
+) -> str | None:
     """Evaluate registered gates against HEAD. Returns a reason, or None to pass.
 
     An unsatisfied gate does not get its own terminal state: it reuses the
@@ -252,13 +267,8 @@ def _run_pre_terminal_gates(task: Task, config: ExecutorConfig) -> str | None:
     """
     from .state import ExecutorState
 
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    if head.returncode != 0:
+    merge_candidate = _head_sha(config)
+    if not merge_candidate:
         # No commit to judge. Refusing here would block fresh-repo bootstrap
         # over bookkeeping, so the gates simply have nothing to run against.
         logger.warning("No checkpoint commit — pre-terminal gates skipped", task_id=task.id)
@@ -268,9 +278,10 @@ def _run_pre_terminal_gates(task: Task, config: ExecutorConfig) -> str | None:
         outcome = evaluate_pre_terminal(
             GateContext(
                 task_id=task.id,
-                checkpoint_sha=head.stdout.strip(),
+                checkpoint_sha=merge_candidate,
                 config=config,
                 state=state,
+                facts=dict(facts or {}),
             )
         )
     if outcome.status is GateStatus.SATISFIED:
@@ -450,10 +461,15 @@ def post_done_hook(
     # tasks.md leftovers — history inverted relative to content. An early
     # commit also protects the work from the next task's pre-start cleanup.
     committed_pre_review = False
+    review_checkpoint_sha = ""
     if config.auto_commit and config.run_review:
         if reporter:
             reporter.enter("commit")
         committed_pre_review = commit_task_work(task, config) == "committed"
+        # #157 §2.1: the tree review is about to judge. Recorded only when a
+        # gate will actually use it — the dormant path stays free of git calls.
+        if has_gates():
+            review_checkpoint_sha = _head_sha(config)
 
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
@@ -636,7 +652,14 @@ def post_done_hook(
     # is resolved or the state DB is opened, so a project that enables nothing
     # cannot tell this code is here (criterion 8).
     if has_gates():
-        blocked = _run_pre_terminal_gates(task, config)
+        blocked = _run_pre_terminal_gates(
+            task,
+            config,
+            facts={
+                "review_verdict": review_verdict.value,
+                "review_checkpoint_sha": review_checkpoint_sha,
+            },
+        )
         if blocked is not None:
             return (False, blocked, review_verdict.value, (review_output or "")[:2048], no_op)
 

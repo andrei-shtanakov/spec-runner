@@ -2049,6 +2049,24 @@ def main():
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
 
+    # #157: a required review that never runs can only ever block. `validate`
+    # catches this in YAML; catching it here too covers `--no-review`, which
+    # sets the flag after the file is read. Refusing at startup beats
+    # discovering it at the merge gate with the work already done.
+    if config.review_policy == "required" and not config.run_review:
+        raise SystemExit(
+            "⛔ review_policy is 'required' but review is disabled "
+            "(run_review: false or --no-review) — a required review that never "
+            "runs can only ever block"
+        )
+
+    # Attach the gates this config asks for, once per process. Under the
+    # default `review_policy: advisory` nothing is registered at all, so the
+    # pre-terminal site stays dormant (#164 criterion 8).
+    from .gates import register_builtin_gates
+
+    register_builtin_gates(config)
+
     from .logging import setup_logging
 
     setup_logging(level=config.log_level, json_output=getattr(args, "log_json", False))

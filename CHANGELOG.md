@@ -12,6 +12,38 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`review_policy: advisory | required`** (#157) — review can finally withhold
+  completion, and the default (`advisory`) leaves every existing project
+  untouched. First consumer of the #164 gate mechanism, which it does not own.
+  - Under `required`: `failed` and `rejected` block; **`not_run` blocks too** —
+    the review did not happen, and "I don't know" is not "fine", which is the
+    #138 defect one level up; `error` is an *instrument* error (bounded
+    recovery, then infrastructure error — not a defect in the work and not
+    NEEDS_HUMAN); `passed`/`fixed` proceed, since `fixed` is a kind of pass
+    rather than a peer of `passed`.
+  - **The evidence names both trees.** The gate judges the *merge candidate*;
+    review judged the *review checkpoint* (the pre-review commit, #103), and a
+    `fixed` verdict means they differ. The verdict is stored against the merge
+    candidate — staleness is still judged there — while the detail records
+    which tree review actually saw. Claiming they are one tree would be the
+    dishonest option.
+  - **The gate does not read its own bookkeeping.** The verdict arrives through
+    the new `GateContext.facts`, not from `phase_results`: that write is
+    best-effort, so reading a blocking decision out of it would make "review
+    produced no verdict" indistinguishable from "we could not read our own
+    note". The first is a fact about the code, the second is our bug — a
+    missing fact is an instrument error, never a verdict.
+  - **`required` with review switched off is refused before the run starts**,
+    by `validate` for YAML and at startup for `--no-review`. A required review
+    that never runs can only ever block, and the merge gate is the wrong place
+    to learn that. The gate still fails closed if both are bypassed.
+  - Under `advisory` **no gate is registered at all** — not one that always
+    passes, which would resolve a SHA and open the state DB on every task and
+    turn #164 criterion 8 from a property into a claim.
+  - Closes #134 item 4: a review that died with an execution error while the
+    task closed as "No-op". #138/#156 made the verdict honest; this makes the
+    lifecycle respect it.
+    Design: `docs/superpowers/specs/2026-08-11-review-policy-design.md`.
 - **Pre-terminal policy gates** (#164) — the mechanism the review policy (#157)
   and TDD's confirmed red (#141) will both hang off, so that the second
   consumer does not arrive as a special case inside the first one's code.

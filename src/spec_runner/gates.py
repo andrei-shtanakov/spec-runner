@@ -31,8 +31,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from .logging import get_logger
-from .phases import check_outcome
-from .state import PhaseOutcome
+from .phases import check_outcome, review_verdict_to_phase
+from .state import PhaseOutcome, ReviewVerdict
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
@@ -80,6 +80,15 @@ class GateContext:
     checkpoint_sha: str
     config: ExecutorConfig
     state: ExecutorState | None = None
+    #: Observations the call site passes in for this evaluation.
+    #:
+    #: Deliberately not "read it back from `phase_results`". That write is
+    #: best-effort — a storage failure is swallowed so bookkeeping can never
+    #: fail a task — so reading a *blocking* decision out of it would make
+    #: "the instrument produced no verdict" indistinguishable from "we could
+    #: not read our own note". The first is a fact about the code; the second
+    #: is our bug. A missing key here is an instrument error, never a verdict.
+    facts: dict[str, object] = field(default_factory=dict)
 
     @property
     def config_hash(self) -> str:
@@ -96,8 +105,7 @@ class GateContext:
 #: rather than hashing the whole config: hashing everything would invalidate
 #: verdicts on an unrelated edit and train people to ignore staleness.
 POLICY_KEYS: set[str] = {
-    # `review_policy` joins this set when #157 lands; listing it before the key
-    # exists would hash a permanent `None` and quietly do nothing.
+    "review_policy",
     "gate_recovery_attempts",
 }
 
@@ -113,7 +121,25 @@ class GateRegistry:
     _gates: dict[str, list[tuple[str, GateEvaluator]]] = field(default_factory=dict)
 
     def register(self, gate_id: str, phase: str, evaluate: GateEvaluator) -> None:
-        self._gates.setdefault(phase, []).append((gate_id, evaluate))
+        """Register (or replace) the gate ``gate_id`` for ``phase``.
+
+        Re-registering the same id replaces it rather than stacking a
+        duplicate: `watch` puts many tasks through one process, and a gate
+        that ran twice per phase would double-count its own verdict. Distinct
+        consumers must therefore use distinct ids.
+        """
+        gates = self._gates.setdefault(phase, [])
+        for i, (existing, _) in enumerate(gates):
+            if existing == gate_id:
+                gates[i] = (gate_id, evaluate)
+                return
+        gates.append((gate_id, evaluate))
+
+    def unregister(self, gate_id: str, phase: str) -> None:
+        """Remove a gate if present. Used when a policy is turned back off."""
+        gates = self._gates.get(phase)
+        if gates:
+            self._gates[phase] = [g for g in gates if g[0] != gate_id]
 
     def for_phase(self, phase: str) -> list[tuple[str, GateEvaluator]]:
         return list(self._gates.get(phase, []))
@@ -235,6 +261,80 @@ def _evaluate_one(
     return result
 
 
+#: How each review verdict maps to a gate answer under `review_policy: required`.
+#: This table is the owner's decision, verbatim — see §1 of the design doc.
+_REVIEW_GATE: dict[ReviewVerdict, GateStatus] = {
+    ReviewVerdict.PASSED: GateStatus.SATISFIED,
+    # `fixed` is a kind of pass, not a peer of it (slice 0's reading). The
+    # fixes are commits between the review checkpoint and the merge candidate,
+    # and the deterministic gates already re-ran over them (#65).
+    ReviewVerdict.FIXED: GateStatus.SATISFIED,
+    ReviewVerdict.FAILED: GateStatus.UNSATISFIED,
+    ReviewVerdict.REJECTED: GateStatus.UNSATISFIED,
+    # The review did not happen. "I don't know" is not "fine" — the #138
+    # defect one level up.
+    ReviewVerdict.NOT_RUN: GateStatus.UNSATISFIED,
+    # The instrument broke, which is not a defect in the work. The mechanism,
+    # not this gate, decides what an exhausted error becomes.
+    ReviewVerdict.ERROR: GateStatus.INSTRUMENT_ERROR,
+    ReviewVerdict.SKIPPED: GateStatus.UNSATISFIED,
+}
+
+
+def _review_gate(ctx: GateContext) -> GateResult:
+    """Does the review policy permit this task to complete?
+
+    Reads the verdict from ``ctx.facts`` — never from `phase_results`, for the
+    reason spelled out on `GateContext.facts`.
+    """
+    raw = ctx.facts.get("review_verdict")
+    if raw is None:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run reported no review verdict to the gate",
+        )
+    outcome, verdict_detail = review_verdict_to_phase(raw)  # type: ignore[arg-type]
+    try:
+        verdict = ReviewVerdict(raw)
+    except ValueError:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, f"unrecognised review verdict {raw!r}"
+        )
+
+    status = _REVIEW_GATE.get(verdict, GateStatus.INSTRUMENT_ERROR)
+    parts = [f"review {verdict_detail or verdict.value}"]
+    # §2.1: name both trees. The gate judges the merge candidate; review judged
+    # the review checkpoint, and a `fixed` verdict means they differ. Claiming
+    # they are one tree would be the dishonest option.
+    reviewed = ctx.facts.get("review_checkpoint_sha")
+    if reviewed:
+        parts.append(f"of review checkpoint {reviewed}")
+    parts.append(f"at merge candidate {ctx.checkpoint_sha}")
+    if verdict is ReviewVerdict.SKIPPED:
+        parts.append("— review_policy is 'required' but run_review is off")
+    return GateResult(status, outcome, " ".join(parts))
+
+
+def register_builtin_gates(
+    config: ExecutorConfig,
+    registry: GateRegistry | None = None,
+) -> None:
+    """Attach the gates this config asks for. Call once per run.
+
+    Under `advisory` the review gate is **not registered at all**, rather than
+    registered as something that always passes. The difference is the whole of
+    #164 criterion 8: an always-passing gate would still resolve a checkpoint
+    SHA and open the state DB on every task, so "nothing enabled changes
+    nothing" would stop being a mechanical property and become a claim.
+    """
+    reg = registry if registry is not None else REGISTRY
+    if getattr(config, "review_policy", "advisory") == "required":
+        reg.register("review", "review", _review_gate)
+    else:
+        reg.unregister("review", "review")
+
+
 def has_gates(registry: GateRegistry | None = None) -> bool:
     """Whether anything is registered at all.
 
@@ -278,4 +378,5 @@ __all__ = [
     "evaluate_gates",
     "evaluate_pre_terminal",
     "has_gates",
+    "register_builtin_gates",
 ]
