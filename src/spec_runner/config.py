@@ -19,6 +19,12 @@ import yaml
 
 if TYPE_CHECKING:
     from .spec import StageProfile
+    from .task import Task
+
+#: Execution contracts a task can run under (#141). `standard` is the default
+#: and its guarantee is precise: execution, terminal state and external
+#: contracts do not change for a project that does not opt in.
+EXECUTION_MODES = ("standard", "tdd")
 
 # === Errors ===
 
@@ -195,6 +201,10 @@ class ExecutorConfig:
     # `advisory` (default) keeps review a report; `required` makes it a
     # pre-terminal gate — see `gates.register_builtin_gates`.
     review_policy: str = "advisory"
+    # #141: the execution contract a task runs under. Project default; a task
+    # may override it with `**Mode:**` in tasks.md. Slice 1a declares and
+    # resolves it — nothing branches on it yet.
+    execution_mode: str = "standard"
     hitl_review: bool = False  # Interactive approval gate after code review
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
@@ -422,6 +432,26 @@ class ExecutorConfig:
             return persona.model
         return self.claude_model
 
+    def resolve_execution_mode(self, task: "Task | None" = None) -> str:
+        """The mode ``task`` actually runs under: its override, else the project.
+
+        Both directions matter (owner amendment 4): a task can opt *in* while
+        the project is `standard`, and out while the project is `tdd`. A
+        one-way override would force one unsuitable task to convert the repo.
+
+        Raises:
+            ConfigError: on an unrecognised mode, naming the task when the task
+                is the one carrying it. Defaulting a typo to `standard` would
+                let a project believe it is under the contract when it is not.
+        """
+        declared = getattr(task, "execution_mode", None) if task is not None else None
+        mode = declared if declared is not None else self.execution_mode
+        if mode not in EXECUTION_MODES:
+            available = ", ".join(EXECUTION_MODES)
+            where = f" on {task.id}" if task is not None and declared is not None else ""
+            raise ConfigError(f"unknown execution_mode{where}: {mode!r}; available: {available}")
+        return mode
+
     def resolve_spec_profile(self) -> "StageProfile":
         """Resolve ``spec_profile`` (a name) to its :class:`~spec_runner.spec.StageProfile`.
 
@@ -599,6 +629,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "auto_commit": post_done.get("auto_commit"),
             "run_review": post_done.get("run_review"),
             "review_policy": executor_config.get("review_policy"),
+            "execution_mode": executor_config.get("execution_mode"),
             "hitl_review": executor_config.get("hitl_review"),
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),

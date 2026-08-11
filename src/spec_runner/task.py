@@ -50,6 +50,11 @@ CHECKLIST_ITEM = re.compile(r"^- \[([ x])\] (.+)$")
 TRACES_TO = re.compile(r"\*\*Traces to:\*\* (.+)")
 DEPENDS_ON = re.compile(r"\*\*Depends on:\*\* (.+)")
 BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
+# #141 slice 1a: a task may declare its execution mode alongside its other
+# metadata. Parsed verbatim — validating it here would either duplicate
+# `ExecutorConfig.resolve_execution_mode` or, worse, normalise a typo into a
+# mode nobody asked for.
+MODE = re.compile(r"\*\*Mode:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 
 # "review" (🔍, #66): gates passed, code review/commit still running — an
@@ -77,6 +82,10 @@ class Task:
     depends_on: list = field(default_factory=list)
     blocks: list = field(default_factory=list)
     milestone: str = ""
+    #: Per-task `execution_mode` override (#141), or None to inherit the
+    #: project default. Resolved — and validated — by
+    #: `ExecutorConfig.resolve_execution_mode`.
+    execution_mode: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -216,6 +225,11 @@ def parse_tasks(filepath: Path) -> list[Task]:
             text = blocks_match.group(1)
             if text.strip() != "—":
                 current_task.blocks = TASK_REF.findall(text)
+            continue
+
+        mode_match = MODE.search(line)
+        if mode_match:
+            current_task.execution_mode = mode_match.group(1).strip().lower()
 
     if current_task:
         tasks.append(current_task)
