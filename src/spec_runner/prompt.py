@@ -353,6 +353,7 @@ def build_gated_generation_prompt(
     spec_context: str | None = None,
     spec_rules: dict[str, list[str]] | None = None,
     statuses: dict[str, str] | None = None,
+    repair_errors: list[str] | None = None,
 ) -> str:
     """Build a rich, template-driven generation prompt for one gated stage.
 
@@ -380,6 +381,10 @@ def build_gated_generation_prompt(
             to label each block honestly. A stage that is missing here is
             assumed approved, so callers that do not track statuses render
             exactly as before.
+        repair_errors: Validation errors from a previous attempt at this same
+            stage (#160). Rendered verbatim: "try again" is not a diagnostic,
+            and the model needs the specific rule it broke. Omitted entirely on
+            a first attempt, so that prompt is byte-identical to before.
 
     Returns:
         The assembled prompt string.
@@ -424,6 +429,13 @@ def build_gated_generation_prompt(
     if stage_rules:
         parts.append("<rules>\n" + "\n".join(f"- {rule}" for rule in stage_rules) + "\n</rules>")
     parts.append(f"## DESCRIPTION\n\n{description}")
+    if repair_errors:
+        parts.append(
+            "## PREVIOUS ATTEMPT FAILED VALIDATION\n\n"
+            "Your previous attempt at this stage was rejected and NOT saved. "
+            "Fix exactly these problems; everything else about the task is "
+            "unchanged:\n\n" + "\n".join(f"- {err}" for err in repair_errors)
+        )
     if prior_block:
         parts.append(prior_block)
     parts.append(f"## TEMPLATE\n\n{template}")

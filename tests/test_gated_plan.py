@@ -44,6 +44,27 @@ GIVEN a WHEN b THEN c
 """
 
 
+# A tasks document that actually validates. Three tests below are about
+# generation mechanics (custom profiles, prompt labelling, the upstream gate),
+# not about content — but since #160 nothing is written unless it validates, so
+# a throwaway "body" would make them fail for an unrelated reason.
+GOOD_TASKS_BODY = """# Tasks
+
+## M0
+
+### TASK-001: Do the thing
+🔴 P0 | ⬜ TODO | Est: 1d
+
+**Description:** the thing
+
+**Checklist:**
+- [ ] do it
+
+**Traces to:** [REQ-001]
+**Depends on:** —
+"""
+
+
 def _fake_invoke(output: str):
     def _run(cmd, **kwargs):
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
@@ -330,7 +351,7 @@ def test_gated_generation_handles_custom_profile_stage(tmp_path, monkeypatch, ac
         "acceptance",
         "desc",
         cfg,
-        invoke=_fake_invoke("SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n"),
+        invoke=_fake_invoke(f"SPEC_TASKS_READY\n{GOOD_TASKS_BODY}\nSPEC_TASKS_END\n"),
     )
     assert rc == 0
 
@@ -364,7 +385,9 @@ def test_gated_prompt_labels_a_draft_ancestor_as_unapproved(tmp_path):
     def _capture(cmd, **kwargs):
         seen["prompt"] = "\n".join(cmd) if isinstance(cmd, list) else str(cmd)
         return SimpleNamespace(
-            returncode=0, stdout="SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n", stderr=""
+            returncode=0,
+            stdout=f"SPEC_TASKS_READY\n{GOOD_TASKS_BODY}\nSPEC_TASKS_END\n",
+            stderr="",
         )
 
     rc = cli_plan._generate_stage_draft("tasks", "desc", cfg, invoke=_capture)
@@ -391,7 +414,7 @@ def test_gated_tasks_allowed_when_only_direct_upstream_is_approved(tmp_path):
         "tasks",
         "desc",
         cfg,
-        invoke=_fake_invoke("SPEC_TASKS_READY\nbody\nSPEC_TASKS_END\n"),
+        invoke=_fake_invoke(f"SPEC_TASKS_READY\n{GOOD_TASKS_BODY}\nSPEC_TASKS_END\n"),
     )
     assert rc == 0
 

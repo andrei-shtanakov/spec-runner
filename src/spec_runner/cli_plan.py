@@ -65,6 +65,18 @@ def _open_editor(path: Path) -> None:
     subprocess.run([*shlex.split(editor), str(path)])
 
 
+def _restore(path: Path, previous: bytes | None) -> None:
+    """Put the stage file back the way it was before a rejected candidate.
+
+    A failed generation must not cost the operator the draft they already had,
+    and must not leave an invalid document that looks like an artifact (#160).
+    """
+    if previous is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_bytes(previous)
+
+
 def _generate_stage_draft(
     stage: str,
     description: str,
@@ -117,69 +129,99 @@ def _generate_stage_draft(
         ancestor_meta = read_spec_meta(stage_path(config, ancestor), stage_names)
         statuses[ancestor] = ancestor_meta.status if ancestor_meta is not None else "unmanaged"
 
-    prompt = build_gated_generation_prompt(
-        stage,
-        description,
-        context,
-        profile=profile,
-        spec_context=config.spec_context or None,
-        spec_rules=config.spec_rules or None,
-        statuses=statuses,
-    )
-    cmd = build_cli_command(
-        cmd=config.claude_command,
-        prompt=prompt,
-        model=config.claude_model,
-        template=config.command_template,
-        skip_permissions=config.skip_permissions,
-    )
-    result = invoke(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=config.task_timeout_minutes * 60,
-        cwd=config.project_root,
-    )
-    if result.returncode != 0:
-        print(f"generation failed at {stage}: {result.stderr[:300]}")
-        return 1
-
-    body = _parse_stage_marker(result.stdout, stage_def)
-    if not body:
-        print(f"no {stage} content produced (marker missing)")
-        return 1
-
     path = stage_path(config, stage)
     existing = read_spec_meta(path, stage_names)
     version = existing.version if existing is not None else 1
-    meta = SpecMeta(
-        spec_stage=stage,
-        status="draft",
-        version=version,
-        generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
-        generated_at=_now_iso(),
-        source_prompt_version=template_hash(stage, profile),
-        owner_role=existing.owner_role if existing is not None else None,
-        extra=dict(existing.extra) if existing is not None else {},
-    )
-    body = body.rstrip("\n") + "\n"
-    # A draft already knows what it was derived from, so the traceability link is
-    # stamped here; the upstream pins wait for approval, which is what they
-    # record (DEC-008, #135).
-    stamp_authoring_links(meta, config, stage, body, profile, pin_upstream=False)
     lock = ExecutorLock(config.spec_lock_file)
-    write_spec(path, meta, body, lock=lock)
+    # Bytes to restore when a candidate fails validation, so a rejected
+    # generation leaves the stage exactly as it found it (#160).
+    previous = path.read_bytes() if path.exists() else None
+    budget = max(0, int(getattr(config, "spec_repair_attempts", 2)))
+    repair_errors: list[str] | None = None
 
-    verdict = verdict_from_result(validate_spec_stage(stage, config, profile))
-    meta.validation = verdict
-    write_spec(path, meta, read_spec_body(path), lock=lock)
+    for attempt in range(budget + 1):
+        prompt = build_gated_generation_prompt(
+            stage,
+            description,
+            context,
+            profile=profile,
+            spec_context=config.spec_context or None,
+            spec_rules=config.spec_rules or None,
+            statuses=statuses,
+            repair_errors=repair_errors,
+        )
+        cmd = build_cli_command(
+            cmd=config.claude_command,
+            prompt=prompt,
+            model=config.claude_model,
+            template=config.command_template,
+            skip_permissions=config.skip_permissions,
+        )
+        result = invoke(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=config.task_timeout_minutes * 60,
+            cwd=config.project_root,
+        )
+        if result.returncode != 0:
+            print(f"generation failed at {stage}: {result.stderr[:300]}")
+            _restore(path, previous)
+            return 1
 
-    print(f"{stage}.md written as DRAFT — validation={verdict}")
-    if verdict == "fail":
-        print("  fix the errors, then `spec approve` (approve will re-validate)")
-    else:
-        print(f"  approve with: spec-runner spec approve {stage}")
-    return 0
+        body = _parse_stage_marker(result.stdout, stage_def)
+        if not body:
+            print(f"no {stage} content produced (marker missing)")
+            _restore(path, previous)
+            return 1
+
+        meta = SpecMeta(
+            spec_stage=stage,
+            status="draft",
+            version=version,
+            generated_by=f"{_harness(config)}@{config.claude_model or 'default'}",
+            generated_at=_now_iso(),
+            source_prompt_version=template_hash(stage, profile),
+            owner_role=existing.owner_role if existing is not None else None,
+            extra=dict(existing.extra) if existing is not None else {},
+        )
+        body = body.rstrip("\n") + "\n"
+        # A draft already knows what it was derived from, so the traceability
+        # link is stamped here; the upstream pins wait for approval, which is
+        # what they record (DEC-008, #135).
+        stamp_authoring_links(meta, config, stage, body, profile, pin_upstream=False)
+
+        # The candidate is validated on disk deliberately: this is the same
+        # validator the run enforces, and it resolves cross-stage references
+        # through the real sibling files — a copy in a scratch directory would
+        # be a second, drifting implementation. Nothing invalid survives the
+        # call: `_restore` puts back the previous bytes (or removes the file
+        # when there were none), so a rejected candidate never persists.
+        write_spec(path, meta, body, lock=lock)
+        result_v = validate_spec_stage(stage, config, profile)
+        verdict = verdict_from_result(result_v)
+
+        if verdict != "fail":
+            meta.validation = verdict
+            write_spec(path, meta, read_spec_body(path), lock=lock)
+            print(f"{stage}.md written as DRAFT — validation={verdict}")
+            print(f"  approve with: spec-runner spec approve {stage}")
+            return 0
+
+        _restore(path, previous)
+        repair_errors = list(result_v.errors)
+        remaining = budget - attempt
+        print(
+            f"{stage}: generated content failed validation "
+            f"({len(repair_errors)} error(s)); nothing written"
+        )
+        for err in repair_errors[:5]:
+            print(f"    • {err}")
+        if remaining:
+            print(f"  regenerating with the errors above ({remaining} attempt(s) left)")
+
+    print(f"⛔ {stage}: no valid document after {budget + 1} attempt(s) — nothing written")
+    return 1
 
 
 def run_gated_stage(

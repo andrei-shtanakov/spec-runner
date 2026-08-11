@@ -208,6 +208,10 @@ class ExecutorConfig:
 
     # Spec file prefix (e.g. "phase5-" for phase5-tasks.md)
     spec_prefix: str = ""
+    # Bounded regeneration when generated spec content fails validation (#160).
+    # Not unlimited: an LLM that cannot satisfy the validator twice will not
+    # satisfy it on the tenth try either, and each attempt costs money.
+    spec_repair_attempts: int = 2
 
     # Change-as-folder id (M2): scope every spec path to
     # spec/changes/<change_id>/ (CLI --change). Empty = flat spec/ layout.
