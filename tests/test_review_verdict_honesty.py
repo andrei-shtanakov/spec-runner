@@ -301,8 +301,6 @@ def test_state_schema_enumerates_every_verdict():
     import json
 
     schema = json.loads(Path("schemas/executor-state.schema.json").read_text())
-    attempt = schema["$defs"]["attempt"] if "$defs" in schema else None
     text = json.dumps(schema)
     for verdict in ReviewVerdict:
         assert f'"{verdict.value}"' in text, f"{verdict.value} missing from the schema"
-    assert attempt is None or True
