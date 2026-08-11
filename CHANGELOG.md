@@ -12,6 +12,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **File claims — the byte-lock behind a confirmed RED** (#141, slice 2). The
+  pilot's first version checked only the file of the current selector, so
+  neighbouring tests were protected by a sentence in the agent's prompt rather
+  than by the instrument. This is the instrument.
+  - A confirmed RED freezes the files its selector names, in a new
+    `tdd_claims` table. A refuted or unverifiable red freezes nothing — an
+    unproven claim must not hold a suite hostage.
+  - Enforcement covers **every active claim in the workstream**, whoever made
+    it, and runs **against the candidate commit** rather than the working tree:
+    a check against a mutable tree answers a question about a moment that has
+    already passed. Evaluated at both points the RED gate is — before GREEN and
+    again before merge.
+  - `modified`, `deleted` and `renamed` are distinguished. All three block; the
+    distinction is so an operator is not sent looking for a deleted file that
+    was actually moved.
+  - Hashing is git's blob SHA over **raw bytes**, with no line-ending
+    normalisation. Symlinks, paths outside the repository and non-regular files
+    are refused rather than normalised — a symlink's bytes are its target's, so
+    hashing it would freeze something the claim does not name.
+  - **The claimed file is linted before it is frozen.** After the checkpoint it
+    is byte-immutable, so lint debt that got in is uncurable without an
+    operator and hits every later task in the suite; the same trap fired three
+    times in one of the pilot's waves.
+  - A red whose commit violates someone else's active claim is refused, and
+    adds no claims of its own.
+  - Known and documented limitation: a selector names exactly one file, so a
+    test depending on a `conftest.py` fixture does **not** claim that conftest.
+    Editing the fixture can turn the red green and is not blocked. Widening the
+    claim set by import graph or coverage is a separate decision.
+    Contract: `docs/superpowers/specs/2026-08-11-claim-and-remedy-contracts.md`.
 - **The RED gate — TDD as the second consumer of #164** (#141, slice 1c).
   `execution_mode: tdd` goes from declared to enforced: the implementation pass
   does not run until a red has been *demonstrated* — authored, committed, and
