@@ -12,6 +12,7 @@ from .hooks import post_done_hook, pre_start_hook
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
 from .runner import (
+    agent_env,
     build_cli_invocation,
     check_error_patterns,
     log_progress,
@@ -219,6 +220,7 @@ def execute_task(
             text=True,
             timeout=config.task_timeout_minutes * 60,
             cwd=config.project_root,
+            env=agent_env(),
         )
 
         duration = (datetime.now() - start_time).total_seconds()

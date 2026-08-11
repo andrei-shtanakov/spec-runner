@@ -12,6 +12,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Operator remedies — `spec-runner tdd abandon` / `tdd repair`** (#141,
+  slice 3). Without them the only cure for a mistake in a byte-locked test is
+  rewriting history; the pilot did that twice in one phase. Slice 2 does not
+  ship without this, and they are one release block.
+  - Both take `--checkpoint <id>` as **compare-and-swap** against the active
+    checkpoint: a remedy issued against what the operator last saw must not
+    silently apply to whatever arrived since. `--reason` is mandatory, and the
+    actor is recorded (explicit `--actor`, else the git identity).
+  - **Nothing is deleted.** `abandon` marks the checkpoint and its claims
+    abandoned and returns the task to RED authoring; `repair` marks them
+    superseded. A retired claim is still evidence of what was believed.
+  - **`repair` does not bless bytes.** It opens a new lineage descending from
+    the checkpoint it replaces, and **re-runs the replay immediately**. A
+    repaired test that turns out to pass is recorded as `not_red` and exits 2
+    rather than reporting a plain success — otherwise `repair` would be a way
+    to launder an unconfirmed claim, the exact hole the contract closes.
+  - Repeating a remedy is idempotent, checked **before** the swap: applying it
+    retires the very checkpoint CAS compares against, so a repeat would
+    otherwise report a stale id and turn "run it twice" into an error.
+  - Refused while a live run holds the executor lock. The lock is PID-checked
+    and authoritative; a `running` row left by a crash does **not** block —
+    locking an operator out of the tool recovery needs would be the wrong
+    failure.
+  - One task's remedy leaves another task's independent claim standing.
+  - Agent subprocesses now carry `SPEC_RUNNER_AGENT=1` and the remedies refuse
+    when it is set. A **guardrail against the ordinary path, not a security
+    boundary**: the agent runs arbitrary shell and can unset it. What holds is
+    that a remedy carries an operator's name.
 - **File claims — the byte-lock behind a confirmed RED** (#141, slice 2). The
   pilot's first version checked only the file of the current selector, so
   neighbouring tests were protected by a sentence in the agent's prompt rather

@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .claims import Claim as ClaimT
     from .claims import ClaimStatus as ClaimStatusT
     from .gates import GateStatus as GateStatusT
+    from .remedy import RemedyRecord as RemedyRecordT
     from .tdd import RedCheckpoint as RedCheckpointT
 
 from .config import ExecutorConfig
@@ -354,7 +355,31 @@ class ExecutorState:
                 execution_mode TEXT NOT NULL,
                 config_hash TEXT NOT NULL,
                 outcome TEXT NOT NULL,
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active'
+            )
+        """)
+        # A dev DB from before slice 3 has no `status`; add it rather than
+        # rebuild, and default it to active so existing checkpoints keep
+        # counting.
+        if "status" not in {
+            row[1] for row in self._conn.execute("PRAGMA table_info(red_checkpoints)")
+        }:
+            self._conn.execute(
+                "ALTER TABLE red_checkpoints ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+            )
+        # #141 slice 3: remedies are authority decisions, kept forever.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tdd_remedies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                checkpoint_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                new_checkpoint_id TEXT
             )
         """)
         # #141 slice 2: a claim's own table, not a JSON column on the
@@ -736,6 +761,10 @@ class ExecutorState:
     ) -> "GateVerdict | None":
         """The latest verdict **for this exact tree and policy**, or None.
 
+        Only an **active** checkpoint counts: one retired by `tdd abandon` or
+        superseded by `tdd repair` is still evidence, but it is no longer this
+        task's standing claim (#141 slice 3).
+
         Deliberately not "the latest verdict for this task": a stale answer
         about an older SHA, or one taken under a different policy, must not
         clear the current one (#164 criterion 5).
@@ -792,7 +821,7 @@ class ExecutorState:
         row = self._conn.execute(
             "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
             "execution_mode, config_hash, outcome, timestamp FROM red_checkpoints "
-            "WHERE task_id = ? AND namespace = ? ORDER BY id DESC LIMIT 1",
+            "WHERE task_id = ? AND namespace = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
             (task_id, namespace),
         ).fetchone()
         if row is None:
@@ -880,6 +909,82 @@ class ExecutorState:
         )
         self._conn.commit()
         return cursor.rowcount
+
+    def set_checkpoint_status(self, namespace: str, checkpoint_id: str, status) -> int:
+        """Retire a checkpoint. Nothing is deleted — the row keeps its history
+        and gains a new standing."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
+            "WHERE namespace = ?",
+            (namespace,),
+        ).fetchall()
+        from .tdd import RedCheckpoint
+
+        changed = 0
+        for row in rows:
+            probe = RedCheckpoint(
+                task_id=row[1],
+                namespace=namespace,
+                commit_sha=row[2],
+                baseline_sha="",
+                selector=row[3],
+                environment_id="",
+                execution_mode="",
+                config_hash="",
+                timestamp=row[4],
+            )
+            if probe.checkpoint_id == checkpoint_id:
+                self._conn.execute(
+                    "UPDATE red_checkpoints SET status = ? WHERE id = ?",
+                    (getattr(status, "value", status), row[0]),
+                )
+                changed += 1
+        self._conn.commit()
+        return changed
+
+    def record_remedy(self, remedy: "RemedyRecordT") -> None:
+        """Persist one remedy. **Raises** on failure — like a claim and for the
+        same reason: a remedy nobody can find is indistinguishable from one that
+        never happened."""
+        self._insert_phase_row(
+            "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, reason, "
+            "actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                remedy.namespace,
+                remedy.task_id,
+                remedy.checkpoint_id,
+                getattr(remedy.operation, "value", remedy.operation),
+                remedy.reason,
+                remedy.actor,
+                remedy.timestamp,
+                remedy.new_checkpoint_id,
+            ),
+        )
+
+    def remedies(self, task_id: str, namespace: str) -> list["RemedyRecordT"]:
+        """Every remedy taken on this task in this workstream, oldest first."""
+        from .remedy import RemedyOperation, RemedyRecord
+
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT namespace, task_id, checkpoint_id, operation, reason, actor, timestamp, "
+            "new_checkpoint_id FROM tdd_remedies WHERE task_id = ? AND namespace = ? ORDER BY id",
+            (task_id, namespace),
+        ).fetchall()
+        return [
+            RemedyRecord(
+                namespace=r[0],
+                task_id=r[1],
+                checkpoint_id=r[2],
+                operation=RemedyOperation(r[3]),
+                reason=r[4],
+                actor=r[5],
+                timestamp=r[6],
+                new_checkpoint_id=r[7],
+            )
+            for r in rows
+        ]
 
     def record_attempt(
         self,

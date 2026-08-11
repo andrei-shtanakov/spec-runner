@@ -226,6 +226,23 @@ looking in different places.
 
 Experimental: the remedies that retire a claim are slice 3.
 
+### `tdd_remedies` (experimental, #141)
+
+One row per operator remedy. Columns: `namespace`, `task_id`, `checkpoint_id`,
+`operation` (`abandon` / `repair`), `reason`, `actor`, `timestamp`,
+`new_checkpoint_id`.
+
+A remedy is an **authority decision**, not an observation — hence the mandatory
+`actor` and `reason`, and hence the row being written fail-closed like a claim:
+a remedy nobody can find is indistinguishable from one that never happened.
+
+`red_checkpoints` gained a `status` column (`active` / `superseded` /
+`abandoned`) in the same slice, and `red_checkpoint()` returns only the
+**active** one. Nothing is deleted: `abandon` marks a checkpoint and its claims
+abandoned, `repair` marks them superseded and records a new lineage whose
+`baseline_sha` is the commit it replaces. Prior gate verdicts go stale by
+construction, since a verdict is keyed on the tree it judged.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |

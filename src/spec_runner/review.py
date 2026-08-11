@@ -12,7 +12,7 @@ from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
-from .runner import build_cli_command, check_error_patterns, log_progress
+from .runner import agent_env, build_cli_command, check_error_patterns, log_progress
 from .state import ReviewVerdict
 from .task import Task
 
@@ -281,6 +281,7 @@ def run_code_review(
             text=True,
             timeout=config.review_timeout_minutes * 60,
             cwd=config.project_root,
+            env=agent_env(),
         )
 
         output = result.stdout
@@ -393,6 +394,7 @@ def _run_single_role_review(
             text=True,
             timeout=config.review_timeout_minutes * 60,
             cwd=config.project_root,
+            env=agent_env(),
         )
         output = result.stdout + "\n" + result.stderr
         if result.returncode != 0:
