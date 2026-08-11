@@ -190,3 +190,119 @@ class TestVerdictVocabulary:
             "skipped",
             "rejected",
         ]
+
+
+class TestNonZeroExitIsNeverAVerdict:
+    """A crashed reviewer's stdout is not evidence (Copilot, PR #156).
+
+    The guard only covered "non-zero **and** empty output", so a process that
+    printed something before dying still had that output parsed for a marker —
+    including `REVIEW_PASSED`. That is the same class this PR exists to close:
+    output that was never a considered verdict being read as approval.
+    """
+
+    @pytest.mark.parametrize("marker", ["REVIEW_PASSED", "REVIEW_FIXED", "REVIEW_FAILED"])
+    def test_any_marker_after_a_crash_is_an_error(self, project, monkeypatch, marker):
+        _cli(monkeypatch, stdout=f"{marker}\n", returncode=1, stderr="segfault\n")
+        verdict, _, _ = run_code_review(_task(), _cfg(project))
+        assert verdict is ReviewVerdict.ERROR
+
+    def test_the_output_is_still_reported(self, project, monkeypatch):
+        """Discarding the verdict must not discard what was said — an operator
+        reading the record still needs the reviewer's last words."""
+        _cli(monkeypatch, stdout="REVIEW_FAILED: nulls unchecked\n", returncode=1)
+        _, error, output = run_code_review(_task(), _cfg(project))
+        assert error and "1" in error
+        assert output and "nulls unchecked" in output
+
+
+class TestParallelFixesAreAlwaysCommittedAndGated:
+    """A role that fixed code changed the working tree; that must not depend on
+    what the *other* roles returned (Copilot, PR #156).
+
+    With `fixed` + `not_run` the aggregate became `not_run`, which skipped the
+    commit-and-rerun-gates path — and the general auto-commit later picked the
+    same changes up without re-running any gate. Un-gated review edits landing
+    silently is exactly the failure mode this issue is about, one level down.
+    """
+
+    def _run(self, project, monkeypatch, role_verdicts: dict[str, ReviewVerdict]):
+        from spec_runner import review as review_mod
+
+        committed: list[list[str]] = []
+        monkeypatch.setattr(review_mod, "stage_all_except_runtime", lambda cfg: True)
+        monkeypatch.setattr(
+            review_mod.subprocess,
+            "run",
+            lambda cmd, *a, **k: (
+                committed.append(cmd),
+                subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr=""),
+            )[1],
+        )
+        monkeypatch.setattr(
+            review_mod,
+            "_run_single_role_review",
+            lambda role, *a, **k: (role, role_verdicts[role], f"{role} output"),
+        )
+        cfg = _cfg(project, review_parallel=True, review_roles=list(role_verdicts))
+        return review_mod.run_parallel_review(_task(), cfg), committed
+
+    def test_fixes_commit_even_when_another_role_did_not_answer(self, project, monkeypatch):
+        (verdict, _, _), committed = self._run(
+            project,
+            monkeypatch,
+            {"quality": ReviewVerdict.FIXED, "testing": ReviewVerdict.NOT_RUN},
+        )
+        assert any("commit" in c for c in committed), "review fixes were left uncommitted"
+        assert verdict is ReviewVerdict.FIXED, (
+            "gates rerun on FIXED, so a run that changed the tree must report it"
+        )
+
+    def test_fixes_commit_even_when_another_role_errored(self, project, monkeypatch):
+        (verdict, _, _), committed = self._run(
+            project,
+            monkeypatch,
+            {"quality": ReviewVerdict.FIXED, "testing": ReviewVerdict.ERROR},
+        )
+        assert any("commit" in c for c in committed)
+        assert verdict is ReviewVerdict.FIXED
+
+    def test_roles_that_did_not_answer_are_still_reported(self, project, monkeypatch):
+        (_, error, _), _ = self._run(
+            project,
+            monkeypatch,
+            {"quality": ReviewVerdict.FIXED, "testing": ReviewVerdict.NOT_RUN},
+        )
+        assert error and "testing" in error, (
+            "the silent role vanished from the record once FIXED won"
+        )
+
+    def test_findings_still_outrank_fixes(self, project, monkeypatch):
+        (verdict, _, _), _ = self._run(
+            project,
+            monkeypatch,
+            {"quality": ReviewVerdict.FAILED, "testing": ReviewVerdict.FIXED},
+        )
+        assert verdict is ReviewVerdict.FAILED
+
+    def test_all_silent_still_aggregates_to_not_run(self, project, monkeypatch):
+        (verdict, _, _), _ = self._run(
+            project,
+            monkeypatch,
+            {"quality": ReviewVerdict.NOT_RUN, "testing": ReviewVerdict.NOT_RUN},
+        )
+        assert verdict is ReviewVerdict.NOT_RUN
+
+
+def test_state_schema_enumerates_every_verdict():
+    """`schemas/executor-state.schema.json` is the frozen interop contract
+    (Copilot, PR #156): a value the code writes but the schema rejects makes
+    validating consumers fail on healthy state."""
+    import json
+
+    schema = json.loads(Path("schemas/executor-state.schema.json").read_text())
+    attempt = schema["$defs"]["attempt"] if "$defs" in schema else None
+    text = json.dumps(schema)
+    for verdict in ReviewVerdict:
+        assert f'"{verdict.value}"' in text, f"{verdict.value} missing from the schema"
+    assert attempt is None or True

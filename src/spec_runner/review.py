@@ -299,8 +299,13 @@ def run_code_review(
             log_progress(f"💥 Code review error: {error_pattern}", task.id)
             return ReviewVerdict.ERROR, f"API error: {error_pattern}", output
 
-        # Check for empty or failed response
-        if result.returncode != 0 and not output.strip():
+        # A non-zero exit means the reviewer did not finish, so whatever it
+        # managed to print is not a considered verdict — including a marker
+        # (Copilot, PR #156). The guard used to require empty output too, so a
+        # process that crashed after printing REVIEW_PASSED was believed. The
+        # output is still returned: discarding the verdict must not discard
+        # what was said.
+        if result.returncode != 0:
             log_progress(
                 f"💥 Code review error: process exited with code {result.returncode}",
                 task.id,
@@ -308,7 +313,7 @@ def run_code_review(
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
             error_msg = f"Review process exited with code {result.returncode}"
-            return ReviewVerdict.ERROR, error_msg, None
+            return ReviewVerdict.ERROR, error_msg, output or None
 
         if not output.strip():
             log_progress("⚠️ Code review produced no verdict: empty response", task.id)
@@ -390,6 +395,9 @@ def _run_single_role_review(
             cwd=config.project_root,
         )
         output = result.stdout + "\n" + result.stderr
+        if result.returncode != 0:
+            # Same rule as the single path: a crashed role has no verdict.
+            return role, ReviewVerdict.ERROR, output
         output_upper = output.upper()
         if "REVIEW_FAILED" in output_upper:
             return role, ReviewVerdict.FAILED, output
@@ -479,8 +487,23 @@ def run_parallel_review(
         elif verdict == ReviewVerdict.FIXED:
             has_fixed = True
 
+    # Precedence: findings first, then fixes, then a reviewer that broke or
+    # never answered. FIXED outranks ERROR/NOT_RUN deliberately (Copilot,
+    # PR #156): it is the verdict the pipeline acts on — `post_done_hook`
+    # re-runs tests and lint on FIXED — and a role that edited the tree must
+    # get those gates regardless of what the *other* roles managed to return.
+    # Ranking a silent role above it left the fixes to be swept up by the
+    # general auto-commit later, ungated. The silent roles are not lost: each
+    # is logged above and named in the returned reason.
+    silent = [
+        f"{role}: {verdict.value}"
+        for role, verdict, _ in results
+        if verdict in (ReviewVerdict.NOT_RUN, ReviewVerdict.ERROR)
+    ]
     if has_failed:
         overall_verdict = ReviewVerdict.FAILED
+    elif has_fixed:
+        overall_verdict = ReviewVerdict.FIXED
     elif has_error:
         overall_verdict = ReviewVerdict.ERROR
     elif has_not_run:
@@ -488,8 +511,10 @@ def run_parallel_review(
     else:
         overall_verdict = ReviewVerdict.PASSED
 
-    if overall_verdict == ReviewVerdict.PASSED and has_fixed:
-        overall_verdict = ReviewVerdict.FIXED
+    if has_fixed:
+        # Committing is driven by "a role changed the tree", not by the overall
+        # verdict: leaving the edits uncommitted here hands them to the general
+        # auto-commit, which runs no gates.
         # Commit fixes from any review agent — minus runtime state (#62)
         try:
             staged = stage_all_except_runtime(config)
@@ -507,7 +532,15 @@ def run_parallel_review(
     combined_output = "\n\n".join(all_outputs)
     log_progress(f"🔍 Parallel review result: {overall_verdict.value}", task.id)
 
-    error = "Review found issues" if overall_verdict == ReviewVerdict.FAILED else None
+    # The reason keeps every role that produced nothing, whatever the overall
+    # verdict turned out to be — otherwise a silent reviewer disappears from
+    # the record the moment another role has something to say.
+    reasons: list[str] = []
+    if overall_verdict == ReviewVerdict.FAILED:
+        reasons.append("Review found issues")
+    if silent:
+        reasons.append("no verdict from " + ", ".join(silent))
+    error = "; ".join(reasons) or None
     return overall_verdict, error, combined_output
 
 
