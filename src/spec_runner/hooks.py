@@ -32,6 +32,10 @@ from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
 
+#: Marks a pre-terminal refusal that is an instrument failure rather than a
+#: verdict on the work. Read by `execution` to classify the attempt.
+GATE_INSTRUMENT_ERROR_PREFIX = "Pre-terminal gate infrastructure error"
+
 # Re-export for backward compatibility
 __all__ = [
     "REVIEW_ROLES",
@@ -292,7 +296,10 @@ def _run_pre_terminal_gates(
     )
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
         logger.error("Pre-terminal gate could not answer", task_id=task.id, detail=detail)
-        return f"Pre-terminal gate infrastructure error: {detail}"
+        # The prefix is a contract, not prose: `execution` reads it to record
+        # INFRASTRUCTURE rather than HOOK_FAILURE, which is what makes the run
+        # exit 2 instead of 1.
+        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
     logger.warning("Pre-terminal gate unsatisfied — not merging", task_id=task.id, detail=detail)
     return f"Pre-terminal gate unsatisfied: {detail}"
 

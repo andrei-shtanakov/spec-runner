@@ -37,6 +37,11 @@ class ErrorCode(str, Enum):
     # (#140). Terminal — never retried.
     TASK_BLOCKED = "TASK_BLOCKED"
     HOOK_FAILURE = "HOOK_FAILURE"
+    # The instrument broke, so the run could not find out whether the work is
+    # good (#141 battle test, F-2). Distinct from HOOK_FAILURE because "the
+    # gate says no" and "the gate could not answer" are the two facts
+    # `GateStatus` separates, and CI deserves the same distinction.
+    INFRASTRUCTURE = "INFRASTRUCTURE"
     UNKNOWN = "UNKNOWN"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     REVIEW_REJECTED = "REVIEW_REJECTED"

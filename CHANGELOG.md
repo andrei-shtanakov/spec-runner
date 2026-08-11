@@ -10,6 +10,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`run` reported success for a run that did not finish** (F-2, found by the
+  battle test of published v2.25.0). `run --task=X` exited **0** after the task
+  failed every attempt, while `run --all` on the same repository exited 1.
+  - The selector was not the cause. The exit code was decided by *whether the
+    loop chose to stop early*, not by whether the work succeeded: `--all`
+    happens to reach an idle-stop verdict afterwards, and the fixed-list path
+    had no final judgement at all. So `--all` could report 0 the same way given
+    a failure that did not trip the stop threshold.
+  - There is now one verdict, `cli.run_exit_code`, computed from **this run's**
+    outcomes and used by both paths. A task left unfinished is not a success,
+    however the loop ended, and an exit code the loop already decided is never
+    downgraded.
+  - **New exit code 2: the instrument broke.** A pre-terminal gate that could
+    not answer is reported apart from one that said no — "I cannot tell you
+    whether the work is good" is a different sentence from "the work is bad",
+    and CI can act on the difference. Carried by a new
+    `ErrorCode.INFRASTRUCTURE` on the attempt. A concrete failure outranks it:
+    something actionable is the more useful thing to report.
+  - Tested through the real CLI entrypoint, because the defect lived in the
+    wiring between the loop and `sys.exit` — every test that called the helper
+    directly passed throughout.
+
 ## [2.25.0] - 2026-08-11
 
 ### Added

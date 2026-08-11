@@ -51,6 +51,7 @@ from .runner import (
 )
 from .spec import SpecMetaError, read_spec_meta
 from .state import (
+    ErrorCode,
     ExecutorState,
     check_stop_requested,
     clear_stop_file,
@@ -276,6 +277,33 @@ def _maybe_start_integration(args, config: ExecutorConfig):
         # existing merge stage reads config.main_branch, so main is untouched.
         config.main_branch = run.branch
     return run
+
+
+def run_exit_code(*, failed: int, infrastructure: int, prior: int) -> int:
+    """The run's exit code, decided once for every way tasks were selected.
+
+    F-2, from the battle test on v2.25.0: `run --task=X` exited 0 after the
+    task failed every attempt, while `run --all` on the same repository exited
+    1. The difference was not the selector — it was that `--all` happens to
+    reach an idle-stop verdict afterwards while the fixed-list path had no
+    final judgement at all. So the exit code was reporting *whether the loop
+    chose to stop early*, not whether the work succeeded.
+
+    - ``prior`` is an exit code the loop already decided (a stop reason). It is
+      never downgraded.
+    - ``failed`` outranks ``infrastructure``: something concrete is wrong and
+      someone can act on it, which is the more useful thing to report.
+    - ``infrastructure`` is 2, because "the instrument broke, so I cannot tell
+      you whether the work is good" is a different sentence from "the work is
+      bad" — the same distinction `GateStatus` draws.
+    """
+    if prior:
+        return prior
+    if failed:
+        return 1
+    if infrastructure:
+        return 2
+    return 0
 
 
 def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
@@ -693,6 +721,9 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         failed_attempts_before = sum(
             1 for ts in state.tasks.values() for a in ts.attempts if not a.success
         )
+        # Per-task attempt counts, so the run's verdict reads only its own
+        # attempts — an earlier run's failure must not fail this one.
+        attempts_before = {tid: len(ts.attempts) for tid, ts in state.tasks.items()}
 
         # Pre-run validation
         from .validate import format_results, validate_all
@@ -1105,6 +1136,27 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
                     exit_code = 1
                     break
+
+        # One verdict for both selectors (F-2). Counts THIS run's outcomes:
+        # a task left unfinished is not a success, however the loop ended.
+        run_failures = 0
+        run_infrastructure = 0
+        for task in tasks_to_run:
+            ts = state.tasks.get(task.id)
+            if ts is None:
+                continue
+            attempts = ts.attempts[attempts_before.get(task.id, 0) :]
+            if ts.status == "success" and not any(not a.success for a in attempts):
+                continue
+            if ts.status == "success":
+                continue
+            if any(a.error_code == ErrorCode.INFRASTRUCTURE for a in attempts):
+                run_infrastructure += 1
+            elif attempts:
+                run_failures += 1
+        exit_code = run_exit_code(
+            failed=run_failures, infrastructure=run_infrastructure, prior=exit_code
+        )
 
         # v2.3.0: persist stop-reason for this run
         state.set_meta("last_run_stop_reason", stop_reason)
