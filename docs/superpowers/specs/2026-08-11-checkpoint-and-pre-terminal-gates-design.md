@@ -148,12 +148,39 @@ both.
 
 ---
 
-## 7. Open
+## 7. Open — as resolved by the implementation
 
-1. Where the gate registry lives — config, plugin surface, or both. The
-   `plugins/` mechanism already exists and may be the honest home.
-2. What "bounded recovery" means concretely for an instrument error: attempts,
-   backoff, and whether the bound is per gate or per task.
-3. Whether an unsatisfied gate should influence the run's exit code, or only
-   the task's terminal state. The exit-code surface changed once already in
-   2.23.0 and should not drift again without a decision.
+The mechanism shipped in `spec_runner/gates.py`. What the three open questions
+turned into:
+
+1. **Where the registry lives.** A `GateRegistry` in `gates.py`, with a
+   module-level `REGISTRY` consumers attach to; `evaluate_gates` also takes an
+   explicit registry, which is what the tests use. Exposing registration
+   through config or the `plugins/` surface stays open — nothing here forecloses
+   it, and no third-party consumer exists yet to justify the surface.
+2. **Bounded recovery.** `gate_recovery_attempts` (default 1), applied **per
+   gate**, no backoff. Only `INSTRUMENT_ERROR` is retried: "the gate says no"
+   is an answer, and asking again does not make it a different one. After the
+   bound is exhausted the result is an infrastructure error — not NEEDS_HUMAN.
+3. **Exit code.** Resolved by *not* adding a surface. An unsatisfied gate takes
+   the existing "this attempt did not succeed" path: the task does not reach
+   DONE and stays resumable, the checkpoint commit stays in place, and the run's
+   exit code follows from the existing failed-task rules. So it does reach the
+   exit code — through the surface that already exists, with no new value and no
+   change to `RUN_STOP_REASONS`. Note this is not the "terminal state only"
+   reading: a gate failure is visible to CI exactly as any other unfinished task
+   is. If gate failures should instead be distinguishable at the exit surface,
+   that is a deliberate follow-up, not something to discover later.
+
+## 8. What shipped
+
+- `GateStatus` / `GateResult` / `GateContext` / `GateRegistry`, `evaluate_gates`
+  (per phase) and `evaluate_pre_terminal` (every registered phase, at the
+  pre-terminal site).
+- The `gate_verdicts` table keyed on `(task_id, gate_id, checkpoint_sha,
+  config_hash)` — see [`docs/state-schema.md`](../../state-schema.md).
+- The call site in `post_done_hook`, between the checkpoint commit and the
+  merge, guarded by `has_gates()` so the dormant path resolves no SHA and opens
+  no state.
+- No consumer. `POLICY_KEYS` does not yet list `review_policy`: that key arrives
+  with #157, and listing it early would hash a permanent `None`.

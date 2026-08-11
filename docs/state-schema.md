@@ -144,6 +144,34 @@ was waived and by whom. The harness never writes one.
 Experimental: shape may change while the later slices land; external consumers
 should not depend on it yet.
 
+### `gate_verdicts` (experimental, #164)
+
+One row per pre-terminal policy gate evaluation. Columns: `task_id`,
+`gate_id`, `checkpoint_sha`, `config_hash`, `status`, `detail`, `timestamp`.
+
+`status` is a `GateStatus` — `satisfied`, `unsatisfied`, or
+`instrument_error`. Three, not two: "the gate says no" and "the gate could not
+answer" have different owners, and only the second is retried.
+
+The load-bearing detail is the key. A lookup is
+`(task_id, gate_id, checkpoint_sha, config_hash)` and deliberately **not**
+"the latest verdict for this task": a verdict is a statement about a specific
+tree under a specific policy, and it stops being one the moment either moves.
+`config_hash` covers only the policy-bearing keys listed in
+`spec_runner.gates.POLICY_KEYS`, so an unrelated config edit does not
+invalidate a verdict — and a relevant one does.
+
+Gates run after the checkpoint commit and before merge. The commit is not
+withheld: a stable SHA is what the gate is evaluated *against*. What an
+unsatisfied gate withholds is progress past the checkpoint.
+
+Dormant until a consumer registers — with an empty registry no SHA is
+resolved, no row is written, and behaviour is unchanged. The first consumer
+is the review policy (#157), the second TDD's confirmed red (#141).
+
+Experimental: shape may change while the consumers land; external consumers
+should not depend on it yet.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |
