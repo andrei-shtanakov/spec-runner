@@ -207,6 +207,13 @@ def _evaluate_one(
     for attempt in range(budget + 1):
         try:
             result = evaluate(ctx)
+            # Type first. Without it a gate returning something GateResult-ish
+            # gets re-wrapped below, *outside* this try — and a `status` that
+            # is a bare string ("satisfied") is not a GateStatus member, so
+            # `_aggregate` would not recognise it and the phase would pass.
+            # A malformed answer must fail closed, like every other gate bug.
+            if not isinstance(result, GateResult):
+                raise TypeError(f"gate returned {type(result).__name__}, expected GateResult")
             # An outcome the phase cannot produce is a bug in the gate, and a
             # buggy gate is a broken instrument — not a licence to crash the
             # run it was supposed to judge. It is also emphatically not a pass.

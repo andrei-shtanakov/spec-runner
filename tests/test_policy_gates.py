@@ -500,3 +500,34 @@ class TestABrokenGateCannotTakeTheRunDown:
 
         assert outcome.status is GateStatus.INSTRUMENT_ERROR
         assert stored is not None, "the answer must survive a bad phase label"
+
+    def test_a_gate_returning_the_wrong_type_is_an_error_not_a_crash(self, tmp_path):
+        cfg = _cfg(tmp_path, gate_recovery_attempts=0)
+        registry = GateRegistry()
+        registry.register("stringy", "review", lambda ctx: "satisfied")  # type: ignore[arg-type,return-value]
+        with ExecutorState(cfg) as state:
+            outcome = evaluate_gates("review", _ctx(state, cfg), registry=registry)
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert "expected GateResult" in (outcome.results[0].detail or "")
+
+    def test_a_lookalike_with_a_string_status_does_not_pass(self, tmp_path):
+        """The dangerous shape: duck-typed enough to survive re-wrapping, but a
+        bare string is not a GateStatus member, so aggregation would not see the
+        "no" and the phase would sail through."""
+        from dataclasses import dataclass as _dc
+
+        @_dc
+        class _Lookalike:
+            status: str = "unsatisfied"
+            outcome: PhaseOutcome = PhaseOutcome.UNEXPECTED_FAIL
+            detail: str | None = "findings"
+
+        cfg = _cfg(tmp_path, gate_recovery_attempts=0)
+        registry = GateRegistry()
+        registry.register("lookalike", "review", lambda ctx: _Lookalike())  # type: ignore[arg-type,return-value]
+        with ExecutorState(cfg) as state:
+            outcome = evaluate_gates("review", _ctx(state, cfg), registry=registry)
+
+        assert outcome.status is not GateStatus.SATISFIED, "a malformed answer must fail closed"
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
