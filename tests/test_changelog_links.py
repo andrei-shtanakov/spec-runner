@@ -116,3 +116,39 @@ class TestTheGuardFailsLegibly:
         assume."""
         root = _project(tmp_path, "2.25.0", _changelog().replace("something", "— dashed —"))
         assert check(root) == []
+
+
+class TestDuplicateSectionsAreCaught:
+    """Twice now an insertion produced a second `### Added` inside
+    `[Unreleased]`, splitting one list in half. Invisible while editing a file
+    this long — the same reason the link check exists."""
+
+    def _write(self, tmp_path: Path, changelog: str) -> Path:
+        (tmp_path / "pyproject.toml").write_text('[project]\nversion = "2.25.0"\n')
+        (tmp_path / "CHANGELOG.md").write_text(changelog)
+        return tmp_path
+
+    def test_two_added_sections_in_one_version_are_a_problem(self, tmp_path):
+        body = _changelog().replace(
+            "## [2.25.0] - 2026-08-11\n- something",
+            "## [2.25.0] - 2026-08-11\n\n### Added\n- one\n\n### Added\n- two",
+        )
+        problems = check(self._write(tmp_path, body))
+        assert any("two '### Added' sections" in p for p in problems)
+
+    def test_the_same_heading_in_different_versions_is_fine(self, tmp_path):
+        body = (
+            _changelog()
+            .replace(
+                "## [2.25.0] - 2026-08-11\n- something",
+                "## [2.25.0] - 2026-08-11\n\n### Added\n- one",
+            )
+            .replace(
+                "## [2.24.0] - 2026-08-10\n- something older",
+                "## [2.24.0] - 2026-08-10\n\n### Added\n- older",
+            )
+        )
+        assert not [p for p in check(self._write(tmp_path, body)) if "sections" in p]
+
+    def test_the_real_changelog_has_no_duplicates(self):
+        assert not [p for p in check(Path(__file__).resolve().parent.parent) if "sections" in p]

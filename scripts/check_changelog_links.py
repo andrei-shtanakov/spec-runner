@@ -26,6 +26,8 @@ from pathlib import Path
 
 VERSION_RE = re.compile(r'^version = "(?P<v>[^"]+)"', re.MULTILINE)
 SECTION_RE = re.compile(r"^## \[(?P<v>\d+\.\d+\.\d+)\]", re.MULTILINE)
+VERSION_HEADING_RE = re.compile(r"^## \[(?P<label>[^\]]+)\]", re.MULTILINE)
+SUBSECTION_RE = re.compile(r"^### (?P<name>.+)$", re.MULTILINE)
 LINK_RE = re.compile(r"^\[(?P<label>Unreleased|\d+\.\d+\.\d+)\]:\s*(?P<url>\S+)\s*$", re.MULTILINE)
 
 
@@ -59,6 +61,7 @@ def check(root: Path) -> list[str]:
     sections = SECTION_RE.findall(changelog)
     links = {m.group("label"): m.group("url") for m in LINK_RE.finditer(changelog)}
     problems: list[str] = []
+    problems.extend(_duplicate_subsections(changelog))
 
     if not sections:
         return ["CHANGELOG has no released version sections"]
@@ -87,6 +90,27 @@ def check(root: Path) -> list[str]:
         want = f"compare/v{previous}...v{current}"
         if not released.endswith(want):
             problems.append(f"[{current}] should end with {want!r}, got {released!r}")
+    return problems
+
+
+def _duplicate_subsections(changelog: str) -> list[str]:
+    """One `### Added` per version, not two.
+
+    Twice now an insertion has produced a second `### Added` inside
+    `[Unreleased]`, splitting one list in half. Cheap to check, and the same
+    reason the link check exists: the file is long enough that the duplicate is
+    invisible while editing.
+    """
+    problems: list[str] = []
+    starts = [(m.start(), m.group("label")) for m in VERSION_HEADING_RE.finditer(changelog)]
+    for index, (offset, label) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(changelog)
+        seen: set[str] = set()
+        for sub in SUBSECTION_RE.finditer(changelog[offset:end]):
+            name = sub.group("name").strip()
+            if name in seen:
+                problems.append(f"[{label}] has two '### {name}' sections; merge them")
+            seen.add(name)
     return problems
 
 

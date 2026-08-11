@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 
 from .claims import check_claims, describe_violations, ensure_claimable, record_claims
 from .git_ops import is_composite_shell_command
+from .lifecycle import TddPhase
 from .logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -386,6 +387,7 @@ def run_red_phase(
     # something to re-derive. Re-authoring on every retry cost an agent call
     # each time and left one red commit and one active checkpoint per attempt —
     # a state the CAS-based remedies do not model.
+    _phase(state, config, task, TddPhase.RED_AUTHORING)
     reusable, ambiguity = _reusable_checkpoint(config, state, task)
     if ambiguity:
         return RedPhaseResult(RedOutcome.UNVERIFIABLE, ambiguity)
@@ -441,6 +443,7 @@ def run_red_phase(
     if lint_failure:
         return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
 
+    _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
     verification = verify_red(config, sha=sha, selector=selector, baseline_sha=baseline)
     checkpoint = RedCheckpoint(
@@ -512,6 +515,18 @@ def _lint_claimed(config: ExecutorConfig, selector: str) -> str | None:
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
     )
+
+
+def _phase(state, config, task, phase, detail=None) -> None:
+    """Record a lifecycle transition, never fail a run over one (#141 4a)."""
+    from .lifecycle import IllegalTransition, advance
+
+    try:
+        advance(state, resolve_namespace(config), task.id, phase, detail)
+    except IllegalTransition as exc:
+        # The gates are what refuse; this is the record. Raising here would
+        # make bookkeeping a second, weaker enforcement point.
+        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
 
 
 def _config_hash(config: ExecutorConfig) -> str:

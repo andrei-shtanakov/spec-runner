@@ -36,6 +36,12 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
         active = state.active_checkpoints(namespace, task_id)
         retired = state.retired_checkpoints(namespace, task_id)
         claims = state.claims_for(namespace, task_id)
+        phase_tasks = sorted(
+            {cp.task_id for cp in active}
+            | {row[0] for row in retired}
+            | ({task_id} if task_id else set())
+        )
+        phases = state.tdd_phase_histories(namespace, phase_tasks)
         remedies = (
             [
                 {
@@ -89,6 +95,10 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
             for c in claims
         ],
         "remedies": remedies,
+        "phases": {
+            tid: [{"phase": h["phase"], "detail": h["detail"]} for h in history]
+            for tid, history in phases.items()
+        },
     }
 
 
@@ -118,6 +128,13 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     *attempt* succeeded. True of the attempt and misleading about the task: it
     has no confirmed red and cannot proceed.
     """
+    history = data.get("phases", {}).get(task_id) or []
+    if history:
+        last = history[-1]["phase"]
+        if last == "done":
+            return "done"
+        if not last.startswith("refused:"):
+            return f"in {last.replace('_', ' ')}"
     active = [c for c in data["active_checkpoints"] if c["task_id"] == task_id]
     if len(active) > 1:
         return f"{len(active)} active checkpoints — ambiguous, a remedy must name one"

@@ -9,6 +9,7 @@ from .config import ExecutorConfig
 from .errors import classify
 from .harness import HarnessBaseline
 from .hooks import post_done_hook, pre_start_hook
+from .lifecycle import TddPhase
 from .logging import get_logger
 from .prompt import build_task_prompt, extract_test_failures
 from .runner import (
@@ -35,6 +36,22 @@ logger = get_logger("execution")
 
 
 # === Task Executor ===
+
+
+def _record_phase(state, config, task, phase, detail=None) -> None:
+    """Record a TDD lifecycle transition (#141 slice 4a).
+
+    Bookkeeping only: the gates decide, this remembers. A refusal here is
+    logged rather than raised, so the machine can never become a second and
+    weaker enforcement point beside the gates.
+    """
+    from .lifecycle import IllegalTransition, advance
+    from .tdd import resolve_namespace
+
+    try:
+        advance(state, resolve_namespace(config), task.id, phase, detail)
+    except IllegalTransition as exc:
+        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
 
 
 def _refusal_error_code(refusal: str) -> ErrorCode:
@@ -183,6 +200,9 @@ def execute_task(
                     else None
                 ),
             )
+
+    if config.resolve_execution_mode(task) == "tdd":
+        _record_phase(state, config, task, TddPhase.GREEN_IMPLEMENTING)
 
     # Build prompt with RetryContext
     prompt = build_task_prompt(task, config, previous_attempts, retry_context=retry_context)
@@ -379,6 +399,12 @@ def execute_task(
             )
 
             if hook_success:
+                # DONE is recorded here rather than inside the hook: the hook
+                # has several successful exits (merged, already on main, merge
+                # skipped) and the lifecycle should not have to know which one
+                # happened — only that the task finished.
+                if config.resolve_execution_mode(task) == "tdd":
+                    _record_phase(state, config, task, TddPhase.DONE)
                 state.record_attempt(
                     task_id,
                     True,

@@ -390,6 +390,22 @@ class ExecutorState:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_calls_task ON agent_calls (task_id)"
         )
+        # #141 slice 4a: where a task is in the TDD lifecycle. Append-only —
+        # where it has *been* is evidence, including refused transitions.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tdd_phases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                detail TEXT,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tdd_phases_lookup "
+            "ON tdd_phases (namespace, task_id, id)"
+        )
         # #141 slice 3: remedies are authority decisions, kept forever.
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS tdd_remedies (
@@ -1202,6 +1218,58 @@ class ExecutorState:
             # cost *report* must not be the thing that raises. Under-reporting
             # here is visible in the same place the degradation is.
             return 0.0
+
+    def record_tdd_phase(
+        self, task_id: str, namespace: str, phase: str, detail: str | None = None
+    ) -> None:
+        """Append one lifecycle transition (#141 slice 4a).
+
+        Best-effort: losing a transition costs legibility, and nothing gates on
+        it — the gates read checkpoints and claims, which are written
+        fail-closed. Logged loudly so a gap is visible rather than silent.
+        """
+        try:
+            self._insert_phase_row(
+                "INSERT INTO tdd_phases (task_id, namespace, phase, detail, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, namespace, phase, detail, datetime.now().isoformat()),
+            )
+        except Exception as exc:
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record TDD phase", task_id=task_id, phase=phase, error=str(exc)
+            )
+
+    def tdd_phase_history(self, task_id: str, namespace: str) -> list[dict]:
+        """Every transition for this task in this workstream, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT phase, detail, timestamp FROM tdd_phases "
+            "WHERE task_id = ? AND namespace = ? ORDER BY id",
+            (task_id, namespace),
+        ).fetchall()
+        return [{"phase": r[0], "detail": r[1], "timestamp": r[2]} for r in rows]
+
+    def tdd_phase_histories(self, namespace: str, task_ids: list[str]) -> dict[str, list[dict]]:
+        """Phase history for several tasks in one query.
+
+        `tdd status` needs every task's history at once; asking per task turned
+        one read into N (Copilot, PR #188).
+        """
+        assert self._conn is not None
+        if not task_ids:
+            return {}
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = self._conn.execute(
+            f"SELECT task_id, phase, detail, timestamp FROM tdd_phases "  # noqa: S608
+            f"WHERE namespace = ? AND task_id IN ({placeholders}) ORDER BY id",
+            [namespace, *task_ids],
+        ).fetchall()
+        grouped: dict[str, list[dict]] = {tid: [] for tid in task_ids}
+        for task_id, phase, detail, timestamp in rows:
+            grouped[task_id].append({"phase": phase, "detail": detail, "timestamp": timestamp})
+        return grouped
 
     def record_attempt(
         self,
