@@ -10,6 +10,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prompt templates resolve from the project, never from the current
+  directory** (issue #153). `PROMPTS_DIR` was the module-level relative
+  `Path("spec/prompts")`, i.e. resolved against the *process* CWD: running
+  spec-runner against one project from inside another silently used the
+  latter's templates — and since a project template replaces the built-in
+  prompt **wholesale**, that quietly changed what the agent was told. It had
+  already substituted a result: a test asserting the built-in prompt documents
+  `TASK_BLOCKED` received this repository's template, because pytest runs from
+  the repo root.
+  - Templates now come from `config.prompts_dir` — `spec_dir /
+    "{spec_prefix}prompts"`, so it is namespaced by `--spec-prefix` and moves
+    into the change dir under `--change`, like every other spec path. For a
+    project laid out normally (`spec/prompts/`, run from its own root) nothing
+    changes.
+  - **The CWD lookup is gone, not kept as a fallback.** It only ever worked by
+    accident, and an accidental match is exactly how the wrong project's
+    template gets picked up. `load_prompt_template` now takes an explicit
+    `prompts_dir`; omitting it means "no project template", not "search
+    somewhere sensible".
+  - Precedence is explicit and logged: CLI-specific template → generic project
+    template → built-in prompt. One `Prompt template resolved` line records
+    which file answered (or `built-in`), because that answer decides the
+    agent's instructions and previously left no trace.
+  - Inheritance of the built-in prompt by a custom template is **not** part of
+    this fix — it is a separate composition contract, and mixing it in here
+    would have hidden the isolation bug behind a feature.
+
+
 ## [2.23.0] — 2026-08-10
 
 Refusals that used to look like success. Every entry below comes from a live

@@ -8,14 +8,15 @@ for use with Claude CLI and other LLM tools.
 import hashlib
 import re
 from importlib import resources
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .config import ExecutorConfig
+from .logging import get_logger
 from .spec import LITE, StageDef, StageProfile, ancestor_stages
 from .state import RetryContext, TaskAttempt
 from .task import Task
 
-PROMPTS_DIR = Path("spec/prompts")
+logger = get_logger("prompt")
 
 
 def _stage_def(stage: str, profile: StageProfile = LITE) -> StageDef:
@@ -78,37 +79,59 @@ SPEC_STAGES: dict[str, dict[str, str]] = {
 }
 
 
-def load_prompt_template(name: str, cli_name: str = "") -> str | None:
-    """Load prompt template from spec/prompts/ directory.
+def load_prompt_template(
+    name: str,
+    cli_name: str = "",
+    *,
+    prompts_dir: Path | None = None,
+) -> str | None:
+    """Load a project-owned prompt template from ``prompts_dir``.
 
-    Tries to load CLI-specific template first (e.g., review.codex.md),
-    then falls back to generic template (e.g., review.md or review.txt).
+    Precedence: a CLI-specific template (``review.codex.md``) beats the generic
+    one (``review.md``/``review.txt``); a project template found here beats the
+    caller's built-in prompt, wholesale — there is no merging of the two.
+
+    ``prompts_dir`` is explicit and has **no default search path** (#153).
+    Passing None means "this caller has no project directory to consult", not
+    "look somewhere sensible": the previous module-level ``Path("spec/prompts")``
+    resolved against the process CWD, so running against one project from
+    inside another silently used the wrong templates. Callers pass
+    ``config.prompts_dir``.
 
     Args:
-        name: Template name without extension (e.g., 'task', 'review')
-        cli_name: CLI name for CLI-specific templates (e.g., 'codex', 'claude')
+        name: Template name without extension (e.g., 'task', 'review').
+        cli_name: CLI name or path for CLI-specific templates (e.g. 'codex').
+        prompts_dir: Directory to look in; None disables the lookup.
 
     Returns:
-        Template content, or None if not found.
+        Template content, or None when there is no project template.
     """
-    # Try CLI-specific template first
+    if prompts_dir is None:
+        return None
+
+    candidates: list[Path] = []
     if cli_name:
-        cli_lower = cli_name.lower()
-        # Extract base CLI name (e.g., "codex" from "/usr/bin/codex")
-        cli_base = cli_lower.split("/")[-1]
+        # Last path component only, so "/usr/bin/codex" matches review.codex.md.
+        # Suffixes are deliberately kept rather than taken as `Path.stem`:
+        # versioned binaries are the common case here and `claude-3.5` would
+        # become `claude-3`, silently missing the template it names. (The
+        # package is POSIX-only — `config.py` imports fcntl unconditionally —
+        # so a Windows-style separator never reaches this.)
+        cli_base = PurePosixPath(cli_name.lower()).name
+        candidates += [
+            prompts_dir / f"{name}.{cli_base}.md",
+            prompts_dir / f"{name}.{cli_base}.txt",
+        ]
+    candidates += [prompts_dir / f"{name}{ext}" for ext in (".md", ".txt")]
 
-        # Try different CLI-specific patterns
-        for pattern in [f"{name}.{cli_base}.md", f"{name}.{cli_base}.txt"]:
-            template_path = PROMPTS_DIR / pattern
-            if template_path.exists():
-                return _read_template(template_path)
+    for path in candidates:
+        if path.exists():
+            # Which template answered decides what the agent was told, so it
+            # belongs in the run's record, not just in the author's head.
+            logger.info("Prompt template resolved", template=name, source=str(path))
+            return _read_template(path)
 
-    # Try generic templates
-    for ext in [".md", ".txt"]:
-        template_path = PROMPTS_DIR / f"{name}{ext}"
-        if template_path.exists():
-            return _read_template(template_path)
-
+    logger.info("Prompt template resolved", template=name, source="built-in")
     return None
 
 
@@ -551,7 +574,7 @@ def build_task_prompt(
         persona_prompt = implementer.system_prompt.strip()
 
     # Try to load custom template
-    template = load_prompt_template("task")
+    template = load_prompt_template("task", prompts_dir=config.prompts_dir)
 
     if template:
         # Use custom template with variable substitution

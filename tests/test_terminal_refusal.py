@@ -178,16 +178,16 @@ class TestRetryClassification:
 class TestPromptTeachesTheMarker:
     """An agent cannot use a marker nobody told it about."""
 
-    def test_builtin_prompt_documents_task_blocked(self, project, tmp_path, monkeypatch):
-        """The built-in prompt, with no custom template in the way.
+    def test_builtin_prompt_documents_task_blocked(self, project):
+        """The built-in prompt, with no project template in the way.
 
-        `PROMPTS_DIR` is `Path("spec/prompts")` — relative to the *process*
-        CWD, not `config.project_root` — so without this the test picks up
-        this repository's own template instead of the one under test.
+        No monkeypatching needed since #153: templates are resolved from
+        `config.prompts_dir`, and this fixture's project has none. Before that
+        fix this test picked up *this repository's* template, because
+        `PROMPTS_DIR` was relative to the process CWD.
         """
         from spec_runner import prompt as prompt_mod
 
-        monkeypatch.setattr(prompt_mod, "PROMPTS_DIR", tmp_path / "no-templates-here")
         text = prompt_mod.build_task_prompt(_task(), _cfg(project))
         assert "TASK_BLOCKED" in text
         assert "TASK_FAILED" in text

@@ -386,6 +386,18 @@ class ExecutorConfig:
     def spec_lock_file(self) -> Path:
         return self.spec_dir / f".{self.spec_prefix}spec.lock"
 
+    @property
+    def prompts_dir(self) -> Path:
+        """Project-owned prompt templates, resolved from ``project_root`` (#153).
+
+        Namespaced by ``spec_prefix`` like the other per-phase paths, and it
+        moves into the change dir under ``--change`` because ``spec_dir`` does.
+        Previously this was the module-level relative ``Path("spec/prompts")``,
+        i.e. resolved against the process CWD: running against another project
+        from a directory that happened to have templates silently used those.
+        """
+        return self.spec_dir / f"{self.spec_prefix}prompts"
+
     def get_persona(self, role: str) -> Persona | None:
         """Get persona by role name (e.g., 'implementer', 'reviewer', 'architect')."""
         return self.personas.get(role)
