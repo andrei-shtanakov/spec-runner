@@ -135,49 +135,6 @@ class TestTheTasksFileDeclaration:
         assert tasks[0].execution_mode == "rgr"
 
 
-class TestNothingBranchesOnItYet:
-    """Slice 1a's whole claim. The mode is declarable and resolvable; no code
-    path reads it to do anything differently."""
-
-    #: Modules that decide what a run actually *does*. Declaring the mode
-    #: (config, task) and refusing a bad value (validate) are not that; those
-    #: are allowed to name it. This list is the claim: as long as none of these
-    #: mentions `execution_mode`, no execution path can branch on it.
-    EXECUTION_PATH = (
-        "execution.py",
-        "hooks.py",
-        "runner.py",
-        "review.py",
-        "gates.py",
-        "cli.py",
-    )
-
-    def test_no_execution_path_consults_the_mode(self):
-        import subprocess
-
-        repo_root = Path(__file__).resolve().parent.parent
-        out = subprocess.run(
-            ["git", "grep", "-l", "--untracked", "execution_mode", "--", "src/spec_runner"],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-        # `git grep` exits 1 when it matches nothing; anything else means the
-        # search itself failed, and an empty stdout would let this guard pass
-        # while checking nothing.
-        assert out.returncode in (0, 1), f"git grep failed ({out.returncode}): {out.stderr}"
-        touched = {Path(line.strip()).name for line in out.stdout.splitlines() if line.strip()}
-        assert {"config.py", "task.py"} <= touched, (
-            "the guard found no declaration sites — it is not searching what it thinks it is"
-        )
-        branching = touched & set(self.EXECUTION_PATH)
-        assert not branching, (
-            f"{sorted(branching)} reads execution_mode — 1a declares the mode, "
-            "it does not enforce it. Enforcement arrives with the RED checkpoint (1b/1c), "
-            "and this guard should be deleted there rather than widened here."
-        )
-
-
 class TestValidateRefusesItToo:
     """`resolve_execution_mode` raises at run time; `validate` says so first,
     which is the difference between a failed run and a message."""

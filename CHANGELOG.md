@@ -12,6 +12,35 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **The RED gate — TDD as the second consumer of #164** (#141, slice 1c).
+  `execution_mode: tdd` goes from declared to enforced: the implementation pass
+  does not run until a red has been *demonstrated* — authored, committed, and
+  replayed against that commit.
+  - A RED authoring pass runs first, told to write one failing test and **no
+    implementation** (a red that passes because the code was written alongside
+    it demonstrates nothing) and to report the full node id via a
+    `TDD_SELECTOR:` marker. The claim is replayed either way, so a wrong or
+    missing selector fails verification rather than sliding through.
+  - **The gate decides, the red phase only observes.** `run_red_phase` authors,
+    commits and replays, recording whatever it found — including a refuted
+    claim, which is evidence too. Folding the decision into the observer is how
+    the review policy and this one would drift apart, which is the reason #164
+    is its own mechanism.
+  - The same gate is evaluated at **two moments**: before implementing, and
+    again at the pre-terminal site, because "do not merge a task that never had
+    a confirmed red" is the same question. One registration, two evaluations —
+    a second gate saying the same thing would be two things to keep in step.
+  - The checkpoint must cover the tree in hand: **descent, not equality**.
+    Green *is* commits on top of the red, so demanding the same SHA would make
+    the gate unsatisfiable the moment the work it gates happens. A checkpoint
+    from another workstream, from an unrelated branch, or whose SHA no longer
+    resolves does not satisfy it.
+  - `unverifiable` reaches the gate as an *instrument error*, not a refusal:
+    "we could not find out" is a fact about us, and a refuted red is a fact
+    about the work.
+  - `execution_mode` joins `POLICY_KEYS`, so flipping the mode invalidates
+    earlier verdicts by construction. `standard` remains untouched: no gate is
+    registered, and a per-task `**Mode:** standard` opt-out reaches the gate.
 - **RED checkpoint verification** (#141, slice 1b) — the machinery that decides
   whether a claimed red is real, standalone and not yet wired in.
   - A confirmed red means **the selector was executed and failed**, replayed

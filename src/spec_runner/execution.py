@@ -36,6 +36,49 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
+def _run_red_phase_gate(task, config, state, reporter) -> str | None:
+    """Author and confirm a red, then ask the gate. Returns a refusal, or None.
+
+    The two halves are deliberately separate. `run_red_phase` *observes* — it
+    authors, commits and replays, and records whatever it found, including a
+    refuted claim. The gate *decides*. Folding the decision into the observer
+    is how the review policy and this one would drift apart, which is the whole
+    reason #164 exists as its own mechanism.
+    """
+    from .gates import GateContext, GateStatus, ensure_red_gate, evaluate_gates
+    from .tdd import run_red_phase
+
+    ensure_red_gate()
+    reporter.enter("tests")
+    red = run_red_phase(task, config, state, log_progress=lambda line: log_progress(line, task.id))
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    outcome = evaluate_gates(
+        "tests",
+        GateContext(
+            task_id=task.id,
+            checkpoint_sha=head.stdout.strip() if head.returncode == 0 else "",
+            config=config,
+            state=state,
+            facts={"execution_mode": "tdd"},
+        ),
+    )
+    if outcome.status is GateStatus.SATISFIED:
+        return None
+
+    detail = "; ".join(
+        r.detail or "" for r in outcome.results if r.status is not GateStatus.SATISFIED
+    )
+    if outcome.status is GateStatus.INSTRUMENT_ERROR:
+        return f"RED could not be verified (infrastructure): {detail or red.detail}"
+    return f"RED not confirmed, refusing to implement: {detail or red.detail}"
+
+
 def execute_task(
     task: Task,
     config: ExecutorConfig,
@@ -84,6 +127,19 @@ def execute_task(
     state.mark_running(task_id)
     update_task_status(config.tasks_file, task_id, "in_progress")
     send_callback(config.callback_url, task_id, "started")
+
+    # RED phase (#141). Under `tdd` the implementation pass does not run until
+    # a red has been *demonstrated* — authored, committed, and replayed against
+    # that commit. The gate is what refuses, not this code: TDD is a consumer
+    # of #164's mechanism, so that the review policy and this one cannot drift.
+    if config.resolve_execution_mode(task) == "tdd":
+        refusal = _run_red_phase_gate(task, config, state, reporter)
+        if refusal is not None:
+            log_progress(f"⛔ {refusal}", task_id)
+            state.record_attempt(
+                task_id, False, 0.0, error=refusal, error_code=ErrorCode.HOOK_FAILURE
+            )
+            return False
 
     # Get previous attempts for context (to inform Claude about past failures)
     task_state = state.get_task_state(task_id)
