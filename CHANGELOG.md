@@ -40,6 +40,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   - Under `advisory` **no gate is registered at all** — not one that always
     passes, which would resolve a SHA and open the state DB on every task and
     turn #164 criterion 8 from a property into a claim.
+  - The gate is evaluated **before** anything writes DONE to `tasks.md`. Running
+    it after that write left a blocked task labelled `done` — the 2.23.0 class
+    of defect (#164 criterion 1) inside the mechanism built to prevent it — and
+    made the merge candidate a tree that already claimed the task was finished,
+    which is circular. A blocked task now keeps its `review` status, its
+    checkpoint commit, and its resumability.
   - Closes #134 item 4: a review that died with an execution error while the
     task closed as "No-op". #138/#156 made the verdict honest; this makes the
     lifecycle respect it.

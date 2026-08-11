@@ -615,6 +615,34 @@ def post_done_hook(
                     )
                 logger.warning("Lint warnings after review fixes (non-blocking)")
 
+    # Pre-terminal policy gates (#164), evaluated BEFORE anything writes DONE.
+    #
+    # The checkpoint commit and the review fixes have already happened — that is
+    # the point: a gate is evaluated *against* a stable SHA. What it withholds is
+    # progress past that checkpoint, and "progress" starts with marking the task
+    # done. Running this after the DONE write left a blocked task labelled `done`
+    # in tasks.md, which is exactly the 2.23.0 class of defect (#164 criterion 1:
+    # an artifact that exists read as work that finished) inside the mechanism
+    # built to prevent it. It also made the merge candidate a tree that already
+    # claimed the task was done — circular, since that is what is being decided.
+    #
+    # Dormant until a consumer registers: `has_gates` is checked before any SHA
+    # is resolved or the state DB is opened, so a project that enables nothing
+    # cannot tell this code is here (criterion 8).
+    if has_gates():
+        blocked = _run_pre_terminal_gates(
+            task,
+            config,
+            facts={
+                "review_verdict": review_verdict.value,
+                "review_checkpoint_sha": review_checkpoint_sha,
+            },
+        )
+        if blocked is not None:
+            # tasks.md still says `review` (or `in_progress`), the checkpoint
+            # commit stands, and nothing was merged — the task stays resumable.
+            return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
+
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the
     # old code did in execution.py) left the update in the working tree post-merge
@@ -644,24 +672,6 @@ def post_done_hook(
                 no_op = True
         except Exception as e:
             logger.error("Commit failed", error=str(e))
-
-    # Pre-terminal policy gates (#164). The checkpoint commit above has already
-    # happened — that is the point: a gate is evaluated *against* a stable SHA.
-    # What it withholds is progress past the checkpoint, i.e. merge and DONE.
-    # Dormant until a consumer registers: `has_gates` is checked before any SHA
-    # is resolved or the state DB is opened, so a project that enables nothing
-    # cannot tell this code is here (criterion 8).
-    if has_gates():
-        blocked = _run_pre_terminal_gates(
-            task,
-            config,
-            facts={
-                "review_verdict": review_verdict.value,
-                "review_checkpoint_sha": review_checkpoint_sha,
-            },
-        )
-        if blocked is not None:
-            return (False, blocked, review_verdict.value, (review_output or "")[:2048], no_op)
 
     # Merge branch to main
     if config.create_git_branch:

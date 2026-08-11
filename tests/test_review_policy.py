@@ -316,3 +316,123 @@ class TestTheLifecycleActuallyBlocks:
         register_builtin_gates(_cfg(tmp_path, review_policy="advisory"), registry=registry)
         monkeypatch.setattr(gates_mod, "REGISTRY", registry)
         assert gates_mod.has_gates() is False
+
+
+class TestABlockedTaskIsNotMarkedDone:
+    """Copilot's finding on #170, and the sharpest possible instance of #164
+    criterion 1: the gate ran *after* tasks.md was written `done`, so a blocked
+    task looked terminal — the 2.23.0 defect inside the mechanism built to
+    prevent it."""
+
+    def _tasks_file(self, tmp_path: Path) -> Path:
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir(exist_ok=True)
+        path = spec_dir / "tasks.md"
+        path.write_text(
+            "# Tasks\n\n"
+            "### TASK-001: do the thing\n"
+            "\U0001f7e0 P1 | \U0001f504 IN_PROGRESS\n"
+            "Est: 1d\n\n"
+            "- [ ] Do it\n"
+        )
+        return path
+
+    def test_an_unsatisfied_gate_leaves_tasks_md_alone(self, tmp_path, monkeypatch):
+        from spec_runner import gates as gates_mod
+        from spec_runner import hooks
+        from spec_runner.task import Task
+
+        tasks_file = self._tasks_file(tmp_path)
+        registry = GateRegistry()
+        cfg = _cfg(
+            tmp_path,
+            review_policy="required",
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+        )
+        register_builtin_gates(cfg, registry=registry)
+        monkeypatch.setattr(gates_mod, "REGISTRY", registry)
+
+        class _Ok:
+            returncode = 0
+            stdout = "merge0candidate\n"
+            stderr = ""
+
+        monkeypatch.setattr(hooks.subprocess, "run", lambda *a, **k: _Ok())
+        monkeypatch.setattr(
+            hooks,
+            "run_code_review",
+            lambda *a, **k: (ReviewVerdict.FAILED, "two findings", "output"),
+        )
+
+        task = Task(
+            id="TASK-001", name="do the thing", priority="p1", status="review", estimate="1h"
+        )
+        success, error, verdict, _findings, no_op = hooks.post_done_hook(task, cfg, True)
+
+        assert success is False
+        assert "unsatisfied" in (error or "").lower()
+        assert "DONE" not in tasks_file.read_text(), (
+            "a task the gate refused must not be labelled done"
+        )
+        assert no_op is False
+
+    def test_a_satisfied_gate_does_write_done(self, tmp_path, monkeypatch):
+        """The companion to the test above: without it, the negative assertion
+        would also pass if the DONE write were simply unreachable here."""
+        from spec_runner import gates as gates_mod
+        from spec_runner import hooks
+        from spec_runner.task import Task
+
+        tasks_file = self._tasks_file(tmp_path)
+        registry = GateRegistry()
+        cfg = _cfg(
+            tmp_path,
+            review_policy="required",
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+        )
+        register_builtin_gates(cfg, registry=registry)
+        monkeypatch.setattr(gates_mod, "REGISTRY", registry)
+
+        class _Ok:
+            returncode = 0
+            stdout = "merge0candidate\n"
+            stderr = ""
+
+        monkeypatch.setattr(hooks.subprocess, "run", lambda *a, **k: _Ok())
+        monkeypatch.setattr(
+            hooks, "run_code_review", lambda *a, **k: (ReviewVerdict.PASSED, None, "output")
+        )
+
+        task = Task(
+            id="TASK-001", name="do the thing", priority="p1", status="review", estimate="1h"
+        )
+        success, _error, _verdict, _findings, _no_op = hooks.post_done_hook(task, cfg, True)
+
+        assert success is True
+        assert "DONE" in tasks_file.read_text()
+
+
+class TestAMalformedVerdictFactFailsCleanly:
+    """`facts` is `dict[str, object]`; deciding what a verdict means before
+    knowing it is one turns a bad fact into an exception."""
+
+    @pytest.mark.parametrize("bad", [5, ["passed"], object()])
+    def test_a_non_verdict_is_an_instrument_error(self, tmp_path, bad):
+        outcome = _run(tmp_path, bad)
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert "expected a ReviewVerdict" in (outcome.results[0].detail or "")
+
+    def test_an_unrecognised_verdict_string_is_an_instrument_error(self, tmp_path):
+        outcome = _run(tmp_path, "mostly-fine")
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert "unrecognised" in (outcome.results[0].detail or "")
+
+    def test_review_verdict_to_phase_never_raises_on_a_non_verdict(self):
+        from spec_runner.phases import review_verdict_to_phase
+
+        outcome, detail = review_verdict_to_phase(5)  # type: ignore[arg-type]
+        assert outcome is PhaseOutcome.ERROR and detail == "5"

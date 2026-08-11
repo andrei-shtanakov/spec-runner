@@ -294,13 +294,23 @@ def _review_gate(ctx: GateContext) -> GateResult:
             PhaseOutcome.ERROR,
             "the run reported no review verdict to the gate",
         )
-    outcome, verdict_detail = review_verdict_to_phase(raw)  # type: ignore[arg-type]
+    # Parse before reading. `facts` is `dict[str, object]`, so a call site can
+    # put anything in it; deciding what the verdict *means* before knowing it
+    # is a verdict is how a malformed fact becomes an exception instead of a
+    # clean instrument error.
+    if not isinstance(raw, ReviewVerdict | str):
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            f"review verdict is a {type(raw).__name__}, expected a ReviewVerdict",
+        )
     try:
         verdict = ReviewVerdict(raw)
     except ValueError:
         return GateResult(
             GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, f"unrecognised review verdict {raw!r}"
         )
+    outcome, verdict_detail = review_verdict_to_phase(verdict)
 
     status = _REVIEW_GATE.get(verdict, GateStatus.INSTRUMENT_ERROR)
     parts = [f"review {verdict_detail or verdict.value}"]
