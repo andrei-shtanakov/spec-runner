@@ -10,6 +10,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.26.0] - 2026-08-12
+
 ### Added
 
 - **The TDD lifecycle is a recorded state machine** (#141, slice 4a):
@@ -1823,7 +1825,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.25.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...HEAD
+[2.26.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.24.0...v2.25.0
 [2.24.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.23.0...v2.24.0
 [2.23.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.22.0...v2.23.0
