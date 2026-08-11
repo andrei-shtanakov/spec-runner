@@ -243,6 +243,23 @@ abandoned, `repair` marks them superseded and records a new lineage whose
 `baseline_sha` is the commit it replaces. Prior gate verdicts go stale by
 construction, since a verdict is keyed on the tree it judged.
 
+### `agent_calls` (experimental, #141)
+
+One row per agent invocation whose cost has nowhere else to live. Columns:
+`task_id`, `provenance`, `input_tokens`, `output_tokens`, `cost_usd`,
+`timestamp`.
+
+`provenance` is `red_authoring` today. The GREEN/exec pass keeps its cost on
+the attempt row, where the schema above already publishes it, so the ledger
+holds only the calls that were previously invisible — which is why
+`total_cost()` can sum both without double counting.
+
+Added because the TDD RED pass parsed its CLI result and kept only the text:
+its tokens and cost were discarded, so `spec-runner costs` reported `$0.00`
+for a run that had made an extra paid call per task. A failed authoring
+attempt is recorded too — money spent on a call that produced nothing usable
+is still spent.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |

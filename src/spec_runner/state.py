@@ -373,6 +373,23 @@ class ExecutorState:
             self._conn.execute(
                 "ALTER TABLE red_checkpoints ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
+        # #141 F-6: every agent invocation, with the phase that made it. The
+        # RED pass's cost was simply discarded, so a TDD run's extra call was
+        # invisible in `costs` — money nobody could see.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cost_usd REAL,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_calls_task ON agent_calls (task_id)"
+        )
         # #141 slice 3: remedies are authority decisions, kept forever.
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS tdd_remedies (
@@ -1105,6 +1122,87 @@ class ExecutorState:
             for r in rows
         ]
 
+    def record_agent_call(
+        self,
+        task_id: str,
+        provenance: str,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        """Record one agent invocation and what it cost (#141 F-6).
+
+        Best-effort like the other bookkeeping: an accounting row must not be
+        able to fail a task. Unlike a claim, nothing *gates* on it — losing one
+        costs visibility, which is the very thing being fixed, so it is logged
+        loudly rather than swallowed silently.
+        """
+        try:
+            self._insert_phase_row(
+                "INSERT INTO agent_calls "
+                "(task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    provenance,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    datetime.now().isoformat(),
+                ),
+            )
+        except Exception as exc:
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record agent call cost",
+                task_id=task_id,
+                provenance=provenance,
+                error=str(exc),
+            )
+
+    def agent_calls(self, task_id: str | None = None) -> list[dict]:
+        """Recorded agent invocations, oldest first."""
+        assert self._conn is not None
+        sql = (
+            "SELECT task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp "
+            "FROM agent_calls"
+        )
+        params: list[object] = []
+        if task_id:
+            sql += " WHERE task_id = ?"
+            params.append(task_id)
+        rows = self._conn.execute(sql + " ORDER BY id", params).fetchall()
+        return [
+            {
+                "task_id": r[0],
+                "provenance": r[1],
+                "input_tokens": r[2],
+                "output_tokens": r[3],
+                "cost_usd": r[4],
+                "timestamp": r[5],
+            }
+            for r in rows
+        ]
+
+    def _ledger_cost(self, task_id: str | None = None) -> float:
+        """Cost from the agent-call ledger — calls whose money is *not* on an
+        attempt (the exec pass keeps its own columns, for the state schema)."""
+        sql = "SELECT COALESCE(SUM(cost_usd), 0.0) FROM agent_calls"
+        params: list[object] = []
+        if task_id:
+            sql += " WHERE task_id = ?"
+            params.append(task_id)
+        try:
+            assert self._conn is not None
+            return float(self._conn.execute(sql, params).fetchone()[0] or 0.0)
+        except Exception:
+            # Degraded mode: the in-memory state keeps serving the run, and a
+            # cost *report* must not be the thing that raises. Under-reporting
+            # here is visible in the same place the degradation is.
+            return 0.0
+
     def record_attempt(
         self,
         task_id: str,
@@ -1384,17 +1482,28 @@ class ExecutorState:
         return self.stop_cause() is not None
 
     def total_cost(self) -> float:
-        """Sum of cost_usd across all attempts."""
-        return sum(
-            a.cost_usd for ts in self.tasks.values() for a in ts.attempts if a.cost_usd is not None
+        """Every dollar this run can account for.
+
+        Attempts carry the exec pass; `agent_calls` carries the ones that never
+        had a home — the TDD RED authoring pass, whose cost used to be parsed
+        and thrown away (#141 F-6). Summing both is safe precisely because the
+        ledger holds only calls that are *not* on an attempt.
+        """
+        return (
+            sum(
+                a.cost_usd
+                for ts in self.tasks.values()
+                for a in ts.attempts
+                if a.cost_usd is not None
+            )
+            + self._ledger_cost()
         )
 
     def task_cost(self, task_id: str) -> float:
-        """Sum of cost_usd for a specific task."""
+        """Sum of cost_usd for a specific task, attempts plus ledger."""
         ts = self.tasks.get(task_id)
-        if not ts:
-            return 0.0
-        return sum(a.cost_usd for a in ts.attempts if a.cost_usd is not None)
+        attempts = sum(a.cost_usd for a in ts.attempts if a.cost_usd is not None) if ts else 0.0
+        return attempts + self._ledger_cost(task_id)
 
     def total_tokens(self) -> tuple[int, int]:
         """(total_input_tokens, total_output_tokens) across all attempts."""

@@ -28,6 +28,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Every retry re-authored the RED** (F-4). A task whose GREEN pass failed
+  three times ran the whole RED phase three times, leaving three red commits
+  and three `active` checkpoints for one task — an agent call per retry that
+  need not happen, and a state the CAS-based remedies do not model.
+  - A confirmed red that still covers this tree is now **reused**. Matching is
+    narrow: same workstream and task, same effective mode and policy hash (a
+    checkpoint records the question it answered), and the red commit must be an
+    **ancestor of HEAD** — a red on a branch this one does not descend from
+    proves nothing about this tree.
+  - Several matches is a **state error**, not a choice: two active lineages
+    mean something upstream is wrong, and quietly taking the newest would hide
+    it. `tdd abandon` / `tdd repair` resolve it.
+  - `abandon` means author afresh; `repair` produces a lineage that is itself
+    reusable.
+- **The RED pass's cost was discarded** (F-6). `_run_agent` parsed the CLI
+  result and returned only the text, so TDD's extra call never reached
+  `spec-runner costs` — a `$0.00` that was true only because the battle test's
+  agent was a script.
+  - A new `agent_calls` ledger records tokens and cost with a **provenance**,
+    and `total_cost()` / `task_cost()` include it. The exec pass keeps its cost
+    on the attempt, so summing both cannot double count.
+  - A **failed** authoring attempt is recorded too: money spent on a call that
+    produced nothing usable is still spent. A **reused** checkpoint is not
+    charged again.
+
 - **A claim belonged to a byte pattern rather than to a task** (F-3). A second
   task authoring the *same* content on the same file recorded **no claim of its
   own**, so `tdd abandon` by the first released a file the second's confirmed

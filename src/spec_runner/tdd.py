@@ -74,6 +74,11 @@ LOCKFILES = (
 #: most load-bearing field a heuristic.
 SELECTOR_MARKER = re.compile(r"^\s*TDD_SELECTOR:\s*(\S+)\s*$", re.MULTILINE)
 
+#: Provenance labels for the agent-call ledger (#141 F-6). `green_implementation`
+#: keeps its cost on the attempt row, where the state schema already publishes
+#: it; the ledger holds the calls that had nowhere else to go.
+RED_AUTHORING = "red_authoring"
+
 #: How long a replay may take before it is abandoned as unverifiable. A hung
 #: test run must not hang the executor.
 REPLAY_TIMEOUT_SECONDS = 900
@@ -320,10 +325,12 @@ def record_red_checkpoint(state: ExecutorState, checkpoint: RedCheckpoint) -> No
 
 __all__ = [
     "LOCKFILES",
+    "RED_AUTHORING",
     "SELECTOR_MARKER",
     "REPLAY_TIMEOUT_SECONDS",
     "RedCheckpoint",
     "RedOutcome",
+    "AgentCall",
     "RedPhaseResult",
     "RedVerification",
     "environment_id",
@@ -375,8 +382,29 @@ def run_red_phase(
             RedOutcome.UNVERIFIABLE, "no commit to author a red against (fresh repo)"
         )
 
+    # F-4: a confirmed red that still covers this tree is evidence, not
+    # something to re-derive. Re-authoring on every retry cost an agent call
+    # each time and left one red commit and one active checkpoint per attempt —
+    # a state the CAS-based remedies do not model.
+    reusable, ambiguity = _reusable_checkpoint(config, state, task)
+    if ambiguity:
+        return RedPhaseResult(RedOutcome.UNVERIFIABLE, ambiguity)
+    if reusable is not None:
+        _say(f"\u267b\ufe0f  RED: reusing the confirmed red {reusable.checkpoint_id}")
+        return RedPhaseResult(RedOutcome.EXPECTED_FAIL, "reused a confirmed red", reusable)
+
     _say("\U0001f534 RED: authoring a failing test")
-    output = _run_agent(config, build_red_prompt(task, config))
+    call = _run_agent(config, build_red_prompt(task, config))
+    # Recorded before anything can refuse the result: the call happened and was
+    # paid for whether or not it produced something usable.
+    state.record_agent_call(
+        task.id,
+        RED_AUTHORING,
+        input_tokens=call.input_tokens,
+        output_tokens=call.output_tokens,
+        cost_usd=call.cost_usd,
+    )
+    output = call.text
 
     marker = SELECTOR_MARKER.search(output or "")
     if not marker:
@@ -493,8 +521,23 @@ def _config_hash(config: ExecutorConfig) -> str:
     return GateContext(task_id="", checkpoint_sha="", config=config).config_hash
 
 
-def _run_agent(config: ExecutorConfig, prompt: str) -> str:
-    """Run the coding agent once and return its text. Seam for tests."""
+@dataclass(frozen=True)
+class AgentCall:
+    """What one agent invocation produced *and* what it cost.
+
+    The cost used to be parsed and dropped on the floor, so a TDD run's extra
+    call never reached `spec-runner costs` (#141 F-6). Returning it is what
+    makes it accountable.
+    """
+
+    text: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+
+
+def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
+    """Run the coding agent once. Seam for tests."""
     from .runner import agent_env, build_cli_invocation, parse_cli_result
 
     invocation = build_cli_invocation(
@@ -513,9 +556,15 @@ def _run_agent(config: ExecutorConfig, prompt: str) -> str:
         cwd=config.project_root,
         env=agent_env(),
     )
-    return parse_cli_result(
+    parsed = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
-    ).text
+    )
+    return AgentCall(
+        text=parsed.text,
+        input_tokens=parsed.input_tokens,
+        output_tokens=parsed.output_tokens,
+        cost_usd=parsed.cost_usd,
+    )
 
 
 def _head(config: ExecutorConfig) -> str:
@@ -548,3 +597,45 @@ def _commit_red(config: ExecutorConfig, task, selector: str) -> str:
         logger.warning("Red commit failed", stderr=committed.stderr.strip()[:200])
         return ""
     return _head(config)
+
+
+def _reusable_checkpoint(config: ExecutorConfig, state: ExecutorState, task):
+    """A confirmed red that still covers this tree, or a reason it cannot be used.
+
+    Matching is deliberately narrow: same workstream and task, same effective
+    mode and policy hash (a checkpoint records the question it answered), and
+    the red commit must be an **ancestor of HEAD** — a red on a branch this one
+    does not descend from proves nothing about this tree.
+
+    Several matches is a **state error**, not a choice. Two active lineages for
+    one task mean something upstream is wrong, and quietly taking the newest
+    would hide it.
+    """
+    namespace = resolve_namespace(config)
+    candidates = [
+        cp
+        for cp in state.active_checkpoints(namespace, task.id)
+        if cp.outcome is RedOutcome.EXPECTED_FAIL
+        and cp.execution_mode == config.resolve_execution_mode(task)
+        and cp.config_hash == _config_hash(config)
+    ]
+    reachable = [cp for cp in candidates if _is_ancestor(config, cp.commit_sha)]
+    if len(reachable) > 1:
+        listed = ", ".join(cp.checkpoint_id for cp in reachable)
+        return None, (
+            f"{len(reachable)} active checkpoints match this task ({listed}); "
+            "the state is ambiguous — resolve it with `tdd abandon` or `tdd repair`"
+        )
+    return (reachable[0] if reachable else None), None
+
+
+def _is_ancestor(config: ExecutorConfig, sha: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
