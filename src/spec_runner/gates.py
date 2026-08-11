@@ -31,6 +31,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from .logging import get_logger
+from .phases import check_outcome
 from .state import PhaseOutcome
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -169,10 +170,21 @@ def evaluate_gates(
     budget = max(0, int(getattr(ctx.config, "gate_recovery_attempts", 1)))
     results: list[GateResult] = []
     for gate_id, evaluate in gates:
-        result = _evaluate_one(gate_id, evaluate, ctx, budget)
+        result = _evaluate_one(gate_id, evaluate, ctx, budget, phase)
         results.append(result)
         if ctx.state is not None:
-            ctx.state.record_phase(ctx.task_id, phase, result.outcome, result.detail)
+            try:
+                ctx.state.record_phase(ctx.task_id, phase, result.outcome, result.detail)
+            except ValueError as exc:
+                # A gate registered for a phase the vocabulary does not know.
+                # Its verdict still gets recorded below — losing the answer
+                # because the label was wrong would be the worse failure.
+                logger.warning(
+                    "Gate phase is outside the outcome vocabulary",
+                    gate=gate_id,
+                    phase=phase,
+                    error=str(exc),
+                )
             ctx.state.record_gate_verdict(
                 ctx.task_id,
                 gate_id,
@@ -189,11 +201,16 @@ def _evaluate_one(
     evaluate: GateEvaluator,
     ctx: GateContext,
     budget: int,
+    phase: str,
 ) -> GateResult:
     result = GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, "gate never ran", gate_id)
     for attempt in range(budget + 1):
         try:
             result = evaluate(ctx)
+            # An outcome the phase cannot produce is a bug in the gate, and a
+            # buggy gate is a broken instrument — not a licence to crash the
+            # run it was supposed to judge. It is also emphatically not a pass.
+            check_outcome(phase, result.outcome)
         except Exception as exc:  # a broken gate is an instrument error, not a verdict
             result = GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, str(exc), gate_id)
         result = GateResult(result.status, result.outcome, result.detail, gate_id)

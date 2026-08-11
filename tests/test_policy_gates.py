@@ -310,16 +310,44 @@ def test_aggregate_precedence(tmp_path, statuses, expected):
 class TestTheLifecycleSite:
     """Criteria 1 and 2: the checkpoint is made, the merge waits on the gate."""
 
+    def test_the_default_registry_is_empty_so_the_site_is_dormant(self):
+        """Criterion 8 starts here: shipping this must not switch anything on.
+        The first consumer (#157) is what makes `has_gates()` true."""
+        from spec_runner.gates import has_gates
+
+        assert has_gates() is False
+
     def test_the_dormant_path_resolves_no_sha_and_opens_no_state(self, tmp_path, monkeypatch):
-        """Criterion 8 has to be mechanical, not a promise: with nothing
-        registered the site must not even ask git what HEAD is."""
+        """The guard is `has_gates()` *before* `_run_pre_terminal_gates`, so
+        that the dormant path never reaches git or the state DB. Proven by
+        making both explode: the real site must not touch them."""
+        from spec_runner import gates as gates_mod
         from spec_runner import hooks
 
-        monkeypatch.setattr(hooks, "REGISTRY", GateRegistry(), raising=False)
-        called: list = []
-        monkeypatch.setattr(hooks.subprocess, "run", lambda *a, **k: called.append(a[0]) or None)
-        assert hooks.has_gates(GateRegistry()) is False
-        assert called == []
+        monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
+
+        def _explode(*a, **k):
+            raise AssertionError(f"dormant path touched {a!r}")
+
+        monkeypatch.setattr(hooks.subprocess, "run", _explode)
+        monkeypatch.setattr(hooks, "_run_pre_terminal_gates", _explode)
+
+        # The exact guard the call site uses.
+        assert hooks.has_gates() is False
+
+    def test_an_empty_registry_never_reads_the_state(self, tmp_path):
+        """`evaluate_pre_terminal` on nothing must return SATISFIED without
+        recording — a state object that raises on any use proves it."""
+        from spec_runner.gates import evaluate_pre_terminal
+
+        class _Explodes:
+            def __getattr__(self, name):
+                raise AssertionError(f"state.{name} touched with no gates registered")
+
+        ctx = GateContext(
+            task_id="TASK-001", checkpoint_sha="abc1234", config=_cfg(tmp_path), state=_Explodes()
+        )
+        assert evaluate_pre_terminal(ctx, registry=GateRegistry()).status is GateStatus.SATISFIED
 
     def test_an_unsatisfied_gate_blocks_before_the_merge(self, tmp_path, monkeypatch):
         from spec_runner import gates as gates_mod
@@ -403,3 +431,72 @@ class TestEvaluatePreTerminalSpansPhases:
 
         assert {r.gate_id for r in outcome.results} == {"review", "tdd.red"}
         assert outcome.status is GateStatus.UNSATISFIED
+
+
+class TestABrokenGateCannotTakeTheRunDown:
+    """A gate is an instrument. When it misbehaves the honest report is
+    "could not answer" — never a pass, and never a crash of the run it was
+    supposed to judge."""
+
+    def test_an_outcome_the_phase_cannot_produce_is_an_instrument_error(self, tmp_path):
+        cfg = _cfg(tmp_path, gate_recovery_attempts=0)
+        registry = GateRegistry()
+        # `expected_fail` is meaningful for a test run and meaningless for a
+        # commit; a gate claiming it for `commit` is broken.
+        registry.register(
+            "bad",
+            "commit",
+            lambda ctx: GateResult(GateStatus.SATISFIED, PhaseOutcome.EXPECTED_FAIL),
+        )
+        with ExecutorState(cfg) as state:
+            outcome = evaluate_gates("commit", _ctx(state, cfg), registry=registry)
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR, "a bug must not read as satisfied"
+        assert "expected_fail" in (outcome.results[0].detail or "")
+
+    def test_a_gate_that_raises_is_an_instrument_error(self, tmp_path):
+        cfg = _cfg(tmp_path, gate_recovery_attempts=0)
+        registry = GateRegistry()
+
+        def _boom(ctx):
+            raise RuntimeError("reviewer CLI vanished")
+
+        registry.register("boom", "review", _boom)
+        with ExecutorState(cfg) as state:
+            outcome = evaluate_gates("review", _ctx(state, cfg), registry=registry)
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert "vanished" in (outcome.results[0].detail or "")
+
+    def test_a_broken_gate_does_not_propagate_out_of_the_lifecycle_site(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner import gates as gates_mod
+        from spec_runner import hooks
+
+        registry = GateRegistry()
+        registry.register(
+            "bad", "commit", lambda ctx: GateResult(GateStatus.SATISFIED, PhaseOutcome.NOT_RUN)
+        )
+        monkeypatch.setattr(gates_mod, "REGISTRY", registry)
+        cfg = _cfg(tmp_path)
+        monkeypatch.setattr(hooks.subprocess, "run", lambda *a, **k: _CompletedStub(0, "abc1234\n"))
+
+        reason = hooks._run_pre_terminal_gates(_task(), cfg)
+        assert reason is not None and "infrastructure error" in reason
+
+    def test_a_gate_on_an_unknown_phase_is_an_error_not_a_crash(self, tmp_path):
+        """The phase label is outside the vocabulary. Fail closed, keep the
+        verdict, do not take the run down with it."""
+        cfg = _cfg(tmp_path, gate_recovery_attempts=0)
+        registry = GateRegistry()
+        registry.register(
+            "odd", "pre_terminal", lambda ctx: GateResult(GateStatus.SATISFIED, PhaseOutcome.PASS)
+        )
+        with ExecutorState(cfg) as state:
+            ctx = _ctx(state, cfg)
+            outcome = evaluate_gates("pre_terminal", ctx, registry=registry)
+            stored = state.gate_verdict("TASK-001", "odd", ctx.checkpoint_sha, ctx.config_hash)
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert stored is not None, "the answer must survive a bad phase label"
