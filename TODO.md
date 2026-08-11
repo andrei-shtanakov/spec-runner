@@ -354,7 +354,16 @@ minor-релиза, а не багфикса.
 
 #### F. Дизайн-треки (решения владельца приняты, код не начат)
 
-- [ ] **checkpoint-and-pre-terminal-gates** (#164) — общий prerequisite; @owner:github:andrei-shtanakov @id:checkpoint-and-pre-terminal-gates
+- [x] **checkpoint-and-pre-terminal-gates** (#164) — общий prerequisite; @owner:github:andrei-shtanakov @id:checkpoint-and-pre-terminal-gates
+      2026-08-11 ОТГРУЖЕНО: дизайн PR #166, Slice 0 PR #167, механизм PR #168
+      (`src/spec_runner/gates.py`, таблица `gate_verdicts`, точка вызова в
+      `post_done_hook` между checkpoint-коммитом и мержем). Потребителей нет:
+      реестр пуст, `has_gates()` проверяется до резолва SHA и открытия state,
+      поэтому проект, ничего не включивший, изменений не видит. Открытый
+      вопрос про exit-код закрыт **не** дефолтом «только терминальное
+      состояние»: неудовлетворённый гейт идёт существующим путём «попытка не
+      удалась» и потому доходит до кода выхода — без нового значения и без
+      правки `RUN_STOP_REASONS`.
       дизайн-док: `docs/superpowers/specs/2026-08-11-checkpoint-and-pre-terminal-gates-design.md`.
       Checkpoint-коммит **делается всегда**; гейт удерживает не коммит, а
       переход дальше — merge и терминальное завершение (поправка владельца
@@ -365,8 +374,17 @@ minor-релиза, а не багфикса.
       `review_policy` случайно становилась бы правкой TDD-контракта.
       Порядок: дизайн → Slice 0 (общий PhaseOutcome) → код #164 → #157 → #141.
       Код не начинать раньше Slice 0, иначе появится второй временный словарь.
-- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @blocked_by:todo://spec-runner/checkpoint-and-pre-terminal-gates
-      2026-08-11: `review_policy: advisory | required`, дефолт advisory.
+- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required
+      2026-08-11: блокер #164 снят (PR #168 влит). Дизайн-док на ревью — PR #169,
+      `docs/superpowers/specs/2026-08-11-review-policy-design.md`. Три решения,
+      которых в принятой политике нет и которые нужны до кода: (1) гейт судит
+      HEAD, а review судил checkpoint — записывать обе SHA честно, а не делать
+      вид, что это одна; (2) вердикт передавать через `GateContext.facts`, а не
+      перечитывать `phase_results` — запись туда best-effort, и сбой хранилища
+      стал бы неотличим от `not_run`; (3) retry по `error` живёт в стадии
+      review, не в гейте: `run_code_review` умеет коммитить фиксы, и гейт,
+      перезапускающий ревью, двигал бы дерево, которое судит.
+      Политика: `review_policy: advisory | required`, дефолт advisory.
       В required блокируют `failed` и **`not_run`** («не знаю» ≠ «нормально»),
       `error` — bounded retry и затем infrastructure error, а не NEEDS_HUMAN.
       Таблица вердиктов и lifecycle записаны в issue. Закрывает п.4 из #134.
