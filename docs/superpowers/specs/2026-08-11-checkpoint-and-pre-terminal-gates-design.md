@@ -58,7 +58,7 @@ red authoring
 
 The three outcomes of a gate are deliberately not two. "The gate says no" and
 "the gate could not answer" are different facts with different owners — the
-same distinction Part A of #141 makes with `NOT_RUN`/`ERROR`, and the same one
+same distinction [Part A of the TDD design](2026-08-11-tdd-lifecycle-design.md#22-the-vocabulary) makes with `NOT_RUN`/`ERROR`, and the same one
 #138 had to introduce after a timeout was being recorded as a pass. An
 instrument error is not a defect in the work: bounded automatic recovery first,
 and only after it is exhausted an **infrastructure error**, which is not the
@@ -87,9 +87,9 @@ taste:
 - **A gate never edits history.** Fixes are new commits on top of the
   checkpoint. This is what makes a crash mid-gate recoverable, and it is why
   the pilot's "fix a frozen test by rewriting history" is not a supported
-  motion (#141 §3.5).
+  motion (see [the TDD design, §3.5](2026-08-11-tdd-lifecycle-design.md#35-what-the-pilot-learned-that-the-contract-must-not-omit), issue #141).
 
-`PhaseOutcome` comes from #141 Part A (slice 0) and is *not* re-invented here.
+`PhaseOutcome` comes from [the TDD design, Part A](2026-08-11-tdd-lifecycle-design.md#2-part-a--the-phase-execution-result-contract-tdd-independent) (issue #141, slice 0) and is *not* re-invented here.
 That ordering is deliberate: writing this code before slice 0 would produce a
 second temporary vocabulary, and the whole point of #164 is that there is one.
 
@@ -108,7 +108,7 @@ Owner-stated; each with the failure it prevents.
 | 5 | A stale verdict for an old SHA does not clear a new SHA | exactly the harness-guard bypass of #137, one level up: evidence from before the change legitimising the change |
 | 6 | A crash after the checkpoint is resumable | the run being unable to say what state it was in, and redoing (or skipping) verified work |
 | 7 | Consumers register declaratively | a second consumer arriving as a special case inside the first one's code |
-| 8 | With no consumer enabled, execution and terminal behaviour are unchanged | the same guarantee as #141 §3.1: opt-in means undetectable when not opted into |
+| 8 | With no consumer enabled, execution and terminal behaviour are unchanged | the same guarantee as [the TDD design, §3.1](2026-08-11-tdd-lifecycle-design.md#31-mode) (issue #141): opt-in means undetectable when not opted into |
 | 9 | HITL stays a separate authority mechanism | conflating "the instrument reported" with "a human decided" — the distinction `WAIVED` is built on |
 
 Criterion 5 deserves its own note. It is the same shape as #137 (a snapshot
@@ -122,8 +122,8 @@ makes that mechanical rather than a matter of care.
 ## 5. Ordering (owner-stated)
 
 1. **This document** — design only. ← *you are here*
-2. **Slice 0** — general `PhaseOutcome` + append-only history (from #141
-   Part A), shipped as ordinary hardening, no TDD surface.
+2. **Slice 0** — general `PhaseOutcome` + append-only history (from
+   [the TDD design, Part A](2026-08-11-tdd-lifecycle-design.md#2-part-a--the-phase-execution-result-contract-tdd-independent), issue #141), shipped as ordinary hardening, no TDD surface.
 3. **#164 implementation**, on top of typed outcomes.
 4. **#157** — review policy as the first consumer.
 5. **#141 RED checkpoint** as the second consumer.

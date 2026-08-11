@@ -296,17 +296,17 @@ needs** — replay without a commit to replay against is trust in whatever is in
 the working tree, which is the thing this lifecycle replaces. The checkpoint
 commit happens; what the gate withholds is the transition to
 `GREEN_IMPLEMENTING` and, further along, merge and terminal completion. See
-#164 §1.
+[#164's design doc, §1](2026-08-11-checkpoint-and-pre-terminal-gates-design.md#1-the-terminological-trap-this-document-exists-to-avoid).
 
 The mechanism this needs — **checkpoint commit + pre-terminal policy gates** —
-is its own thing, tracked as **#164**, and *not* a part of the review policy
+is its own thing — issue **#164**, design in [`2026-08-11-checkpoint-and-pre-terminal-gates-design.md`](2026-08-11-checkpoint-and-pre-terminal-gates-design.md) — and *not* a part of the review policy
 (owner amendment 5). Review (#157) and TDD (#141) are its two **consumers**.
 
 That separation is not tidiness. If the prerequisite lived inside #157, a later
 edit to `review_policy` would silently be an edit to the TDD contract, and the
 two have different owners and different reasons to change.
 
-Shared shape, from #164 — note the gate is evaluated **against the checkpoint
+Shared shape, from [#164's design doc](2026-08-11-checkpoint-and-pre-terminal-gates-design.md) — note the gate is evaluated **against the checkpoint
 SHA**, not before it exists:
 
 ```
