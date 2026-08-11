@@ -17,11 +17,12 @@ to be a design question wearing an implementation's clothes.
 
 Two release conditions are part of the decision, not commentary:
 
-- **Slice 2 does not ship without slice 3.** A byte-lock without typed remedies
-  leaves exactly one cure for a mistake in a frozen test — rewriting history.
-  The pilot did that twice in a single phase, each time with a state freeze and
-  a second signature. Shipping the lock alone would make that the supported
-  path.
+- **Slice 2 does not ship without slice 3.** They are built in that order —
+  the lock has to exist before there is anything to remedy — but they form one
+  release block. A byte-lock without typed remedies leaves exactly one cure for
+  a mistake in a frozen test: rewriting history. The pilot did that twice in a
+  single phase, each time with a state freeze and a second signature. Shipping
+  the lock alone would make that the supported path.
 - **Slice 4 does not ship as one PR.** See §3.
 
 ---
@@ -141,7 +142,11 @@ implementation, do not invent a second narrowing rule.
 
 ## 2. Slice 3 — the remedy contract
 
-Mandatory before slice 2 is released.
+**Built after slice 2, released together with it.** Not a contradiction: the
+lock has to exist before there is anything to remedy, but a release containing
+the lock and not the remedies would make rewriting history the only cure for a
+mistake in a frozen test. Two PRs, one release block — no version ships with
+§1 and without §2.
 
 ```
 spec-runner tdd abandon TASK-ID --checkpoint <id> --reason <text>
