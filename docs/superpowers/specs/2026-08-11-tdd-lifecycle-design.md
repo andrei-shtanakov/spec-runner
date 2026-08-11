@@ -179,9 +179,12 @@ This is additive to the interop contract (new table, `schema_version` bumped in
 
 ### 2.5 Acceptance for Part A
 
-- Every existing stage records a typed result; `standard` mode behaviour is
-  **byte-identical** (the results are additive record-keeping, nothing gates on
-  them yet).
+- Every existing stage records a typed result, and `standard` mode keeps the
+  guarantee stated in §3.1: **execution, terminal state and external contracts
+  do not change**. Note that this is the section where byte identity would be
+  violated — Part A is exactly the append-only record-keeping that makes it
+  impossible — so the weaker, true guarantee is the one to hold Part A to.
+  Nothing gates on the new results yet.
 - `review` uses the shared vocabulary or is documented as a refinement of it,
   and `not_run` keeps meaning what it means today — the generalization must not
   quietly drop the distinction #138 was built to introduce.
@@ -333,7 +336,7 @@ every later slice depends on the earlier ones being real.
 
 | # | Slice | Done when |
 |---|---|---|
-| 0 | **Phase result contract** (Part A) | every stage records a typed result; `standard` byte-identical; waivers are operator-only records |
+| 0 | **Phase result contract** (Part A) | every stage records a typed result; `standard` unchanged in execution, terminal state and external contracts (§3.1 — *not* byte identity, which Part A's own rows preclude); waivers are operator-only records |
 | 1 | **RED checkpoint** | `(SHA, selector, baseline, namespace)` persisted and replayable; green refused without a confirmed `EXPECTED_FAIL` |
 | 2 | **Immutable claimed files** | byte-lock across *all* claimed files, enforced by the instrument; red lints the file it freezes |
 | 3 | **Operator remedies** | `abandon` / `repair` write typed records with provenance; history is never rewritten to fix a frozen test |

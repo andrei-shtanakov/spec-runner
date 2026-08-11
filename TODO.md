@@ -325,7 +325,10 @@ minor-релиза, а не багфикса.
       реально прогонялся и упал), типизированные per-phase вердикты
       (`PASS|EXPECTED_FAIL|UNEXPECTED_FAIL|ERROR|WAIVED`), durable checkpoints
       `(commit SHA, полный pytest node-id, baseline SHA, namespace)`, evidence в state
-      с append-only историей. `standard` обязан остаться byte-identical.
+      с append-only историей. Формулировка issue «`standard` обязан остаться
+      byte-identical» уточнена владельцем 2026-08-11 до «execution, terminal
+      state и внешние контракты не меняются» — append-only записи делают
+      байтовую идентичность невозможной по построению (см. дизайн-док §3.1).
       Вход достоверный: пилот прогнал 100 leaf-задач через TDD-дисциплину,
       построенную **вне** spec-runner (плагин + 1500 строк скрипта), и все упоры
       однотипны — у задачи нет фаз. Их же выводы, без которых контракт неполон:
