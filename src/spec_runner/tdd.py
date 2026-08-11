@@ -44,6 +44,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .claims import check_claims, describe_violations, record_claims
 from .git_ops import is_composite_shell_command
 from .logging import get_logger
 
@@ -117,6 +118,19 @@ class RedCheckpoint:
     config_hash: str
     outcome: RedOutcome = RedOutcome.EXPECTED_FAIL
     timestamp: str = ""
+
+    @property
+    def checkpoint_id(self) -> str:
+        """A stable, human-copyable id (#141 slice 2).
+
+        Derived rather than the table's rowid: `tdd repair --checkpoint <id>`
+        has to be typed by an operator, and a rowid would not survive a state
+        rebuild.
+        """
+        seed = "|".join(
+            [self.namespace, self.task_id, self.commit_sha, self.selector, self.timestamp]
+        )
+        return hashlib.sha256(seed.encode()).hexdigest()[:12]
 
 
 def environment_id(project_root: Path) -> str:
@@ -379,6 +393,26 @@ def run_red_phase(
             "the authoring pass changed nothing, so there is no red commit to replay",
         )
 
+    # #141 slice 2. Two checks before this commit may become a checkpoint.
+    #
+    # First: did authoring the red touch a file someone else has frozen? A
+    # checkpoint derived from a tree that violates an active claim would make
+    # the violation part of the record.
+    violations = check_claims(config, state, resolve_namespace(config), sha)
+    if violations:
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE,
+            f"the red commit violates an active claim — {describe_violations(violations)}",
+        )
+
+    # Second: lint what is about to be frozen. After the checkpoint the file is
+    # byte-immutable, so lint debt that got in is uncurable without an operator
+    # and hits every later task in the suite — the same I001 trap fired three
+    # times in one of the pilot's waves.
+    lint_failure = _lint_claimed(config, selector)
+    if lint_failure:
+        return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
+
     _say(f"\U0001f50d RED: replaying {selector}")
     verification = verify_red(config, sha=sha, selector=selector, baseline_sha=baseline)
     checkpoint = RedCheckpoint(
@@ -394,7 +428,46 @@ def run_red_phase(
         timestamp=datetime.now().isoformat(),
     )
     state.record_red_checkpoint(checkpoint)
+    if verification.outcome is RedOutcome.EXPECTED_FAIL:
+        # Only a *confirmed* red freezes anything. A refuted or unverifiable
+        # claim is recorded as evidence but locks no files.
+        record_claims(config, state, checkpoint)
     return RedPhaseResult(verification.outcome, verification.detail, checkpoint)
+
+
+def _lint_claimed(config: ExecutorConfig, selector: str) -> str | None:
+    """Lint the file about to be frozen. Returns a refusal, or None.
+
+    Narrowed to the claimed file when that is safe. When `lint_command` is
+    composite the whole declared gate runs instead of guessing which component
+    takes a path — #139's lesson, and deliberately not a second narrowing rule.
+    """
+    from .claims import claim_paths_for
+    from .git_ops import is_composite_shell_command
+
+    if not config.lint_command:
+        return None
+    paths = claim_paths_for(selector)
+    if not paths:
+        return None
+
+    command = config.lint_command
+    if not is_composite_shell_command(command):
+        command = f"{command} {' '.join(shlex.quote(p) for p in paths)}"
+    result = subprocess.run(
+        command,
+        shell=True,
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return None
+    tail = _tail(f"{result.stdout}\n{result.stderr}")
+    return (
+        f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
+        "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
+    )
 
 
 def _config_hash(config: ExecutorConfig) -> str:

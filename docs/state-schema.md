@@ -198,6 +198,34 @@ out" is a fact about us, and only the first refutes the claim.
 
 Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
 
+### `tdd_claims` (experimental, #141)
+
+The byte-lock behind a confirmed RED. Columns: `namespace`, `task_id`,
+`checkpoint_id`, `checkpoint_sha`, `path`, `blob_sha`, `created_at`, `status`.
+
+Its own table rather than a JSON column on `red_checkpoints`: enforcement
+queries by `(namespace, status, path)` **across tasks**, a claim's status
+changes independently of the checkpoint that created it, and two tasks claiming
+one path is precisely the case that has to be queryable rather than parsed out
+of every row.
+
+- `path` is canonical and project-relative. Symlinks, paths outside the
+  repository and non-regular files are refused, not normalised.
+- `blob_sha` is git's blob SHA over the file's **raw bytes** — no line-ending
+  normalisation, since a claim that tolerates a CRLF flip is not a byte-lock.
+- `status` is `active` · `superseded` · `abandoned`. Nothing is deleted; a
+  retired claim is still evidence.
+- `checkpoint_id` is derived (a short hash of namespace, task, commit,
+  selector and timestamp), not the rowid: it has to be typeable in
+  `--checkpoint <id>` and survive a state rebuild.
+
+Enforcement reads every **active** claim in the namespace and checks it against
+the **candidate commit**, never the working tree. Violations are distinguished
+as modified / deleted / renamed — all three block, but they send an operator
+looking in different places.
+
+Experimental: the remedies that retire a claim are slice 3.
+
 ### `executor_meta` key-value pairs
 
 | Key | Value type | Stability | Notes |

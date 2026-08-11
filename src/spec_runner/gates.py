@@ -403,6 +403,47 @@ def _descends_from(config: ExecutorConfig, ancestor: str, descendant: str) -> bo
     )
 
 
+def _claims_gate(ctx: GateContext) -> GateResult:
+    """Is every active claim in this workstream still intact in this tree?
+
+    Evaluated wherever the RED gate is — before GREEN and again before merge —
+    because "do not build on a violated claim" and "do not merge one" are the
+    same question at two moments.
+    """
+    from .claims import check_claims, describe_violations
+    from .tdd import resolve_namespace
+
+    mode = ctx.facts.get("execution_mode")
+    if mode is None:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run reported no execution_mode to the claims gate",
+        )
+    if mode != "tdd":
+        return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
+    if ctx.state is None:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, "no state to read claims from"
+        )
+
+    from .claims import ClaimCheckError
+
+    try:
+        violations = check_claims(
+            ctx.config, ctx.state, resolve_namespace(ctx.config), ctx.checkpoint_sha
+        )
+    except ClaimCheckError as exc:
+        return GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, str(exc))
+    if not violations:
+        return GateResult(GateStatus.SATISFIED, PhaseOutcome.PASS, "claims intact")
+    return GateResult(
+        GateStatus.UNSATISFIED,
+        PhaseOutcome.UNEXPECTED_FAIL,
+        f"claim violated — {describe_violations(violations)}",
+    )
+
+
 def register_builtin_gates(
     config: ExecutorConfig,
     registry: GateRegistry | None = None,
@@ -425,9 +466,10 @@ def register_builtin_gates(
     # calls `ensure_red_gate` when it resolves such a task. Either way the gate
     # re-checks the effective mode from `facts`, since it is per task.
     if getattr(config, "execution_mode", "standard") == "tdd":
-        reg.register("tdd.red", "tests", _red_gate)
+        ensure_red_gate(reg)
     else:
         reg.unregister("tdd.red", "tests")
+        reg.unregister("tdd.claims", "tests")
 
 
 def ensure_red_gate(registry: GateRegistry | None = None) -> None:
@@ -439,6 +481,7 @@ def ensure_red_gate(registry: GateRegistry | None = None) -> None:
     """
     reg = registry if registry is not None else REGISTRY
     reg.register("tdd.red", "tests", _red_gate)
+    reg.register("tdd.claims", "tests", _claims_gate)
 
 
 def has_gates(registry: GateRegistry | None = None) -> bool:

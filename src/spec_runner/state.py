@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .claims import Claim as ClaimT
+    from .claims import ClaimStatus as ClaimStatusT
     from .gates import GateStatus as GateStatusT
     from .tdd import RedCheckpoint as RedCheckpointT
 
@@ -355,6 +357,27 @@ class ExecutorState:
                 timestamp TEXT NOT NULL
             )
         """)
+        # #141 slice 2: a claim's own table, not a JSON column on the
+        # checkpoint — enforcement queries by (namespace, path, status) across
+        # tasks, and two tasks claiming one path is the case that has to be
+        # queryable rather than parsed out of every row.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS tdd_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                checkpoint_id TEXT NOT NULL,
+                checkpoint_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tdd_claims_lookup "
+            "ON tdd_claims (namespace, status, path)"
+        )
         # Reads are always (task_id, namespace) → latest, so give that pattern
         # an index rather than let it become a table scan as TDD mode
         # accumulates a row per task per retry.
@@ -786,6 +809,77 @@ class ExecutorState:
             outcome=RedOutcome(row[8]),
             timestamp=row[9],
         )
+
+    def record_claim(self, claim: "ClaimT") -> None:
+        """Persist one file claim (#141 slice 2). **Raises** on failure.
+
+        Deliberately not the swallow-and-log posture of the other bookkeeping
+        writers. Nothing gates on a `phase_results` row, so losing one costs
+        visibility; the gate *does* read claims, so a lost claim is not a
+        missing note — it is a byte-lock that silently does not exist while the
+        run believes it does. Fail closed.
+        """
+        self._insert_phase_row(
+            "INSERT INTO tdd_claims (namespace, task_id, checkpoint_id, checkpoint_sha, "
+            "path, blob_sha, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                claim.namespace,
+                claim.task_id,
+                claim.checkpoint_id,
+                claim.checkpoint_sha,
+                claim.path,
+                claim.blob_sha,
+                claim.created_at,
+                getattr(claim.status, "value", claim.status),
+            ),
+        )
+
+    def active_claims(self, namespace: str) -> list["ClaimT"]:
+        """Every claim still in force in ``namespace``, whoever made it.
+
+        Not filtered by task on purpose: checking only the current task's
+        claims is exactly the hole the pilot found — neighbouring tests left
+        guarded by prompt text rather than by the instrument.
+        """
+        from .claims import Claim, ClaimStatus
+
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT namespace, task_id, checkpoint_id, checkpoint_sha, path, blob_sha, "
+            "created_at, status FROM tdd_claims WHERE namespace = ? AND status = ? ORDER BY id",
+            (namespace, ClaimStatus.ACTIVE.value),
+        ).fetchall()
+        return [
+            Claim(
+                namespace=r[0],
+                task_id=r[1],
+                checkpoint_id=r[2],
+                checkpoint_sha=r[3],
+                path=r[4],
+                blob_sha=r[5],
+                created_at=r[6],
+                status=ClaimStatus(r[7]),
+            )
+            for r in rows
+        ]
+
+    def supersede_claims(self, namespace: str, task_id: str, status: "ClaimStatusT") -> int:
+        """Retire a task's active claims. Nothing is deleted — the row stays
+        with its new status, because a retired claim is still evidence."""
+        assert self._conn is not None
+        from .claims import ClaimStatus
+
+        cursor = self._conn.execute(
+            "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? AND status = ?",
+            (
+                getattr(status, "value", status),
+                namespace,
+                task_id,
+                ClaimStatus.ACTIVE.value,
+            ),
+        )
+        self._conn.commit()
+        return cursor.rowcount
 
     def record_attempt(
         self,
