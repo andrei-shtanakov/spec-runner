@@ -12,6 +12,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **RED checkpoint verification** (#141, slice 1b) — the machinery that decides
+  whether a claimed red is real, standalone and not yet wired in.
+  - A confirmed red means **the selector was executed and failed**, replayed
+    against its *commit* in a disposable `git worktree`. An agent's report of
+    its own red is exactly the evidence this replaces, and replaying a commit
+    rather than the working tree is why the checkpoint commit exists at all —
+    a test proven red by an uncommitted edit proves nothing.
+  - Three outcomes, not two: `expected_fail`, `not_red`, and **`unverifiable`**.
+    "The test passes" is a fact about the code; "we could not find out" is a
+    fact about us, and only the first refutes the claim.
+  - Refused without running anything: a selector that is not a full node id (a
+    `-k`-style name matches several tests, so it proves nothing about the one),
+    a composite `test_command` (#139's reasoning — guessing which component
+    takes a node id is how you run the wrong program and believe it), and an
+    unknown SHA.
+  - The worktree is removed on every path, including a crash mid-replay: a
+    leaked worktree makes the next `git worktree add` fail.
+  - New `red_checkpoints` table storing `(commit, selector, baseline,
+    namespace)` plus the environment identity (`<lockfile>:<hash>`, or an
+    honest `unpinned`) and the effective mode + config hash. Reads are
+    namespaced, because identical `TASK-NNN` ids from different workstreams
+    collide once their branches meet.
+  - The pytest exit-code mapping was **measured rather than assumed**: an
+    unresolvable node id and a file with a syntax error both exit 4, not the 5
+    ("no tests collected") one would guess. Only exit 1 can mean a red.
 - **`execution_mode: standard | tdd`** (#141, slice 1a) — the mode surface,
   **declared but not yet enforced**. A project default plus an optional
   per-task `**Mode:**` line in tasks.md, overriding in both directions: a

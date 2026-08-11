@@ -157,7 +157,7 @@ class TestNothingBranchesOnItYet:
 
         repo_root = Path(__file__).resolve().parent.parent
         out = subprocess.run(
-            ["git", "grep", "-l", "execution_mode", "--", "src/spec_runner"],
+            ["git", "grep", "-l", "--untracked", "execution_mode", "--", "src/spec_runner"],
             capture_output=True,
             text=True,
             cwd=repo_root,
