@@ -368,3 +368,111 @@ class TestNothingIsWiredYet:
             f"{sorted(wired)} uses tdd — 1b is standalone machinery, and wiring belongs "
             "with the gate in 1c so the mode never half-enforces. Delete this guard there."
         )
+
+
+@pytest.mark.slow
+class TestTheSelectorIsUntrustedInput:
+    """The selector comes from an agent's output. Interpolated raw into a
+    `shell=True` command it is not a test id, it is a shell command the harness
+    runs on the operator's machine."""
+
+    def test_a_selector_cannot_execute_a_second_command(self, tmp_path):
+        root = _repo(tmp_path)
+        baseline = _git(root, "rev-parse", "HEAD").stdout.strip()
+        sha = _commit_test(root, FAILING)
+        canary = root / "pwned.txt"
+
+        result = verify_red(
+            _cfg(root),
+            sha=sha,
+            selector=f"test_thing.py::test_thing; touch {canary}",
+            baseline_sha=baseline,
+        )
+
+        assert not canary.exists(), "the selector was executed as a shell command"
+        # Non-vacuity: the replay really ran and pytest really received the
+        # whole string as one unresolvable node id, rather than the command
+        # having failed earlier for some unrelated reason.
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "exited 4" in (result.detail or "")
+
+    def test_the_quoting_does_not_break_an_ordinary_selector(self, tmp_path):
+        """Quoting must not be paid for with a broken happy path."""
+        root = _repo(tmp_path)
+        baseline = _git(root, "rev-parse", "HEAD").stdout.strip()
+        sha = _commit_test(root, FAILING)
+        result = verify_red(
+            _cfg(root), sha=sha, selector="test_thing.py::test_thing", baseline_sha=baseline
+        )
+        assert result.outcome is RedOutcome.EXPECTED_FAIL
+
+
+@pytest.mark.slow
+class TestTheBaselineIsChecked:
+    """`baseline_sha` is the checkpoint's "red *against what*". A pair whose red
+    does not descend from its claimed baseline is a false record — refusing is
+    cheaper than storing it as evidence."""
+
+    def test_a_baseline_that_is_not_an_ancestor_is_refused(self, tmp_path):
+        root = _repo(tmp_path)
+        _git(root, "checkout", "-q", "-b", "other")
+        (root / "other.txt").write_text("x\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "unrelated")
+        unrelated = _git(root, "rev-parse", "HEAD").stdout.strip()
+        _git(root, "checkout", "-q", "-")
+        sha = _commit_test(root, FAILING)
+
+        result = verify_red(
+            _cfg(root), sha=sha, selector="test_thing.py::test_thing", baseline_sha=unrelated
+        )
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "ancestor" in (result.detail or "")
+
+    def test_a_commit_is_its_own_baseline(self, tmp_path):
+        root = _repo(tmp_path)
+        sha = _commit_test(root, FAILING)
+        result = verify_red(
+            _cfg(root), sha=sha, selector="test_thing.py::test_thing", baseline_sha=sha
+        )
+        assert result.outcome is RedOutcome.EXPECTED_FAIL
+
+
+@pytest.mark.slow
+class TestCleanupFailureIsNotSwallowed:
+    def test_a_failed_removal_is_logged_and_pruned(self, tmp_path, monkeypatch):
+        from spec_runner import tdd
+
+        root = _repo(tmp_path)
+        baseline = _git(root, "rev-parse", "HEAD").stdout.strip()
+        sha = _commit_test(root, FAILING)
+
+        real_run = subprocess.run
+        pruned: list = []
+
+        def _fake(cmd, *a, **k):
+            if isinstance(cmd, list) and cmd[:3] == ["git", "worktree", "remove"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "permission denied")
+            if isinstance(cmd, list) and cmd[:3] == ["git", "worktree", "prune"]:
+                pruned.append(cmd)
+            return real_run(cmd, *a, **k)
+
+        monkeypatch.setattr(tdd.subprocess, "run", _fake)
+        verify_red(_cfg(root), sha=sha, selector="test_thing.py::test_thing", baseline_sha=baseline)
+
+        assert pruned, "a removal failure must be followed by a prune, not ignored"
+        # The real worktree is still registered because removal was faked out;
+        # clean it up so the temp repo is not left in a broken state.
+        real_run(["git", "worktree", "prune"], cwd=root, capture_output=True)
+
+
+class TestTheReadPatternIsIndexed:
+    def test_an_index_covers_task_and_namespace(self, tmp_path):
+        root = _repo(tmp_path)
+        with ExecutorState(_cfg(root)) as state:
+            rows = state._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='red_checkpoints'"
+            ).fetchall()
+        assert any("red_checkpoints" in r[0] for r in rows), (
+            "the (task_id, namespace) lookup would degrade to a table scan"
+        )

@@ -355,6 +355,13 @@ class ExecutorState:
                 timestamp TEXT NOT NULL
             )
         """)
+        # Reads are always (task_id, namespace) → latest, so give that pattern
+        # an index rather than let it become a table scan as TDD mode
+        # accumulates a row per task per retry.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_red_checkpoints_lookup "
+            "ON red_checkpoints (task_id, namespace, id DESC)"
+        )
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS gate_verdicts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

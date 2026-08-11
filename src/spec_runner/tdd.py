@@ -33,6 +33,7 @@ Design: ``docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md`` §3.3, §3
 from __future__ import annotations
 
 import hashlib
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -172,6 +173,25 @@ def verify_red(
         )
 
     root = Path(config.project_root)
+
+    # `baseline_sha` is the "red *against what*" of the checkpoint (§3.3), and
+    # a pair where the red is not a descendant of its claimed baseline is a
+    # false record — cheaper to refuse here than to store and puzzle over. A
+    # commit is its own ancestor, so baseline == sha is fine.
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", baseline_sha, sha],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if ancestry.returncode != 0:
+        return RedVerification(
+            RedOutcome.UNVERIFIABLE,
+            f"{baseline_sha[:12]} is not an ancestor of {sha[:12]} "
+            f"(or one of them does not resolve)",
+            env_id,
+        )
+
     parent = tempfile.mkdtemp(prefix="spec-runner-red-")
     worktree = Path(parent) / "tree"
     added = subprocess.run(
@@ -194,21 +214,38 @@ def verify_red(
         return RedVerification(RedOutcome.UNVERIFIABLE, f"replay failed: {exc}", env_id)
     finally:
         # Always, including on the exception path: a leaked worktree makes the
-        # next `git worktree add` fail and the branch un-deletable.
-        subprocess.run(
+        # next `git worktree add` fail and the branch un-deletable. Removal can
+        # itself fail (permissions, a transient filesystem), and swallowing
+        # that would turn the guarantee above into a hope — so it is logged and
+        # followed by a prune, which clears a registration whose directory is
+        # already gone.
+        removed = subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
             cwd=root,
             capture_output=True,
             text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
+        if removed.returncode != 0:
+            logger.warning(
+                "Could not remove the replay worktree; pruning",
+                worktree=str(worktree),
+                error=removed.stderr.strip()[:200],
+            )
+            subprocess.run(
+                ["git", "worktree", "prune"], cwd=root, capture_output=True, text=True
+            )
 
 
 def _run_selector(
     config: ExecutorConfig, worktree: Path, selector: str
 ) -> subprocess.CompletedProcess:
     """Run the project's test command, narrowed to one node id, in ``worktree``."""
-    command = f"{config.test_command} {selector}"
+    # `shell=True` is unavoidable — `test_command` is a shell string by
+    # contract — but the selector is not ours: it comes from an agent's output.
+    # Interpolating it raw makes `tests/x.py::t; rm -rf ~` a shell command that
+    # the harness runs on the operator's machine.
+    command = f"{config.test_command} {shlex.quote(selector)}"
     logger.info("Replaying claimed red", selector=selector, worktree=str(worktree))
     return subprocess.run(
         command,

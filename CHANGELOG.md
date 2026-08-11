@@ -27,8 +27,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
     a composite `test_command` (#139's reasoning — guessing which component
     takes a node id is how you run the wrong program and believe it), and an
     unknown SHA.
+  - The selector is **shell-quoted**. It comes from an agent's output, and
+    `test_command` is a shell string by contract, so interpolating it raw made
+    `tests/x.py::t; rm -rf ~` a command the harness runs on the operator's
+    machine.
+  - The baseline is checked to be an ancestor of the red commit. A pair whose
+    red does not descend from its claimed baseline is a false record, and
+    refusing costs less than storing it as evidence.
   - The worktree is removed on every path, including a crash mid-replay: a
-    leaked worktree makes the next `git worktree add` fail.
+    leaked worktree makes the next `git worktree add` fail. A removal that
+    itself fails is logged and pruned rather than swallowed, since swallowing
+    it would turn that guarantee into a hope.
   - New `red_checkpoints` table storing `(commit, selector, baseline,
     namespace)` plus the environment identity (`<lockfile>:<hash>`, or an
     honest `unpinned`) and the effective mode + config hash. Reads are
