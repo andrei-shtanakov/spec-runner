@@ -10,6 +10,37 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`plan --gated` writes a stage only after it validates, and repairs
+  boundedly** (issue #160, the remainder of #133). The order was generate →
+  write → validate → stamp the verdict onto the file just written, so an
+  invalid spec landed on disk and stayed there: a DRAFT that looks like an
+  artifact and is not one.
+  - Validation now runs on the candidate **before** it is committed, using the
+    same validator the run enforces — not a lookalike, which would drift and
+    let a spec pass here and fail there. A rejected candidate leaves the stage
+    exactly as it was: the previous draft is restored byte for byte, and a
+    stage that had no file still has none.
+  - On failure the stage is regenerated up to `spec_repair_attempts` times
+    (default 2) with **the actual validation errors** in the prompt — "try
+    again" is not a diagnostic. Bounded on purpose: a model that cannot
+    satisfy the validator twice will not satisfy it on the tenth try, and each
+    attempt costs money.
+  - When no attempt validates, the command exits non-zero and writes nothing,
+    where it used to exit 0 with `validation=fail` on disk.
+  - The rollback itself is atomic (temp file + `os.replace`, shared with
+    `write_spec` as `spec.atomic_write_bytes`): a plain write truncates first,
+    so an interruption mid-restore would destroy the very draft the rollback
+    exists to protect.
+  - **No canonicalizing normalizer.** The alternative proposal — parse the
+    generated file and rewrite it into canonical form — was rejected: a tool
+    that guesses the meaning of an unfamiliar LLM format and then canonicalizes
+    its own guess makes the mistake invisible. Unrecognized output is
+    rejected, never rewritten; the written body is byte-identical to what was
+    generated.
+
+
 ### Added
 
 - **`spec-runner preflight [--json]` — read-only readiness diagnostics**

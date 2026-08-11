@@ -417,6 +417,26 @@ def read_spec_body(path: Path) -> str:
     return strip_frontmatter(path.read_text())
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data`` in one step, or leave it untouched.
+
+    Same temp-file + ``os.replace`` dance `write_spec` uses, exposed for
+    callers that restore raw bytes rather than render frontmatter. A plain
+    ``write_bytes`` truncates first, so an interruption mid-write destroys the
+    very file a rollback exists to protect (Copilot, PR #161).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, str(path))
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
 def write_spec(
     path: Path,
     meta: SpecMeta,
