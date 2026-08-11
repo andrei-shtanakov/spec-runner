@@ -28,6 +28,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
     repaired test that turns out to pass is recorded as `not_red` and exits 2
     rather than reporting a plain success — otherwise `repair` would be a way
     to launder an unconfirmed claim, the exact hole the contract closes.
+  - A repeated `repair` reaches the **same verdict** as the first call: the
+    idempotent path carries the lineage's outcome, so running the command twice
+    cannot turn an exit 2 into a bare success. Running something twice must not
+    launder its verdict.
   - Repeating a remedy is idempotent, checked **before** the swap: applying it
     retires the very checkpoint CAS compares against, so a repeat would
     otherwise report a stale id and turn "run it twice" into an error.

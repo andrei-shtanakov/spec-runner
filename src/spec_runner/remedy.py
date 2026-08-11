@@ -150,10 +150,20 @@ def repair(
 
     prior = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REPAIR)
     if prior is not None:
+        # Carry the lineage's outcome, not just its id. Without it a repeated
+        # `repair` reports a bare success over a lineage that never
+        # re-established a red — the first call said so and exited 2, and the
+        # second must not quietly disagree.
+        lineage = (
+            state.checkpoint_by_id(namespace, prior.new_checkpoint_id)
+            if prior.new_checkpoint_id
+            else None
+        )
         return RemedyResult(
             RemedyOperation.REPAIR,
             checkpoint_id,
             new_checkpoint_id=prior.new_checkpoint_id,
+            outcome=lineage.outcome if lineage else None,
             already_applied=True,
         )
 
@@ -353,17 +363,30 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
 
     if result.already_applied:
         print(f"✔️  Already applied — {result.operation.value} on {result.checkpoint_id}")
+        # A repeat must reach the same verdict as the first call: an
+        # already-applied repair whose lineage is not a confirmed red is still
+        # not a success.
+        if result.operation is RemedyOperation.REPAIR:
+            return _repair_exit(result)
         return 0
     if result.operation is RemedyOperation.ABANDON:
         print(f"✔️  Abandoned {result.checkpoint_id}; {args.task_id} returns to RED authoring")
         return 0
 
     print(f"✔️  Repaired: new lineage {result.new_checkpoint_id} (was {result.checkpoint_id})")
+    return _repair_exit(result)
+
+
+def _repair_exit(result: RemedyResult) -> int:
+    """0 only when the new lineage actually re-established a red.
+
+    A repair is not a blessing, so the exit code must not imply one — and the
+    same must hold on a repeat, or running the command twice would launder the
+    verdict.
+    """
     if result.outcome is RedOutcome.EXPECTED_FAIL:
         print("   Red re-confirmed on the repaired commit; the new bytes are claimed.")
         return 0
-    # A repair is not a blessing: say plainly that the new lineage did not
-    # establish a red, rather than let the success line imply it did.
     outcome = result.outcome.value if result.outcome else "no verdict"
     print(f"   ⚠️  The repaired commit did not establish a red ({outcome}).")
     print("   The task has no confirmed red and will be gated until it does.")
