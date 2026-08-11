@@ -286,24 +286,43 @@ nowhere else; it should not be reproduced as a design.
 
 ### 3.6 Prerequisite (not owned by review)
 
-`post_done` fires **after** commit/merge, so a phase check cannot sit before the
-commit. For TDD that is fatal: `RED_VERIFYING` must gate the commit, not follow
-it.
+`post_done` fires **after** commit/merge, so today a phase check cannot
+withhold anything: by the time it runs, the merge has happened.
+
+**Correction (owner, 2026-08-11):** an earlier draft of this section said
+`RED_VERIFYING` "must gate the commit, not follow it". That is backwards, and
+the mistake matters. A **stable red SHA is exactly what the verification
+needs** — replay without a commit to replay against is trust in whatever is in
+the working tree, which is the thing this lifecycle replaces. The checkpoint
+commit happens; what the gate withholds is the transition to
+`GREEN_IMPLEMENTING` and, further along, merge and terminal completion. See
+[#164's design doc, §1](2026-08-11-checkpoint-and-pre-terminal-gates-design.md#1-the-terminological-trap-this-document-exists-to-avoid).
 
 The mechanism this needs — **checkpoint commit + pre-terminal policy gates** —
-is its own thing, tracked as **#164**, and *not* a part of the review policy
+is its own thing — issue **#164**, design in [`2026-08-11-checkpoint-and-pre-terminal-gates-design.md`](2026-08-11-checkpoint-and-pre-terminal-gates-design.md) — and *not* a part of the review policy
 (owner amendment 5). Review (#157) and TDD (#141) are its two **consumers**.
 
 That separation is not tidiness. If the prerequisite lived inside #157, a later
 edit to `review_policy` would silently be an edit to the TDD contract, and the
 two have different owners and different reasons to change.
 
-Shared shape, from #164:
+Shared shape, from [#164's design doc](2026-08-11-checkpoint-and-pre-terminal-gates-design.md) — note the gate is evaluated **against the checkpoint
+SHA**, not before it exists:
 
 ```
-execute → deterministic gates → checkpoint commit → policy gates
-→ fixes as separate commit → repeat deterministic gates
-→ policy satisfied → merge → DONE
+work → deterministic checks → checkpoint commit
+→ pre-terminal policy gate, evaluated against the checkpoint SHA
+   ├─ satisfied        → merge → DONE
+   ├─ unsatisfied      → resumable / non-terminal
+   └─ instrument error → bounded recovery → infrastructure error
+```
+
+For this track specifically:
+
+```
+red authoring → red checkpoint commit
+→ replay / RED_VERIFYING against the checkpoint SHA
+→ EXPECTED_FAIL required → GREEN_IMPLEMENTING
 ```
 
 The checkpoint commit is kept — it exists for a stable SHA and provenance,

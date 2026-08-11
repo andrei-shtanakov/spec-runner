@@ -354,11 +354,17 @@ minor-релиза, а не багфикса.
 
 #### F. Дизайн-треки (решения владельца приняты, код не начат)
 
-- [ ] **checkpoint-and-pre-terminal-gates** (#164) — общий prerequisite: @owner:github:andrei-shtanakov @id:checkpoint-and-pre-terminal-gates
-      checkpoint-коммит (не мержится, не означает DONE) + policy-гейты между
-      ним и терминальным состоянием. Вынесен из #157 намеренно: иначе правка
+- [ ] **checkpoint-and-pre-terminal-gates** (#164) — общий prerequisite; @owner:github:andrei-shtanakov @id:checkpoint-and-pre-terminal-gates
+      дизайн-док: `docs/superpowers/specs/2026-08-11-checkpoint-and-pre-terminal-gates-design.md`.
+      Checkpoint-коммит **делается всегда**; гейт удерживает не коммит, а
+      переход дальше — merge и терминальное завершение (поправка владельца
+      2026-08-11: стабильный red SHA нужен именно для воспроизводимой
+      проверки). Гейт привязан к паре `(SHA, config hash)`; исправления —
+      новым коммитом, история не переписывается; устаревший вердикт для
+      старого SHA не открывает новый. Вынесен из #157 намеренно: иначе правка
       `review_policy` случайно становилась бы правкой TDD-контракта.
-      Потребители — #157 (review) и #141 (TDD). Блокирует оба.
+      Порядок: дизайн → Slice 0 (общий PhaseOutcome) → код #164 → #157 → #141.
+      Код не начинать раньше Slice 0, иначе появится второй временный словарь.
 - [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @blocked_by:todo://spec-runner/checkpoint-and-pre-terminal-gates
       2026-08-11: `review_policy: advisory | required`, дефолт advisory.
       В required блокируют `failed` и **`not_run`** («не знаю» ≠ «нормально»),
