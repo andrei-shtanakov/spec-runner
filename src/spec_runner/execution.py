@@ -37,6 +37,20 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
+def _refusal_error_code(refusal: str) -> ErrorCode:
+    """Classify a gate refusal: a verdict on the work, or a broken instrument.
+
+    The two need different answers from whoever reads the run — one says fix
+    the code, the other says fix the environment — so they must not collapse
+    into one `HOOK_FAILURE`.
+    """
+    from .hooks import GATE_INSTRUMENT_ERROR_PREFIX
+
+    if refusal.startswith(GATE_INSTRUMENT_ERROR_PREFIX):
+        return ErrorCode.INFRASTRUCTURE
+    return ErrorCode.HOOK_FAILURE
+
+
 def _run_red_phase_gate(task, config, state, reporter) -> str | None:
     """Author and confirm a red, then ask the gate. Returns a refusal, or None.
 
@@ -138,7 +152,11 @@ def execute_task(
         if refusal is not None:
             log_progress(f"⛔ {refusal}", task_id)
             state.record_attempt(
-                task_id, False, 0.0, error=refusal, error_code=ErrorCode.HOOK_FAILURE
+                task_id,
+                False,
+                0.0,
+                error=refusal,
+                error_code=_refusal_error_code(refusal),
             )
             return False
 
@@ -402,7 +420,10 @@ def execute_task(
                     elif "Review rejected" in hook_error or "Fix requested" in hook_error:
                         error_code = ErrorCode.REVIEW_REJECTED
                     else:
-                        error_code = ErrorCode.HOOK_FAILURE
+                        # Distinguishes "the gate says no" from "the gate could
+                        # not answer" — the second is an instrument failure and
+                        # the run exits 2 rather than 1.
+                        error_code = _refusal_error_code(hook_error)
                 # Combine Claude output with test failures for context
                 full_output = output
                 if hook_error:
