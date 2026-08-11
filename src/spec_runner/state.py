@@ -761,10 +761,6 @@ class ExecutorState:
     ) -> "GateVerdict | None":
         """The latest verdict **for this exact tree and policy**, or None.
 
-        Only an **active** checkpoint counts: one retired by `tdd abandon` or
-        superseded by `tdd repair` is still evidence, but it is no longer this
-        task's standing claim (#141 slice 3).
-
         Deliberately not "the latest verdict for this task": a stale answer
         about an older SHA, or one taken under a different policy, must not
         clear the current one (#164 criterion 5).
@@ -810,7 +806,11 @@ class ExecutorState:
             )
 
     def red_checkpoint(self, task_id: str, namespace: str) -> "RedCheckpointT | None":
-        """The latest checkpoint for this task **in this workstream**, or None.
+        """The latest **active** checkpoint for this task in this workstream.
+
+        Only active counts: one retired by `tdd abandon` or superseded by
+        `tdd repair` is still evidence, but it is no longer this task's
+        standing claim (#141 slice 3).
 
         Deliberately namespaced: a checkpoint from another workstream is not
         this task's evidence, however identical the id.
@@ -909,6 +909,42 @@ class ExecutorState:
         )
         self._conn.commit()
         return cursor.rowcount
+
+    def checkpoint_by_id(self, namespace: str, checkpoint_id: str) -> "RedCheckpointT | None":
+        """Any checkpoint by its derived id, whatever its status.
+
+        Unlike `red_checkpoint`, this deliberately ignores status: a caller
+        asking for a specific lineage wants that lineage, including a
+        superseded one.
+        """
+        from .tdd import RedCheckpoint, RedOutcome
+
+        assert self._conn is not None
+        # Iterate the cursor rather than `fetchall()`: the loop returns on the
+        # first match, so materialising every checkpoint in the namespace only
+        # to discard it is waste that grows with the workstream's history.
+        cursor = self._conn.execute(
+            "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
+            "execution_mode, config_hash, outcome, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? ORDER BY id DESC",
+            (namespace,),
+        )
+        for r in cursor:
+            candidate = RedCheckpoint(
+                task_id=r[0],
+                namespace=r[1],
+                commit_sha=r[2],
+                baseline_sha=r[3],
+                selector=r[4],
+                environment_id=r[5],
+                execution_mode=r[6],
+                config_hash=r[7],
+                outcome=RedOutcome(r[8]),
+                timestamp=r[9],
+            )
+            if candidate.checkpoint_id == checkpoint_id:
+                return candidate
+        return None
 
     def set_checkpoint_status(self, namespace: str, checkpoint_id: str, status) -> int:
         """Retire a checkpoint. Nothing is deleted — the row keeps its history

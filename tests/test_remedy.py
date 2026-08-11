@@ -410,3 +410,61 @@ class TestTheCommandLine:
         parser = _build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["tdd", "repair", "TASK-001", "--checkpoint", "abc", "--reason", "r"])
+
+
+@pytest.mark.slow
+class TestARepeatDoesNotLaunderTheVerdict:
+    """Copilot's finding on #177: the idempotent path returned no outcome, so a
+    second `tdd repair` printed a plain success over a lineage the first call
+    had reported as not-a-red."""
+
+    def _args(self, **kw):
+        import argparse
+
+        return argparse.Namespace(**kw)
+
+    def test_a_repeated_repair_of_a_not_red_lineage_still_exits_2(self, tmp_path, capsys):
+        from spec_runner.remedy import cmd_tdd
+
+        root, cfg, cp = _establish(tmp_path)
+        fixed = _commit(root, {"tests/test_x.py": PASSING}, "repair")
+        args = self._args(
+            tdd_command="repair",
+            task_id="TASK-001",
+            checkpoint=cp.checkpoint_id,
+            commit=fixed,
+            reason="typo",
+            actor=None,
+        )
+        assert cmd_tdd(args, cfg) == 2
+        capsys.readouterr()
+
+        assert cmd_tdd(args, cfg) == 2, "the repeat must reach the same verdict as the first call"
+        out = capsys.readouterr().out
+        assert "Already applied" in out
+        assert "did not establish a red" in out
+
+    def test_a_repeated_repair_of_a_confirmed_red_still_exits_0(self, tmp_path):
+        from spec_runner.remedy import cmd_tdd
+
+        root, cfg, cp = _establish(tmp_path)
+        fixed = _commit(root, {"tests/test_x.py": "def test_y():\n    assert 1 == 2\n"}, "repair")
+        args = self._args(
+            tdd_command="repair",
+            task_id="TASK-001",
+            checkpoint=cp.checkpoint_id,
+            commit=fixed,
+            reason="typo",
+            actor=None,
+        )
+        assert cmd_tdd(args, cfg) == 0
+        assert cmd_tdd(args, cfg) == 0
+
+    def test_a_lineage_can_be_looked_up_by_id_whatever_its_status(self, tmp_path):
+        root, cfg, cp = _establish(tmp_path)
+        fixed = _commit(root, {"tests/test_x.py": "def test_y():\n    assert 1 == 2\n"}, "repair")
+        with ExecutorState(cfg) as state:
+            repair(cfg, state, "TASK-001", cp.checkpoint_id, fixed, reason="typo")
+            superseded = state.checkpoint_by_id(resolve_namespace(cfg), cp.checkpoint_id)
+        assert superseded is not None, "a superseded lineage is still findable by id"
+        assert superseded.commit_sha == cp.commit_sha
