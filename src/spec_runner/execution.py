@@ -22,6 +22,7 @@ from .stages import StageReporter
 from .state import (
     ErrorCode,
     ExecutorState,
+    PhaseOutcome,
     RetryContext,
 )
 from .task import (
@@ -56,7 +57,14 @@ def execute_task(
     """
 
     task_id = task.id
-    reporter = StageReporter(task.id, lambda line: log_progress(line))
+    # Slice 0: typed phase outcomes go to the state DB alongside the progress
+    # mirror. Recording is best-effort inside `record_phase`; nothing gates on
+    # it, so execution and terminal state are unchanged.
+    reporter = StageReporter(
+        task.id,
+        lambda line: log_progress(line),
+        sink=lambda phase, outcome, detail: state.record_phase(task.id, phase, outcome, detail),
+    )
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
@@ -175,6 +183,26 @@ def execute_task(
 
         # Check for API errors (rate limits, etc.)
         error_pattern = check_error_patterns(combined_output)
+
+        # Record the exec outcome from the *same* signals that decide the
+        # attempt, not from the return code alone (Copilot, PR #167): a rate
+        # limit or an is_error payload arrives with exit 0, and recording that
+        # as a pass would make the new evidence disagree with the verdict it
+        # sits next to.
+        # `exec` is about the *process*: did the agent run to completion. What
+        # it then said about the work belongs to `parse`. So a non-zero exit,
+        # an explicit `is_error` payload and an API pattern are all ERROR —
+        # the same call #138 made for a review whose CLI did not finish.
+        # (`is_error` is the return code for text CLIs and the payload flag for
+        # claude's JSON, so the three collapse into one honest signal.)
+        if error_pattern or cli_result.is_error or result.returncode != 0:
+            reporter.record(
+                PhaseOutcome.ERROR,
+                error_pattern or f"exit {result.returncode}",
+            )
+        else:
+            reporter.record(PhaseOutcome.PASS, f"exit {result.returncode}")
+
         if error_pattern:
             log_progress(f"\u26a0\ufe0f API error detected: {error_pattern}", task_id)
             logger.warning(
@@ -263,6 +291,7 @@ def execute_task(
 
         if success:
             reporter.enter("parse")
+            reporter.record(PhaseOutcome.PASS, "completion marker recognized")
             if has_complete_marker:
                 logger.info("Task completed by Claude", task_id=task_id)
             else:
@@ -347,6 +376,21 @@ def execute_task(
                 return False
         else:
             # Claude reported failure
+            # record_for, not enter: `reporter.current` feeds `error_stage`,
+            # and a failure here belongs to `exec`, not to `parse`.
+            reporter.record_for(
+                "parse",
+                PhaseOutcome.UNEXPECTED_FAIL
+                if (has_failed_marker or has_blocked_marker)
+                else PhaseOutcome.NOT_RUN,
+                # Three distinguishable cases: a deliberate escalation, a
+                # reported failure, and output nobody could read. Collapsing
+                # them made the evidence for a blocked task say "no completion
+                # marker", which is simply untrue (Copilot, PR #167).
+                "blocked marker"
+                if has_blocked_marker
+                else ("failure marker" if has_failed_marker else "no completion marker"),
+            )
             blocked_match = re.search(r"TASK_BLOCKED:\s*(.+)", output)
             error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
             if has_blocked_marker:

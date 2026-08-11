@@ -8,6 +8,10 @@ there are no thread-locals.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .state import PhaseOutcome
 
 STAGES: tuple[str, ...] = (
     "sync_deps",
@@ -33,9 +37,17 @@ class StageReporter:
         mirror: callable invoked with the formatted line for each transition.
     """
 
-    def __init__(self, task_id: str, mirror: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        mirror: Callable[[str], None],
+        sink: Callable[[str, PhaseOutcome, str | None], None] | None = None,
+    ) -> None:
         self.task_id = task_id
         self._mirror = mirror
+        # Optional: where typed outcomes go (slice 0). None keeps the reporter
+        # a pure progress mirror, which is what every existing caller expects.
+        self._sink = sink
         self.current: str | None = None
 
     def enter(self, name: str) -> None:
@@ -46,3 +58,26 @@ class StageReporter:
         assert name in STAGES, f"unknown stage: {name!r}"
         self.current = name
         self._mirror(f"[{self.task_id}] ⏳ stage: {name}")
+
+    def record(self, outcome: PhaseOutcome, detail: str | None = None) -> None:
+        """Record the outcome of the stage that is currently entered.
+
+        A no-op without a sink and outside a stage, so adding calls to this is
+        never able to change control flow — the slice-0 guarantee is that
+        execution and terminal state do not move.
+        """
+        if self.current is None:
+            return
+        self.record_for(self.current, outcome, detail)
+
+    def record_for(self, phase: str, outcome: PhaseOutcome, detail: str | None = None) -> None:
+        """Record an outcome for ``phase`` **without** entering it.
+
+        `current` feeds `attempts.error_stage`, a documented field consumers
+        read, so recording an outcome must never move it. Entering a stage just
+        to record its result is how slice 0 would have silently changed that
+        contract — caught by `TestErrorStageRecorded`.
+        """
+        if self._sink is None:
+            return
+        self._sink(phase, outcome, detail)
