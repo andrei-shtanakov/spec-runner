@@ -296,23 +296,23 @@ def run_code_review(
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
         if error_pattern:
-            log_progress(f"⚠️ Review API error: {error_pattern}", task.id)
-            return ReviewVerdict.FAILED, f"API error: {error_pattern}", output
+            log_progress(f"💥 Code review error: {error_pattern}", task.id)
+            return ReviewVerdict.ERROR, f"API error: {error_pattern}", output
 
         # Check for empty or failed response
         if result.returncode != 0 and not output.strip():
             log_progress(
-                f"⚠️ Review process failed (exit code {result.returncode})",
+                f"💥 Code review error: process exited with code {result.returncode}",
                 task.id,
             )
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
             error_msg = f"Review process exited with code {result.returncode}"
-            return ReviewVerdict.FAILED, error_msg, None
+            return ReviewVerdict.ERROR, error_msg, None
 
         if not output.strip():
-            log_progress("⚠️ Review returned empty response", task.id)
-            return ReviewVerdict.FAILED, "Review returned empty response", None
+            log_progress("⚠️ Code review produced no verdict: empty response", task.id)
+            return ReviewVerdict.NOT_RUN, "Review returned empty response", None
 
         # Check review result (case-insensitive, check both stdout and stderr)
         output_upper = combined_output.upper()
@@ -341,18 +341,25 @@ def run_code_review(
             log_progress(f"   Review output (last 300 chars): {preview}", task.id)
             return ReviewVerdict.FAILED, "Review found issues", output
         else:
-            # No explicit marker — treat as passed but log for visibility
+            # #138: this used to return PASSED — "the agent said nothing I
+            # recognize" was recorded, and displayed with a tick, as a clean
+            # review. Silence is not approval: the reviewer may have produced
+            # prose, hit its context limit, or misunderstood the protocol, and
+            # none of those is evidence about the code.
             preview = output.strip()[-200:] if output.strip() else "(empty)"
-            log_progress("✅ Code review completed (no explicit status marker)", task.id)
+            log_progress("⚠️ Code review produced no verdict: no status marker", task.id)
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
-            return ReviewVerdict.PASSED, None, output
+            return ReviewVerdict.NOT_RUN, "Review produced no verdict marker", output
 
     except subprocess.TimeoutExpired:
-        log_progress(f"⏰ Review timeout after {config.review_timeout_minutes}m", task.id)
-        return ReviewVerdict.FAILED, "Review timed out", None
+        log_progress(
+            f"⏰ Code review produced no verdict: timed out after {config.review_timeout_minutes}m",
+            task.id,
+        )
+        return ReviewVerdict.NOT_RUN, "Review timed out", None
     except Exception as e:
-        log_progress(f"💥 Review error: {e}", task.id)
-        return ReviewVerdict.FAILED, str(e), None
+        log_progress(f"💥 Code review error: {e}", task.id)
+        return ReviewVerdict.ERROR, str(e), None
 
 
 def _run_single_role_review(
@@ -388,11 +395,15 @@ def _run_single_role_review(
             return role, ReviewVerdict.FAILED, output
         elif "REVIEW_FIXED" in output_upper:
             return role, ReviewVerdict.FIXED, output
-        return role, ReviewVerdict.PASSED, output
+        elif "REVIEW_PASSED" in output_upper:
+            return role, ReviewVerdict.PASSED, output
+        # Same rule as the single-review path (#138): no marker means this role
+        # produced no verdict, not that it approved.
+        return role, ReviewVerdict.NOT_RUN, output
     except subprocess.TimeoutExpired:
-        return role, ReviewVerdict.FAILED, f"Review timeout ({role})"
+        return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
     except Exception as e:
-        return role, ReviewVerdict.FAILED, str(e)
+        return role, ReviewVerdict.ERROR, str(e)
 
 
 def run_parallel_review(
@@ -451,19 +462,33 @@ def run_parallel_review(
         for future in futures:
             results.append(future.result())
 
-    # Aggregate verdicts
+    # Aggregate verdicts. Precedence (#138): concrete findings first, then a
+    # broken reviewer, then one that produced nothing — a role that never
+    # answered must never be averaged away into an overall "passed".
     all_outputs: list[str] = []
-    overall_verdict = ReviewVerdict.PASSED
-    has_fixed = False
+    has_failed = has_error = has_not_run = has_fixed = False
     for role, verdict, output in results:
         log_progress(f"  📋 {role}: {verdict.value}", task.id)
         all_outputs.append(f"=== {role.upper()} REVIEW ===\n{output[:2000]}")
         if verdict == ReviewVerdict.FAILED:
-            overall_verdict = ReviewVerdict.FAILED
+            has_failed = True
+        elif verdict == ReviewVerdict.ERROR:
+            has_error = True
+        elif verdict == ReviewVerdict.NOT_RUN:
+            has_not_run = True
         elif verdict == ReviewVerdict.FIXED:
             has_fixed = True
 
-    if overall_verdict != ReviewVerdict.FAILED and has_fixed:
+    if has_failed:
+        overall_verdict = ReviewVerdict.FAILED
+    elif has_error:
+        overall_verdict = ReviewVerdict.ERROR
+    elif has_not_run:
+        overall_verdict = ReviewVerdict.NOT_RUN
+    else:
+        overall_verdict = ReviewVerdict.PASSED
+
+    if overall_verdict == ReviewVerdict.PASSED and has_fixed:
         overall_verdict = ReviewVerdict.FIXED
         # Commit fixes from any review agent — minus runtime state (#62)
         try:

@@ -43,6 +43,15 @@ class ReviewVerdict(str, Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
     REJECTED = "rejected"
+    # A review that did not produce a verdict — timed out, returned nothing, or
+    # said nothing recognizable (#138). Distinct from SKIPPED, which means the
+    # stage was deliberately not run, and emphatically distinct from PASSED,
+    # which is what silence used to be recorded as.
+    NOT_RUN = "not_run"
+    # The review machinery itself failed: the CLI errored, hit a rate limit, or
+    # raised. Nothing was learned about the code, and the cause is ours to fix,
+    # not the agent's.
+    ERROR = "error"
 
 
 @dataclass

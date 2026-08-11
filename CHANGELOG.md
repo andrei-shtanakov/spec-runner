@@ -12,6 +12,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A review that did not happen no longer reports as one that passed**
+  (issue #138, correctness half). The stage could not fail a task by any
+  route, yet the log read like a quality gate — and the worst path was silent
+  approval: **output with no recognizable marker was recorded as `passed`**,
+  so a reviewer that produced prose, ran out of context, or misunderstood the
+  protocol counted as a clean review. Measured on a 26-task pilot: six
+  15-minute timeouts, an hour and a half of wall time for advice that was
+  never given, every one of those tasks closed DONE without a single finding.
+  - Two new `ReviewVerdict` values make the four outcomes four different
+    facts: `not_run` (timeout, empty response, no verdict marker) and `error`
+    (CLI failure, rate limit, exception). `passed` now requires the reviewer
+    to have actually said so.
+  - Parallel review follows the same rule per role, and aggregation is
+    ordered findings → error → not-run → passed, so a role that never
+    answered can no longer be averaged away into an overall pass.
+  - Progress lines and the run log name the outcome: the old
+    `✅ Code review completed (no explicit status marker)` — tick and all —
+    was precisely what made a non-review look like a review.
+  - `docs/state-schema.md` documents the enlarged vocabulary; consumers should
+    treat unknown values as unknown, as with `ErrorCode`.
+  - **Blocking behaviour is deliberately unchanged.** Outside HITL every
+    verdict stays advisory. Whether a review may fail a task, and whether the
+    stage should move relative to the commit, are policy decisions tracked
+    separately — this change only makes the record honest.
+
+
+### Fixed
+
 - **Prompt templates resolve from the project, never from the current
   directory** (issue #153). `PROMPTS_DIR` was the module-level relative
   `Path("spec/prompts")`, i.e. resolved against the *process* CWD: running
