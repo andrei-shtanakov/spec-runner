@@ -27,6 +27,7 @@ from .runner import (
 from .spec import (
     SpecMeta,
     ancestor_stages,
+    atomic_write_bytes,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -74,7 +75,9 @@ def _restore(path: Path, previous: bytes | None) -> None:
     if previous is None:
         path.unlink(missing_ok=True)
     else:
-        path.write_bytes(previous)
+        # Atomic: a plain write truncates first, so an interruption here would
+        # destroy the draft this rollback exists to protect (Copilot, PR #161).
+        atomic_write_bytes(path, previous)
 
 
 def _generate_stage_draft(

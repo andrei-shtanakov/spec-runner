@@ -29,6 +29,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
     attempt costs money.
   - When no attempt validates, the command exits non-zero and writes nothing,
     where it used to exit 0 with `validation=fail` on disk.
+  - The rollback itself is atomic (temp file + `os.replace`, shared with
+    `write_spec` as `spec.atomic_write_bytes`): a plain write truncates first,
+    so an interruption mid-restore would destroy the very draft the rollback
+    exists to protect.
   - **No canonicalizing normalizer.** The alternative proposal — parse the
     generated file and rewrite it into canonical form — was rejected: a tool
     that guesses the meaning of an unfamiliar LLM format and then canonicalizes

@@ -178,3 +178,56 @@ def test_repair_budget_is_configurable(tmp_path, attempts):
     invoke = _invoker([BAD_REQ])
     run_gated_stage("requirements", "X", cfg, invoke=invoke)
     assert invoke.calls["n"] == attempts + 1
+
+
+class TestRollbackIsCrashSafe:
+    """The rollback must not be able to destroy what it is protecting.
+
+    `write_bytes` truncates before writing, so an interruption mid-restore
+    (crash, SIGKILL, disk full) left the operator's prior good draft
+    half-written — the one outcome this whole path exists to prevent
+    (Copilot, PR #161).
+    """
+
+    def test_a_failed_restore_leaves_the_original_intact(self, tmp_path, monkeypatch):
+        from spec_runner import cli_plan
+        from spec_runner import spec as spec_mod
+
+        cfg = _cfg(tmp_path)
+        assert run_gated_stage("requirements", "X", cfg, invoke=_invoker([GOOD_REQ])) == 0
+        good = cfg.requirements_file.read_bytes()
+
+        def _boom(src, dst):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(spec_mod.os, "replace", _boom)
+        with pytest.raises(OSError):
+            cli_plan._restore(cfg.requirements_file, b"replacement")
+
+        assert cfg.requirements_file.read_bytes() == good, (
+            "the draft was damaged by a failed restore"
+        )
+        leftovers = [
+            p.name
+            for p in cfg.requirements_file.parent.iterdir()
+            if p.name.startswith(".requirements.md.")
+        ]
+        assert not leftovers, f"temp files left behind: {leftovers}"
+
+    def test_restore_puts_the_bytes_back(self, tmp_path):
+        from spec_runner import cli_plan
+
+        target = tmp_path / "spec" / "requirements.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"new content")
+        cli_plan._restore(target, b"old content")
+        assert target.read_bytes() == b"old content"
+
+    def test_restore_removes_a_file_that_did_not_exist_before(self, tmp_path):
+        from spec_runner import cli_plan
+
+        target = tmp_path / "spec" / "requirements.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"candidate")
+        cli_plan._restore(target, None)
+        assert not target.exists()
