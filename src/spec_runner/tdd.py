@@ -44,7 +44,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .claims import check_claims, describe_violations, record_claims
+from .claims import check_claims, describe_violations, ensure_claimable, record_claims
 from .git_ops import is_composite_shell_command
 from .logging import get_logger
 
@@ -427,11 +427,27 @@ def run_red_phase(
         outcome=verification.outcome,
         timestamp=datetime.now().isoformat(),
     )
-    state.record_red_checkpoint(checkpoint)
+    # Claims first, checkpoint second. The order is the whole safety property:
+    # a process that dies between the two writes must not leave a *confirmed
+    # red with no lock* — the red gate would pass while the file it depends on
+    # is open for anyone to edit. Written this way, the same crash leaves no
+    # confirmed red instead, and the next run re-authors. Found by the battle
+    # test, which is what a battle test is for.
+    #
+    # Only a confirmed red freezes anything: a refuted or unverifiable one is
+    # recorded as evidence and locks nothing.
     if verification.outcome is RedOutcome.EXPECTED_FAIL:
-        # Only a *confirmed* red freezes anything. A refuted or unverifiable
-        # claim is recorded as evidence but locks no files.
-        record_claims(config, state, checkpoint)
+        try:
+            ensure_claimable(config, selector)
+            record_claims(config, state, checkpoint)
+        except Exception as exc:
+            logger.error("Could not claim the red's files", task_id=task.id, error=str(exc))
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                f"the red was confirmed but its files could not be claimed ({exc}); "
+                "recording it without the lock would leave the gate passing over an open file",
+            )
+    state.record_red_checkpoint(checkpoint)
     return RedPhaseResult(verification.outcome, verification.detail, checkpoint)
 
 

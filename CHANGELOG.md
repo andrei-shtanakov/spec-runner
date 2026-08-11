@@ -256,6 +256,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
     swallowed rather than able to fail a task.
 
 
+### Fixed
+
+- **A confirmed RED could be recorded without its claims** (#141). The
+  checkpoint was written before the files were claimed, so a process dying
+  between the two writes left a red that **counts** over a file **anyone may
+  edit** — the gate would pass while the byte-lock silently did not exist. The
+  order is now claims-first: the same crash leaves no confirmed red, and the
+  next run re-authors. Found by the battle test, which is what a battle test is
+  for.
+- **An unlockable file still produced a confirmed RED.** A path the claim
+  contract refuses — a symlink, a non-regular file — was skipped with a warning
+  and the checkpoint recorded anyway, so the gate passed over a file nobody was
+  protecting: the same hole as above by a different route. Claimability is now
+  checked *before* anything is written, in both the RED phase and `repair`, and
+  a red whose files cannot be locked is refused. A refused `repair` also keeps
+  the lock it failed to replace.
+- **A claim violation did not say where a renamed file went.** The message read
+  `renamed tests/x.py` and stopped there, discarding the reason the violation
+  kinds are distinguished at all — an operator was told a file had moved and
+  not where to.
+
 ## [2.24.0] — 2026-08-11
 
 Instruments that could not report failure. Every entry is a place where the

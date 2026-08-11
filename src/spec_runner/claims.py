@@ -43,6 +43,15 @@ class ClaimCheckError(RuntimeError):
     """The claims could not be checked. Never confused with "no violations"."""
 
 
+class ClaimRefused(RuntimeError):
+    """A file a confirmed red depends on cannot be claimed.
+
+    Fail-closed by construction: a red whose files are not locked is a red the
+    gate would pass over an open file, which is the hole the byte-lock exists
+    to close. Better to refuse the red than to record it without its lock.
+    """
+
+
 class ClaimStatus(str, Enum):
     """A claim's life. Nothing is ever deleted — see slice 3."""
 
@@ -150,14 +159,11 @@ def record_claims(
     not be a violation and must not stack duplicate rows.
     """
     root = Path(config.project_root)
+    ensure_claimable(config, checkpoint.selector)
     existing = {(c.path, c.blob_sha) for c in state.active_claims(checkpoint.namespace)}
     recorded: list[Claim] = []
 
     for path in claim_paths_for(checkpoint.selector):
-        refusal = validate_claim_path(root, path)
-        if refusal:
-            logger.warning("Refusing to claim a path", path=path, reason=refusal)
-            continue
         blob = claim_blob_sha(root, path)
         if (path, blob) in existing:
             continue
@@ -173,6 +179,29 @@ def record_claims(
         state.record_claim(claim)
         recorded.append(claim)
     return recorded
+
+
+def ensure_claimable(config: ExecutorConfig, selector: str) -> list[str]:
+    """The paths ``selector`` will claim, or raise `ClaimRefused`.
+
+    Called *before* anything is written, so a red whose file cannot be locked
+    is refused rather than recorded lock-less. Skipping an unclaimable path
+    with a warning — as an earlier version did — produced exactly the state
+    this module exists to prevent: a confirmed red the gate passes, over a file
+    nobody is protecting.
+    """
+    paths = claim_paths_for(selector)
+    if not paths:
+        raise ClaimRefused(
+            f"selector {selector!r} names no file to claim; a red with nothing locked "
+            "would pass the gate over an open file"
+        )
+    root = Path(config.project_root)
+    for path in paths:
+        refusal = validate_claim_path(root, path)
+        if refusal:
+            raise ClaimRefused(f"cannot claim {path}: {refusal}")
+    return paths
 
 
 def check_claims(
@@ -263,9 +292,16 @@ def _tree_blobs(root: Path, sha: str) -> dict[str, str] | None:
 
 
 def describe_violations(violations: list[ClaimViolation]) -> str:
-    """One line an operator can act on."""
+    """One line an operator can act on.
+
+    Includes each violation's detail — without it a rename reads as
+    "renamed tests/x.py" and does not say *where to*, which throws away the
+    reason the kinds are distinguished at all.
+    """
     return "; ".join(
-        f"{v.kind.value} {v.path} (claimed by {v.task_id}, checkpoint {v.checkpoint_id})"
+        f"{v.kind.value} {v.path} (claimed by {v.task_id}, checkpoint {v.checkpoint_id}"
+        + (f"; {v.detail}" if v.detail else "")
+        + ")"
         for v in violations
     )
 
@@ -273,6 +309,7 @@ def describe_violations(violations: list[ClaimViolation]) -> str:
 __all__ = [
     "Claim",
     "ClaimCheckError",
+    "ClaimRefused",
     "ClaimStatus",
     "ClaimViolation",
     "ViolationKind",
@@ -280,6 +317,7 @@ __all__ = [
     "claim_blob_sha",
     "claim_paths_for",
     "describe_violations",
+    "ensure_claimable",
     "record_claims",
     "validate_claim_path",
 ]
