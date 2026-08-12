@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 
+from .budget import budget_is_active
 from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
@@ -280,6 +281,10 @@ class ReviewCall:
     #: nothing", when in fact the reviewer said it had failed (Copilot, #216).
     is_error: bool = False
     timed_out: bool = False
+    #: Set when the call was refused before it started, because the budget
+    #: guard could not prove there was anything left to spend (#213). Not an
+    #: error and not a verdict: nothing was asked, so nothing was learned.
+    budget_refusal: str = ""
 
 
 def _run_reviewer(
@@ -308,6 +313,16 @@ def _run_reviewer(
     one call per role of every parallel review (#213).
     """
     from .runner import build_cli_invocation, parse_cli_result
+
+    # #213: the third of a TDD attempt's paid calls, and the one whose refusal
+    # costs least — the candidate commit stands either way, and an unreviewed
+    # candidate is a state the tool already models.
+    refusal = _budget_refusal(config, task_id, provenance)
+    if refusal is not None:
+        log_progress(f"⛔ {refusal.reason}", task_id)
+        return ReviewCall(
+            text="", stderr="", returncode=-1, cost_usd=None, budget_refusal=refusal.reason
+        )
 
     invocation = build_cli_invocation(
         cmd=review_cmd,
@@ -362,6 +377,41 @@ def _run_reviewer(
 #: that. A review call takes minutes; serialising a millisecond write is free,
 #: and losing an accounting row is the thing this change exists to stop.
 _LEDGER_LOCK = threading.Lock()
+
+
+def _budget_refusal(config: ExecutorConfig, task_id: str, provenance: str):
+    """Ask the pre-call guard, or None when no cap is configured.
+
+    Opens no state when there is no budget: a run that set no cap must not
+    gain a database read per review call from a feature it never enabled.
+    """
+    from .budget import UNREADABLE, BudgetRefusal, check_before_call
+    from .state import ExecutorState
+
+    if not budget_is_active(config):
+        return None
+    try:
+        with _LEDGER_LOCK, ExecutorState(config) as state:
+            return check_before_call(config, state, task_id, provenance)
+    except Exception as exc:
+        # Fail closed. A guard that cannot read spend is the extreme case of
+        # the unprovable remainder it already refuses on, and proceeding here
+        # would break the guarantee in exactly the situation where nobody is
+        # counting: an unreadable ledger lets every remaining call through
+        # (Copilot, PR #217). The first version of this reasoned that
+        # refusing on a broken reader stops work "for a reason that may not
+        # be true" — but "we do not know" is not a reason to spend.
+        logger.error(
+            "Budget guard could not read spend — refusing the call",
+            task_id=task_id,
+            provenance=provenance,
+            error=str(exc),
+        )
+        return BudgetRefusal(
+            UNREADABLE,
+            f"the budget guard could not read recorded spend ({exc}), so the remaining "
+            f"budget cannot be proven — not starting the {provenance} call",
+        )
 
 
 def _record_call(config: ExecutorConfig, task_id: str, provenance: str, parsed: object) -> None:
@@ -447,6 +497,12 @@ def run_code_review(
             review_model,
             review_template,
         )
+        if call.budget_refusal:
+            # NOT_RUN, never SKIPPED: `skipped` is what a *policy* decision
+            # looks like, and under `review_policy: advisory` the absence of a
+            # review must not read as a review that went fine. Nothing was
+            # asked, so nothing is known about this code.
+            return ReviewVerdict.NOT_RUN, call.budget_refusal, None
         if call.timed_out:
             log_progress(
                 "⏰ Code review produced no verdict: timed out after "
@@ -566,6 +622,8 @@ def _run_single_role_review(
             review_model,
             review_template,
         )
+        if call.budget_refusal:
+            return role, ReviewVerdict.NOT_RUN, call.budget_refusal
         if call.timed_out:
             return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
         output = call.text + "\n" + call.stderr
@@ -623,25 +681,33 @@ def run_parallel_review(
         log_progress("⚠️ No valid review roles configured, falling back to single review", task.id)
         return run_code_review(task, config, test_output, lint_output, previous_error)
 
-    # Run reviews in parallel using threads (each is a subprocess call)
+    def _run(role: str, role_prompt: str) -> tuple[str, ReviewVerdict, str]:
+        return _run_single_role_review(
+            role,
+            role_prompt,
+            base_prompt,
+            review_cmd,
+            review_model,
+            review_template,
+            config,
+            task.id,
+        )
+
     results: list[tuple[str, ReviewVerdict, str]] = []
-    with ThreadPoolExecutor(max_workers=len(roles_to_run)) as pool:
-        futures = [
-            pool.submit(
-                _run_single_role_review,
-                role,
-                role_prompt,
-                base_prompt,
-                review_cmd,
-                review_model,
-                review_template,
-                config,
-                task.id,
-            )
-            for role, role_prompt in roles_to_run
-        ]
-        for future in futures:
-            results.append(future.result())
+    if budget_is_active(config):
+        # #213: serialised while a cap is set, and the guarantee is the reason.
+        # "No new paid call starts once the limit is reached, so the overshoot
+        # is bounded by one call" is simply false for five roles launched
+        # together: all five pass the check before any of them reports a cost.
+        # Sequential is slower and is what makes the sentence true.
+        log_progress("💰 Budget active — reviewing one role at a time", task.id)
+        for role, role_prompt in roles_to_run:
+            results.append(_run(role, role_prompt))
+    else:
+        with ThreadPoolExecutor(max_workers=len(roles_to_run)) as pool:
+            futures = [pool.submit(_run, role, role_prompt) for role, role_prompt in roles_to_run]
+            for future in futures:
+                results.append(future.result())
 
     # Aggregate verdicts. Precedence (#138): concrete findings first, then a
     # broken reviewer, then one that produced nothing — a role that never

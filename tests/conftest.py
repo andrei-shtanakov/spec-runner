@@ -41,6 +41,30 @@ def acceptance_profile() -> StageProfile:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_gate_registry():
+    """Restore the process-wide gate registry after every test.
+
+    `gates.REGISTRY` is global by design, and `execute_task` attaches the TDD
+    gates to it through `ensure_red_gate` — so any test that runs a `tdd` task
+    leaves them registered for whatever runs next. `has_gates()` then reads
+    True in an unrelated test, which changes real behaviour: `post_done_hook`
+    commits a pre-review candidate only when a gate exists to judge it.
+
+    Found by `test_no_pre_review_commit_when_review_off`, which passed alone
+    and failed after the new budget-guard tests — the failure mode gates.py's
+    own comment names: "a global that tests must mutate is how order-dependent
+    suites are born". Restoring here fixes the whole class rather than the one
+    test that happened to sit downstream of it.
+    """
+    from spec_runner.gates import REGISTRY
+
+    saved = {phase: list(gates) for phase, gates in REGISTRY._gates.items()}
+    yield
+    REGISTRY._gates.clear()
+    REGISTRY._gates.update(saved)
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     """Restrict anyio-marked async tests to the asyncio backend (no trio)."""

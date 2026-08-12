@@ -349,7 +349,7 @@ Treat the MCP server as equivalent to giving the caller shell access to the work
 **Hardening options** (if you need tighter limits):
 
 - Run in a disposable container or Maestro worktree so writes are isolated
-- Set `budget_usd` low to cap accidental cost spend
+- Set `budget_usd` low to bound accidental cost spend — see the guarantee below
 - Disable `hooks.post_done.auto_commit` if you want manual review before commits
 - Restrict `commands.test`/`commands.lint` to safe allow-listed shell commands — they run verbatim
 
@@ -376,8 +376,8 @@ claude_command: "claude"
 claude_model: "sonnet"
 spec_prefix: ""                # e.g. "phase5-" for phase5-tasks.md
 tdd_runner: ""                 # pytest (empty = infer; only where inference cannot be wrong)
-budget_usd: 50.0               # Total budget cap (whole run)
-task_budget_usd: 10.0          # Per-task cap incl. first attempt
+budget_usd: 50.0               # Total budget guard (whole run)
+task_budget_usd: 10.0          # Per-task guard incl. first attempt
 max_retry_cost_usd: 2.0        # Cap on retry cost only (attempts 2+)
 
 # Telegram notifications (optional)
@@ -439,6 +439,35 @@ paths:
   root: "."
   logs: "spec/.executor-logs"
 ```
+
+### Budgets: what the caps actually guarantee
+
+`budget_usd` and `task_budget_usd` are **pre-call guards, not hard caps.** The
+guarantee, exactly:
+
+> Once recorded spend has reached the limit, no new paid call is started; the
+> maximum consecutive overshoot is bounded by one call.
+
+A call's cost is known only after it returns, so no state-based check can stop
+the call that crosses the line. The only true hard cap would be a
+backend-enforced per-call limit, which spec-runner deliberately does not pass:
+a hard mid-call cap turns a slight overage into a hard failure. Until then, one
+call can exceed the remainder.
+
+Three consequences worth knowing before you rely on a cap:
+
+- **A task attempt can make several paid calls.** Under `execution_mode: tdd`
+  it makes three — RED authoring, GREEN implementation, review — and each is
+  guarded separately. A refusal before GREEN keeps the confirmed red; a
+  refusal before review keeps the candidate commit and records the review as
+  `not_run` (never as passed).
+- **Parallel review runs one role at a time while a cap is set.** Five roles
+  launched together would all pass the same check before any of them reported
+  a cost, and the guarantee above would be false.
+- **A CLI that reports no cost cannot be combined with a cap.** The first such
+  call is recorded unpriced, and the guard then refuses the next one: the
+  remaining budget cannot be proven from a figure known to be a floor.
+  `spec-runner costs` shows unpriced calls and marks such totals with `≥`.
 
 ### Git Branch Workflow
 
