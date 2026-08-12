@@ -216,22 +216,45 @@ an instrument error (`unverifiable`), never a pass through.
 | exit 1 and `Paths given to "mix test" did not match` | `SELECTION_FAILED` |
 | anything else | `UNRECOGNIZED` |
 
-### 4.3 prove_selected
+### 4.3 prove_selected — amended during implementation
 
-- `TESTS_FAILED`: the failure block names a location, and it must be **exactly**
-  the requested project-relative `path:line`:
+The design above said: match the reported location for a failure, and for a
+pass rely on preflight plus "the summary reports exactly one test". The second
+half did not survive contact. **Counting the summary disagreed between Elixir
+1.18 and 1.19** — the required CI job caught it on its first run; the local
+1.19 run did not.
 
-  ```
-    1) test calls missing module (ProbeTest)
-       test/probe_test.exs:9
-  ```
+The proof is now `mix test --trace`, whose per-test entry carries the
+**definition line**, so one rule covers passes and failures and neither depends
+on counting:
 
-  Equal → `PROVEN`; a different location → `REFUTED`; no location found →
-  `UNKNOWN`. This is what catches `:999` even if preflight were bypassed —
-  belt and braces, since the two mechanisms fail in different ways.
+```
+  * test passes [L#3]                 start — every test gets one
+  * test passes (0.00ms) [L#3]        result — this one ran
+  * test fails (excluded) [L#6]       result — this one did not
+```
 
-- `TESTS_PASSED`: `PROVEN` only when preflight validated the definition line
-  **and** the summary reports exactly one test. Otherwise `UNKNOWN`.
+Executed means a **timed** result. (The first version of this rule read "a line
+without `(excluded)`" as executed, which counted every start line and refuted
+everything — measured, not reasoned.)
+
+- executed lines == {requested} → `PROVEN`
+- executed lines non-empty and requested not among them → `REFUTED`.
+  `:999` produces a timed `[L#9]`, so it is refuted **outright** rather than
+  inferred — strictly stronger than this design originally asked for.
+- no trace at all → fall back to the failure-location match below, then
+  `UNKNOWN`.
+
+`--trace` is appended by `build_command`. It also serialises the run, which for
+a single replayed test costs nothing and makes the output deterministic.
+
+**Fallback**, for output without a trace: the failure block names a location,
+and it must be exactly the requested project-relative `path:line`.
+
+```
+  1) test calls missing module (ProbeTest)
+     test/probe_test.exs:9
+```
 
 ### 4.4 The compile-error nuance
 
