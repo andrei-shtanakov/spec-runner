@@ -10,6 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.27.0] - 2026-08-12
+
+**Minor, not patch.** Everything here is a defect fix, but the outward
+compatibility change is visible: a malformed or mixed config used to load as
+nothing and let the run proceed on defaults, and now it stops the run before
+anything executes. That is the right incompatibility — the defaults invoke a
+paid external model with write access to the working tree — but it is one
+operators should meet as a minor release rather than a patch. `--json-result`
+and the state-DB schema are untouched.
+
 ### Fixed
 
 - **A config that mixes the flat and `executor:` shapes is refused** (#182,
@@ -1858,7 +1868,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...HEAD
+[2.27.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.24.0...v2.25.0
 [2.24.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.23.0...v2.24.0
