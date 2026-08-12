@@ -2,16 +2,23 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/costs.schema.json",
   "title": "SpecRunnerCosts",
-  "description": "Output of `spec-runner costs --json` (spec_runner.cli_info.cmd_costs). The per-task read surface that backs the spec-runner-vscode extension's TASKS tree. NOTE: `status` carries a MIXED vocabulary — DB states (pending/running/success/failed/skipped) for tasks that have run, tasks.md states (todo/in_progress/done/blocked) otherwise. Consumers must normalize both. See docs/state-schema.md.",
+  "description": "Output of `spec-runner costs --json` (spec_runner.cli_info.cmd_costs). The per-task read surface that backs the spec-runner-vscode extension's TASKS tree. NOTE: `status` carries a MIXED vocabulary \u2014 DB states (pending/running/success/failed/skipped) for tasks that have run, tasks.md states (todo/in_progress/done/blocked) otherwise. Consumers must normalize both. See docs/state-schema.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tasks", "summary"],
+  "required": [
+    "tasks",
+    "summary"
+  ],
   "properties": {
     "tasks": {
       "type": "array",
-      "items": { "$ref": "#/definitions/TaskCost" }
+      "items": {
+        "$ref": "#/definitions/TaskCost"
+      }
     },
-    "summary": { "$ref": "#/definitions/Summary" }
+    "summary": {
+      "$ref": "#/definitions/Summary"
+    }
   },
   "definitions": {
     "TaskCost": {
@@ -67,6 +74,11 @@
         "output_tokens": {
           "description": "Total output tokens for this task",
           "type": "integer"
+        },
+        "unmeasured_calls": {
+          "description": "Agent calls recorded for this task whose cost the CLI never reported (timeout, account limit, or a CLI that reports no cost). Added 2.29.0. When > 0, `cost` is a floor, not a total. Absent in output from <2.29.0.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -100,7 +112,10 @@
         },
         "most_expensive_task": {
           "description": "task_id of the costliest task, or null when none has cost > 0",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "budget_usd": {
           "description": "Configured budget in USD; present only when a budget is set",
@@ -109,6 +124,11 @@
         "budget_used_pct": {
           "description": "Percentage of budget consumed; present only when a budget is set",
           "type": "number"
+        },
+        "unmeasured_calls": {
+          "description": "Agent calls across all tasks whose cost the CLI never reported. Added 2.29.0. When > 0, `total_cost` is a floor, not a total. Absent in output from <2.29.0.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     }

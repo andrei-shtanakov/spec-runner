@@ -1219,6 +1219,27 @@ class ExecutorState:
             # here is visible in the same place the degradation is.
             return 0.0
 
+    def unmeasured_calls(self, task_id: str | None = None) -> int:
+        """Ledger rows whose cost is unknown — a call that happened and was
+        never priced.
+
+        Reported rather than summed. A NULL cost is not zero: a timed-out or
+        session-limited reviewer was billed for as long as it ran, and quietly
+        adding 0.0 would make an unpriced call indistinguishable from a free
+        one in every total the tool prints. The count is what lets a reader
+        (and, from #213, a budget guard) know a figure is a floor.
+        """
+        sql = "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL"
+        params: list[object] = []
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        try:
+            assert self._conn is not None
+            return int(self._conn.execute(sql, params).fetchone()[0] or 0)
+        except Exception:
+            return 0
+
     def record_tdd_phase(
         self, task_id: str, namespace: str, phase: str, detail: str | None = None
     ) -> None:

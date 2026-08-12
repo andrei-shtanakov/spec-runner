@@ -249,10 +249,19 @@ One row per agent invocation whose cost has nowhere else to live. Columns:
 `task_id`, `provenance`, `input_tokens`, `output_tokens`, `cost_usd`,
 `timestamp`.
 
-`provenance` is `red_authoring` today. The GREEN/exec pass keeps its cost on
-the attempt row, where the schema above already publishes it, so the ledger
-holds only the calls that were previously invisible — which is why
-`total_cost()` can sum both without double counting.
+`provenance` is `red_authoring`, `review` (the single-pass reviewer) or
+`review:<role>` (one row per parallel review role — never one aggregate, which
+could not say which role was expensive or which was never measured). The
+GREEN/exec pass keeps its cost on the attempt row, where the schema above
+already publishes it, so the ledger holds only the calls that were previously
+invisible — which is why `total_cost()` can sum both without double counting.
+
+`cost_usd` is **nullable, and NULL is not zero**: a reviewer killed by a
+timeout or an account limit was billed for as long as it ran, and recording
+0.0 would make that indistinguishable from a cheap call in every later sum.
+`ExecutorState.unmeasured_calls()` counts the NULL rows, and `costs --json`
+publishes that count per task and overall, so a total can be read as the floor
+it is. A call that never launched (missing binary) writes no row at all.
 
 Added because the TDD RED pass parsed its CLI result and kept only the text:
 its tokens and cost were discarded, so `spec-runner costs` reported `$0.00`

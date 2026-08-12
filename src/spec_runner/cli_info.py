@@ -251,6 +251,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "input_tokens": inp_tokens,
                         "output_tokens": out_tokens,
                         "total_tokens": inp_tokens + out_tokens,
+                        "unmeasured_calls": state.unmeasured_calls(t.id),
                     }
                 )
             else:
@@ -262,6 +263,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 # shown. `no_state` now means "nothing to report", not "no
                 # attempts".
                 inp_tokens, out_tokens = state.task_tokens(t.id)
+                unpriced = state.unmeasured_calls(t.id)
                 task_rows.append(
                     {
                         "task_id": t.id,
@@ -272,7 +274,14 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "input_tokens": inp_tokens,
                         "output_tokens": out_tokens,
                         "total_tokens": inp_tokens + out_tokens,
-                        "no_state": not (cost or inp_tokens or out_tokens),
+                        "unmeasured_calls": unpriced,
+                        # An unpriced call has NULL cost *and* NULL tokens, so
+                        # by cost and tokens alone it looks like nothing
+                        # happened — and the row would render `--`, hiding a
+                        # call that was made and paid for. That is the same
+                        # F-9 shape as the comment above, one level down, and
+                        # it arrived with "unknown is not zero" (Copilot, #216).
+                        "no_state": not (cost or inp_tokens or out_tokens or unpriced),
                     }
                 )
 
@@ -293,8 +302,15 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         avg_cost = sum(completed_costs) / len(completed_costs) if completed_costs else 0.0
         most_expensive = max(task_rows, key=lambda r: r["cost"]) if task_rows else None
 
+        # A call that happened and was never priced. Reported next to the
+        # total so a reader can tell "$3.71" from "at least $3.71" — the
+        # distinction the third pilot attempt's evidence had to be corrected
+        # for after the fact (#213).
+        unmeasured = state.unmeasured_calls()
+
         summary = {
             "total_cost": round(total_cost, 2),
+            "unmeasured_calls": unmeasured,
             "total_input_tokens": total_inp,
             "total_output_tokens": total_out,
             "avg_cost_per_completed": round(avg_cost, 2),
@@ -320,6 +336,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "attempts": r["attempts"],
                         "input_tokens": r["input_tokens"],
                         "output_tokens": r["output_tokens"],
+                        "unmeasured_calls": r.get("unmeasured_calls", 0),
                     }
                 )
             print(json.dumps({"tasks": json_tasks, "summary": summary}, indent=2))
@@ -334,7 +351,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 att_str = "--"
                 tok_str = "--"
             else:
-                cost_str = f"${r['cost']:.2f}"
+                # `≥` where a call went unpriced: "$0.00" on a task that made
+                # a call reads as "this was free", which is the one thing the
+                # figure does not say.
+                prefix = "≥" if r.get("unmeasured_calls") else ""
+                cost_str = f"{prefix}${r['cost']:.2f}"
                 att_str = str(r["attempts"])
                 tok_str = f"{r['total_tokens']}"
             name = r["name"][:28]
@@ -345,7 +366,10 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
         # Summary section
         print(f"\n{'=' * 40}")
-        print(f"Total cost:           ${total_cost:.2f}")
+        if unmeasured:
+            print(f"Total cost:           ${total_cost:.2f}  (a floor — see below)")
+        else:
+            print(f"Total cost:           ${total_cost:.2f}")
         if total_inp > 0 or total_out > 0:
 
             def _fmt_tok(n: int) -> str:
@@ -362,6 +386,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         if most_expensive and most_expensive["cost"] > 0:
             print(
                 f"Most expensive:       {most_expensive['task_id']} (${most_expensive['cost']:.2f})"
+            )
+        if unmeasured:
+            print(
+                f"Unpriced calls:       {unmeasured} — the CLI reported no cost "
+                "(timeout, account limit, or a CLI that does not report one)"
             )
 
 

@@ -275,3 +275,62 @@ class TestCmdCostsSortTokens:
         pos_002 = output.index("TASK-002")
         pos_001 = output.index("TASK-001")
         assert pos_002 < pos_001, "High-token task should appear first when sorted by tokens"
+
+
+class TestUnpricedCallsAreVisible:
+    """A call that happened and was never priced must not read as no call.
+
+    NULL cost and NULL tokens mean a task with an unpriced call looks, by cost
+    and tokens alone, exactly like a task that never ran — and the row rendered
+    `--`. That is the F-9 shape (spend that exists and is not shown) arriving
+    one level down with "unknown is not zero" (Copilot, PR #216).
+    """
+
+    def _with_one_unpriced_call(self, tmp_path: Path) -> ExecutorConfig:
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Reviewed", "p0", "todo")])
+        with ExecutorState(config) as state:
+            # No attempt row at all: exactly the shape a review call leaves
+            # when the attempt was never recorded.
+            state.record_agent_call("TASK-001", "review", cost_usd=None)
+        return config
+
+    def test_the_row_is_not_hidden_behind_a_dash(self, tmp_path: Path, capsys) -> None:
+        config = self._with_one_unpriced_call(tmp_path)
+
+        cmd_costs(Namespace(json=False, sort="id"), config)
+
+        line = next(ln for ln in capsys.readouterr().out.splitlines() if "TASK-001" in ln)
+        assert "--" not in line
+        # And the cost it shows is marked as a floor, not stated as free.
+        assert "≥$0.00" in line
+
+    def test_the_summary_says_how_many_went_unpriced(self, tmp_path: Path, capsys) -> None:
+        config = self._with_one_unpriced_call(tmp_path)
+
+        cmd_costs(Namespace(json=False, sort="id"), config)
+
+        out = capsys.readouterr().out
+        assert "Unpriced calls:       1" in out
+        assert "a floor" in out
+
+    def test_json_carries_the_count_per_task_and_overall(self, tmp_path: Path, capsys) -> None:
+        config = self._with_one_unpriced_call(tmp_path)
+
+        cmd_costs(Namespace(json=True, sort="id"), config)
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["summary"]["unmeasured_calls"] == 1
+        assert data["tasks"][0]["unmeasured_calls"] == 1
+
+    def test_a_task_that_really_did_nothing_still_shows_a_dash(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """The dash still means something — it has to keep meaning it."""
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Untouched", "p0", "todo")])
+
+        cmd_costs(Namespace(json=False, sort="id"), config)
+
+        line = next(ln for ln in capsys.readouterr().out.splitlines() if "TASK-001" in ln)
+        assert "--" in line
