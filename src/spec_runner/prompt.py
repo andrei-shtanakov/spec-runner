@@ -510,7 +510,20 @@ def _selector_instruction(config: "ExecutorConfig") -> str:
 
 
 def build_red_prompt(task: "Task", config: "ExecutorConfig") -> str:
-    """Prompt for the RED authoring pass (#141): write the failing test only.
+    """Prompt for the RED authoring pass, with the frozen-files block appended.
+
+    The authoring pass is told too, not only the implementation: a namespace
+    can hold another workstream's claims, and `check_claims` judges all of
+    them. A red authored on top of a neighbour's frozen test is a candidate
+    the gate will refuse just as surely.
+    """
+    from .claims import append_frozen_files
+
+    return append_frozen_files(_render_red_prompt(task, config), config, task)
+
+
+def _render_red_prompt(task: "Task", config: "ExecutorConfig") -> str:
+    """The RED prompt's body (#141): write the failing test only.
 
     Two instructions carry the contract. **Write no implementation** — a red
     that passes because the code was written alongside it demonstrates
@@ -562,6 +575,31 @@ The test command is: `{config.test_command}`
 
 
 def build_task_prompt(
+    task: Task,
+    config: ExecutorConfig,
+    previous_attempts: list[TaskAttempt] | None = None,
+    retry_context: RetryContext | None = None,
+) -> str:
+    """The implementation prompt, with the frozen-files block appended (#214).
+
+    The body is rendered first — built-in or custom template, it makes no
+    difference — and the block is appended to whatever came out. The pilot's
+    GREEN pass received exactly the prompt a `standard` task gets, wrote four
+    more tests into the file the red had frozen, and the claims gate refused
+    the merge: $1.3 of implementation spent on a candidate rejected for a rule
+    the agent was never given.
+
+    A single wrapper rather than a line in each branch, because "remember to
+    append it in the template path too" is precisely the kind of instruction
+    that gets forgotten when a branch is added.
+    """
+    from .claims import append_frozen_files
+
+    body = _render_task_prompt(task, config, previous_attempts, retry_context)
+    return append_frozen_files(body, config, task)
+
+
+def _render_task_prompt(
     task: Task,
     config: ExecutorConfig,
     previous_attempts: list[TaskAttempt] | None = None,
