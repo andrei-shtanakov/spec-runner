@@ -47,6 +47,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
     (exit 2) survives, since the note is appended.
   - Only under `auto_commit`, and only reachable through a registered gate — so
     the `standard` / `advisory` paths acquire no commit they did not have.
+  - The status is neutralised **positionally**, at the span the pattern
+    matched, so a meta line carrying a note that mentions a status word cannot
+    weaken the proof; and the file is read once, then verified to be what got
+    staged, so an edit landing between the proof and the commit refuses rather
+    than riding along.
 
 ## [2.27.0] - 2026-08-12
 

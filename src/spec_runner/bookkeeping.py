@@ -35,12 +35,13 @@ what keeps a resumed task from growing a chain of identical REVIEW commits.
 from __future__ import annotations
 
 import difflib
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from .logging import get_logger
-from .task import STATUS_EMOJI, STATUS_FROM_EMOJI, TASK_HEADER, TASK_META
+from .task import TASK_HEADER, TASK_META, TASK_STATUS_WORDS
 
 logger = get_logger("bookkeeping")
 
@@ -80,13 +81,39 @@ def _meta_index(lines: list[str], task_id: str) -> int | None:
     return None
 
 
+#: `TASK_META` with the status emoji and word captured *positionally*, so the
+#: status can be neutralised where it actually is rather than by replacing the
+#: word wherever it appears. Kept in step with `task.TASK_META` by refusing to
+#: answer when the two disagree — see `_split_meta`.
+_META_PARTS = re.compile(
+    r"^((?:[ \t]*[-*]\s+)?(?:(?:🔴|🟠|🟡|🟢)\s+)?P\d\s*\|\s*)"
+    r"((?:⬜|🔄|🔍|✅|⏸️)\s+)?"
+    rf"((?i:{'|'.join(TASK_STATUS_WORDS)}))\b"
+    r"(.*)$"
+)
+
+
+def _split_meta(line: str) -> tuple[str, str] | None:
+    """``(status, the line with its status token blanked)``, or None.
+
+    The blanked form is what proves "only the status changed": everything
+    outside the matched status span — priority, separators, any trailing note —
+    must compare identical. A global string replace could not do this. A note
+    reading ``see TODO below`` would be stripped from one version and not the
+    other, which at best refuses a legitimate flip and at worst lets two
+    genuinely different lines look alike.
+    """
+    match = _META_PARTS.match(line)
+    if not match:
+        return None
+    prefix, _emoji, word, rest = match.groups()
+    return word.lower(), f"{prefix}\0{rest}"
+
+
 def _status_of(line: str) -> str | None:
     """The status a meta line declares, or None if it declares none."""
-    for emoji, status in STATUS_FROM_EMOJI.items():
-        if emoji in line:
-            return status
-    match = TASK_META.match(line)
-    return match.group(2).lower() if match else None
+    parts = _split_meta(line)
+    return parts[0] if parts else None
 
 
 def status_only_transition(before: str, after: str, task_id: str) -> StatusFlip | None:
@@ -120,24 +147,22 @@ def status_only_transition(before: str, after: str, task_id: str) -> StatusFlip 
     if _meta_index(old_lines, task_id) != i1 or _meta_index(new_lines, task_id) != j1:
         return None
 
-    previous = _status_of(old_lines[i1])
-    new = _status_of(new_lines[j1])
-    if not previous or not new or previous == new:
+    old_meta = _split_meta(old_lines[i1])
+    new_meta = _split_meta(new_lines[j1])
+    if old_meta is None or new_meta is None:
+        # `TASK_META` recognised the line and this did not: the two patterns
+        # have drifted apart. Refusing is the safe direction — an unproven
+        # status-only claim must never become a commit.
         return None
-
-    # The line may carry more than a status. Neutralise the statuses and
-    # require what is left to be identical, so a priority or a trailing note
-    # changed in the same line is caught rather than waved through.
-    if _without_status(old_lines[i1], previous) != _without_status(new_lines[j1], new):
+    previous, old_rest = old_meta
+    new, new_rest = new_meta
+    if previous == new:
+        return None
+    # Everything outside the status span, compared where it stands.
+    if old_rest != new_rest:
         return None
 
     return StatusFlip(task_id=task_id, previous=previous, new=new)
-
-
-def _without_status(line: str, status: str) -> str:
-    """The meta line with its status token removed, for comparing the rest."""
-    stripped = line.replace(STATUS_EMOJI[status], "")
-    return stripped.replace(status.upper(), "").replace(status.lower(), "")
 
 
 def _git(config, *args: str) -> subprocess.CompletedProcess:
@@ -177,9 +202,13 @@ def commit_status_flip(
         # report it either, so there is no deadlock to prevent.
         return None
 
-    flip = status_only_transition(committed.stdout, tasks_file.read_text(), task_id)
+    # Read once. The file is decided about, staged and then verified against
+    # *this* text: a second read could be a different file, and the whole point
+    # of the proof is that what gets committed is what was proven.
+    working = tasks_file.read_text()
+    flip = status_only_transition(committed.stdout, working, task_id)
     if flip is None:
-        if committed.stdout == tasks_file.read_text():
+        if committed.stdout == working:
             return None
         return (
             f"{rel} differs from the last commit by more than {task_id}'s status, "
@@ -205,10 +234,24 @@ def commit_status_flip(
     add = _git(config, "add", "--", rel)
     if add.returncode != 0:
         return f"could not stage {rel}: {add.stderr.strip()[:200]}"
+    if tasks_file.read_text() != working:
+        # Somebody edited the file between the proof and the staging. Undo the
+        # staging and refuse: what is in the tree is no longer what was proven.
+        _git(config, "reset", "-q", "--", rel)
+        return f"{rel} changed while the status flip was being committed; nothing was committed"
     commit = _git(config, "commit", "-m", message, "--", rel)
     if commit.returncode != 0:
         _git(config, "reset", "-q", "--", rel)
         return f"could not commit {rel}: {commit.stderr.strip()[:200]}"
+    landed = _git(config, "show", f"HEAD:{rel}")
+    if landed.returncode != 0 or landed.stdout != working:
+        # `git commit -- <path>` takes the working-tree content, so a write
+        # landing in that last instant would be committed unproven. It cannot
+        # be undone from here, but it must not be reported as a clean stop.
+        return (
+            f"{rel} was committed with content that differs from what was "
+            "proven status-only; inspect the last commit before continuing"
+        )
     logger.info(
         "Committed the blocked task's status flip",
         task_id=task_id,

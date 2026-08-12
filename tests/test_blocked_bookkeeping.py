@@ -149,6 +149,58 @@ class TestTheProofIsStatusOnly:
         assert status_only_transition(TASKS, after, "TASK-001") is None
 
 
+class TestTheProofIsPositional:
+    """Raised in review of this PR: neutralising the status by replacing the
+    word wherever it appears made the proof depend on what else the line says.
+    It is now blanked at the span the pattern matched."""
+
+    def test_a_note_containing_a_status_word_does_not_confuse_it(self):
+        before = TASKS.replace("🟠 P1 | 🔄 IN_PROGRESS", "🟠 P1 | 🔄 IN_PROGRESS | see TODO below")
+        after = before.replace("🔄 IN_PROGRESS |", "🔍 REVIEW |")
+        flip = status_only_transition(before, after, "TASK-001")
+        assert flip == StatusFlip(task_id="TASK-001", previous="in_progress", new="review")
+
+    def test_a_note_changing_with_the_status_is_still_refused(self):
+        before = TASKS.replace("🟠 P1 | 🔄 IN_PROGRESS", "🟠 P1 | 🔄 IN_PROGRESS | see TODO below")
+        after = before.replace("🔄 IN_PROGRESS | see TODO below", "🔍 REVIEW | see DONE below")
+        assert status_only_transition(before, after, "TASK-001") is None
+
+    def test_a_priority_changing_with_the_status_is_refused(self):
+        after = TASKS.replace("🟠 P1 | 🔄 IN_PROGRESS", "🔴 P0 | 🔍 REVIEW")
+        assert status_only_transition(TASKS, after, "TASK-001") is None
+
+    def test_the_plain_no_emoji_form_works_too(self):
+        before = TASKS.replace("🟠 P1 | 🔄 IN_PROGRESS", "P1 | IN_PROGRESS")
+        after = before.replace("P1 | IN_PROGRESS", "P1 | REVIEW")
+        flip = status_only_transition(before, after, "TASK-001")
+        assert flip == StatusFlip(task_id="TASK-001", previous="in_progress", new="review")
+
+    def test_the_bullet_prefixed_form_works_too(self):
+        """#123: agents editing tasks.md mid-run introduce a bullet prefix, and
+        this path is reached precisely after an agent has been editing."""
+        before = TASKS.replace("🟠 P1 | 🔄 IN_PROGRESS", "- 🟠 P1 | 🔄 IN_PROGRESS")
+        after = before.replace("🔄 IN_PROGRESS", "🔍 REVIEW")
+        flip = status_only_transition(before, after, "TASK-001")
+        assert flip == StatusFlip(task_id="TASK-001", previous="in_progress", new="review")
+
+    def test_it_agrees_with_the_parser_on_every_status(self):
+        """The positional pattern is a second copy of `TASK_META`'s shape.
+        Drift between them must not silently weaken the proof — the code
+        refuses when they disagree, and this is the guard that they don't."""
+        from spec_runner.bookkeeping import _split_meta
+        from spec_runner.task import STATUS_EMOJI, TASK_META
+
+        for status, emoji in STATUS_EMOJI.items():
+            for line in (
+                f"🟠 P1 | {emoji} {status.upper()}",
+                f"P1 | {status.upper()}",
+                f"- 🟠 P1 | {emoji} {status.upper()} | note",
+            ):
+                assert TASK_META.match(line), line
+                parts = _split_meta(line)
+                assert parts is not None and parts[0] == status, line
+
+
 class TestTheCommit:
     def test_it_commits_the_flip_and_leaves_the_spec_clean(self, tmp_path):
         """Asserted through `spec_dirty_paths` — the function the next run's
@@ -472,6 +524,34 @@ class TestTheTwoInvariants:
             commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
         flips = [s for s in _subjects(root) if "TASK-001" in s]
         assert len(flips) == 1, _subjects(root)
+
+    def test_an_edit_landing_between_the_proof_and_the_commit_is_refused(self, tmp_path):
+        """Also from review: the file was read more than once while deciding.
+        It is read once now, and what was proven is verified to be what got
+        staged — a write landing in between refuses instead of riding along."""
+        import spec_runner.bookkeeping as bk
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        tasks = root / "spec" / "tasks.md"
+        _flip(root)
+
+        real_git = bk._git
+
+        def _edit_then_git(config, *args):
+            if args and args[0] == "add":
+                result = real_git(config, *args)
+                tasks.write_text(tasks.read_text().replace("- [ ] a", "- [x] a"))
+                return result
+            return real_git(config, *args)
+
+        bk._git = _edit_then_git
+        try:
+            problem = commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
+        finally:
+            bk._git = real_git
+        assert problem and "changed while" in problem
+        assert _subjects(root) == ["spec"], "nothing may be committed after a refusal"
 
     def test_a_crash_between_the_flip_and_the_commit_recovers(self, tmp_path):
         """The window the whole design has to survive: the process dies after
