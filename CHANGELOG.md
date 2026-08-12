@@ -10,6 +10,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GREEN pass is told which files the byte-lock froze (#214).** Under
+  `execution_mode: tdd` the implementation pass received exactly the prompt a
+  `standard` task gets: no mention that a file was claimed, which one, or what
+  changing it would cost. In the third pilot run the agent wrote four more
+  tests into the file the red had frozen and the claims gate refused the
+  merge — ~$1.3 of implementation spent on a candidate the tool was always
+  going to reject, for a rule the agent was never given.
+
+  A frozen-files block naming the claimed paths is now appended to the
+  implementation prompt, the RED authoring prompt (a namespace can hold
+  another workstream's claims), the review prompt, and every parallel review
+  role. It is appended **after** rendering rather than offered as a template
+  variable, so a project with its own `task`/`review` template cannot
+  silently lose the constraint while the gate goes on enforcing it. Review is
+  told to answer `REVIEW_FAILED`, not `TASK_BLOCKED`, which `review` does not
+  parse — editing a frozen file is not a review fix.
+
+  The claims gate is also evaluated once more **before** review: a candidate
+  that already violates the lock cannot be merged whatever a reviewer says, so
+  that call buys a verdict nothing can act on. The merge-time check is
+  unchanged and remains the authority; a stop here keeps the existing
+  resumable shape and records the review verdict as `skipped`.
+
+  No public surface: no new config key, no new flag, no schema change. Nothing
+  is read or opened for a run that did not enable TDD.
+
 ## [2.28.3] - 2026-08-12
 
 **Patch.** No public surface: no new config key, no new flag, no schema change
