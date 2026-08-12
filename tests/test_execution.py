@@ -102,8 +102,11 @@ class TestExecuteTask:
         assert result is True
         mock_pre.assert_called_once_with(task, config, reporter=ANY)
         # `pending_cost` carries this attempt's unrecorded spend to the budget
-        # guard (#213); the fake CLI reports no cost, so it arrives as None.
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=ANY)
+        # guard (#213). Asserted as exactly None, not ANY: the fake CLI reports
+        # no cost, and the property worth pinning is that an unpriced call
+        # reaches the guard as *unknown* rather than as $0.00 — `ANY` would
+        # have passed either way (Copilot, PR #221).
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=None)
         mock_status.assert_called()
 
     @patch("spec_runner.execution.update_task_status")
@@ -142,8 +145,11 @@ class TestExecuteTask:
 
         assert result is True
         # `pending_cost` carries this attempt's unrecorded spend to the budget
-        # guard (#213); the fake CLI reports no cost, so it arrives as None.
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=ANY)
+        # guard (#213). Asserted as exactly None, not ANY: the fake CLI reports
+        # no cost, and the property worth pinning is that an unpriced call
+        # reaches the guard as *unknown* rather than as $0.00 — `ANY` would
+        # have passed either way (Copilot, PR #221).
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=None)
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
