@@ -10,6 +10,40 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A confirmed RED now requires a runner whose exit codes were measured**
+  (#198). `_TESTS_FAILED = 1` is pytest's convention, and the code called it
+  "shared by most runners". Measured on Elixir/OTP 28 it is **inverted**:
+  `mix test` exits 2 when tests fail and 1 when the run never happened — a
+  nonexistent file, or a test file that would not compile.
+
+  So on a non-pytest project the ordinary path produced a **false confirmed
+  red**. The RED prompt asks the agent for `TDD_SELECTOR: path::test`; an agent
+  working in Elixir complies with the shape; `verify_red` accepted it because
+  the only check was `"::" in selector`; `mix test 'test/x_test.exs::name'`
+  matched no file and exited 1; and 1 was read as "the selector failed on
+  replay". A checkpoint, file claims and a satisfied gate all followed, for a
+  test that **never ran** — which is precisely what the RED checkpoint exists
+  to prevent.
+
+  `verify_red` now recognises the runner *before* anything is executed and
+  refuses anything it has not measured, with a message naming the command, the
+  selector and what is missing. No fallback to pytest semantics: an
+  unrecognised runner is `unverifiable`, never a red. Recognition is
+  token-based (`uv run pytest` and `./venv/bin/pytest` count;
+  `mix test --formatter PytestFormatter` does not), because believing the wrong
+  runner is the whole defect. The `::` check moved behind it — it is one
+  runner's syntax, not a universal proof that a selector is valid.
+
+  pytest is unchanged and still reaches `expected_fail`: there a mis-selected
+  node id exits 4, never 1, which is the property ExUnit lacks.
+
+  This is the fail-closed half. A per-runner adapter — canonical selector form,
+  a classification wider than an exit code, and proof that the selected test
+  actually ran — is the next step, and it will bring an explicit `tdd_runner`
+  config key with it.
+
 ## [2.27.1] - 2026-08-12
 
 **Patch, not minor.** One defect (#192 / battle finding F-8) in three forms.

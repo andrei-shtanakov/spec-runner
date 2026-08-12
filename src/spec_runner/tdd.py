@@ -41,7 +41,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from .claims import check_claims, describe_violations, ensure_claimable, record_claims
@@ -169,6 +169,44 @@ def resolve_namespace(config: ExecutorConfig) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
+#: Runners whose exit codes have been measured, keyed by the executable that
+#: appears in `test_command`. One entry, deliberately: this is a list of what
+#: was *measured*, not of what probably behaves the same. The richer per-runner
+#: adapter — canonical selector form, a classification wider than an exit code,
+#: and proof that the selected test actually ran — is the next step (#198 §2);
+#: until it lands, an unrecognised runner is refused rather than guessed at.
+MEASURED_RUNNERS: dict[str, str] = {"pytest": "pytest"}
+
+#: Wrappers that run something else. `uv run pytest` is a pytest run; the
+#: runner is the first token that is not one of these.
+_RUNNER_WRAPPERS = frozenset(
+    {"uv", "run", "poetry", "pipenv", "hatch", "rye", "pdm", "nox", "tox", "-m", "exec"}
+)
+_PYTHONS = re.compile(r"^python(\d(\.\d+)?)?$")
+
+
+def detect_runner(test_command: str) -> str | None:
+    """The measured runner behind ``test_command``, or None.
+
+    Token-based, never a substring test: `"pytest" in command` would read
+    `mix test --formatter PytestFormatter` as a pytest run, and the whole point
+    of #198 is that believing the wrong runner is what produced a false red.
+    A path is reduced to its basename, so `./venv/bin/pytest` counts.
+    """
+    try:
+        tokens = shlex.split(test_command or "")
+    except ValueError:  # unbalanced quotes — not something to guess about
+        return None
+    for token in tokens:
+        if token.startswith("-") and token != "-m":
+            continue
+        name = PurePosixPath(token).name
+        if name in _RUNNER_WRAPPERS or _PYTHONS.match(name):
+            continue
+        return MEASURED_RUNNERS.get(name)
+    return None
+
+
 def verify_red(
     config: ExecutorConfig,
     *,
@@ -179,15 +217,10 @@ def verify_red(
     """Replay ``selector`` against commit ``sha`` in a disposable worktree."""
     env_id = environment_id(Path(config.project_root))
 
-    if "::" not in selector:
-        # `-k`-style names match several tests, and a checkpoint that matches
-        # several proves nothing about the one (§3.3).
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
-            f"selector {selector!r} is not a node id (expected 'path::test')",
-            env_id,
-        )
-
+    # Both refusals below come before anything is executed, and both answer the
+    # same question — "can this exit code mean what we would read into it?"
+    # Composite first, because it is the more specific statement about a
+    # command that also happens to name no single runner.
     if is_composite_shell_command(config.test_command):
         # Same reasoning as the scoped-test refusal (#139): guessing which
         # component of `a && b && c` accepts a node id is how you run the wrong
@@ -195,6 +228,34 @@ def verify_red(
         return RedVerification(
             RedOutcome.UNVERIFIABLE,
             "test_command is composite; cannot narrow it to a single node id",
+            env_id,
+        )
+
+    # The runner, before the selector (#198). A red is confirmed by reading an
+    # exit code, and an exit code only means what a *specific* runner says it
+    # means: pytest exits 1 for "tests failed", ExUnit exits 1 for "the run
+    # never happened" and 2 for "tests failed". Reading the second as the first
+    # turned a test that was never executed into a confirmed red — silently,
+    # with a checkpoint, claims and a satisfied gate behind it.
+    runner = detect_runner(config.test_command)
+    if runner is None:
+        return RedVerification(
+            RedOutcome.UNVERIFIABLE,
+            f"cannot confirm a red for {selector!r}: no authoritative exit-code "
+            f"mapping for test_command {config.test_command!r} — only pytest is "
+            "recognised, and guessing another runner's codes is how a test that "
+            "never ran becomes a confirmed red",
+            env_id,
+        )
+
+    if "::" not in selector:
+        # pytest's node-id form. `-k`-style names match several tests, and a
+        # checkpoint that matches several proves nothing about the one (§3.3).
+        # Checked *after* the runner: `::` is not a universal proof of a valid
+        # selector, it is one runner's syntax.
+        return RedVerification(
+            RedOutcome.UNVERIFIABLE,
+            f"selector {selector!r} is not a node id (expected 'path::test')",
             env_id,
         )
 
