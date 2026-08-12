@@ -12,6 +12,38 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Review calls are counted (#213, first half).** `run_code_review` ran a bare
+  `subprocess.run` and threw the CLI result away, so review spend was recorded
+  **nowhere** — not on the attempt row, not in the `agent_calls` ledger. Every
+  total the tool printed, and both budget caps, were blind to it. Not a TDD
+  regression: review has never been counted, in any mode. A TDD attempt makes
+  three paid calls and thereby made the hole visible; with `review_parallel` it
+  was one invisible call per role.
+
+  Each reviewer subprocess now goes through the same `build_cli_invocation` /
+  `parse_cli_result` seam the RED pass uses and writes its own ledger row:
+  `review` for the single pass, `review:<role>` per parallel role. Passed,
+  failed, timed out, or killed by an account limit — money spent on a call that
+  produced nothing usable is still spent. A call that never launched writes no
+  row.
+
+  **Unknown is recorded as unknown, never as zero.** A cost the CLI did not
+  report is stored NULL; `spec-runner costs` counts those rows and marks the
+  total as a floor. Previously an unpriced call would have been silently summed
+  as free.
+
+  Asking a claude reviewer for its cost means asking for JSON output, so the
+  verdict marker now comes from the parsed result rather than raw stdout — the
+  path the exec pass has always used.
+
+  Ledger writes from the parallel pool are serialised: five roles opening a
+  state connection at once made SQLite return "database is locked" immediately
+  and drop a row, which is how the new test failed on its first run.
+
+  **Old databases stay historically under-counted** — nothing is back-filled,
+  because the numbers were never recorded. New runs report the fuller figure,
+  so a cost comparison across this version is not like for like.
+
 - **The GREEN pass is told which files the byte-lock froze (#214).** Under
   `execution_mode: tdd` the implementation pass received exactly the prompt a
   `standard` task gets: no mention that a file was claimed, which one, or what
@@ -37,6 +69,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
   No public surface: no new config key, no new flag, no schema change. Nothing
   is read or opened for a run that did not enable TDD.
+
+### Changed
+
+- `costs --json` gains an optional `unmeasured_calls` integer on each task and
+  on the summary (`schemas/costs.schema.json`). Additive: consumers that ignore
+  unknown keys are unaffected, but the schema pins `additionalProperties:
+  false`, so a consumer validating against a vendored pre-2.29 copy must update
+  it.
 
 ## [2.28.3] - 2026-08-12
 

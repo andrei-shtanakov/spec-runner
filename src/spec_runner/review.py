@@ -5,14 +5,16 @@ code review execution, and HITL approval gate functions.
 """
 
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 
 from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
-from .runner import agent_env, build_cli_command, check_error_patterns, log_progress
+from .runner import agent_env, check_error_patterns, log_progress
 from .state import ReviewVerdict
 from .task import Task
 
@@ -242,6 +244,145 @@ If no issues found, respond with: "REVIEW_PASSED"
 """
 
 
+#: Ledger provenance for the single-pass reviewer.
+REVIEW_PROVENANCE = "review"
+
+
+def role_provenance(role: str) -> str:
+    """Ledger provenance for one parallel review role.
+
+    Per role, never one aggregate row: five roles are five paid calls, and a
+    single approximate total cannot say which one was expensive or which one
+    was never measured.
+    """
+    return f"review:{role}"
+
+
+@dataclass(frozen=True)
+class ReviewCall:
+    """One reviewer subprocess: what it said, and what it cost.
+
+    `text` is the CLI's *result*, extracted by `parse_cli_result` — the same
+    authority the RED pass uses — rather than raw stdout, so an explicit
+    claude reviewer can be asked for JSON (and thus for its cost) without the
+    markers disappearing into a JSON envelope.
+    """
+
+    text: str
+    stderr: str
+    returncode: int
+    cost_usd: float | None
+    timed_out: bool = False
+
+
+def _run_reviewer(
+    config: ExecutorConfig,
+    task_id: str,
+    provenance: str,
+    prompt: str,
+    review_cmd: str,
+    review_model: str,
+    review_template: str,
+) -> ReviewCall:
+    """Run one reviewer subprocess and **record what it cost**.
+
+    Every call that happened gets a ledger row: passed, failed, timed out, or
+    killed by an account limit. Money spent on a call that produced nothing
+    usable is still spent — the rule the RED pass already follows.
+
+    A call that never launched (missing binary, no permission) gets no row and
+    the error is re-raised for the caller's existing handler: no subprocess, no
+    spend, and a row would assert one. Re-raised rather than reported as a
+    return value so the operator still reads *which* binary was missing.
+
+    Until this existed, review cost was recorded **nowhere** — not on the
+    attempt row, not in the ledger — so `spec-runner costs`, `task_budget_usd`
+    and `budget_usd` were all blind to a third of a TDD attempt's calls, and to
+    one call per role of every parallel review (#213).
+    """
+    from .runner import build_cli_invocation, parse_cli_result
+
+    invocation = build_cli_invocation(
+        cmd=review_cmd,
+        prompt=prompt,
+        model=review_model,
+        template=review_template,
+        skip_permissions=config.skip_permissions,
+        json_output=True,
+    )
+    try:
+        result = subprocess.run(
+            invocation.argv,
+            capture_output=True,
+            text=True,
+            timeout=config.review_timeout_minutes * 60,
+            cwd=config.project_root,
+            env=agent_env(),
+        )
+    except subprocess.TimeoutExpired:
+        # It ran, and it was billed for as long as it ran. The cost is
+        # unknown — recorded as unknown, never as zero, because a zero would
+        # be indistinguishable from a cheap call in every later sum.
+        _record_call(config, task_id, provenance, None)
+        return ReviewCall(text="", stderr="", returncode=-1, cost_usd=None, timed_out=True)
+    except OSError as exc:
+        logger.warning(
+            "Reviewer did not launch — no ledger row",
+            task_id=task_id,
+            provenance=provenance,
+            error=str(exc),
+        )
+        raise
+
+    parsed = parse_cli_result(
+        invocation.result_format, result.stdout, result.stderr, result.returncode
+    )
+    _record_call(config, task_id, provenance, parsed)
+    return ReviewCall(
+        text=parsed.text,
+        stderr=result.stderr,
+        returncode=result.returncode,
+        cost_usd=parsed.cost_usd,
+    )
+
+
+#: Serialises ledger writes from the parallel review pool. Each role opens its
+#: own `ExecutorState`, and five of those arriving together made SQLite return
+#: "database is locked" *immediately* — `busy_timeout` does not cover a write
+#: lock taken during the schema setup every connection runs. The first run of
+#: `test_each_parallel_role_gets_its_own_row` lost one role's row to exactly
+#: that. A review call takes minutes; serialising a millisecond write is free,
+#: and losing an accounting row is the thing this change exists to stop.
+_LEDGER_LOCK = threading.Lock()
+
+
+def _record_call(config: ExecutorConfig, task_id: str, provenance: str, parsed: object) -> None:
+    """Append the ledger row. Never allowed to affect the verdict.
+
+    Loud on failure and swallowed all the same: an accounting problem must not
+    turn "the reviewer found issues" into "the reviewer passed it", and must
+    not turn a finished review into a failed task.
+    """
+    from .state import ExecutorState
+
+    try:
+        with _LEDGER_LOCK, ExecutorState(config) as state:
+            state.record_agent_call(
+                task_id,
+                provenance,
+                input_tokens=getattr(parsed, "input_tokens", None),
+                output_tokens=getattr(parsed, "output_tokens", None),
+                cost_usd=getattr(parsed, "cost_usd", None),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Review cost was not recorded",
+            task_id=task_id,
+            provenance=provenance,
+            error=str(exc),
+        )
+
+
 def run_code_review(
     task: Task,
     config: ExecutorConfig,
@@ -284,38 +425,38 @@ def run_code_review(
         f.write(f"=== REVIEW PROMPT ===\n{prompt}\n\n")
 
     try:
-        # Build command using template or auto-detect
-        cmd = build_cli_command(
-            cmd=review_cmd,
-            prompt=prompt,
-            model=review_model,
-            template=review_template,
-            skip_permissions=config.skip_permissions,
-        )
-
         log_progress(
             f"🔍 Review using: {review_cmd}" + (f" ({review_model})" if review_model else ""),
             task.id,
         )
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.review_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=agent_env(),
+        call = _run_reviewer(
+            config,
+            task.id,
+            REVIEW_PROVENANCE,
+            prompt,
+            review_cmd,
+            review_model,
+            review_template,
         )
+        if call.timed_out:
+            log_progress(
+                "⏰ Code review produced no verdict: timed out after "
+                f"{config.review_timeout_minutes}m",
+                task.id,
+            )
+            return ReviewVerdict.NOT_RUN, "Review timed out", None
 
-        output = result.stdout
-        stderr = result.stderr
+        output = call.text
+        stderr = call.stderr
         combined_output = output + "\n" + stderr
 
         # Save output
         with open(log_file, "a") as f:
             f.write(f"=== OUTPUT ===\n{output}\n\n")
             f.write(f"=== STDERR ===\n{stderr}\n\n")
-            f.write(f"=== RETURN CODE: {result.returncode} ===\n")
+            f.write(f"=== RETURN CODE: {call.returncode} ===\n")
+            f.write(f"=== COST: {'unknown' if call.cost_usd is None else call.cost_usd} ===\n")
 
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
@@ -329,14 +470,14 @@ def run_code_review(
         # process that crashed after printing REVIEW_PASSED was believed. The
         # output is still returned: discarding the verdict must not discard
         # what was said.
-        if result.returncode != 0:
+        if call.returncode != 0:
             log_progress(
-                f"💥 Code review error: process exited with code {result.returncode}",
+                f"💥 Code review error: process exited with code {call.returncode}",
                 task.id,
             )
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
-            error_msg = f"Review process exited with code {result.returncode}"
+            error_msg = f"Review process exited with code {call.returncode}"
             return ReviewVerdict.ERROR, error_msg, output or None
 
         if not output.strip():
@@ -380,12 +521,10 @@ def run_code_review(
             log_progress(f"   Review output (last 200 chars): {preview}", task.id)
             return ReviewVerdict.NOT_RUN, "Review produced no verdict marker", output
 
-    except subprocess.TimeoutExpired:
-        log_progress(
-            f"⏰ Code review produced no verdict: timed out after {config.review_timeout_minutes}m",
-            task.id,
-        )
-        return ReviewVerdict.NOT_RUN, "Review timed out", None
+    # No `except subprocess.TimeoutExpired` here: the subprocess is owned by
+    # `_run_reviewer`, which turns a timeout into a recorded call and a
+    # `timed_out` result. Catching it here again would mean a path that spent
+    # money and wrote no ledger row.
     except Exception as e:
         log_progress(f"💥 Code review error: {e}", task.id)
         return ReviewVerdict.ERROR, str(e), None
@@ -401,26 +540,27 @@ def _run_single_role_review(
     config: ExecutorConfig,
     task_id: str,
 ) -> tuple[str, ReviewVerdict, str]:
-    """Run a single role-specific review. Returns (role, verdict, output)."""
+    """Run a single role-specific review. Returns (role, verdict, output).
+
+    Its cost is recorded under its own provenance, `review:<role>`. One
+    aggregate row for the whole parallel pass would hide which role was
+    expensive and which one was never measured at all.
+    """
     full_prompt = f"{role_prompt}\n\n{base_prompt}"
-    cmd = build_cli_command(
-        cmd=review_cmd,
-        prompt=full_prompt,
-        model=review_model,
-        template=review_template,
-        skip_permissions=config.skip_permissions,
-    )
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.review_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=agent_env(),
+        call = _run_reviewer(
+            config,
+            task_id,
+            role_provenance(role),
+            full_prompt,
+            review_cmd,
+            review_model,
+            review_template,
         )
-        output = result.stdout + "\n" + result.stderr
-        if result.returncode != 0:
+        if call.timed_out:
+            return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
+        output = call.text + "\n" + call.stderr
+        if call.returncode != 0:
             # Same rule as the single path: a crashed role has no verdict.
             return role, ReviewVerdict.ERROR, output
         output_upper = output.upper()
@@ -433,8 +573,6 @@ def _run_single_role_review(
         # Same rule as the single-review path (#138): no marker means this role
         # produced no verdict, not that it approved.
         return role, ReviewVerdict.NOT_RUN, output
-    except subprocess.TimeoutExpired:
-        return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
     except Exception as e:
         return role, ReviewVerdict.ERROR, str(e)
 

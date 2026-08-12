@@ -251,6 +251,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "input_tokens": inp_tokens,
                         "output_tokens": out_tokens,
                         "total_tokens": inp_tokens + out_tokens,
+                        "unmeasured_calls": state.unmeasured_calls(t.id),
                     }
                 )
             else:
@@ -272,6 +273,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "input_tokens": inp_tokens,
                         "output_tokens": out_tokens,
                         "total_tokens": inp_tokens + out_tokens,
+                        "unmeasured_calls": state.unmeasured_calls(t.id),
                         "no_state": not (cost or inp_tokens or out_tokens),
                     }
                 )
@@ -293,8 +295,15 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         avg_cost = sum(completed_costs) / len(completed_costs) if completed_costs else 0.0
         most_expensive = max(task_rows, key=lambda r: r["cost"]) if task_rows else None
 
+        # A call that happened and was never priced. Reported next to the
+        # total so a reader can tell "$3.71" from "at least $3.71" — the
+        # distinction the third pilot attempt's evidence had to be corrected
+        # for after the fact (#213).
+        unmeasured = state.unmeasured_calls()
+
         summary = {
             "total_cost": round(total_cost, 2),
+            "unmeasured_calls": unmeasured,
             "total_input_tokens": total_inp,
             "total_output_tokens": total_out,
             "avg_cost_per_completed": round(avg_cost, 2),
@@ -320,6 +329,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "attempts": r["attempts"],
                         "input_tokens": r["input_tokens"],
                         "output_tokens": r["output_tokens"],
+                        "unmeasured_calls": r.get("unmeasured_calls", 0),
                     }
                 )
             print(json.dumps({"tasks": json_tasks, "summary": summary}, indent=2))
@@ -345,7 +355,10 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
 
         # Summary section
         print(f"\n{'=' * 40}")
-        print(f"Total cost:           ${total_cost:.2f}")
+        if unmeasured:
+            print(f"Total cost:           ${total_cost:.2f}  (a floor — see below)")
+        else:
+            print(f"Total cost:           ${total_cost:.2f}")
         if total_inp > 0 or total_out > 0:
 
             def _fmt_tok(n: int) -> str:
@@ -362,6 +375,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         if most_expensive and most_expensive["cost"] > 0:
             print(
                 f"Most expensive:       {most_expensive['task_id']} (${most_expensive['cost']:.2f})"
+            )
+        if unmeasured:
+            print(
+                f"Unpriced calls:       {unmeasured} — the CLI reported no cost "
+                "(timeout, account limit, or a CLI that does not report one)"
             )
 
 
