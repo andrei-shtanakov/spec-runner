@@ -10,6 +10,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.28.0] - 2026-08-12
+
+**Minor: a new public config key.** `tdd_runner` is the outward change; the
+rest is one defect (#198) fixed in depth. Nothing existing moves — pytest
+projects behave exactly as before, `--json-result` and the state-DB schema are
+untouched, and TDD mode stays opt-in.
+
+The defect was worth this much work because of what it produced: a confirmed
+RED checkpoint for a test that **never ran**, silently, with claims and a
+satisfied gate behind it. On any non-pytest runner, and found before a single
+paid pilot run — by checking compatibility rather than assuming it.
+
 ### Added
 
 - **ExUnit is a supported TDD runner** (#198, build order §3–4):
@@ -2053,7 +2065,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...HEAD
+[2.28.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...v2.28.0
 [2.27.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...v2.27.1
 [2.27.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.25.0...v2.26.0
