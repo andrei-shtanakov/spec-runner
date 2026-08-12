@@ -222,3 +222,60 @@ class TestTheRegistry:
     def test_executable_looks_past_wrappers(self):
         assert executable_of("uv run poetry run pytest -q") == "pytest"
         assert executable_of("mix test") == "mix"
+
+
+class TestThePromptAsksForTheRightShape:
+    """#198, found before the first paid pilot run: the RED prompt hardcoded
+    pytest's node id, so an agent on an Elixir project would comply with *that*
+    shape — and `path::name` is exactly what the ExUnit adapter refuses. Every
+    RED would have died `unverifiable` before a line of implementation, and the
+    pilot would have burned its budget discovering it."""
+
+    def _selector_line(self, test_command: str, runner: str) -> str:
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.prompt import build_red_prompt
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1d")
+        prompt = build_red_prompt(
+            task, ExecutorConfig(test_command=test_command, tdd_runner=runner)
+        )
+        return next(line for line in prompt.splitlines() if "TDD_SELECTOR" in line).strip()
+
+    def test_pytest_is_asked_for_a_node_id(self):
+        assert "::" in self._selector_line("uv run pytest", "pytest")
+
+    def test_exunit_is_asked_for_a_line(self):
+        line = self._selector_line("mix test", "exunit")
+        assert "::" not in line
+        assert ":LINE" in line
+
+    def test_what_the_prompt_asks_for_is_what_the_adapter_parses(self):
+        """The property that matters, and it has to be read out of the prompt
+        text itself.
+
+        An earlier version compared against a hand-written example per adapter,
+        which asserted that *my* example parses — not that the **prompted** one
+        does — and would have raised `KeyError` the moment a third adapter
+        arrived (Copilot, PR #205). The example now comes from
+        `selector_instruction`, so prompt and parser cannot drift apart in
+        silence.
+        """
+        from spec_runner.tdd_runners import ADAPTERS, Selector
+
+        for name, adapter in ADAPTERS.items():
+            instruction = adapter.selector_instruction
+            marker = "TDD_SELECTOR:"
+            assert marker in instruction, name
+            example = next(line for line in instruction.splitlines() if marker in line).split(
+                marker, 1
+            )[1]
+            # The one substitution a shape may carry: a placeholder for a
+            # number the agent fills in.
+            example = example.strip().replace("LINE", "12")
+            parsed = adapter.parse_selector(example)
+            assert isinstance(parsed, Selector), f"{name}: prompt asks for {example!r}, refused"
+
+    def test_an_unsupported_runner_says_so_rather_than_asking_for_pytest(self):
+        line = self._selector_line("go test ./...", "")
+        assert "::" not in line

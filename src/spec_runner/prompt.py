@@ -487,6 +487,28 @@ def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
     return output[start:end].strip()
 
 
+def _selector_instruction(config: "ExecutorConfig") -> str:
+    """How to ask this project's runner for a selector (#198).
+
+    The prompt used to hardcode pytest's node id. On an ExUnit project the
+    agent would comply with that *shape* — and `path::name` is exactly what the
+    ExUnit adapter refuses, so every RED would have died `unverifiable` before
+    a line of implementation. Found before the first paid pilot run, by reading
+    the prompt the agent would receive.
+    """
+    from .tdd import resolve_adapter
+
+    adapter = resolve_adapter(config)
+    if adapter is None:
+        return (
+            "TDD_SELECTOR: <the selector your test runner accepts>\n"
+            "\n"
+            "   (This project's runner is not one spec-runner can verify, so the\n"
+            "   red cannot be confirmed — see `tdd_runner` in the docs.)"
+        )
+    return adapter.selector_instruction
+
+
 def build_red_prompt(task: "Task", config: "ExecutorConfig") -> str:
     """Prompt for the RED authoring pass (#141): write the failing test only.
 
@@ -531,12 +553,9 @@ You are writing **one failing test** and nothing else.
 3. The test must fail for the *right* reason — an assertion about the missing
    behaviour, not an import error or a syntax error. A test that cannot be
    collected demonstrates nothing.
-4. Report the test's **full node id** on its own line, exactly:
+4. Report the test's selector on its own line, exactly:
 
-   TDD_SELECTOR: path/to/test_file.py::TestClass::test_name
-
-   Not a `-k` expression and not a bare name: those match several tests, and a
-   checkpoint that matches several proves nothing about the one.
+   {_selector_instruction(config)}
 
 The test command is: `{config.test_command}`
 """
