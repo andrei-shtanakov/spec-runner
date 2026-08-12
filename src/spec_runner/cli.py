@@ -2173,9 +2173,13 @@ def main():
     config = build_config(yaml_config, args)
     config.config_found = config_path.exists()
 
-    # Fail fast with a clean message (no traceback) on an unknown spec profile.
+    # Fail fast with a clean message (no traceback) on an unknown spec profile,
+    # or on a `tdd_runner` that does not exist or that the test command cannot
+    # carry (#198 — a declared runner does not prove the command can carry it,
+    # and reading one runner's exit codes as another's is the defect itself).
     try:
         config.resolve_spec_profile()
+        config.resolve_tdd_runner()
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
 

@@ -10,6 +10,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`tdd_runner` config key** (#198, build order §2): which runner adapter
+  verifies a claimed RED. Empty infers, and inference is allowed only where it
+  cannot be wrong — a command whose executable *is* a known runner's.
+
+  A **declared runner the `test_command` cannot carry is refused** — a
+  `ConfigError` at load, an error in `validate`, and a clean `⛔` at startup —
+  rather than winning with a logged mismatch. The declaration chooses the
+  semantics; it cannot prove the command can carry them, and letting a typo
+  through would read one runner's exit codes as another's, which is #198
+  returning through an explicit config key.
+
+  `tdd_runner` joins `gates.POLICY_KEYS`, so changing the adapter changes the
+  `config_hash` a gate verdict is bound to: an earlier "confirmed" was
+  confirmed by a different judge and is not inherited.
+
+  Accepted values are the adapters that exist, so today the only one is
+  `pytest`; `exunit` becomes valid when its adapter lands.
+
 ### Changed
 
 - **RED verification is per-runner behind an adapter** (#198, build order §1 of

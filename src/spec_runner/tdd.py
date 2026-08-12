@@ -54,6 +54,7 @@ from .tdd_runners import (
     Selector,
     SelectorRefusal,
     TddRunnerAdapter,
+    adapter_for,
     infer_adapter,
 )
 
@@ -197,12 +198,20 @@ def detect_runner(test_command: str) -> str | None:
 def resolve_adapter(config: ExecutorConfig) -> TddRunnerAdapter | None:
     """Which adapter judges this project's replays, or None to refuse.
 
-    One function, because the answer is about to gain a second source: the
-    explicit `tdd_runner` key (build order §2). Until then it is inference, and
-    inference is allowed only where it cannot be wrong — an executable that
-    *is* a known runner's.
+    The explicit `tdd_runner` wins; absent, inference is allowed only where it
+    cannot be wrong — an executable that *is* a known runner's. A declared
+    runner that the command cannot carry raises, and is refused at config load
+    and by `validate` long before a replay; catching it here as well keeps the
+    replay honest if it is ever reached another way.
     """
-    return infer_adapter(config.test_command)
+    from .config import ConfigError
+
+    try:
+        name = config.resolve_tdd_runner()
+    except ConfigError as exc:
+        logger.warning("Refusing to verify a red", error=str(exc))
+        return None
+    return adapter_for(name) if name else None
 
 
 def verify_red(

@@ -108,6 +108,9 @@ POLICY_KEYS: set[str] = {
     "review_policy",
     "execution_mode",
     "gate_recovery_attempts",
+    # #198: which adapter judged the replay. Changing it changes what
+    # "confirmed" meant, so an earlier verdict must not be inherited across it.
+    "tdd_runner",
 }
 
 
