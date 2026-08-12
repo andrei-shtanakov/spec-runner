@@ -272,6 +272,13 @@ class ReviewCall:
     stderr: str
     returncode: int
     cost_usd: float | None
+    #: The CLI said it failed. For a text CLI that is the return code; for
+    #: claude's JSON it is the payload flag, which can arrive with **exit 0**.
+    #: Carried because the exec path already decides on all three signals
+    #: together (#167), and a review that dropped this one turned a rate-limit
+    #: payload into "no marker" — NOT_RUN, which reads as "the reviewer said
+    #: nothing", when in fact the reviewer said it had failed (Copilot, #216).
+    is_error: bool = False
     timed_out: bool = False
 
 
@@ -343,6 +350,7 @@ def _run_reviewer(
         stderr=result.stderr,
         returncode=result.returncode,
         cost_usd=parsed.cost_usd,
+        is_error=parsed.is_error,
     )
 
 
@@ -470,15 +478,16 @@ def run_code_review(
         # process that crashed after printing REVIEW_PASSED was believed. The
         # output is still returned: discarding the verdict must not discard
         # what was said.
-        if call.returncode != 0:
-            log_progress(
-                f"💥 Code review error: process exited with code {call.returncode}",
-                task.id,
+        if call.is_error or call.returncode != 0:
+            reason = (
+                f"process exited with code {call.returncode}"
+                if call.returncode != 0
+                else "the CLI reported an error"
             )
+            log_progress(f"💥 Code review error: {reason}", task.id)
             if stderr.strip():
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
-            error_msg = f"Review process exited with code {call.returncode}"
-            return ReviewVerdict.ERROR, error_msg, output or None
+            return ReviewVerdict.ERROR, f"Review {reason}", output or None
 
         if not output.strip():
             log_progress("⚠️ Code review produced no verdict: empty response", task.id)
@@ -560,8 +569,9 @@ def _run_single_role_review(
         if call.timed_out:
             return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
         output = call.text + "\n" + call.stderr
-        if call.returncode != 0:
-            # Same rule as the single path: a crashed role has no verdict.
+        if call.is_error or call.returncode != 0:
+            # Same rule as the single path: a role that crashed — or whose CLI
+            # said it failed while exiting 0 — has no verdict.
             return role, ReviewVerdict.ERROR, output
         output_upper = output.upper()
         if "REVIEW_FAILED" in output_upper:

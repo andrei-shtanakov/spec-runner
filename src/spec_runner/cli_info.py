@@ -263,6 +263,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 # shown. `no_state` now means "nothing to report", not "no
                 # attempts".
                 inp_tokens, out_tokens = state.task_tokens(t.id)
+                unpriced = state.unmeasured_calls(t.id)
                 task_rows.append(
                     {
                         "task_id": t.id,
@@ -273,8 +274,14 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "input_tokens": inp_tokens,
                         "output_tokens": out_tokens,
                         "total_tokens": inp_tokens + out_tokens,
-                        "unmeasured_calls": state.unmeasured_calls(t.id),
-                        "no_state": not (cost or inp_tokens or out_tokens),
+                        "unmeasured_calls": unpriced,
+                        # An unpriced call has NULL cost *and* NULL tokens, so
+                        # by cost and tokens alone it looks like nothing
+                        # happened — and the row would render `--`, hiding a
+                        # call that was made and paid for. That is the same
+                        # F-9 shape as the comment above, one level down, and
+                        # it arrived with "unknown is not zero" (Copilot, #216).
+                        "no_state": not (cost or inp_tokens or out_tokens or unpriced),
                     }
                 )
 
@@ -344,7 +351,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 att_str = "--"
                 tok_str = "--"
             else:
-                cost_str = f"${r['cost']:.2f}"
+                # `≥` where a call went unpriced: "$0.00" on a task that made
+                # a call reads as "this was free", which is the one thing the
+                # figure does not say.
+                prefix = "≥" if r.get("unmeasured_calls") else ""
+                cost_str = f"{prefix}${r['cost']:.2f}"
                 att_str = str(r["attempts"])
                 tok_str = f"{r['total_tokens']}"
             name = r["name"][:28]

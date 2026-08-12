@@ -182,6 +182,53 @@ class TestUnknownIsNotZero:
             assert state.unmeasured_calls() == 1
 
 
+class TestAnErrorPayloadIsAnError:
+    """Exit 0 with `is_error` in the JSON is how claude reports a rate limit.
+
+    The exec path has decided on all three signals together since #167 — return
+    code, `is_error`, and the API error patterns. The review path keyed on the
+    return code alone, so such a reply became "no marker" → NOT_RUN: recorded
+    as *the reviewer said nothing*, when the reviewer said it had failed
+    (Copilot, PR #216).
+    """
+
+    def _rate_limited(self) -> MagicMock:
+        payload = {
+            "is_error": True,
+            "subtype": "rate_limit",
+            "result": "",
+            "total_cost_usd": 0.11,
+        }
+        return MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    def test_a_zero_exit_error_payload_is_an_error_not_a_missing_verdict(self, tmp_path):
+        cfg = _cfg(tmp_path)
+
+        with patch("spec_runner.review.subprocess.run", return_value=self._rate_limited()):
+            verdict, error, _out = run_code_review(_task(), cfg)
+
+        assert verdict is ReviewVerdict.ERROR
+        assert "error" in (error or "").lower()
+
+    def test_a_parallel_role_reads_it_the_same_way(self, tmp_path):
+        cfg = _cfg(tmp_path, review_parallel=True, review_roles=["quality"])
+
+        with patch("spec_runner.review.subprocess.run", return_value=self._rate_limited()):
+            verdict, _error, _out = run_parallel_review(_task(), cfg)
+
+        assert verdict is ReviewVerdict.ERROR
+
+    def test_it_is_still_paid_for_and_still_recorded(self, tmp_path):
+        cfg = _cfg(tmp_path)
+
+        with patch("spec_runner.review.subprocess.run", return_value=self._rate_limited()):
+            run_code_review(_task(), cfg)
+
+        rows = _calls(cfg)
+        assert len(rows) == 1
+        assert rows[0]["cost_usd"] == 0.11
+
+
 class TestTheLedgerNeverDecidesAnything:
     def test_a_failed_ledger_write_does_not_change_the_verdict(self, tmp_path):
         """An accounting problem must not turn "found issues" into "passed",
