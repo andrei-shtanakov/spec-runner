@@ -1,0 +1,75 @@
+# The ExUnit contract matrix, run for real — #198 build order §4.
+#
+# The ordinary `test` job runs `-m "not slow"`, so it never executes this
+# matrix, and on a runner without Elixir it would skip it anyway. A suite that
+# skips loudly is still a green suite that checked nothing, which is the same
+# class of problem as the defect this whole issue is about: something that
+# looks like a verdict and is not one.
+#
+# So this job exists to make the claim: pinned toolchain, real `mix`, and an
+# assertion on how many tests actually ran. A skip here fails the job.
+name: exunit-contract
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: ExUnit contract matrix (real mix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pinned, so a verdict that changes because ExUnit changed shows up as a
+      # version bump in this file rather than as a mystery in a review.
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          elixir-version: "1.18"
+
+      - run: elixir --version && mix --version
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv sync
+
+      - name: Run the contract matrix
+        run: uv run pytest tests/test_exunit_adapter.py -v --junitxml=exunit-contract.xml
+
+      # The guard that makes the job worth having: a run that skipped is not a
+      # run that passed. `mix` missing, the fixture failing to build, a marker
+      # change — all of them would otherwise leave this green.
+      # `defusedxml` rather than the stdlib parser: the report is ours, but a
+      # guard is a poor place to keep a habit that is wrong everywhere else.
+      - name: Refuse a matrix that did not actually run
+        run: |
+          uv run --with defusedxml python - <<'PY'
+          import sys
+
+          from defusedxml import ElementTree as ET
+
+          suite = ET.parse("exunit-contract.xml").getroot()
+          if suite.tag == "testsuites":
+              suite = suite[0]
+          total = int(suite.get("tests", 0))
+          skipped = int(suite.get("skipped", 0))
+          # Floor, not an exact count: adding a case must not fail the job, but
+          # losing the whole matrix to a skip must.
+          expected_minimum = 12
+          print(f"ran {total}, skipped {skipped}")
+          if skipped:
+              sys.exit(f"::error::{skipped} ExUnit contract test(s) skipped — the matrix must run")
+          if total < expected_minimum:
+              sys.exit(
+                  f"::error::only {total} ExUnit contract tests ran, expected at least "
+                  f"{expected_minimum} — the matrix did not run in full"
+              )
+          PY
