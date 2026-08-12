@@ -217,7 +217,7 @@ def verify_red(
     config: ExecutorConfig,
     *,
     sha: str,
-    selector: str,
+    selector: str | Selector,
     baseline_sha: str,
 ) -> RedVerification:
     """Replay ``selector`` against commit ``sha`` in a disposable worktree."""
@@ -255,8 +255,10 @@ def verify_red(
         )
 
     # The selector is the adapter's syntax, not a universal one: `::` is
-    # pytest's node-id form and nothing outside an adapter may assume it.
-    parsed = adapter.parse_selector(selector)
+    # pytest's node-id form and nothing outside an adapter may assume it. A
+    # caller that already parsed it passes the object, so the string is read
+    # exactly once by exactly one adapter.
+    parsed = adapter.parse_selector(selector) if isinstance(selector, str) else selector
     if isinstance(parsed, SelectorRefusal):
         return RedVerification(RedOutcome.UNVERIFIABLE, parsed.message, env_id)
 
@@ -513,6 +515,22 @@ def run_red_phase(
         )
     selector = marker.group(1)
 
+    # Parse **once**, with the adapter this project's config chose, and pass the
+    # typed object down the pipeline. Every consumer — lint narrowing, the
+    # replay, the byte-lock — used to re-derive the shape from the string, and
+    # the byte-lock derived it differently (#210): it split on `::`, so a valid
+    # ExUnit selector claimed nothing and a confirmed red was thrown away. One
+    # parse, one authority; the string survives only as evidence.
+    adapter = resolve_adapter(config)
+    if adapter is None:
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE,
+            f"no runner adapter for test_command {config.test_command!r}",
+        )
+    parsed_selector = adapter.parse_selector(selector)
+    if isinstance(parsed_selector, SelectorRefusal):
+        return RedPhaseResult(RedOutcome.UNVERIFIABLE, parsed_selector.message)
+
     sha = _commit_red(config, task, selector)
     if not sha:
         return RedPhaseResult(
@@ -536,13 +554,13 @@ def run_red_phase(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
-    lint_failure = _lint_claimed(config, selector)
+    lint_failure = _lint_claimed(config, parsed_selector)
     if lint_failure:
         return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
-    verification = verify_red(config, sha=sha, selector=selector, baseline_sha=baseline)
+    verification = verify_red(config, sha=sha, selector=parsed_selector, baseline_sha=baseline)
     checkpoint = RedCheckpoint(
         task_id=task.id,
         namespace=resolve_namespace(config),
@@ -566,8 +584,8 @@ def run_red_phase(
     # recorded as evidence and locks nothing.
     if verification.outcome is RedOutcome.EXPECTED_FAIL:
         try:
-            ensure_claimable(config, selector)
-            record_claims(config, state, checkpoint)
+            ensure_claimable(config, parsed_selector)
+            record_claims(config, state, checkpoint, parsed_selector)
         except Exception as exc:
             logger.error("Could not claim the red's files", task_id=task.id, error=str(exc))
             return RedPhaseResult(
@@ -579,7 +597,7 @@ def run_red_phase(
     return RedPhaseResult(verification.outcome, verification.detail, checkpoint)
 
 
-def _lint_claimed(config: ExecutorConfig, selector: str) -> str | None:
+def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     """Lint the file about to be frozen. Returns a refusal, or None.
 
     Narrowed to the claimed file when that is safe. When `lint_command` is

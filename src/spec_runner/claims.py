@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
     from .state import ExecutorState
     from .tdd import RedCheckpoint
+    from .tdd_runners import Selector
 
 logger = get_logger("claims")
 
@@ -92,20 +93,27 @@ class ClaimViolation:
     detail: str | None = None
 
 
-def claim_paths_for(selector: str) -> list[str]:
-    """The files a selector claims.
+def claim_paths_for(selector: Selector) -> list[str]:
+    """The files a **parsed** selector claims.
 
-    A pytest node id names exactly one file. **Documented limitation** (§1.3):
-    a test depending on a fixture in `conftest.py` does not claim that
-    conftest, so editing the fixture can turn the red green and is not blocked.
-    Widening this by import graph or coverage is a separate decision; guessing
-    at it here would be worse than the honest gap.
+    Takes the typed object, not the raw string: the selector was parsed once by
+    the adapter the config chose, and re-deriving it here would distribute the
+    authority again. Today `::` and `:line` do not overlap, so a loop over the
+    adapters happens to give the right answer — but a third adapter could make
+    one string parse under two of them, and then the order of `ADAPTERS` would
+    become hidden semantics of the byte-lock (owner's review, PR #211).
+
+    The raw string survives only as evidence: it is what the agent said, and it
+    is what a stored checkpoint displays.
     """
-    if "::" not in selector:
-        # Refused upstream by `verify_red`. Claiming nothing rather than
-        # guessing keeps the two from disagreeing about what a selector is.
+    from .tdd_runners import adapter_for
+
+    adapter = adapter_for(selector.runner)
+    if adapter is None:
+        # A selector whose runner is no longer registered claims nothing, and
+        # a red with nothing locked would pass the gate over an open file.
         return []
-    return [selector.split("::", 1)[0]]
+    return [str(path) for path in adapter.claim_paths(selector)]
 
 
 def validate_claim_path(project_root: Path, path: str) -> str | None:
@@ -148,10 +156,29 @@ def claim_blob_sha(project_root: Path, path: str) -> str:
     return git_blob_hash((Path(project_root) / path).read_bytes())
 
 
+def selector_of(config: ExecutorConfig, checkpoint: RedCheckpoint) -> Selector | None:
+    """Parse a **stored** checkpoint's selector, with the config's adapter.
+
+    A record in the database holds the raw string, so somewhere it has to be
+    read again. The authority for that reading is the adapter the config
+    chose — never a loop over the registry, which is what would make the order
+    of `ADAPTERS` into hidden semantics of the byte-lock.
+    """
+    from .tdd import resolve_adapter
+    from .tdd_runners import Selector
+
+    adapter = resolve_adapter(config)
+    if adapter is None:
+        return None
+    parsed = adapter.parse_selector(checkpoint.selector)
+    return parsed if isinstance(parsed, Selector) else None
+
+
 def record_claims(
     config: ExecutorConfig,
     state: ExecutorState,
     checkpoint: RedCheckpoint,
+    selector: Selector | None = None,
 ) -> list[Claim]:
     """Claim the files ``checkpoint``'s selector depends on.
 
@@ -163,14 +190,22 @@ def record_claims(
     idempotent; a re-run must not stack duplicate rows.
     """
     root = Path(config.project_root)
-    ensure_claimable(config, checkpoint.selector)
+    # The live pipeline hands the parsed object down; a caller holding only a
+    # stored record gets it read back by the config's adapter.
+    resolved = selector or selector_of(config, checkpoint)
+    if resolved is None:
+        raise ClaimRefused(
+            f"selector {checkpoint.selector!r} cannot be parsed by this project's "
+            "runner adapter, so nothing can be claimed"
+        )
+    ensure_claimable(config, resolved)
     existing = {
         (c.task_id, c.checkpoint_id, c.path, c.blob_sha)
         for c in state.active_claims(checkpoint.namespace)
     }
     recorded: list[Claim] = []
 
-    for path in claim_paths_for(checkpoint.selector):
+    for path in claim_paths_for(resolved):
         blob = claim_blob_sha(root, path)
         if (checkpoint.task_id, checkpoint.checkpoint_id, path, blob) in existing:
             continue
@@ -188,7 +223,7 @@ def record_claims(
     return recorded
 
 
-def ensure_claimable(config: ExecutorConfig, selector: str) -> list[str]:
+def ensure_claimable(config: ExecutorConfig, selector: Selector) -> list[str]:
     """The paths ``selector`` will claim, or raise `ClaimRefused`.
 
     Called *before* anything is written, so a red whose file cannot be locked
@@ -323,6 +358,7 @@ __all__ = [
     "check_claims",
     "claim_blob_sha",
     "claim_paths_for",
+    "selector_of",
     "describe_violations",
     "ensure_claimable",
     "record_claims",

@@ -200,6 +200,16 @@ class TddRunnerAdapter(Protocol):
         """Prove and isolate the environment the replay will run in."""
         ...
 
+    def claim_paths(self, selector: Selector) -> tuple[PurePosixPath, ...]:
+        """The files this selector depends on, for the byte-lock."""
+        ...
+
+    def contract_selectors(self) -> tuple[str, ...]:
+        """Canonical selectors this adapter must parse. The machine contract,
+        kept apart from the human-readable `selector_instruction` so that
+        rewording the prompt cannot silently change what is guaranteed."""
+        ...
+
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
         """argv — never a shell string, since the selector is agent output."""
         ...
@@ -314,6 +324,20 @@ class PytestAdapter:
         ExUnit needs its definition line proven before the runner is invoked.
         """
         return None
+
+    def claim_paths(self, selector: Selector) -> tuple[PurePosixPath, ...]:
+        """One node id names one file.
+
+        **Documented limitation** (§1.3): a test depending on a fixture in
+        `conftest.py` does not claim that conftest.
+        """
+        return (selector.path,)
+
+    def contract_selectors(self) -> tuple[str, ...]:
+        return (
+            "tests/test_thing.py::test_it",
+            "tests/test_thing.py::TestGroup::test_it",
+        )
 
     def prepare_replay(
         self, canonical_root: Path, replay_root: Path, selector: Selector
@@ -577,6 +601,13 @@ class ExUnitAdapter:
                 "the nearest test at or before it",
             )
         return None
+
+    def claim_paths(self, selector: Selector) -> tuple[PurePosixPath, ...]:
+        """One `path:line` names one file."""
+        return (selector.path,)
+
+    def contract_selectors(self) -> tuple[str, ...]:
+        return ("test/thing_test.exs:12",)
 
     def prepare_replay(
         self, canonical_root: Path, replay_root: Path, selector: Selector

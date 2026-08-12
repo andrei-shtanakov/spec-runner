@@ -29,7 +29,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from .claims import ClaimRefused, ClaimStatus, ensure_claimable, record_claims
+from .claims import ClaimRefused, ClaimStatus, ensure_claimable, record_claims, selector_of
 from .logging import get_logger
 from .tdd import RedCheckpoint, RedOutcome, resolve_namespace, verify_red
 
@@ -196,7 +196,13 @@ def repair(
         # red whose file cannot be locked is the same hole in a different
         # doorway, and by then the old lock would already be gone.
         try:
-            ensure_claimable(config, lineage.selector)
+            parsed = selector_of(config, lineage)
+            if parsed is None:
+                raise ClaimRefused(
+                    f"selector {lineage.selector!r} cannot be parsed by this "
+                    "project's runner adapter"
+                )
+            ensure_claimable(config, parsed)
         except ClaimRefused as exc:
             raise RemedyError(f"the repaired red cannot be locked: {exc}") from exc
 

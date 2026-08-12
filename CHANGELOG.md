@@ -10,6 +10,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An ExUnit red is no longer discarded as unclaimable** (#210).
+  `claim_paths_for` split the selector on `::` and returned nothing for any
+  other shape, with a comment saying `verify_red` had already refused such
+  selectors. True when pytest was the only runner; false the moment ExUnit
+  landed. A valid `path:line` therefore claimed no files, `record_claims`
+  refused — correctly, since a red with nothing locked would pass the gate over
+  an open file — and the checkpoint was discarded **after** the replay had
+  confirmed it.
+
+  **The selector is parsed once, by the adapter the config chose, and the
+  typed object travels down the pipeline** — lint narrowing, replay, byte-lock.
+  Re-deriving the shape from the raw string at each step was the actual defect;
+  a first fix that looked up the adapter again at the claim site kept the same
+  mistake in a quieter place, since `::` and `:line` merely happen not to
+  overlap today. The raw string survives as evidence and as what a stored
+  record holds; reading a stored record back is the one place an adapter is
+  consulted again, and it is the config's, never a search.
+
+  Guarantees are split in two, so wording cannot change semantics:
+  `adapter.contract_selectors()` is the machine contract — every canonical
+  selector parses and yields a claimable path — while a separate, narrower
+  test asserts the human-readable `selector_instruction` shows an example the
+  same adapter accepts.
+
+  Found by the second paid pilot attempt. Nothing false was recorded and no
+  implementation ran; the defect was that a valid selector was treated as
+  nonsense.
+
 ## [2.28.2] - 2026-08-12
 
 **Patch.** No public surface moves — no new config key, no new flag, no schema
