@@ -1095,10 +1095,20 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     )
                     break
 
-                if result is False and state.should_stop():
+                # #219: asked whatever the task returned. It used to be
+                # `result is False and ...`, which meant an exhausted budget
+                # could only halt the run through a *failed* task — so the
+                # post-attempt check had to record a successful, merged task as
+                # failed for the run to stop at all. With that lie removed, the
+                # stop condition has to stand on its own.
+                if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
-                    exit_code = 1
+                    if result is not True:
+                        # A successful task does not make the run a failure.
+                        # The exit code is recomputed below from what this run
+                        # actually did, including any task it never reached.
+                        exit_code = 1
                     break
         else:
             # For single task or milestone mode, execute the fixed list
@@ -1150,10 +1160,20 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     )
                     break
 
-                if result is False and state.should_stop():
+                # #219: asked whatever the task returned. It used to be
+                # `result is False and ...`, which meant an exhausted budget
+                # could only halt the run through a *failed* task — so the
+                # post-attempt check had to record a successful, merged task as
+                # failed for the run to stop at all. With that lie removed, the
+                # stop condition has to stand on its own.
+                if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
-                    exit_code = 1
+                    if result is not True:
+                        # A successful task does not make the run a failure.
+                        # The exit code is recomputed below from what this run
+                        # actually did, including any task it never reached.
+                        exit_code = 1
                     break
 
         # One verdict for both selectors (F-2). Counts THIS run's outcomes:
