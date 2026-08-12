@@ -408,3 +408,65 @@ class TestTheFloorIsQuotedInTheBindingScope:
 
         assert refusal is not None
         assert "$2.00 for this task" in refusal.reason
+
+
+class TestSpendThatHappenedButIsNotRecordedYet:
+    """The free budget rehearsal's finding, at unit scale.
+
+    `record_attempt` writes the implementation call's cost only *after*
+    `post_done_hook` returns, so a guard reading the database alone sees the
+    task's spend as it was before this attempt's most expensive call. In the
+    rehearsal that meant $0.60 recorded against a $1.00 cap, review allowed,
+    and $1.80 spent — the guarantee broken by the one call it was written for.
+    """
+
+    def test_the_pending_call_counts_against_the_cap(self, tmp_path):
+        cfg = _cfg(tmp_path, task_budget_usd=1.0)
+        _spend(cfg, 0.60)  # RED, recorded
+
+        with ExecutorState(cfg) as state:
+            # Without the pending amount this is $0.60 < $1.00 and proceeds.
+            assert check_before_call(cfg, state, "TASK-001", "review") is None
+            refusal = check_before_call(cfg, state, "TASK-001", "review", pending_cost=0.60)
+
+        assert refusal is not None and refusal.kind == TASK_BUDGET
+        assert "$1.20" in refusal.reason
+
+    def test_it_counts_against_the_run_cap_too(self, tmp_path):
+        cfg = _cfg(tmp_path, budget_usd=1.0)
+        _spend(cfg, 0.60, task_id="TASK-002")
+
+        with ExecutorState(cfg) as state:
+            refusal = check_before_call(cfg, state, "TASK-001", "review", pending_cost=0.60)
+
+        assert refusal is not None and refusal.kind == RUN_BUDGET
+
+    def test_an_unknown_pending_cost_is_unprovable_not_free(self, tmp_path):
+        """The call happened; nobody knows what it cost. That is not $0.00."""
+        cfg = _cfg(tmp_path, task_budget_usd=10.0)
+
+        with ExecutorState(cfg) as state:
+            refusal = check_before_call(cfg, state, "TASK-001", "review", pending_cost=None)
+
+        assert refusal is not None and refusal.kind == UNPRICED
+
+    def test_review_is_refused_through_the_hook(self, tmp_path):
+        """End to end through `post_done_hook`, the way the rehearsal ran it."""
+        from spec_runner.hooks import post_done_hook
+
+        cfg = _cfg(
+            tmp_path,
+            task_budget_usd=1.0,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            run_review=True,
+        )
+        _spend(cfg, 0.60)
+
+        with patch("spec_runner.review.subprocess.run") as run:
+            _ok, _err, verdict, _findings, _no_op = post_done_hook(
+                _task(), cfg, True, pending_cost=0.60
+            )
+
+        run.assert_not_called()
+        assert verdict == "not_run"

@@ -41,6 +41,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
   of a review as a good one, and `review_policy: required` still withholds the
   merge.
 
+  Spend that has **happened but is not yet recorded** counts too: the
+  implementation call's cost reaches the state DB only after `post_done_hook`
+  returns, so the amount is handed to the guard directly. Without that the
+  free budget rehearsal spent $1.80 against a $1.00 cap — the guarantee broken
+  by the one call it was written for. An unknown amount is an unprovable
+  remainder, not a free call.
+
 ### Changed
 
 - **Parallel review runs one role at a time while a budget is set.** Five roles

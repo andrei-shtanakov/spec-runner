@@ -99,17 +99,33 @@ def check_before_call(
     state: ExecutorState,
     task_id: str,
     provenance: str,
+    pending_cost: float | None = 0.0,
 ) -> BudgetRefusal | None:
     """Refuse the next paid call, or None to proceed.
 
     ``provenance`` names the call about to be made (`red_authoring`, `green`,
     `review`, `review:<role>`) and appears in the refusal, because "which call
     did not happen" is the first thing an operator needs in order to resume.
+
+    ``pending_cost`` is spend that has **happened but is not yet recorded** —
+    the implementation call's cost, which `record_attempt` writes only after
+    `post_done_hook` returns. Reading the database alone would let review start
+    on a budget this very attempt has already spent, and the free rehearsal
+    demonstrated exactly that: $0.60 recorded against a $1.00 cap, review
+    allowed, $1.80 spent. `None` means the amount is unknown, which is an
+    unprovable remainder, not a free call.
     """
     if not budget_is_active(config):
         return None
 
-    task_spent = state.task_cost(task_id)
+    if pending_cost is None:
+        return BudgetRefusal(
+            UNPRICED,
+            "the call just made reported no cost, so the remaining budget cannot be proven "
+            f"— not starting the {provenance} call",
+        )
+
+    task_spent = state.task_cost(task_id) + pending_cost
     if config.task_budget_usd is not None and task_spent >= config.task_budget_usd:
         return BudgetRefusal(
             TASK_BUDGET,
@@ -118,7 +134,7 @@ def check_before_call(
         )
 
     if config.budget_usd is not None:
-        run_spent = state.total_cost()
+        run_spent = state.total_cost() + pending_cost
         if run_spent >= config.budget_usd:
             return BudgetRefusal(
                 RUN_BUDGET,
@@ -135,7 +151,7 @@ def check_before_call(
         # under a run-wide budget the task's own total says nothing about how
         # much of the run remains (Copilot, PR #217).
         if config.budget_usd is not None:
-            floor = f"${state.total_cost():.2f} for this run"
+            floor = f"${state.total_cost() + pending_cost:.2f} for this run"
         else:
             floor = f"${task_spent:.2f} for this task"
         return BudgetRefusal(
