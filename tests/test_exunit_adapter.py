@@ -11,13 +11,15 @@ So an out-of-range line looks exactly like a confirmed red. Nothing but the
 real runner would have shown that, and nothing but the real runner can show it
 has stopped happening.
 
-These are marked `slow` and skip when `elixir`/`mix` are absent. The skip is not
-the safety net: a dedicated required CI job (build order §4) runs this matrix
-with a pinned toolchain and fails if any of it was skipped, because a green
-suite that quietly tested nothing is the same class of problem as everything
-else in this issue.
+These are marked `slow` and skip when `elixir`/`mix` are absent — locally.
+The dedicated CI job sets `SPEC_RUNNER_REQUIRE_EXUNIT=1`, which turns that skip
+into a collection error, because a green suite that quietly tested nothing is
+the same class of problem as everything else in this issue. The guard lives
+here rather than in the workflow: a check that counts how many tests ran is one
+more thing to keep in step with the file it is counting.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,10 +29,24 @@ import pytest
 from spec_runner.config import ExecutorConfig
 from spec_runner.tdd import RedOutcome, verify_red
 
+_TOOLCHAIN_MISSING = shutil.which("mix") is None or shutil.which("elixir") is None
+
+#: Set by the dedicated CI job. With it, a missing toolchain is a **collection
+#: error** rather than a skip — the guard lives here, next to the tests, rather
+#: than in a workflow counting how many of them ran.
+REQUIRED = os.environ.get("SPEC_RUNNER_REQUIRE_EXUNIT") == "1"
+
+if _TOOLCHAIN_MISSING and REQUIRED:
+    raise RuntimeError(
+        "SPEC_RUNNER_REQUIRE_EXUNIT=1 but `mix`/`elixir` are not on PATH — the "
+        "ExUnit contract matrix must run, and a skipped matrix is a green suite "
+        "that checked nothing"
+    )
+
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(
-        shutil.which("mix") is None or shutil.which("elixir") is None,
+        _TOOLCHAIN_MISSING,
         reason="the ExUnit contract matrix needs a real Elixir toolchain",
     ),
 ]
@@ -266,3 +282,35 @@ class TestTheProofIsAboutTheRequestedTest:
         from spec_runner.tdd_runners import SelectionProof
 
         assert adapter.prove_selected(selector, elsewhere) is SelectionProof.REFUTED
+
+
+class TestPreflightRefusalsAreDistinct:
+    """Raised in review: one code for two causes sends an operator to fix the
+    wrong thing. A missing toolchain and a preflight that did not complete are
+    both refusals, and they are not the same refusal."""
+
+    def test_a_missing_toolchain_says_so(self, project, monkeypatch):
+        import spec_runner.tdd_runners as runners
+
+        def _no_elixir(*_a, **_k):
+            raise FileNotFoundError("elixir")
+
+        monkeypatch.setattr(runners.subprocess, "run", _no_elixir)
+        from pathlib import PurePosixPath
+
+        assert runners.definition_lines(project, PurePosixPath("test/probe_test.exs")) == (
+            "runner_toolchain_missing"
+        )
+
+    def test_a_timeout_does_not_claim_the_toolchain_is_missing(self, project, monkeypatch):
+        import spec_runner.tdd_runners as runners
+
+        def _times_out(*_a, **_k):
+            raise subprocess.TimeoutExpired(cmd="elixir", timeout=1)
+
+        monkeypatch.setattr(runners.subprocess, "run", _times_out)
+        from pathlib import PurePosixPath
+
+        code = runners.definition_lines(project, PurePosixPath("test/probe_test.exs"))
+        assert code == "preflight_failed"
+        assert "PATH" not in runners._PREFLIGHT_MESSAGES[code]

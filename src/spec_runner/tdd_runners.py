@@ -342,7 +342,10 @@ def definition_lines(root: Path, path: PurePosixPath) -> list[int] | str:
     except FileNotFoundError:
         return "runner_toolchain_missing"
     except subprocess.SubprocessError:
-        return "runner_toolchain_missing"
+        # A timeout or a crashed parse is not a missing toolchain, and saying
+        # "`elixir` is not on PATH" would send an operator to fix the wrong
+        # thing (Copilot, PR #203). Both refuse; they refuse differently.
+        return "preflight_failed"
     if result.returncode != 0:
         return "unparseable_test_file"
     out = result.stdout.strip()
@@ -490,6 +493,10 @@ _PREFLIGHT_MESSAGES = {
     "runner_toolchain_missing": (
         "`elixir` is not on PATH, so {path} cannot be checked before running — "
         "an unchecked ExUnit selector can silently run a different test"
+    ),
+    "preflight_failed": (
+        "checking {path} for the test's definition line did not complete "
+        "(timeout or a failed parse run); nothing was run"
     ),
 }
 

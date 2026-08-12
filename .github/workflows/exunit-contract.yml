@@ -41,35 +41,12 @@ jobs:
       - uses: astral-sh/setup-uv@v8.1.0
       - run: uv sync
 
+      # `SPEC_RUNNER_REQUIRE_EXUNIT=1` makes the test module refuse to skip:
+      # without a toolchain it is a collection error, and pytest exits 5 if it
+      # collects nothing at all. So "did the matrix really run" is answered by
+      # pytest itself rather than by a workflow parsing a report — one fewer
+      # thing to keep in step, and no extra dependency in CI.
       - name: Run the contract matrix
-        run: uv run pytest tests/test_exunit_adapter.py -v --junitxml=exunit-contract.xml
-
-      # The guard that makes the job worth having: a run that skipped is not a
-      # run that passed. `mix` missing, the fixture failing to build, a marker
-      # change — all of them would otherwise leave this green.
-      # `defusedxml` rather than the stdlib parser: the report is ours, but a
-      # guard is a poor place to keep a habit that is wrong everywhere else.
-      - name: Refuse a matrix that did not actually run
-        run: |
-          uv run --with defusedxml python - <<'PY'
-          import sys
-
-          from defusedxml import ElementTree as ET
-
-          suite = ET.parse("exunit-contract.xml").getroot()
-          if suite.tag == "testsuites":
-              suite = suite[0]
-          total = int(suite.get("tests", 0))
-          skipped = int(suite.get("skipped", 0))
-          # Floor, not an exact count: adding a case must not fail the job, but
-          # losing the whole matrix to a skip must.
-          expected_minimum = 12
-          print(f"ran {total}, skipped {skipped}")
-          if skipped:
-              sys.exit(f"::error::{skipped} ExUnit contract test(s) skipped — the matrix must run")
-          if total < expected_minimum:
-              sys.exit(
-                  f"::error::only {total} ExUnit contract tests ran, expected at least "
-                  f"{expected_minimum} — the matrix did not run in full"
-              )
-          PY
+        env:
+          SPEC_RUNNER_REQUIRE_EXUNIT: "1"
+        run: uv run pytest tests/test_exunit_adapter.py -v
