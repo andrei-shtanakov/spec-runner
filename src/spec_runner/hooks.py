@@ -7,7 +7,7 @@ code review, testing, linting, and plugin execution around task runs.
 import subprocess
 
 from .config import ExecutorConfig
-from .gates import GateContext, GateStatus, evaluate_pre_terminal, has_gates
+from .gates import GateContext, GateStatus, evaluate_pre_terminal, has_gates, is_registered
 from .git_ops import (
     build_scoped_test_command,
     ensure_runtime_gitignore,
@@ -677,11 +677,29 @@ def post_done_hook(
     # #214: the byte-lock is asked *before* the reviewer is paid. The merge-time
     # gate below is unchanged and remains the authority; this only stops the run
     # from buying a verdict on a candidate that is already unmergeable.
+    #
+    # Conditioned on `run_review`, because that is the whole of what it buys
+    # (Copilot, PR #215): with review off there is no call to save, and the
+    # merge-time gate a few lines down asks the same question of the same
+    # commit. Running it anyway would be a second evaluation whose only effect
+    # is a stop message that says "not reviewing" about a run that was never
+    # going to review.
+    #
+    # Conditioned on the claims gate being *registered*, too. This site calls
+    # `evaluate_claims` outside the registry, so without that check it could
+    # refuse a candidate in a run where the registry-driven merge-time site
+    # would not even look — a helper stopping work the authority permits, which
+    # is exactly what the docstring promises it will not do.
+    #
     # HEAD is resolved only when a claim could exist to check — an ordinary run
     # must not gain a git call per task from a feature it did not enable.
     candidate_before_review = ""
     claims_blocked: str | None = None
-    if config.resolve_execution_mode(task) == "tdd":
+    if (
+        config.run_review
+        and is_registered("tdd.claims", "tests")
+        and config.resolve_execution_mode(task) == "tdd"
+    ):
         candidate_before_review = _head_sha(config)
         claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
     if claims_blocked is not None:

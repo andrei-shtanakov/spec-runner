@@ -492,6 +492,18 @@ def ensure_red_gate(registry: GateRegistry | None = None) -> None:
     reg.register("tdd.claims", "tests", evaluate_claims)
 
 
+def is_registered(gate_id: str, phase: str, registry: GateRegistry | None = None) -> bool:
+    """Whether one particular gate is in force for this run.
+
+    `has_gates` answers "is anything registered"; a call site that evaluates a
+    *named* gate outside the registry needs the narrower question, or it can
+    refuse work that the registry-driven sites would have let through — which
+    is the one thing a helper site must never do (#214, PR #215).
+    """
+    reg = registry if registry is not None else REGISTRY
+    return any(existing == gate_id for existing, _ in reg.for_phase(phase))
+
+
 def has_gates(registry: GateRegistry | None = None) -> bool:
     """Whether anything is registered at all.
 

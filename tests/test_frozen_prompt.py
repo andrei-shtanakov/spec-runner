@@ -272,6 +272,24 @@ class TestTheBlockItself:
         assert FROZEN_HEADER not in prompt
 
 
+@pytest.fixture
+def registered_gates():
+    """The TDD gates, attached as a real `tdd` run attaches them.
+
+    The registry is process-wide, so a suite that registers without removing
+    is how order-dependent tests are born. Registering here rather than
+    leaning on whatever a previous test left behind is also what caught the
+    early check evaluating a gate the registry had never been asked for.
+    """
+    from spec_runner.gates import REGISTRY, ensure_red_gate
+
+    ensure_red_gate()
+    yield
+    REGISTRY.unregister("tdd.red", "tests")
+    REGISTRY.unregister("tdd.claims", "tests")
+
+
+@pytest.mark.usefixtures("registered_gates")
 class TestTheGateStillDecides:
     """The prompt prevents; `check_claims` refuses. The second is the authority."""
 
@@ -326,6 +344,24 @@ class TestTheGateStillDecides:
             post_done_hook(_task(), cfg, True)
 
         review.assert_called_once()
+
+    def test_with_review_off_the_early_check_does_not_run_at_all(self, tmp_path):
+        """It buys one thing — the review call — so it costs nothing when
+        there is no review call to buy (Copilot, PR #215).
+
+        The violation is still refused, by the merge-time gate that was always
+        the authority: the task does not finish, and it does not merge.
+        """
+        root, cfg = self._ready_for_review(tmp_path)
+        cfg.run_review = False
+        (root / CLAIMED).write_text("mutated\n")
+
+        with patch("spec_runner.hooks._claims_intact_before_review") as early:
+            success, error, _verdict, _findings, _no_op = post_done_hook(_task(), cfg, True)
+
+        early.assert_not_called()
+        assert success is False
+        assert "claim violated" in (error or "")
 
     def test_an_unreadable_candidate_is_an_instrument_error_not_a_verdict(self, tmp_path):
         root, cfg = self._ready_for_review(tmp_path)
