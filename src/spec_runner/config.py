@@ -209,6 +209,12 @@ class ExecutorConfig:
     # from the resolved project root + spec_prefix. An orchestrator that knows
     # its own workstream identity should state it rather than have it inferred.
     tdd_namespace: str = ""
+    # #198: which runner adapter verifies a claimed RED. Empty = infer, and
+    # inference is allowed only where it cannot be wrong (a command whose
+    # executable *is* a known runner's). A declared value chooses the
+    # semantics; it does not prove the command can carry them, so a declared
+    # runner the command contradicts is refused rather than logged.
+    tdd_runner: str = ""
     hitl_review: bool = False  # Interactive approval gate after code review
     review_timeout_minutes: int = 15  # Review timeout
     review_command: str = ""  # Review CLI command (empty = use claude_command)
@@ -456,6 +462,31 @@ class ExecutorConfig:
             raise ConfigError(f"unknown execution_mode{where}: {mode!r}; available: {available}")
         return mode
 
+    def resolve_tdd_runner(self) -> str | None:
+        """The adapter name that verifies a RED here, or None to refuse.
+
+        Raises:
+            ConfigError: on an unknown name, or on a declared runner the
+                `test_command` cannot carry. The declaration chooses the
+                semantics; it cannot prove the command can carry them, and
+                letting a typo through would read one runner's exit codes as
+                another's — #198 returning through an explicit config key.
+        """
+        from .tdd_runners import ADAPTERS, adapter_for, infer_adapter
+
+        declared = (self.tdd_runner or "").strip()
+        if not declared:
+            inferred = infer_adapter(self.test_command)
+            return inferred.name if inferred else None
+        adapter = adapter_for(declared)
+        if adapter is None:
+            available = ", ".join(sorted(ADAPTERS))
+            raise ConfigError(f"unknown tdd_runner: {declared!r}; available: {available}")
+        refusal = adapter.validate_command(self.test_command)
+        if refusal is not None:
+            raise ConfigError(f"tdd_runner is {declared!r} but {refusal}")
+        return adapter.name
+
     def resolve_spec_profile(self) -> "StageProfile":
         """Resolve ``spec_profile`` (a name) to its :class:`~spec_runner.spec.StageProfile`.
 
@@ -699,6 +730,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "review_policy": executor_config.get("review_policy"),
             "execution_mode": executor_config.get("execution_mode"),
             "tdd_namespace": executor_config.get("tdd_namespace"),
+            "tdd_runner": executor_config.get("tdd_runner"),
             "hitl_review": executor_config.get("hitl_review"),
             "review_timeout_minutes": executor_config.get("review_timeout_minutes"),
             "review_command": executor_config.get("review_command"),

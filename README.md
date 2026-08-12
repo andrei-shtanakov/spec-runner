@@ -375,6 +375,7 @@ task_timeout_minutes: 30
 claude_command: "claude"
 claude_model: "sonnet"
 spec_prefix: ""                # e.g. "phase5-" for phase5-tasks.md
+tdd_runner: ""                 # pytest (empty = infer; only where inference cannot be wrong)
 budget_usd: 50.0               # Total budget cap (whole run)
 task_budget_usd: 10.0          # Per-task cap incl. first attempt
 max_retry_cost_usd: 2.0        # Cap on retry cost only (attempts 2+)

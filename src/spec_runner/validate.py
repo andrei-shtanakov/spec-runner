@@ -395,11 +395,40 @@ def validate_config(config_path: Path) -> ValidationResult:
         if key in _DEAD_SECTIONS:
             result.warnings.append(f"Top-level key '{key}' is not supported and will be ignored")
 
+    _validate_tdd_runner(executor_section, result)
     _validate_spec_context_rules(executor_section, result)
     _validate_review_policy(executor_section, result)
     _validate_execution_mode(executor_section, result)
 
     return result
+
+
+def _validate_tdd_runner(section: dict, result: "ValidationResult") -> None:
+    """Refuse a runner that does not exist, or one the command cannot carry (#198).
+
+    Both are the same failure at different distances: a red confirmed by
+    reading one runner's exit codes as another's. A declaration chooses the
+    semantics and cannot prove the command can carry them, so a mismatch is an
+    error rather than a logged note — letting it through would be #198
+    returning through an explicit config key.
+    """
+    from .tdd_runners import ADAPTERS, adapter_for
+
+    declared = (section.get("tdd_runner") or "").strip()
+    if not declared:
+        return
+    adapter = adapter_for(declared)
+    if adapter is None:
+        available = ", ".join(sorted(ADAPTERS))
+        result.errors.append(f"unknown tdd_runner: {declared!r}; available: {available}")
+        return
+    commands = section.get("commands") or {}
+    test_command = commands.get("test") if isinstance(commands, dict) else None
+    if not test_command:
+        return
+    refusal = adapter.validate_command(str(test_command))
+    if refusal is not None:
+        result.errors.append(f"tdd_runner is {declared!r} but {refusal}")
 
 
 def _validate_execution_mode(section: dict, result: "ValidationResult") -> None:
