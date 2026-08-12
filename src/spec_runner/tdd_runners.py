@@ -114,6 +114,11 @@ class TddRunnerAdapter(Protocol):
 
     name: str
 
+    #: How the RED prompt must ask for a selector. The agent writes the test;
+    #: the shape it reports has to be the shape this adapter parses, or every
+    #: RED is refused before it is replayed.
+    selector_instruction: str
+
     def parse_selector(self, raw: str) -> Selector | SelectorRefusal: ...
 
     def validate_command(self, test_command: str) -> str | None:
@@ -200,6 +205,13 @@ class PytestAdapter:
     """pytest, whose exit codes were measured on pytest 8."""
 
     name = "pytest"
+    selector_instruction = (
+        "TDD_SELECTOR: path/to/test_file.py::TestClass::test_name\n"
+        "\n"
+        "   The full pytest node id. Not a `-k` expression and not a bare name:\n"
+        "   those match several tests, and a checkpoint that matches several\n"
+        "   proves nothing about the one."
+    )
 
     def parse_selector(self, raw: str) -> Selector | SelectorRefusal:
         value = (raw or "").strip()
@@ -371,6 +383,14 @@ class ExUnitAdapter:
     """
 
     name = "exunit"
+    selector_instruction = (
+        "TDD_SELECTOR: test/path/to/file_test.exs:LINE\n"
+        "\n"
+        '   `path:line`, where LINE is the line the `test "..." do` is written\n'
+        "   on — the definition line, not a line inside the body. A pytest-style\n"
+        "   `path::name` is refused: `mix test` cannot resolve it, and a line\n"
+        "   that resolves to nothing silently runs a different test."
+    )
 
     def parse_selector(self, raw: str) -> Selector | SelectorRefusal:
         value = (raw or "").strip()

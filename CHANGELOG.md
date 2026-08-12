@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The RED prompt asks for the selector shape the project's runner accepts**
+  (#198). It hardcoded pytest's node id, so an agent on an Elixir project would
+  comply with *that* shape — and `path::name` is exactly what the ExUnit
+  adapter refuses. Every RED authoring pass would have ended `unverifiable`
+  before a line of implementation was written.
+
+  Found by reading the prompt the agent would receive, before the first paid
+  pilot run rather than during it. The instruction now comes from the resolved
+  adapter, and a test asserts the property directly: what the prompt asks for
+  is what the adapter parses.
+
 ## [2.28.0] - 2026-08-12
 
 **Minor: a new public config key.** `tdd_runner` is the outward change; the
