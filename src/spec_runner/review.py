@@ -385,7 +385,7 @@ def _budget_refusal(config: ExecutorConfig, task_id: str, provenance: str):
     Opens no state when there is no budget: a run that set no cap must not
     gain a database read per review call from a feature it never enabled.
     """
-    from .budget import check_before_call
+    from .budget import UNREADABLE, BudgetRefusal, check_before_call
     from .state import ExecutorState
 
     if not budget_is_active(config):
@@ -394,16 +394,24 @@ def _budget_refusal(config: ExecutorConfig, task_id: str, provenance: str):
         with _LEDGER_LOCK, ExecutorState(config) as state:
             return check_before_call(config, state, task_id, provenance)
     except Exception as exc:
-        # The guard could not answer. Refusing on a broken reader would stop
-        # work for a reason that may not be true, and the between-attempt cap
-        # still applies; the failure is loud instead.
-        logger.warning(
-            "Budget guard could not read spend",
+        # Fail closed. A guard that cannot read spend is the extreme case of
+        # the unprovable remainder it already refuses on, and proceeding here
+        # would break the guarantee in exactly the situation where nobody is
+        # counting: an unreadable ledger lets every remaining call through
+        # (Copilot, PR #217). The first version of this reasoned that
+        # refusing on a broken reader stops work "for a reason that may not
+        # be true" — but "we do not know" is not a reason to spend.
+        logger.error(
+            "Budget guard could not read spend — refusing the call",
             task_id=task_id,
             provenance=provenance,
             error=str(exc),
         )
-        return None
+        return BudgetRefusal(
+            UNREADABLE,
+            f"the budget guard could not read recorded spend ({exc}), so the remaining "
+            f"budget cannot be proven — not starting the {provenance} call",
+        )
 
 
 def _record_call(config: ExecutorConfig, task_id: str, provenance: str, parsed: object) -> None:

@@ -339,3 +339,72 @@ class TestTheExecutionSites:
         # send the gate's bounded recovery back to spend the money it does not
         # have.
         assert attempts[-1].error_code is not ErrorCode.INFRASTRUCTURE
+
+
+class TestTheGuardFailsClosedWhenItCannotRead:
+    """ "We do not know" is not a reason to spend (Copilot, PR #217).
+
+    The first version logged and proceeded, reasoning that refusing on a broken
+    reader stops work for a reason that may not be true. But an unreadable
+    ledger is the extreme case of the unprovable remainder the guard already
+    refuses on — and it is the one situation where nothing at all is counting,
+    so every remaining call would go through.
+    """
+
+    def test_an_unreadable_ledger_refuses_the_review_call(self, tmp_path):
+        from spec_runner.budget import UNREADABLE
+
+        cfg = _cfg(tmp_path, task_budget_usd=10.0)
+
+        with (
+            patch(
+                "spec_runner.state.ExecutorState.__init__", side_effect=RuntimeError("db is gone")
+            ),
+            patch("spec_runner.review.subprocess.run") as run,
+        ):
+            verdict, error, _out = run_code_review(_task(), cfg)
+
+        run.assert_not_called()
+        assert verdict is ReviewVerdict.NOT_RUN
+        assert "cannot be proven" in (error or "")
+        assert UNREADABLE  # the kind exists and is distinct from UNPRICED
+
+    def test_it_still_does_nothing_when_no_cap_is_set(self, tmp_path):
+        """A broken reader only matters to a question someone is asking."""
+        cfg = _cfg(tmp_path)
+
+        with (
+            patch(
+                "spec_runner.state.ExecutorState.__init__", side_effect=RuntimeError("db is gone")
+            ),
+            patch("spec_runner.review.subprocess.run", return_value=_priced()) as run,
+        ):
+            verdict, _error, _out = run_code_review(_task(), cfg)
+
+        run.assert_called_once()
+        assert verdict is ReviewVerdict.PASSED
+
+
+class TestTheFloorIsQuotedInTheBindingScope:
+    def test_a_run_cap_quotes_the_run_total(self, tmp_path):
+        """The task's own total says nothing about how much of the run is left."""
+        cfg = _cfg(tmp_path, budget_usd=10.0)
+        _spend(cfg, 3.0, task_id="TASK-002")
+        _spend(cfg, None, task_id="TASK-001")
+
+        with ExecutorState(cfg) as state:
+            refusal = check_before_call(cfg, state, "TASK-001", "green")
+
+        assert refusal is not None
+        assert "$3.00 for this run" in refusal.reason
+
+    def test_a_task_cap_quotes_the_task_total(self, tmp_path):
+        cfg = _cfg(tmp_path, task_budget_usd=10.0)
+        _spend(cfg, 2.0)
+        _spend(cfg, None)
+
+        with ExecutorState(cfg) as state:
+            refusal = check_before_call(cfg, state, "TASK-001", "green")
+
+        assert refusal is not None
+        assert "$2.00 for this task" in refusal.reason

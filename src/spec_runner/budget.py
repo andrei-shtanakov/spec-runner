@@ -29,7 +29,9 @@ Two consequences follow from the guarantee rather than from taste:
   the remainder unprovable, so the guard fails closed rather than spending
   against a number it knows to be a floor. A project whose CLI never reports
   cost therefore cannot combine that CLI with a budget — which is the honest
-  answer, not a limitation to work around.
+  answer, not a limitation to work around. A guard that cannot read spend *at
+  all* is the extreme of the same case and refuses for the same reason: "we do
+  not know" is not a reason to spend.
 """
 
 from __future__ import annotations
@@ -50,6 +52,9 @@ logger = get_logger("budget")
 TASK_BUDGET = "task_budget"
 RUN_BUDGET = "run_budget"
 UNPRICED = "unpriced"
+#: The guard could not read recorded spend at all. The extreme case of an
+#: unprovable remainder, and refused for the same reason (Copilot, PR #217).
+UNREADABLE = "unreadable"
 
 
 @dataclass(frozen=True)
@@ -126,11 +131,18 @@ def check_before_call(
     # to look for a missing price.
     unpriced = _unpriced_in_scope(config, state, task_id)
     if unpriced:
+        # The floor quoted is the one the *binding* cap is measured against:
+        # under a run-wide budget the task's own total says nothing about how
+        # much of the run remains (Copilot, PR #217).
+        if config.budget_usd is not None:
+            floor = f"${state.total_cost():.2f} for this run"
+        else:
+            floor = f"${task_spent:.2f} for this task"
         return BudgetRefusal(
             UNPRICED,
             f"{unpriced} earlier call(s) reported no cost, so the remaining budget cannot be "
             f"proven — not starting the {provenance} call. Recorded spend is a floor "
-            f"(${task_spent:.2f} for this task); see `spec-runner costs`",
+            f"({floor}); see `spec-runner costs`",
         )
     return None
 
@@ -152,6 +164,7 @@ __all__ = [
     "RUN_BUDGET",
     "TASK_BUDGET",
     "UNPRICED",
+    "UNREADABLE",
     "BudgetRefusal",
     "BudgetRefused",
     "budget_is_active",

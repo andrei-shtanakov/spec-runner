@@ -47,10 +47,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   launched together all pass the same check before any of them reports a cost,
   which would make "at most one call of overshoot" false. Without a cap
   configured, review is unchanged and still parallel.
-- **An unpriced call fails the guard closed.** A call whose cost the CLI never
-  reported (timeout, account limit, or a CLI that reports none) makes the
-  remaining budget unprovable, so the next paid call is refused rather than
-  spent against a figure known to be a floor. Practical consequence: a CLI that
+- **An unpriced call fails the guard closed** — and so does a guard that
+  cannot read spend at all. A call whose cost the CLI never reported (timeout,
+  account limit, or a CLI that reports none) makes the remaining budget
+  unprovable, so the next paid call is refused rather than spent against a
+  figure known to be a floor. Practical consequence: a CLI that
   never reports cost cannot be combined with a budget. That is the honest
   answer — you cannot enforce a limit you cannot measure — and it is stated in
   the README rather than discovered in a bill.
