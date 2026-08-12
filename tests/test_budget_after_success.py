@@ -38,8 +38,23 @@ TASKS_MD = """# Tasks
 🟠 P1 | ⬜ TODO | Est: 1d
 """
 
+#: TASK-002 is *not* ready until TASK-001 finishes — the shape in which the
+#: initially-ready list cannot see the work a success unblocks.
+TASKS_MD_CHAINED = """# Tasks
 
-def _repo(tmp_path: Path) -> Path:
+### TASK-001: Deterministic thing
+🟠 P1 | ⬜ TODO | Est: 1d
+
+**Blocks:** [TASK-002]
+
+### TASK-002: The next thing
+🟠 P1 | ⬜ TODO | Est: 1d
+
+**Depends on:** [TASK-001]
+"""
+
+
+def _repo(tmp_path: Path, tasks_md: str = TASKS_MD) -> Path:
     root = tmp_path / "repo"
     (root / "spec").mkdir(parents=True)
     for args in (
@@ -48,7 +63,7 @@ def _repo(tmp_path: Path) -> Path:
         ("config", "user.name", "t"),
     ):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-    (root / "spec" / "tasks.md").write_text(TASKS_MD)
+    (root / "spec" / "tasks.md").write_text(tasks_md)
     subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True, capture_output=True)
     return root
@@ -248,3 +263,78 @@ class TestAFailedAttemptIsStillCapped:
         assert result is False
         assert any(a.error_code == ErrorCode.BUDGET_EXCEEDED for a in attempts)
         assert "BLOCKED" in _meta_line(cfg, "TASK-001")
+
+
+class TestStoppingWithWorkLeftIsNotSuccess:
+    """A budget stop after a success is only a clean finish if nothing is left.
+
+    The exit code is computed from `touched | tasks_to_run`, and in `--all`
+    mode `tasks_to_run` is the *initially* ready list. A task unblocked by the
+    success that just happened is in neither set — so a run halted with it
+    waiting could report 0 to an orchestrator, which would then believe the
+    queue was drained (Copilot, PR #223).
+    """
+
+    def _args(self):
+        import argparse
+
+        return argparse.Namespace(
+            command="run",
+            all=True,
+            no_reset_failed=False,
+            force=True,
+            task=None,
+            milestone=None,
+            restart=False,
+            dry_run=False,
+            json_result=False,
+            max_retries=None,
+            timeout=None,
+            no_tests=False,
+            no_branch=False,
+            no_commit=False,
+            no_review=False,
+            hitl_review=False,
+            callback_url="",
+            tui=False,
+        )
+
+    def _run(self, cfg):
+        from spec_runner.cli import _run_tasks
+
+        executed: list[str] = []
+
+        def _spend(task, config, state, harness_baseline=None):
+            executed.append(task.id)
+            return _succeed_expensively()(task, config, state, harness_baseline)
+
+        code = 0
+        try:
+            with (
+                patch("spec_runner.cli.execute_task", _spend),
+                patch("spec_runner.execution.execute_task", _spend),
+            ):
+                _run_tasks(self._args(), cfg)
+        except SystemExit as exit_:
+            code = exit_.code or 0
+        return executed, code
+
+    def test_a_task_unblocked_by_the_success_makes_the_run_non_zero(self, tmp_path):
+        cfg = _cfg(_repo(tmp_path, TASKS_MD_CHAINED), budget_usd=1.0)
+
+        executed, code = self._run(cfg)
+
+        assert executed == ["TASK-001"]
+        # TASK-002 became ready and was never run — the run did not finish.
+        assert code == 1
+
+    def test_a_run_that_left_nothing_ready_exits_zero(self, tmp_path):
+        """The other half: an exhausted budget after the last task is not a
+        failure of the run, and reporting one would train people to ignore it."""
+        one_task = "# Tasks\n\n### TASK-001: Deterministic thing\n🟠 P1 | ⬜ TODO | Est: 1d\n"
+        cfg = _cfg(_repo(tmp_path, one_task), budget_usd=1.0)
+
+        executed, code = self._run(cfg)
+
+        assert executed == ["TASK-001"]
+        assert code == 0

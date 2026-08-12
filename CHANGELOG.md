@@ -82,9 +82,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
   the run loop's job, and it had to be made honest for that: `cli` asked
   `should_stop()` only after a *failed* task, so an exhausted budget could halt
   a run only through the very failure this fix removes. It is now asked
-  whatever the task returned, and a successful task no longer forces a non-zero
-  exit — the exit code is computed from what the run actually did, including
-  any task it never reached.
+  whatever the task returned. A successful task no longer forces a non-zero
+  exit — but a stop that leaves work **ready** still does, re-checked from disk
+  at the stop, because in `--all` mode a task unblocked by the success that just
+  happened is in neither set the exit code is otherwise computed from.
 
   Found by the free budget rehearsal for #213; pre-existing, and made common by
   the review-cost accounting, which lets totals reach caps they used to reach
