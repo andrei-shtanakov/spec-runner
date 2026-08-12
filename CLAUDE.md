@@ -40,6 +40,7 @@ make lint                                  # Lint + format check
 make typecheck                             # mypy
 make format                                # Auto-format + fix
 python scripts/check_changelog_links.py    # Release hygiene: CHANGELOG compare links match the version
+python scripts/check_changelog_links.py --tag v2.27.0   # Same script, tag-time checks (what publish.yml runs)
 ```
 
 ### CLI entry points (defined in pyproject.toml)
