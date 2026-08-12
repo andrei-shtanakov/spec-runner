@@ -191,6 +191,62 @@ class TestACompileErrorIsNotARed:
             bad.unlink()
 
 
+class TestTheProofIsTheTrace:
+    """The proof of selection is `--trace`'s per-test **timed** entry, which
+    carries the definition line. Two measurements shaped this:
+
+    1. Counting the summary instead disagreed between Elixir 1.18 and 1.19 —
+       the CI job caught it, the local run did not.
+    2. `--trace` prints a *start* line for every test and a *result* line for
+       each; only the result carries a timing. Reading "no (excluded)" as
+       executed marked all three tests as run and refuted everything.
+    """
+
+    def test_the_trace_names_the_line_that_actually_ran(self, project):
+        from spec_runner.tdd_runners import ExUnitAdapter, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector(f"test/probe_test.exs:{FAILS}")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_command("mix test", selector)
+        assert "--trace" in argv, "the proof depends on it"
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+        assert f"[L#{FAILS}]" in result.stdout
+
+    def test_an_out_of_range_line_is_refuted_by_the_trace(self, project):
+        """`:999` runs the last test in the file. The trace says `[L#12]`, so
+        the claim is refuted outright instead of inferred from a count."""
+        from spec_runner.tdd_runners import ExUnitAdapter, SelectionProof, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:999")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_command("mix test", selector)
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+        assert adapter.prove_selected(selector, result) is SelectionProof.REFUTED
+
+    def test_a_start_line_alone_is_not_an_execution(self, project):
+        """Pinning the second measurement: every test gets a start line, and
+        only the timed result means it ran."""
+        from spec_runner.tdd_runners import ExUnitAdapter, SelectionProof, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector(f"test/probe_test.exs:{PASSES}")
+        assert isinstance(selector, Selector)
+        starts_only = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                f"  * test passes [L#{PASSES}]\n"
+                f"  * test passes (0.00ms) [L#{PASSES}]\n"
+                f"  * test fails [L#{FAILS}]\n"
+                f"  * test fails (excluded) [L#{FAILS}]\n"
+            ),
+            stderr="",
+        )
+        assert adapter.prove_selected(selector, starts_only) is SelectionProof.PROVEN
+
+
 class TestTheProofIsAboutTheRequestedTest:
     def test_the_failure_location_must_match(self, project):
         """A red confirmed at line 8 must be the test defined at line 8. This

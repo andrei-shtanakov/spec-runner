@@ -290,6 +290,29 @@ _EXUNIT_SUMMARY = re.compile(r"^(\d+) (?:doctest|test)s?, (\d+) failures?", re.M
 #:        test/probe_test.exs:9
 _EXUNIT_FAILURE_AT = re.compile(r"^\s+\d+\) test .*\n\s+(\S+):(\d+)\s*$", re.MULTILINE)
 
+#: `mix test --trace` prints two lines per test — a start and a result — each
+#: carrying the test's **definition line**:
+#:
+#:     * test fails [L#6]                 <- start, every test gets one
+#:     * test fails (excluded) [L#6]      <- result: not run
+#:     * test passes [L#3]
+#:     * test passes (0.00ms) [L#3]       <- result: ran, in 0.00ms
+#:
+#: So "executed" is the **timed** result, not "a line without (excluded)" —
+#: measured, after the first version of this rule read every start line as an
+#: execution and refuted everything. A timing is the only thing that means the
+#: test ran; `(excluded)` and `(skipped)` mean it did not.
+#:
+#: This is direct proof, and version-independent: for `:999` the timed entry
+#: reads `[L#9]`, refuting the claim outright rather than leaving it to be
+#: inferred from a count — which is what the earlier summary-counting rule did,
+#: and it disagreed between Elixir 1.18 and 1.19. CI caught that.
+_EXUNIT_TRACE_EXECUTED = re.compile(r"\(\d+(?:\.\d+)?ms\)\s*\[L#(\d+)\]")
+
+#: Appended so the trace above exists. It also serialises the run, which for a
+#: single replayed test costs nothing and makes the output deterministic.
+TRACE_FLAG = "--trace"
+
 _COMPILE_ERROR = "Compilation error in file"
 _NO_SUCH_PATH = 'Paths given to "mix test" did not match'
 
@@ -404,7 +427,10 @@ class ExUnitAdapter:
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, ExUnitDefinitionLine)
-        return [*command_tokens(test_command), f"{selector.path}:{selector.locator.line}"]
+        tokens = command_tokens(test_command)
+        if TRACE_FLAG not in tokens:
+            tokens.append(TRACE_FLAG)
+        return [*tokens, f"{selector.path}:{selector.locator.line}"]
 
     def classify(self, result: subprocess.CompletedProcess) -> RunOutcome:
         output = f"{result.stdout or ''}\n{result.stderr or ''}"
@@ -434,20 +460,27 @@ class ExUnitAdapter:
     ) -> SelectionProof:
         assert isinstance(selector.locator, ExUnitDefinitionLine)
         output = f"{result.stdout or ''}\n{result.stderr or ''}"
-        wanted = (str(selector.path), selector.locator.line)
+        wanted = selector.locator.line
+
+        # The trace first: it states which test *executed*, by line, whether it
+        # passed or failed. `:999` shows `[L#9]` here — refuted outright rather
+        # than inferred from a count.
+        executed = {int(m.group(1)) for m in _EXUNIT_TRACE_EXECUTED.finditer(output)}
+        if executed:
+            return SelectionProof.PROVEN if executed == {wanted} else SelectionProof.REFUTED
+
+        # No trace (an older ExUnit, or a command that suppressed it): a failure
+        # block still names a location.
         located = [
             (str(normalise_path(path)), int(line))
             for path, line in _EXUNIT_FAILURE_AT.findall(output)
         ]
         if located:
-            return SelectionProof.PROVEN if wanted in located else SelectionProof.REFUTED
-        summary = _EXUNIT_SUMMARY.search(output)
-        if summary and summary.group(1) == "1":
-            # No failure block, so nothing names the test. This is only proof
-            # because `preflight` established that the requested line defines a
-            # test — reaching here at all means it passed — and exactly one
-            # test ran.
-            return SelectionProof.PROVEN
+            return (
+                SelectionProof.PROVEN
+                if (str(selector.path), wanted) in located
+                else SelectionProof.REFUTED
+            )
         return SelectionProof.UNKNOWN
 
 

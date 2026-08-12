@@ -37,6 +37,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   inside a test that does run is an honest red (Elixir makes it a compile-time
   warning and a runtime error).
 
+  Selection is proven by `mix test --trace`, whose per-test entry carries the
+  definition line: `:999` reports a timed `[L#9]` and is refuted outright,
+  rather than inferred from a count. The count-based rule it replaced disagreed
+  between Elixir 1.18 and 1.19 — caught by the CI job below, not by the local
+  run, which is the job earning its place on its first execution.
+
   The contract matrix runs against a **real** `mix` project in its own required
   CI job with a pinned Elixir/OTP, and the job fails if any of it was skipped —
   a green suite that quietly tested nothing is the same class of problem as the
