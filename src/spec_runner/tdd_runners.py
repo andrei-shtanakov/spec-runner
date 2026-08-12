@@ -143,7 +143,19 @@ _RUNNER_WRAPPERS = frozenset(
     {"uv", "run", "poetry", "pipenv", "hatch", "rye", "pdm", "nox", "tox", "-m", "exec"}
 )
 _PYTHONS = re.compile(r"^python(\d(\.\d+)?)?$")
-_PYTEST_SUMMARY = re.compile(r"^=*\s*(\d+) (passed|failed)", re.MULTILINE)
+
+#: pytest's final line, e.g. `===== 1 failed, 2 passed, 1 skipped in 0.01s =====`.
+#: Matched whole, and every count in it is read — an earlier version anchored on
+#: the *first* count and so read `1 failed, 97 passed` as "one test ran"
+#: (Copilot, PR #201). Measured forms: `1 passed in 0.00s`, `1 failed in 0.01s`,
+#: `1 skipped in 0.00s`, `1 xfailed in 0.01s`, and the mixed line above.
+_PYTEST_SUMMARY = re.compile(r"^=*\s*((?:\d+ \w+(?:, )?)+) in [\d.]+s", re.MULTILINE)
+_PYTEST_COUNT = re.compile(r"(\d+) (\w+)")
+
+#: Words that mean a test **executed**. `skipped` and `deselected` mean it did
+#: not, so they cannot prove that the requested test ran — and a claimed red
+#: that was skipped must not be retired as `not_red`.
+_EXECUTED_WORDS = frozenset({"passed", "failed", "xfailed", "xpassed", "error", "errors"})
 
 
 def command_tokens(test_command: str) -> list[str]:
@@ -164,6 +176,24 @@ def executable_of(test_command: str) -> str | None:
             continue
         return name
     return None
+
+
+def _exactly_one_test_executed(output: str) -> bool:
+    """True when pytest's summary accounts for exactly one executed test.
+
+    The whole summary is read, not its first count: `1 failed, 97 passed` is a
+    98-test run whose first number is 1, and reading that as proof would let a
+    full-suite run stand in for the named test. The single count must also be an
+    *executed* outcome — one skipped test is one test that did not run.
+    """
+    matches = _PYTEST_SUMMARY.findall(output)
+    if not matches:
+        return False
+    counts = _PYTEST_COUNT.findall(matches[-1])
+    if len(counts) != 1:
+        return False
+    number, word = counts[0]
+    return number == "1" and word in _EXECUTED_WORDS
 
 
 class PytestAdapter:
@@ -226,11 +256,10 @@ class PytestAdapter:
             # The failure header carries the node id verbatim — measured:
             # `FAILED tests/test_p.py::test_bad - assert False`.
             return SelectionProof.PROVEN
-        match = _PYTEST_SUMMARY.search(output)
-        if match and match.group(1) == "1":
-            # A passing run prints `1 passed in 0.00s` and no node id. One test
-            # ran, and pytest cannot silently substitute a different one — a
-            # node id that resolves to nothing exits 4.
+        if _exactly_one_test_executed(output):
+            # A passing run prints `1 passed in 0.00s` and no node id. Exactly
+            # one test ran, and pytest cannot silently substitute a different
+            # one — a node id that resolves to nothing exits 4.
             return SelectionProof.PROVEN
         return SelectionProof.UNKNOWN
 

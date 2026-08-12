@@ -151,6 +151,43 @@ class TestProvingTheSelection:
     def test_silence_proves_nothing(self):
         assert ADAPTER.prove_selected(self._selector(), _result(0)) is SelectionProof.UNKNOWN
 
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            "===== 1 failed, 2 passed, 1 skipped, 1 xfailed in 0.01s =====",
+            "===== 1 failed, 97 passed in 4.00s =====",
+            "===== 1 passed, 2 failed in 0.10s =====",
+        ],
+    )
+    def test_a_whole_suite_run_is_not_proof(self, summary):
+        """Raised in review of this PR: the summary's *first* count being 1 is
+        not "one test ran". Measured — pytest's mixed line really does start
+        `1 failed, 2 passed, …`, so a full-suite run would otherwise stand in
+        for the named test and confirm a red nobody demonstrated."""
+        assert ADAPTER.prove_selected(self._selector(), _result(1, summary)) is (
+            SelectionProof.UNKNOWN
+        )
+
+    def test_a_single_skipped_test_is_not_proof(self):
+        """One skipped test is one test that did **not** run. Counting it would
+        retire a claimed red — `not_red` sends an operator to `repair` — on the
+        strength of a test nobody executed."""
+        result = _result(0, "===== 1 skipped in 0.00s =====")
+        assert ADAPTER.prove_selected(self._selector(), result) is SelectionProof.UNKNOWN
+
+    @pytest.mark.parametrize("word", ["passed", "failed", "xfailed", "xpassed"])
+    def test_the_measured_single_test_forms_are_proof(self, word):
+        result = _result(0, f"============ 1 {word} in 0.01s ============")
+        assert ADAPTER.prove_selected(self._selector(), result) is SelectionProof.PROVEN
+
+    def test_the_node_id_still_wins_over_any_summary(self):
+        """A named failure is direct evidence and does not need the count."""
+        result = _result(
+            1,
+            "FAILED tests/test_p.py::test_bad - assert False\n1 failed, 97 passed in 4.0s",
+        )
+        assert ADAPTER.prove_selected(self._selector(), result) is SelectionProof.PROVEN
+
 
 class TestTheRegistry:
     def test_pytest_is_the_only_adapter(self):
