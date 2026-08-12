@@ -1,6 +1,7 @@
 # TDD runner adapters — design (#198 step 2)
 
-**Status:** design, for sign-off. No code until it is approved.
+**Status:** **approved** 2026-08-12 (owner, after four corrections). Being
+implemented in the build order of §8; each step links back here.
 
 Step 1 (#199, shipped) made a confirmed RED reachable only for pytest and
 refused every other runner. That is safe and it is not enough: TDD mode is
