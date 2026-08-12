@@ -27,13 +27,18 @@ Design: ``docs/superpowers/specs/2026-08-12-tdd-runner-adapter-design.md``
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import shlex
+import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Protocol
+from uuid import uuid4
 
 from .logging import get_logger
 
@@ -109,6 +114,66 @@ def normalise_path(raw: str) -> PurePosixPath:
     return PurePosixPath(*parts) if parts else PurePosixPath("")
 
 
+@dataclass(frozen=True)
+class ReplayEnvironment:
+    """A proven, isolated environment for one replay (#207).
+
+    `env` is overlaid on the process environment for the test run.
+    `environment_id` is what the checkpoint records — richer than a lockfile
+    hash, because "the same lock" is not "the same environment".
+    `cleanup_paths` are removed when the replay ends, on every path.
+    """
+
+    env: Mapping[str, str]
+    environment_id: str
+    cleanup_paths: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReplayEnvironmentRefusal:
+    """Why a replay cannot be run here.
+
+    A refusal is never a red and never a pass. Preparation **proves and
+    isolates** what is installed; it does not download, generate or repair
+    anything, so "the environment is not there" stays the operator's problem
+    rather than becoming a silent network call inside a gate.
+    """
+
+    code: str
+    message: str
+
+
+#: Lockfiles that identify an environment, most specific first. The order is
+#: fixed so the answer is deterministic when a repo carries more than one.
+LOCKFILES = (
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "requirements.txt",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "Cargo.lock",
+    "go.sum",
+    "mix.lock",
+)
+
+
+def lockfile_identity(project_root: Path) -> str:
+    """``"<lockfile>:<hash>"``, or ``"unpinned"``.
+
+    The generic identity, used by adapters that have nothing richer to say.
+    Saying "unpinned" is honest and keeps TDD mode available to projects that
+    pin nothing; inventing an identity would not be.
+    """
+    for name in LOCKFILES:
+        candidate = project_root / name
+        if candidate.is_file():
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()[:16]
+            return f"{name}:{digest}"
+    return "unpinned"
+
+
 class TddRunnerAdapter(Protocol):
     """What a runner must be able to answer for a red to be confirmed."""
 
@@ -127,6 +192,12 @@ class TddRunnerAdapter(Protocol):
 
     def preflight(self, root: Path, selector: Selector) -> SelectorRefusal | None:
         """Check the selector against the source, before anything is executed."""
+        ...
+
+    def prepare_replay(
+        self, canonical_root: Path, replay_root: Path, selector: Selector
+    ) -> ReplayEnvironment | ReplayEnvironmentRefusal:
+        """Prove and isolate the environment the replay will run in."""
         ...
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
@@ -243,6 +314,16 @@ class PytestAdapter:
         ExUnit needs its definition line proven before the runner is invoked.
         """
         return None
+
+    def prepare_replay(
+        self, canonical_root: Path, replay_root: Path, selector: Selector
+    ) -> ReplayEnvironment | ReplayEnvironmentRefusal:
+        """Passthrough: a Python environment lives outside the checkout.
+
+        That is exactly why pytest never met #207 — a bare worktree can run
+        tests because site-packages is somewhere else entirely.
+        """
+        return ReplayEnvironment(env={}, environment_id=lockfile_identity(canonical_root))
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, PytestNodeId)
@@ -371,6 +452,55 @@ def definition_lines(root: Path, path: PurePosixPath) -> list[int] | str:
         return "unparseable_test_file"
 
 
+#: Where a replay's private build lives, under the canonical `_build/`.
+#:
+#: **Forced, not chosen.** Mix links a dependency's `priv` into the build with a
+#: *relative* symlink computed for the standard layout, so a build path outside
+#: the project gets no link at all — measured on kapelle, where
+#: `phoenix_live_dashboard` then failed to compile deterministically because it
+#: reads `phoenix`'s priv asset at compile time. A temp-directory build (both
+#: `MIX_BUILD_PATH` and `MIX_BUILD_ROOT`) fails; a sibling of `_build/test`
+#: works. `_build` is gitignored, the directory is unique per replay, and it is
+#: removed afterwards — so the canonical project's *tracked* content is
+#: untouched, which is the invariant that matters.
+REPLAY_BUILD_PREFIX = ".spec-runner-replay-"
+
+#: Phrases in `mix deps` output that mean the installed sources do not satisfy
+#: the checkpoint's lock. Matched as text because Mix has no machine-readable
+#: form for this, and matched **fail-closed**: an unrecognised problem still
+#: shows up as a non-zero exit.
+_DEPS_PROBLEMS = (
+    "the dependency is not available",
+    "the dependency is out of date",
+    "lock mismatch",
+    "lock outdated",
+    "does not match the lock",
+)
+
+
+def elixir_toolchain() -> tuple[str, str] | str:
+    """`(elixir_version, otp_release)`, or a message explaining why not.
+
+    Recorded in the environment identity because the same lock compiled by a
+    different Elixir is a different environment — and because a verdict that
+    changed with a toolchain upgrade should be visible as such.
+    """
+    try:
+        result = subprocess.run(["elixir", "--version"], capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        return "`elixir` is not on PATH"
+    except subprocess.SubprocessError as exc:
+        return f"`elixir --version` did not complete: {exc}"
+    if result.returncode != 0:
+        return f"`elixir --version` exited {result.returncode}"
+    text = result.stdout
+    elixir = re.search(r"^Elixir (\S+)", text, re.MULTILINE)
+    otp = re.search(r"Erlang/OTP (\S+)", text)
+    if not elixir or not otp:
+        return "could not read the Elixir/OTP versions"
+    return elixir.group(1), otp.group(1)
+
+
 class ExUnitAdapter:
     """ExUnit, whose exit codes are **inverted** relative to pytest's.
 
@@ -446,6 +576,104 @@ class ExUnitAdapter:
                 f"(tests are defined at {nearest}); ExUnit would silently run "
                 "the nearest test at or before it",
             )
+        return None
+
+    def prepare_replay(
+        self, canonical_root: Path, replay_root: Path, selector: Selector
+    ) -> ReplayEnvironment | ReplayEnvironmentRefusal:
+        """Share the dependency *sources*, isolate the build (#207).
+
+        A `git worktree` carries tracked files only, and Elixir keeps `deps/`
+        and `_build/` inside the project — both gitignored — so a replay tree
+        cannot compile anything. Measured on a real project: the first paid
+        pilot run died here.
+
+        Dependency **sources** are reusable as a cache and are shared read-only
+        through `MIX_DEPS_PATH`. Build **artifacts** carry the compile state of
+        one checkout and are never shared: each replay gets its own build path,
+        removed afterwards.
+
+        The private build lives under the canonical `_build/`, and that
+        placement is forced rather than chosen — see `REPLAY_BUILD_PREFIX`.
+        Nothing here downloads, generates or repairs: preparation proves and
+        isolates what is installed, or refuses.
+        """
+        deps = (canonical_root / "deps").resolve()
+        # `is_relative_to`, not a string prefix: `/repo-other/deps` starts with
+        # `/repo` textually, so a symlinked `deps/` could point outside the
+        # project and still pass a prefix check (Copilot, PR #208). The guard
+        # exists precisely because that directory is shared into the replay.
+        if deps.is_dir() and not deps.is_relative_to(canonical_root.resolve()):
+            return ReplayEnvironmentRefusal(
+                "environment_unavailable", f"{deps} is outside the project root"
+            )
+        # A project with no dependencies has no `deps/`, and that is not a
+        # problem to report — authority belongs to the checkpoint's lock and to
+        # `mix deps`, not to whether a directory exists. If dependencies *are*
+        # declared and missing, `mix deps` below says so.
+
+        toolchain = elixir_toolchain()
+        if isinstance(toolchain, str):
+            return ReplayEnvironmentRefusal("environment_unavailable", toolchain)
+
+        build = canonical_root.resolve() / "_build" / f"{REPLAY_BUILD_PREFIX}{uuid4().hex[:12]}"
+        if build.exists():  # pragma: no cover - a uuid4 collision
+            return ReplayEnvironmentRefusal("environment_unavailable", f"{build} already exists")
+        env = {"MIX_ENV": "test", "MIX_BUILD_PATH": str(build)}
+        if deps.is_dir():
+            env["MIX_DEPS_PATH"] = str(deps)
+
+        problem = self._check_deps(replay_root, env)
+        if problem is not None:
+            shutil.rmtree(build, ignore_errors=True)
+            return ReplayEnvironmentRefusal("environment_unavailable", problem)
+
+        lock = replay_root / "mix.lock"
+        lock_id = (
+            hashlib.sha256(lock.read_bytes()).hexdigest()[:16] if lock.is_file() else "unlocked"
+        )
+        identity = ";".join(
+            [
+                "runner=exunit",
+                f"mix.lock={lock_id}",
+                f"elixir={toolchain[0]}",
+                f"otp={toolchain[1]}",
+                "mix_env=test",
+                f"deps_source={hashlib.sha256(str(deps).encode()).hexdigest()[:12]}",
+            ]
+        )
+        return ReplayEnvironment(env=env, environment_id=identity, cleanup_paths=(build,))
+
+    def _check_deps(self, replay_root: Path, env: Mapping[str, str]) -> str | None:
+        """`mix deps` in the *checkpoint* tree, so the lock being checked is the
+        checkpoint's own. No network: `mix deps` reports status, it does not
+        fetch.
+
+        (`mix deps.check` is not a Mix task — measured: "The task
+        "deps.check" could not be found". The status listing is the real one.)
+        """
+        try:
+            result = subprocess.run(
+                ["mix", "deps"],
+                cwd=replay_root,
+                capture_output=True,
+                text=True,
+                timeout=PREFLIGHT_TIMEOUT_SECONDS,
+                env={**os.environ, **env},
+            )
+        except FileNotFoundError:
+            return "`mix` is not on PATH"
+        except subprocess.SubprocessError as exc:
+            return f"`mix deps` did not complete: {exc}"
+        output = f"{result.stdout}\n{result.stderr}"
+        for phrase in _DEPS_PROBLEMS:
+            if phrase in output:
+                return (
+                    f"the checkpoint's dependencies do not match what is installed ({phrase}); "
+                    "the replay will not fetch or repair them"
+                )
+        if result.returncode != 0:
+            return f"`mix deps` exited {result.returncode} in the replay tree"
         return None
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
@@ -549,15 +777,19 @@ __all__ = [
     "ExUnitDefinitionLine",
     "PytestAdapter",
     "PytestNodeId",
+    "ReplayEnvironment",
+    "ReplayEnvironmentRefusal",
     "RunOutcome",
     "SelectionProof",
     "Selector",
     "SelectorRefusal",
     "TddRunnerAdapter",
     "adapter_for",
+    "elixir_toolchain",
     "definition_lines",
     "command_tokens",
     "executable_of",
+    "lockfile_identity",
     "infer_adapter",
     "normalise_path",
 ]

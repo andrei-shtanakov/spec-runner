@@ -279,3 +279,83 @@ class TestThePromptAsksForTheRightShape:
     def test_an_unsupported_runner_says_so_rather_than_asking_for_pytest(self):
         line = self._selector_line("go test ./...", "")
         assert "::" not in line
+
+
+class TestPytestReplayIsUnchanged:
+    """#207 gave every adapter a preparation step. pytest's is a passthrough,
+    and it must stay one: a Python environment lives outside the checkout,
+    which is exactly why pytest never met the defect."""
+
+    def test_it_adds_no_environment_and_nothing_to_clean_up(self, tmp_path):
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        prepared = ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+        assert isinstance(prepared, ReplayEnvironment)
+        assert prepared.env == {}
+        assert prepared.cleanup_paths == ()
+
+    def test_it_keeps_the_lockfile_identity(self, tmp_path):
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        (tmp_path / "uv.lock").write_text("x = 1\n")
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        prepared = ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+        assert isinstance(prepared, ReplayEnvironment)
+        assert prepared.environment_id.startswith("uv.lock:")
+
+    def test_it_never_shells_out(self, tmp_path, monkeypatch):
+        """Preparation for pytest costs nothing, and must not start costing."""
+        import spec_runner.tdd_runners as runners
+
+        monkeypatch.setattr(
+            runners.subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("pytest prepare ran a process")),
+        )
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+
+
+class TestTheSharedDepsMustBeInsideTheProject:
+    """#207 shares `deps/` into the replay read-only, so where it points is a
+    safety question. Raised in review of PR #208: a textual prefix check passes
+    `/repo-other/deps` for the root `/repo`."""
+
+    def _refusal(self, canonical, worktree):
+        from spec_runner.tdd_runners import ExUnitAdapter, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/x_test.exs:3")
+        assert isinstance(selector, Selector)
+        return adapter.prepare_replay(canonical, worktree, selector)
+
+    def test_a_deps_symlink_to_a_prefix_sibling_is_refused(self, tmp_path):
+        """The exact bypass: `/…/repo` and `/…/repo-other` share a prefix."""
+        from spec_runner.tdd_runners import ReplayEnvironmentRefusal
+
+        root = tmp_path / "repo"
+        (root / "_build").mkdir(parents=True)
+        outside = tmp_path / "repo-other" / "deps"
+        outside.mkdir(parents=True)
+        (root / "deps").symlink_to(outside)
+
+        refusal = self._refusal(root, root)
+        assert isinstance(refusal, ReplayEnvironmentRefusal)
+        assert refusal.code == "environment_unavailable"
+        assert "outside the project root" in refusal.message
+
+    def test_a_deps_directory_inside_the_project_is_accepted(self, tmp_path):
+        """The guard must not refuse the ordinary case — asserted by getting
+        past it, whatever the toolchain then says."""
+        from spec_runner.tdd_runners import ReplayEnvironmentRefusal
+
+        root = tmp_path / "repo"
+        (root / "deps").mkdir(parents=True)
+        (root / "_build").mkdir()
+        result = self._refusal(root, root)
+        if isinstance(result, ReplayEnvironmentRefusal):
+            assert "outside the project root" not in result.message

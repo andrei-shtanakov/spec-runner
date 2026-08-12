@@ -10,6 +10,44 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A RED can be replayed in a language whose dependencies live in the project
+  directory** (#207). A `git worktree` carries tracked files only, and Elixir
+  keeps `deps/` and `_build/` inside the project — both gitignored — so the
+  replay tree could not compile and every red came back `unverifiable`. Found
+  by the first paid pilot run on a real project.
+
+  The adapter now prepares the environment before the replay: dependency
+  **sources** are shared read-only through `MIX_DEPS_PATH` (they are a cache),
+  while build **artifacts** are never shared — each replay gets its own build
+  path, removed afterwards on every exit path including timeout and crash.
+  `mix deps` proves the checkpoint's lock is satisfied by what is installed;
+  **nothing is fetched, generated or repaired**, so a missing environment is a
+  refusal (`environment_unavailable` → `unverifiable`) rather than a silent
+  network call inside a gate.
+
+  The environment identity recorded on a checkpoint grew accordingly:
+  `runner=exunit;mix.lock=…;elixir=1.19.4;otp=28;mix_env=test;deps_source=…`.
+  The same lock compiled by a different toolchain is a different environment.
+
+  **The private build lives under the canonical `_build/`, and that is forced
+  rather than chosen.** Mix links a dependency's `priv` into the build with a
+  *relative* symlink computed for the standard layout, so a build outside the
+  project gets no link at all and dependencies that read a sibling's assets at
+  compile time fail deterministically. Measured: both `MIX_BUILD_PATH` and
+  `MIX_BUILD_ROOT` pointing at a temp directory fail; a uniquely-named sibling
+  of `_build/test` works. `_build` is gitignored and the directory is removed,
+  so the project's tracked content is untouched — asserted by a test that
+  compares `git status --porcelain` across a real replay.
+
+- **The preflight reads the checkpoint's source, not the working tree** (#207).
+  The selector describes a test in the commit being replayed; reading the file
+  from the canonical tree quietly broke the module's whole premise. Measured on
+  the pilot's own red: the agent's new test was at line 85 of the commit, and
+  line 85 of `master` was something else, so a genuine red was refused as "not
+  a definition line".
+
 ## [2.28.1] - 2026-08-12
 
 **Patch.** One fix, no public surface: prompt text only. `schemas/`,
