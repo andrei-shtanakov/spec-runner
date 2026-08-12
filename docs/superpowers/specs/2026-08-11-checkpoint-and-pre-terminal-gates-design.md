@@ -109,7 +109,7 @@ Owner-stated; each with the failure it prevents.
 | 6 | A crash after the checkpoint is resumable | the run being unable to say what state it was in, and redoing (or skipping) verified work |
 | 7 | Consumers register declaratively | a second consumer arriving as a special case inside the first one's code |
 | 8 | With no consumer enabled, execution and terminal behaviour are unchanged | the same guarantee as [the TDD design, §3.1](2026-08-11-tdd-lifecycle-design.md#31-mode) (issue #141): opt-in means undetectable when not opted into |
-| 9 | HITL stays a separate authority mechanism | conflating "the instrument reported" with "a human decided" — the distinction `WAIVED` is built on |
+| 9 | HITL stays a separate authority mechanism | conflating "the instrument reported" with "a human decided" — the distinction a **waiver** rests on (a recorded operator decision beside the observation, never an outcome value; `phases.py`) |
 
 Criterion 5 deserves its own note. It is the same shape as #137 (a snapshot
 re-taken per attempt legitimised an edit that survived one failure) and as the
