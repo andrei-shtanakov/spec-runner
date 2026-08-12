@@ -388,6 +388,41 @@ def _run_pre_terminal_gates(
     return f"Pre-terminal gate unsatisfied: {detail}"
 
 
+def _commit_blocked_status(
+    task: Task, config: ExecutorConfig, blocked: str, candidate_sha: str
+) -> str:
+    """Commit the blocked task's `REVIEW` flip, and say so if that failed (#192).
+
+    Without this, a blocked task leaves `tasks.md` dirty with a status flip the
+    *harness* wrote, and the next run refuses at the dirty-spec guard until the
+    operator commits a change they did not make — a recovery deadlock in which
+    both halves are individually correct.
+
+    The commit carries only the status line and is a child of the candidate, so
+    the SHA the gate judged is unchanged: a later evaluation happens against a
+    different tree and is a fresh evaluation, never this verdict reapplied to
+    code that has since moved.
+
+    Only under `auto_commit`. Without it the run does not commit the task's work
+    either, so the tree is dirty for reasons this cannot fix, and committing on
+    behalf of an operator who switched auto-commit off would be a surprise.
+    """
+    if not config.auto_commit:
+        return blocked
+    from .bookkeeping import commit_status_flip
+
+    try:
+        problem = commit_status_flip(config, task.id, candidate_sha=candidate_sha, verdict=blocked)
+    except Exception as exc:  # pragma: no cover - defensive
+        problem = f"the status flip could not be committed: {exc}"
+    if not problem:
+        return blocked
+    # Visible, and part of the failure the caller records: a stop that left the
+    # deadlock in place must not read as a clean resumable stop.
+    logger.warning("Blocked task left a dirty spec", task_id=task.id, detail=problem)
+    return f"{blocked} — {problem}"
+
+
 def post_done_hook(
     task: Task,
     config: ExecutorConfig,
@@ -763,6 +798,7 @@ def post_done_hook(
             # tasks.md still says `review` (or `in_progress`), the candidate
             # commit stands, and nothing was merged — the task stays resumable,
             # and the work is committed rather than left dirty.
+            blocked = _commit_blocked_status(task, config, blocked, gated_sha)
             return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     # Materialised, never executed (3a). The phase exists so the machine is
