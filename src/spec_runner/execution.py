@@ -785,15 +785,25 @@ def run_with_retries(
         if result == "HOOK_ERROR":
             return False
 
+        # #219: a successful attempt stays successful. This check used to run
+        # first, so a task that finished, committed, merged and deleted its
+        # branch was then recorded as a BUDGET_EXCEEDED *failure* and flipped
+        # `done → blocked` in tasks.md — and since `resolve_dependencies`
+        # promotes blocked → todo, the next run could re-execute work that was
+        # already merged, paying to author a red against a finished feature.
+        #
+        # The check's purpose is to stop the *next* attempt, and returning here
+        # serves it. Stopping the rest of the run is the caller's job: `cli`
+        # asks `should_stop()` whatever this returned.
+        if result is True:
+            return True
+
         # Post-attempt budget check: catches cases where a single expensive
         # attempt pushed us over the cap.
         post_msg = _check_task_budget(task.id, config, state, attempt + 1)
         if post_msg is not None:
             _fail_for_budget(task, config, state, post_msg)
             return False
-
-        if result is True:
-            return True
 
         # Get last error code from state
         ts = state.get_task_state(task.id)

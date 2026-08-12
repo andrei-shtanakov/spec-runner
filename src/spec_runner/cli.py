@@ -554,6 +554,27 @@ def _idle_stop_verdict(state: ExecutorState, all_tasks: list) -> tuple[str, str,
     return "completed", "", 0
 
 
+def _ready_work_remains(config: ExecutorConfig, executed_ids: set[str]) -> bool:
+    """Is there a task that is ready **now** and has not been run this session?
+
+    Asked once, at a mid-run stop that follows a *successful* task, to decide
+    whether the run failed to finish or simply finished (#219 / Copilot #223).
+    Readiness is re-derived from disk rather than from the loop's list,
+    because the point of the question is precisely the task the last success
+    unblocked.
+
+    Unreadable spec → True. "I could not tell whether work is left" after a
+    stop is not a clean finish, and an orchestrator reading only the exit code
+    should hear the pessimistic answer.
+    """
+    try:
+        tasks = resolve_dependencies(parse_tasks(config.tasks_file))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not re-check readiness at the stop", error=str(exc))
+        return True
+    return any(task.id not in executed_ids for task in get_next_tasks(tasks))
+
+
 def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
     """Resolve the (stop_reason, stop_detail) pair for a mid-run stop.
 
@@ -1095,10 +1116,25 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     )
                     break
 
-                if result is False and state.should_stop():
+                # #219: asked whatever the task returned. It used to be
+                # `result is False and ...`, which meant an exhausted budget
+                # could only halt the run through a *failed* task — so the
+                # post-attempt check had to record a successful, merged task as
+                # failed for the run to stop at all. With that lie removed, the
+                # stop condition has to stand on its own.
+                if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
-                    exit_code = 1
+                    # A successful task does not by itself make the run a
+                    # failure — but stopping with work still ready does, and
+                    # the computation below cannot see it: `considered` is
+                    # `touched | tasks_to_run`, and in `--all` mode
+                    # `tasks_to_run` is only the *initially* ready list. A task
+                    # unblocked by the success that just happened is in neither
+                    # set, so a run halted with it waiting could exit 0
+                    # (Copilot, PR #223).
+                    if result is not True or _ready_work_remains(config, executed_ids):
+                        exit_code = 1
                     break
         else:
             # For single task or milestone mode, execute the fixed list
@@ -1150,10 +1186,20 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     )
                     break
 
-                if result is False and state.should_stop():
+                # #219: asked whatever the task returned. It used to be
+                # `result is False and ...`, which meant an exhausted budget
+                # could only halt the run through a *failed* task — so the
+                # post-attempt check had to record a successful, merged task as
+                # failed for the run to stop at all. With that lie removed, the
+                # stop condition has to stand on its own.
+                if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
-                    exit_code = 1
+                    if result is not True:
+                        # A successful task does not make the run a failure.
+                        # The exit code is recomputed below from what this run
+                        # actually did, including any task it never reached.
+                        exit_code = 1
                     break
 
         # One verdict for both selectors (F-2). Counts THIS run's outcomes:

@@ -70,6 +70,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A successful task is no longer un-finished by the budget running out
+  (#219).** The post-attempt budget check ran before the success branch, so a
+  task that had finished, committed, merged and deleted its branch was recorded
+  as a `BUDGET_EXCEEDED` failure and flipped `done → blocked` in `tasks.md`.
+  Since `resolve_dependencies` promotes `blocked` → `todo`, the next run could
+  re-execute already-merged work — paying an agent to author a red against a
+  feature that is already implemented.
+
+  A successful attempt now stays successful. Stopping the rest of the run is
+  the run loop's job, and it had to be made honest for that: `cli` asked
+  `should_stop()` only after a *failed* task, so an exhausted budget could halt
+  a run only through the very failure this fix removes. It is now asked
+  whatever the task returned. A successful task no longer forces a non-zero
+  exit — but a stop that leaves work **ready** still does, re-checked from disk
+  at the stop, because in `--all` mode a task unblocked by the success that just
+  happened is in neither set the exit code is otherwise computed from.
+
+  Found by the free budget rehearsal for #213; pre-existing, and made common by
+  the review-cost accounting, which lets totals reach caps they used to reach
+  invisibly.
+
 - **Review calls are counted (#213, first half).** `run_code_review` ran a bare
   `subprocess.run` and threw the CLI result away, so review spend was recorded
   **nowhere** — not on the attempt row, not in the `agent_calls` ledger. Every
