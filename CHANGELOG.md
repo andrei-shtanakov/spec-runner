@@ -10,6 +10,49 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A gate-blocked task no longer deadlocks the next run** (#192, battle
+  finding F-8). Review start writes `🔍 REVIEW` into `tasks.md` so a run killed
+  mid-review stays resumable (#66); that write is uncommitted by design,
+  because the commit that would carry it comes later. When a pre-terminal gate
+  then blocked, there was no later — the run stopped, and the next one refused
+  at the dirty-spec guard (#69) because `tasks.md` was dirty. Both behaviours
+  are right on their own; together they were a recovery deadlock whose only
+  exits were `--allow-dirty-spec` (which disarms the guard for *real* spec
+  edits too) or committing a status flip the operator did not make.
+
+  The blocked path now commits it:
+  `candidate commit → gate unsatisfied → bookkeeping commit (status only) →
+  resumable stop`. The next run starts with no override.
+
+  - **Only a proven status-only transition is committed.** The committed and
+    working files may differ in exactly one line, that line must be the named
+    task's meta line in both, and only its status may have changed. A checklist
+    tick, a renamed task, an edited dependency, a new task, a line of prose —
+    any of these and nothing is committed, the spec stays dirty, and the next
+    run's guard is doing its job rather than deadlocking. Stricter than
+    comparing parsed tasks on purpose: the parser ignores prose, and "the
+    parser didn't notice" is not "nothing changed".
+  - **The bookkeeping commit is not the new candidate.** It is a child of the
+    SHA the gate judged, carries only `tasks.md`, and never becomes a verdict
+    key — a later evaluation asks about a different tree and is a fresh
+    evaluation, never the old verdict reapplied to code that has since moved.
+  - **Resuming does not grow a chain of identical REVIEW commits**, because
+    idempotence comes from the diff rather than from a marker: the second pass
+    writes the same status, so there is nothing to commit.
+  - **A failed bookkeeping commit is visible** and is appended to the block
+    reason rather than passed off as a clean resumable stop. The
+    instrument-error prefix that `execution` reads to report infrastructure
+    (exit 2) survives, since the note is appended.
+  - Only under `auto_commit`, and only reachable through a registered gate — so
+    the `standard` / `advisory` paths acquire no commit they did not have.
+  - The status is neutralised **positionally**, at the span the pattern
+    matched, so a meta line carrying a note that mentions a status word cannot
+    weaken the proof; and the file is read once, then verified to be what got
+    staged, so an edit landing between the proof and the commit refuses rather
+    than riding along.
+
 ## [2.27.0] - 2026-08-12
 
 **Minor, not patch.** Everything here is a defect fix, but the outward
