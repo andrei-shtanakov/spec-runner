@@ -190,14 +190,16 @@ class TestProvingTheSelection:
 
 
 class TestTheRegistry:
-    def test_pytest_is_the_only_adapter(self):
+    def test_the_registry_lists_only_measured_runners(self):
         """A list of what was *measured*. Adding a name here without measuring
-        the runner is the whole defect (#198) in one line of diff."""
-        assert set(ADAPTERS) == {"pytest"}
+        the runner is the whole defect (#198) in one line of diff — so this
+        asserts the exact set, and grows only when a measurement does."""
+        assert set(ADAPTERS) == {"pytest", "exunit"}
 
     def test_lookup_by_name(self):
         assert adapter_for("pytest") is not None
-        assert adapter_for("exunit") is None
+        assert adapter_for("exunit") is not None
+        assert adapter_for("rspec") is None
         assert adapter_for("") is None
 
     @pytest.mark.parametrize(

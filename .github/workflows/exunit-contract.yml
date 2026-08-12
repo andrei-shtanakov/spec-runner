@@ -1,0 +1,52 @@
+# The ExUnit contract matrix, run for real — #198 build order §4.
+#
+# The ordinary `test` job runs `-m "not slow"`, so it never executes this
+# matrix, and on a runner without Elixir it would skip it anyway. A suite that
+# skips loudly is still a green suite that checked nothing, which is the same
+# class of problem as the defect this whole issue is about: something that
+# looks like a verdict and is not one.
+#
+# So this job exists to make the claim: pinned toolchain, real `mix`, and an
+# assertion on how many tests actually ran. A skip here fails the job.
+name: exunit-contract
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: ExUnit contract matrix (real mix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pinned, so a verdict that changes because ExUnit changed shows up as a
+      # version bump in this file rather than as a mystery in a review.
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          elixir-version: "1.18"
+
+      - run: elixir --version && mix --version
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv sync
+
+      # `SPEC_RUNNER_REQUIRE_EXUNIT=1` makes the test module refuse to skip:
+      # without a toolchain it is a collection error, and pytest exits 5 if it
+      # collects nothing at all. So "did the matrix really run" is answered by
+      # pytest itself rather than by a workflow parsing a report — one fewer
+      # thing to keep in step, and no extra dependency in CI.
+      - name: Run the contract matrix
+        env:
+          SPEC_RUNNER_REQUIRE_EXUNIT: "1"
+        run: uv run pytest tests/test_exunit_adapter.py -v

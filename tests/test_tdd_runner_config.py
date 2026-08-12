@@ -46,6 +46,15 @@ class TestResolvingTheRunner:
             _cfg(tdd_runner="pytset").resolve_tdd_runner()
         assert "pytset" in str(exc.value) and "pytest" in str(exc.value)
 
+    def test_exunit_is_now_a_value(self):
+        """It became one when its adapter landed, not before — the accepted
+        values are the adapters that exist."""
+        assert _cfg(tdd_runner="exunit", test_command="mix test").resolve_tdd_runner() == "exunit"
+
+    def test_exunit_with_a_pytest_command_is_refused(self):
+        with pytest.raises(ConfigError):
+            _cfg(tdd_runner="exunit", test_command="uv run pytest").resolve_tdd_runner()
+
     def test_a_runner_the_command_cannot_carry_is_refused(self):
         """The heart of it. A typo here would read ExUnit's exit codes as
         pytest's, which is exactly how a test that never ran became a red."""
@@ -67,7 +76,7 @@ class TestValidateSaysItToo:
         return path
 
     def test_an_unknown_runner_is_an_error(self, tmp_path):
-        result = validate_config(self._write(tmp_path, "tdd_runner: exunit\n"))
+        result = validate_config(self._write(tmp_path, "tdd_runner: rspec\n"))
         assert any("tdd_runner" in e for e in result.errors), result.errors
 
     def test_a_mismatch_is_an_error_not_a_warning(self, tmp_path):

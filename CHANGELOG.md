@@ -12,6 +12,42 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **ExUnit is a supported TDD runner** (#198, build order §3–4):
+  `tdd_runner: exunit`, canonical selector `path:line` where the line is the
+  `test "..." do` line. TDD mode now works outside Python.
+
+  **The line is proven to define a test before `mix` is invoked**, by Elixir's
+  own parser (`Code.string_to_quoted` + a walk for the `test` macro) rather
+  than by teaching Python to read Elixir. This is not belt-and-braces, it is
+  the only way `not_red` can mean anything here: a passing ExUnit run prints no
+  location, so after the fact `1 test, 0 failures` is exactly what a
+  *misresolved* selector prints too — and `not_red` retires a claimed red and
+  sends an operator to `repair`.
+
+  Measured, and the reason the whole adapter exists: `mix test path:line`
+  selects the nearest test **at or before** the line, so `:999` silently runs
+  the last test in the file and reports an ordinary "1 test, 1 failure".
+  Refused now, along with a line before the first test, a line inside a test
+  body, a pytest-style `path::name`, a file that does not parse, a missing
+  file, and a missing Elixir toolchain — each with a stable refusal code.
+
+  Classification keys on the **run summary**, not on message text: a file that
+  will not compile never reaches ExUnit and prints no summary, which is the
+  structural difference from a test that runs and fails. A missing module
+  inside a test that does run is an honest red (Elixir makes it a compile-time
+  warning and a runtime error).
+
+  Selection is proven by `mix test --trace`, whose per-test entry carries the
+  definition line: `:999` reports a timed `[L#9]` and is refuted outright,
+  rather than inferred from a count. The count-based rule it replaced disagreed
+  between Elixir 1.18 and 1.19 — caught by the CI job below, not by the local
+  run, which is the job earning its place on its first execution.
+
+  The contract matrix runs against a **real** `mix` project in its own required
+  CI job with a pinned Elixir/OTP, and the job fails if any of it was skipped —
+  a green suite that quietly tested nothing is the same class of problem as the
+  defect itself.
+
 - **`tdd_runner` config key** (#198, build order §2): which runner adapter
   verifies a claimed RED. Empty infers, and inference is allowed only where it
   cannot be wrong — a command whose executable *is* a known runner's.

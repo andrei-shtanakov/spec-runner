@@ -264,9 +264,249 @@ class PytestAdapter:
         return SelectionProof.UNKNOWN
 
 
+# === ExUnit ===
+
+#: The whole point of the preflight, in one script: ask **Elixir** where the
+#: tests are, rather than teaching Python to read Elixir. The path arrives via
+#: `System.argv()` and is never interpolated into source.
+_DEFINITION_LINES_SCRIPT = """
+[path] = System.argv()
+case Code.string_to_quoted(File.read!(path)) do
+  {:ok, ast} ->
+    {_, lines} = Macro.prewalk(ast, [], fn
+      {:test, meta, [_ | _]} = n, acc -> {n, [meta[:line] | acc]}
+      n, acc -> {n, acc}
+    end)
+    lines |> Enum.reverse() |> Enum.join(",") |> IO.puts()
+  {:error, _} -> IO.puts("PARSE_ERROR")
+end
+"""
+
+#: ExUnit's summary, e.g. `1 test, 1 failure (2 excluded)` or `0 tests, 0 failures`.
+_EXUNIT_SUMMARY = re.compile(r"^(\d+) (?:doctest|test)s?, (\d+) failures?", re.MULTILINE)
+
+#: The location line under a numbered failure:
+#:     1) test calls missing module (ProbeTest)
+#:        test/probe_test.exs:9
+_EXUNIT_FAILURE_AT = re.compile(r"^\s+\d+\) test .*\n\s+(\S+):(\d+)\s*$", re.MULTILINE)
+
+#: `mix test --trace` prints two lines per test — a start and a result — each
+#: carrying the test's **definition line**:
+#:
+#:     * test fails [L#6]                 <- start, every test gets one
+#:     * test fails (excluded) [L#6]      <- result: not run
+#:     * test passes [L#3]
+#:     * test passes (0.00ms) [L#3]       <- result: ran, in 0.00ms
+#:
+#: So "executed" is the **timed** result, not "a line without (excluded)" —
+#: measured, after the first version of this rule read every start line as an
+#: execution and refuted everything. A timing is the only thing that means the
+#: test ran; `(excluded)` and `(skipped)` mean it did not.
+#:
+#: This is direct proof, and version-independent: for `:999` the timed entry
+#: reads `[L#9]`, refuting the claim outright rather than leaving it to be
+#: inferred from a count — which is what the earlier summary-counting rule did,
+#: and it disagreed between Elixir 1.18 and 1.19. CI caught that.
+_EXUNIT_TRACE_EXECUTED = re.compile(r"\(\d+(?:\.\d+)?ms\)\s*\[L#(\d+)\]")
+
+#: Appended so the trace above exists. It also serialises the run, which for a
+#: single replayed test costs nothing and makes the output deterministic.
+TRACE_FLAG = "--trace"
+
+_COMPILE_ERROR = "Compilation error in file"
+_NO_SUCH_PATH = 'Paths given to "mix test" did not match'
+
+#: How long the AST preflight may take. It parses one file; a minute is already
+#: generous, and hanging here would hang the run before any test is executed.
+PREFLIGHT_TIMEOUT_SECONDS = 60
+
+
+def definition_lines(root: Path, path: PurePosixPath) -> list[int] | str:
+    """Lines where ``path`` defines ExUnit tests, or an error code.
+
+    Elixir's own parser is the authority: `Code.string_to_quoted` plus a walk
+    for the `test` macro. Measured — a `@tag`ged test reports the `test` line
+    rather than the tag line, a test inside `describe` is found, and a bodiless
+    `test "not implemented"` is found.
+    """
+    target = Path(root) / str(path)
+    if not target.is_file():
+        return "missing_test_file"
+    try:
+        result = subprocess.run(
+            ["elixir", "-e", _DEFINITION_LINES_SCRIPT, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        return "runner_toolchain_missing"
+    except subprocess.SubprocessError:
+        # A timeout or a crashed parse is not a missing toolchain, and saying
+        # "`elixir` is not on PATH" would send an operator to fix the wrong
+        # thing (Copilot, PR #203). Both refuse; they refuse differently.
+        return "preflight_failed"
+    if result.returncode != 0:
+        return "unparseable_test_file"
+    out = result.stdout.strip()
+    if out == "PARSE_ERROR":
+        return "unparseable_test_file"
+    if not out:
+        return []
+    try:
+        return [int(part) for part in out.split(",") if part]
+    except ValueError:  # pragma: no cover - the script emits integers or nothing
+        return "unparseable_test_file"
+
+
+class ExUnitAdapter:
+    """ExUnit, whose exit codes are **inverted** relative to pytest's.
+
+    Measured on Elixir/OTP 28: `mix test` exits 2 when tests fail and 1 when
+    the run never happened. And more importantly, `path:line` selects the
+    nearest test *at or before* the line — so a line past the end of a file
+    runs the last test in it and reports an ordinary "1 test, 1 failure". That
+    is why this adapter proves the line is a definition line **before** running
+    anything, and checks the reported location afterwards as well.
+    """
+
+    name = "exunit"
+
+    def parse_selector(self, raw: str) -> Selector | SelectorRefusal:
+        value = (raw or "").strip()
+        if "::" in value:
+            # The pytest form. It is what the RED prompt used to ask for, and
+            # `mix test 'x.exs::name'` matches no file and exits 1 — which the
+            # old code read as a confirmed red (#198).
+            return SelectorRefusal(
+                "pytest_style_selector",
+                f"selector {raw!r} is a pytest node id; ExUnit selectors are "
+                "'path:line', where line is the `test \"...\" do` line",
+            )
+        head, separator, tail = value.rpartition(":")
+        if not separator or not tail.isdigit():
+            return SelectorRefusal(
+                "not_a_line_selector",
+                f"selector {raw!r} is not 'path:line'",
+            )
+        path = normalise_path(head)
+        if not path.parts:
+            return SelectorRefusal("not_a_line_selector", f"selector {raw!r} names no file")
+        return Selector(runner=self.name, path=path, locator=ExUnitDefinitionLine(int(tail)))
+
+    def validate_command(self, test_command: str) -> str | None:
+        tokens = command_tokens(test_command)
+        if executable_of(test_command) != "mix" or "test" not in tokens:
+            return (
+                f"test_command {test_command!r} does not run `mix test`; "
+                "set tdd_runner to the runner this project uses"
+            )
+        return None
+
+    def preflight(self, root: Path, selector: Selector) -> SelectorRefusal | None:
+        """Prove the requested line *defines* a test, before anything runs.
+
+        Without this, a `not_red` verdict would rest on nothing: a passing run
+        prints no location, and `1 test, 0 failures` is what `:999` prints too.
+        And `not_red` is not a quiet verdict — it retires a claimed red and
+        sends an operator to `repair`.
+        """
+        assert isinstance(selector.locator, ExUnitDefinitionLine)
+        lines = definition_lines(root, selector.path)
+        if isinstance(lines, str):
+            return SelectorRefusal(lines, _PREFLIGHT_MESSAGES[lines].format(path=selector.path))
+        if not lines:
+            return SelectorRefusal("no_tests_in_file", f"{selector.path} defines no ExUnit tests")
+        wanted = selector.locator.line
+        if wanted not in lines:
+            nearest = ", ".join(str(line) for line in lines)
+            return SelectorRefusal(
+                "not_a_definition_line",
+                f'{selector.path}:{wanted} is not a `test "..." do` line '
+                f"(tests are defined at {nearest}); ExUnit would silently run "
+                "the nearest test at or before it",
+            )
+        return None
+
+    def build_command(self, test_command: str, selector: Selector) -> list[str]:
+        assert isinstance(selector.locator, ExUnitDefinitionLine)
+        tokens = command_tokens(test_command)
+        if TRACE_FLAG not in tokens:
+            tokens.append(TRACE_FLAG)
+        return [*tokens, f"{selector.path}:{selector.locator.line}"]
+
+    def classify(self, result: subprocess.CompletedProcess) -> RunOutcome:
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        summary = _EXUNIT_SUMMARY.search(output)
+        if summary:
+            tests, failures = int(summary.group(1)), int(summary.group(2))
+            if tests == 0:
+                # Measured: a line before the first test runs nothing and still
+                # exits 0. "Nothing ran" is not "your test passed".
+                return RunOutcome.SELECTION_FAILED
+            if failures > 0 and result.returncode == 2:
+                return RunOutcome.TESTS_FAILED
+            if failures == 0 and result.returncode == 0:
+                return RunOutcome.TESTS_PASSED
+            return RunOutcome.UNRECOGNIZED
+        if _COMPILE_ERROR in output:
+            # No summary at all: the file never reached ExUnit. This is the
+            # structural difference between a compile error and a runtime
+            # failure, and why classify keys on the summary and not on text.
+            return RunOutcome.COLLECTION_OR_COMPILE_ERROR
+        if _NO_SUCH_PATH in output:
+            return RunOutcome.SELECTION_FAILED
+        return RunOutcome.UNRECOGNIZED
+
+    def prove_selected(
+        self, selector: Selector, result: subprocess.CompletedProcess
+    ) -> SelectionProof:
+        assert isinstance(selector.locator, ExUnitDefinitionLine)
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        wanted = selector.locator.line
+
+        # The trace first: it states which test *executed*, by line, whether it
+        # passed or failed. `:999` shows `[L#9]` here — refuted outright rather
+        # than inferred from a count.
+        executed = {int(m.group(1)) for m in _EXUNIT_TRACE_EXECUTED.finditer(output)}
+        if executed:
+            return SelectionProof.PROVEN if executed == {wanted} else SelectionProof.REFUTED
+
+        # No trace (an older ExUnit, or a command that suppressed it): a failure
+        # block still names a location.
+        located = [
+            (str(normalise_path(path)), int(line))
+            for path, line in _EXUNIT_FAILURE_AT.findall(output)
+        ]
+        if located:
+            return (
+                SelectionProof.PROVEN
+                if (str(selector.path), wanted) in located
+                else SelectionProof.REFUTED
+            )
+        return SelectionProof.UNKNOWN
+
+
+_PREFLIGHT_MESSAGES = {
+    "missing_test_file": "{path} does not exist in the tree being replayed",
+    "unparseable_test_file": "{path} does not parse as Elixir; nothing was run",
+    "runner_toolchain_missing": (
+        "`elixir` is not on PATH, so {path} cannot be checked before running — "
+        "an unchecked ExUnit selector can silently run a different test"
+    ),
+    "preflight_failed": (
+        "checking {path} for the test's definition line did not complete "
+        "(timeout or a failed parse run); nothing was run"
+    ),
+}
+
+
 #: Adapters by name. Adding one means measuring a runner, not assuming it
 #: behaves like another (#198).
-ADAPTERS: dict[str, TddRunnerAdapter] = {PytestAdapter.name: PytestAdapter()}
+ADAPTERS: dict[str, TddRunnerAdapter] = {
+    PytestAdapter.name: PytestAdapter(),
+    ExUnitAdapter.name: ExUnitAdapter(),
+}
 
 
 def adapter_for(name: str) -> TddRunnerAdapter | None:
@@ -285,6 +525,7 @@ def infer_adapter(test_command: str) -> TddRunnerAdapter | None:
 
 __all__ = [
     "ADAPTERS",
+    "ExUnitAdapter",
     "ExUnitDefinitionLine",
     "PytestAdapter",
     "PytestNodeId",
@@ -294,6 +535,7 @@ __all__ = [
     "SelectorRefusal",
     "TddRunnerAdapter",
     "adapter_for",
+    "definition_lines",
     "command_tokens",
     "executable_of",
     "infer_adapter",
