@@ -30,6 +30,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   key that is not a mapping is refused for the same reason (it used to crash
   into the loader's broad handler and return an empty config, i.e. defaults).
 
+  **A config that cannot be read is refused for the same reason.** Malformed
+  YAML, or any other failure to load, used to log a warning and return an empty
+  config — which is the identical fail-open one level up. A file the loader
+  cannot read is not consent to run on defaults.
+
   Either shape alone is untouched: the legacy `executor:`-only layout is the
   documented v1.x shape and keeps working, and the top-level
   `execution_order`/`skip_tasks`/`environment` sections carried by every

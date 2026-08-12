@@ -757,15 +757,14 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             ),
         }
     except ConfigError:
-        # A refusal must not fall into the broad handler below: returning `{}`
-        # there would be the original bug wearing a new hat — the settings
-        # still do nothing, and the defaults still spend money (#182).
         raise
     except Exception as e:
-        from .logging import get_logger
-
-        get_logger("config").warning("Failed to load config", path=str(config_path), error=str(e))
-        return {}
+        # Every way of failing to read a config lands here, and returning `{}`
+        # would be the same fail-open #182 is about: a config that does
+        # nothing sends the run to the defaults, and the defaults invoke a paid
+        # external model with write access to the tree. A file that cannot be
+        # read is not consent to run on defaults — say so and stop.
+        raise ConfigError(f"{config_path}: cannot be read as a config: {e}") from e
 
 
 def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:

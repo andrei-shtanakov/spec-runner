@@ -84,6 +84,15 @@ class TestTheLoaderRefuses:
             return
         pytest.fail(f"the mixed config loaded as {result!r} instead of raising")
 
+    def test_a_config_that_cannot_be_read_is_refused_too(self, tmp_path):
+        """Raised by review of this PR, and the same fail-open: a config the
+        loader cannot parse used to log a warning and return `{}`, which sends
+        the run to the defaults — a paid model with write access — while the
+        operator believes their file is in force."""
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(_write(tmp_path, ": invalid: yaml: ["))
+        assert "spec-runner.config.yaml" in str(exc.value)
+
     def test_an_executor_key_that_is_not_a_mapping_is_refused(self, tmp_path):
         """`executor:` with nothing under it discards everything too, and used
         to crash into the same silent `{}`."""
