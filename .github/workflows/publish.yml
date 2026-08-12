@@ -14,15 +14,21 @@ jobs:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
 
-      - name: Verify tag matches pyproject version
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::Tag v$tag does not match pyproject version $pkg"
-            exit 1
-          fi
-          echo "Publishing version $pkg"
+      # The second enforcement point for release hygiene, and the fail-closed
+      # one: `changelog-links` already runs on every pull request, but a PR
+      # check is advice — the tag is the moment the artifact goes out, and it
+      # is the moment the links must be right. Deliberately the SAME script
+      # rather than a second validator, because two implementations of one rule
+      # are how the rule ends up meaning two things.
+      #
+      # `--tag` adds what only makes sense here: the tag agrees with the
+      # pyproject version (this replaces the inline shell that used to check
+      # it), and the version has a CHANGELOG section — which is what the GitHub
+      # Release notes are written from, so publishing without one ships blind.
+      #
+      # `publish` needs `build`, so a failure here means nothing reaches PyPI.
+      - name: Release hygiene (tag, version, CHANGELOG links)
+        run: python3 scripts/check_changelog_links.py --tag "$GITHUB_REF_NAME"
 
       - run: uv build
       - run: uv run --with twine twine check dist/*

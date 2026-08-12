@@ -10,6 +10,10 @@
 # Unlike the tag guard this DOES run on pull requests, because the invariant
 # holds at every commit — not just at a release — and catching it on the release
 # PR is the entire point.
+#
+# This is the early-feedback half. The fail-closed half is the same script with
+# `--tag`, run by publish.yml before the build — a PR check is advice, and the
+# tag is the moment the artifact goes out.
 name: changelog-links
 
 on:

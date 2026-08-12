@@ -152,3 +152,56 @@ class TestDuplicateSectionsAreCaught:
 
     def test_the_real_changelog_has_no_duplicates(self):
         assert not [p for p in check(Path(__file__).resolve().parent.parent) if "sections" in p]
+
+
+class TestTheTagTimeCheck:
+    """The second enforcement point (#192 follow-up, owner's item 3).
+
+    The PR run gives early feedback; the tag/publish run is the fail-closed
+    barrier, because the one moment the links *must* be right is the moment the
+    artifact goes out. Deliberately the **same script** — a second validator
+    would be a second thing to keep in step with the first.
+    """
+
+    def test_a_matching_tag_passes(self, tmp_path):
+        assert check(_project(tmp_path, "2.25.0", _changelog()), tag="v2.25.0") == []
+
+    def test_a_tag_that_does_not_match_pyproject_is_caught(self, tmp_path):
+        problems = check(_project(tmp_path, "2.25.0", _changelog()), tag="v2.26.0")
+        assert any("v2.26.0" in p and "2.25.0" in p for p in problems)
+
+    def test_the_bare_version_form_is_accepted(self, tmp_path):
+        """`GITHUB_REF_NAME` carries the `v`; a human running it locally may
+        not. Refusing the bare form would only teach people to skip the check."""
+        assert check(_project(tmp_path, "2.25.0", _changelog()), tag="2.25.0") == []
+
+    def test_a_tag_with_no_changelog_section_is_caught(self, tmp_path):
+        """The section is what the GitHub Release is written from — publishing
+        without one means shipping with no notes."""
+        body = _changelog().replace("## [2.25.0] - 2026-08-11\n- something\n\n", "")
+        problems = check(_project(tmp_path, "2.25.0", body), tag="v2.25.0")
+        assert any("no CHANGELOG section" in p or "was not cut" in p for p in problems)
+
+    def test_stale_links_still_fail_at_tag_time(self, tmp_path):
+        """The whole point of the second enforcement point: the mistake that
+        got through twice must not get through here either."""
+        root = _project(tmp_path, "2.25.0", _changelog(unreleased_from="2.24.0"))
+        assert check(root, tag="v2.25.0")
+
+    def test_a_junk_tag_is_a_stated_problem_not_a_crash(self, tmp_path):
+        problems = check(_project(tmp_path, "2.25.0", _changelog()), tag="release-candidate")
+        assert problems and all(isinstance(p, str) for p in problems)
+
+    def test_without_a_tag_nothing_new_is_required(self, tmp_path):
+        """The PR run must stay exactly as permissive as it was — a release PR
+        legitimately has no tag yet."""
+        assert check(_project(tmp_path, "2.25.0", _changelog())) == []
+
+    def test_an_empty_changelog_does_not_hide_the_tag_mismatch(self, tmp_path):
+        """Raised in review: the "no sections" branch used to return on its
+        own, so a publish run could report only that while the tag disagreed
+        with the version — the more actionable of the two."""
+        root = _project(tmp_path, "2.25.0", "# Changelog\n\n## [Unreleased]\n")
+        problems = check(root, tag="v2.26.0")
+        assert any("does not match" in p for p in problems), problems
+        assert any("no released version sections" in p for p in problems), problems

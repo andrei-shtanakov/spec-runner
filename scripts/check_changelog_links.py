@@ -15,13 +15,24 @@ Two invariants, checkable at any commit — not only at a release:
 where `<current>` is the version in pyproject.toml and `<previous>` is the next
 version section down in the CHANGELOG.
 
-Exits 0 when both hold, 1 with a specific message when they do not.
+Two enforcement points, one script — because two implementations of one rule is
+how the rule comes to mean two things:
+
+    pull_request   early feedback, on every commit          (changelog-links.yml)
+    tag / publish  fail-closed barrier, `--tag vX.Y.Z`      (publish.yml)
+
+`--tag` adds what only makes sense when an artifact is going out: the tag agrees
+with the pyproject version, and that version has a CHANGELOG section — the one
+the GitHub Release notes are written from. `publish` needs `build`, so a failure
+means nothing reaches PyPI.
+
+Exits 0 when everything holds, 1 with a specific message when it does not.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
-import sys
 from pathlib import Path
 
 VERSION_RE = re.compile(r'^version = "(?P<v>[^"]+)"', re.MULTILINE)
@@ -45,8 +56,19 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def check(root: Path) -> list[str]:
-    """Return a list of problems; empty means the links are consistent."""
+TAG_RE = re.compile(r"^v?(?P<v>\d+\.\d+\.\d+)$")
+
+
+def check(root: Path, tag: str | None = None) -> list[str]:
+    """Return a list of problems; empty means the links are consistent.
+
+    ``tag`` turns on the tag-time checks — the second enforcement point. The
+    invariants are the same ones; what changes is that a tag is being published
+    from this tree, so the tag itself has to agree with the version and the
+    version has to have a section (that section is what the GitHub Release is
+    written from). Passing None keeps the pull-request behaviour exactly as it
+    was: a release PR legitimately has no tag yet.
+    """
     pyproject = _read(root / "pyproject.toml")
     if pyproject is None:
         return [f"cannot read {root / 'pyproject.toml'} — is this the repository root?"]
@@ -62,9 +84,15 @@ def check(root: Path) -> list[str]:
     links = {m.group("label"): m.group("url") for m in LINK_RE.finditer(changelog)}
     problems: list[str] = []
     problems.extend(_duplicate_subsections(changelog))
+    if tag is not None:
+        problems.extend(_tag_problems(tag, current, sections))
 
     if not sections:
-        return ["CHANGELOG has no released version sections"]
+        # Appended, not returned on its own: anything already collected — a tag
+        # that does not match the version, a duplicated subsection — is still
+        # true and still what the operator needs to fix.
+        problems.append("CHANGELOG has no released version sections")
+        return problems
     if sections[0] != current:
         problems.append(
             f"pyproject declares {current} but the newest CHANGELOG section is "
@@ -93,6 +121,31 @@ def check(root: Path) -> list[str]:
     return problems
 
 
+def _tag_problems(tag: str, current: str, sections: list[str]) -> list[str]:
+    """Checks that only make sense when a tag is being published.
+
+    `publish.yml` verified the tag against pyproject in inline shell. That check
+    lives here now — one script, two enforcement points, rather than two
+    implementations of the same rule drifting in two files.
+    """
+    match = TAG_RE.match(tag.strip())
+    if not match:
+        return [f"tag {tag!r} is not a vX.Y.Z release tag"]
+    tagged = match.group("v")
+    problems: list[str] = []
+    if tagged != current:
+        problems.append(
+            f"tag v{tagged} does not match the pyproject version {current} — "
+            "publishing would put the wrong version on PyPI"
+        )
+    if tagged not in sections:
+        problems.append(
+            f"no CHANGELOG section [{tagged}] — the release notes are written "
+            "from it, so publishing would ship without any"
+        )
+    return problems
+
+
 def _duplicate_subsections(changelog: str) -> list[str]:
     """One `### Added` per version, not two.
 
@@ -115,10 +168,18 @@ def _duplicate_subsections(changelog: str) -> list[str]:
 
 
 def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent
-    problems = check(root)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", nargs="?", help="repository root (default: this file's repo)")
+    parser.add_argument(
+        "--tag",
+        help="the release tag being published (e.g. v2.27.0) — adds the tag-time checks",
+    )
+    args = parser.parse_args()
+    root = Path(args.root) if args.root else Path(__file__).resolve().parent.parent
+    problems = check(root, tag=args.tag)
     if not problems:
-        print("✅ CHANGELOG compare links are consistent")
+        where = f" for {args.tag}" if args.tag else ""
+        print(f"✅ CHANGELOG compare links are consistent{where}")
         return 0
     for problem in problems:
         print(f"::error title=CHANGELOG links::{problem}")
