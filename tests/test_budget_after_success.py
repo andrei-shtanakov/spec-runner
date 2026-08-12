@@ -114,9 +114,11 @@ class TestTheTaskStaysDone:
     def test_tasks_md_still_says_done(self, tmp_path):
         cfg = _cfg(_repo(tmp_path))
 
-        with ExecutorState(cfg) as state:
-            with patch("spec_runner.execution.execute_task", _succeed_expensively()):
-                run_with_retries(_task(), cfg, state)
+        with (
+            ExecutorState(cfg) as state,
+            patch("spec_runner.execution.execute_task", _succeed_expensively()),
+        ):
+            run_with_retries(_task(), cfg, state)
 
         assert "DONE" in _meta_line(cfg, "TASK-001")
         assert "BLOCKED" not in _meta_line(cfg, "TASK-001")
@@ -128,9 +130,11 @@ class TestTheSecondRunDoesNotRedoIt:
     def test_the_finished_task_is_not_selected_again(self, tmp_path):
         cfg = _cfg(_repo(tmp_path))
 
-        with ExecutorState(cfg) as state:
-            with patch("spec_runner.execution.execute_task", _succeed_expensively()):
-                run_with_retries(_task(), cfg, state)
+        with (
+            ExecutorState(cfg) as state,
+            patch("spec_runner.execution.execute_task", _succeed_expensively()),
+        ):
+            run_with_retries(_task(), cfg, state)
 
         # A fresh read of tasks.md, exactly as the next run does it — including
         # the dependency resolution that promotes `blocked` back to `todo`.
