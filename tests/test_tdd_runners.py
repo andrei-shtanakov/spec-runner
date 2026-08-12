@@ -251,18 +251,30 @@ class TestThePromptAsksForTheRightShape:
         assert ":LINE" in line
 
     def test_what_the_prompt_asks_for_is_what_the_adapter_parses(self):
-        """The property that matters, asserted as one statement rather than as
-        two facts that happen to agree today."""
+        """The property that matters, and it has to be read out of the prompt
+        text itself.
+
+        An earlier version compared against a hand-written example per adapter,
+        which asserted that *my* example parses — not that the **prompted** one
+        does — and would have raised `KeyError` the moment a third adapter
+        arrived (Copilot, PR #205). The example now comes from
+        `selector_instruction`, so prompt and parser cannot drift apart in
+        silence.
+        """
         from spec_runner.tdd_runners import ADAPTERS, Selector
 
-        examples = {
-            "pytest": "tests/test_x.py::TestY::test_z",
-            "exunit": "test/x_test.exs:12",
-        }
         for name, adapter in ADAPTERS.items():
             instruction = adapter.selector_instruction
-            assert "TDD_SELECTOR:" in instruction, name
-            assert isinstance(adapter.parse_selector(examples[name]), Selector), name
+            marker = "TDD_SELECTOR:"
+            assert marker in instruction, name
+            example = next(line for line in instruction.splitlines() if marker in line).split(
+                marker, 1
+            )[1]
+            # The one substitution a shape may carry: a placeholder for a
+            # number the agent fills in.
+            example = example.strip().replace("LINE", "12")
+            parsed = adapter.parse_selector(example)
+            assert isinstance(parsed, Selector), f"{name}: prompt asks for {example!r}, refused"
 
     def test_an_unsupported_runner_says_so_rather_than_asking_for_pytest(self):
         line = self._selector_line("go test ./...", "")
