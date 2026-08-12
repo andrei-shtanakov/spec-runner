@@ -114,21 +114,21 @@ class TestTheCheckpointHasAStableId:
 
 class TestTheClaimSetComesFromTheSelector:
     def test_a_node_id_claims_its_file(self):
-        assert claim_paths_for("tests/test_x.py::TestY::test_z") == ["tests/test_x.py"]
+        assert claim_paths_for(_sel("tests/test_x.py::TestY::test_z")) == ["tests/test_x.py"]
 
     def test_a_plain_file_node_id_claims_the_file(self):
-        assert claim_paths_for("tests/test_x.py::test_y") == ["tests/test_x.py"]
+        assert claim_paths_for(_sel("tests/test_x.py::test_y")) == ["tests/test_x.py"]
 
     def test_a_selector_without_a_node_id_claims_nothing(self):
         """Refused upstream by `verify_red`; claiming nothing here rather than
         guessing keeps the two from disagreeing."""
-        assert claim_paths_for("test_x") == []
+        assert _parse("test_x") is None, "an unparseable selector never becomes a Selector"
 
     def test_a_conftest_fixture_is_not_claimed(self):
         """The documented limitation, pinned so it is a known gap rather than a
         surprise: a selector names one file, so a fixture it depends on is
         reachable and unlocked (§1.3)."""
-        assert "tests/conftest.py" not in claim_paths_for("tests/test_x.py::test_y")
+        assert "tests/conftest.py" not in claim_paths_for(_sel("tests/test_x.py::test_y"))
 
 
 class TestPathValidation:
@@ -595,54 +595,94 @@ class TestFailingClosed:
         assert any(r.status is GateStatus.INSTRUMENT_ERROR for r in outcome.results)
 
 
-class TestClaimPathsAreTheAdaptersBusiness:
-    """#210, found by the second paid pilot run. `claim_paths_for` split on
-    `::` and returned `[]` for anything else, with a comment saying
-    `verify_red` had already refused such selectors. That was true when pytest
-    was the only runner and stopped being true when ExUnit arrived: a perfectly
-    good `path:line` reached here, claimed nothing, and the red was discarded
-    as unclaimable — after the replay had already confirmed it.
+def _parse(raw: str, runner: str = "pytest"):
+    """Parse a selector the way the pipeline does — through an adapter."""
+    from spec_runner.tdd_runners import Selector, adapter_for
 
-    Fail-closed was never in question (nothing claimed → no checkpoint). What
-    was wrong is that a valid selector was treated as nonsense.
+    adapter = adapter_for(runner)
+    assert adapter is not None
+    parsed = adapter.parse_selector(raw)
+    return parsed if isinstance(parsed, Selector) else None
+
+
+def _sel(raw: str = "tests/test_x.py::test_y", runner: str = "pytest"):
+    parsed = _parse(raw, runner)
+    assert parsed is not None, raw
+    return parsed
+
+
+class TestClaimPathsAreTheAdaptersBusiness:
+    """#210, found by the second paid pilot run. `claim_paths_for` split the
+    raw string on `::` and returned `[]` for anything else, so a valid ExUnit
+    `path:line` claimed nothing and a **confirmed** red was discarded.
+
+    It now takes the parsed `Selector` — the object the config's adapter
+    produced — so the shape is read once, by one authority. Passing the raw
+    string and re-deriving the adapter here is what the owner's review of
+    PR #211 refused: today `::` and `:line` do not overlap, but a third adapter
+    could make one string parse under two, and the order of `ADAPTERS` would
+    quietly become semantics of the byte-lock.
     """
 
     def test_a_pytest_node_id_claims_its_file(self):
         from spec_runner.claims import claim_paths_for
 
-        assert claim_paths_for("tests/test_x.py::TestY::test_z") == ["tests/test_x.py"]
+        assert claim_paths_for(_sel("tests/test_x.py::TestY::test_z")) == ["tests/test_x.py"]
 
     def test_an_exunit_line_selector_claims_its_file(self):
         from spec_runner.claims import claim_paths_for
 
-        assert claim_paths_for("test/kapelle/providers/catalog_test.exs:85") == [
-            "test/kapelle/providers/catalog_test.exs"
-        ]
+        selector = _sel("test/kapelle/providers/catalog_test.exs:85", "exunit")
+        assert claim_paths_for(selector) == ["test/kapelle/providers/catalog_test.exs"]
 
-    def test_naming_the_runner_uses_that_adapter(self):
+    def test_the_selector_carries_its_own_runner(self):
+        """No inference at the claim site: the object says which adapter made
+        it, and that adapter answers."""
+        assert _sel("test/x_test.exs:12", "exunit").runner == "exunit"
+        assert _parse("test/x_test.exs:12", "pytest") is None
+
+    def test_a_selector_from_an_unregistered_runner_claims_nothing(self):
+        """The fail-closed half: a red with nothing locked would pass the gate
+        over an open file."""
+        from dataclasses import replace
+
         from spec_runner.claims import claim_paths_for
 
-        assert claim_paths_for("test/x_test.exs:85", runner="exunit") == ["test/x_test.exs"]
-        assert claim_paths_for("test/x_test.exs:85", runner="pytest") == []
+        assert claim_paths_for(replace(_sel(), runner="rspec")) == []
 
-    @pytest.mark.parametrize("selector", ["garbage", "tests/test_x.py", "", "::test_y"])
-    def test_a_selector_no_adapter_understands_claims_nothing(self, selector):
-        """The fail-closed half, unchanged: a red with nothing locked would
-        pass the gate over an open file."""
+    @pytest.mark.parametrize("raw", ["garbage", "tests/test_x.py", "", "::test_y"])
+    def test_nonsense_never_becomes_a_selector_at_all(self, raw):
+        assert _parse(raw) is None
+
+
+class TestTheAdapterContract:
+    """The machine contract, kept apart from the prompt text (owner's review of
+    PR #211): rewording an instruction must not be able to change what is
+    guaranteed, and a guarantee must not depend on a sentence being greppable.
+    """
+
+    def test_every_adapters_canonical_selectors_parse_and_claim(self):
         from spec_runner.claims import claim_paths_for
-
-        assert claim_paths_for(selector) == []
-
-    def test_every_adapter_s_own_prompted_shape_claims_a_file(self):
-        """The property, not the two examples: whatever an adapter asks the
-        agent for must yield a claimable path, or its reds cannot be locked —
-        which is exactly how this defect reached a paid run."""
-        from spec_runner.claims import claim_paths_for
-        from spec_runner.tdd_runners import ADAPTERS
+        from spec_runner.tdd_runners import ADAPTERS, Selector
 
         for name, adapter in ADAPTERS.items():
-            line = next(
-                ln for ln in adapter.selector_instruction.splitlines() if "TDD_SELECTOR:" in ln
-            )
-            example = line.split("TDD_SELECTOR:", 1)[1].strip().replace("LINE", "12")
-            assert claim_paths_for(example, runner=name), f"{name}: {example!r} claims nothing"
+            assert adapter.contract_selectors(), f"{name} declares no contract selectors"
+            for raw in adapter.contract_selectors():
+                parsed = adapter.parse_selector(raw)
+                assert isinstance(parsed, Selector), f"{name}: {raw!r} does not parse"
+                assert claim_paths_for(parsed), f"{name}: {raw!r} claims nothing"
+
+    def test_no_adapter_accepts_anothers_canonical_selector(self):
+        """Not required by the contract, but true today — and if it ever stops
+        being true, the claim site must be reading `selector.runner` rather
+        than guessing, which is exactly what #210 was about."""
+        from spec_runner.tdd_runners import ADAPTERS, Selector
+
+        for name, adapter in ADAPTERS.items():
+            for other, foreign in ADAPTERS.items():
+                if other == name:
+                    continue
+                for raw in foreign.contract_selectors():
+                    assert not isinstance(adapter.parse_selector(raw), Selector), (
+                        f"{name} accepts {other}'s selector {raw!r}"
+                    )

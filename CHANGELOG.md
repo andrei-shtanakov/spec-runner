@@ -21,14 +21,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
   an open file — and the checkpoint was discarded **after** the replay had
   confirmed it.
 
-  Claim paths now come from the adapter that parses the selector, with an
-  optional `runner` when the caller knows it. Anything no adapter understands
-  still claims nothing, so the fail-closed half is unchanged.
+  **The selector is parsed once, by the adapter the config chose, and the
+  typed object travels down the pipeline** — lint narrowing, replay, byte-lock.
+  Re-deriving the shape from the raw string at each step was the actual defect;
+  a first fix that looked up the adapter again at the claim site kept the same
+  mistake in a quieter place, since `::` and `:line` merely happen not to
+  overlap today. The raw string survives as evidence and as what a stored
+  record holds; reading a stored record back is the one place an adapter is
+  consulted again, and it is the config's, never a search.
 
-  Pinned by a property rather than by examples: for every registered adapter,
-  the shape its own prompt asks the agent for must yield a claimable path.
-  That is precisely what was missing — the prompt asked for `path:line` and
-  claims could not read it.
+  Guarantees are split in two, so wording cannot change semantics:
+  `adapter.contract_selectors()` is the machine contract — every canonical
+  selector parses and yields a claimable path — while a separate, narrower
+  test asserts the human-readable `selector_instruction` shows an example the
+  same adapter accepts.
 
   Found by the second paid pilot attempt. Nothing false was recorded and no
   implementation ran; the defect was that a valid selector was treated as

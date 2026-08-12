@@ -250,6 +250,28 @@ class TestThePromptAsksForTheRightShape:
         assert "::" not in line
         assert ":LINE" in line
 
+    def test_the_prompt_carries_a_canonical_example(self):
+        """The *prompt* contract, deliberately narrow now that the machine
+        contract lives in `contract_selectors()` (owner's review of PR #211):
+        the instruction must show an example the same adapter parses, so an
+        agent that copies the shape is understood. Rewording the surrounding
+        sentence is free; changing the example is not."""
+        from spec_runner.tdd_runners import ADAPTERS, Selector
+
+        for name, adapter in ADAPTERS.items():
+            marker = "TDD_SELECTOR:"
+            instruction = adapter.selector_instruction
+            assert marker in instruction, name
+            example = (
+                next(line for line in instruction.splitlines() if marker in line)
+                .split(marker, 1)[1]
+                .strip()
+                .replace("LINE", "12")
+            )
+            assert isinstance(adapter.parse_selector(example), Selector), (
+                f"{name}: the prompt asks for {example!r}, which it then refuses"
+            )
+
     def test_what_the_prompt_asks_for_is_what_the_adapter_parses(self):
         """The property that matters, and it has to be read out of the prompt
         text itself.
