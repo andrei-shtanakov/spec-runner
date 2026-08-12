@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 from .bookkeeping import commit_status_flip_quietly
+from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
 from .harness import HarnessBaseline
@@ -166,7 +167,15 @@ def execute_task(
     # that commit. The gate is what refuses, not this code: TDD is a consumer
     # of #164's mechanism, so that the review policy and this one cannot drift.
     if config.resolve_execution_mode(task) == "tdd":
-        refusal = _run_red_phase_gate(task, config, state, reporter)
+        try:
+            refusal = _run_red_phase_gate(task, config, state, reporter)
+        except BudgetRefused as stop:
+            # #213: no red was authored and no money was spent. Terminal for
+            # this task in the same shape every other budget stop takes, so
+            # the checkpoint (if any) and the tree are left exactly as they
+            # were and the task resumes when the cap is raised.
+            _fail_for_budget(task, config, state, str(stop))
+            return False
         if refusal is not None:
             log_progress(f"⛔ {refusal}", task_id)
             state.record_attempt(
@@ -201,6 +210,15 @@ def execute_task(
                     else None
                 ),
             )
+
+    # #213: the guard immediately before the implementation call — the second
+    # of the three paid calls a TDD attempt makes, and the most expensive.
+    # Refusing here leaves a confirmed red recorded and unspent: the task
+    # resumes on the same checkpoint rather than re-authoring it.
+    green_refusal = check_before_call(config, state, task_id, "green")
+    if green_refusal is not None:
+        _fail_for_budget(task, config, state, green_refusal.reason)
+        return False
 
     if config.resolve_execution_mode(task) == "tdd":
         _record_phase(state, config, task, TddPhase.GREEN_IMPLEMENTING)

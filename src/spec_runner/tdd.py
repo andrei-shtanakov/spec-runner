@@ -494,6 +494,16 @@ def run_red_phase(
         _say(f"\u267b\ufe0f  RED: reusing the confirmed red {reusable.checkpoint_id}")
         return RedPhaseResult(RedOutcome.EXPECTED_FAIL, "reused a confirmed red", reusable)
 
+    # #213: the last point at which refusing costs nothing. A reused red got
+    # this far for free, so the guard sits here and not at the top of the
+    # phase — a task whose red is already confirmed must not be stopped for a
+    # call it was not going to make.
+    from .budget import BudgetRefused, check_before_call
+
+    refusal = check_before_call(config, state, task.id, RED_AUTHORING)
+    if refusal is not None:
+        raise BudgetRefused(refusal)
+
     _say("\U0001f534 RED: authoring a failing test")
     call = _run_agent(config, build_red_prompt(task, config))
     # Recorded before anything can refuse the result: the call happened and was

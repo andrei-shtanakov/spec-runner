@@ -10,6 +10,56 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **A pre-call budget guard (#213, second half).** `budget_usd` and
+  `task_budget_usd` were checked **between attempts**, which was a bound when
+  an attempt meant one agent call. Under `execution_mode: tdd` an attempt makes
+  three (RED authoring → GREEN implementation → review), so the first attempt
+  could overshoot by whatever those three happened to cost — the third pilot
+  run spent at least $2.53 against a $1.82 cap, and the cap then correctly
+  refused a *second* attempt, after the money was gone.
+
+  Both caps are now checked immediately before each paid call, in the order the
+  calls happen. The guarantee is deliberately narrow, and it is what the docs
+  now say:
+
+  > Once recorded spend has reached the limit, no new paid call is started; the
+  > maximum consecutive overshoot is bounded by one call.
+
+  It is a **guard, not a hard cap**: a call's cost is known only once it
+  returns, so no state-based check can stop the call that crosses the line.
+  (The one true hard cap, claude's native `--max-budget-usd`, stays unwired for
+  the reason recorded in `execution.py` — it turned a slight overage into a
+  hard failure.)
+
+  Each refusal leaves a resumable state and names the call that did not happen:
+  before RED, the task does not start; before GREEN, the confirmed red is kept,
+  so resuming reuses it rather than paying to re-author it; before review, the
+  candidate commit stands and the verdict is recorded `not_run` — never
+  `skipped` and never `passed`, so an advisory policy cannot read the absence
+  of a review as a good one, and `review_policy: required` still withholds the
+  merge.
+
+### Changed
+
+- **Parallel review runs one role at a time while a budget is set.** Five roles
+  launched together all pass the same check before any of them reports a cost,
+  which would make "at most one call of overshoot" false. Without a cap
+  configured, review is unchanged and still parallel.
+- **An unpriced call fails the guard closed.** A call whose cost the CLI never
+  reported (timeout, account limit, or a CLI that reports none) makes the
+  remaining budget unprovable, so the next paid call is refused rather than
+  spent against a figure known to be a floor. Practical consequence: a CLI that
+  never reports cost cannot be combined with a budget. That is the honest
+  answer — you cannot enforce a limit you cannot measure — and it is stated in
+  the README rather than discovered in a bill.
+- `costs --json` gains an optional `unmeasured_calls` integer on each task and
+  on the summary (`schemas/costs.schema.json`). Additive: consumers that ignore
+  unknown keys are unaffected, but the schema pins `additionalProperties:
+  false`, so a consumer validating against a vendored pre-2.29 copy must update
+  it.
+
 ### Fixed
 
 - **Review calls are counted (#213, first half).** `run_code_review` ran a bare
@@ -69,14 +119,6 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
   No public surface: no new config key, no new flag, no schema change. Nothing
   is read or opened for a run that did not enable TDD.
-
-### Changed
-
-- `costs --json` gains an optional `unmeasured_calls` integer on each task and
-  on the summary (`schemas/costs.schema.json`). Additive: consumers that ignore
-  unknown keys are unaffected, but the schema pins `additionalProperties:
-  false`, so a consumer validating against a vendored pre-2.29 copy must update
-  it.
 
 ## [2.28.3] - 2026-08-12
 
