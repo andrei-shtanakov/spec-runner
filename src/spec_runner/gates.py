@@ -406,12 +406,17 @@ def _descends_from(config: ExecutorConfig, ancestor: str, descendant: str) -> bo
     )
 
 
-def _claims_gate(ctx: GateContext) -> GateResult:
+def evaluate_claims(ctx: GateContext) -> GateResult:
     """Is every active claim in this workstream still intact in this tree?
 
     Evaluated wherever the RED gate is — before GREEN and again before merge —
     because "do not build on a violated claim" and "do not merge one" are the
     same question at two moments.
+
+    Public because `hooks` asks it a third time, before review (#214): a
+    candidate that already violates the lock cannot be merged whatever a
+    reviewer says. Calling this function rather than re-deriving the check
+    keeps the third site from drifting from the two that decide.
     """
     from .claims import check_claims, describe_violations
     from .tdd import resolve_namespace
@@ -484,7 +489,7 @@ def ensure_red_gate(registry: GateRegistry | None = None) -> None:
     """
     reg = registry if registry is not None else REGISTRY
     reg.register("tdd.red", "tests", _red_gate)
-    reg.register("tdd.claims", "tests", _claims_gate)
+    reg.register("tdd.claims", "tests", evaluate_claims)
 
 
 def has_gates(registry: GateRegistry | None = None) -> bool:

@@ -80,6 +80,29 @@ def build_review_prompt(
     lint_output: str | None = None,
     previous_error: str | None = None,
 ) -> str:
+    """The review prompt, with the frozen-files block appended (#214).
+
+    Review is not exempt. It fixes findings by editing files — that is what
+    `REVIEW_FIXED` means — so it is the second pass that can violate a claim it
+    was never told about, and in the pilot run the reviewer had started editing
+    the claimed file when it died. The block is appended to the base prompt, so
+    every parallel role carries it too: a role's prompt is this one with a
+    focus prepended.
+    """
+    from .claims import ESCAPE_REVIEW, append_frozen_files
+
+    body = _render_review_prompt(task, config, cli_name, test_output, lint_output, previous_error)
+    return append_frozen_files(body, config, task, escape=ESCAPE_REVIEW)
+
+
+def _render_review_prompt(
+    task: Task,
+    config: ExecutorConfig,
+    cli_name: str = "",
+    test_output: str | None = None,
+    lint_output: str | None = None,
+    previous_error: str | None = None,
+) -> str:
     """Build code review prompt for the specified CLI.
 
     Args:

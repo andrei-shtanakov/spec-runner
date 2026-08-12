@@ -388,6 +388,58 @@ def _run_pre_terminal_gates(
     return f"Pre-terminal gate unsatisfied: {detail}"
 
 
+def _claims_intact_before_review(
+    task: Task, config: ExecutorConfig, candidate_sha: str
+) -> str | None:
+    """Ask the claims gate before paying a reviewer. Returns a reason, or None.
+
+    The byte-lock is checked at the merge either way — that check is the
+    authority and is unchanged. This one is about *when the money is spent*: a
+    candidate that has already broken a claim cannot be merged whatever the
+    reviewer concludes, so the review call buys a verdict nothing can act on.
+    In the pilot run that was ~$0.6, and the reviewer then began editing the
+    claimed file itself.
+
+    Only an unsatisfied verdict and a claim-check instrument error stop here.
+    Anything else unexpected is logged and left to the pre-terminal gate, which
+    will meet the same problem and refuse: inventing a new blocking failure
+    mode in front of the authority could only ever block work the authority
+    would have let through.
+    """
+    from .gates import evaluate_claims
+    from .state import ExecutorState
+
+    if not candidate_sha:
+        return None
+    try:
+        with ExecutorState(config) as state:
+            result = evaluate_claims(
+                GateContext(
+                    task_id=task.id,
+                    checkpoint_sha=candidate_sha,
+                    config=config,
+                    state=state,
+                    facts={"execution_mode": config.resolve_execution_mode(task)},
+                )
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Early claim check could not run", task_id=task.id, error=str(exc))
+        return None
+
+    if result.status is GateStatus.SATISFIED:
+        return None
+    detail = f"tdd.claims: {result.detail}"
+    if result.status is GateStatus.INSTRUMENT_ERROR:
+        logger.error("Claims could not be checked before review", task_id=task.id, detail=detail)
+        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
+    logger.warning(
+        "Claim violated before review — not reviewing, not merging",
+        task_id=task.id,
+        detail=detail,
+    )
+    return f"Pre-terminal gate unsatisfied: {detail}"
+
+
 def _commit_blocked_status(
     task: Task, config: ExecutorConfig, blocked: str, candidate_sha: str
 ) -> str:
@@ -621,6 +673,27 @@ def post_done_hook(
         if not last.success and last.error:
             previous_error = last.error[:1024]
     state.close()
+
+    # #214: the byte-lock is asked *before* the reviewer is paid. The merge-time
+    # gate below is unchanged and remains the authority; this only stops the run
+    # from buying a verdict on a candidate that is already unmergeable.
+    # HEAD is resolved only when a claim could exist to check — an ordinary run
+    # must not gain a git call per task from a feature it did not enable.
+    candidate_before_review = ""
+    claims_blocked: str | None = None
+    if config.resolve_execution_mode(task) == "tdd":
+        candidate_before_review = _head_sha(config)
+        claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
+    if claims_blocked is not None:
+        # Same resumable shape as the merge-time refusal: the candidate commit
+        # stands, nothing is merged, and tasks.md's flip is committed so the
+        # next run does not meet the dirty-spec guard. The review verdict is
+        # `skipped` because review genuinely did not run — a review that never
+        # happened must not be recorded as one that passed.
+        claims_blocked = _commit_blocked_status(
+            task, config, claims_blocked, candidate_before_review
+        )
+        return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
     # Run code review (before commit, so fixes can be included)
     review_verdict = ReviewVerdict.SKIPPED

@@ -34,6 +34,7 @@ from .spec import git_blob_hash
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
     from .state import ExecutorState
+    from .task import Task as TaskT
     from .tdd import RedCheckpoint
     from .tdd_runners import Selector
 
@@ -114,6 +115,95 @@ def claim_paths_for(selector: Selector) -> list[str]:
         # a red with nothing locked would pass the gate over an open file.
         return []
     return [str(path) for path in adapter.claim_paths(selector)]
+
+
+#: The heading every agent-facing frozen-files block carries. One string, so a
+#: test can assert the block reached a prompt without reproducing its prose.
+FROZEN_HEADER = "TDD FROZEN FILES — do not modify, delete, rename or replace:"
+
+#: What an implementation pass says when the work cannot be done without
+#: touching a frozen file. `TASK_BLOCKED: <reason>` is the form `execution`
+#: parses; "TASK_BLOCKED" alone is read as a failure with no reason given.
+ESCAPE_TASK = (
+    "If the task cannot be completed without changing one, stop and report\n"
+    "TASK_BLOCKED: <reason>. Only an operator may abandon or repair a claim."
+)
+
+#: The same rule for a reviewer. A review pass has a different vocabulary —
+#: `TASK_BLOCKED` is not a marker `review` parses, so telling a reviewer to
+#: emit it would produce "no verdict" and, under `review_policy: required`,
+#: block the task for a reason that is not the truth. `REVIEW_FAILED` is the
+#: honest marker for "there is an issue and I did not fix it"; `REVIEW_FIXED`
+#: after editing a frozen file is exactly what must not happen.
+ESCAPE_REVIEW = (
+    "If a finding cannot be fixed without changing one, do NOT fix it: report\n"
+    "REVIEW_FAILED and describe the finding. Editing a frozen file is not a\n"
+    "review fix — only an operator may abandon or repair a claim."
+)
+
+
+def active_claim_paths(config: ExecutorConfig, state: ExecutorState | None = None) -> list[str]:
+    """Every path frozen in this project's namespace, whoever froze it.
+
+    Not filtered by task, for the same reason `check_claims` is not: the gate
+    judges every active claim in the namespace, so every pass that can produce
+    a candidate has to be told about every one of them.
+    """
+    from .tdd import resolve_namespace
+
+    namespace = resolve_namespace(config)
+    if state is not None:
+        return sorted({c.path for c in state.active_claims(namespace)})
+
+    from .state import ExecutorState as _State
+
+    try:
+        with _State(config) as opened:
+            return sorted({c.path for c in opened.active_claims(namespace)})
+    except Exception as exc:
+        # Degraded, not a hole: the instrument still checks the claims against
+        # the candidate commit. What is lost is the agent's chance to comply,
+        # so it is logged rather than passed over in silence.
+        logger.warning("Could not read active claims for the prompt", error=str(exc))
+        return []
+
+
+def frozen_files_block(paths: list[str], escape: str = ESCAPE_TASK) -> str:
+    """The block itself, or "" when nothing is frozen."""
+    if not paths:
+        return ""
+    listed = "\n".join(f"- {path}" for path in paths)
+    return f"{FROZEN_HEADER}\n{listed}\n\n{escape}"
+
+
+def append_frozen_files(
+    prompt: str,
+    config: ExecutorConfig,
+    task: TaskT,
+    *,
+    state: ExecutorState | None = None,
+    escape: str = ESCAPE_TASK,
+) -> str:
+    """Append the frozen-files block to an already-rendered prompt.
+
+    **After rendering, never inside a template.** A project with its own
+    `task` or `review` template renders from its own variables, so a block
+    delivered as one more substitution would silently vanish for exactly the
+    projects that customised the most — and the constraint would be missing
+    from the prompt while the gate went on enforcing it. A template variable
+    may exist for placement; this append is what makes it arrive.
+
+    Dormant outside TDD, and dormant before reading anything: the claims gate
+    is evaluated per task and skips a task whose mode is not `tdd`, so telling
+    such a task about a lock nothing will check would be noise bought with a
+    state-DB open on every prompt of every ordinary run.
+    """
+    if config.resolve_execution_mode(task) != "tdd":
+        return prompt
+    block = frozen_files_block(active_claim_paths(config, state), escape)
+    if not block:
+        return prompt
+    return f"{prompt.rstrip()}\n\n{block}\n"
 
 
 def validate_claim_path(project_root: Path, path: str) -> str | None:
@@ -349,13 +439,19 @@ def describe_violations(violations: list[ClaimViolation]) -> str:
 
 
 __all__ = [
+    "ESCAPE_REVIEW",
+    "ESCAPE_TASK",
+    "FROZEN_HEADER",
     "Claim",
     "ClaimCheckError",
     "ClaimRefused",
     "ClaimStatus",
     "ClaimViolation",
     "ViolationKind",
+    "active_claim_paths",
+    "append_frozen_files",
     "check_claims",
+    "frozen_files_block",
     "claim_blob_sha",
     "claim_paths_for",
     "selector_of",

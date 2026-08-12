@@ -264,8 +264,11 @@ class TestNoBranchMode:
 
         assert success is True
         assert review_status == "skipped"
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert not any("merge" in c for c in call_args)
+        # The *argv*, not the whole call repr: `cwd` is a pytest tmp_path named
+        # after this test, so it contains the word "merge" and the assertion
+        # passed no matter what git was asked to do.
+        argv = [call.args[0] for call in mock_run.call_args_list if call.args]
+        assert not any("merge" in part for cmd in argv for part in cmd)
 
 
 class TestBuildReviewPrompt:
