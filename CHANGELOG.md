@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.28.1] - 2026-08-12
+
+**Patch.** One fix, no public surface: prompt text only. `schemas/`,
+`docs/state-schema.md` and the CLI flags were diffed against `v2.28.0` and none
+moved.
+
+It ships now rather than waiting because the kapelle pilot cannot start without
+it — on an Elixir project every RED authoring pass would have ended
+`unverifiable` before a line of implementation, and the pilot would have spent
+its budget discovering that the prompt and the parser disagreed.
+
 ### Fixed
 
 - **The RED prompt asks for the selector shape the project's runner accepts**
@@ -2078,7 +2089,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...HEAD
+[2.28.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...v2.28.1
 [2.28.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...v2.28.0
 [2.27.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...v2.27.1
 [2.27.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...v2.27.0
