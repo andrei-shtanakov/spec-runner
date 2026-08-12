@@ -10,6 +10,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.28.3] - 2026-08-12
+
+**Patch.** No public surface: no new config key, no new flag, no schema change
+(diffed against `v2.28.2`). The changed signatures are internal.
+
+Found by the second paid pilot attempt, which got one step further than the
+first: the replay worked, the red was confirmed, and then the byte-lock threw
+it away.
+
 ### Fixed
 
 - **An ExUnit red is no longer discarded as unclaimable** (#210).
@@ -2166,7 +2175,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...HEAD
+[2.28.3]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...v2.28.3
 [2.28.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...v2.28.2
 [2.28.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...v2.28.1
 [2.28.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...v2.28.0
