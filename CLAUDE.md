@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Active Work & Roadmap
 
 - **Current task list:** `./TODO.md` — read it at the start of every session
+- **Release ritual (4 surfaces + artifact verification):** `docs/release-runbook.md`
 - **Ecosystem roadmap (strategic):** `../prograph-vault/authored/notes/ecosystem-roadmap.md` — R-01…R-16 across Maestro / arbiter / ATP / spec-runner
 - **Latest weekly status:** `../prograph-vault/authored/notes/status/2026-04-10-status.md`
 - **Sibling projects** (reference only): `../maestro/`, `../arbiter/`, `../atp-platform/`, `../proctor/`
