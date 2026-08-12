@@ -198,6 +198,21 @@ def status_only_transition(
     return StatusFlip(task_id=task_id, previous=previous, new=new)
 
 
+#: Long enough for a gate detail with a SHA in it, short enough to stay a
+#: trailer. `git log --format=%(trailers)` and `git interpret-trailers` both
+#: read a trailer as one line; a reason arriving from `last_error` or a gate
+#: detail can be neither.
+_REASON_LIMIT = 200
+
+
+def _one_line(text: str) -> str:
+    """A trailer-safe reason: whitespace collapsed, bounded, never empty."""
+    flattened = " ".join(text.split())
+    if len(flattened) > _REASON_LIMIT:
+        flattened = flattened[: _REASON_LIMIT - 1] + "…"
+    return flattened or "unspecified"
+
+
 def _git(config, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=config.project_root, capture_output=True, text=True)
 
@@ -262,7 +277,7 @@ def commit_status_flip(
         "The task stays resumable; nothing was merged and nothing is DONE.\n"
         "\n"
         f"Task-Status: {task_id} {flip.previous} -> {flip.new}\n"
-        f"Status-Reason: {reason}\n"
+        f"Status-Reason: {_one_line(reason)}\n"
     )
     if candidate_sha:
         # Only the gate path has one. Recorded so the commit says which tree

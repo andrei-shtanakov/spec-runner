@@ -552,6 +552,30 @@ class TestTheOtherHarnessStatus:
         commit_status_flip(cfg, "TASK-001", reason="Pre-terminal gate unsatisfied: review")
         assert "Pre-terminal gate unsatisfied" in _git(root, "log", "-1", "--format=%B").stdout
 
+    def test_the_reason_stays_one_trailer_line(self, tmp_path):
+        """Raised in review: the reason arrives from `last_error` or a gate
+        detail, so it can be multi-line and long — and a trailer is one line to
+        `git interpret-trailers` and `--format=%(trailers)` alike."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        commit_status_flip(cfg, "TASK-001", reason="line one\nline two\n\n  padded   " + "x" * 400)
+        body = _git(root, "log", "-1", "--format=%B").stdout
+        trailer = [ln for ln in body.splitlines() if ln.startswith("Status-Reason:")]
+        assert len(trailer) == 1
+        assert "line one line two padded" in trailer[0]
+        assert len(trailer[0]) < 250, trailer[0]
+        # And git itself agrees it is a trailer.
+        parsed = _git(root, "log", "-1", "--format=%(trailers:key=Status-Reason)").stdout
+        assert parsed.strip().startswith("Status-Reason:")
+
+    def test_an_empty_reason_still_yields_a_trailer(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        commit_status_flip(cfg, "TASK-001", reason="   \n  ")
+        assert "Status-Reason: unspecified" in _git(root, "log", "-1", "--format=%B").stdout
+
     def test_the_failure_path_commits_it(self, tmp_path, monkeypatch):
         """Through the real terminal-failure helper, not just the module."""
         from spec_runner.execution import _record_blocked
