@@ -10,6 +10,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.28.2] - 2026-08-12
+
+**Patch.** No public surface moves — no new config key, no new flag, no schema
+change (diffed against `v2.28.1`). What changes is that `tdd_runner: exunit`,
+which shipped in 2.28.0, can now actually verify a red on a real project.
+
+Both fixes came from the first paid pilot run rather than from review: the run
+authored a correct failing test and the replay could not execute it.
+
 ### Fixed
 
 - **A RED can be replayed in a language whose dependencies live in the project
@@ -2127,7 +2136,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...HEAD
+[2.28.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...v2.28.2
 [2.28.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...v2.28.1
 [2.28.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...v2.28.0
 [2.27.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...v2.27.1
