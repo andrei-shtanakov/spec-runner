@@ -88,7 +88,11 @@ def check(root: Path, tag: str | None = None) -> list[str]:
         problems.extend(_tag_problems(tag, current, sections))
 
     if not sections:
-        return ["CHANGELOG has no released version sections"]
+        # Appended, not returned on its own: anything already collected — a tag
+        # that does not match the version, a duplicated subsection — is still
+        # true and still what the operator needs to fix.
+        problems.append("CHANGELOG has no released version sections")
+        return problems
     if sections[0] != current:
         problems.append(
             f"pyproject declares {current} but the newest CHANGELOG section is "

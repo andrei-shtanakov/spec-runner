@@ -196,3 +196,12 @@ class TestTheTagTimeCheck:
         """The PR run must stay exactly as permissive as it was — a release PR
         legitimately has no tag yet."""
         assert check(_project(tmp_path, "2.25.0", _changelog())) == []
+
+    def test_an_empty_changelog_does_not_hide_the_tag_mismatch(self, tmp_path):
+        """Raised in review: the "no sections" branch used to return on its
+        own, so a publish run could report only that while the tag disagreed
+        with the version — the more actionable of the two."""
+        root = _project(tmp_path, "2.25.0", "# Changelog\n\n## [Unreleased]\n")
+        problems = check(root, tag="v2.26.0")
+        assert any("does not match" in p for p in problems), problems
+        assert any("no released version sections" in p for p in problems), problems
