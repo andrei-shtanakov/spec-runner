@@ -424,7 +424,12 @@ def _validate_tdd_runner(section: dict, result: "ValidationResult") -> None:
         return
     commands = section.get("commands") or {}
     test_command = commands.get("test") if isinstance(commands, dict) else None
-    if not test_command:
+    if test_command is None:
+        # Absent means the built-in default applies, and that default is a
+        # pytest command. Present-but-empty is a different thing and must be
+        # refused here, or `validate` would pass a config that `run` then
+        # stops at — the same config judged differently by two surfaces
+        # (Copilot, PR #202).
         return
     refusal = adapter.validate_command(str(test_command))
     if refusal is not None:

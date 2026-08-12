@@ -80,6 +80,24 @@ class TestValidateSaysItToo:
         body = "tdd_runner: pytest\ncommands:\n  test: uv run pytest\n"
         assert validate_config(self._write(tmp_path, body)).ok
 
+    @pytest.mark.parametrize("value", ['""', "0"])
+    def test_a_present_but_empty_command_is_still_checked(self, tmp_path, value):
+        """Raised in review: skipping every falsy value let `validate` pass a
+        config that `run` then refuses at startup — the same file judged
+        differently by two surfaces, which is worse than either verdict."""
+        body = f"tdd_runner: pytest\ncommands:\n  test: {value}\n"
+        result = validate_config(self._write(tmp_path, body))
+        assert any("tdd_runner" in e for e in result.errors), result.errors
+
+    def test_validate_and_startup_agree(self, tmp_path):
+        """Pinning the agreement itself, not just each side of it."""
+        from spec_runner.config import ExecutorConfig
+
+        body = 'tdd_runner: pytest\ncommands:\n  test: ""\n'
+        assert not validate_config(self._write(tmp_path, body)).ok
+        with pytest.raises(ConfigError):
+            ExecutorConfig(tdd_runner="pytest", test_command="").resolve_tdd_runner()
+
     def test_no_command_is_not_an_error(self, tmp_path):
         """A config that names a runner and no test command is incomplete, not
         contradictory — `preflight` is where missing commands are reported."""
