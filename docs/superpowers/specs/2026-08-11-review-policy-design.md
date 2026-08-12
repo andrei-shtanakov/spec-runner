@@ -42,7 +42,8 @@ execute
 
 The review checkpoint commit is **kept and not merged**, and does not mean DONE.
 HITL remains a separate authority stage: it is a human deciding, not an
-instrument reporting, and conflating the two is what `WAIVED` exists to prevent.
+instrument reporting, and a **waiver** is the record of that decision beside
+the preserved observation — never a fifth verdict standing in place of one.
 
 ### 1.1 Two SHAs, and why they need different names
 
