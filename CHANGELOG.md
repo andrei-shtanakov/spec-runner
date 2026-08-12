@@ -10,6 +10,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **RED verification is per-runner behind an adapter** (#198, build order §1 of
+  the approved design). Two independent answers now decide a red instead of one
+  exit code: `RunOutcome` describes what the run did (`TESTS_PASSED`,
+  `TESTS_FAILED`, `SELECTION_FAILED`, `COLLECTION_OR_COMPILE_ERROR`,
+  `RUNNER_ERROR`, `UNRECOGNIZED`) and `SelectionProof` answers whether the
+  *requested* test is what ran. Only `TESTS_FAILED` + `PROVEN` is a confirmed
+  red; only `TESTS_PASSED` + `PROVEN` refutes one; everything else is
+  `unverifiable`.
+
+  The separation is what the next adapter needs: on ExUnit `mix test path:line`
+  selects the nearest test at or before the line, so a line past the end of a
+  file runs the *last* test and reports an ordinary "1 test, 1 failure". The
+  observation is true and the red is still a lie, which no exit-code table can
+  fix.
+
+  **Behaviour is unchanged**: pytest is still the only adapter, with the same
+  measured exit codes, and the full suite passes untouched. One internal change
+  went with it — the replay now builds **argv** rather than a shell string. The
+  selector comes from agent output; quoting it correctly was right and was one
+  edit away from not being.
+
 ### Fixed
 
 - **A confirmed RED now requires a runner whose exit codes were measured**

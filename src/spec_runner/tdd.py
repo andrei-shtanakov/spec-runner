@@ -41,13 +41,21 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .claims import check_claims, describe_violations, ensure_claimable, record_claims
 from .git_ops import is_composite_shell_command
 from .lifecycle import TddPhase
 from .logging import get_logger
+from .tdd_runners import (
+    RunOutcome,
+    SelectionProof,
+    Selector,
+    SelectorRefusal,
+    TddRunnerAdapter,
+    infer_adapter,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
@@ -169,20 +177,10 @@ def resolve_namespace(config: ExecutorConfig) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
-#: Runners whose exit codes have been measured, keyed by the executable that
-#: appears in `test_command`. One entry, deliberately: this is a list of what
-#: was *measured*, not of what probably behaves the same. The richer per-runner
-#: adapter — canonical selector form, a classification wider than an exit code,
-#: and proof that the selected test actually ran — is the next step (#198 §2);
-#: until it lands, an unrecognised runner is refused rather than guessed at.
+#: The runners whose exit codes have been measured, by name. Kept as a name
+#: here because callers and tests ask "which runner is this?"; the behaviour
+#: lives in `tdd_runners`, where each answer is one adapter's business.
 MEASURED_RUNNERS: dict[str, str] = {"pytest": "pytest"}
-
-#: Wrappers that run something else. `uv run pytest` is a pytest run; the
-#: runner is the first token that is not one of these.
-_RUNNER_WRAPPERS = frozenset(
-    {"uv", "run", "poetry", "pipenv", "hatch", "rye", "pdm", "nox", "tox", "-m", "exec"}
-)
-_PYTHONS = re.compile(r"^python(\d(\.\d+)?)?$")
 
 
 def detect_runner(test_command: str) -> str | None:
@@ -191,20 +189,20 @@ def detect_runner(test_command: str) -> str | None:
     Token-based, never a substring test: `"pytest" in command` would read
     `mix test --formatter PytestFormatter` as a pytest run, and the whole point
     of #198 is that believing the wrong runner is what produced a false red.
-    A path is reduced to its basename, so `./venv/bin/pytest` counts.
     """
-    try:
-        tokens = shlex.split(test_command or "")
-    except ValueError:  # unbalanced quotes — not something to guess about
-        return None
-    for token in tokens:
-        if token.startswith("-") and token != "-m":
-            continue
-        name = PurePosixPath(token).name
-        if name in _RUNNER_WRAPPERS or _PYTHONS.match(name):
-            continue
-        return MEASURED_RUNNERS.get(name)
-    return None
+    adapter = infer_adapter(test_command)
+    return adapter.name if adapter else None
+
+
+def resolve_adapter(config: ExecutorConfig) -> TddRunnerAdapter | None:
+    """Which adapter judges this project's replays, or None to refuse.
+
+    One function, because the answer is about to gain a second source: the
+    explicit `tdd_runner` key (build order §2). Until then it is inference, and
+    inference is allowed only where it cannot be wrong — an executable that
+    *is* a known runner's.
+    """
+    return infer_adapter(config.test_command)
 
 
 def verify_red(
@@ -237,8 +235,8 @@ def verify_red(
     # never happened" and 2 for "tests failed". Reading the second as the first
     # turned a test that was never executed into a confirmed red — silently,
     # with a checkpoint, claims and a satisfied gate behind it.
-    runner = detect_runner(config.test_command)
-    if runner is None:
+    adapter = resolve_adapter(config)
+    if adapter is None:
         return RedVerification(
             RedOutcome.UNVERIFIABLE,
             f"cannot confirm a red for {selector!r}: no authoritative exit-code "
@@ -248,16 +246,15 @@ def verify_red(
             env_id,
         )
 
-    if "::" not in selector:
-        # pytest's node-id form. `-k`-style names match several tests, and a
-        # checkpoint that matches several proves nothing about the one (§3.3).
-        # Checked *after* the runner: `::` is not a universal proof of a valid
-        # selector, it is one runner's syntax.
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
-            f"selector {selector!r} is not a node id (expected 'path::test')",
-            env_id,
-        )
+    # The selector is the adapter's syntax, not a universal one: `::` is
+    # pytest's node-id form and nothing outside an adapter may assume it.
+    parsed = adapter.parse_selector(selector)
+    if isinstance(parsed, SelectorRefusal):
+        return RedVerification(RedOutcome.UNVERIFIABLE, parsed.message, env_id)
+
+    refusal = adapter.preflight(Path(config.project_root), parsed)
+    if refusal is not None:
+        return RedVerification(RedOutcome.UNVERIFIABLE, refusal.message, env_id)
 
     root = Path(config.project_root)
 
@@ -296,7 +293,8 @@ def verify_red(
         )
 
     try:
-        return _classify(_run_selector(config, worktree, selector), env_id)
+        result = _run_selector(config, worktree, adapter, parsed)
+        return _classify(adapter, parsed, result, env_id)
     except Exception as exc:  # a broken replay is unverifiable, never a red
         return RedVerification(RedOutcome.UNVERIFIABLE, f"replay failed: {exc}", env_id)
     finally:
@@ -323,18 +321,20 @@ def verify_red(
 
 
 def _run_selector(
-    config: ExecutorConfig, worktree: Path, selector: str
+    config: ExecutorConfig,
+    worktree: Path,
+    adapter: TddRunnerAdapter,
+    selector: Selector,
 ) -> subprocess.CompletedProcess:
-    """Run the project's test command, narrowed to one node id, in ``worktree``."""
-    # `shell=True` is unavoidable — `test_command` is a shell string by
-    # contract — but the selector is not ours: it comes from an agent's output.
-    # Interpolating it raw makes `tests/x.py::t; rm -rf ~` a shell command that
-    # the harness runs on the operator's machine.
-    command = f"{config.test_command} {shlex.quote(selector)}"
-    logger.info("Replaying claimed red", selector=selector, worktree=str(worktree))
+    """Run the project's test command, narrowed to one test, in ``worktree``."""
+    # argv, not a shell string. The selector comes from an agent's output, and
+    # `tests/x.py::t; rm -rf ~` must be an argument rather than a command. The
+    # previous form quoted it correctly and was one edit away from not doing so;
+    # composite commands are refused before this point, so nothing needs a shell.
+    argv = adapter.build_command(config.test_command, selector)
+    logger.info("Replaying claimed red", selector=str(selector.locator), worktree=str(worktree))
     return subprocess.run(
-        command,
-        shell=True,
+        argv,
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -342,28 +342,33 @@ def _run_selector(
     )
 
 
-#: "The tests ran and some failed" — the only exit code that can mean a
-#: confirmed red. pytest's convention, shared by most runners.
-#:
-#: Everything else non-zero is treated as *unverifiable*, deliberately without
-#: trying to tell the cases apart. Measured on pytest 8: an unresolvable node
-#: id and a test file with a syntax error both exit **4**, not the 5 ("no tests
-#: collected") one would guess — 5 is for a directory with no tests. Since a
-#: wrong guess here would turn "we could not run it" into "it failed", the
-#: mapping stays as narrow as what was actually measured, and the exit code
-#: goes into the detail so a human can see what happened.
-_TESTS_FAILED = 1
+def _classify(
+    adapter: TddRunnerAdapter,
+    selector: Selector,
+    result: subprocess.CompletedProcess,
+    env_id: str,
+) -> RedVerification:
+    """Two independent answers, combined by one table (#198).
 
-
-def _classify(result: subprocess.CompletedProcess, env_id: str) -> RedVerification:
-    if result.returncode == 0:
-        return RedVerification(RedOutcome.NOT_RED, "the selector passed on replay", env_id)
-    if result.returncode == _TESTS_FAILED:
-        return RedVerification(RedOutcome.EXPECTED_FAIL, "the selector failed on replay", env_id)
+    `classify` says what the run did; `prove_selected` says whether the test we
+    asked for is what ran. Only both together can confirm a red — on ExUnit an
+    out-of-range line silently runs a *different* test and reports an ordinary
+    failure, so an exit code alone cannot mean "the test you named failed".
+    """
+    outcome = adapter.classify(result)
+    proof = adapter.prove_selected(selector, result)
+    if proof is SelectionProof.PROVEN:
+        if outcome is RunOutcome.TESTS_FAILED:
+            return RedVerification(
+                RedOutcome.EXPECTED_FAIL, "the selector failed on replay", env_id
+            )
+        if outcome is RunOutcome.TESTS_PASSED:
+            return RedVerification(RedOutcome.NOT_RED, "the selector passed on replay", env_id)
     output = f"{result.stdout}\n{result.stderr}"
     return RedVerification(
         RedOutcome.UNVERIFIABLE,
-        f"the test run exited {result.returncode} without reaching a verdict: {_tail(output)}",
+        f"the test run exited {result.returncode} without reaching a verdict "
+        f"({outcome.value}, selection {proof.value}): {_tail(output)}",
         env_id,
     )
 
