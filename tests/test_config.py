@@ -3,6 +3,8 @@
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import (
     ERROR_PATTERNS,
     ExecutorConfig,
@@ -97,11 +99,18 @@ class TestLoadConfigFromYaml:
         assert result["max_retries"] == 5
         assert result["claude_model"] == "opus"
 
-    def test_returns_empty_dict_for_invalid_yaml(self, tmp_path):
+    def test_refuses_invalid_yaml(self, tmp_path):
+        """Was `return {}` until #182. Falling back to defaults is not a
+        neutral act: the defaults invoke a paid external model with write
+        access to the tree, so a config that cannot be read must stop the run
+        rather than be treated as consent to run without one."""
+        from spec_runner.config import ConfigError
+
         cfg = tmp_path / "config.yaml"
         cfg.write_text(": invalid: yaml: [")
-        result = load_config_from_yaml(cfg)
-        assert result == {}
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert str(cfg) in str(exc.value)
 
     def test_loads_hooks_from_yaml(self, tmp_path):
         cfg = tmp_path / "config.yaml"

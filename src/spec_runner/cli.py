@@ -2134,13 +2134,27 @@ def main():
     # path once — _resolve_config_path() prints a deprecation warning for the
     # legacy location, which must not appear twice.
     config_path = _resolve_config_path()
-    yaml_config = load_config_from_yaml(config_path)
+    from .config import ConfigError
+
+    # A config the loader refuses (#182: flat keys silently discarded by an
+    # `executor:` wrapper) must stop the run with a readable line, not a
+    # traceback — and certainly not by falling back to the defaults it was
+    # written to avoid.
+    try:
+        yaml_config = load_config_from_yaml(config_path)
+    except ConfigError as exc:
+        if args.command != "validate":
+            raise SystemExit(f"⛔ {exc}") from None
+        # `validate` is the command whose job is to report exactly this. Dying
+        # here would hand the operator one problem at a time; let it run and
+        # list everything wrong with the setup in one pass. Nothing executes
+        # under `validate`, so the empty config below cannot start a run on
+        # defaults.
+        yaml_config = {}
     config = build_config(yaml_config, args)
     config.config_found = config_path.exists()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile.
-    from .config import ConfigError
-
     try:
         config.resolve_spec_profile()
     except ConfigError as exc:

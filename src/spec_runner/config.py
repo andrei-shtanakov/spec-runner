@@ -480,6 +480,63 @@ class ExecutorConfig:
 
 # === Config Loading ===
 
+#: Keys the loader recognises at the top of a flat v2.0 config — the dataclass
+#: fields plus the three nested sections. Defined here rather than in
+#: `validate.py` (which re-exports it) so the loader and the validator answer
+#: "is this a setting?" from one list and cannot drift.
+KNOWN_EXECUTOR_KEYS: set[str] = set(ExecutorConfig.__dataclass_fields__.keys()) | {
+    "hooks",
+    "commands",
+    "paths",
+}
+
+
+def discarded_top_level_keys(data: dict) -> list[str]:
+    """Settings that a config's `executor:` wrapper silently throws away (#182).
+
+    Two shapes are legal on their own: flat v2.0, and the legacy `executor:`
+    wrapper. Mixed, the wrapper wins and every top-level key is ignored — which
+    is how a run whose config named a scripted stand-in agent went to the real
+    `claude` CLI and spent real money.
+
+    Only *recognised* keys count. An unknown top-level key was never going to
+    be read under either shape, so it is noise rather than a setting that
+    stopped working, and calling it discarded would make the check cry wolf on
+    the `execution_order`/`skip_tasks`/`environment` sections carried by every
+    bundled legacy template.
+    """
+    if "executor" not in data:
+        return []
+    return sorted(k for k in data if k != "executor" and k in KNOWN_EXECUTOR_KEYS)
+
+
+def mixed_shape_error(config_path: Path | None, data: dict) -> str | None:
+    """The message for a config that mixes the two shapes, or None if it doesn't.
+
+    Shared by `load_config_from_yaml` and `validate_config` so the two surfaces
+    say the same thing.
+    """
+    if not isinstance(data, dict) or "executor" not in data:
+        return None
+    where = f"{config_path}: " if config_path else ""
+    section = data["executor"]
+    if not isinstance(section, dict):
+        kind = type(section).__name__
+        return (
+            f"{where}'executor:' is not a mapping (got {kind}) — nothing in this "
+            "file is read. Put the settings under 'executor:', or drop the key "
+            "and use the flat v2.0 shape."
+        )
+    discarded = discarded_top_level_keys(data)
+    if not discarded:
+        return None
+    return (
+        f"{where}config mixes the flat and 'executor:' shapes. Only the "
+        f"'executor:' section is read, so these settings did nothing: "
+        f"{', '.join(discarded)}. Move them under 'executor:', or drop the "
+        "'executor:' wrapper and use the flat v2.0 shape."
+    )
+
 
 def _parse_personas(raw: dict) -> dict[str, Persona] | None:
     """Parse personas section from YAML config into Persona objects."""
@@ -606,8 +663,15 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
 
-        # Support both v2.0 flat format and v1.x legacy (executor: wrapper)
-        executor_config = data.get("executor", {}) if "executor" in data else data
+        # Support both v2.0 flat format and v1.x legacy (executor: wrapper).
+        # Mixed, the wrapper wins and the flat keys vanish — refused (#182),
+        # because "your settings did nothing" is not a thing to discover from
+        # the bill.
+        problem = mixed_shape_error(config_path, data)
+        if problem:
+            raise ConfigError(problem)
+        # Past the check above, an `executor:` key is guaranteed to be a mapping.
+        executor_config = data.get("executor", data)
         hooks = executor_config.get("hooks", {})
         pre_start = hooks.get("pre_start", {})
         post_done = hooks.get("post_done", {})
@@ -692,11 +756,15 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
                 "post_pr_wait_seconds"
             ),
         }
+    except ConfigError:
+        raise
     except Exception as e:
-        from .logging import get_logger
-
-        get_logger("config").warning("Failed to load config", path=str(config_path), error=str(e))
-        return {}
+        # Every way of failing to read a config lands here, and returning `{}`
+        # would be the same fail-open #182 is about: a config that does
+        # nothing sends the run to the defaults, and the defaults invoke a paid
+        # external model with write access to the tree. A file that cannot be
+        # read is not consent to run on defaults — say so and stop.
+        raise ConfigError(f"{config_path}: cannot be read as a config: {e}") from e
 
 
 def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:

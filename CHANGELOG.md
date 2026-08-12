@@ -10,6 +10,39 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A config that mixes the flat and `executor:` shapes is refused** (#182,
+  battle finding F-7). One stray `executor:` key made the loader read *only*
+  that section and discard every top-level key — silently, with
+  `spec-runner validate` reporting zero errors.
+
+  This is a fail-open safety bug, not a usability wart: `claude_command` is
+  among the discarded keys, so the tool falls back to its default and invokes a
+  paid external model with write access to the working tree. It is how a battle
+  run whose config named a scripted stand-in agent reached the real `claude`
+  CLI and spent real tokens. Any safety knob set that way — `skip_permissions`,
+  `run_review`, `execution_mode`, a sandboxed command — was silently off.
+
+  Now an **error** naming the discarded keys, at load time and in `validate`;
+  not a warning, because "your settings did nothing and money was spent
+  elsewhere" is exactly the class of message that scrolls past. An `executor:`
+  key that is not a mapping is refused for the same reason (it used to crash
+  into the loader's broad handler and return an empty config, i.e. defaults).
+
+  **A config that cannot be read is refused for the same reason.** Malformed
+  YAML, or any other failure to load, used to log a warning and return an empty
+  config — which is the identical fail-open one level up. A file the loader
+  cannot read is not consent to run on defaults.
+
+  Either shape alone is untouched: the legacy `executor:`-only layout is the
+  documented v1.x shape and keeps working, and the top-level
+  `execution_order`/`skip_tasks`/`environment` sections carried by every
+  bundled legacy template stay warnings — detection intersects with the keys
+  the loader actually reads, so an unrecognised key is noise rather than a
+  setting that stopped working. Every command stops at the refusal; `validate`
+  runs on, because listing the setup's problems in one pass is what it is for.
+
 ## [2.26.0] - 2026-08-12
 
 ### Added
