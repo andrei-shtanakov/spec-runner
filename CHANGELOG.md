@@ -53,6 +53,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
     staged, so an edit landing between the proof and the commit refuses rather
     than riding along.
 
+- **…and the same for the other two harness-written statuses** — found by
+  battle-testing the fix above against a build from master, which is the only
+  reason they are in the same release:
+
+  - **`⏸️ BLOCKED`**, written when a task stops without finishing, is committed
+    the same way. Without it the deadlock simply arrived one run later:
+    measured, run 1 blocked and committed `REVIEW` and left a clean tree, run 2
+    wrote `BLOCKED` uncommitted, and run 3 refused.
+  - **A run killed between writing a status and committing it** (`SIGKILL`
+    during review, measured) leaves the same dirt with no stop path to clean
+    it. The next run now recovers it where the guard would otherwise refuse,
+    under the same proof, and says so: `↻ Recovered an interrupted run:
+    committed TASK-001 in_progress → review as bookkeeping`. `in_progress`
+    joins the set for this reason.
+
+  `done` is still refused everywhere here — it is a claim about the work,
+  carried by the task's own commit, and committing one found lying in a tree
+  would complete a task nobody finished. So is `todo`, which comes from
+  operator commands rather than from a run. A real spec edit still refuses, and
+  a failing run is never taken down by a bookkeeping problem (#127's lesson).
+
 ## [2.27.0] - 2026-08-12
 
 **Minor, not patch.** Everything here is a defect fix, but the outward

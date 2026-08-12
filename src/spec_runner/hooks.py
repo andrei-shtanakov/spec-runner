@@ -412,7 +412,7 @@ def _commit_blocked_status(
     from .bookkeeping import commit_status_flip
 
     try:
-        problem = commit_status_flip(config, task.id, candidate_sha=candidate_sha, verdict=blocked)
+        problem = commit_status_flip(config, task.id, reason=blocked, candidate_sha=candidate_sha)
     except Exception as exc:  # pragma: no cover - defensive
         problem = f"the status flip could not be committed: {exc}"
     if not problem:
