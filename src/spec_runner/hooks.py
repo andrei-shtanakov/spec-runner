@@ -482,8 +482,17 @@ def post_done_hook(
     changed_since: float | None = None,
     *,
     reporter: StageReporter | None = None,
+    pending_cost: float | None = 0.0,
 ) -> tuple[bool, str | None, str, str, bool]:
     """Hook after task completion.
+
+    Args:
+        pending_cost: what this attempt has already spent on the implementation
+            call but has not yet recorded — `record_attempt` runs after this
+            hook returns, so the budget guard would otherwise read stale spend
+            and start a review the attempt can no longer afford (#213). `None`
+            means the call's cost is unknown, which the guard treats as an
+            unprovable remainder rather than as zero.
 
     Returns:
         Tuple of (success, error_details, review_status, review_findings, no_op).
@@ -744,6 +753,7 @@ def post_done_hook(
             test_output=test_output_str,
             lint_output=lint_output_str,
             previous_error=previous_error,
+            pending_cost=pending_cost,
         )
         # #138: the four outcomes are four different facts and are recorded as
         # such — "found issues", "never produced a verdict" and "the reviewer

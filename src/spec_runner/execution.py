@@ -413,8 +413,14 @@ def execute_task(
                 logger.info("Implicit success (return code 0)", task_id=task_id)
 
             # Post-done hook (tests, lint, review)
+            # #213: the implementation call's cost is real but not yet
+            # *recorded* — `record_attempt` runs after the hook returns. Handed
+            # over explicitly, because a guard that reads only the database
+            # would let review start on a task whose budget this very attempt
+            # has already spent. The free budget rehearsal caught exactly that:
+            # $0.60 recorded, $1.00 cap, review allowed, $1.80 spent.
             hook_success, hook_error, review_status, review_findings, hook_no_op = post_done_hook(
-                task, config, True, reporter=reporter
+                task, config, True, reporter=reporter, pending_cost=cli_result.cost_usd
             )
 
             if hook_success:

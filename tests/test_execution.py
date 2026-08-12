@@ -101,7 +101,9 @@ class TestExecuteTask:
 
         assert result is True
         mock_pre.assert_called_once_with(task, config, reporter=ANY)
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
+        # `pending_cost` carries this attempt's unrecorded spend to the budget
+        # guard (#213); the fake CLI reports no cost, so it arrives as None.
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=ANY)
         mock_status.assert_called()
 
     @patch("spec_runner.execution.update_task_status")
@@ -139,7 +141,9 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY)
+        # `pending_cost` carries this attempt's unrecorded spend to the budget
+        # guard (#213); the fake CLI reports no cost, so it arrives as None.
+        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=ANY)
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")

@@ -295,6 +295,7 @@ def _run_reviewer(
     review_cmd: str,
     review_model: str,
     review_template: str,
+    pending_cost: float | None = 0.0,
 ) -> ReviewCall:
     """Run one reviewer subprocess and **record what it cost**.
 
@@ -317,7 +318,7 @@ def _run_reviewer(
     # #213: the third of a TDD attempt's paid calls, and the one whose refusal
     # costs least — the candidate commit stands either way, and an unreviewed
     # candidate is a state the tool already models.
-    refusal = _budget_refusal(config, task_id, provenance)
+    refusal = _budget_refusal(config, task_id, provenance, pending_cost)
     if refusal is not None:
         log_progress(f"⛔ {refusal.reason}", task_id)
         return ReviewCall(
@@ -379,7 +380,9 @@ def _run_reviewer(
 _LEDGER_LOCK = threading.Lock()
 
 
-def _budget_refusal(config: ExecutorConfig, task_id: str, provenance: str):
+def _budget_refusal(
+    config: ExecutorConfig, task_id: str, provenance: str, pending_cost: float | None = 0.0
+):
     """Ask the pre-call guard, or None when no cap is configured.
 
     Opens no state when there is no budget: a run that set no cap must not
@@ -392,7 +395,7 @@ def _budget_refusal(config: ExecutorConfig, task_id: str, provenance: str):
         return None
     try:
         with _LEDGER_LOCK, ExecutorState(config) as state:
-            return check_before_call(config, state, task_id, provenance)
+            return check_before_call(config, state, task_id, provenance, pending_cost)
     except Exception as exc:
         # Fail closed. A guard that cannot read spend is the extreme case of
         # the unprovable remainder it already refuses on, and proceeding here
@@ -447,6 +450,7 @@ def run_code_review(
     test_output: str | None = None,
     lint_output: str | None = None,
     previous_error: str | None = None,
+    pending_cost: float | None = 0.0,
 ) -> tuple[ReviewVerdict, str | None, str | None]:
     """Run code review on completed task.
 
@@ -496,6 +500,7 @@ def run_code_review(
             review_cmd,
             review_model,
             review_template,
+            pending_cost,
         )
         if call.budget_refusal:
             # NOT_RUN, never SKIPPED: `skipped` is what a *policy* decision
@@ -604,6 +609,7 @@ def _run_single_role_review(
     review_template: str,
     config: ExecutorConfig,
     task_id: str,
+    pending_cost: float | None = 0.0,
 ) -> tuple[str, ReviewVerdict, str]:
     """Run a single role-specific review. Returns (role, verdict, output).
 
@@ -621,6 +627,7 @@ def _run_single_role_review(
             review_cmd,
             review_model,
             review_template,
+            pending_cost,
         )
         if call.budget_refusal:
             return role, ReviewVerdict.NOT_RUN, call.budget_refusal
@@ -651,6 +658,7 @@ def run_parallel_review(
     test_output: str | None = None,
     lint_output: str | None = None,
     previous_error: str | None = None,
+    pending_cost: float | None = 0.0,
 ) -> tuple[ReviewVerdict, str | None, str | None]:
     """Run multiple review agents in parallel, one per role.
 
@@ -691,6 +699,7 @@ def run_parallel_review(
             review_template,
             config,
             task.id,
+            pending_cost,
         )
 
     results: list[tuple[str, ReviewVerdict, str]] = []
