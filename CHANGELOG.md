@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.27.1] - 2026-08-12
+
+**Patch, not minor.** One defect (#192 / battle finding F-8) in three forms.
+No public surface moves: `--json-result`, the state-DB schema and the CLI are
+untouched, and no flag is added or changed. What a user sees that is new is a
+bookkeeping commit where the tool previously left a dirty `tasks.md` — the
+absence of a deadlock rather than a new capability.
+
 ### Fixed
 
 - **A gate-blocked task no longer deadlocks the next run** (#192, battle
@@ -1932,7 +1940,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.1...HEAD
+[2.27.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.27.0...v2.27.1
 [2.27.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.24.0...v2.25.0
