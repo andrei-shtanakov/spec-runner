@@ -10,6 +10,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An ExUnit red is no longer discarded as unclaimable** (#210).
+  `claim_paths_for` split the selector on `::` and returned nothing for any
+  other shape, with a comment saying `verify_red` had already refused such
+  selectors. True when pytest was the only runner; false the moment ExUnit
+  landed. A valid `path:line` therefore claimed no files, `record_claims`
+  refused — correctly, since a red with nothing locked would pass the gate over
+  an open file — and the checkpoint was discarded **after** the replay had
+  confirmed it.
+
+  Claim paths now come from the adapter that parses the selector, with an
+  optional `runner` when the caller knows it. Anything no adapter understands
+  still claims nothing, so the fail-closed half is unchanged.
+
+  Pinned by a property rather than by examples: for every registered adapter,
+  the shape its own prompt asks the agent for must yield a claimable path.
+  That is precisely what was missing — the prompt asked for `path:line` and
+  claims could not read it.
+
+  Found by the second paid pilot attempt. Nothing false was recorded and no
+  implementation ran; the defect was that a valid selector was treated as
+  nonsense.
+
 ## [2.28.2] - 2026-08-12
 
 **Patch.** No public surface moves — no new config key, no new flag, no schema

@@ -92,20 +92,38 @@ class ClaimViolation:
     detail: str | None = None
 
 
-def claim_paths_for(selector: str) -> list[str]:
+def claim_paths_for(selector: str, runner: str = "") -> list[str]:
     """The files a selector claims.
 
-    A pytest node id names exactly one file. **Documented limitation** (§1.3):
-    a test depending on a fixture in `conftest.py` does not claim that
-    conftest, so editing the fixture can turn the red green and is not blocked.
-    Widening this by import graph or coverage is a separate decision; guessing
-    at it here would be worse than the honest gap.
+    A selector names exactly one file, and **which part of it is the file is
+    the runner's business** — pytest's `path::test` and ExUnit's `path:line`
+    are not the same shape. This used to split on `::` and return `[]` for
+    anything else, with a comment saying `verify_red` had already refused it.
+    That stopped being true when ExUnit arrived: a perfectly good `path:line`
+    reached here, claimed nothing, and the red was discarded as unclaimable —
+    found by the second paid pilot run (#210).
+
+    ``runner`` names the adapter to parse with. Empty means "try each until one
+    parses", which keeps every existing caller working; a selector no adapter
+    understands still claims nothing, because a red with nothing locked would
+    pass the gate over an open file.
+
+    **Documented limitation** (§1.3): a test depending on a fixture in
+    `conftest.py` does not claim that conftest, so editing the fixture can turn
+    the red green and is not blocked. Widening this by import graph or coverage
+    is a separate decision; guessing at it here would be worse than the honest
+    gap.
     """
-    if "::" not in selector:
-        # Refused upstream by `verify_red`. Claiming nothing rather than
-        # guessing keeps the two from disagreeing about what a selector is.
-        return []
-    return [selector.split("::", 1)[0]]
+    from .tdd_runners import ADAPTERS, Selector, adapter_for
+
+    candidates = [adapter_for(runner)] if runner else list(ADAPTERS.values())
+    for adapter in candidates:
+        if adapter is None:
+            continue
+        parsed = adapter.parse_selector(selector)
+        if isinstance(parsed, Selector):
+            return [str(parsed.path)]
+    return []
 
 
 def validate_claim_path(project_root: Path, path: str) -> str | None:

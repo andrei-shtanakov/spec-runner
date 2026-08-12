@@ -593,3 +593,56 @@ class TestFailingClosed:
             outcome = evaluate_gates("tests", ctx, registry=registry)
         assert outcome.status is not GateStatus.SATISFIED
         assert any(r.status is GateStatus.INSTRUMENT_ERROR for r in outcome.results)
+
+
+class TestClaimPathsAreTheAdaptersBusiness:
+    """#210, found by the second paid pilot run. `claim_paths_for` split on
+    `::` and returned `[]` for anything else, with a comment saying
+    `verify_red` had already refused such selectors. That was true when pytest
+    was the only runner and stopped being true when ExUnit arrived: a perfectly
+    good `path:line` reached here, claimed nothing, and the red was discarded
+    as unclaimable — after the replay had already confirmed it.
+
+    Fail-closed was never in question (nothing claimed → no checkpoint). What
+    was wrong is that a valid selector was treated as nonsense.
+    """
+
+    def test_a_pytest_node_id_claims_its_file(self):
+        from spec_runner.claims import claim_paths_for
+
+        assert claim_paths_for("tests/test_x.py::TestY::test_z") == ["tests/test_x.py"]
+
+    def test_an_exunit_line_selector_claims_its_file(self):
+        from spec_runner.claims import claim_paths_for
+
+        assert claim_paths_for("test/kapelle/providers/catalog_test.exs:85") == [
+            "test/kapelle/providers/catalog_test.exs"
+        ]
+
+    def test_naming_the_runner_uses_that_adapter(self):
+        from spec_runner.claims import claim_paths_for
+
+        assert claim_paths_for("test/x_test.exs:85", runner="exunit") == ["test/x_test.exs"]
+        assert claim_paths_for("test/x_test.exs:85", runner="pytest") == []
+
+    @pytest.mark.parametrize("selector", ["garbage", "tests/test_x.py", "", "::test_y"])
+    def test_a_selector_no_adapter_understands_claims_nothing(self, selector):
+        """The fail-closed half, unchanged: a red with nothing locked would
+        pass the gate over an open file."""
+        from spec_runner.claims import claim_paths_for
+
+        assert claim_paths_for(selector) == []
+
+    def test_every_adapter_s_own_prompted_shape_claims_a_file(self):
+        """The property, not the two examples: whatever an adapter asks the
+        agent for must yield a claimable path, or its reds cannot be locked —
+        which is exactly how this defect reached a paid run."""
+        from spec_runner.claims import claim_paths_for
+        from spec_runner.tdd_runners import ADAPTERS
+
+        for name, adapter in ADAPTERS.items():
+            line = next(
+                ln for ln in adapter.selector_instruction.splitlines() if "TDD_SELECTOR:" in ln
+            )
+            example = line.split("TDD_SELECTOR:", 1)[1].strip().replace("LINE", "12")
+            assert claim_paths_for(example, runner=name), f"{name}: {example!r} claims nothing"
