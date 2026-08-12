@@ -648,6 +648,25 @@ def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
     dirty = spec_dirty_paths(config)
     if not dirty:
         return
+
+    # A run killed between writing a status and committing it leaves exactly
+    # one kind of dirt behind: a harness-authored status flip. Committing that
+    # on its own is the recovery — the operator must not have to commit a
+    # change they did not make, and `--allow-dirty-spec` would disarm the guard
+    # for real spec edits at the same time (#192). Anything the proof cannot
+    # confirm as status-only stays dirt and is refused below.
+    from .bookkeeping import recover_interrupted_flip
+
+    recovered = recover_interrupted_flip(config)
+    if recovered is not None:
+        print(
+            f"↻ Recovered an interrupted run: committed {recovered.task_id} "
+            f"{recovered.previous} → {recovered.new} as bookkeeping"
+        )
+        dirty = spec_dirty_paths(config)
+        if not dirty:
+            return
+
     logger.error("Refusing to run: spec/config files are not committed", files=dirty)
     print("⛔ Refusing to run: spec/config files have uncommitted changes:")
     for line in dirty:

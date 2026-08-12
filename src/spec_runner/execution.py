@@ -5,6 +5,7 @@ import subprocess
 import time
 from datetime import datetime
 
+from .bookkeeping import commit_status_flip_quietly
 from .config import ExecutorConfig
 from .errors import classify
 from .harness import HarnessBaseline
@@ -666,6 +667,32 @@ def _check_task_budget(
     return None
 
 
+def _record_blocked(task: Task, config: ExecutorConfig) -> None:
+    """Write `blocked` into tasks.md and commit that flip on its own (#192).
+
+    The flip is the harness recording its own process, exactly like the
+    `review` flip at the start of review — and exactly like it, an uncommitted
+    one leaves the next run refusing at the dirty-spec guard. The first fix
+    cleaned up the review flip and the battle test then met the same wall one
+    status later; this is that second half.
+    """
+    last = state_last_error(task, config)
+    update_task_status(config.tasks_file, task.id, "blocked")
+    commit_status_flip_quietly(config, task.id, reason=last)
+
+
+def state_last_error(task: Task, config: ExecutorConfig) -> str:
+    """A short why-it-stopped for the bookkeeping commit's trailer."""
+    from .state import ExecutorState
+
+    try:
+        with ExecutorState(config) as state:
+            ts = state.tasks.get(task.id)
+            return (ts.last_error or "task failed")[:120] if ts else "task failed"
+    except Exception:  # pragma: no cover - the commit message is not worth a crash
+        return "task failed"
+
+
 def _fail_for_budget(
     task: Task,
     config: ExecutorConfig,
@@ -687,6 +714,7 @@ def _fail_for_budget(
     # in it, so writing one raised KeyError and took the whole run tail with
     # it (#127). "blocked" is what every other terminal failure writes here.
     update_task_status(config.tasks_file, task.id, "blocked")
+    commit_status_flip_quietly(config, task.id, reason="budget exceeded")
 
 
 def run_with_retries(
@@ -789,7 +817,7 @@ def run_with_retries(
 
     # Handle based on on_task_failure setting
     if config.on_task_failure == "stop":
-        update_task_status(config.tasks_file, task.id, "blocked")
+        _record_blocked(task, config)
         return False
 
     elif config.on_task_failure == "ask":
@@ -806,15 +834,15 @@ def run_with_retries(
             state._save()
             return run_with_retries(task, config, state, harness_baseline=harness_baseline)
         elif choice == "q":
-            update_task_status(config.tasks_file, task.id, "blocked")
+            _record_blocked(task, config)
             return False
         else:
             # Skip (default)
-            update_task_status(config.tasks_file, task.id, "blocked")
+            _record_blocked(task, config)
             log_progress("\u23ed\ufe0f Skipped, continuing to next task", task.id)
             return "SKIP"
 
     else:  # "skip" (default)
-        update_task_status(config.tasks_file, task.id, "blocked")
+        _record_blocked(task, config)
         log_progress("\u23ed\ufe0f Skipped, continuing to next task", task.id)
         return "SKIP"

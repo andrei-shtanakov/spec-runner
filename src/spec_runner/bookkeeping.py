@@ -45,9 +45,18 @@ from .task import TASK_HEADER, TASK_META, TASK_STATUS_WORDS
 
 logger = get_logger("bookkeeping")
 
-#: The only transition this module will commit. A `done` flip is a terminal
-#: claim, not bookkeeping, and must never ride in on this path.
-BOOKKEEPING_STATUS = "review"
+#: The transitions this module will commit — the three the *harness* writes
+#: about its own process: `in_progress` when a task starts, `review` when
+#: review starts (#66), and `blocked` when a task stops without finishing. Each
+#: can be left uncommitted at a point where the run ends, and each then
+#: deadlocks the next one.
+#:
+#: `done` is deliberately absent. It is a claim about the work, it is written
+#: with the checklist and carried by the task's own commit, and letting it
+#: through here would turn a bookkeeping path into a way to complete a task.
+#: `todo` is absent too: it comes from operator commands (`reset`) rather than
+#: from a run, and an operator who edits the spec can commit the edit.
+BOOKKEEPING_STATUSES = frozenset({"in_progress", "review", "blocked"})
 
 
 @dataclass(frozen=True)
@@ -116,14 +125,30 @@ def _status_of(line: str) -> str | None:
     return parts[0] if parts else None
 
 
-def status_only_transition(before: str, after: str, task_id: str) -> StatusFlip | None:
+def _task_owning(lines: list[str], index: int) -> str | None:
+    """The task whose block contains ``index``, by the nearest header above it."""
+    for i in range(index, -1, -1):
+        match = TASK_HEADER.match(lines[i])
+        if match:
+            return match.group(1)
+    return None
+
+
+def status_only_transition(
+    before: str, after: str, task_id: str | None = None
+) -> StatusFlip | None:
     """The status change from ``before`` to ``after``, if that is *all* it is.
 
-    Returns None when the texts are identical, when anything outside
-    ``task_id``'s status changed, or when the change cannot be proven to be a
-    status flip. Fail-closed on purpose: the caller commits on a yes, and
-    committing somebody's spec edit as bookkeeping is the failure worth
-    avoiding.
+    ``task_id`` names the task the caller is acting for; passing None asks
+    which task changed, which is what recovery needs — an interrupted run left
+    a flip behind and nobody is holding the task object any more. Either way
+    the proof is the same, because the answer is only accepted when the changed
+    line *is* that task's meta line.
+
+    Returns None when the texts are identical, when anything outside the task's
+    status changed, or when the change cannot be proven to be a status flip.
+    Fail-closed on purpose: the caller commits on a yes, and committing
+    somebody's spec edit as bookkeeping is the failure worth avoiding.
     """
     if before == after:
         return None
@@ -143,6 +168,14 @@ def status_only_transition(before: str, after: str, task_id: str) -> StatusFlip 
     tag, i1, i2, j1, j2 = changes[0]
     if tag != "replace" or i2 - i1 != 1 or j2 - j1 != 1:
         return None
+
+    if task_id is None:
+        # Inferred from the changed line, then held to the same standard: the
+        # checks below still require it to be *that* task's meta line in both
+        # versions, so inference cannot widen what gets accepted.
+        task_id = _task_owning(new_lines, j1)
+        if task_id is None or task_id != _task_owning(old_lines, i1):
+            return None
 
     if _meta_index(old_lines, task_id) != i1 or _meta_index(new_lines, task_id) != j1:
         return None
@@ -165,6 +198,21 @@ def status_only_transition(before: str, after: str, task_id: str) -> StatusFlip 
     return StatusFlip(task_id=task_id, previous=previous, new=new)
 
 
+#: Long enough for a gate detail with a SHA in it, short enough to stay a
+#: trailer. `git log --format=%(trailers)` and `git interpret-trailers` both
+#: read a trailer as one line; a reason arriving from `last_error` or a gate
+#: detail can be neither.
+_REASON_LIMIT = 200
+
+
+def _one_line(text: str) -> str:
+    """A trailer-safe reason: whitespace collapsed, bounded, never empty."""
+    flattened = " ".join(text.split())
+    if len(flattened) > _REASON_LIMIT:
+        flattened = flattened[: _REASON_LIMIT - 1] + "…"
+    return flattened or "unspecified"
+
+
 def _git(config, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=config.project_root, capture_output=True, text=True)
 
@@ -173,10 +221,10 @@ def commit_status_flip(
     config,
     task_id: str,
     *,
-    candidate_sha: str,
-    verdict: str,
+    reason: str,
+    candidate_sha: str = "",
 ) -> str | None:
-    """Commit the blocked task's status flip. Returns a problem, or None.
+    """Commit a harness-authored status flip. Returns a problem, or None.
 
     None means "nothing needed doing or it is done": an untracked `tasks.md`
     (orchestrators that keep generated specs out of git never meet the guard),
@@ -215,22 +263,26 @@ def commit_status_flip(
             "so the status flip was not committed on its own; the next run will "
             "refuse until the spec changes are committed"
         )
-    if flip.new != BOOKKEEPING_STATUS:
+    if flip.new not in BOOKKEEPING_STATUSES:
+        allowed = ", ".join(sorted(BOOKKEEPING_STATUSES))
         return (
             f"refusing to commit a {flip.previous} → {flip.new} transition as "
-            f"bookkeeping: only '{BOOKKEEPING_STATUS}' is a process record"
+            f"bookkeeping: only {allowed} are process records"
         )
 
     message = (
-        f"{task_id}: status {flip.previous} → {flip.new} (blocked before merge)\n"
+        f"{task_id}: status {flip.previous} → {flip.new} (spec-runner bookkeeping)\n"
         "\n"
         "Bookkeeping only — written by spec-runner, no task work in this commit.\n"
         "The task stays resumable; nothing was merged and nothing is DONE.\n"
         "\n"
         f"Task-Status: {task_id} {flip.previous} -> {flip.new}\n"
-        f"Gate-Candidate: {candidate_sha}\n"
-        f"Gate-Verdict: {verdict}\n"
+        f"Status-Reason: {_one_line(reason)}\n"
     )
+    if candidate_sha:
+        # Only the gate path has one. Recorded so the commit says which tree
+        # was judged — the candidate, never this commit.
+        message += f"Gate-Candidate: {candidate_sha}\n"
     add = _git(config, "add", "--", rel)
     if add.returncode != 0:
         return f"could not stage {rel}: {add.stderr.strip()[:200]}"
@@ -262,9 +314,76 @@ def commit_status_flip(
     return None
 
 
+def recover_interrupted_flip(config) -> StatusFlip | None:
+    """Commit a status flip an interrupted run left behind. Returns it, or None.
+
+    A run killed between writing a status and committing it leaves `tasks.md`
+    dirty, and the next run refuses at the dirty-spec guard — the same deadlock
+    as the blocked stop, reached by crashing instead of by stopping. Measured
+    on a build from master: `SIGKILL` during review, then
+    `⛔ Refusing to run: spec/config files have uncommitted changes`.
+
+    The same proof decides: exactly one changed line, that task's meta line,
+    status only, and a status the harness itself writes about its own process.
+    Anything else — including a `done` left behind, which is a claim about work
+    rather than about process — is left dirty for the guard to refuse, which is
+    the guard doing its job.
+    """
+    if not getattr(config, "auto_commit", False):
+        return None
+    tasks_file: Path = config.tasks_file
+    if not tasks_file.exists():
+        return None
+    try:
+        rel = str(tasks_file.relative_to(config.project_root))
+    except ValueError:
+        return None
+    committed = _git(config, "show", f"HEAD:{rel}")
+    if committed.returncode != 0:
+        return None
+    flip = status_only_transition(committed.stdout, tasks_file.read_text())
+    if flip is None or flip.new not in BOOKKEEPING_STATUSES:
+        return None
+    problem = commit_status_flip(config, flip.task_id, reason="recovered after an interrupted run")
+    if problem:
+        logger.warning("Could not recover an interrupted status flip", detail=problem)
+        return None
+    logger.info(
+        "Recovered an interrupted status flip",
+        task_id=flip.task_id,
+        previous=flip.previous,
+        new=flip.new,
+    )
+    return flip
+
+
+def commit_status_flip_quietly(config, task_id: str, *, reason: str) -> None:
+    """`commit_status_flip` for the terminal-failure path, which has no return
+    channel to carry a problem.
+
+    A task is already failing when this runs; the flip to `blocked` is the
+    harness recording that, and it deadlocks the next run just as the `review`
+    flip did (found by the battle test of the first fix, which cleaned up the
+    review flip and then met the same wall one status later). Nothing here may
+    raise: the failure being recorded is the important event, and a bookkeeping
+    problem is logged loudly rather than taking the run tail with it — the same
+    rule `_fail_for_budget` learned in #127.
+    """
+    if not getattr(config, "auto_commit", False):
+        return
+    try:
+        problem = commit_status_flip(config, task_id, reason=reason)
+    except Exception as exc:  # pragma: no cover - defensive
+        problem = str(exc)
+    if problem:
+        logger.warning("Failed task left a dirty spec", task_id=task_id, detail=problem)
+
+
 __all__ = [
-    "BOOKKEEPING_STATUS",
+    "BOOKKEEPING_STATUSES",
     "StatusFlip",
     "commit_status_flip",
+    "commit_status_flip_quietly",
+    "recover_interrupted_flip",
     "status_only_transition",
 ]

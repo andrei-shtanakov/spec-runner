@@ -212,7 +212,7 @@ class TestTheCommit:
         cfg = _cfg(root)
         _flip(root)
         assert spec_dirty_paths(cfg), "precondition: the flip is dirt until committed"
-        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc1234", verdict="gate") is None
+        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc1234", reason="gate") is None
         assert spec_dirty_paths(cfg) == []
 
     def test_the_commit_records_what_it_is_and_what_judged_it(self, tmp_path):
@@ -221,7 +221,7 @@ class TestTheCommit:
         root = _repo(tmp_path)
         cfg = _cfg(root)
         _flip(root)
-        commit_status_flip(cfg, "TASK-001", candidate_sha="abc1234def", verdict="review: failed")
+        commit_status_flip(cfg, "TASK-001", candidate_sha="abc1234def", reason="review: failed")
         body = _git(root, "log", "-1", "--format=%B").stdout
         assert "TASK-001" in body
         assert "abc1234def" in body
@@ -234,7 +234,7 @@ class TestTheCommit:
         cfg = _cfg(root)
         _flip(root)
         (root / "stray.py").write_text("x = 1\n")
-        commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
+        commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate")
         files = _git(root, "show", "--name-only", "--format=", "HEAD").stdout.split()
         assert files == ["spec/tasks.md"]
         assert "stray.py" in _git(root, "status", "--porcelain").stdout
@@ -242,7 +242,7 @@ class TestTheCommit:
     def test_nothing_to_commit_is_not_an_error(self, tmp_path):
         root = _repo(tmp_path)
         cfg = _cfg(root)
-        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate") is None
+        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate") is None
         assert _subjects(root) == ["spec"]
 
     def test_a_content_change_is_refused_and_says_so(self, tmp_path):
@@ -254,7 +254,7 @@ class TestTheCommit:
         _flip(root)
         tasks = root / "spec" / "tasks.md"
         tasks.write_text(tasks.read_text().replace("- [ ] a", "- [x] a"))
-        problem = commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
+        problem = commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate")
         assert problem and "status" in problem.lower()
         assert _git(root, "status", "--porcelain").stdout.strip() != ""
 
@@ -267,7 +267,7 @@ class TestTheCommit:
         _git(root, "commit", "-qm", "untrack")
         _flip(root)
         before = _subjects(root)
-        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate") is None
+        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate") is None
         assert _subjects(root) == before
 
 
@@ -513,6 +513,191 @@ class TestARealBlockedRun:
         assert "more than" in (error or ""), "the failed bookkeeping must still be visible"
 
 
+class TestTheOtherHarnessStatus:
+    """Found by the battle test of the first version of this fix, on a build
+    from master: cleaning up the `review` flip left the *terminal failure*
+    flip — `⏸️ BLOCKED`, written by `run_with_retries` when a task stops — and
+    the deadlock came back one status later. Measured, three runs deep:
+
+        run 1  blocked → REVIEW committed → tree clean
+        run 2  writes BLOCKED, uncommitted  → tree dirty
+        run 3  ⛔ Refusing to run: spec/config files have uncommitted changes
+
+    Both flips are the harness recording its own process, so both are
+    bookkeeping and both get committed.
+    """
+
+    def test_blocked_is_a_process_record_too(self, tmp_path):
+        from spec_runner.git_ops import spec_dirty_paths
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        assert commit_status_flip(cfg, "TASK-001", reason="task failed") is None
+        assert spec_dirty_paths(cfg) == []
+
+    def test_done_is_still_refused(self, tmp_path):
+        """`done` is a claim about the work, carried by the task's own commit.
+        Letting it through here would make bookkeeping a way to finish a task."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="done")
+        problem = commit_status_flip(cfg, "TASK-001", reason="whatever")
+        assert problem and "done" in problem
+
+    def test_the_reason_is_recorded(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        commit_status_flip(cfg, "TASK-001", reason="Pre-terminal gate unsatisfied: review")
+        assert "Pre-terminal gate unsatisfied" in _git(root, "log", "-1", "--format=%B").stdout
+
+    def test_the_reason_stays_one_trailer_line(self, tmp_path):
+        """Raised in review: the reason arrives from `last_error` or a gate
+        detail, so it can be multi-line and long — and a trailer is one line to
+        `git interpret-trailers` and `--format=%(trailers)` alike."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        commit_status_flip(cfg, "TASK-001", reason="line one\nline two\n\n  padded   " + "x" * 400)
+        body = _git(root, "log", "-1", "--format=%B").stdout
+        trailer = [ln for ln in body.splitlines() if ln.startswith("Status-Reason:")]
+        assert len(trailer) == 1
+        assert "line one line two padded" in trailer[0]
+        assert len(trailer[0]) < 250, trailer[0]
+        # And git itself agrees it is a trailer.
+        parsed = _git(root, "log", "-1", "--format=%(trailers:key=Status-Reason)").stdout
+        assert parsed.strip().startswith("Status-Reason:")
+
+    def test_an_empty_reason_still_yields_a_trailer(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="blocked")
+        commit_status_flip(cfg, "TASK-001", reason="   \n  ")
+        assert "Status-Reason: unspecified" in _git(root, "log", "-1", "--format=%B").stdout
+
+    def test_the_failure_path_commits_it(self, tmp_path, monkeypatch):
+        """Through the real terminal-failure helper, not just the module."""
+        from spec_runner.execution import _record_blocked
+        from spec_runner.git_ops import spec_dirty_paths
+        from spec_runner.task import Task, get_task_by_id, parse_tasks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, state_file=root / "spec" / ".executor-state.db")
+        task = Task(id="TASK-001", name="first", priority="p1", status="review", estimate="1d")
+
+        _record_blocked(task, cfg)
+
+        assert spec_dirty_paths(cfg) == []
+        parsed = get_task_by_id(parse_tasks(root / "spec" / "tasks.md"), "TASK-001")
+        assert parsed is not None and parsed.status == "blocked"
+
+    def test_a_bookkeeping_problem_never_takes_the_run_down(self, tmp_path, monkeypatch):
+        """A task is already failing when this runs. #127's lesson: the tail of
+        a failing run is the worst place to raise."""
+        import spec_runner.bookkeeping as bk
+        from spec_runner.execution import _record_blocked
+        from spec_runner.task import Task
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, state_file=root / "spec" / ".executor-state.db")
+        monkeypatch.setattr(
+            bk,
+            "commit_status_flip",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git ate it")),
+        )
+        task = Task(id="TASK-001", name="first", priority="p1", status="review", estimate="1d")
+        _record_blocked(task, cfg)  # must not raise
+
+    def test_auto_commit_off_commits_nothing(self, tmp_path):
+        from spec_runner.bookkeeping import commit_status_flip_quietly
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, auto_commit=False)
+        _flip(root, status="blocked")
+        commit_status_flip_quietly(cfg, "TASK-001", reason="task failed")
+        assert _subjects(root) == ["spec"]
+
+
+class TestRecoveryAfterACrash:
+    """Measured on a build from master: `SIGKILL` during review leaves the
+    REVIEW flip uncommitted, and the next run refuses. The stop path commits
+    its own flip; a crash has no stop path, so recovery happens where the guard
+    would otherwise refuse — under the same proof."""
+
+    def test_an_interrupted_flip_is_committed_and_the_task_inferred(self, tmp_path):
+        from spec_runner.bookkeeping import recover_interrupted_flip
+        from spec_runner.git_ops import spec_dirty_paths
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="review")  # …and the process was killed here
+
+        recovered = recover_interrupted_flip(cfg)
+        assert recovered is not None
+        assert recovered.task_id == "TASK-001" and recovered.new == "review"
+        assert spec_dirty_paths(cfg) == []
+
+    def test_in_progress_counts_too(self, tmp_path):
+        """A crash right after the task started is the earliest form of it."""
+        from spec_runner.bookkeeping import recover_interrupted_flip
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, task_id="TASK-002", status="in_progress")  # TASK-001 is already there
+        recovered = recover_interrupted_flip(cfg)
+        assert recovered is not None and recovered.task_id == "TASK-002"
+
+    def test_a_left_behind_done_is_not_recovered(self, tmp_path):
+        """`done` is a claim about the work, carried by the task's own commit.
+        Committing one found lying in the tree would complete a task nobody
+        finished."""
+        from spec_runner.bookkeeping import recover_interrupted_flip
+        from spec_runner.git_ops import spec_dirty_paths
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="done")
+        assert recover_interrupted_flip(cfg) is None
+        assert spec_dirty_paths(cfg), "it must stay dirt, for the guard to refuse"
+
+    def test_a_real_spec_edit_is_not_recovered(self, tmp_path):
+        from spec_runner.bookkeeping import recover_interrupted_flip
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        tasks = root / "spec" / "tasks.md"
+        _flip(root, status="review")
+        tasks.write_text(tasks.read_text().replace("- [ ] a", "- [x] a"))
+        assert recover_interrupted_flip(cfg) is None
+
+    def test_the_guard_lets_the_run_through_afterwards(self, tmp_path, capsys):
+        """The acceptance criterion, through the guard itself."""
+        from argparse import Namespace
+
+        from spec_runner.cli import _enforce_clean_spec
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        _flip(root, status="review")
+        _enforce_clean_spec(Namespace(allow_dirty_spec=False), cfg)  # must not SystemExit
+        assert "Recovered an interrupted run" in capsys.readouterr().out
+
+    def test_the_guard_still_refuses_a_real_spec_change(self, tmp_path):
+        from argparse import Namespace
+
+        import pytest as _pytest
+
+        from spec_runner.cli import _enforce_clean_spec
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        tasks = root / "spec" / "tasks.md"
+        tasks.write_text(tasks.read_text().replace("- [ ] a", "- [x] a"))
+        with _pytest.raises(SystemExit):
+            _enforce_clean_spec(Namespace(allow_dirty_spec=False), cfg)
+
+
 class TestTheTwoInvariants:
     def test_resuming_does_not_grow_a_chain_of_review_commits(self, tmp_path):
         """Invariant 2. The second pass writes the same status, so there is
@@ -521,7 +706,7 @@ class TestTheTwoInvariants:
         cfg = _cfg(root)
         for _ in range(3):
             _flip(root)  # what the run does on every pass through review
-            commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
+            commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate")
         flips = [s for s in _subjects(root) if "TASK-001" in s]
         assert len(flips) == 1, _subjects(root)
 
@@ -547,7 +732,7 @@ class TestTheTwoInvariants:
 
         bk._git = _edit_then_git
         try:
-            problem = commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate")
+            problem = commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate")
         finally:
             bk._git = real_git
         assert problem and "changed while" in problem
@@ -565,7 +750,7 @@ class TestTheTwoInvariants:
         _flip(root)  # …and the process dies here
         assert spec_dirty_paths(cfg)
 
-        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", verdict="gate") is None
+        assert commit_status_flip(cfg, "TASK-001", candidate_sha="abc", reason="gate") is None
         assert spec_dirty_paths(cfg) == []
         assert len([s for s in _subjects(root) if "TASK-001" in s]) == 1
 
@@ -577,7 +762,7 @@ class TestTheTwoInvariants:
         cfg = _cfg(root)
         candidate = _git(root, "rev-parse", "HEAD").stdout.strip()
         _flip(root)
-        commit_status_flip(cfg, "TASK-001", candidate_sha=candidate, verdict="gate")
+        commit_status_flip(cfg, "TASK-001", candidate_sha=candidate, reason="gate")
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         assert head != candidate
         assert candidate in _git(root, "log", "-1", "--format=%B").stdout
