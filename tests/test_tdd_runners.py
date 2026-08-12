@@ -279,3 +279,42 @@ class TestThePromptAsksForTheRightShape:
     def test_an_unsupported_runner_says_so_rather_than_asking_for_pytest(self):
         line = self._selector_line("go test ./...", "")
         assert "::" not in line
+
+
+class TestPytestReplayIsUnchanged:
+    """#207 gave every adapter a preparation step. pytest's is a passthrough,
+    and it must stay one: a Python environment lives outside the checkout,
+    which is exactly why pytest never met the defect."""
+
+    def test_it_adds_no_environment_and_nothing_to_clean_up(self, tmp_path):
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        prepared = ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+        assert isinstance(prepared, ReplayEnvironment)
+        assert prepared.env == {}
+        assert prepared.cleanup_paths == ()
+
+    def test_it_keeps_the_lockfile_identity(self, tmp_path):
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        (tmp_path / "uv.lock").write_text("x = 1\n")
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        prepared = ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+        assert isinstance(prepared, ReplayEnvironment)
+        assert prepared.environment_id.startswith("uv.lock:")
+
+    def test_it_never_shells_out(self, tmp_path, monkeypatch):
+        """Preparation for pytest costs nothing, and must not start costing."""
+        import spec_runner.tdd_runners as runners
+
+        monkeypatch.setattr(
+            runners.subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("pytest prepare ran a process")),
+        )
+        selector = ADAPTER.parse_selector("tests/t.py::test_x")
+        assert isinstance(selector, Selector)
+        ADAPTER.prepare_replay(tmp_path, tmp_path, selector)

@@ -314,3 +314,157 @@ class TestPreflightRefusalsAreDistinct:
         code = runners.definition_lines(project, PurePosixPath("test/probe_test.exs"))
         assert code == "preflight_failed"
         assert "PATH" not in runners._PREFLIGHT_MESSAGES[code]
+
+
+class TestTheReplayEnvironment:
+    """#207, the invariants the owner required. Every one of them is measured
+    against a real `mix`, because the defect they answer was invisible to
+    reasoning: a `git worktree` carries tracked files only, and Elixir keeps
+    `deps/` and `_build/` inside the project.
+    """
+
+    def _prepared(self, project: Path, worktree: Path):
+        from spec_runner.tdd_runners import ExUnitAdapter, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector(f"test/probe_test.exs:{FAILS}")
+        assert isinstance(selector, Selector)
+        return adapter, adapter.prepare_replay(project, worktree, selector)
+
+    def test_the_build_is_private_new_and_under_the_canonical_build(self, project):
+        from spec_runner.tdd_runners import REPLAY_BUILD_PREFIX, ReplayEnvironment
+
+        _adapter, prepared = self._prepared(project, project)
+        assert isinstance(prepared, ReplayEnvironment)
+        build = Path(prepared.env["MIX_BUILD_PATH"])
+        assert build.parent == (project / "_build").resolve()
+        assert build.name.startswith(REPLAY_BUILD_PREFIX)
+        assert prepared.cleanup_paths == (build,)
+        shutil.rmtree(build, ignore_errors=True)
+
+    def test_the_canonical_build_is_never_the_replay_build(self, project):
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        _adapter, prepared = self._prepared(project, project)
+        assert isinstance(prepared, ReplayEnvironment)
+        assert Path(prepared.env["MIX_BUILD_PATH"]).name != "test"
+        assert "test" not in Path(prepared.env["MIX_BUILD_PATH"]).parts[-1:]
+        shutil.rmtree(prepared.env["MIX_BUILD_PATH"], ignore_errors=True)
+
+    def test_two_replays_get_different_build_paths(self, project):
+        """Two workstreams replaying at once must not share compile state."""
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        _a, first = self._prepared(project, project)
+        _b, second = self._prepared(project, project)
+        assert isinstance(first, ReplayEnvironment) and isinstance(second, ReplayEnvironment)
+        assert first.env["MIX_BUILD_PATH"] != second.env["MIX_BUILD_PATH"]
+        for prepared in (first, second):
+            shutil.rmtree(prepared.env["MIX_BUILD_PATH"], ignore_errors=True)
+
+    def test_the_environment_identity_records_the_toolchain(self, project):
+        """The same lock compiled by a different Elixir is a different
+        environment, and a verdict that changes with a toolchain upgrade should
+        be visible as one."""
+        from spec_runner.tdd_runners import ReplayEnvironment
+
+        _adapter, prepared = self._prepared(project, project)
+        assert isinstance(prepared, ReplayEnvironment)
+        for field in (
+            "runner=exunit",
+            "mix.lock=",
+            "elixir=",
+            "otp=",
+            "mix_env=test",
+            "deps_source=",
+        ):
+            assert field in prepared.environment_id, prepared.environment_id
+        shutil.rmtree(prepared.env["MIX_BUILD_PATH"], ignore_errors=True)
+
+    def test_a_declared_but_uninstalled_dependency_is_refused(self, project, tmp_path):
+        """`mix deps` is the authority, not the existence of a directory. No
+        network: the check reports status, it does not fetch."""
+        from spec_runner.tdd_runners import ReplayEnvironmentRefusal
+
+        worktree = tmp_path / "declared"
+        shutil.copytree(project, worktree, ignore=shutil.ignore_patterns("_build", ".git"))
+        mix_exs = worktree / "mix.exs"
+        mix_exs.write_text(
+            mix_exs.read_text().replace(
+                "defp deps do\n    [\n", 'defp deps do\n    [\n      {:jason, "~> 1.4"},\n'
+            )
+        )
+        _adapter, prepared = self._prepared(project, worktree)
+        assert isinstance(prepared, ReplayEnvironmentRefusal)
+        assert prepared.code == "environment_unavailable"
+        assert "will not fetch" in prepared.message
+
+    def test_nothing_is_fetched(self, project, monkeypatch):
+        """The refusal must never become a download inside a gate."""
+        import spec_runner.tdd_runners as runners
+
+        seen: list[list[str]] = []
+        real = runners.subprocess.run
+
+        def _record(argv, *a, **k):
+            if isinstance(argv, list):
+                seen.append(argv)
+            return real(argv, *a, **k)
+
+        monkeypatch.setattr(runners.subprocess, "run", _record)
+        _adapter, prepared = self._prepared(project, project)
+        assert seen, "nothing ran at all"
+        for argv in seen:
+            joined = " ".join(argv)
+            assert "deps.get" not in joined and "hex" not in joined, joined
+        if hasattr(prepared, "env"):
+            shutil.rmtree(prepared.env["MIX_BUILD_PATH"], ignore_errors=True)
+
+
+@pytest.mark.slow
+class TestTheReplayLeavesNothingBehind:
+    def test_the_canonical_project_stays_clean_and_the_build_is_removed(self, project):
+        """Success path: after a real replay the project is byte-clean by git's
+        own account, and no replay build survives."""
+        from spec_runner.tdd_runners import REPLAY_BUILD_PREFIX
+
+        before = _git(project, "status", "--porcelain").stdout
+        result = _verify(project, f"test/probe_test.exs:{FAILS}")
+        assert result.outcome is RedOutcome.EXPECTED_FAIL
+        assert _git(project, "status", "--porcelain").stdout == before
+        leftovers = list((project / "_build").glob(f"{REPLAY_BUILD_PREFIX}*"))
+        assert leftovers == [], leftovers
+
+    def test_a_crashed_replay_leaves_a_build_that_the_next_one_does_not_reuse(self, project):
+        """A build left by a killed process is state the next replay could
+        read. It gets its own path regardless — and the stale one is visible
+        rather than silently inherited."""
+        from spec_runner.tdd_runners import REPLAY_BUILD_PREFIX, ReplayEnvironment
+
+        stale = project / "_build" / f"{REPLAY_BUILD_PREFIX}stale"
+        stale.mkdir(parents=True, exist_ok=True)
+        try:
+            from spec_runner.tdd_runners import ExUnitAdapter, Selector
+
+            adapter = ExUnitAdapter()
+            selector = adapter.parse_selector(f"test/probe_test.exs:{FAILS}")
+            assert isinstance(selector, Selector)
+            prepared = adapter.prepare_replay(project, project, selector)
+            assert isinstance(prepared, ReplayEnvironment)
+            assert Path(prepared.env["MIX_BUILD_PATH"]) != stale
+            shutil.rmtree(prepared.env["MIX_BUILD_PATH"], ignore_errors=True)
+        finally:
+            shutil.rmtree(stale, ignore_errors=True)
+
+    def test_a_failing_replay_still_removes_its_build(self, project, monkeypatch):
+        """Timeout and crash take the same path as success."""
+        import spec_runner.tdd as tdd_mod
+        from spec_runner.tdd_runners import REPLAY_BUILD_PREFIX
+
+        def _explode(*_a, **_k):
+            raise subprocess.TimeoutExpired(cmd="mix", timeout=1)
+
+        monkeypatch.setattr(tdd_mod, "_run_selector", _explode)
+        result = _verify(project, f"test/probe_test.exs:{FAILS}")
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert list((project / "_build").glob(f"{REPLAY_BUILD_PREFIX}*")) == []

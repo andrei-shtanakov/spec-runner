@@ -33,11 +33,13 @@ Design: ``docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md`` §3.3, §3
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -49,6 +51,7 @@ from .git_ops import is_composite_shell_command
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .tdd_runners import (
+    ReplayEnvironmentRefusal,
     RunOutcome,
     SelectionProof,
     Selector,
@@ -56,6 +59,7 @@ from .tdd_runners import (
     TddRunnerAdapter,
     adapter_for,
     infer_adapter,
+    lockfile_identity,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -151,16 +155,11 @@ class RedCheckpoint:
 def environment_id(project_root: Path) -> str:
     """Identify the environment a replay would run in, by lockfile content.
 
-    Returns ``"<lockfile>:<hash>"``, or ``"unpinned"`` when the project pins
-    nothing. Saying "unpinned" is honest and keeps TDD mode available to
-    projects without a lockfile; inventing an identity would not be.
+    The generic answer. An adapter that can say more — Elixir records the
+    toolchain and the dependency source alongside the lock (#207) — replaces it
+    at replay time, and the checkpoint stores whichever is richer.
     """
-    for name in LOCKFILES:
-        candidate = project_root / name
-        if candidate.is_file():
-            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()[:16]
-            return f"{name}:{digest}"
-    return "unpinned"
+    return lockfile_identity(project_root)
 
 
 def resolve_namespace(config: ExecutorConfig) -> str:
@@ -261,10 +260,6 @@ def verify_red(
     if isinstance(parsed, SelectorRefusal):
         return RedVerification(RedOutcome.UNVERIFIABLE, parsed.message, env_id)
 
-    refusal = adapter.preflight(Path(config.project_root), parsed)
-    if refusal is not None:
-        return RedVerification(RedOutcome.UNVERIFIABLE, refusal.message, env_id)
-
     root = Path(config.project_root)
 
     # `baseline_sha` is the "red *against what*" of the checkpoint (§3.3), and
@@ -301,12 +296,37 @@ def verify_red(
             env_id,
         )
 
+    prepared = None
     try:
-        result = _run_selector(config, worktree, adapter, parsed)
+        # Preflight reads the **checkpoint's** source, not the canonical tree.
+        # The selector describes a test in the commit being replayed, and the
+        # working tree has moved on — measured on a real run, where the agent's
+        # new test sat at line 85 of the commit and line 85 of master was
+        # something else entirely. Judging the commit is this module's premise;
+        # reading the file from anywhere else quietly breaks it.
+        refusal = adapter.preflight(worktree, parsed)
+        if refusal is not None:
+            return RedVerification(RedOutcome.UNVERIFIABLE, refusal.message, env_id)
+
+        # Prove and isolate the environment before running anything (#207).
+        # A `git worktree` carries tracked files only, so a language that keeps
+        # its dependencies in the project directory has none here — measured on
+        # a real Elixir project, where the replay could not compile at all.
+        prepared = adapter.prepare_replay(root, worktree, parsed)
+        if isinstance(prepared, ReplayEnvironmentRefusal):
+            return RedVerification(RedOutcome.UNVERIFIABLE, prepared.message, env_id)
+        env_id = prepared.environment_id or env_id
+        result = _run_selector(config, worktree, adapter, parsed, prepared.env)
         return _classify(adapter, parsed, result, env_id)
     except Exception as exc:  # a broken replay is unverifiable, never a red
         return RedVerification(RedOutcome.UNVERIFIABLE, f"replay failed: {exc}", env_id)
     finally:
+        # The private build goes with the worktree, on every path — success,
+        # refusal, timeout and the exception above. A build left behind is
+        # state the next replay could read.
+        if prepared is not None and not isinstance(prepared, ReplayEnvironmentRefusal):
+            for path in prepared.cleanup_paths:
+                shutil.rmtree(path, ignore_errors=True)
         # Always, including on the exception path: a leaked worktree makes the
         # next `git worktree add` fail and the branch un-deletable. Removal can
         # itself fail (permissions, a transient filesystem), and swallowing
@@ -334,6 +354,7 @@ def _run_selector(
     worktree: Path,
     adapter: TddRunnerAdapter,
     selector: Selector,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run the project's test command, narrowed to one test, in ``worktree``."""
     # argv, not a shell string. The selector comes from an agent's output, and
@@ -348,6 +369,7 @@ def _run_selector(
         capture_output=True,
         text=True,
         timeout=REPLAY_TIMEOUT_SECONDS,
+        env={**os.environ, **(env or {})},
     )
 
 
