@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from spec_runner.config import ExecutorConfig
+from spec_runner.config import KNOWN_EXECUTOR_KEYS, ExecutorConfig, mixed_shape_error
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
 from spec_runner.spec import LITE, StageProfile, load_profile, stage_path, strip_frontmatter
@@ -22,13 +22,9 @@ _REQ_ID = re.compile(r"\bREQ-\d+\b")
 _REQ_HEADING = re.compile(r"^#+\s*REQ-(\d+)\b", re.MULTILINE)
 _DESIGN_HEADING = re.compile(r"^#+\s*DESIGN-(\d+)\b", re.MULTILINE)
 
-# Known keys allowed under the executor: section in config YAML.
-# Built from ExecutorConfig dataclass fields plus nested config sections.
-KNOWN_EXECUTOR_KEYS: set[str] = set(ExecutorConfig.__dataclass_fields__.keys()) | {
-    "hooks",
-    "commands",
-    "paths",
-}
+# `KNOWN_EXECUTOR_KEYS` is imported from `config` above rather than rebuilt
+# here: the loader decides what counts as a setting, and a second copy of that
+# list is how validation and loading come to disagree (#182).
 
 
 @dataclass
@@ -370,6 +366,15 @@ def validate_config(config_path: Path) -> ValidationResult:
         return result
 
     # Canonical v2.0 is flat (no executor: wrapper); legacy uses the wrapper.
+    # Mixing them discards every top-level setting, which is an error and not a
+    # warning: the failure mode is "your settings did nothing and the run went
+    # to the defaults", and a warning scrolls past (#182).
+    mixed = mixed_shape_error(config_path, data)
+    if mixed:
+        result.errors.append(mixed)
+        # Not a return: `validate` exists to report everything wrong at once,
+        # and the `executor:` section is still readable and still worth checking.
+
     executor_section = data.get("executor", data)
     if not isinstance(executor_section, dict):
         return result

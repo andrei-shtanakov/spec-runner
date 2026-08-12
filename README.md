@@ -361,6 +361,12 @@ Configuration file: `spec-runner.config.yaml` (project root, v2.0)
 
 Legacy location `spec/executor.config.yaml` is still supported with a deprecation warning.
 
+**Pick one shape.** Flat v2.0 and the legacy `executor:` wrapper are each fine
+on their own; a file that mixes them is **refused** (#182). The wrapper wins, so
+mixing means every top-level setting is silently discarded — `claude_command`
+among them, which sends the run to the default CLI and a paid model. The
+refusal names the discarded keys, at load time and in `spec-runner validate`.
+
 v2.0 flat format (no `executor:` wrapper):
 
 ```yaml

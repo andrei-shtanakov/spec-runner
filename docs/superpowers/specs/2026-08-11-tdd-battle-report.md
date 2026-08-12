@@ -247,8 +247,10 @@ The RED pass's $0.42 was invisible before F-6; it is now in both totals.
 
 ## Status of the earlier findings
 
-F-1, F-2, F-3, F-4, F-5, F-6 — **closed and re-measured**. F-7 is filed as
-issue #182 and not yet fixed. F-8 (a gate-blocked task leaves the spec dirty,
-so the next run refuses) is unchanged and still deferred.
+F-1, F-2, F-3, F-4, F-5, F-6 — **closed and re-measured**. F-7 was filed as
+issue #182 and is now closed: mixing the two config shapes is an error naming
+the discarded keys, at load time and in `validate`. F-8 (a gate-blocked task
+leaves the spec dirty, so the next run refuses) is unchanged and still
+deferred.
 
 **Slice 4a is unblocked** on the criteria listed at the top of this report.
