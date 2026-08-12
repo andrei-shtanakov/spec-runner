@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.execution import run_with_retries
