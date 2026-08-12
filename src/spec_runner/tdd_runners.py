@@ -599,7 +599,11 @@ class ExUnitAdapter:
         isolates what is installed, or refuses.
         """
         deps = (canonical_root / "deps").resolve()
-        if deps.is_dir() and not str(deps).startswith(str(canonical_root.resolve())):
+        # `is_relative_to`, not a string prefix: `/repo-other/deps` starts with
+        # `/repo` textually, so a symlinked `deps/` could point outside the
+        # project and still pass a prefix check (Copilot, PR #208). The guard
+        # exists precisely because that directory is shared into the replay.
+        if deps.is_dir() and not deps.is_relative_to(canonical_root.resolve()):
             return ReplayEnvironmentRefusal(
                 "environment_unavailable", f"{deps} is outside the project root"
             )

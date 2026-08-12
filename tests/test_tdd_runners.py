@@ -318,3 +318,44 @@ class TestPytestReplayIsUnchanged:
         selector = ADAPTER.parse_selector("tests/t.py::test_x")
         assert isinstance(selector, Selector)
         ADAPTER.prepare_replay(tmp_path, tmp_path, selector)
+
+
+class TestTheSharedDepsMustBeInsideTheProject:
+    """#207 shares `deps/` into the replay read-only, so where it points is a
+    safety question. Raised in review of PR #208: a textual prefix check passes
+    `/repo-other/deps` for the root `/repo`."""
+
+    def _refusal(self, canonical, worktree):
+        from spec_runner.tdd_runners import ExUnitAdapter, Selector
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/x_test.exs:3")
+        assert isinstance(selector, Selector)
+        return adapter.prepare_replay(canonical, worktree, selector)
+
+    def test_a_deps_symlink_to_a_prefix_sibling_is_refused(self, tmp_path):
+        """The exact bypass: `/…/repo` and `/…/repo-other` share a prefix."""
+        from spec_runner.tdd_runners import ReplayEnvironmentRefusal
+
+        root = tmp_path / "repo"
+        (root / "_build").mkdir(parents=True)
+        outside = tmp_path / "repo-other" / "deps"
+        outside.mkdir(parents=True)
+        (root / "deps").symlink_to(outside)
+
+        refusal = self._refusal(root, root)
+        assert isinstance(refusal, ReplayEnvironmentRefusal)
+        assert refusal.code == "environment_unavailable"
+        assert "outside the project root" in refusal.message
+
+    def test_a_deps_directory_inside_the_project_is_accepted(self, tmp_path):
+        """The guard must not refuse the ordinary case — asserted by getting
+        past it, whatever the toolchain then says."""
+        from spec_runner.tdd_runners import ReplayEnvironmentRefusal
+
+        root = tmp_path / "repo"
+        (root / "deps").mkdir(parents=True)
+        (root / "_build").mkdir()
+        result = self._refusal(root, root)
+        if isinstance(result, ReplayEnvironmentRefusal):
+            assert "outside the project root" not in result.message
