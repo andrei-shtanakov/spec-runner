@@ -1793,13 +1793,18 @@ class ExecutorState:
                 "max_consecutive_failures",
                 f"{self.consecutive_failures}/{self.config.max_consecutive_failures}",
             )
-        if self.config.budget_usd is not None:
+        # The **effective** ceiling, not the config value (#256). An operator
+        # authorization raised it deliberately and under audit; a preflight
+        # that reads the YAML anyway makes the ceiling mean different things in
+        # different places — `retry` honoured the authorization while `run`
+        # refused against a number the operator had already superseded.
+        from .budget import effective_limits
+
+        _task_limit, run_limit = effective_limits(self.config, self, None)
+        if run_limit is not None:
             cost = self.total_cost()
-            if cost > self.config.budget_usd:
-                return (
-                    "budget_exceeded",
-                    f"total cost ${cost:.2f} > budget ${self.config.budget_usd:.2f}",
-                )
+            if cost > run_limit:
+                return ("budget_exceeded", f"total cost ${cost:.2f} > budget ${run_limit:.2f}")
         return None
 
     def should_stop(self) -> bool:
