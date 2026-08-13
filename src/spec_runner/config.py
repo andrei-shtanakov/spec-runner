@@ -196,6 +196,13 @@ class ExecutorConfig:
     # open a single PR at the end instead of self-merging tasks into main. For
     # repos with a remote where a human reviews/merges (never touches main).
     integration_pr: bool = False
+    # Runtime only, never a YAML key: set when a command has actually forked an
+    # integration branch and redirected `main_branch` onto it. The merge stage
+    # refuses to merge into the real main while `integration_pr` is on and this
+    # is False (#254) — a name check would be fooled by a branch that merely
+    # looks like one, and the pilot's `retry` merged into master precisely
+    # because nothing distinguished "redirected" from "not redirected".
+    integration_branch_active: bool = False
     sync_deps: bool = True  # Run dependency sync in pre_start_hook (doctor disables this)
     # Dependency sync command (commands.sync in YAML). Empty = auto: run
     # `uv sync` only when pyproject.toml exists, else skip quietly — a
