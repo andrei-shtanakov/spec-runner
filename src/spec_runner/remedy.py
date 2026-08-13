@@ -50,6 +50,11 @@ class RemedyError(RuntimeError):
 class RemedyOperation(str, Enum):
     ABANDON = "abandon"
     REPAIR = "repair"
+    #: #232: the post-green half finally has one. `abandon` and `repair` both
+    #: ask questions about a *red*; an operator meeting a crash after green had
+    #: no remedy that fitted, reached for `repair`, and superseded the very
+    #: evidence that would have let the task finish.
+    RESUME = "resume"
 
 
 class CheckpointStatus(str, Enum):
@@ -149,6 +154,7 @@ def repair(
     out to pass, which is not a red and must not be recorded as one.
     """
     namespace = _guard(config, reason)
+    _refuse_repair_after_green(state, namespace, task_id)
 
     prior = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REPAIR)
     if prior is not None:
@@ -240,6 +246,198 @@ def repair(
         new_checkpoint_id=lineage.checkpoint_id,
         outcome=verification.outcome,
     )
+
+
+@dataclass(frozen=True)
+class ResumeConflict:
+    """A claimed file whose bytes have moved since the red was recorded."""
+
+    path: str
+    claimed: str
+    found: str | None
+
+
+def resume(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task_id: str,
+    *,
+    reason: str,
+    actor: str | None = None,
+    checkpoint_id: str | None = None,
+) -> tuple[RemedyResult, list[ResumeConflict]]:
+    """Green is established; make this task's confirmed red standing again.
+
+    The post-green remedy (#232). It **introduces no new way to satisfy the RED
+    gate**: the gate is untouched and still demands a confirmed `expected_fail`
+    whose commit is an ancestor of the tree in hand. All this changes is *which
+    row is standing*, and only when such a row already exists.
+
+    Three conditions, and failing any of them means the task cannot be resumed
+    past a green it never had:
+
+    1. a checkpoint with outcome `expected_fail` exists for this task here —
+       **any status**, since supersession retires a lineage rather than
+       unhappening the observation it recorded;
+    2. its commit is an **ancestor of HEAD** — the same descent test the gate
+       applies, so a resume can never authorise a tree the gate would refuse
+       for a different reason;
+    3. the lifecycle has reached `green_implementing` or later.
+
+    The checkpoint and **its own lineage's claims** are reinstated in one
+    transaction. Reinstating the red alone would make this chain legal —
+    `confirmed red + claim → GREEN edits the frozen test → repair supersedes
+    both → resume returns only the red → merge` — which launders exactly the
+    violation the byte-lock exists to catch, using the command built to help.
+    A claim protects the evidence from the RED until the terminal gate.
+
+    Returns the result and any **conflicts**: claimed paths whose bytes in HEAD
+    differ from what was locked. The decision is still recorded — an operator
+    may legitimately want the record before restoring the bytes — but the gate
+    will refuse until they match, and the caller is expected to say so loudly.
+    Nothing here ever accepts new bytes.
+    """
+    from .lifecycle import TddPhase, current_phase
+
+    namespace = _guard(config, reason)
+
+    candidates = state.confirmed_reds(namespace, task_id)
+    if not candidates:
+        raise RemedyError(
+            f"{task_id} has no confirmed red in this workstream — there is no green to resume "
+            "past, and `resume` cannot invent the evidence a red is"
+        )
+    if checkpoint_id:
+        matches = [cp for cp in candidates if cp.checkpoint_id == checkpoint_id]
+        if not matches:
+            listed = ", ".join(cp.checkpoint_id for cp in candidates)
+            raise RemedyError(
+                f"{checkpoint_id} is not a confirmed red of {task_id} in this workstream "
+                f"(have: {listed})"
+            )
+        evidence = matches[0]
+    elif len(candidates) > 1:
+        # The same rule the other remedies follow (F-5): "probably that one" is
+        # not a thing to guess about an authority decision, and reinstating the
+        # wrong lineage reinstates the wrong byte-lock with it.
+        listed = ", ".join(cp.checkpoint_id for cp in candidates)
+        raise RemedyError(
+            f"{task_id} has {len(candidates)} confirmed reds ({listed}); name one with --checkpoint"
+        )
+    else:
+        evidence = candidates[0]
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode != 0:
+        raise RemedyError("cannot resolve HEAD; resume needs a tree to check the red against")
+    candidate = head.stdout.strip()
+    if not _is_ancestor(config, evidence.commit_sha, candidate):
+        raise RemedyError(
+            f"the confirmed red {evidence.checkpoint_id} ({evidence.commit_sha[:12]}) is not an "
+            f"ancestor of HEAD ({candidate[:12]}) — this tree was not built on that red"
+        )
+    phase = current_phase(state, namespace, task_id)
+    if phase in (TddPhase.READY, TddPhase.RED_AUTHORING, TddPhase.RED_VERIFYING):
+        raise RemedyError(
+            f"{task_id} is at {phase.value}: there is no established green to resume from. "
+            "`resume` reinstates evidence for work that reached GREEN, not for work that has "
+            "not started"
+        )
+
+    prior = _existing(state, namespace, task_id, evidence.checkpoint_id, RemedyOperation.RESUME)
+    conflicts = _claim_conflicts(config, state, namespace, evidence.checkpoint_id, candidate)
+    if prior is not None:
+        return (
+            RemedyResult(RemedyOperation.RESUME, evidence.checkpoint_id, already_applied=True),
+            conflicts,
+        )
+
+    checkpoints, claims = state.reinstate_checkpoint_with_claims(
+        namespace, task_id, evidence.checkpoint_id
+    )
+    _record(
+        state,
+        namespace,
+        task_id,
+        evidence.checkpoint_id,
+        RemedyOperation.RESUME,
+        reason,
+        actor,
+        config,
+    )
+    logger.info(
+        "Red reinstated",
+        task_id=task_id,
+        checkpoint=evidence.checkpoint_id,
+        checkpoints=checkpoints,
+        claims=claims,
+        conflicts=len(conflicts),
+    )
+    return RemedyResult(RemedyOperation.RESUME, evidence.checkpoint_id), conflicts
+
+
+def _claim_conflicts(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    namespace: str,
+    checkpoint_id: str,
+    candidate: str,
+) -> list[ResumeConflict]:
+    """Claimed paths whose bytes in the candidate differ from the lock.
+
+    Surfaced by the command's own preflight rather than discovered at the gate:
+    an operator who learns at merge time that their resume cannot merge has
+    been told too late to do anything cheap about it.
+    """
+    out: list[ResumeConflict] = []
+    for claim in state.claims_of_checkpoint(namespace, checkpoint_id):
+        found = subprocess.run(
+            ["git", "rev-parse", f"{candidate}:{claim['path']}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        current = found.stdout.strip() if found.returncode == 0 else None
+        if current != claim["blob_sha"]:
+            out.append(ResumeConflict(claim["path"], claim["blob_sha"], current))
+    return out
+
+
+def _is_ancestor(config: ExecutorConfig, ancestor: str, descendant: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=config.project_root,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def _refuse_repair_after_green(state: ExecutorState, namespace: str, task_id: str) -> None:
+    """Repair asks "is this changed test still a red?" — a question with no
+    honest answer once the implementation exists (#232 §5).
+
+    Answering it costs a replay and, worse, retires the evidence: that is how
+    the pilot ended with a `not_red` lineage, a superseded confirmed red, and a
+    task that could not finish. A behaviour change to a shipped command, made
+    deliberately — what worked yesterday produced a wedge.
+    """
+    from .lifecycle import TddPhase, current_phase
+
+    phase = current_phase(state, namespace, task_id)
+    if phase in (TddPhase.GREEN_VERIFYING, TddPhase.REFACTORING, TddPhase.DONE) or (
+        phase is TddPhase.GREEN_IMPLEMENTING
+    ):
+        raise RemedyError(
+            f"{task_id} is at {phase.value}: a red cannot be repaired once the implementation "
+            "exists — the replay would pass, and recording that supersedes the confirmed red "
+            "this task still needs. Use `spec-runner tdd resume` to reinstate it"
+        )
 
 
 def _guard(config: ExecutorConfig, reason: str) -> str:
@@ -392,6 +590,9 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
     """
     from .state import ExecutorState
 
+    if args.tdd_command == "resume":
+        return _cmd_resume(args, config)
+
     try:
         with ExecutorState(config) as state:
             checkpoint_id, note = resolve_checkpoint(
@@ -441,6 +642,46 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
     return _repair_exit(result)
 
 
+def _cmd_resume(args, config: ExecutorConfig) -> int:
+    """`spec-runner tdd resume`. 0 when the task can proceed, 2 when the
+    decision is recorded but the claimed bytes no longer match.
+
+    The non-zero exit on a conflict is the point: the record is allowed — an
+    operator may want it before restoring anything — but the gate *will* refuse
+    until the bytes match, and a command that returned 0 would be promising a
+    merge that cannot happen.
+    """
+    from .state import ExecutorState
+
+    try:
+        with ExecutorState(config) as state:
+            result, conflicts = resume(
+                config,
+                state,
+                args.task_id,
+                reason=args.reason,
+                actor=getattr(args, "actor", None),
+                checkpoint_id=getattr(args, "checkpoint", None),
+            )
+    except RemedyError as exc:
+        print(f"⛔ {exc}")
+        return 1
+
+    if result.already_applied:
+        print(f"✔️  Already applied — resume on {result.checkpoint_id}")
+    else:
+        print(f"✔️  Reinstated {result.checkpoint_id} and its claims; {args.task_id} can proceed")
+    if not conflicts:
+        return 0
+    print("   ⚠️  Claimed bytes have moved since that red was recorded:")
+    for c in conflicts:
+        found = c.found[:12] if c.found else "(absent from HEAD)"
+        print(f"      {c.path}: claimed {c.claimed[:12]}, HEAD has {found}")
+    print("   The gate will refuse until they match. Restore the evidential bytes, or")
+    print("   record a deliberate change of evidence — this command never accepts new ones.")
+    return 2
+
+
 def _repair_exit(result: RemedyResult) -> int:
     """0 only when the new lineage actually re-established a red.
 
@@ -460,6 +701,7 @@ def _repair_exit(result: RemedyResult) -> int:
 __all__ = [
     "AGENT_MARKER",
     "CheckpointStatus",
+    "ResumeConflict",
     "RemedyError",
     "RemedyOperation",
     "RemedyRecord",
