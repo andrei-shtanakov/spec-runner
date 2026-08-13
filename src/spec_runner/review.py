@@ -15,7 +15,14 @@ from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, render_template
-from .runner import agent_env, check_error_patterns, log_progress
+from .runner import (
+    AgentAnswer,
+    CliResult,
+    agent_env,
+    check_error_patterns,
+    classify_agent_answer,
+    log_progress,
+)
 from .state import ReviewVerdict
 from .task import Task
 
@@ -533,13 +540,17 @@ def run_code_review(
             log_progress(f"💥 Code review error: {error_pattern}", task.id)
             return ReviewVerdict.ERROR, f"API error: {error_pattern}", output
 
-        # A non-zero exit means the reviewer did not finish, so whatever it
-        # managed to print is not a considered verdict — including a marker
-        # (Copilot, PR #156). The guard used to require empty output too, so a
-        # process that crashed after printing REVIEW_PASSED was believed. The
+        # Whether this output may be read for a verdict at all is one shared
+        # decision (#241), not this module's opinion: a non-zero exit means the
+        # reviewer did not finish, so whatever it managed to print is not a
+        # considered verdict — including a marker (Copilot, PR #156). The
         # output is still returned: discarding the verdict must not discard
         # what was said.
-        if call.is_error or call.returncode != 0:
+        answer = classify_agent_answer(
+            CliResult(output, None, None, call.cost_usd, is_error=call.is_error),
+            call.returncode,
+        )
+        if answer is AgentAnswer.CRASHED:
             reason = (
                 f"process exited with code {call.returncode}"
                 if call.returncode != 0
@@ -550,7 +561,7 @@ def run_code_review(
                 log_progress(f"   stderr: {stderr.strip()[:200]}", task.id)
             return ReviewVerdict.ERROR, f"Review {reason}", output or None
 
-        if not output.strip():
+        if answer is AgentAnswer.EMPTY:
             log_progress("⚠️ Code review produced no verdict: empty response", task.id)
             return ReviewVerdict.NOT_RUN, "Review returned empty response", None
 

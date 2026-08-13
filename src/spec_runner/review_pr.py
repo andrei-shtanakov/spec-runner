@@ -657,7 +657,12 @@ def verify_comment(
     text rather than from raw stdout.
     """
     from .review import _resolve_review_template
-    from .runner import build_cli_invocation, parse_cli_result
+    from .runner import (
+        AgentAnswer,
+        build_cli_invocation,
+        classify_agent_answer,
+        parse_cli_result,
+    )
 
     cmd = config.review_command or config.claude_command
     template = _resolve_review_template(config, cmd)
@@ -698,27 +703,45 @@ def verify_comment(
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )
-    failed = result.returncode != 0 and not cli_result.text.strip()
-    # The ledger reports what the *process* did, so a non-zero exit is an error
-    # whatever it managed to print — the rule `run_fix_agent` already followed
-    # (Copilot, PR #240). `failed` below is a different question: whether this
-    # call produced anything a verdict can be read from.
+    answer = classify_agent_answer(cli_result, result.returncode)
     _record_pr_call(
         ledger,
         repo,
         pr_number,
         comment.comment_id,
         "verify",
-        "completed" if result.returncode == 0 else "error",
+        "completed" if answer is not AgentAnswer.CRASHED else "error",
         head_sha,
         cli_result,
     )
-    if failed:
-        return (
-            VERDICT_UNCERTAIN,
-            f"Verifier exited {result.returncode}: {result.stderr.strip()[:200]}",
-            cli_result.cost_usd,
+    if not answer.carries_a_verdict:
+        # #241: this used to parse a verdict out of a crashed run whenever it
+        # had printed *something*, while `run_code_review` discarded the same
+        # thing — one agent result, two readings, and this was the permissive
+        # one: a verifier that died after printing `VERDICT: REFUTED` had its
+        # refutation posted to the PR as evidence.
+        printed = parse_verdict(cli_result.text)[0] if cli_result.text.strip() else None
+        contradiction = (
+            f" (it printed VERDICT: {printed.upper()} first — discarded: a run that did not "
+            "finish did not reach a verdict)"
+            if printed and printed != VERDICT_UNCERTAIN
+            else ""
         )
+        if answer is AgentAnswer.EMPTY:
+            detail = "Verifier produced no output"
+        elif result.returncode != 0:
+            detail = (
+                f"Verifier exited {result.returncode}: {result.stderr.strip()[:200] or 'no stderr'}"
+            )
+        else:
+            # claude's JSON reports a failure with **exit 0** and an `is_error`
+            # payload, and `_parse_claude_json` folds that payload into the
+            # text. "Verifier exited 0" would read as nonsense, and the two
+            # call sites would describe one fact differently — the thing this
+            # change is about (Copilot, PR #247). The decision is shared; only
+            # the sentence is local, because the subject differs.
+            detail = f"Verifier reported an error: {cli_result.text.strip()[:200] or 'no detail'}"
+        return VERDICT_UNCERTAIN, detail + contradiction, cli_result.cost_usd
     verdict, evidence = parse_verdict(cli_result.text)
     return verdict, evidence, cli_result.cost_usd
 

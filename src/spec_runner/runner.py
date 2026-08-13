@@ -13,6 +13,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -34,6 +35,59 @@ class CliResult:
     output_tokens: int | None
     cost_usd: float | None
     is_error: bool = False
+
+
+class AgentAnswer(str, Enum):
+    """Whether an agent's output may be read for a verdict at all (#241).
+
+    One vocabulary for both call sites. `review.run_code_review` and
+    `review_pr.verify_comment` run one agent each, get back the same four
+    signals — text, return code, an `is_error` payload flag, a timeout — and
+    used to disagree about what they mean: a reviewer that crashed after
+    printing `REVIEW_PASSED` was disbelieved (#156), while a verifier that
+    crashed after printing `VERDICT: REFUTED` was taken at its word and its
+    refutation posted to the PR.
+
+    The discriminator that produced the disagreement was "did it print
+    anything". It cannot work: a CLI killed by a provider limit mid-answer
+    prints a partial answer, and so does one that crashed after its
+    conclusion. Nothing in the text distinguishes them, and only one of them
+    reached a verdict.
+
+    Consumers may still *act* differently on a verdict — that is policy — but
+    they no longer differ on whether there is one to act on.
+    """
+
+    #: Exit 0, no error flag, something to read. A considered answer.
+    ANSWERED = "answered"
+    #: Exit 0 and nothing to read. The agent finished and said nothing.
+    EMPTY = "empty"
+    #: Non-zero exit, or the CLI's own error flag. Whatever it printed is not a
+    #: verdict — including a marker.
+    CRASHED = "crashed"
+    #: Killed before it could finish. Nothing is known, and it was billed for
+    #: the time it ran.
+    TIMED_OUT = "timed_out"
+
+    @property
+    def carries_a_verdict(self) -> bool:
+        """Only `ANSWERED`. The others are the absence of one, in three
+        distinguishable ways — which is what lets a caller say *why* it has no
+        verdict instead of inventing one."""
+        return self is AgentAnswer.ANSWERED
+
+
+def classify_agent_answer(
+    result: CliResult, returncode: int, *, timed_out: bool = False
+) -> AgentAnswer:
+    """The one place this question is answered (#241)."""
+    if timed_out:
+        return AgentAnswer.TIMED_OUT
+    if returncode != 0 or result.is_error:
+        return AgentAnswer.CRASHED
+    if not result.text.strip():
+        return AgentAnswer.EMPTY
+    return AgentAnswer.ANSWERED
 
 
 @dataclass
