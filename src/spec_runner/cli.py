@@ -2024,6 +2024,19 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--actor", help="Who (default: git user.email)")
     tdd_repair.add_argument("--commit", required=True, help="Commit carrying the repaired bytes")
 
+    tdd_resume = tdd_sub.add_parser(
+        "resume",
+        parents=[common],
+        help="Green is established: reinstate this task's confirmed red and its claims (#232)",
+    )
+    tdd_resume.add_argument("task_id", help="Task whose confirmed red is being reinstated")
+    tdd_resume.add_argument(
+        "--checkpoint",
+        help="Which confirmed red to reinstate; required only when the task has more than one",
+    )
+    tdd_resume.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    tdd_resume.add_argument("--actor", help="Who (default: git user.email)")
+
     tdd_status = tdd_sub.add_parser(
         "status", parents=[common], help="Show checkpoints, claims and remedies (#141)"
     )

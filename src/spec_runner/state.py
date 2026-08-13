@@ -1119,6 +1119,123 @@ class ExecutorState:
         self._conn.commit()
         return changed
 
+    def reinstate_checkpoint_with_claims(
+        self, namespace: str, task_id: str, checkpoint_id: str
+    ) -> tuple[int, int]:
+        """Make a retired checkpoint standing again, **with its own claims**,
+        in one transaction (#232). Returns `(checkpoints, claims)` changed.
+
+        The atomicity is the safety property, not an optimisation. A resume
+        that reinstated a red and then failed to reinstate its byte-lock would
+        leave exactly the state the whole design forbids — a confirmed red whose
+        evidence nothing protects — and it would leave it while reporting
+        success. Refusing outright is better than that, so both flips share one
+        `with self._conn` block and roll back together.
+
+        Only claims recorded **for this checkpoint** are touched. A claim
+        retired for its own unrelated reasons stays retired; resume is not an
+        amnesty.
+        """
+        from .claims import ClaimStatus
+        from .tdd import RedCheckpoint
+
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchall()
+        target_ids = [
+            row[0]
+            for row in rows
+            if RedCheckpoint(
+                task_id=row[1],
+                namespace=namespace,
+                commit_sha=row[2],
+                baseline_sha="",
+                selector=row[3],
+                environment_id="",
+                execution_mode="",
+                config_hash="",
+                timestamp=row[4],
+            ).checkpoint_id
+            == checkpoint_id
+        ]
+        if not target_ids:
+            # Nothing to reinstate — and therefore nothing to reinstate the
+            # claims *of*. Touching them anyway would activate a byte-lock with
+            # no standing red behind it: the inverse of the hazard this method
+            # exists to prevent, produced by the method itself (Copilot, #244).
+            raise ValueError(
+                f"no checkpoint {checkpoint_id} for {task_id} in {namespace}; "
+                "refusing to reinstate claims that would stand alone"
+            )
+        with self._conn:
+            checkpoints = 0
+            for row_id in target_ids:
+                self._conn.execute(
+                    "UPDATE red_checkpoints SET status = 'active' WHERE id = ?", (row_id,)
+                )
+                checkpoints += 1
+            cur = self._conn.execute(
+                "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status != ?",
+                (
+                    ClaimStatus.ACTIVE.value,
+                    namespace,
+                    task_id,
+                    checkpoint_id,
+                    ClaimStatus.ACTIVE.value,
+                ),
+            )
+            claims = int(cur.rowcount or 0)
+        return checkpoints, claims
+
+    def claims_of_checkpoint(self, namespace: str, checkpoint_id: str) -> list[dict]:
+        """Every claim recorded for one lineage, whatever its status."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT task_id, path, blob_sha, status FROM tdd_claims "
+            "WHERE namespace = ? AND checkpoint_id = ? ORDER BY id",
+            (namespace, checkpoint_id),
+        ).fetchall()
+        return [{"task_id": r[0], "path": r[1], "blob_sha": r[2], "status": r[3]} for r in rows]
+
+    def confirmed_reds(self, namespace: str, task_id: str) -> list["RedCheckpointT"]:
+        """Every checkpoint that ever confirmed a red, **any status**, newest first.
+
+        Supersession retires a lineage; it does not unhappen the observation.
+        `resume` needs the evidence, and the evidence is what `expected_fail`
+        recorded — the pilot's confirmed red is `superseded` and still true.
+
+        A list rather than "the newest", because more than one is a case an
+        authority decision must not resolve by guessing (F-5).
+        """
+        from .tdd import RedCheckpoint, RedOutcome
+
+        assert self._conn is not None
+        cursor = self._conn.execute(
+            "SELECT task_id, namespace, commit_sha, baseline_sha, selector, environment_id, "
+            "execution_mode, config_hash, outcome, timestamp, status FROM red_checkpoints "
+            "WHERE namespace = ? AND task_id = ? AND outcome = ? ORDER BY id DESC",
+            (namespace, task_id, RedOutcome.EXPECTED_FAIL.value),
+        )
+        return [
+            RedCheckpoint(
+                task_id=row[0],
+                namespace=row[1],
+                commit_sha=row[2],
+                baseline_sha=row[3],
+                selector=row[4],
+                environment_id=row[5],
+                execution_mode=row[6],
+                config_hash=row[7],
+                outcome=RedOutcome(row[8]),
+                timestamp=row[9],
+            )
+            for row in cursor
+        ]
+
     def record_remedy(self, remedy: "RemedyRecordT") -> None:
         """Persist one remedy. **Raises** on failure — like a claim and for the
         same reason: a remedy nobody can find is indistinguishable from one that

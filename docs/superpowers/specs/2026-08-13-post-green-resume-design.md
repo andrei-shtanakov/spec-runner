@@ -1,6 +1,6 @@
 # Post-green resume — design
 
-**Status:** **signed off by the owner 2026-08-13** — with this document's own recommendation on claims **overruled**: `resume` reinstates the checkpoint *and* its lineage's claims, in one transaction (§7 "Claims"). Ready to implement; no code ships with this document.
+**Status:** **implemented** (PR for #232). Signed off by the owner 2026-08-13 — with this document's own recommendation on claims **overruled**: `resume` reinstates the checkpoint *and* its lineage's claims, in one transaction (§7 "Claims"). Ready to implement; no code ships with this document.
 **Issue:** #232 (F-28), terminal member of the F-25 → F-26 → F-27 → F-28 cascade.
 **Related:** [TDD lifecycle](2026-08-11-tdd-lifecycle-design.md) (#141), [claim and remedy contracts](2026-08-11-claim-and-remedy-contracts.md) §3a, [budget authorization](2026-08-13-budget-authorization-design.md) (#230 part 2 — the wedge is expensive, and that is its problem)
 
@@ -197,3 +197,24 @@ Consequence, accepted deliberately: **kapelle must first restore the evidential
 test to its claimed bytes**, or go through a separate — and as yet undesigned —
 change-of-evidence procedure. That is more honest than finishing the pilot by
 quietly removing its principal guarantee.
+
+---
+
+## 8. As built
+
+Two things the implementation added to the signed-off design, both found by
+writing the tests:
+
+1. **`--checkpoint`, and a refusal to guess.** A task can hold more than one
+   confirmed red. Picking the newest would reinstate the wrong byte-lock along
+   with the wrong lineage, so `resume` refuses and lists them — the rule the
+   other remedies already follow (F-5).
+2. **A conflict exits 2.** The record is allowed when the claimed bytes have
+   moved (§7), but a zero exit would promise a merge that the gate will refuse.
+   The command prints the paths with claimed-vs-HEAD blobs and exits 2.
+
+One interaction worth knowing, not a defect: the free reuse in §4 depends on the
+reinstated checkpoint's `config_hash` still matching current policy. Change a
+`POLICY_KEYS` value between the green and the resume and the red will be
+re-authored — the gate still passes, so the task completes, but it costs one
+call.

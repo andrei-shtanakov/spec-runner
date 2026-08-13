@@ -12,6 +12,38 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`spec-runner tdd resume`** (#232) — the post-green half finally has a
+  remedy. `abandon` and `repair` both answer questions about a *red*, so an
+  operator whose run died after green reached for the nearest one; `repair`
+  honestly recorded that the changed test no longer fails, **superseding the
+  confirmed red the task still needed**, and `red_authoring` was then the only
+  door the lifecycle offered — to a task whose red cannot exist precisely
+  because the work is done.
+
+  `resume` reinstates that evidence, and the property that makes it safe is
+  negative: **it introduces no new way to satisfy the RED gate.** The gate is
+  untouched and still demands a confirmed `expected_fail` whose commit is an
+  ancestor of the tree in hand; this only changes which row is standing, and
+  only when such a row already exists. Admissible when the task has a confirmed
+  red here (any status — supersession retires a lineage, not an observation),
+  its commit is an ancestor of HEAD, and the lifecycle reached
+  `green_implementing` or later; with more than one confirmed red it refuses
+  and asks for `--checkpoint` rather than guessing.
+
+  **The checkpoint and its lineage's claims are reinstated in one transaction.**
+  Reinstating the red alone would make this legal: *confirmed red + claim →
+  GREEN edits the frozen test → repair supersedes both → resume returns only
+  the red → merge with no byte-lock* — laundering the exact violation the lock
+  exists to catch, with the command built to help. A claim protects the
+  evidence from the RED until the terminal gate. If the claimed bytes have
+  moved, the command's preflight says so, the decision is still recorded, the
+  exit code is 2, and the gate refuses until they match. Nothing accepts new
+  bytes.
+
+- **`tdd repair` is refused after green** — it asks whether a changed test is
+  still a red, a question with no honest answer once the implementation exists,
+  and answering it retires the evidence. It points at `resume`.
+
 - **`spec-runner budget authorize`** (#230 part 2) — an operator raising a
   ceiling, audited. Refunds and a separate infrastructure budget were rejected
   at design time: both stop *"the number bounds the money"* from being true.
