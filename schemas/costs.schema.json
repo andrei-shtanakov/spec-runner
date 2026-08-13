@@ -11,9 +11,40 @@
       "type": "array",
       "items": { "$ref": "#/definitions/TaskCost" }
     },
-    "summary": { "$ref": "#/definitions/Summary" }
+    "summary": { "$ref": "#/definitions/Summary" },
+    "pr_reviews": {
+      "description": "Per-PR totals from the `review-pr` ledger (`pr_agent_calls`). A separate ledger from the task one: these calls belong to a PR comment, not to a task, and are never folded into `tasks[].cost`. Added 2.31.0; absent when the loop has never run in this state file.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/PrReviewCost" }
+    }
   },
   "definitions": {
+    "PrReviewCost": {
+      "title": "PrReviewCost",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "pr_number", "calls", "cost", "unmeasured_calls"],
+      "properties": {
+        "repo": { "description": "owner/repo", "type": "string" },
+        "pr_number": { "description": "PR number", "type": "integer" },
+        "calls": {
+          "description": "Paid calls this loop made for the PR (verification and fix), counting failed and timed-out ones whose process started",
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "description": "Sum of the priced calls in USD. A floor when `unmeasured_calls` > 0.",
+          "type": "number"
+        },
+        "unmeasured_calls": {
+          "description": "Calls whose cost the CLI never reported. When > 0, `cost` is a floor, not a total.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" }
+      }
+    },
     "TaskCost": {
       "title": "TaskCost",
       "type": "object",
@@ -119,6 +150,23 @@
           "description": "Agent calls across all tasks whose cost the CLI never reported. Added 2.29.0. When > 0, `total_cost` is a floor, not a total. Absent in output from <2.29.0.",
           "type": "integer",
           "minimum": 0
+        },
+        "pr_review_cost": {
+          "description": "Total USD spent by `review-pr` in this state file. Separate from `total_cost`, which remains the TASK total and is unaffected by this key. Added 2.31.0; present only when the PR ledger has rows.",
+          "type": "number"
+        },
+        "pr_review_unmeasured_calls": {
+          "description": "Review-pr calls whose cost the CLI never reported. When > 0, `pr_review_cost` is a floor. Added 2.31.0.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "repo_total_cost": {
+          "description": "`total_cost` + `pr_review_cost` — the two ledgers summed at the point of asking, never merged at the point of writing. Added 2.31.0; present only when the PR ledger has rows.",
+          "type": "number"
+        },
+        "pr_ledger_since": {
+          "description": "First version that recorded review-pr calls. Sessions from earlier versions are missing from the ledger — incomplete history, not free work. Added 2.31.0.",
+          "type": "string"
         }
       }
     }
