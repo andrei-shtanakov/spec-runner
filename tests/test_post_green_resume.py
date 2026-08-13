@@ -112,6 +112,15 @@ def _pilot(tmp_path: Path, *, green_touches_test: bool = False):
         )
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "green")
+
+    # The wedge's own tail (#249). Every retry after the crash re-enters
+    # `red_authoring` — that is what being wedged *is* — so a fixture that
+    # stops at green describes a state no operator ever meets. The first
+    # version of this file stopped there, and the remedy shipped refusing the
+    # only case it was built for.
+    with ExecutorState(cfg) as state:
+        for phase in (TddPhase.GREEN_VERIFYING, TddPhase.RED_AUTHORING, TddPhase.RED_AUTHORING):
+            advance(state, resolve_namespace(cfg), "TASK-101", phase)
     return root, cfg, checkpoint
 
 
@@ -341,6 +350,27 @@ class TestRefusals:
         with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="not an ancestor"):
             resume(cfg, state, "TASK-101", reason=REASON)
 
+    def test_the_wedges_own_retries_do_not_make_it_inadmissible(self, tmp_path):
+        """#249 (F-29), found by the owner within the hour of shipping #244.
+
+        Every wedge retry re-enters `red_authoring` by definition, so a check
+        that reads the *latest* row refuses every task that actually hit the
+        wedge — admissible only for an operator who runs it before ever
+        retrying, which is not how the wedge is discovered.
+        """
+        from spec_runner.lifecycle import current_phase
+
+        root, cfg, cp = _pilot(tmp_path)
+        _retire(cfg, cp)
+
+        with ExecutorState(cfg) as state:
+            assert current_phase(state, resolve_namespace(cfg), "TASK-101") is (
+                TddPhase.RED_AUTHORING
+            )
+            result, _conflicts = resume(cfg, state, "TASK-101", reason=REASON)
+
+        assert result.checkpoint_id == cp.checkpoint_id
+
     def test_a_task_that_never_reached_green_is_refused(self, tmp_path):
         root = tmp_path / "repo"
         root.mkdir(parents=True)
@@ -471,7 +501,26 @@ class TestRepairAfterGreen:
         with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="resume") as exc:
             repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
 
-        assert "green_implementing" in str(exc.value)
+        assert "has reached green" in str(exc.value)
+
+    def test_it_is_refused_after_the_wedges_own_retries(self, tmp_path):
+        """The mirrored half of #249, and the more dangerous one.
+
+        Asked of `current_phase`, this guard went **quiet** exactly where it is
+        needed: a task that reached green and was then retried reads as
+        `red_authoring`, so the repair that creates the wedge was still
+        allowed. That is how the pilot arrived here in the first place.
+        """
+        root, cfg, cp = _pilot(tmp_path)  # its history ends in two red_authoring rows
+        head = _git(root, "rev-parse", "HEAD").stdout.strip()
+        from spec_runner.lifecycle import current_phase
+
+        with ExecutorState(cfg) as state:
+            assert current_phase(state, resolve_namespace(cfg), "TASK-101") is (
+                TddPhase.RED_AUTHORING
+            ), "the fixture must reproduce the wedge's tail, or this proves nothing"
+            with pytest.raises(RemedyError, match="has reached green"):
+                repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
 
     def test_before_green_it_still_works(self, tmp_path):
         """The refusal must not swallow the case repair was built for."""

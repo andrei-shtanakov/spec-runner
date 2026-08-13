@@ -12,6 +12,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`tdd resume` was inadmissible in the exact state it was built for** (#249,
+  F-29 — found by the owner within the hour of #244 shipping). Its third
+  condition asked `current_phase`, the latest recorded row. But **backwards is
+  legal in this lifecycle**: every wedge retry re-enters `red_authoring`, which
+  is what being wedged *is*, so any task that actually hit the wedge read as
+  `red_authoring` and was refused. The remedy was admissible only for an
+  operator who ran it before ever retrying — which is not how the wedge is
+  discovered.
+
+  Both remedies now ask the history's high-water mark
+  (`lifecycle.has_reached`), not the latest row. The mirrored half was the more
+  dangerous one and the issue did not name it: the guard that refuses `repair`
+  after green went **quiet** in the same state, so the repair that creates the
+  wedge was still allowed — which is how the pilot arrived there.
+
+  The design said "has reached `green_implementing` or later"; the code asked
+  "is at". The test fixture agreed with the code because it stopped at green
+  and never simulated the retries that define the wedge, even though the design
+  document's own table lists them.
+
 - **One reading of an agent's result, shared by both call sites** (#241).
   `run_code_review` and `verify_comment` each run one agent and get back the
   same four signals — text, return code, the CLI's own error flag, a timeout —
