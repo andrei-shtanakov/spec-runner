@@ -1,6 +1,6 @@
 # Post-green resume — design
 
-**Status:** design only. No code ships with this document. **Pending owner sign-off.**
+**Status:** **signed off by the owner 2026-08-13** — with this document's own recommendation on claims **overruled**: `resume` reinstates the checkpoint *and* its lineage's claims, in one transaction (§7 "Claims"). Ready to implement; no code ships with this document.
 **Issue:** #232 (F-28), terminal member of the F-25 → F-26 → F-27 → F-28 cascade.
 **Related:** [TDD lifecycle](2026-08-11-tdd-lifecycle-design.md) (#141), [claim and remedy contracts](2026-08-11-claim-and-remedy-contracts.md) §3a, [budget authorization](2026-08-13-budget-authorization-design.md) (#230 part 2 — the wedge is expensive, and that is its problem)
 
@@ -73,7 +73,8 @@ spec-runner tdd resume TASK-101 \
 ```
 
 **What it does:** reinstates the task's confirmed red as its standing evidence
-(status `superseded`/`abandoned` → `active`) and records the decision.
+(status `superseded`/`abandoned` → `active`) **together with the claims of that
+same lineage, in one transaction** (§7 "Claims"), and records the decision.
 
 **What it refuses:** everything else. The command is admissible only when
 
@@ -148,14 +149,51 @@ a wedge) would refuse tomorrow. Deliberate, and small enough to ship with §4.
 - **A `--force` that skips the three conditions.** Then it is `Mode: standard`
   with extra steps.
 
-## 7. Open questions for sign-off
+## 7. Settled at sign-off (2026-08-13)
 
-1. **Claims.** The pilot's byte-lock is `superseded` too. Should `resume`
-   reinstate it? Recommendation: **no** — the claim protects a red while the
-   implementation is being written, and that is over. Reinstating it would
-   freeze a file the review may legitimately need to touch.
-2. **Naming.** `tdd resume` reads as "continue the run"; the operation is
-   narrower — "reinstate this task's confirmed red so the run can continue".
-   `tdd reinstate` is more literal, `tdd resume` is what an operator will type.
-   Recommendation: `resume`, with the refusal messages doing the teaching.
-3. **Variant (a) or (b)** from §4. Recommendation: (a).
+**Naming:** `spec-runner tdd resume`, as recommended.
+
+**Execution path:** variant **(a)** — reuse the existing path, introduce no
+skip of the implementation pass.
+
+**Claims — the recommendation was wrong, and is overruled.** This document
+argued that a claim protects a red only while the implementation is being
+written, so a resume need not reinstate it. The owner's counter-example is the
+pilot itself, and it is decisive:
+
+```
+confirmed RED + claim
+→ GREEN modifies the frozen test
+→ repair supersedes both
+→ resume reinstates only the RED
+→ merge, with no byte-lock on the evidence
+```
+
+Attempt №3 walked the first two steps for real. Reinstating the checkpoint
+alone would make the remaining two a *legal* way to launder exactly the
+violation the byte-lock exists to catch — and it would be laundered by the
+command built to help. **A claim protects the evidence from the RED until the
+terminal gate, not merely during implementation.** That is the correct reading
+of what a confirmed red asserts, and this document had it too narrow.
+
+Requirements that follow:
+
+- **Reinstate only the claims of the same lineage** — the ones recorded with
+  the checkpoint being reinstated. An unrelated claim retired for its own
+  reasons stays retired; resume is not an amnesty.
+- **The checkpoint and its claims flip in one transaction**, under the same CAS.
+  A resume that reinstated a red and then failed to reinstate its lock would
+  leave precisely the state the previous bullet forbids, which is worse than
+  refusing.
+- **A mismatch between the current bytes and the claimed blob does not block
+  the record, but the gate must then refuse with a precise diff.** Preferably
+  the command surfaces the conflict in its own preflight, so the operator meets
+  it before the record exists rather than after.
+- **No automatic acceptance of new bytes.** Ever, under any flag on this
+  command. Accepting a changed proof is a different operation, and it has not
+  been designed.
+
+Consequence, accepted deliberately: **kapelle must first restore the evidential
+test to its claimed bytes**, or go through a separate — and as yet undesigned —
+change-of-evidence procedure. That is more honest than finishing the pilot by
+quietly removing its principal guarantee.
