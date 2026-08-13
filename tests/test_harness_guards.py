@@ -18,6 +18,8 @@ import pytest
 
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
+from spec_runner.preset_cmd import list_presets, load_fragment
+from tests.conftest import PAID_AGENT_COMMANDS
 
 
 def _cfg(tmp_path: Path, cmd: str) -> ExecutorConfig:
@@ -30,7 +32,7 @@ def _cfg(tmp_path: Path, cmd: str) -> ExecutorConfig:
 
 
 class TestTheGuard:
-    @pytest.mark.parametrize("cmd", ["claude", "codex", "opencode", "pi", "qwen"])
+    @pytest.mark.parametrize("cmd", sorted(PAID_AGENT_COMMANDS))
     def test_a_bare_agent_name_is_refused(self, tmp_path, monkeypatch, cmd):
         """Nothing may execute even if the guard is gone.
 
@@ -70,3 +72,19 @@ class TestTheGuard:
         monkeypatch.setattr(tdd, "_run_agent", lambda *a, **k: tdd.AgentCall(text="stubbed"))
 
         assert tdd._run_agent(_cfg(tmp_path, "claude"), "any prompt").text == "stubbed"
+
+    def test_the_guard_knows_every_cli_this_project_ships_a_preset_for(self):
+        """The envelope, pinned against the product rather than against a
+        second hand-kept list (Copilot, #246).
+
+        Parametrizing over `PAID_AGENT_COMMANDS` proves every listed name is
+        refused, but it cannot notice a name going *missing* — the cases would
+        vanish with it. What cannot vanish quietly is a bundled preset: adding
+        `spec-runner config --preset <new-cli>` means the suite can now invoke
+        that CLI, so the guard has to learn it in the same change.
+        """
+        shipped = {load_fragment(name).command for name in list_presets()}
+
+        assert shipped <= PAID_AGENT_COMMANDS, (
+            f"these CLIs have presets but are not guarded: {sorted(shipped - PAID_AGENT_COMMANDS)}"
+        )
