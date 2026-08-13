@@ -157,6 +157,20 @@ class TestWhatCountsAsACall:
 
         assert _rows(cfg)[0]["outcome"] == "error"
 
+    def test_a_nonzero_exit_is_an_error_even_when_it_printed_something(self, tmp_path):
+        """The ledger reports what the process did. A CLI that died after
+        emitting partial output did not complete, and recording it as
+        `completed` would under-report failures and disagree with the fix
+        agent's own rule (Copilot, PR #240)."""
+        cfg = _cfg(tmp_path, claude_command="claude")
+        partial = _claude("VERDICT: VALID\nEVIDENCE: half an answer", 0.2, returncode=1)
+        with ReviewPrState(cfg) as state, patch.object(rp.subprocess, "run", return_value=partial):
+            verify_comment(_comment(), REPO, 6, cfg, ledger=state)
+
+        row = _rows(cfg)[0]
+        assert row["outcome"] == "error"
+        assert row["cost_usd"] == 0.2, "it still cost what it cost"
+
     def test_a_fix_call_is_recorded_under_its_own_kind(self, tmp_path):
         cfg = _cfg(tmp_path, claude_command="claude")
         with (
@@ -225,6 +239,17 @@ class TestThroughTheLoop:
         rows = _rows(cfg)
         assert rows[0]["round_number"] is None
         assert rows[1]["round_number"] == 1
+
+    def test_a_verification_after_an_earlier_round_still_has_none(self, tmp_path):
+        """A later invocation verifies new comments *before* opening its round.
+        Reading the current count there would bill the verification to the
+        previous invocation's round — one it took no part in (Copilot, #240)."""
+        cfg = _cfg(tmp_path, claude_command="claude")
+        with ReviewPrState(cfg) as state:
+            state.start_round(REPO, 6, "sha-round-1")
+            state.record_agent_call(REPO, 6, 2, kind="verify", outcome="completed")
+
+        assert _rows(cfg)[-1]["round_number"] is None
 
 
 class TestCostsKeepsTheLedgersApart:

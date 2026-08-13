@@ -490,20 +490,25 @@ class ReviewPrState:
         CLI reported none — unknown is not zero, and a total that hides
         unpriced calls is a floor pretending to be a sum (#216).
 
-        The round is looked up rather than passed: verification runs before any
-        round is started, so the honest value there is "no round yet" (NULL),
-        while a fix always has one.
+        ``round_number`` is the round this call **belongs to**, and only a fix
+        belongs to one: rounds bound the mutating phase, and a verification
+        precedes it — in `--verify-only` no round is ever opened at all. Reading
+        the current count for a verification would attribute its spend to the
+        previous invocation's round, which is a round it took no part in
+        (Copilot, PR #240).
 
         A ledger failure must never turn into a failed review or a lost fix, so
         this swallows its errors after logging — the same rule the task ledger
         follows.
         """
         try:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM pr_review_rounds WHERE repo = ? AND pr_number = ?",
-                (repo, pr_number),
-            ).fetchone()
-            round_number = int(row[0]) or None
+            round_number: int | None = None
+            if kind == "fix":
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM pr_review_rounds WHERE repo = ? AND pr_number = ?",
+                    (repo, pr_number),
+                ).fetchone()
+                round_number = int(row[0]) or None
             with self._conn:
                 self._conn.execute(
                     "INSERT INTO pr_agent_calls (repo, pr_number, comment_id, head_sha, "
@@ -694,13 +699,17 @@ def verify_comment(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )
     failed = result.returncode != 0 and not cli_result.text.strip()
+    # The ledger reports what the *process* did, so a non-zero exit is an error
+    # whatever it managed to print — the rule `run_fix_agent` already followed
+    # (Copilot, PR #240). `failed` below is a different question: whether this
+    # call produced anything a verdict can be read from.
     _record_pr_call(
         ledger,
         repo,
         pr_number,
         comment.comment_id,
         "verify",
-        "error" if failed else "completed",
+        "completed" if result.returncode == 0 else "error",
         head_sha,
         cli_result,
     )
