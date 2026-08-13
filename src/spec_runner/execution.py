@@ -74,7 +74,6 @@ def _refusal_error_code(refusal: str) -> ErrorCode:
     another sentence.
     """
     from .hooks import GATE_INSTRUMENT_ERROR_PREFIX
-    from .phases import Refusal
 
     if isinstance(refusal, Refusal):
         return refusal.error_code
@@ -100,7 +99,7 @@ def _headline(reason: str, limit: int = 120) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def _run_red_phase_gate(task, config, state, reporter) -> "Refusal | None":
+def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     """Author and confirm a red, then ask the gate. Returns a refusal, or None.
 
     The two halves are deliberately separate. `run_red_phase` *observes* — it
