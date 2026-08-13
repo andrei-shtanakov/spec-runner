@@ -10,6 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-08-13
+
+**Minor.** No schema, no CLI flag and no config key was added — verified by
+diffing `schemas/`, `docs/state-schema.md` and the `add_argument` lines against
+v2.29.0. One **externally visible behaviour change** earns the minor bump: a
+TDD run whose replay environment is broken now exits **2** ("the instrument
+broke, so I cannot tell whether the work is good") where it exited **1** ("the
+work is bad"). That exit surface has been declared since v2.25.0; this is the
+first release in which the RED site can honour it. A consumer treating any
+non-zero exit as failure is unaffected.
+
+The theme is what the tool did when something other than the work went wrong.
+Four of the five fixes come from one battle-testing cascade (F-25…F-28) on a
+real TDD pilot, and the pattern they share is worth naming: in each case the
+tool knew what had happened and told the operator something else — a provider
+session limit reported as a failing test suite, a byte-lock violation reported
+as "tests/lint check", an instrument failure reported as a bad task, and
+uncommitted work deleted with no mention that it had ever existed.
+
 ### Fixed
 
 - **A broken instrument at the RED site is reported as one** (#230, part 1).
@@ -2436,7 +2455,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...HEAD
+[2.30.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...v2.29.0
 [2.28.3]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...v2.28.3
 [2.28.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...v2.28.2
