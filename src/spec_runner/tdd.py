@@ -662,14 +662,15 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
 
 def _phase(state, config, task, phase, detail=None) -> None:
     """Record a lifecycle transition, never fail a run over one (#141 4a)."""
+    import contextlib
+
     from .lifecycle import IllegalTransition, advance
 
-    try:
+    # The gates are what refuse; this is the record. Raising here would make
+    # bookkeeping a second, weaker enforcement point. Not re-logged either:
+    # `advance` already did, with more context (Copilot, PR #259).
+    with contextlib.suppress(IllegalTransition):
         advance(state, resolve_namespace(config), task.id, phase, detail)
-    except IllegalTransition as exc:
-        # The gates are what refuse; this is the record. Raising here would
-        # make bookkeeping a second, weaker enforcement point.
-        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
 
 
 def _config_hash(config: ExecutorConfig) -> str:

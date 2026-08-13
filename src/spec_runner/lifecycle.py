@@ -174,6 +174,10 @@ def advance(
     now = current_phase(state, namespace, task_id)
     if (now, target) in ILLEGAL and not has_confirmed_red(state, namespace, task_id):
         state.record_tdd_phase(task_id, namespace, f"refused:{target.value}", f"from {now.value}")
+        # Logged **here and only here** (Copilot, PR #259). The call sites used
+        # to log it too, so one event produced two lines at two severities —
+        # and this is the only place that knows what the event means.
+        #
         # An error, not a warning: after #253 this fires only when the record
         # and the gate disagree — the gate refuses to implement without a
         # confirmed red, so reaching here means one of them is wrong about the

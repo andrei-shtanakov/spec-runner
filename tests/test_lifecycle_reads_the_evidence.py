@@ -76,7 +76,7 @@ def _bed(tmp_path: Path) -> tuple[ExecutorConfig, str, str]:
     )
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)
     sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
     ).stdout.strip()
     return cfg, resolve_namespace(cfg), sha
 
@@ -195,6 +195,42 @@ class TestTheHistoryKeepsBeingWritten:
 
             rows = [r["phase"] for r in state.tdd_phase_history("TASK-1", ns)]
         assert "refused:green_verifying" in rows
+
+    def test_a_refusal_is_logged_once(self, tmp_path, monkeypatch):
+        """One event, one line, at the severity the machine chose (Copilot,
+        PR #259). Three call sites used to re-log the same refusal as a
+        warning, so a contract violation arrived twice and disagreed with
+        itself about how serious it was.
+
+        The loggers are recorded rather than stderr: a first version read the
+        rendered output and passed alone but failed inside the full suite,
+        because another test had reconfigured structlog. A test whose verdict
+        depends on who ran before it is not evidence.
+        """
+        from spec_runner import execution, hooks, lifecycle, tdd
+        from spec_runner.task import Task
+
+        emitted: list[tuple[str, str]] = []
+
+        class _Recorder:
+            def __getattr__(self, level):
+                def log(event, **kw):
+                    emitted.append((level, event))
+
+                return log
+
+        for module in (lifecycle, execution, tdd, hooks):
+            monkeypatch.setattr(module, "logger", _Recorder())
+
+        cfg, ns, _sha = _bed(tmp_path)
+        task = Task(id="TASK-1", name="t", priority="p1", status="todo", estimate="1h")
+        with ExecutorState(cfg) as state:
+            advance(state, ns, "TASK-1", TddPhase.RED_AUTHORING)
+            emitted.clear()
+            execution._record_phase(state, cfg, task, TddPhase.GREEN_IMPLEMENTING)
+
+        refusals = [(lvl, ev) for lvl, ev in emitted if "refused" in ev.lower()]
+        assert refusals == [("error", "Lifecycle transition refused")], emitted
 
     def test_a_refusal_never_fails_the_task(self, tmp_path):
         """`_record_phase` swallows it by design: the gates decide, this

@@ -381,8 +381,11 @@ def _record_tdd_phase(config: ExecutorConfig, task: Task, phase, detail=None) ->
     try:
         with ExecutorState(config) as state:
             advance(state, resolve_namespace(config), task.id, phase, detail)
-    except IllegalTransition as exc:
-        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
+    except IllegalTransition:
+        # Not re-logged: `advance` already did, with the full context
+        # (Copilot, PR #259). Swallowed for the reason the other two sites
+        # swallow it — the gates refuse, this remembers.
+        pass
     except Exception as exc:  # never fail a task over bookkeeping
         logger.warning("Could not record lifecycle phase", task_id=task.id, error=str(exc))
 
