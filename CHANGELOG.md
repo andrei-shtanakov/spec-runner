@@ -12,6 +12,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A provider session limit is retryable infrastructure again** (#229). The
+  wordings CLIs actually print for exhaustion — `You've hit your session limit
+  · resets 5:30pm`, `Claude usage limit reached. Your limit will reset at 3pm`,
+  `5-hour limit reached ∙ resets 3pm` — matched none of the six substrings in
+  `ERROR_PATTERNS`, so on the implementation pass the run recorded a plain
+  `TASK_FAILED` and retried it on a **5-second linear backoff** against a cap
+  that resets hours later. Now recognised as `RATE_LIMIT` (exponential
+  backoff), and the recorded message carries the reset time, which is the only
+  actionable fact in such a response.
+- **A failed task says what refused.** `❌ Failed: tests/lint check` was
+  printed for *every* post-done failure — a byte-lock violation, a review the
+  reviewer never finished, a refused merge. In the pilot an operator read
+  "tests/lint" for a claims-gate refusal while the suite was green. The line
+  now carries the actual reason.
+- **A blocked task reports work left in the tree.** An agent that dies mid-way
+  leaves its edits uncommitted; the task went `blocked` with nothing recording
+  that they exist (in the pilot: six modified and untracked files, one `git
+  checkout` from being lost). The block reason and the progress log now name
+  the stranded paths. A report, never a new failure — if git cannot answer,
+  the reason is unchanged.
+
 - **TDD no longer requires the project to be a Python project** (#220). The RED
   phase lints the file it is about to freeze — reasonably, since a claim makes
   it byte-immutable — using `lint_command`, whose default is

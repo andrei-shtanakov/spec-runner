@@ -440,6 +440,47 @@ def _claims_intact_before_review(
     return f"Pre-terminal gate unsatisfied: {detail}"
 
 
+#: How many stranded paths to name before saying "and N more". The point is to
+#: prove the work exists and where to look, not to reproduce `git status`.
+STRANDED_PATHS_SHOWN = 6
+
+
+def _note_stranded_work(task: Task, config: ExecutorConfig, blocked: str) -> str:
+    """Append "an agent left work in the tree" to a block reason (#229).
+
+    A gate that refuses does not undo what an agent already wrote. In the pilot
+    the review agent applied its fixes, hit a provider session limit, and the
+    task was recorded `blocked` with no mention that six modified and untracked
+    files were sitting in the working tree — good work, one `git checkout` away
+    from being lost, and nothing in the tool's output said it was there.
+
+    A report, never a failure: if git cannot answer, the block reason is
+    returned unchanged.
+    """
+    from .git_ops import uncommitted_work_paths
+
+    try:
+        paths = uncommitted_work_paths(config, exclude=[config.tasks_file])
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not check for stranded work", task_id=task.id, error=str(exc))
+        return blocked
+    if not paths:
+        return blocked
+    shown = ", ".join(paths[:STRANDED_PATHS_SHOWN])
+    if len(paths) > STRANDED_PATHS_SHOWN:
+        shown += f", and {len(paths) - STRANDED_PATHS_SHOWN} more"
+    note = (
+        f"uncommitted changes left in the working tree by this attempt "
+        f"({len(paths)} path(s)): {shown} — review them before re-running; "
+        "they are not part of any commit"
+    )
+    from .runner import log_progress
+
+    logger.warning("Blocked task left uncommitted work", task_id=task.id, paths=paths[:20])
+    log_progress(f"⚠️  {note}", task.id)
+    return f"{blocked} — {note}"
+
+
 def _commit_blocked_status(
     task: Task, config: ExecutorConfig, blocked: str, candidate_sha: str
 ) -> str:
@@ -459,6 +500,7 @@ def _commit_blocked_status(
     either, so the tree is dirty for reasons this cannot fix, and committing on
     behalf of an operator who switched auto-commit off would be a surprise.
     """
+    blocked = _note_stranded_work(task, config, blocked)
     if not config.auto_commit:
         return blocked
     from .bookkeeping import commit_status_flip

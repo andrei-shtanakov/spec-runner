@@ -119,6 +119,14 @@ PROGRESS_FILE = Path("spec/.executor-progress.txt")
 # Error patterns for graceful exit (rate limits, context window, etc.)
 ERROR_PATTERNS = [
     "you've hit your limit",
+    # Provider exhaustion, in the wordings CLIs actually print (#229). None of
+    # them contains "rate limit", so a session limit used to match nothing at
+    # all: it was recorded as a plain task failure and retried on a 5-second
+    # linear backoff against a cap that resets hours later.
+    "session limit",
+    "usage limit reached",
+    "limit will reset",
+    "5-hour limit",
     "rate limit exceeded",
     "context window",
     "quota exceeded",
