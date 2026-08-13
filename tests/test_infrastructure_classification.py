@@ -194,9 +194,7 @@ class TestARefusedVerdictExitsOne:
     def test_a_red_that_does_not_fail_is_the_works_problem(self, tmp_path):
         """The instrument worked perfectly and answered: this test passes, so
         it is not a red. Nothing is broken — the work is not ready."""
-        root = _tdd_project(
-            tmp_path, assertion="True", test_command=f"{sys.executable} -m pytest"
-        )
+        root = _tdd_project(tmp_path, assertion="True", test_command=f"{sys.executable} -m pytest")
 
         result = _run_cli(root, "run", "--task=TASK-001")
 
