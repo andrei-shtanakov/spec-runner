@@ -10,6 +10,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`review-pr` records its own paid calls** (#218 stage 2). The loop makes one
+  verification call per collected bot comment and one fix call per valid one;
+  neither reached any ledger, so `spec-runner costs` showed a review-pr session
+  as free and the money existed only inside one invocation's memory. They now
+  land in a **separate `pr_agent_calls` table** — never a nullable `task_id` on
+  `agent_calls`, because such a call belongs to a PR comment and `costs` groups
+  the task ledger by task.
+
+  Append-only, one row per call whose process **started** (a verifier killed by
+  a timeout was billed for the time it ran; a call the cost guard refused before
+  spawning anything is not a call). Cost is **NULL when the CLI reported none** —
+  unknown is not zero.
+
+  `costs` keeps the two ledgers apart and sums them only at the point of asking:
+  `total_cost` remains the **task** total and is unchanged, `pr_review_cost` is
+  what the loop spent, `repo_total_cost` is their sum. `costs --json` gains an
+  optional `pr_reviews` array and four summary keys
+  (`schemas/costs.schema.json`), all absent when the loop has never run — a
+  project that does not use `review-pr` sees the surface it always saw.
+
+  **Not backfilled**: spend from before this version is missing from the ledger,
+  which the output states rather than implying that older sessions were free.
+
 ## [2.30.0] - 2026-08-13
 
 **Minor.** No schema, no CLI flag and no config key was added — verified by

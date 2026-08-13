@@ -43,7 +43,7 @@ def _verifier(*costs: float | None):
     """A verifier whose calls cost the given amounts, in order."""
     seq = list(costs)
 
-    def verify(comment, repo, pr, config):
+    def verify(comment, repo, pr, config, **_kw):
         cost = seq.pop(0) if seq else 0.0
         return "valid", "checked", cost
 
@@ -126,7 +126,7 @@ class TestVerificationCallsCount:
         )
         cfg = _m2_cfg(work, review_pr_max_cost_usd=1.0)
 
-        def fix_agent(comment, evidence, repo, pr, config):
+        def fix_agent(comment, evidence, repo, pr, config, **_kw):
             (work / "src.py").write_text(f"x = {comment.comment_id + 1}\n")
             return True, "fixed", 1.0
 

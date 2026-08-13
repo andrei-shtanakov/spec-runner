@@ -109,6 +109,29 @@ that makes the command resumable. Columns: `repo`, `pr_number`,
 shape may change in minor releases while the loop is in phase M2/M3;
 external consumers should not depend on it yet.
 
+### `pr_agent_calls` (experimental, v2.31.0)
+
+The loop's own paid calls (#218 stage 2), **append-only**. A third table in the
+same family rather than a nullable `task_id` on `agent_calls`: a review-pr call
+belongs to a PR comment, `costs` groups the task ledger by task, and rows
+belonging to no task would have to be special-cased by every reader of that
+surface.
+
+Columns: `repo`, `pr_number`, `comment_id`, `head_sha`, `round_number` (NULL
+before the first round is started — verification runs before any round exists),
+`kind` (`verify`/`fix`), `provenance` (`review_pr:<kind>`), `outcome`
+(`completed`/`error`/`timeout`), `cost_usd` (**NULL when the CLI reported none**
+— unknown is not zero), `input_tokens`, `output_tokens`, `timestamp`.
+
+A row exists exactly when a subprocess **started**. A call refused by the cost
+guard before spawning anything is not a call and gets no row; a verifier killed
+by a timeout is one, because it was billed for the time it ran.
+
+**Not backfilled.** Review-pr spend before v2.31.0 was recorded nowhere, and no
+version reconstructs it. Sessions from earlier versions are missing from this
+ledger — incomplete history, not free work — which `costs` says in as many
+words whenever it prints the PR section.
+
 ### `phase_results` / `phase_waivers` (experimental, slice 0)
 
 Added by slice 0 of the lifecycle contract (#164 / #141 Part A). **Nothing

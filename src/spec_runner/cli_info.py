@@ -11,6 +11,7 @@ from .config import (
     _resolve_config_path,
 )
 from .logging import get_logger
+from .review_pr import pr_cost_rows
 from .state import (
     ExecutorState,
     clear_stop_file,
@@ -203,6 +204,55 @@ def cmd_status(args, config: ExecutorConfig):
     print_status(config)
 
 
+#: Review-pr spend was recorded nowhere before 2.31.0 (#218). Sessions from
+#: earlier versions are missing from this ledger — that is incomplete history,
+#: not free work, and the difference is worth one printed line.
+PR_LEDGER_SINCE = "2.31.0"
+
+
+def _add_pr_costs(payload: dict, summary: dict, pr_rows: list[dict], *, task_cost: float) -> None:
+    """Attach the PR ledger to a `costs --json` payload (#218 stage 2).
+
+    Three separate numbers, never one: `total_cost` stays the **task** total and
+    is not touched, `pr_review_cost` is what `review-pr` spent, and
+    `repo_total_cost` is their sum — computed at the point of asking rather than
+    by mixing the ledgers at the point of writing. A consumer that only knows
+    about tasks keeps reading exactly what it read before.
+
+    Absent entirely when the ledger is empty, so a project that never runs
+    `review-pr` sees no new keys.
+    """
+    if not pr_rows:
+        return
+    pr_cost = round(sum(r["cost"] for r in pr_rows), 2)
+    payload["pr_reviews"] = pr_rows
+    summary["pr_review_cost"] = pr_cost
+    summary["pr_review_unmeasured_calls"] = sum(r["unmeasured_calls"] for r in pr_rows)
+    summary["repo_total_cost"] = round(task_cost + pr_cost, 2)
+    summary["pr_ledger_since"] = PR_LEDGER_SINCE
+
+
+def _print_pr_costs(pr_rows: list[dict], *, task_cost: float) -> None:
+    """The same three numbers, for a human."""
+    if not pr_rows:
+        return
+    pr_cost = sum(r["cost"] for r in pr_rows)
+    unpriced = sum(r["unmeasured_calls"] for r in pr_rows)
+    print(f"\n{'=' * 40}")
+    print("Review-PR sessions (separate ledger — not task cost)")
+    for r in pr_rows:
+        prefix = "≥" if r["unmeasured_calls"] else ""
+        print(
+            f"  {r['repo']}#{r['pr_number']:<6} {r['calls']:>3} call(s)   {prefix}${r['cost']:.2f}"
+        )
+    print(f"Review-PR total:      {'≥' if unpriced else ''}${pr_cost:.2f}")
+    print(f"Repo total:           {'≥' if unpriced else ''}${task_cost + pr_cost:.2f}")
+    print(
+        f"  (review-pr calls before {PR_LEDGER_SINCE} were not recorded at all — "
+        "earlier sessions are missing from this ledger, not free)"
+    )
+
+
 def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Show cost breakdown per task with optional JSON output."""
     # Guard the file-exists case like cmd_status does: parse_tasks() hard-exits
@@ -213,6 +263,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
     if not tasks:
         # --json must stay machine-parseable even with no tasks (empty is not an
         # error) — emit a valid, schema-conformant payload instead of prose.
+        pr_rows = pr_cost_rows(config)
         if getattr(args, "json", False):
             summary: dict = {
                 "total_cost": 0.0,
@@ -224,9 +275,14 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             if config.budget_usd is not None:
                 summary["budget_usd"] = config.budget_usd
                 summary["budget_used_pct"] = 0.0
-            print(json.dumps({"tasks": [], "summary": summary}, indent=2))
+            payload: dict = {"tasks": [], "summary": summary}
+            # No tasks does not mean no spend: `review-pr` runs against a repo,
+            # not against a task list (#218 stage 2).
+            _add_pr_costs(payload, summary, pr_rows, task_cost=0.0)
+            print(json.dumps(payload, indent=2))
         else:
             print("No tasks found")
+            _print_pr_costs(pr_rows, task_cost=0.0)
         return
 
     with ExecutorState(config) as state:
@@ -307,6 +363,10 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         # distinction the third pilot attempt's evidence had to be corrected
         # for after the fact (#213).
         unmeasured = state.unmeasured_calls()
+        # This loop's own ledger, kept separate on purpose (#218 stage 2): a
+        # review-pr call belongs to a PR comment, not to a task, and folding it
+        # into a task's cost would be a lie about which work cost what.
+        pr_rows = pr_cost_rows(config)
 
         summary = {
             "total_cost": round(total_cost, 2),
@@ -339,7 +399,9 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                         "unmeasured_calls": r.get("unmeasured_calls", 0),
                     }
                 )
-            print(json.dumps({"tasks": json_tasks, "summary": summary}, indent=2))
+            payload = {"tasks": json_tasks, "summary": summary}
+            _add_pr_costs(payload, summary, pr_rows, task_cost=total_cost)
+            print(json.dumps(payload, indent=2))
             return
 
         # Text table output
@@ -392,6 +454,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 f"Unpriced calls:       {unmeasured} — the CLI reported no cost "
                 "(timeout, account limit, or a CLI that does not report one)"
             )
+        _print_pr_costs(pr_rows, task_cost=total_cost)
 
 
 def cmd_logs(args, config: ExecutorConfig):

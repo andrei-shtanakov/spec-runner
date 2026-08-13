@@ -119,6 +119,37 @@ class CostGuard:
         return None
 
 
+def _record_pr_call(
+    ledger: "ReviewPrState | None",
+    repo: str,
+    pr_number: int,
+    comment_id: int,
+    kind: str,
+    outcome: str,
+    head_sha: str | None,
+    cli_result=None,
+) -> None:
+    """Write one row to this loop's ledger, if a ledger was passed (#218 stage 2).
+
+    Optional on purpose: `verify_comment` and `run_fix_agent` are called
+    directly in tests and could be called by a consumer, and neither should
+    require a database to answer the question it exists to answer.
+    """
+    if ledger is None:
+        return
+    ledger.record_agent_call(
+        repo,
+        pr_number,
+        comment_id,
+        kind=kind,
+        outcome=outcome,
+        head_sha=head_sha,
+        cost_usd=getattr(cli_result, "cost_usd", None),
+        input_tokens=getattr(cli_result, "input_tokens", None),
+        output_tokens=getattr(cli_result, "output_tokens", None),
+    )
+
+
 def _note(message: str) -> None:
     """Operator-facing diagnostic → stderr.
 
@@ -298,6 +329,32 @@ class ReviewPrState:
                 UNIQUE(repo, pr_number, head_sha)
             )
         """)
+        # #218 stage 2: this loop's own paid calls. A third table in the same
+        # family, deliberately **not** a nullable `task_id` on `agent_calls`: a
+        # review-pr call belongs to a PR comment, and `costs` groups the task
+        # ledger by task. Rows that belonged to no task would have to be
+        # special-cased in every reader of that surface.
+        #
+        # Append-only. A row exists exactly when a subprocess started, whatever
+        # it then did — a verifier killed by a timeout was billed for the time
+        # it ran, and a refusal that never spawned anything is not a call.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS pr_agent_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                comment_id INTEGER NOT NULL,
+                head_sha TEXT,
+                round_number INTEGER,
+                kind TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                cost_usd REAL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                timestamp TEXT NOT NULL
+            )
+        """)
         self._conn.commit()
 
     def known_ids(self, repo: str, pr_number: int) -> set[int]:
@@ -413,6 +470,102 @@ class ReviewPrState:
         ).fetchone()
         return int(row[0])
 
+    def record_agent_call(
+        self,
+        repo: str,
+        pr_number: int,
+        comment_id: int,
+        *,
+        kind: str,
+        outcome: str,
+        head_sha: str | None = None,
+        cost_usd: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Record one paid call this loop made (#218 stage 2). Never raises.
+
+        ``kind`` is `verify` or `fix`; ``outcome`` is what the process did
+        (`completed`, `error`, `timeout`). ``cost_usd`` stays **NULL** when the
+        CLI reported none — unknown is not zero, and a total that hides
+        unpriced calls is a floor pretending to be a sum (#216).
+
+        ``round_number`` is the round this call **belongs to**, and only a fix
+        belongs to one: rounds bound the mutating phase, and a verification
+        precedes it — in `--verify-only` no round is ever opened at all. Reading
+        the current count for a verification would attribute its spend to the
+        previous invocation's round, which is a round it took no part in
+        (Copilot, PR #240).
+
+        A ledger failure must never turn into a failed review or a lost fix, so
+        this swallows its errors after logging — the same rule the task ledger
+        follows.
+        """
+        try:
+            round_number: int | None = None
+            if kind == "fix":
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM pr_review_rounds WHERE repo = ? AND pr_number = ?",
+                    (repo, pr_number),
+                ).fetchone()
+                round_number = int(row[0]) or None
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO pr_agent_calls (repo, pr_number, comment_id, head_sha, "
+                    "round_number, kind, provenance, outcome, cost_usd, input_tokens, "
+                    "output_tokens, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        repo,
+                        pr_number,
+                        comment_id,
+                        head_sha,
+                        round_number,
+                        kind,
+                        f"review_pr:{kind}",
+                        outcome,
+                        cost_usd,
+                        input_tokens,
+                        output_tokens,
+                        datetime.now().isoformat(),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Could not record a review-pr agent call",
+                repo=repo,
+                pr=pr_number,
+                comment_id=comment_id,
+                kind=kind,
+                error=str(exc),
+            )
+
+    def agent_calls(self, repo: str | None = None, pr_number: int | None = None) -> list[dict]:
+        """Rows from this loop's ledger, oldest first."""
+        sql = (
+            "SELECT repo, pr_number, comment_id, head_sha, round_number, kind, provenance, "
+            "outcome, cost_usd, input_tokens, output_tokens, timestamp FROM pr_agent_calls"
+        )
+        params: list[object] = []
+        if repo is not None and pr_number is not None:
+            sql += " WHERE repo = ? AND pr_number = ?"
+            params = [repo, pr_number]
+        sql += " ORDER BY id"
+        cols = [
+            "repo",
+            "pr_number",
+            "comment_id",
+            "head_sha",
+            "round_number",
+            "kind",
+            "provenance",
+            "outcome",
+            "cost_usd",
+            "input_tokens",
+            "output_tokens",
+            "timestamp",
+        ]
+        return [dict(zip(cols, r, strict=True)) for r in self._conn.execute(sql, params)]
+
     def previous_round_sha(self, repo: str, pr_number: int, current_sha: str) -> str | None:
         """Most recent round SHA other than the current one (force-push check)."""
         row = self._conn.execute(
@@ -483,7 +636,12 @@ def parse_verdict(output: str) -> tuple[str, str]:
 
 
 def verify_comment(
-    comment: BotComment, repo: str, pr_number: int, config: ExecutorConfig
+    comment: BotComment,
+    repo: str,
+    pr_number: int,
+    config: ExecutorConfig,
+    ledger: "ReviewPrState | None" = None,
+    head_sha: str | None = None,
 ) -> tuple[str, str, float | None]:
     """Run one verification agent call. Fail-closed to ``uncertain``.
 
@@ -529,6 +687,9 @@ def verify_comment(
             cwd=config.project_root,
         )
     except subprocess.TimeoutExpired:
+        # The process started and was billed for the time it ran, so it is a
+        # ledger row with an unknown price — not an absent call (#218 stage 2).
+        _record_pr_call(ledger, repo, pr_number, comment.comment_id, "verify", "timeout", head_sha)
         return (
             VERDICT_UNCERTAIN,
             f"Verifier timed out after {config.review_timeout_minutes}m",
@@ -537,7 +698,22 @@ def verify_comment(
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )
-    if result.returncode != 0 and not cli_result.text.strip():
+    failed = result.returncode != 0 and not cli_result.text.strip()
+    # The ledger reports what the *process* did, so a non-zero exit is an error
+    # whatever it managed to print — the rule `run_fix_agent` already followed
+    # (Copilot, PR #240). `failed` below is a different question: whether this
+    # call produced anything a verdict can be read from.
+    _record_pr_call(
+        ledger,
+        repo,
+        pr_number,
+        comment.comment_id,
+        "verify",
+        "completed" if result.returncode == 0 else "error",
+        head_sha,
+        cli_result,
+    )
+    if failed:
         return (
             VERDICT_UNCERTAIN,
             f"Verifier exited {result.returncode}: {result.stderr.strip()[:200]}",
@@ -622,7 +798,13 @@ FIX_FAILED: <reason>"""
 
 
 def run_fix_agent(
-    comment: BotComment, evidence: str, repo: str, pr_number: int, config: ExecutorConfig
+    comment: BotComment,
+    evidence: str,
+    repo: str,
+    pr_number: int,
+    config: ExecutorConfig,
+    ledger: "ReviewPrState | None" = None,
+    head_sha: str | None = None,
 ) -> tuple[bool, str, float | None]:
     """Run the fix agent for one valid comment.
 
@@ -662,9 +844,20 @@ def run_fix_agent(
             cwd=config.project_root,
         )
     except subprocess.TimeoutExpired:
+        _record_pr_call(ledger, repo, pr_number, comment.comment_id, "fix", "timeout", head_sha)
         return False, f"Fix agent timed out after {config.task_timeout_minutes}m", None
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
+    )
+    _record_pr_call(
+        ledger,
+        repo,
+        pr_number,
+        comment.comment_id,
+        "fix",
+        "error" if result.returncode != 0 else "completed",
+        head_sha,
+        cli_result,
     )
     cost = cli_result.cost_usd
     output = cli_result.text
@@ -914,7 +1107,15 @@ def _apply_phase(
             break
         comment = comment_map[cid]
         pre_fix_head = _git(config, "rev-parse", "HEAD").stdout.strip()
-        ok, note, cost = run_fix_agent(comment, row["evidence"] or "", repo, pr_number, config)
+        ok, note, cost = run_fix_agent(
+            comment,
+            row["evidence"] or "",
+            repo,
+            pr_number,
+            config,
+            ledger=state,
+            head_sha=meta["head_sha"],
+        )
         spend.record(cost)
         if spend.active and spend.spent_usd > config.review_pr_max_cost_usd:
             # Hard ceiling: the over-budget fix itself is discarded (money
@@ -985,6 +1186,51 @@ def _apply_phase(
             )
         if _reply(config, repo, pr_number, row["comment_id"], body):
             state.mark_replied(repo, pr_number, row["comment_id"])
+
+
+def pr_cost_rows(config: ExecutorConfig) -> list[dict]:
+    """Per-PR totals from this loop's ledger, for `costs` (#218 stage 2).
+
+    Read-only and forgiving: a state file that predates the table, or one from
+    a repo where `review-pr` never ran, yields `[]` rather than an error —
+    `costs` must never break over a ledger it does not own.
+
+    Deliberately **not** merged into the task ledger. A review-pr call belongs
+    to a PR comment, and `costs` groups tasks by task id; folding these rows in
+    would make one task's cost include money spent on someone's review comment.
+    The caller shows them side by side and sums them only at the point of
+    asking (the repo total).
+    """
+    import sqlite3 as _sqlite3
+
+    if not config.state_file.exists():
+        return []
+    try:
+        conn = _sqlite3.connect(f"file:{config.state_file}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT repo, pr_number, COUNT(*), "
+                "       COALESCE(SUM(cost_usd), 0.0), "
+                "       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), "
+                "       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
+                "FROM pr_agent_calls GROUP BY repo, pr_number ORDER BY repo, pr_number"
+            ).fetchall()
+        finally:
+            conn.close()
+    except _sqlite3.Error:
+        return []
+    return [
+        {
+            "repo": r[0],
+            "pr_number": int(r[1]),
+            "calls": int(r[2]),
+            "cost": round(float(r[3]), 4),
+            "unmeasured_calls": int(r[4]),
+            "input_tokens": int(r[5]),
+            "output_tokens": int(r[6]),
+        }
+        for r in rows
+    ]
 
 
 def needs_human_rows(config: ExecutorConfig) -> list[tuple[str, int, int]]:
@@ -1077,7 +1323,9 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
                     logger.warning("review-pr cost guard stopped verification", reason=refusal)
                     _note(f"⚠️  {refusal}")
                     break
-                verdict, evidence, cost = verify_comment(comment, repo, pr_number, config)
+                verdict, evidence, cost = verify_comment(
+                    comment, repo, pr_number, config, ledger=state, head_sha=meta["head_sha"]
+                )
                 spend.record(cost)
                 after = _worktree_fingerprint(config)
                 if after != baseline:

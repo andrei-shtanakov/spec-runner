@@ -282,7 +282,7 @@ class TestCmdReviewPr:
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
         cfg = _cfg(tmp_path)
 
-        def rogue_verifier(comment, repo, pr, config):
+        def rogue_verifier(comment, repo, pr, config, **_kw):
             (tmp_path / "mutated.py").write_text("oops")
             return "valid", "trust me", 0.01
 
@@ -390,7 +390,7 @@ def _m2_cfg(work: Path, **overrides) -> ExecutorConfig:
 def _fix_agent_factory(work: Path, content: str = "x = 2\n"):
     """A fix agent that edits src.py and reports success."""
 
-    def agent(comment, evidence, repo, pr, config):
+    def agent(comment, evidence, repo, pr, config, **_kw):
         (work / "src.py").write_text(content)
         return True, "changed x to 2", 0.01
 
@@ -644,7 +644,7 @@ class TestStatusSurfacing:
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
         cfg = _m2_cfg(work)  # default generous line cap
 
-        def binary_agent(comment, evidence, repo, pr, config):
+        def binary_agent(comment, evidence, repo, pr, config, **_kw):
             (work / "blob.bin").write_bytes(bytes(range(256)) * 4)
             return True, "added binary", 0.01
 
@@ -672,7 +672,7 @@ class TestStatusSurfacing:
         )
         cfg = _m2_cfg(work, review_pr_max_cost_usd=5.0)
 
-        def pricey_agent(comment, evidence, repo, pr, config):
+        def pricey_agent(comment, evidence, repo, pr, config, **_kw):
             (work / "src.py").write_text("x = 3\n")
             return True, "expensive", 10.0  # blows the 5.0 cap
 
