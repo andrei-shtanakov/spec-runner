@@ -132,6 +132,32 @@ def current_phase(state: ExecutorState, namespace: str, task_id: str) -> TddPhas
     return TddPhase.READY
 
 
+def has_confirmed_red(state: ExecutorState, namespace: str, task_id: str) -> bool:
+    """Does this task have a standing confirmed red? (#253)
+
+    The contract this machine enforces is *"GREEN may not be reached without a
+    confirmed red"* — a statement about **evidence**, which the code read off
+    the previous row instead. Those differ constantly: a reused red records
+    `red_authoring` and no verification (there is nothing to replay), and a
+    resumed one reinstates the checkpoint without replaying either. Both then
+    moved to GREEN legitimately and were refused with the words "GREEN requires
+    a confirmed red" while one sat in the database.
+
+    The consequence was not cosmetic: the refusal is non-fatal, so the run
+    continued and simply stopped recording green phases — and phase history is
+    what `has_reached` reads, which is the admissibility check #249 had just
+    fixed.
+
+    Existence only. Whether that red covers *this tree* is the gate's question,
+    and it has the candidate SHA to answer it with; a recorder that duplicated
+    the test would be a second, weaker gate.
+    """
+    from .tdd import RedOutcome
+
+    checkpoint = state.red_checkpoint(task_id, namespace)
+    return checkpoint is not None and checkpoint.outcome is RedOutcome.EXPECTED_FAIL
+
+
 def advance(
     state: ExecutorState,
     namespace: str,
@@ -146,8 +172,21 @@ def advance(
     history of successes only is a poor record of a lifecycle.
     """
     now = current_phase(state, namespace, task_id)
-    if (now, target) in ILLEGAL:
+    if (now, target) in ILLEGAL and not has_confirmed_red(state, namespace, task_id):
         state.record_tdd_phase(task_id, namespace, f"refused:{target.value}", f"from {now.value}")
+        # An error, not a warning: after #253 this fires only when the record
+        # and the gate disagree — the gate refuses to implement without a
+        # confirmed red, so reaching here means one of them is wrong about the
+        # same task. It stays non-fatal because bookkeeping must never fail a
+        # task (`_record_phase`: the gates decide, this remembers), but it must
+        # not read as routine either.
+        logger.error(
+            "Lifecycle transition refused",
+            task_id=task_id,
+            namespace=namespace,
+            frm=now.value,
+            to=target.value,
+        )
         raise IllegalTransition(
             f"{task_id} cannot move from {now.value} to {target.value}: "
             "GREEN requires a confirmed red"
@@ -167,6 +206,7 @@ __all__ = [
     "TddPhase",
     "advance",
     "current_phase",
+    "has_confirmed_red",
     "is_terminal",
     "next_phase",
 ]
