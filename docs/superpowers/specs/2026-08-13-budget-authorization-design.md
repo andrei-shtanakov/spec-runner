@@ -1,6 +1,6 @@
 # Budget authorization — design
 
-**Status:** design only. No code ships with this document. **Pending owner sign-off.**
+**Status:** **signed off by the owner 2026-08-13.** Ready to implement; no code ships with this document.
 **Issue:** #230 (F-26), part 2. Part 1 — typed infrastructure classification — shipped in #236.
 **Related:** [the pre-call budget guard](../../../src/spec_runner/budget.py) (#213), [TDD remedies](2026-08-11-tdd-lifecycle-design.md) (#141 slice 3, whose command shape this follows)
 
@@ -72,7 +72,7 @@ Append-only table `budget_authorizations`, in the same family as
 | `domain_id` | the budget domain (§5) this decision belongs to |
 | `scope` | `task` or `run` |
 | `task_id` | set for `scope='task'`; NULL for `run` |
-| `namespace` | the TDD workstream, so two workstreams in one DB do not inherit each other's ceilings |
+| `namespace` | the TDD workstream — set for `scope='task'`, **NULL for `scope='run'`**: `budget_usd` bounds the whole domain, and a namespaced run ceiling would give each namespace its own "global" cap (owner, sign-off) |
 | `previous_limit_usd` | what the guard would have used a moment earlier — config value or an earlier authorization |
 | `new_limit_usd` | the absolute ceiling from now on |
 | `recorded_spend_usd` | spend at the moment of the decision |
@@ -162,16 +162,28 @@ should say exactly that — `recorded_spend_usd` = what this domain can prove,
   spec-runner-vscode with `additionalProperties: false`, so it is decided at
   implementation time with a schema-sync issue, not assumed here.
 
-## 7. Open questions for sign-off
+## 7. Settled at sign-off (2026-08-13)
 
-1. **Scope of a task authorization across namespaces.** The table carries
-   `namespace`; the alternative is task-id-only. Two workstreams sharing one
-   state DB is rare — but so was a state file per attempt, until it happened.
-   Recommendation: keep `namespace`.
-2. **Should `run` authorizations be per-domain only, or also per-run-id?** A
-   run id changes every invocation; a ceiling that expires with it would need
-   re-authorising constantly. Recommendation: per-domain, as above.
-3. **Display.** Minimum is `status` and `costs` naming the authorised limit with
-   actor and timestamp. Whether a refusal message should quote the authorization
-   id (so the operator can `--after` it directly) is a small choice with a real
-   ergonomics payoff. Recommendation: quote it.
+All three recommendations approved, with one correction that changes the schema.
+
+1. **A task authorization is scoped `(domain_id, namespace, task_id)`.** Two
+   workstreams sharing one state DB is rare — but so was a state file per
+   attempt, until it happened.
+2. **A run authorization covers the whole budget domain**, not an invocation's
+   `run_id`. A run id changes every invocation, so a ceiling that expired with
+   it would have to be re-authorised constantly, which trains people to
+   authorise without reading.
+3. **A refusal quotes the authorization id, the effective limit, the actor and
+   the timestamp.** An operator who has to go looking for the id before they can
+   pass `--after` is an operator who will skip the CAS.
+
+**Correction (owner):** for a run-scope row, `namespace` is **NULL**.
+`budget_usd` bounds the whole DB domain, so a namespaced run ceiling would let
+several namespaces each hold an independent "global" cap — three workstreams,
+three global limits, no global limit. The column therefore means: set for
+`scope='task'`, NULL for `scope='run'`, and the resolver reads a run
+authorization by `domain_id` alone.
+
+That constraint is worth enforcing rather than documenting: a `CHECK` that
+`scope = 'run'` implies `namespace IS NULL` and `task_id IS NULL`, so the schema
+cannot hold a row whose meaning is ambiguous.
