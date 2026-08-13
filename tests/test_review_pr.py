@@ -178,7 +178,9 @@ class TestCmdReviewPr:
             rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(2)])
         )
         cfg = _cfg(tmp_path)
-        with patch.object(rp, "verify_comment", side_effect=[("valid", "ev1"), ("refuted", "ev2")]):
+        with patch.object(
+            rp, "verify_comment", side_effect=[("valid", "ev1", 0.01), ("refuted", "ev2", 0.01)]
+        ):
             code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         out = capsys.readouterr().out
@@ -187,7 +189,7 @@ class TestCmdReviewPr:
 
     def test_uncertain_exits_needs_human(self, tmp_path, monkeypatch):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
-        with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
+        with patch.object(rp, "verify_comment", return_value=("uncertain", "?", 0.01)):
             assert cmd_review_pr(_args(verify_only=True), _cfg(tmp_path)) == EXIT_NEEDS_HUMAN
 
     def test_no_verify_leaves_unverified_and_needs_human(self, tmp_path, monkeypatch):
@@ -202,7 +204,7 @@ class TestCmdReviewPr:
         comments it has not seen."""
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
         cfg = _cfg(tmp_path)
-        with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as m1:
+        with patch.object(rp, "verify_comment", return_value=("valid", "ev", 0.01)) as m1:
             cmd_review_pr(_args(verify_only=True), cfg)
         assert m1.call_count == 1
 
@@ -210,7 +212,7 @@ class TestCmdReviewPr:
         monkeypatch.setattr(
             rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(9)])
         )
-        with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as m2:
+        with patch.object(rp, "verify_comment", return_value=("valid", "ev", 0.01)) as m2:
             code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         assert m2.call_count == 1  # only comment 9
@@ -226,7 +228,7 @@ class TestCmdReviewPr:
         monkeypatch.setattr(
             rp, "_gh", _gh_router(comments=[_comment_payload(1), _comment_payload(2)])
         )
-        with patch.object(rp, "verify_comment", return_value=("valid", "ev")) as mock_verify:
+        with patch.object(rp, "verify_comment", return_value=("valid", "ev", 0.01)) as mock_verify:
             code = cmd_review_pr(_args(verify_only=True), cfg)
         assert code == EXIT_OK
         # Both the new comment AND the stranded one got verified
@@ -254,7 +256,7 @@ class TestCmdReviewPr:
 
     def test_json_report_shape(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
-        with patch.object(rp, "verify_comment", return_value=("valid", "ev")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "ev", 0.01)):
             code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
         assert code == EXIT_OK
         payload = json.loads(capsys.readouterr().out)
@@ -282,7 +284,7 @@ class TestCmdReviewPr:
 
         def rogue_verifier(comment, repo, pr, config):
             (tmp_path / "mutated.py").write_text("oops")
-            return "valid", "trust me"
+            return "valid", "trust me", 0.01
 
         with patch.object(rp, "verify_comment", side_effect=rogue_verifier):
             code = cmd_review_pr(_args(verify_only=True), cfg)
@@ -406,7 +408,7 @@ class TestApplyPhase:
         )
         cfg = _m2_cfg(work)
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -439,7 +441,9 @@ class TestApplyPhase:
             _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
         )
         cfg = _m2_cfg(work)
-        with patch.object(rp, "verify_comment", return_value=("refuted", "disproven: test passes")):
+        with patch.object(
+            rp, "verify_comment", return_value=("refuted", "disproven: test passes", 0.01)
+        ):
             code = cmd_review_pr(_args(), cfg)
         assert code == EXIT_OK
         assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # no commit
@@ -454,7 +458,7 @@ class TestApplyPhase:
             "_gh",
             _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
         )
-        with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
+        with patch.object(rp, "verify_comment", return_value=("uncertain", "?", 0.01)):
             code = cmd_review_pr(_args(), _m2_cfg(work))
         assert code == EXIT_NEEDS_HUMAN
         assert reply_log == []
@@ -469,7 +473,7 @@ class TestApplyPhase:
         )
         cfg = _m2_cfg(work, test_command="false")
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -486,7 +490,7 @@ class TestApplyPhase:
         cfg = _m2_cfg(work, review_pr_max_changed_lines=1)
         big = "".join(f"line{i} = {i}\n" for i in range(50))
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work, big)),
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -497,7 +501,7 @@ class TestApplyPhase:
         work, _, head = _init_repo_with_remote(tmp_path)
         (work / "uncommitted.py").write_text("dirty\n")
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head))
-        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)):
             code = cmd_review_pr(_args(), _m2_cfg(work))
         assert code == EXIT_FAIL
         assert "not clean" in capsys.readouterr().err
@@ -507,7 +511,7 @@ class TestApplyPhase:
         monkeypatch.setattr(
             rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha="f" * 40)
         )
-        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)):
             code = cmd_review_pr(_args(), _m2_cfg(work))
         assert code == EXIT_FAIL
         assert "check out the PR branch" in capsys.readouterr().err
@@ -523,7 +527,7 @@ class TestApplyPhase:
         )
         cfg = _m2_cfg(work)
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=_fix_agent_factory(work)),
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -540,7 +544,7 @@ class TestApplyPhase:
             _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
         )
         cfg = _m2_cfg(work)
-        with patch.object(rp, "verify_comment", return_value=("refuted", "no")):
+        with patch.object(rp, "verify_comment", return_value=("refuted", "no", 0.01)):
             assert cmd_review_pr(_args(), cfg) == EXIT_OK
             assert cmd_review_pr(_args(), cfg) == EXIT_OK
         assert len(reply_log) == 1  # replied_at guard held
@@ -551,7 +555,7 @@ class TestApplyPhase:
         cfg = _m2_cfg(work)
         with ReviewPrState(cfg) as st:
             st.start_round(REPO, 6, "e" * 40)  # a SHA that is no ancestor
-        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)):
             code = cmd_review_pr(_args(), cfg)
         assert code == EXIT_FAIL
         assert "force-push" in capsys.readouterr().err
@@ -579,7 +583,7 @@ class TestApplyPhase:
         head3 = _git(work, "rev-parse", "HEAD").stdout.strip()
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head3))
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent") as mock_fix,
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -605,7 +609,7 @@ class TestApplyPhase:
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=payload, head_sha=head))
         cfg = _m2_cfg(work, review_pr_max_comments=2)
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent") as mock_fix,
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -645,7 +649,7 @@ class TestStatusSurfacing:
             return True, "added binary", 0.01
 
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=binary_agent),
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -673,7 +677,7 @@ class TestStatusSurfacing:
             return True, "expensive", 10.0  # blows the 5.0 cap
 
         with (
-            patch.object(rp, "verify_comment", return_value=("valid", "checked")),
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
             patch.object(rp, "run_fix_agent", side_effect=pricey_agent) as mock_fix,
         ):
             code = cmd_review_pr(_args(), cfg)
@@ -696,7 +700,7 @@ class TestJsonStdoutPurity:
 
     def test_clean_exit_zero(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
-        with patch.object(rp, "verify_comment", return_value=("refuted", "ev")):
+        with patch.object(rp, "verify_comment", return_value=("refuted", "ev", 0.01)):
             code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
         payload = self._only_json(capsys.readouterr())
         assert code == EXIT_OK
@@ -704,7 +708,7 @@ class TestJsonStdoutPurity:
 
     def test_needs_human_exit_two(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)]))
-        with patch.object(rp, "verify_comment", return_value=("uncertain", "?")):
+        with patch.object(rp, "verify_comment", return_value=("uncertain", "?", 0.01)):
             code = cmd_review_pr(_args(json_output=True, verify_only=True), _cfg(tmp_path))
         payload = self._only_json(capsys.readouterr())
         assert code == EXIT_NEEDS_HUMAN
@@ -735,7 +739,7 @@ class TestJsonStdoutPurity:
         payload_comments = [_comment_payload(i) for i in range(1, 4)]
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=payload_comments, head_sha=head))
         cfg = _m2_cfg(work, review_pr_max_comments=2)
-        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)):
             code = cmd_review_pr(_args(json_output=True), cfg)
         captured = capsys.readouterr()
         payload = self._only_json(captured)
@@ -755,7 +759,7 @@ class TestJsonStdoutPurity:
         _git(work, "commit", "-q", "-m", "next round")
         head2 = _git(work, "rev-parse", "HEAD").stdout.strip()
         monkeypatch.setattr(rp, "_gh", _gh_router(comments=[_comment_payload(1)], head_sha=head2))
-        with patch.object(rp, "verify_comment", return_value=("valid", "checked")):
+        with patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)):
             code = cmd_review_pr(_args(json_output=True), cfg)
         captured = capsys.readouterr()
         self._only_json(captured)
