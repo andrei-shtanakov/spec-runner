@@ -176,6 +176,20 @@ class TestTheContradiction:
 
         assert verdict == "uncertain"
 
+    def test_and_is_not_described_as_exiting_zero(self, tmp_path):
+        """ "Verifier exited 0" reads as nonsense, and it is how the two sites
+        would describe one fact differently again (Copilot, PR #247)."""
+        cfg = _cfg(tmp_path)
+        with patch.object(
+            rp.subprocess,
+            "run",
+            return_value=_claude("VERDICT: VALID\nEVIDENCE: e", is_error=True),
+        ):
+            _verdict, evidence, _cost = verify_comment(_comment(), REPO, 6, cfg)
+
+        assert "exited 0" not in evidence
+        assert "reported an error" in evidence
+
 
 class TestTheThreeCasesStayApart:
     """Transport failure, a valid negative verdict, and the contradiction are

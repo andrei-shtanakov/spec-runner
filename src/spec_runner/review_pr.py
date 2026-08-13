@@ -727,11 +727,20 @@ def verify_comment(
             if printed and printed != VERDICT_UNCERTAIN
             else ""
         )
-        detail = {
-            AgentAnswer.CRASHED: f"Verifier exited {result.returncode}: "
-            f"{result.stderr.strip()[:200] or 'no stderr'}",
-            AgentAnswer.EMPTY: "Verifier produced no output",
-        }[answer]
+        if answer is AgentAnswer.EMPTY:
+            detail = "Verifier produced no output"
+        elif result.returncode != 0:
+            detail = (
+                f"Verifier exited {result.returncode}: {result.stderr.strip()[:200] or 'no stderr'}"
+            )
+        else:
+            # claude's JSON reports a failure with **exit 0** and an `is_error`
+            # payload, and `_parse_claude_json` folds that payload into the
+            # text. "Verifier exited 0" would read as nonsense, and the two
+            # call sites would describe one fact differently — the thing this
+            # change is about (Copilot, PR #247). The decision is shared; only
+            # the sentence is local, because the subject differs.
+            detail = f"Verifier reported an error: {cli_result.text.strip()[:200] or 'no detail'}"
         return VERDICT_UNCERTAIN, detail + contradiction, cli_result.cost_usd
     verdict, evidence = parse_verdict(cli_result.text)
     return verdict, evidence, cli_result.cost_usd
