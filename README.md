@@ -397,7 +397,7 @@ review_pr:
   max_rounds: 3                # bounded rounds per PR (new head SHA = new round)
   max_comments: 20
   max_changed_lines: 300       # per-fix diff cap
-  max_cost_usd: 5.0
+  max_cost_usd: 5.0            # every paid call (verify + fix), checked before each; 0 = off
   max_wall_minutes: 30
 
 # Compliance audit trail (optional — JSON Lines, opt-in)
@@ -468,6 +468,14 @@ Three consequences worth knowing before you rely on a cap:
   call is recorded unpriced, and the guard then refuses the next one: the
   remaining budget cannot be proven from a figure known to be a floor.
   `spec-runner costs` shows unpriced calls and marks such totals with `≥`.
+
+`review-pr` carries its own limit, `review_pr.max_cost_usd`, with the same
+guarantee and the same consequences. It counts **both** kinds of call the loop
+makes — one verification per collected comment and one fix per valid one — and
+checks before each. Comments it stops short of keep no verdict and no
+resolution, which is what the `NEEDS_HUMAN` exit (2) already reports. Because a
+CLI that reports no cost would otherwise stall the loop after its first call,
+`max_cost_usd: 0` disables the limit outright.
 
 ### Git Branch Workflow
 

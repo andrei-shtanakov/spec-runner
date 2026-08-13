@@ -10,6 +10,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`review-pr`'s own cost limit counts every paid call it makes** (#218, stage 1).
+  `review_pr.max_cost_usd` was summed over the **fix** agents alone and checked
+  *after* each of them. The loop also makes one verification call per collected
+  bot comment, so a PR with twenty comments spent twenty calls the limit never
+  saw — the number an operator set bounded roughly half the spend, and which
+  half depended on how many comments turned out valid. Both kinds of call now
+  count against one shared limit, checked **before** each call, with the same
+  guarantee the task-loop guard carries (#213): once recorded spend reaches the
+  limit no new paid call starts, and the overshoot is bounded by one call.
+  Comments the loop stops short of keep no verdict and no resolution, which the
+  existing `NEEDS_HUMAN` exit (2) already reports.
+- **A verification call that reports no cost is unknown, not free.**
+  `verify_comment` never parsed its result at all, so no cost was available;
+  it now goes through the same `build_cli_invocation` → `parse_cli_result` seam
+  as every other paid call, which also means an explicit claude verifier is
+  asked for JSON and the `VERDICT:`/`EVIDENCE:` markers are read from the parsed
+  text. An unpriced call (timeout, account limit, or a CLI that never reports
+  cost) stops the next one — the remaining budget cannot be proven from a floor.
+
+### Changed
+
+- **`review_pr.max_cost_usd: 0` (or negative) disables the limit.** Needed
+  because of the rule above: a CLI that never reports cost would otherwise stall
+  the loop after its first call. Previously a `0` limit was simply never
+  reached for unpriced calls and stopped after the first priced fix.
+
 ## [2.29.0] - 2026-08-13
 
 **Minor.** One public-surface change: `costs --json` gains an optional

@@ -47,6 +47,78 @@ class ReviewPrError(Exception):
     """Fail-closed condition — the loop must stop, not guess."""
 
 
+@dataclass
+class CostGuard:
+    """The loop's own pre-call spend guard (#218 stage 1).
+
+    Same shape and same guarantee as the task loop's budget guard
+    (`budget.check_before_call`, #213), for the same reason: *once recorded
+    spend has reached the limit, no new paid call is started; the maximum
+    consecutive overshoot is bounded by one call.*
+
+    What it fixes: `review_pr_max_cost_usd` was summed over the **fix** agents
+    alone and checked after each of them. A PR with twenty bot comments makes
+    twenty verification calls the limit never saw, so the number an operator
+    set bounded roughly half the spend — and which half depended on how many
+    comments turned out valid. Both kinds of call now count, and both are
+    checked before they start rather than after they have been paid for.
+
+    Two boundaries follow from the guarantee rather than from taste:
+
+    - **An unpriced call stops the next one.** A CLI that reports no cost
+      (a timeout, an account limit, or a CLI that never reports cost at all)
+      leaves the remainder unprovable, and "we do not know" is not a reason to
+      spend. Recorded spend is then a floor, not a total.
+    - **A non-positive limit disables the guard entirely** — the escape hatch
+      for the case above. Without it, a project whose CLI never reports cost
+      could not run `review-pr` at all, because the very first call would
+      make every later one unprovable.
+
+    Per invocation, in memory: where the rows should durably live is #218
+    stage 2 (a separate `pr_agent_calls` table), and the internal limit has
+    always been per-invocation.
+    """
+
+    limit_usd: float
+    spent_usd: float = 0.0
+    unpriced_calls: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self.limit_usd > 0
+
+    def record(self, cost_usd: float | None) -> None:
+        """Account one paid call. ``None`` means the CLI reported no cost."""
+        if cost_usd is None:
+            self.unpriced_calls += 1
+        else:
+            self.spent_usd += cost_usd
+
+    def refusal(self, provenance: str) -> str | None:
+        """Why the next paid call must not start, or None to proceed.
+
+        ``provenance`` names the call that will not happen — an operator
+        resuming needs to know which one, not just that something stopped.
+        """
+        if not self.active:
+            return None
+        if self.spent_usd >= self.limit_usd:
+            return (
+                f"cost limit reached before {provenance} "
+                f"(${self.spent_usd:.2f} >= ${self.limit_usd:.2f}) — not starting it"
+            )
+        if self.unpriced_calls:
+            # After the limit check, so an operator who is simply out of money
+            # is told that rather than sent to look for a missing price.
+            return (
+                f"{self.unpriced_calls} earlier call(s) reported no cost, so the remaining "
+                f"budget cannot be proven — not starting {provenance}. Recorded spend is a "
+                f"floor (${self.spent_usd:.2f} of ${self.limit_usd:.2f}); set "
+                f"review_pr.max_cost_usd: 0 to run without the limit"
+            )
+        return None
+
+
 def _note(message: str) -> None:
     """Operator-facing diagnostic → stderr.
 
@@ -412,10 +484,22 @@ def parse_verdict(output: str) -> tuple[str, str]:
 
 def verify_comment(
     comment: BotComment, repo: str, pr_number: int, config: ExecutorConfig
-) -> tuple[str, str]:
-    """Run one verification agent call. Fail-closed to ``uncertain``."""
+) -> tuple[str, str, float | None]:
+    """Run one verification agent call. Fail-closed to ``uncertain``.
+
+    Returns ``(verdict, evidence, cost_usd)``. The cost is what the loop's own
+    limit was missing (#218): a verification call is paid for whether or not
+    the comment turns out valid. ``None`` means the CLI reported no cost —
+    unknown, never zero (a verifier killed by a timeout was billed for the
+    time it ran).
+
+    The result goes through the same seam as every other paid call
+    (`build_cli_invocation` → `parse_cli_result`, #216), so an explicit claude
+    binary is asked for JSON and the verdict markers are read from the parsed
+    text rather than from raw stdout.
+    """
     from .review import _resolve_review_template
-    from .runner import build_cli_command
+    from .runner import build_cli_invocation, parse_cli_result
 
     cmd = config.review_command or config.claude_command
     template = _resolve_review_template(config, cmd)
@@ -428,29 +512,39 @@ def verify_comment(
         diff_hunk=comment.diff_hunk[:3000] or "(none)",
         body=comment.body[:4000],
     )
-    argv = build_cli_command(
+    invocation = build_cli_invocation(
         cmd=cmd,
         prompt=prompt,
         model=model,
         template=template,
         skip_permissions=config.skip_permissions,
+        json_output=True,
     )
     try:
         result = subprocess.run(
-            argv,
+            invocation.argv,
             capture_output=True,
             text=True,
             timeout=config.review_timeout_minutes * 60,
             cwd=config.project_root,
         )
     except subprocess.TimeoutExpired:
-        return VERDICT_UNCERTAIN, f"Verifier timed out after {config.review_timeout_minutes}m"
-    if result.returncode != 0 and not result.stdout.strip():
+        return (
+            VERDICT_UNCERTAIN,
+            f"Verifier timed out after {config.review_timeout_minutes}m",
+            None,
+        )
+    cli_result = parse_cli_result(
+        invocation.result_format, result.stdout, result.stderr, result.returncode
+    )
+    if result.returncode != 0 and not cli_result.text.strip():
         return (
             VERDICT_UNCERTAIN,
             f"Verifier exited {result.returncode}: {result.stderr.strip()[:200]}",
+            cli_result.cost_usd,
         )
-    return parse_verdict(result.stdout)
+    verdict, evidence = parse_verdict(cli_result.text)
+    return verdict, evidence, cli_result.cost_usd
 
 
 def _dirty_paths(config: ExecutorConfig) -> list[str]:
@@ -529,11 +623,16 @@ FIX_FAILED: <reason>"""
 
 def run_fix_agent(
     comment: BotComment, evidence: str, repo: str, pr_number: int, config: ExecutorConfig
-) -> tuple[bool, str, float]:
+) -> tuple[bool, str, float | None]:
     """Run the fix agent for one valid comment.
 
     Returns (ok, note, cost_usd). Fail-closed: a FIX_FAILED marker, an
     error exit with no output, or a timeout all report ok=False.
+
+    ``cost_usd`` is ``None`` when the CLI reported no cost — unknown, not zero
+    (#216/#218). A timed-out fix agent in particular was billed for the time it
+    ran, and recording that as 0.0 is how the loop's limit came to bound a
+    number smaller than the spend.
     """
     from .runner import build_cli_invocation, parse_cli_result
 
@@ -563,11 +662,11 @@ def run_fix_agent(
             cwd=config.project_root,
         )
     except subprocess.TimeoutExpired:
-        return False, f"Fix agent timed out after {config.task_timeout_minutes}m", 0.0
+        return False, f"Fix agent timed out after {config.task_timeout_minutes}m", None
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )
-    cost = cli_result.cost_usd or 0.0
+    cost = cli_result.cost_usd
     output = cli_result.text
     m = re.search(r"FIX_FAILED:\s*(.+)", output)
     if m:
@@ -748,6 +847,7 @@ def _apply_phase(
     meta: dict,
     comment_map: dict[int, BotComment],
     started_at: float,
+    spend: CostGuard,
 ) -> None:
     """M2: fix valid comments, gate, push, reply. All limits fail to human.
 
@@ -798,18 +898,25 @@ def _apply_phase(
             )
             fixable = []
 
-    spent_usd = 0.0
     pushed_shas: list[tuple[int, str]] = []  # (comment_id, fix_sha) awaiting push
     for row in fixable:
         if (time.monotonic() - started_at) / 60 > config.review_pr_max_wall_minutes:
             logger.warning("review-pr wall-clock limit hit — stopping")
             break
         cid = row["comment_id"]
+        # Pre-call: nothing has been attempted for this comment, so it keeps
+        # no resolution — it and everything after it stay unresolved, which is
+        # what NEEDS_HUMAN is for.
+        refusal = spend.refusal(f"the fix for comment {cid}")
+        if refusal is not None:
+            logger.warning("review-pr cost guard stopped the fix phase", reason=refusal)
+            _note(f"⚠️  {refusal}")
+            break
         comment = comment_map[cid]
         pre_fix_head = _git(config, "rev-parse", "HEAD").stdout.strip()
         ok, note, cost = run_fix_agent(comment, row["evidence"] or "", repo, pr_number, config)
-        spent_usd += cost
-        if spent_usd > config.review_pr_max_cost_usd:
+        spend.record(cost)
+        if spend.active and spend.spent_usd > config.review_pr_max_cost_usd:
             # Hard ceiling: the over-budget fix itself is discarded (money
             # is spent either way, but pushing it would mean the limit
             # changed the PR) and the loop stops — remaining comments stay
@@ -818,7 +925,7 @@ def _apply_phase(
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning(
                 "review-pr cost limit exceeded — fix reverted, stopping",
-                spent=round(spent_usd, 2),
+                spent=round(spend.spent_usd, 2),
                 limit=config.review_pr_max_cost_usd,
             )
             break
@@ -954,11 +1061,24 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
             for comment in new:
                 state.record(repo, pr_number, meta["head_sha"], comment)
 
+            # One guard for the whole invocation: verification calls and fix
+            # calls are the same money (#218). Sharing it is the point — a
+            # per-phase limit would let each phase spend the whole cap.
+            spend = CostGuard(limit_usd=config.review_pr_max_cost_usd)
+
             baseline = _worktree_fingerprint(config)
             for comment in new + pending:
                 if getattr(args, "no_verify", False):
                     continue
-                verdict, evidence = verify_comment(comment, repo, pr_number, config)
+                refusal = spend.refusal(f"the verification of comment {comment.comment_id}")
+                if refusal is not None:
+                    # The remaining comments keep no verdict, which the exit
+                    # code already reads as NEEDS_HUMAN.
+                    logger.warning("review-pr cost guard stopped verification", reason=refusal)
+                    _note(f"⚠️  {refusal}")
+                    break
+                verdict, evidence, cost = verify_comment(comment, repo, pr_number, config)
+                spend.record(cost)
                 after = _worktree_fingerprint(config)
                 if after != baseline:
                     # Read-only guard: a verifier that touched the tree
@@ -981,7 +1101,9 @@ def cmd_review_pr(args, config: ExecutorConfig) -> int:
             if not read_only and any(
                 r["verdict"] and not _row_complete(r) for r in state.rows(repo, pr_number)
             ):
-                _apply_phase(args, config, state, repo, pr_number, meta, comment_map, started_at)
+                _apply_phase(
+                    args, config, state, repo, pr_number, meta, comment_map, started_at, spend
+                )
 
             rows = state.rows(repo, pr_number)
 
