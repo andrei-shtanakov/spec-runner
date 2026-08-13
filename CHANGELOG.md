@@ -10,6 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-08-13
+
+**Minor.** One public-surface change: `costs --json` gains an optional
+`unmeasured_calls` integer per task and on the summary
+(`schemas/costs.schema.json`). Additive — but the schema pins
+`additionalProperties: false`, so a consumer validating against a vendored
+pre-2.29 copy must update it (spec-runner-vscode did, in their #23).
+`--json-result` and the state-DB format are untouched, and no config key or CLI
+flag was added.
+
+The theme is money the tool was spending without being able to say so. Review
+calls were recorded **nowhere**, so both budget caps and every total the tool
+printed were blind to roughly a third of a TDD attempt's spend; the caps were
+checked between attempts, which stopped bounding anything once an attempt
+became three paid calls; and a task that finished and merged could be marked
+BLOCKED because the budget ran out after it, which invited the next run to
+re-execute already-merged work. Found by three paid pilot attempts and two free
+rehearsals, not by reading the code.
+
 ### Added
 
 - **A pre-call budget guard (#213, second half).** `budget_usd` and
@@ -2314,7 +2333,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...HEAD
+[2.29.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...v2.29.0
 [2.28.3]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...v2.28.3
 [2.28.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.1...v2.28.2
 [2.28.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.0...v2.28.1
