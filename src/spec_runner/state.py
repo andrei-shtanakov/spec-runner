@@ -420,6 +420,30 @@ class ExecutorState:
                 new_checkpoint_id TEXT
             )
         """)
+        # #230 part 2: an operator raising a ceiling, kept forever. The CHECKs
+        # are the sign-off's correction made unrepresentable rather than
+        # documented: `budget_usd` bounds the whole DB domain, so a run-scope
+        # row carrying a namespace would give each workstream its own "global"
+        # cap — three namespaces, three global limits, no global limit.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS budget_authorizations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                task_id TEXT,
+                namespace TEXT,
+                previous_limit_usd REAL,
+                new_limit_usd REAL NOT NULL,
+                recorded_spend_usd REAL NOT NULL,
+                unmeasured_calls INTEGER NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                CHECK (scope IN ('task', 'run')),
+                CHECK (scope != 'run' OR (namespace IS NULL AND task_id IS NULL)),
+                CHECK (scope != 'task' OR task_id IS NOT NULL)
+            )
+        """)
         # #141 slice 2: a claim's own table, not a JSON column on the
         # checkpoint — enforcement queries by (namespace, path, status) across
         # tasks, and two tasks claiming one path is the case that has to be
@@ -1218,6 +1242,101 @@ class ExecutorState:
             # cost *report* must not be the thing that raises. Under-reporting
             # here is visible in the same place the degradation is.
             return 0.0
+
+    def budget_domain_id(self) -> str:
+        """This state file's budget domain, minted on first use (#230 part 2).
+
+        The domain is **the state DB**, and this id is what makes that
+        mechanical rather than a rule people remember. A new state file mints a
+        new id, so it inherits no authorization and no spend — which is exactly
+        what happened by accident in the pilot, where three attempts ran
+        against three state files and the cap that refused had never seen the
+        earlier $1.19.
+        """
+        from uuid import uuid4
+
+        existing = self.get_meta("budget_domain_id")
+        if existing:
+            return existing
+        minted = uuid4().hex[:16]
+        self.set_meta("budget_domain_id", minted)
+        return minted
+
+    def record_budget_authorization(
+        self,
+        *,
+        scope: str,
+        new_limit_usd: float,
+        recorded_spend_usd: float,
+        unmeasured_calls: int,
+        actor: str,
+        reason: str,
+        task_id: str | None = None,
+        namespace: str | None = None,
+        previous_limit_usd: float | None = None,
+    ) -> int:
+        """Append one authorization and return its id. Never updates a row."""
+        assert self._conn is not None
+        with self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO budget_authorizations (domain_id, scope, task_id, namespace, "
+                "previous_limit_usd, new_limit_usd, recorded_spend_usd, unmeasured_calls, "
+                "actor, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self.budget_domain_id(),
+                    scope,
+                    task_id,
+                    namespace,
+                    previous_limit_usd,
+                    new_limit_usd,
+                    recorded_spend_usd,
+                    unmeasured_calls,
+                    actor,
+                    reason,
+                    datetime.now().isoformat(),
+                ),
+            )
+        return int(cur.lastrowid or 0)
+
+    def latest_budget_authorization(
+        self, scope: str, task_id: str | None = None, namespace: str | None = None
+    ) -> dict | None:
+        """The standing authorization for a scope in *this* domain, or None.
+
+        Scoping is the sign-off's: a task ceiling is `(domain, namespace,
+        task)`; a run ceiling is the domain's, with no namespace at all.
+        """
+        assert self._conn is not None
+        sql = (
+            "SELECT id, scope, task_id, namespace, previous_limit_usd, new_limit_usd, "
+            "recorded_spend_usd, unmeasured_calls, actor, reason, timestamp "
+            "FROM budget_authorizations WHERE domain_id = ? AND scope = ?"
+        )
+        params: list[object] = [self.budget_domain_id(), scope]
+        if scope == "task":
+            sql += " AND task_id = ? AND namespace IS ?"
+            params += [task_id, namespace]
+        sql += " ORDER BY id DESC LIMIT 1"
+        try:
+            row = self._conn.execute(sql, params).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        cols = (
+            "id",
+            "scope",
+            "task_id",
+            "namespace",
+            "previous_limit_usd",
+            "new_limit_usd",
+            "recorded_spend_usd",
+            "unmeasured_calls",
+            "actor",
+            "reason",
+            "timestamp",
+        )
+        return dict(zip(cols, row, strict=True))
 
     def unmeasured_calls(self, task_id: str | None = None) -> int:
         """Ledger rows whose cost is unknown — a call that happened and was

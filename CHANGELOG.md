@@ -12,6 +12,36 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`spec-runner budget authorize`** (#230 part 2) — an operator raising a
+  ceiling, audited. Refunds and a separate infrastructure budget were rejected
+  at design time: both stop *"the number bounds the money"* from being true.
+  This decides **which number** the limit is, never whether it binds, so the
+  #213 guarantee is unchanged.
+
+  ```
+  spec-runner budget authorize TASK-101 --task-limit 6.00 --run-limit 6.00 \
+      --reason "continuing the pilot after F-25…F-28 were fixed"
+  ```
+
+  Both axes, because neither implies the other. Mandatory `--reason`, recorded
+  actor, refusal while a run holds the executor lock, refusal from inside an
+  agent, compare-and-swap via `--after`, and **raises only** — lowering is not
+  supported by this command or any flag on it. Every budget refusal now quotes
+  the standing authorization's id, limit, actor and timestamp, so an operator
+  never has to go looking for the id before they can supersede it.
+
+  The record (`budget_authorizations`, append-only) keeps the previous and new
+  absolute limits, **the recorded spend at the moment of the decision and how
+  many calls in scope were unpriced** — $6.00 authorised against a proven $2.53
+  means something different from $6.00 against a floor.
+
+  **The budget domain is the state DB.** A task ceiling is scoped
+  `(domain, namespace, task)`; a run ceiling belongs to the whole domain and
+  carries no namespace, enforced by a `CHECK` — otherwise several workstreams
+  would each hold an independent "global" cap. A new state file inherits no
+  authorization and no spend, which is the mechanism behind the rule the pilot
+  broke by accident when three attempts ran against three state files.
+
 - **`review-pr` records its own paid calls** (#218 stage 2). The loop makes one
   verification call per collected bot comment and one fix call per valid one;
   neither reached any ledger, so `spec-runner costs` showed a review-pr session

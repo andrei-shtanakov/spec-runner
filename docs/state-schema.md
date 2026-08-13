@@ -132,6 +132,28 @@ version reconstructs it. Sessions from earlier versions are missing from this
 ledger — incomplete history, not free work — which `costs` says in as many
 words whenever it prints the PR section.
 
+### `budget_authorizations` (experimental, v2.31.0)
+
+An operator raising a ceiling (#230 part 2), **append-only** — no row is ever
+updated or deleted, and the standing limit for a scope is the newest row.
+
+Columns: `domain_id` (see below), `scope` (`task`/`run`), `task_id` and
+`namespace` (both set for a task scope, both **NULL** for a run scope — a
+`CHECK` enforces it), `previous_limit_usd`, `new_limit_usd`,
+`recorded_spend_usd`, `unmeasured_calls`, `actor`, `reason`, `timestamp`.
+
+`recorded_spend_usd` and `unmeasured_calls` capture *what the human was looking
+at*: $6.00 authorised against a proven $2.53 means something different from
+$6.00 against a floor of $2.53 with unpriced calls behind it.
+
+**The budget domain is the state file.** `executor_meta.budget_domain_id` is
+minted on first use and stamped on every authorization, so a new state file
+inherits no authorization and no spend. That is mechanical rather than a rule
+to remember — in the pilot, three attempts ran against three state files and
+the cap that refused had never seen the earlier spend. Moving a pilot to a new
+state file therefore requires an explicit opening balance or a fresh decision;
+archived state files are evidence, never runtime inputs.
+
 ### `phase_results` / `phase_waivers` (experimental, slice 0)
 
 Added by slice 0 of the lifecycle contract (#164 / #141 Part A). **Nothing
