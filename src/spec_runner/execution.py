@@ -70,6 +70,23 @@ def _refusal_error_code(refusal: str) -> ErrorCode:
     return ErrorCode.HOOK_FAILURE
 
 
+def _headline(reason: str, limit: int = 120) -> str:
+    """One line naming why the attempt failed, for the progress log (#229).
+
+    Every post-done failure used to print the same words: `❌ Failed:
+    tests/lint check`. A byte-lock violation, a review the reviewer never
+    finished, a refused merge and an actual failing suite were one sentence,
+    and the pilot's operator read "tests/lint" for a claims-gate refusal while
+    the suite was green. The reason is already in hand — printing it costs
+    nothing and is the difference between a log that points at the cause and
+    one that points at a stage.
+    """
+    line = (reason or "").strip().splitlines()[0].strip() if (reason or "").strip() else ""
+    if not line:
+        return "post-done checks"
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
 def _run_red_phase_gate(task, config, state, reporter) -> str | None:
     """Author and confirm a red, then ask the gate. Returns a refusal, or None.
 
@@ -327,28 +344,42 @@ def execute_task(
             reporter.record(PhaseOutcome.PASS, f"exit {result.returncode}")
 
         if error_pattern:
-            log_progress(f"\u26a0\ufe0f API error detected: {error_pattern}", task_id)
+            # The pattern that matched is a substring ("session limit"), not a
+            # sentence. When the classifier recognises the same failure it has
+            # the one fact an operator needs \u2014 when the limit resets \u2014 so its
+            # message wins; the raw pattern stays as the fallback (#229).
+            api_kind, api_message = classify(combined_output, result.returncode)
+            detail = api_message if api_kind != "unknown" else error_pattern
+            log_progress(f"\u26a0\ufe0f API error detected: {detail}", task_id)
             logger.warning(
                 "API error detected",
                 task_id=task_id,
                 error_pattern=error_pattern,
+                detail=detail,
             )
             state.record_attempt(
                 task_id,
                 False,
                 duration,
-                error=f"API error: {error_pattern}",
+                error=f"API error: {detail}",
                 error_code=ErrorCode.RATE_LIMIT,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                error_kind=api_kind if api_kind != "unknown" else "api_error",
+                error_stage=reporter.current,
             )
             send_callback(
                 config.callback_url,
                 task_id,
                 "failed",
                 duration,
-                f"API error: {error_pattern}",
+                # The same sentence the attempt recorded (Copilot, PR #233): an
+                # orchestrator reading the callback and an operator reading
+                # `status` must not be told two different things about one
+                # failure, and the callback is the one that loses the reset
+                # time if it keeps the bare substring.
+                f"API error: {detail}",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
@@ -500,7 +531,7 @@ def execute_task(
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
                 )
-                log_progress("\u274c Failed: tests/lint check", task_id)
+                log_progress(f"\u274c Failed: {_headline(error)}", task_id)
                 send_callback(
                     config.callback_url,
                     task_id,

@@ -32,6 +32,28 @@ PATTERNS: list[ErrorPattern] = [
         regex=re.compile(r"hit your usage limit.*?try again at ([\d:]+\s*[AP]M)", re.S),
         template="OpenAI usage limit — try again at {0}",
     ),
+    # Provider exhaustion with a reset time — claude prints "You've hit your
+    # session limit · resets 5:30pm", "Claude usage limit reached. Your limit
+    # will reset at 3pm", "5-hour limit reached ∙ resets 3pm". None of those
+    # contains "rate limit", so before #229 they all fell through to the
+    # "unknown" tail and were reported as whatever the CLI happened to print.
+    # The reset time is the one thing an operator needs, so it is captured.
+    ErrorPattern(
+        kind="rate_limit",
+        regex=re.compile(
+            r"(?:session|usage|\d+-hour)\s+limit[^\n]*?reset[s]?\s+(?:at\s+)?"
+            r"([\d:]+\s*(?:[ap]\.?m\.?)?)",
+            re.I,
+        ),
+        template="Provider limit reached — resets {0}",
+    ),
+    # …and without one. Separate rather than an optional group: a template that
+    # says "resets " followed by nothing reads like a truncated message.
+    ErrorPattern(
+        kind="rate_limit",
+        regex=re.compile(r"(?:session limit|usage limit reached|\d+-hour limit)", re.I),
+        template="Provider limit reached",
+    ),
     # generic rate-limit (claude, generic providers)
     ErrorPattern(
         kind="rate_limit",

@@ -42,6 +42,50 @@ def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
     ]
 
 
+def uncommitted_work_paths(config: ExecutorConfig, exclude: list[Path] | None = None) -> list[str]:
+    """Project files with uncommitted changes, runtime state excluded (#229).
+
+    Not a guard — a *report*. When a task stops at a gate, whatever an agent
+    left in the working tree stays there, uncommitted and unmentioned: in the
+    pilot a review agent applied its fixes, hit a provider session limit, and
+    the task went `blocked` with nothing recording that six modified and
+    untracked files were sitting in the tree. The next actor's only clue was
+    `git status`, which nobody runs when the tool says the task is blocked.
+
+    ``exclude`` drops paths the caller is about to commit itself (the status
+    flip's `tasks.md`), so the report names only what is genuinely stranded.
+    Returns [] when there is no repo or git cannot answer — a report that
+    cannot be produced must not become a failure.
+
+    A repo with **no commits yet** does report its untracked files, unlike the
+    fresh-repo exemption in `spec_dirty_paths` (Copilot, PR #233). That
+    exemption exists because a *guard* must not block bootstrap; here nothing
+    is blocked, and a task that stopped in a repo where nothing has ever been
+    committed is the case where naming the uncommitted work matters most.
+    """
+    if _git(config, "rev-parse", "--git-dir").returncode != 0:
+        return []
+    status = _git(config, "status", "--porcelain")
+    if status.returncode != 0:
+        return []
+    skip: set[str] = set()
+    for p in [*runtime_state_paths(config), *(exclude or [])]:
+        try:
+            skip.add(str(p.relative_to(config.project_root)))
+        except ValueError:
+            continue
+    skip.add("spec/.gitignore")  # harness-owned (#96)
+    out: list[str] = []
+    for line in status.stdout.splitlines():
+        path = line[3:].strip().strip('"')
+        # `-wal`/`-shm` sidecars sit next to the state file, hence the prefix
+        # forms — the same filter `review_pr` applies to its own dirt check.
+        if any(path == s or path.startswith(s + "/") or path.startswith(s + "-") for s in skip):
+            continue
+        out.append(path)
+    return out
+
+
 def stage_all_except_runtime(config: ExecutorConfig) -> bool:
     """Stage all changes except executor runtime state.
 
