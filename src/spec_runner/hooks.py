@@ -1114,6 +1114,40 @@ def post_done_hook(
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)
 
+            # `integration_pr: true` means "one branch per run, a single PR at
+            # the end, and the tool never touches main". Only a command that
+            # actually forked an integration branch may merge (#254): the
+            # pilot's `retry` did not, so `main_branch` resolved to the real
+            # master and the tool performed the one git operation its config
+            # forbids — leaving master 11 commits ahead of origin with no PR.
+            #
+            # Refusing here rather than in each command is deliberate: this is
+            # where the merge happens, so a future command that forgets to fork
+            # cannot reintroduce it.
+            if config.integration_pr and not config.integration_branch_active:
+                logger.warning(
+                    "integration_pr: not merging — no integration branch in this command",
+                    task_id=task.id,
+                    branch=branch_name,
+                    would_have_merged_into=main_branch,
+                )
+                from .runner import log_progress
+
+                log_progress(
+                    f"🔒 integration_pr: leaving {branch_name} unmerged — this command opened "
+                    f"no integration branch, and merging into {main_branch} is what the config "
+                    "forbids. The work is committed on its branch; open a PR from it, or "
+                    "re-run through `spec-runner run`.",
+                    task.id,
+                )
+                return (
+                    True,
+                    None,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                    no_op,
+                )
+
             # Check current branch — if we're already on main, skip merge
             # (happens for TASK-000 or fresh repos)
             result = subprocess.run(

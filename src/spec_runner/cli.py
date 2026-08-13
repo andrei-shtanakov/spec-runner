@@ -276,6 +276,7 @@ def _maybe_start_integration(args, config: ExecutorConfig):
         # Redirect every task's merge target to the integration branch; the
         # existing merge stage reads config.main_branch, so main is untouched.
         config.main_branch = run.branch
+        config.integration_branch_active = True
     return run
 
 
@@ -1350,14 +1351,26 @@ def cmd_retry(args, config: ExecutorConfig):
 
         logger.info("Retrying task", task_id=task.id)
 
-        # Execute single attempt (not run_with_retries which has max_retries limit)
-        success = execute_task(task, config, state)
+        # A retry is a run of one task, and under `integration_pr` it has to
+        # behave like one (#254): fork the integration branch, collect the work
+        # on it, push it and open the PR. Without this the merge stage now
+        # refuses (correctly) and the finished work would sit on a task branch
+        # with nobody told what to do next.
+        integration = _maybe_start_integration(args, config)
+        try:
+            # Execute single attempt (not run_with_retries which has max_retries limit)
+            success = execute_task(task, config, state)
 
-        if success:
-            update_task_status(config.tasks_file, task.id, "done")
-            mark_all_checklist_done(config.tasks_file, task.id)
-        else:
-            update_task_status(config.tasks_file, task.id, "blocked")
+            if success:
+                update_task_status(config.tasks_file, task.id, "done")
+                mark_all_checklist_done(config.tasks_file, task.id)
+            else:
+                update_task_status(config.tasks_file, task.id, "blocked")
+        finally:
+            if integration is not None:
+                pr_url = finalize_integration_branch(config, integration)
+                if pr_url:
+                    _announce_integration_pr(config, pr_url)
 
 
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:

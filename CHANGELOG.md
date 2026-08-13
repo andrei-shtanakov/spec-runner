@@ -12,6 +12,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`integration_pr` is honoured by every command that merges** (#254, F-32).
+  The mode's promise is one line — *one branch per run, a single PR at the end,
+  the tool never touches main* — and `retry` broke it: `_maybe_start_integration`
+  (which forks the branch and redirects the merge target onto it) was called by
+  `run` and by nothing else, so a retry resolved the merge target to the real
+  master and merged into it, leaving it ahead of origin with no PR and the
+  human gate bypassed.
+
+  Two halves. The **guard** sits where the merge happens, not in each command:
+  under `integration_pr`, a merge into anything but an active integration
+  branch is refused, loudly, leaving the work on its task branch — so a future
+  command that forgets to fork cannot reintroduce this. And **`retry` now
+  participates** in the mode instead of being blocked by it: it forks, collects
+  its work, pushes and opens the PR, finalising even when the retry fails,
+  exactly as `run` does.
+
 - **The run ceiling has one reader again** (#256, F-34). `budget authorize`
   raised it to $9.00 on the record; the next `run` refused anyway against
   `budget_usd` from the config file — the number the authorization exists to
