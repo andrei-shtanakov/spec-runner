@@ -255,6 +255,15 @@ class ExecutorConfig:
     # subset (#139). Composite `test_command`s are never narrowed regardless.
     scoped_tests: bool = True
     lint_command: str = "uv run ruff check ."
+    # Whether the project actually declared `commands.lint` (#220). The default
+    # above is a Python guess, and the RED phase lints the file it is about to
+    # freeze *regardless of the post-done lint switch* — so on an Elixir project
+    # that declared no linter, ruff read a `.exs` file, reported 251 errors, and
+    # made every red `unverifiable`: `execution_mode: tdd` could not run at all.
+    # The loader sets this False when the key is absent; a config built directly
+    # in code is taken at its word, since passing `lint_command` there is itself
+    # a declaration.
+    lint_command_declared: bool = True
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
@@ -739,6 +748,10 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "review_command_template": executor_config.get("review_command_template"),
             "test_command": commands.get("test"),
             "lint_command": commands.get("lint"),
+            # A bool, never None: absent means "not declared", which is exactly
+            # what the RED-phase lint needs to know (#220), so it must reach
+            # build_config rather than being dropped with the other Nones.
+            "lint_command_declared": bool(commands.get("lint")),
             "lint_fix_command": commands.get("lint_fix"),
             "sync_command": commands.get("sync"),
             "project_root": Path(paths["root"]) if paths.get("root") else None,

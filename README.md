@@ -431,7 +431,8 @@ harness_allow: []            # Globs exempt from strict-mode violations
 
 commands:
   test: "uv run pytest tests/ -v"
-  lint: "uv run ruff check ."
+  lint: "uv run ruff check ."   # absent = no linter: under execution_mode: tdd the
+                                # pre-freeze lint is skipped rather than guessing ruff
   sync: "mix deps.get"       # Dependency sync before each task. Empty/absent =
                              # auto: `uv sync` when pyproject.toml exists, else skip
 

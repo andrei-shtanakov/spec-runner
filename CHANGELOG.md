@@ -12,6 +12,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **TDD no longer requires the project to be a Python project** (#220). The RED
+  phase lints the file it is about to freeze — reasonably, since a claim makes
+  it byte-immutable — using `lint_command`, whose default is
+  `uv run ruff check .`. On an Elixir project that declared `commands.test` and
+  no `commands.lint`, ruff read a `.exs` file, reported 251 errors, and made
+  every red `unverifiable`, so `execution_mode: tdd` could not run at all. The
+  pre-freeze lint now runs **only a linter the project declared**
+  (`commands.lint`). A declared one runs exactly as before, and this lint stays
+  deliberately independent of `hooks.post_done.run_lint` — "do not gate
+  finished work on lint" is not "freeze a file that does not lint".
+- **A refused RED now says why.** The refusal quoted the gate's generic "no
+  confirmed red for this task in this workstream" and dropped the reason the
+  red phase had already found — a failing lint, an unparseable selector, an
+  unmeasured runner. Both halves are reported now, so the diagnosis lands on
+  the cause rather than on its symptom.
 - **`review-pr`'s own cost limit counts every paid call it makes** (#218, stage 1).
   `review_pr.max_cost_usd` was summed over the **fix** agents alone and checked
   *after* each of them. The loop also makes one verification call per collected

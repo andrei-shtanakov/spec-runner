@@ -108,9 +108,17 @@ def _run_red_phase_gate(task, config, state, reporter) -> str | None:
     detail = "; ".join(
         r.detail or "" for r in outcome.results if r.status is not GateStatus.SATISFIED
     )
+    # Both halves, not whichever is non-empty (#220). The gate says what it saw
+    # ("no confirmed red for this task"); the red phase says *why* there is
+    # none — a failing lint on the file about to be frozen, a selector it could
+    # not parse, a runner whose exit codes were never measured. Quoting only the
+    # gate sent an operator looking for a missing red when the cause was a
+    # linter they never configured.
+    if red.detail and red.detail not in detail:
+        detail = f"{detail} — {red.detail}" if detail else red.detail
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
-        return f"RED could not be verified (infrastructure): {detail or red.detail}"
-    return f"RED not confirmed, refusing to implement: {detail or red.detail}"
+        return f"RED could not be verified (infrastructure): {detail}"
+    return f"RED not confirmed, refusing to implement: {detail}"
 
 
 def execute_task(
