@@ -10,7 +10,7 @@ from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
 from .harness import HarnessBaseline
-from .hooks import post_done_hook, pre_start_hook
+from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal
@@ -73,8 +73,6 @@ def _refusal_error_code(refusal: str) -> ErrorCode:
     task. Anything new must return a `Refusal` rather than teach this function
     another sentence.
     """
-    from .hooks import GATE_INSTRUMENT_ERROR_PREFIX
-
     if isinstance(refusal, Refusal):
         return refusal.error_code
     if refusal.startswith(GATE_INSTRUMENT_ERROR_PREFIX):
