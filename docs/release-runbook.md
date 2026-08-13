@@ -88,15 +88,22 @@ The last step, and the one that has repeatedly earned its place: install what a
 user would install and exercise the thing the release claims to fix.
 
 ```bash
-uv tool install --refresh --reinstall spec-runner==X.Y.Z
+uv tool install --refresh --reinstall --no-cache spec-runner==X.Y.Z
 spec-runner --version        # MUST print X.Y.Z before anything else is believed
 ```
 
-**`--refresh --reinstall` and the version assertion are both load-bearing.**
-Measured during the 2.27.1 release: `uv tool install spec-runner==2.27.1`
-reported `unsatisfiable` from a stale index and left the *previous* binary in
-place. The scenario then ran green — against the old build. The run looked like
-a verification and was not one.
+**All three flags and the version assertion are load-bearing.** Measured during
+the 2.27.1 release: `uv tool install spec-runner==2.27.1` reported
+`unsatisfiable` from a stale index and left the *previous* binary in place. The
+scenario then ran green — against the old build. The run looked like a
+verification and was not one.
+
+`--no-cache` joined the line after 2.30.0, where `--refresh --reinstall` alone
+hit the same stale index — the **fourth** occurrence (2.27.1, 2.28.1, 2.28.3,
+2.30.0). It is not a fallback to reach for when the install misbehaves: by the
+time you notice, the rehearsal has already run against the wrong binary. The
+cost is one slower install; the cost of the alternative is a verification that
+proves nothing, convincingly.
 
 That is a defect in how a test stand is attributed, not in spec-runner, and it
 is fixed by discipline rather than by a feature: **a run counts only after the
