@@ -10,6 +10,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A git error at the RED gate is an instrument error, not a verdict** (#245).
+  `_descends_from` returned `returncode == 0`, so exit 1 ("not an ancestor")
+  and exit 128 ("bad object / missing repo / unreadable") were the same
+  `False`, and the gate answered *"the confirmed red is on a different tree"*
+  for a commit that is simply not in this clone — sending an operator to read
+  branch topology when the fix is `git fetch`. Split three ways: 0 satisfies,
+  1 is an honest `UNSATISFIED`, anything else (including a git that cannot be
+  executed) is `INSTRUMENT_ERROR`, carrying git's own message, so the run
+  exits 2 rather than 1.
+
+  **Behaviour reversal, deliberate:** a checkpoint whose SHA no longer resolves
+  used to be `UNSATISFIED` (pinned since #141 slice 1c). Nothing merges either
+  way — the change is what the operator and CI are told.
+
 ### Added
 
 - **`spec-runner tdd resume`** (#232) — the post-green half finally has a

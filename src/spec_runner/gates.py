@@ -375,7 +375,15 @@ def _red_gate(ctx: GateContext) -> GateResult:
             PhaseOutcome.UNEXPECTED_FAIL,
             f"the claimed red did not fail on replay: {checkpoint.selector}",
         )
-    if not _descends_from(ctx.config, checkpoint.commit_sha, ctx.checkpoint_sha):
+    try:
+        descends = _descends_from(ctx.config, checkpoint.commit_sha, ctx.checkpoint_sha)
+    except AncestryUnknown as exc:
+        # Not a verdict: nothing was learned about the work (#245). The usual
+        # cause is a commit missing from this clone, and "the red is on a
+        # different tree" would send an operator to read branch topology when
+        # the fix is to fetch.
+        return GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, str(exc))
+    if not descends:
         # #164 criterion 5 in this track's terms. Descent, not equality: green
         # *is* commits on top of the red, so demanding the same SHA would make
         # the gate unsatisfiable the moment the work it gates happens.
@@ -392,18 +400,41 @@ def _red_gate(ctx: GateContext) -> GateResult:
     )
 
 
+class AncestryUnknown(RuntimeError):
+    """git could not answer whether one commit descends from another (#245).
+
+    Carried as an exception rather than a `False`, because the two are opposite
+    instructions: "no" is a verdict about the work, "I could not look" is a
+    broken instrument, and the gate owes them different statuses. Collapsing
+    them told an operator their red was on another tree when the commit was
+    simply not in this clone — a verdict standing in for a fetch.
+    """
+
+
 def _descends_from(config: ExecutorConfig, ancestor: str, descendant: str) -> bool:
+    """True/False only when git answered; otherwise `AncestryUnknown`.
+
+    `merge-base --is-ancestor` uses exit 1 for "no" and 128 for a bad object,
+    a missing repo, an unreadable one. A git that cannot be executed at all is
+    the same case one step earlier.
+    """
     import subprocess
 
-    return (
-        subprocess.run(
+    try:
+        result = subprocess.run(
             ["git", "merge-base", "--is-ancestor", ancestor, descendant],
             cwd=config.project_root,
             capture_output=True,
             text=True,
-        ).returncode
-        == 0
-    )
+        )
+    except OSError as exc:  # git missing, project_root gone
+        raise AncestryUnknown(f"git could not be run: {exc}") from exc
+    if result.returncode not in (0, 1):
+        raise AncestryUnknown(
+            f"git could not compare {ancestor[:12]} with {descendant[:12]}: "
+            f"{result.stderr.strip()[:200] or f'exit {result.returncode}'}"
+        )
+    return result.returncode == 0
 
 
 def evaluate_claims(ctx: GateContext) -> GateResult:
@@ -557,6 +588,7 @@ def evaluate_pre_terminal(
 __all__ = [
     "POLICY_KEYS",
     "REGISTRY",
+    "AncestryUnknown",
     "GateContext",
     "GateOutcome",
     "GateRegistry",

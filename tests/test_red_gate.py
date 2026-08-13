@@ -159,17 +159,27 @@ class TestTheCheckpointMustBelongToThisTree:
     """#164 criterion 5, applied here: a red confirmed on an older tree says
     nothing about the tree about to be merged."""
 
-    def test_a_checkpoint_whose_sha_does_not_resolve_does_not_satisfy(self, tmp_path):
-        """A recorded SHA that no longer exists — a rewritten or pruned
-        history — is not evidence about anything present."""
+    def test_a_checkpoint_whose_sha_does_not_resolve_is_an_instrument_error(self, tmp_path):
+        """A recorded SHA that no longer exists is not evidence about anything
+        present — but it is also not a *verdict* about the work.
+
+        **This reverses what this test asserted from #141 slice 1c until
+        #245.** It used to expect `UNSATISFIED` ("the confirmed red is on a
+        different tree"), which reads as a statement about the code when the
+        truth is that git could not look: the commit is missing from this
+        clone, or history was rewritten under us. Same fail-closed outcome —
+        nothing merges either way — but the run now exits 2 rather than 1, and
+        the message says what actually happened.
+        """
         root = _repo(tmp_path)
         cfg = _cfg(root)
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         with ExecutorState(cfg) as state:
             state.record_red_checkpoint(_checkpoint(cfg, sha="c" * 40))
             outcome = _evaluate(cfg, state, sha=head)
-        assert outcome.status is GateStatus.UNSATISFIED
-        assert "different tree" in (outcome.results[0].detail or "").lower()
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        assert "different tree" not in (outcome.results[0].detail or "").lower()
+        assert "could not compare" in (outcome.results[0].detail or "").lower()
 
     def test_a_descendant_tree_is_accepted(self, tmp_path):
         """Green *is* new commits on top of the red. Requiring SHA equality
