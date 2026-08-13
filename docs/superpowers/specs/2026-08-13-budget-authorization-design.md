@@ -53,7 +53,7 @@ able to audit.
 | actor | recorded, `resolve_actor(config, --actor)` | "someone raised it" is not an audit trail |
 | agent guardrail | refuse when `SPEC_RUNNER_AGENT=1` | an agent must not raise its own budget; a guardrail, not a boundary — the agent runs arbitrary shell — but the audit row then carries a human's name or nothing happens |
 | live-run refusal | refuse while the PID-checked `ExecutorLock` is held | the guard reads limits mid-run; changing them under a running loop makes "what was authorised when the call started" unanswerable |
-| monotonic | new limit must be **strictly greater** than the current effective one | this command exists to unblock, never to silently tighten; see §6 for lowering |
+| monotonic | new limit must be **strictly greater** than the current effective one; a lower or equal value is refused | this command exists to unblock, never to tighten. Lowering is **not supported at all** — not by this command and not by any flag on it (§6) |
 | CAS | `--after <auth-id>` when a previous authorization exists for the scope | the operator authorises against a state they have seen, exactly as `tdd repair --checkpoint` does |
 
 **Both axes are needed, and neither implies the other.** Raising only
