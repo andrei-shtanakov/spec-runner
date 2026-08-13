@@ -733,9 +733,16 @@ def _check_task_budget(
       always runs regardless of this key so flaky tasks can fail fast
       rather than never getting a chance.
     """
+    # The same resolved ceiling the pre-call guard uses (#230 part 2): an
+    # operator authorization must not be honoured at one site and ignored at
+    # the other, or raising a limit would unblock the next call and still lose
+    # the task between attempts.
+    from .budget import effective_limits
+
+    task_limit, _run_limit = effective_limits(config, state, task_id)
     spent = state.task_cost(task_id)
-    if config.task_budget_usd is not None and spent >= config.task_budget_usd:
-        return f"Task budget exceeded (${spent:.2f} >= ${config.task_budget_usd:.2f})"
+    if task_limit is not None and spent >= task_limit:
+        return f"Task budget exceeded (${spent:.2f} >= ${task_limit:.2f})"
 
     if config.max_retry_cost_usd is not None and attempt_index > 0:
         ts = state.get_task_state(task_id)

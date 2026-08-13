@@ -471,6 +471,33 @@ Three consequences worth knowing before you rely on a cap:
   remaining budget cannot be proven from a figure known to be a floor.
   `spec-runner costs` shows unpriced calls and marks such totals with `≥`.
 
+### Raising a ceiling deliberately
+
+A cap that has done its job can leave a task one cheap step from done — the
+pilot hit exactly that: the implementation finished and green, the budget spent,
+and the only remaining step forbidden. `budget authorize` is the audited way
+out, and it raises the limit rather than pretending the money was not spent:
+
+```bash
+spec-runner budget authorize TASK-101 --task-limit 6.00 --run-limit 6.00 \
+    --reason "continuing after the instrument failures were fixed"
+```
+
+Both axes, because raising one leaves the other refusing the next call. The
+reason is mandatory, the actor is recorded, it refuses while a run is live or
+when invoked from inside an agent, a second authorization needs
+`--after <id>` (quoted in every refusal), and it **only raises** — lowering is
+not supported by this command or any flag on it.
+
+The record keeps the previous and new limits plus the recorded spend and the
+number of unpriced calls at the moment of the decision, because "$6.00
+authorised" means one thing against a proven total and another against a floor.
+
+**A budget lives in one state file.** A new state file starts a new budget
+domain: no authorization and no spend carry over. Rotating the state file
+mid-pilot is therefore not a neutral act — it resets the financial record while
+leaving the work in place.
+
 `review-pr` carries its own limit, `review_pr.max_cost_usd`, with the same
 guarantee and the same consequences. It counts **both** kinds of call the loop
 makes — one verification per collected comment and one fix per valid one — and

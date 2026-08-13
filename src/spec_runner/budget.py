@@ -94,6 +94,38 @@ def budget_is_active(config: ExecutorConfig) -> bool:
     return config.task_budget_usd is not None or config.budget_usd is not None
 
 
+def effective_limits(
+    config: ExecutorConfig, state: ExecutorState, task_id: str | None = None
+) -> tuple[float | None, float | None]:
+    """`(task_limit, run_limit)` after operator authorizations (#230 part 2).
+
+    The newest authorization for a scope **wins over the config value** — not
+    `max()` of the two. An operator who edits the YAML after authorising
+    deserves an answer that does not depend on which number happens to be
+    larger. What keeps that honest is that an authorised limit is always
+    *displayed as one*, with its id, actor and timestamp, so a config file that
+    disagrees with the live ceiling can never be read as the truth.
+
+    Scoping is the sign-off's: a task ceiling is `(domain, namespace, task)`, a
+    run ceiling belongs to the whole budget domain and carries no namespace —
+    `budget_usd` bounds the DB, and a per-namespace "global" cap is not global.
+    """
+    task_limit = config.task_budget_usd
+    run_limit = config.budget_usd
+    if task_id:
+        from .tdd import resolve_namespace
+
+        row = state.latest_budget_authorization(
+            "task", task_id=task_id, namespace=resolve_namespace(config)
+        )
+        if row is not None:
+            task_limit = float(row["new_limit_usd"])
+    run_row = state.latest_budget_authorization("run")
+    if run_row is not None:
+        run_limit = float(run_row["new_limit_usd"])
+    return task_limit, run_limit
+
+
 def check_before_call(
     config: ExecutorConfig,
     state: ExecutorState,
@@ -125,21 +157,24 @@ def check_before_call(
             f"— not starting the {provenance} call",
         )
 
+    task_limit, run_limit = effective_limits(config, state, task_id)
     task_spent = state.task_cost(task_id) + pending_cost
-    if config.task_budget_usd is not None and task_spent >= config.task_budget_usd:
+    if task_limit is not None and task_spent >= task_limit:
         return BudgetRefusal(
             TASK_BUDGET,
             f"Task budget reached before the {provenance} call "
-            f"(${task_spent:.2f} >= ${config.task_budget_usd:.2f}) — not starting it",
+            f"(${task_spent:.2f} >= ${task_limit:.2f}) — not starting it"
+            + _authorization_note(state, "task", task_id, config),
         )
 
-    if config.budget_usd is not None:
+    if run_limit is not None:
         run_spent = state.total_cost() + pending_cost
-        if run_spent >= config.budget_usd:
+        if run_spent >= run_limit:
             return BudgetRefusal(
                 RUN_BUDGET,
                 f"Run budget reached before the {provenance} call "
-                f"(${run_spent:.2f} >= ${config.budget_usd:.2f}) — not starting it",
+                f"(${run_spent:.2f} >= ${run_limit:.2f}) — not starting it"
+                + _authorization_note(state, "run", None, config),
             )
 
     # Fail closed on an unprovable remainder. Checked *after* the caps so an
@@ -176,6 +211,34 @@ def _unpriced_in_scope(config: ExecutorConfig, state: ExecutorState, task_id: st
     return state.unmeasured_calls(task_id)
 
 
+def _authorization_note(
+    config_scope_state: ExecutorState, scope: str, task_id: str | None, config: ExecutorConfig
+) -> str:
+    """What an operator needs in order to raise this ceiling (#230 §7.3).
+
+    A refusal that names only the number sends someone to `git log` to find the
+    authorization id before they can pass `--after`, and an operator who cannot
+    find the id skips the CAS. So the refusal carries the id, the effective
+    limit, who set it and when — or says plainly that the limit is the config's.
+    """
+    row = None
+    if scope == "task" and task_id:
+        from .tdd import resolve_namespace
+
+        row = config_scope_state.latest_budget_authorization(
+            "task", task_id=task_id, namespace=resolve_namespace(config)
+        )
+    elif scope == "run":
+        row = config_scope_state.latest_budget_authorization("run")
+    if row is None:
+        return ". The limit is the configured one; `spec-runner budget authorize` can raise it"
+    return (
+        f". The limit is authorization #{row['id']} (${float(row['new_limit_usd']):.2f}, "
+        f"{row['actor']}, {row['timestamp']}); raise it with "
+        f"`spec-runner budget authorize --after {row['id']}`"
+    )
+
+
 __all__ = [
     "RUN_BUDGET",
     "TASK_BUDGET",
@@ -185,4 +248,5 @@ __all__ = [
     "BudgetRefused",
     "budget_is_active",
     "check_before_call",
+    "effective_limits",
 ]

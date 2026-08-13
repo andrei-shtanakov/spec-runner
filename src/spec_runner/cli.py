@@ -2034,6 +2034,36 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("task_id", nargs="?", help="Limit to one task")
         sub.add_argument("--json", action="store_true", help="Machine-readable output")
 
+    # budget authorization (#230 part 2): an operator raising a ceiling
+    budget_parser = subparsers.add_parser(
+        "budget", parents=[common], help="Budget authorization (raise a ceiling, audited)"
+    )
+    budget_sub = budget_parser.add_subparsers(dest="budget_command", required=True)
+    budget_auth = budget_sub.add_parser(
+        "authorize",
+        parents=[common],
+        help="Raise the task and/or run ceiling for this state file, with a recorded reason",
+    )
+    budget_auth.add_argument("task_id", nargs="?", help="Task the --task-limit applies to")
+    # Deliberately not `--task-budget`/`--budget`: those are inherited from the
+    # common parent, where they *override the config for one invocation*. Reusing
+    # the spelling would mean one flag both raising the ceiling and moving the
+    # value the monotonic check compares against — a command that refuses itself.
+    budget_auth.add_argument(
+        "--task-limit", type=float, help="New absolute task ceiling in USD (raises only)"
+    )
+    budget_auth.add_argument(
+        "--run-limit", type=float, help="New absolute run ceiling in USD (raises only)"
+    )
+    budget_auth.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    budget_auth.add_argument("--actor", help="Who (default: git user.email)")
+    budget_auth.add_argument(
+        "--after",
+        type=int,
+        help="Id of the authorization this one follows (compare-and-swap); "
+        "required once one exists, and quoted in every refusal",
+    )
+
     # doctor
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
@@ -2303,6 +2333,11 @@ def main():
             from .review_pr import cmd_review_pr
 
             raise SystemExit(cmd_review_pr(args, config))
+
+        if args.command == "budget":
+            from .budget_cmd import cmd_budget
+
+            raise SystemExit(cmd_budget(args, config))
 
         # tdd remedies: a refusal is an operator-facing message, not a traceback
         if args.command == "tdd":
