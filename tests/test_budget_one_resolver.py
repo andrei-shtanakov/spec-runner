@@ -108,6 +108,35 @@ class TestThePreflightReadsTheEffectiveCeiling:
             assert state.stop_cause() is None
             assert check_before_call(cfg, state, "TASK-101", "green") is None
 
+    def test_it_stays_dormant_when_no_ceiling_is_configured(self, tmp_path):
+        """The same divergence from the other side (Copilot, PR #257).
+
+        `budget.check_before_call` is dormant when no cap is configured — it
+        returns before reading any state. If the preflight enforced an
+        authorization on such a project, the ceiling would stop a run from
+        starting and then guard nothing while it ran: two readers again, with
+        the roles swapped.
+        """
+        cfg = _cfg(tmp_path, budget_usd=None, task_budget_usd=None)
+        _spend(cfg, 5.92)
+
+        with ExecutorState(cfg) as state:
+            authorize(cfg, state, reason=REASON, run_budget_usd=2.00)
+            assert state.stop_cause() is None
+
+    def test_and_the_guard_agrees_in_that_state(self, tmp_path):
+        """Stated as the property rather than as two separate observations:
+        with no configured ceiling, neither reader enforces."""
+        from spec_runner.budget import check_before_call
+
+        cfg = _cfg(tmp_path, budget_usd=None, task_budget_usd=None)
+        _spend(cfg, 5.92)
+
+        with ExecutorState(cfg) as state:
+            authorize(cfg, state, reason=REASON, run_budget_usd=2.00)
+            assert state.stop_cause() is None
+            assert check_before_call(cfg, state, "TASK-101", "green") is None
+
     def test_max_consecutive_failures_still_outranks_it(self, tmp_path):
         """The other stop reason must keep working — the fix touches which
         number the budget check reads, nothing else."""

@@ -24,8 +24,8 @@ from .task import (
 logger = get_logger("cli")
 
 
-def _ceiling_in_force(config, state) -> str | None:
-    """A line naming the authorised run ceiling, or None if the config's stands.
+def _ceiling_in_force(state: ExecutorState) -> str | None:
+    """A line naming the authorised run ceiling, or None when none was raised.
 
     `budget_usd` is pinned in `schemas/status.schema.json` and
     `schemas/costs.schema.json` as the **configured** budget, so its value is
@@ -131,7 +131,7 @@ def print_status(config: ExecutorConfig) -> None:
                 f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
             )
             print(f"Total cost:            ${total_cost_val:.2f}")
-            in_force = _ceiling_in_force(config, state)
+            in_force = _ceiling_in_force(state)
             if in_force:
                 # The ceiling an operator raised on the record is the one that
                 # decides whether the next run starts (#256) — `status` must
@@ -472,7 +472,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         if config.budget_usd is not None:
             pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
             print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f} (configured)")
-        in_force = _ceiling_in_force(config, state)
+        in_force = _ceiling_in_force(state)
         if in_force:
             print(in_force)
         if completed_costs:

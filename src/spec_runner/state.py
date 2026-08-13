@@ -1793,11 +1793,20 @@ class ExecutorState:
                 "max_consecutive_failures",
                 f"{self.consecutive_failures}/{self.config.max_consecutive_failures}",
             )
-        # The **effective** ceiling, not the config value (#256). An operator
-        # authorization raised it deliberately and under audit; a preflight
-        # that reads the YAML anyway makes the ceiling mean different things in
-        # different places — `retry` honoured the authorization while `run`
-        # refused against a number the operator had already superseded.
+        # Dormant unless a run ceiling is *configured*, exactly as before, and
+        # exactly as the pre-call guard is (`budget.budget_is_active`). Reading
+        # an authorization on a project that configured no budget would enforce
+        # here while the guard stayed dormant during execution — the same
+        # divergence this fix is about, entered from the other side (Copilot,
+        # PR #257).
+        #
+        # Given a ceiling, the **effective** one decides (#256): an operator
+        # raised it deliberately and under audit, and a preflight that reads
+        # the YAML anyway makes the ceiling mean different things in different
+        # places — `retry` honoured the authorization while `run` refused
+        # against a number the operator had already superseded.
+        if self.config.budget_usd is None:
+            return None
         from .budget import effective_limits
 
         _task_limit, run_limit = effective_limits(self.config, self, None)
