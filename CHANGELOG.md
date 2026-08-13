@@ -10,6 +10,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The run ceiling has one reader again** (#256, F-34). `budget authorize`
+  raised it to $9.00 on the record; the next `run` refused anyway against
+  `budget_usd` from the config file — the number the authorization exists to
+  supersede. So the ceiling had three readers that disagreed: `retry` honoured
+  authorizations, `run`'s preflight read raw config, and the success path
+  enforced nothing (#255, still open). `state.stop_cause` now reads
+  `budget.effective_limits`, like every other enforcement site, and its refusal
+  quotes the number it actually compared against.
+
+- **A budget refusal no longer advises destroying the evidence.** It said
+  *"Raise `budget_usd`, or `spec-runner reset` to clear recorded costs"* — the
+  first points at the boundary the audited mechanism replaced, the second tells
+  an operator to erase the spend history to fit under a ceiling. It now points
+  at `budget authorize`.
+
+- **`status` and `costs` name the ceiling in force.** The pinned `budget_usd`
+  key keeps its documented meaning (the *configured* value) — changing what it
+  carries would be a silent semantic change on a surface spec-runner-vscode
+  vendors — and a line beside it names the authorised ceiling with its id,
+  actor and timestamp, per #230 §4.
+
 ## [2.31.0] - 2026-08-13
 
 **Minor.** Everything added is additive and everything changed is a diagnosis:

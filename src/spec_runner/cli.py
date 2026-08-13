@@ -798,7 +798,15 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
             logger.error("Refusing to run", reason=reason, detail=detail)
             print(f"⛔ Refusing to run: {reason} ({detail})")
             if reason == "budget_exceeded":
-                print("   Raise budget_usd, or `spec-runner reset` to clear recorded costs.")
+                # Not "raise budget_usd, or reset" (#256). The first sends an
+                # operator to edit the boundary the authorization mechanism
+                # exists to supersede auditably; the second tells them to
+                # **erase the cost history** to get under a ceiling, which is
+                # the exact opposite of "enforced rather than trusted".
+                print(
+                    "   Raise it on the record: `spec-runner budget authorize "
+                    '--run-limit <USD> --reason "..."`.'
+                )
             # Persist the refusal as this run's stop reason so `status`
             # reports it instead of the previous run's outcome.
             state.set_meta("last_run_stop_reason", reason)

@@ -24,6 +24,29 @@ from .task import (
 logger = get_logger("cli")
 
 
+def _ceiling_in_force(state: ExecutorState) -> str | None:
+    """A line naming the authorised run ceiling, or None when none was raised.
+
+    `budget_usd` is pinned in `schemas/status.schema.json` and
+    `schemas/costs.schema.json` as the **configured** budget, so its value is
+    left alone — but a report that prints only that number is telling an
+    operator a ceiling that is no longer the one in force (#256). The design's
+    rule (#230 §4) is that an authorised limit is always displayed *as such*,
+    with who set it and when.
+
+    Text only for now: exposing it in `--json` means another additive key on a
+    surface spec-runner-vscode vendors with `additionalProperties: false`, and
+    that is a separate, scheduled round.
+    """
+    row = state.latest_budget_authorization("run")
+    if row is None:
+        return None
+    return (
+        f"Ceiling in force:     ${float(row['new_limit_usd']):.2f} — authorization "
+        f"#{row['id']} ({row['actor']}, {row['timestamp'][:16]})"
+    )
+
+
 def print_status(config: ExecutorConfig) -> None:
     """Print human-readable status to stdout."""
     from . import __version__
@@ -108,6 +131,12 @@ def print_status(config: ExecutorConfig) -> None:
                 f"Tokens:                {_fmt_tokens(total_inp)} in / {_fmt_tokens(total_out)} out"
             )
             print(f"Total cost:            ${total_cost_val:.2f}")
+            in_force = _ceiling_in_force(state)
+            if in_force:
+                # The ceiling an operator raised on the record is the one that
+                # decides whether the next run starts (#256) — `status` must
+                # not show only the config value it superseded.
+                print(in_force.replace("Ceiling in force:     ", "Ceiling in force:      "))
 
         # Tasks with attempts
         attempted = [ts for ts in state.tasks.values() if ts.attempts]
@@ -442,7 +471,10 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             )
         if config.budget_usd is not None:
             pct = (total_cost / config.budget_usd * 100) if config.budget_usd > 0 else 0.0
-            print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f}")
+            print(f"Budget used:          {pct:.0f}% of ${config.budget_usd:.2f} (configured)")
+        in_force = _ceiling_in_force(state)
+        if in_force:
+            print(in_force)
         if completed_costs:
             print(f"Avg per completed:    ${avg_cost:.2f}")
         if most_expensive and most_expensive["cost"] > 0:
