@@ -103,7 +103,8 @@ pattern from `attempts.no_op`).
    call the loop makes** — one verification per collected comment and one fix
    per valid one — and is checked *before* each call, not after (#218 stage 1);
    a call whose cost the CLI never reported stops the next one, and
-   `max_cost_usd: 0` disables the limit for a CLI that never reports cost.
+   a non-positive `max_cost_usd` (`0` or negative) disables the limit for a
+   CLI that never reports cost.
 10. **Fail-closed** on: draft/pending review, API rate limit, deleted
     comment, force-push (head-SHA mismatch with stored state), and
     permission failures.
