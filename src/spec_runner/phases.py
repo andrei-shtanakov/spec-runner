@@ -16,8 +16,10 @@ Design: ``docs/superpowers/specs/2026-08-11-tdd-lifecycle-design.md`` Part A.
 Consumers of the gating built on top: #157 (review policy), #141 (TDD).
 """
 
+from enum import Enum
+
 from .stages import STAGES
-from .state import PhaseOutcome, ReviewVerdict
+from .state import ErrorCode, PhaseOutcome, ReviewVerdict
 
 #: There is no ``WAIVED``: a result is what the instrument observed, a waiver is
 #: an operator overriding it. See ``ExecutorState.record_waiver``.
@@ -103,9 +105,74 @@ def review_verdict_to_phase(verdict: ReviewVerdict | str) -> tuple[PhaseOutcome,
     return PhaseOutcome.ERROR, str(getattr(key, "value", key))
 
 
+class RefusalKind(str, Enum):
+    """Why an attempt did not finish, as a value rather than as a sentence.
+
+    This is an **external** distinction, not an internal nicety: the run's exit
+    code is 1 for work that did not finish and 2 for an instrument that could
+    not tell, and an orchestrator reads that. #230 found the two collapsed — a
+    RED replay that failed for environment reasons was recorded `HOOK_FAILURE`
+    and reported to CI as a failed task, because the only classifier was a
+    prefix match on the message and the RED site wrote a different sentence.
+    """
+
+    #: A gate answered, and the answer was no. The work is what is wrong.
+    POLICY = "policy"
+    #: The instrument could not answer. Nothing is known about the work.
+    INSTRUMENT = "instrument"
+    #: There was no money left to find out.
+    BUDGET = "budget"
+
+
+_REFUSAL_CODES: dict[RefusalKind, ErrorCode] = {
+    RefusalKind.POLICY: ErrorCode.HOOK_FAILURE,
+    RefusalKind.INSTRUMENT: ErrorCode.INFRASTRUCTURE,
+    RefusalKind.BUDGET: ErrorCode.BUDGET_EXCEEDED,
+}
+
+
+class Refusal(str):
+    """A refusal message that also carries *why*, so nobody re-reads the words.
+
+    Deliberately a `str` subclass. The message is logged, recorded on the
+    attempt, shown to an operator and returned through call sites that have
+    always handled a string; none of them should change because the classifier
+    grew a type. What does change is that `_refusal_error_code` no longer has
+    to recognise a prefix — a kind that travels with the message cannot drift
+    from it, and adding a new refusal site cannot silently inherit the wrong
+    exit code by phrasing its sentence differently (#230).
+    """
+
+    __slots__ = ("kind",)
+
+    kind: RefusalKind
+
+    def __new__(cls, message: str, kind: RefusalKind) -> "Refusal":
+        obj = super().__new__(cls, message)
+        obj.kind = kind
+        return obj
+
+    @property
+    def error_code(self) -> ErrorCode:
+        """The attempt's `ErrorCode` — and through it the run's exit code."""
+        return _REFUSAL_CODES[self.kind]
+
+    def with_note(self, note: str) -> "Refusal":
+        """Append context and keep the kind.
+
+        Refusals collect notes on the way out — the bookkeeping commit that
+        failed, the work an agent stranded in the tree. Plain concatenation
+        would return an ordinary `str` and the classification would silently
+        fall back to reading words again.
+        """
+        return Refusal(f"{self} — {note}", self.kind)
+
+
 __all__ = [
     "ALLOWED_OUTCOMES",
     "PhaseOutcome",
+    "Refusal",
+    "RefusalKind",
     "check_outcome",
     "review_verdict_to_phase",
 ]

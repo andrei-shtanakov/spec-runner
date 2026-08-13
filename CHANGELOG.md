@@ -12,6 +12,28 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A broken instrument at the RED site is reported as one** (#230, part 1).
+  `run_exit_code` has meant exit 1 = "the work did not finish" and exit 2 =
+  "the instrument broke, so I cannot tell you whether the work is good" since
+  v2.25.0 — but the RED site could never reach 2. Its refusals were classified
+  by a **prefix match on the message**, and it wrote a different sentence, so a
+  replay that failed for environment reasons was recorded `HOOK_FAILURE` and
+  reported to CI as a failed task. From the pilot's state DB: `HOOK_FAILURE |
+  RED could not be verified (infrastructure): …` — the word was in the message
+  and nothing read it.
+
+  The classification is now typed rather than textual: `gates.refusal_for`
+  turns a gate's own `GateStatus` into a `Refusal` carrying its kind
+  (`policy` → `HOOK_FAILURE` → exit 1, `instrument` → `INFRASTRUCTURE` →
+  exit 2, `budget` → `BUDGET_EXCEEDED`), and appending context to a refusal
+  preserves it. A new refusal site cannot inherit the wrong exit code by
+  phrasing itself differently, because phrasing no longer decides.
+
+  **Interop note:** `--json-result` and the state-DB format are unchanged, but
+  a TDD run whose replay environment is broken now exits **2** where it exited
+  1. A consumer that treats any non-zero exit as "task failed" is unaffected;
+  one that distinguishes 1 from 2 gets the honest answer for the first time.
+
 - **A task start no longer destroys uncommitted work** (#231). The branch stage
   begins every task with `git checkout -- .` and `git clean -fd`, so one task's
   leftovers cannot contaminate the next one's tests — silently and
