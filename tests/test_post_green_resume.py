@@ -286,6 +286,20 @@ class TestClaimsComeBackWithIt:
 
         assert paths == {"tests/test_x.py"}
 
+    def test_reinstating_a_checkpoint_that_does_not_exist_touches_nothing(self, tmp_path):
+        """Otherwise the claims would be activated with no standing red behind
+        them — the inverse of the hazard this method exists to prevent, caused
+        by the method itself (Copilot, #244)."""
+        root, cfg, cp = _pilot(tmp_path)
+        _retire(cfg, cp)
+
+        with ExecutorState(cfg) as state:
+            with pytest.raises(ValueError, match="refusing to reinstate claims"):
+                state.reinstate_checkpoint_with_claims(
+                    resolve_namespace(cfg), "TASK-101", "nosuchcheckpoint"
+                )
+            assert state.active_claims(resolve_namespace(cfg)) == []
+
     def test_the_two_flips_are_one_transaction(self, tmp_path):
         """A resume that reinstated a red and then failed to reinstate its lock
         would leave a confirmed red with nothing protecting its evidence — and
@@ -409,6 +423,20 @@ class TestRefusals:
         root, cfg, cp = _pilot(tmp_path)
         with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="not a confirmed red"):
             resume(cfg, state, "TASK-101", reason=REASON, checkpoint_id="deadbeefcafe")
+
+    def test_a_missing_commit_is_not_reported_as_a_wrong_branch(self, tmp_path):
+        """`merge-base --is-ancestor` exits 1 for "no" and 128 for "I could not
+        look". Collapsing them tells an operator their red is on another branch
+        when the commit simply is not in this clone (Copilot, #244)."""
+        root, cfg, cp = _pilot(tmp_path)
+        with ExecutorState(cfg) as state:
+            state._conn.execute(
+                "UPDATE red_checkpoints SET commit_sha = ? WHERE 1",
+                ("0" * 40,),
+            )
+            state._conn.commit()
+            with pytest.raises(RemedyError, match="git could not compare"):
+                resume(cfg, state, "TASK-101", reason=REASON)
 
     def test_a_reason_is_required(self, tmp_path):
         root, cfg, cp = _pilot(tmp_path)

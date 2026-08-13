@@ -1161,6 +1161,15 @@ class ExecutorState:
             ).checkpoint_id
             == checkpoint_id
         ]
+        if not target_ids:
+            # Nothing to reinstate — and therefore nothing to reinstate the
+            # claims *of*. Touching them anyway would activate a byte-lock with
+            # no standing red behind it: the inverse of the hazard this method
+            # exists to prevent, produced by the method itself (Copilot, #244).
+            raise ValueError(
+                f"no checkpoint {checkpoint_id} for {task_id} in {namespace}; "
+                "refusing to reinstate claims that would stand alone"
+            )
         with self._conn:
             checkpoints = 0
             for row_id in target_ids:

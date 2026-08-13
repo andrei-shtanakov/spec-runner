@@ -408,14 +408,26 @@ def _claim_conflicts(
 
 
 def _is_ancestor(config: ExecutorConfig, ancestor: str, descendant: str) -> bool:
-    return (
-        subprocess.run(
-            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
-            cwd=config.project_root,
-            capture_output=True,
-        ).returncode
-        == 0
+    """True/False only when git actually answered.
+
+    `merge-base --is-ancestor` uses exit 1 for "no" and 128 for "I could not
+    look" — a commit that is not in this clone, a corrupt object, a repo that
+    is not there. Collapsing them would tell an operator their red is on
+    another branch when the real problem is that the commit is missing, and
+    send them reading topology instead of fetching (Copilot, #244).
+    """
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
     )
+    if result.returncode not in (0, 1):
+        raise RemedyError(
+            f"git could not compare {ancestor[:12]} with {descendant[:12]}: "
+            f"{result.stderr.strip()[:200] or f'exit {result.returncode}'}"
+        )
+    return result.returncode == 0
 
 
 def _refuse_repair_after_green(state: ExecutorState, namespace: str, task_id: str) -> None:
