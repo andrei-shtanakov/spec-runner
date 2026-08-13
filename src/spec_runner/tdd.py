@@ -610,6 +610,18 @@ def run_red_phase(
 def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     """Lint the file about to be frozen. Returns a refusal, or None.
 
+    Runs **only a linter the project declared** (#220). `lint_command` defaults
+    to `uv run ruff check .`, a Python guess; applying it to a project that
+    declared no linter is how an Elixir suite got 251 ruff errors on a `.exs`
+    file and `execution_mode: tdd` became unusable there. An inferred linter is
+    not a gate the project asked for — the same reasoning as `tdd_runner`
+    (#198), where a wrong inference was worse than no inference.
+
+    What this is **not** gated on is `hooks.post_done.run_lint`. Those are
+    different guarantees: one says "do not gate finished work on lint", this one
+    says "do not freeze a file that does not lint". Reusing that switch here
+    would be convenient and wrong.
+
     Narrowed to the claimed file when that is safe. When `lint_command` is
     composite the whole declared gate runs instead of guessing which component
     takes a path — #139's lesson, and deliberately not a second narrowing rule.
@@ -618,6 +630,12 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     from .git_ops import is_composite_shell_command
 
     if not config.lint_command:
+        return None
+    if not config.lint_command_declared:
+        logger.debug(
+            "No commands.lint declared — skipping the pre-freeze lint",
+            path=str(selector.path),
+        )
         return None
     paths = claim_paths_for(selector)
     if not paths:
