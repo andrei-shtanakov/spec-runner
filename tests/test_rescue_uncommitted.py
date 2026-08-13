@@ -215,6 +215,44 @@ class TestWhenItCannotBeSaved:
         assert _tree_digest(root) == before
         assert (root / "fixture_a.toml").exists()
 
+    def _break_status(self, monkeypatch) -> None:
+        from spec_runner import git_ops
+
+        real = git_ops._git
+
+        def fake(config, *args):
+            if args[:2] == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(
+                    ["git", *args], 1, "", "fatal: unable to read index"
+                )
+            return real(config, *args)
+
+        monkeypatch.setattr(git_ops, "_git", fake)
+
+    def test_an_unreadable_tree_is_not_a_clean_tree(self, tmp_path, monkeypatch):
+        """`uncommitted_work_paths` fails open by design — it is a report. Read
+        that way here and an index lock would read as "nothing to save" and
+        license the wipe (Copilot, PR #234). The guard asks in strict mode."""
+        root = _repo(tmp_path)
+        _strand_work(root)
+        before = _tree_digest(root)
+        self._break_status(monkeypatch)
+
+        assert pre_start_hook(_task(), _cfg(root)) is False
+        assert _tree_digest(root) == before
+        assert (root / "fixture_a.toml").exists()
+
+    def test_the_report_still_fails_open(self, tmp_path, monkeypatch):
+        """The other half of the same distinction: naming stranded work must
+        never become a new way for a blocked task to fail."""
+        from spec_runner.git_ops import uncommitted_work_paths
+
+        root = _repo(tmp_path)
+        _strand_work(root)
+        self._break_status(monkeypatch)
+
+        assert uncommitted_work_paths(_cfg(root)) == []
+
     def test_the_refusal_explains_itself(self, tmp_path, monkeypatch):
         root = _repo(tmp_path)
         _strand_work(root)

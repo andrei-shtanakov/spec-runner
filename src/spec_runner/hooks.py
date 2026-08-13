@@ -82,10 +82,19 @@ def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
     """
     from datetime import datetime
 
-    from .git_ops import uncommitted_work_paths
+    from .git_ops import WorktreeStatusError, uncommitted_work_paths
     from .runner import log_progress
 
-    paths = uncommitted_work_paths(config)
+    try:
+        # strict: an unreadable `git status` must not arrive here as "clean"
+        # and license the cleanup (Copilot, PR #234). The helper's own callers
+        # may fail open — this one is the reason the helper exists.
+        paths = uncommitted_work_paths(config, strict=True)
+    except WorktreeStatusError as exc:
+        detail = f"could not read the working tree before cleaning it: {exc}"
+        logger.error("Refusing to start: the tree could not be read", task_id=task.id)
+        log_progress(f"⛔ {detail} — not starting, nothing was touched", task.id)
+        return False, detail
     if not paths:
         return True, ""  # the ordinary case: nothing to rescue, nothing to say
 
