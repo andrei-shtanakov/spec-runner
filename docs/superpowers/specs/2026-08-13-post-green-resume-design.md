@@ -1,6 +1,6 @@
 # Post-green resume — design
 
-**Status:** **signed off by the owner 2026-08-13, with §7.1 overruled.** Ready to implement; no code ships with this document.
+**Status:** **signed off by the owner 2026-08-13** — with this document's own recommendation on claims **overruled**: `resume` reinstates the checkpoint *and* its lineage's claims, in one transaction (§7 "Claims"). Ready to implement; no code ships with this document.
 **Issue:** #232 (F-28), terminal member of the F-25 → F-26 → F-27 → F-28 cascade.
 **Related:** [TDD lifecycle](2026-08-11-tdd-lifecycle-design.md) (#141), [claim and remedy contracts](2026-08-11-claim-and-remedy-contracts.md) §3a, [budget authorization](2026-08-13-budget-authorization-design.md) (#230 part 2 — the wedge is expensive, and that is its problem)
 
@@ -74,7 +74,7 @@ spec-runner tdd resume TASK-101 \
 
 **What it does:** reinstates the task's confirmed red as its standing evidence
 (status `superseded`/`abandoned` → `active`) **together with the claims of that
-same lineage, in one transaction** (see §7), and records the decision.
+same lineage, in one transaction** (§7 "Claims"), and records the decision.
 
 **What it refuses:** everything else. The command is admissible only when
 
@@ -156,7 +156,7 @@ a wedge) would refuse tomorrow. Deliberate, and small enough to ship with §4.
 **Execution path:** variant **(a)** — reuse the existing path, introduce no
 skip of the implementation pass.
 
-**Claims: the recommendation was wrong, and is overruled.** This document
+**Claims — the recommendation was wrong, and is overruled.** This document
 argued that a claim protects a red only while the implementation is being
 written, so a resume need not reinstate it. The owner's counter-example is the
 pilot itself, and it is decisive:
