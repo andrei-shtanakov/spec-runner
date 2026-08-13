@@ -65,6 +65,45 @@ def _isolate_gate_registry():
     REGISTRY._gates.update(saved)
 
 
+#: CLI names that mean a real, paid agent. A test that reaches one of these is
+#: spending money; a test that points `claude_command` at a script under
+#: `tmp_path` is not, and neither is one that stubs the seam.
+PAID_AGENT_COMMANDS = frozenset(
+    {"claude", "claude-code", "codex", "opencode", "pi", "ollama", "llama-cli", "qwen", "copilot"}
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_agent_calls(monkeypatch):
+    """Fail a test that would invoke a real agent, instead of billing for it.
+
+    Written after this suite spent $0.55: a new test drove the RED phase with
+    the default `claude_command`, the checkpoint it planted turned out not to
+    be reusable, and the phase did exactly what it is supposed to do — it
+    called `claude`. Nothing was wrong with the product; the test was missing
+    one `monkeypatch.setattr`, and the only signal was a minute of silence.
+
+    The guard sits on the seam every paid call goes through, and it fires only
+    on a **bare known-agent name**: a fake script (an absolute path under
+    `tmp_path`) runs as before, and a test that stubs `_run_agent` itself
+    replaces this patch and never sees it.
+    """
+    from spec_runner import tdd
+
+    def _refuse(config, prompt, **kwargs):
+        cmd = getattr(config, "claude_command", "")
+        if cmd in PAID_AGENT_COMMANDS:
+            raise AssertionError(
+                f"this test would call the real agent ({cmd!r}) and be billed for it. "
+                "Stub `spec_runner.tdd._run_agent`, or point `claude_command` at a fake "
+                "script under tmp_path."
+            )
+        return _real_run_agent(config, prompt, **kwargs)
+
+    _real_run_agent = tdd._run_agent
+    monkeypatch.setattr(tdd, "_run_agent", _refuse)
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     """Restrict anyio-marked async tests to the asyncio backend (no trio)."""
