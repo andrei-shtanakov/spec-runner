@@ -12,6 +12,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **One reading of an agent's result, shared by both call sites** (#241).
+  `run_code_review` and `verify_comment` each run one agent and get back the
+  same four signals — text, return code, the CLI's own error flag, a timeout —
+  and disagreed about what they mean. A reviewer that crashed after printing
+  `REVIEW_PASSED` was disbelieved (#156); a verifier that crashed after
+  printing `VERDICT: REFUTED` was **believed, and its refutation posted to the
+  PR as evidence**.
+
+  The discriminator was "did it print anything", which cannot work: a CLI
+  killed mid-answer prints a partial answer and so does one that crashed after
+  its conclusion. `runner.classify_agent_answer` now answers that question once
+  — `answered` / `empty` / `crashed` / `timed_out` — and both sites read it.
+  Consumers still act differently on a verdict; they no longer differ on
+  whether there is one.
+
+  **Behaviour change:** a verification whose process did not finish is now
+  `uncertain` (a human's call) even when it printed a marker, and the evidence
+  says which marker was discarded and why. `is_error` at exit 0 — claude's JSON
+  reports it that way — counts as a crash on both sides.
+
 - **A git error at the RED gate is an instrument error, not a verdict** (#245).
   `_descends_from` returned `returncode == 0`, so exit 1 ("not an ancestor")
   and exit 128 ("bad object / missing repo / unreadable") were the same
