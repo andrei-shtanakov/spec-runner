@@ -12,6 +12,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The lifecycle machine reads the evidence, not the previous row** (#253,
+  F-31). Its contract is *GREEN may not be reached without a confirmed red* —
+  a statement about evidence, decided from the last recorded phase. Those
+  differ constantly: a **reused** red records `red_authoring` and no
+  verification (there is nothing to replay), and a **resumed** one reinstates
+  the checkpoint without replaying either. Both then moved to GREEN
+  legitimately and were refused with the words "GREEN requires a confirmed red"
+  while the red sat in the database.
+
+  Not cosmetic: the refusal is non-fatal, so runs continued and simply stopped
+  recording green phases — and phase history is what `has_reached` reads, the
+  admissibility check #249 had just fixed. A task resumed into a fresher state
+  file would have flunked it.
+
+  "Guard or shrug" is resolved by saying which is which: the **gate** guards
+  (it holds the candidate SHA and refuses to implement without a confirmed
+  red); this machine records. A refusal here now means the record and the gate
+  disagree about one task, so it is logged as an **error** — and still never
+  fails the task, because bookkeeping that can fail work is a second, weaker
+  gate.
+
 - **`integration_pr` is honoured by every command that merges** (#254, F-32).
   The mode's promise is one line — *one branch per run, a single PR at the end,
   the tool never touches main* — and `retry` broke it: `_maybe_start_integration`

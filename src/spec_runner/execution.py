@@ -48,13 +48,16 @@ def _record_phase(state, config, task, phase, detail=None) -> None:
     logged rather than raised, so the machine can never become a second and
     weaker enforcement point beside the gates.
     """
+    import contextlib
+
     from .lifecycle import IllegalTransition, advance
     from .tdd import resolve_namespace
 
-    try:
+    # Suppressed, not silenced: `advance` logged it with the full context
+    # (task, namespace, from, to) before raising. A second line here said the
+    # same thing at a different severity (Copilot, PR #259).
+    with contextlib.suppress(IllegalTransition):
         advance(state, resolve_namespace(config), task.id, phase, detail)
-    except IllegalTransition as exc:
-        logger.warning("Lifecycle transition refused", task_id=task.id, error=str(exc))
 
 
 def _refusal_error_code(refusal: str) -> ErrorCode:
