@@ -5,9 +5,17 @@ code review, testing, linting, and plugin execution around task runs.
 """
 
 import subprocess
+from typing import TypeVar, cast
 
 from .config import ExecutorConfig
-from .gates import GateContext, GateStatus, evaluate_pre_terminal, has_gates, is_registered
+from .gates import (
+    GateContext,
+    GateStatus,
+    evaluate_pre_terminal,
+    has_gates,
+    is_registered,
+    refusal_for,
+)
 from .git_ops import (
     build_scoped_test_command,
     ensure_runtime_gitignore,
@@ -19,6 +27,7 @@ from .git_ops import (
 )
 from .lifecycle import TddPhase
 from .logging import get_logger
+from .phases import Refusal
 from .review import (
     REVIEW_ROLES,
     build_review_prompt,
@@ -32,6 +41,11 @@ from .state import PhaseOutcome, ReviewVerdict
 from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
+
+#: Notes are appended to refusals on the way out. The type must survive that:
+#: a `Refusal` that becomes a plain `str` loses the kind, and the classifier
+#: silently falls back to reading words (#230).
+RefusalT = TypeVar("RefusalT", bound=str)
 
 #: Marks a pre-terminal refusal that is an instrument failure rather than a
 #: verdict on the work. Read by `execution` to classify the attempt.
@@ -59,6 +73,19 @@ __all__ = [
 #: reports work it found in the tree. The point is to prove the work exists and
 #: where to look, not to reproduce `git status`.
 STRANDED_PATHS_SHOWN = 6
+
+
+def _with_note(reason: RefusalT, note: str) -> RefusalT:
+    """Append context to a refusal without losing its kind (#230).
+
+    A `Refusal` knows whether it was the work or the instrument that failed;
+    plain concatenation returns an ordinary `str` and that answer is gone.
+    Ordinary strings are appended to as before.
+    """
+    noted = reason.with_note(note) if isinstance(reason, Refusal) else f"{reason} — {note}"
+    # cast, not a lie: both branches return the same class they were given, and
+    # that is the property the annotation exists to state.
+    return cast(RefusalT, noted)
 
 
 def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
@@ -425,7 +452,7 @@ def _run_pre_terminal_gates(
     config: ExecutorConfig,
     candidate_sha: str | None = None,
     facts: dict[str, object] | None = None,
-) -> str | None:
+) -> Refusal | None:
     """Evaluate registered gates against HEAD. Returns a reason, or None to pass.
 
     An unsatisfied gate does not get its own terminal state: it reuses the
@@ -461,17 +488,18 @@ def _run_pre_terminal_gates(
     )
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
         logger.error("Pre-terminal gate could not answer", task_id=task.id, detail=detail)
-        # The prefix is a contract, not prose: `execution` reads it to record
-        # INFRASTRUCTURE rather than HOOK_FAILURE, which is what makes the run
-        # exit 2 instead of 1.
-        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
+        # The kind travels with the message (#230). The prefix stays because
+        # operators and logs have read it for releases, but nothing classifies
+        # by it any more: `execution` reads `Refusal.kind`, which is what makes
+        # the run exit 2 instead of 1.
+        return refusal_for(outcome.status, f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}")
     logger.warning("Pre-terminal gate unsatisfied — not merging", task_id=task.id, detail=detail)
-    return f"Pre-terminal gate unsatisfied: {detail}"
+    return refusal_for(outcome.status, f"Pre-terminal gate unsatisfied: {detail}")
 
 
 def _claims_intact_before_review(
     task: Task, config: ExecutorConfig, candidate_sha: str
-) -> str | None:
+) -> Refusal | None:
     """Ask the claims gate before paying a reviewer. Returns a reason, or None.
 
     The byte-lock is checked at the merge either way — that check is the
@@ -512,16 +540,16 @@ def _claims_intact_before_review(
     detail = f"tdd.claims: {result.detail}"
     if result.status is GateStatus.INSTRUMENT_ERROR:
         logger.error("Claims could not be checked before review", task_id=task.id, detail=detail)
-        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
+        return refusal_for(result.status, f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}")
     logger.warning(
         "Claim violated before review — not reviewing, not merging",
         task_id=task.id,
         detail=detail,
     )
-    return f"Pre-terminal gate unsatisfied: {detail}"
+    return refusal_for(result.status, f"Pre-terminal gate unsatisfied: {detail}")
 
 
-def _note_stranded_work(task: Task, config: ExecutorConfig, blocked: str) -> str:
+def _note_stranded_work(task: Task, config: ExecutorConfig, blocked: RefusalT) -> RefusalT:
     """Append "an agent left work in the tree" to a block reason (#229).
 
     A gate that refuses does not undo what an agent already wrote. In the pilot
@@ -554,12 +582,12 @@ def _note_stranded_work(task: Task, config: ExecutorConfig, blocked: str) -> str
 
     logger.warning("Blocked task left uncommitted work", task_id=task.id, paths=paths[:20])
     log_progress(f"⚠️  {note}", task.id)
-    return f"{blocked} — {note}"
+    return _with_note(blocked, note)
 
 
 def _commit_blocked_status(
-    task: Task, config: ExecutorConfig, blocked: str, candidate_sha: str
-) -> str:
+    task: Task, config: ExecutorConfig, blocked: RefusalT, candidate_sha: str
+) -> RefusalT:
     """Commit the blocked task's `REVIEW` flip, and say so if that failed (#192).
 
     Without this, a blocked task leaves `tasks.md` dirty with a status flip the
@@ -590,7 +618,7 @@ def _commit_blocked_status(
     # Visible, and part of the failure the caller records: a stop that left the
     # deadlock in place must not read as a clean resumable stop.
     logger.warning("Blocked task left a dirty spec", task_id=task.id, detail=problem)
-    return f"{blocked} — {problem}"
+    return _with_note(blocked, problem)
 
 
 def post_done_hook(

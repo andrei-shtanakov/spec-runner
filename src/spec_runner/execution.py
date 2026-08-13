@@ -13,6 +13,7 @@ from .harness import HarnessBaseline
 from .hooks import post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .logging import get_logger
+from .phases import Refusal
 from .prompt import build_task_prompt, extract_test_failures
 from .runner import (
     agent_env,
@@ -57,14 +58,26 @@ def _record_phase(state, config, task, phase, detail=None) -> None:
 
 
 def _refusal_error_code(refusal: str) -> ErrorCode:
-    """Classify a gate refusal: a verdict on the work, or a broken instrument.
+    """Classify a refusal: a verdict on the work, or a broken instrument.
 
     The two need different answers from whoever reads the run — one says fix
     the code, the other says fix the environment — so they must not collapse
-    into one `HOOK_FAILURE`.
+    into one `HOOK_FAILURE`. It is also an external contract: `run_exit_code`
+    turns `INFRASTRUCTURE` into exit 2.
+
+    A `Refusal` carries its kind, and that is read directly. The prefix match
+    below is the **legacy path**, kept for refusal strings this classifier does
+    not own (a plugin hook, a message from an older state file). It is why #230
+    happened: the RED site phrased its instrument error differently, matched
+    nothing, and a broken replay environment was reported to CI as a failed
+    task. Anything new must return a `Refusal` rather than teach this function
+    another sentence.
     """
     from .hooks import GATE_INSTRUMENT_ERROR_PREFIX
+    from .phases import Refusal
 
+    if isinstance(refusal, Refusal):
+        return refusal.error_code
     if refusal.startswith(GATE_INSTRUMENT_ERROR_PREFIX):
         return ErrorCode.INFRASTRUCTURE
     return ErrorCode.HOOK_FAILURE
@@ -87,7 +100,7 @@ def _headline(reason: str, limit: int = 120) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def _run_red_phase_gate(task, config, state, reporter) -> str | None:
+def _run_red_phase_gate(task, config, state, reporter) -> "Refusal | None":
     """Author and confirm a red, then ask the gate. Returns a refusal, or None.
 
     The two halves are deliberately separate. `run_red_phase` *observes* — it
@@ -96,7 +109,7 @@ def _run_red_phase_gate(task, config, state, reporter) -> str | None:
     is how the review policy and this one would drift apart, which is the whole
     reason #164 exists as its own mechanism.
     """
-    from .gates import GateContext, GateStatus, ensure_red_gate, evaluate_gates
+    from .gates import GateContext, GateStatus, ensure_red_gate, evaluate_gates, refusal_for
     from .tdd import run_red_phase
 
     ensure_red_gate()
@@ -133,9 +146,14 @@ def _run_red_phase_gate(task, config, state, reporter) -> str | None:
     # linter they never configured.
     if red.detail and red.detail not in detail:
         detail = f"{detail} — {red.detail}" if detail else red.detail
+    # The kind comes from the gate's own verdict, not from the sentence built
+    # below (#230). This site used to write "(infrastructure)" into the message
+    # and nothing read it: the classifier matched a different prefix, so a
+    # broken replay environment was recorded as a failed task and CI was told
+    # exit 1 — "the work is bad" — about work nothing had judged.
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
-        return f"RED could not be verified (infrastructure): {detail}"
-    return f"RED not confirmed, refusing to implement: {detail}"
+        return refusal_for(outcome.status, f"RED could not be verified (infrastructure): {detail}")
+    return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 
 def execute_task(

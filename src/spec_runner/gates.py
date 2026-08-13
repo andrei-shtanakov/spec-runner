@@ -31,7 +31,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from .logging import get_logger
-from .phases import check_outcome, review_verdict_to_phase
+from .phases import Refusal, RefusalKind, check_outcome, review_verdict_to_phase
 from .state import PhaseOutcome, ReviewVerdict
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -490,6 +490,24 @@ def ensure_red_gate(registry: GateRegistry | None = None) -> None:
     reg = registry if registry is not None else REGISTRY
     reg.register("tdd.red", "tests", _red_gate)
     reg.register("tdd.claims", "tests", evaluate_claims)
+
+
+def refusal_for(status: GateStatus, message: str) -> Refusal:
+    """Turn a gate's verdict into a typed refusal (#230).
+
+    One place, because there are two call sites that must not drift: the RED
+    gate before the implementation pass and the pre-terminal gates before the
+    merge. They ask the same registry the same way, and until this existed one
+    of them phrased its message differently and was classified as a failed task
+    while the other was classified as a broken instrument — with different exit
+    codes reaching CI for the same underlying event.
+
+    `SATISFIED` is a programming error here: a satisfied gate refuses nothing.
+    """
+    if status is GateStatus.SATISFIED:
+        raise ValueError("a satisfied gate is not a refusal")
+    kind = RefusalKind.INSTRUMENT if status is GateStatus.INSTRUMENT_ERROR else RefusalKind.POLICY
+    return Refusal(message, kind)
 
 
 def is_registered(gate_id: str, phase: str, registry: GateRegistry | None = None) -> bool:
