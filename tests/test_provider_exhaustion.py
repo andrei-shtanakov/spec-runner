@@ -126,6 +126,24 @@ class TestItIsTreatedAsInfrastructure:
         attempts = self._run(tmp_path)
         assert "5:30pm" in (attempts[-1].error or "")
 
+    def test_the_callback_says_the_same_thing_as_the_attempt(self, tmp_path, monkeypatch):
+        """An orchestrator reading the callback and an operator reading
+        `status` must not be told two different things about one failure
+        (Copilot, PR #233). The callback used to carry the bare matched
+        substring, which is the half without the reset time."""
+        from spec_runner import execution
+
+        sent: list = []
+        monkeypatch.setattr(
+            execution,
+            "send_callback",
+            lambda url, tid, status, *a, **k: sent.append(a[1] if len(a) > 1 else None),
+        )
+        attempts = self._run(tmp_path)
+
+        assert sent, "no callback was sent"
+        assert sent[-1] == attempts[-1].error
+
 
 class TestTheFailureLineNamesTheCause:
     @pytest.mark.slow
@@ -252,6 +270,19 @@ class TestStrandedWorkIsReported:
 
     def test_a_clean_tree_reports_nothing(self, tmp_path):
         assert uncommitted_work_paths(self._repo(tmp_path)) == []
+
+    def test_a_repo_with_no_commits_still_reports_its_work(self, tmp_path):
+        """Deliberately unlike `spec_dirty_paths`, which exempts a fresh repo
+        so bootstrap is not blocked (Copilot, PR #233). Nothing is blocked
+        here, and "nothing has ever been committed" is the case where naming
+        the uncommitted work matters most."""
+        root = tmp_path / "fresh"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+        (root / "src.py").write_text("x = 1\n")
+        cfg = ExecutorConfig(project_root=root, state_file=root / ".s.db", logs_dir=root / ".logs")
+
+        assert uncommitted_work_paths(cfg) == ["src.py"]
 
     def test_no_repo_is_not_an_error(self, tmp_path):
         """A report that cannot be produced must not become a failure — this

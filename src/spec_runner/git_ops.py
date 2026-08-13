@@ -54,8 +54,14 @@ def uncommitted_work_paths(config: ExecutorConfig, exclude: list[Path] | None = 
 
     ``exclude`` drops paths the caller is about to commit itself (the status
     flip's `tasks.md`), so the report names only what is genuinely stranded.
-    Returns [] when there is no repo, no commits, or git cannot answer —
-    a report that cannot be produced must not become a failure.
+    Returns [] when there is no repo or git cannot answer — a report that
+    cannot be produced must not become a failure.
+
+    A repo with **no commits yet** does report its untracked files, unlike the
+    fresh-repo exemption in `spec_dirty_paths` (Copilot, PR #233). That
+    exemption exists because a *guard* must not block bootstrap; here nothing
+    is blocked, and a task that stopped in a repo where nothing has ever been
+    committed is the case where naming the uncommitted work matters most.
     """
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         return []

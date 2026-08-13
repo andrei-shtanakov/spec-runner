@@ -374,7 +374,12 @@ def execute_task(
                 task_id,
                 "failed",
                 duration,
-                f"API error: {error_pattern}",
+                # The same sentence the attempt recorded (Copilot, PR #233): an
+                # orchestrator reading the callback and an operator reading
+                # `status` must not be told two different things about one
+                # failure, and the callback is the one that loses the reset
+                # time if it keeps the bare substring.
+                f"API error: {detail}",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
