@@ -10,6 +10,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.31.0] - 2026-08-13
+
+**Minor.** Everything added is additive and everything changed is a diagnosis:
+two new operator commands (`budget authorize`, `tdd resume`), two new state
+tables (`pr_agent_calls`, `budget_authorizations`), optional `costs --json`
+keys for the PR ledger — checked against v2.30.0 by diffing `schemas/`,
+`docs/state-schema.md` and the `add_argument` lines rather than asserted. The
+`--json-result` contract and the state-DB format for existing consumers are
+untouched; the schema change is guarded by spec-runner-vscode having vendored
+the same file first (their #25, byte-identical).
+
+The theme is **money and evidence you can account for**. `review-pr` now has a
+ledger of its own, so a session is no longer free by omission; a ceiling can be
+raised by a named human with a reason instead of being worked around; a task
+whose green survived an infrastructure crash has a door back; and two more
+instrument failures stopped being reported as verdicts about the code.
+
+Four of the six were found by running the tool rather than reading it — and
+one, #249, was found by the owner within the hour of the remedy it fixes
+shipping, in the exact state that remedy was built for.
+
 ### Fixed
 
 - **`tdd resume` was inadmissible in the exact state it was built for** (#249,
@@ -2598,7 +2619,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...HEAD
+[2.31.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...v2.29.0
 [2.28.3]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.2...v2.28.3
