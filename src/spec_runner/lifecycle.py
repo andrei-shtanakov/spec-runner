@@ -88,6 +88,35 @@ def is_terminal(phase: TddPhase) -> bool:
     return phase is TddPhase.DONE
 
 
+def has_reached(state: ExecutorState, namespace: str, task_id: str, phase: TddPhase) -> bool:
+    """Did this task **ever** get to ``phase`` or beyond? (#249)
+
+    The high-water mark, not the current position — and the distinction is not
+    academic here. **Backwards is legal in this machine** (see the module
+    docstring): a retry re-enters `red_authoring`, and a task that reached
+    green and was then retried twice reads as `red_authoring` today.
+
+    `tdd resume` asked `current_phase` whether a green existed and refused the
+    pilot it was built from, because the wedge it cures *is* a task retrying
+    into `red_authoring`. Any question of the form "has this happened" must be
+    asked of the history; only "what is happening now" belongs to
+    `current_phase`.
+    """
+    threshold = _ORDER.index(phase)
+    for entry in state.tdd_phase_history(task_id, namespace):
+        raw = entry["phase"]
+        if raw.startswith("refused:"):
+            # A refusal records what was attempted, not where the task went.
+            continue
+        try:
+            recorded = TddPhase(raw)
+        except ValueError:  # pragma: no cover - a phase from a future version
+            continue
+        if _ORDER.index(recorded) >= threshold:
+            return True
+    return False
+
+
 def current_phase(state: ExecutorState, namespace: str, task_id: str) -> TddPhase:
     """Where the task stands. A task with no history is `READY`."""
     history = state.tdd_phase_history(task_id, namespace)

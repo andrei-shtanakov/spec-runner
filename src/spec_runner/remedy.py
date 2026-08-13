@@ -297,7 +297,7 @@ def resume(
     will refuse until they match, and the caller is expected to say so loudly.
     Nothing here ever accepts new bytes.
     """
-    from .lifecycle import TddPhase, current_phase
+    from .lifecycle import TddPhase, has_reached
 
     namespace = _guard(config, reason)
 
@@ -340,12 +340,11 @@ def resume(
             f"the confirmed red {evidence.checkpoint_id} ({evidence.commit_sha[:12]}) is not an "
             f"ancestor of HEAD ({candidate[:12]}) — this tree was not built on that red"
         )
-    phase = current_phase(state, namespace, task_id)
-    if phase in (TddPhase.READY, TddPhase.RED_AUTHORING, TddPhase.RED_VERIFYING):
+    if not has_reached(state, namespace, task_id, TddPhase.GREEN_IMPLEMENTING):
         raise RemedyError(
-            f"{task_id} is at {phase.value}: there is no established green to resume from. "
-            "`resume` reinstates evidence for work that reached GREEN, not for work that has "
-            "not started"
+            f"{task_id} never reached green in this workstream: there is no established green "
+            "to resume from. `resume` reinstates evidence for work that reached GREEN, not for "
+            "work that has not started"
         )
 
     prior = _existing(state, namespace, task_id, evidence.checkpoint_id, RemedyOperation.RESUME)
@@ -439,16 +438,18 @@ def _refuse_repair_after_green(state: ExecutorState, namespace: str, task_id: st
     task that could not finish. A behaviour change to a shipped command, made
     deliberately — what worked yesterday produced a wedge.
     """
-    from .lifecycle import TddPhase, current_phase
+    from .lifecycle import TddPhase, has_reached
 
-    phase = current_phase(state, namespace, task_id)
-    if phase in (TddPhase.GREEN_VERIFYING, TddPhase.REFACTORING, TddPhase.DONE) or (
-        phase is TddPhase.GREEN_IMPLEMENTING
-    ):
+    # The same correction as `resume`'s, mirrored — and the more dangerous half
+    # (#249). Asked of `current_phase`, this guard went **quiet** exactly where
+    # it is needed: a task that reached green and was then retried reads as
+    # `red_authoring`, so the repair that creates the wedge was still allowed.
+    # That is how the pilot got here in the first place.
+    if has_reached(state, namespace, task_id, TddPhase.GREEN_IMPLEMENTING):
         raise RemedyError(
-            f"{task_id} is at {phase.value}: a red cannot be repaired once the implementation "
-            "exists — the replay would pass, and recording that supersedes the confirmed red "
-            "this task still needs. Use `spec-runner tdd resume` to reinstate it"
+            f"{task_id} has reached green in this workstream: a red cannot be repaired once the "
+            "implementation exists — the replay would pass, and recording that supersedes the "
+            "confirmed red this task still needs. Use `spec-runner tdd resume` to reinstate it"
         )
 
 
