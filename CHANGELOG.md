@@ -12,6 +12,23 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A task start no longer destroys uncommitted work** (#231). The branch stage
+  begins every task with `git checkout -- .` and `git clean -fd`, so one task's
+  leftovers cannot contaminate the next one's tests — silently and
+  irreversibly. In the pilot that deleted a review agent's stranded fixes (two
+  modified files, four new fixtures, suite green, later accepted via `tdd
+  repair`); only a byte-exact snapshot taken by hand recovered them. Whatever
+  the tree carries is now stashed first, under a label naming the task
+  (`spec-runner rescue: TASK-101 at <time>`), and announced with the way back.
+  If the stash **fails**, the task refuses to start rather than clean:
+  destroying work is never the fallback for failing to save it.
+
+  Worth knowing: the loss was reported as a consequence of the TDD
+  claim-violation refusal, but the wipe happens before any gate is consulted —
+  it was every task start, on any repo with git automation on. Runtime state
+  (the live state DB, logs) is excluded, and a clean tree still creates no
+  stash, so nothing changes for a run that starts from a committed tree.
+
 - **A provider session limit is retryable infrastructure again** (#229). The
   wordings CLIs actually print for exhaustion — `You've hit your session limit
   · resets 5:30pm`, `Claude usage limit reached. Your limit will reset at 3pm`,

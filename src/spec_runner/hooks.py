@@ -55,6 +55,77 @@ __all__ = [
 ]
 
 
+#: How many paths to name before saying "and N more", wherever the harness
+#: reports work it found in the tree. The point is to prove the work exists and
+#: where to look, not to reproduce `git status`.
+STRANDED_PATHS_SHOWN = 6
+
+
+def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
+    """Preserve whatever the tree carries before the branch stage wipes it (#231).
+
+    The branch stage starts every task by reverting tracked files and deleting
+    untracked ones (`git checkout -- .` + `git clean -fd`), so that one task's
+    leftovers cannot contaminate the next one's tests. Reasonable — except it
+    was doing it **silently and irreversibly**. In the pilot a review agent's
+    fixes (two modified files, four new fixtures, suite 252/0 green, later
+    accepted by `tdd repair`) were destroyed by the next `retry`, and only a
+    byte-exact snapshot taken by hand beforehand got them back.
+
+    Note what this is *not*: the loss was blamed on the claim-violation
+    refusal, but the wipe happens before any gate is consulted — it is every
+    task start, on any repo with git automation on, whatever the tree holds.
+
+    Returns ``(ok, note)``. ``ok=False`` means the bytes could **not** be
+    preserved, and the caller must then refuse to start rather than clean:
+    destroying work is never the fallback for failing to save it.
+    """
+    from datetime import datetime
+
+    from .git_ops import WorktreeStatusError, uncommitted_work_paths
+    from .runner import log_progress
+
+    try:
+        # strict: an unreadable `git status` must not arrive here as "clean"
+        # and license the cleanup (Copilot, PR #234). The helper's own callers
+        # may fail open — this one is the reason the helper exists.
+        paths = uncommitted_work_paths(config, strict=True)
+    except WorktreeStatusError as exc:
+        detail = f"could not read the working tree before cleaning it: {exc}"
+        logger.error("Refusing to start: the tree could not be read", task_id=task.id)
+        log_progress(f"⛔ {detail} — not starting, nothing was touched", task.id)
+        return False, detail
+    if not paths:
+        return True, ""  # the ordinary case: nothing to rescue, nothing to say
+
+    label = f"spec-runner rescue: {task.id} at {datetime.now().isoformat(timespec='seconds')}"
+    stash = subprocess.run(
+        ["git", "stash", "push", "--include-untracked", "-m", label, "--", *paths],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if stash.returncode != 0:
+        detail = (
+            f"could not preserve {len(paths)} uncommitted path(s) before cleaning the tree "
+            f"({', '.join(paths[:STRANDED_PATHS_SHOWN])}): "
+            f"{stash.stderr.strip()[:200] or 'git stash failed'}"
+        )
+        logger.error("Refusing to start: uncommitted work cannot be saved", task_id=task.id)
+        log_progress(f"⛔ {detail} — not starting, your changes are untouched", task.id)
+        return False, detail
+
+    note = (
+        f"stashed {len(paths)} uncommitted path(s) before starting "
+        f"({', '.join(paths[:STRANDED_PATHS_SHOWN])}"
+        f"{f', and {len(paths) - STRANDED_PATHS_SHOWN} more' if len(paths) > STRANDED_PATHS_SHOWN else ''})"
+        f" as “{label}” — recover with `git stash list` / `git stash pop`"
+    )
+    logger.warning("Rescued uncommitted work before the branch stage", task_id=task.id, paths=paths)
+    log_progress(f"📦 {note}", task.id)
+    return True, note
+
+
 def pre_start_hook(
     task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None
 ) -> bool:
@@ -137,6 +208,16 @@ def pre_start_hook(
                 # TASK-000 typically does git init, first commit will be on main
                 logger.warning("No commits yet, skipping branch creation")
                 return True
+
+            # Nothing below this line may destroy uncommitted work (#231): the
+            # two cleanup commands and the checkout that precedes them are what
+            # deleted a review agent's stranded fixes in the pilot. Save first,
+            # and if saving fails, stop instead of cleaning.
+            rescued, rescue_detail = rescue_uncommitted(task, config)
+            if not rescued:
+                if reporter:
+                    reporter.record_for("branch", PhaseOutcome.ERROR, rescue_detail)
+                return False
 
             # Switch to main
             main_branch = get_main_branch(config)
@@ -438,11 +519,6 @@ def _claims_intact_before_review(
         detail=detail,
     )
     return f"Pre-terminal gate unsatisfied: {detail}"
-
-
-#: How many stranded paths to name before saying "and N more". The point is to
-#: prove the work exists and where to look, not to reproduce `git status`.
-STRANDED_PATHS_SHOWN = 6
 
 
 def _note_stranded_work(task: Task, config: ExecutorConfig, blocked: str) -> str:

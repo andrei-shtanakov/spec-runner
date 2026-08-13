@@ -485,6 +485,13 @@ a non-positive `max_cost_usd` — `0` or negative — disables the limit outrigh
 2. **Task branches**: Creates `task/TASK-001-short-name` branches for each task
 3. **Auto-merge**: Merges task branch to main after completion
 
+Each task starts from a clean tree: the branch stage reverts tracked changes and
+removes untracked files so one task's leftovers cannot contaminate the next
+one's tests. Anything it finds is **stashed first**, labelled
+`spec-runner rescue: <TASK-ID> at <time>` — recover it with `git stash list` /
+`git stash pop`. If the stash cannot be taken, the task refuses to start rather
+than clean. A tree that is already clean creates no stash.
+
 ### Supported CLIs
 
 | CLI | Auto-detected | Example template |

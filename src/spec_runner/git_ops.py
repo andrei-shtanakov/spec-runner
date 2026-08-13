@@ -42,7 +42,19 @@ def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
     ]
 
 
-def uncommitted_work_paths(config: ExecutorConfig, exclude: list[Path] | None = None) -> list[str]:
+class WorktreeStatusError(RuntimeError):
+    """`git status` could not be read (index lock, permissions, broken repo).
+
+    Raised only for `strict=True` callers. A *report* may shrug and say nothing
+    (#229); a caller that is about to **destroy** what it did not manage to
+    read must not (Copilot, PR #234): "I could not tell" and "there is nothing
+    there" are the same empty list and opposite instructions.
+    """
+
+
+def uncommitted_work_paths(
+    config: ExecutorConfig, exclude: list[Path] | None = None, *, strict: bool = False
+) -> list[str]:
     """Project files with uncommitted changes, runtime state excluded (#229).
 
     Not a guard — a *report*. When a task stops at a gate, whatever an agent
@@ -62,11 +74,22 @@ def uncommitted_work_paths(config: ExecutorConfig, exclude: list[Path] | None = 
     exemption exists because a *guard* must not block bootstrap; here nothing
     is blocked, and a task that stopped in a repo where nothing has ever been
     committed is the case where naming the uncommitted work matters most.
+
+    ``strict`` raises `WorktreeStatusError` instead of returning [] when git
+    cannot answer. Reporting may fail open; a caller about to destroy the tree
+    may not, or an unreadable `git status` silently becomes "clean" and the
+    cleanup proceeds over work nobody managed to read (Copilot, PR #234).
+    Absence of a repo is still not an error under ``strict``: there is then no
+    git command that could destroy anything.
     """
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         return []
     status = _git(config, "status", "--porcelain")
     if status.returncode != 0:
+        if strict:
+            raise WorktreeStatusError(
+                f"git status failed: {status.stderr.strip()[:200] or f'exit {status.returncode}'}"
+            )
         return []
     skip: set[str] = set()
     for p in [*runtime_state_paths(config), *(exclude or [])]:
