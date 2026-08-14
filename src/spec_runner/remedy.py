@@ -175,12 +175,22 @@ def repair(
             if prior.new_checkpoint_id
             else None
         )
+        outcome = lineage.outcome if lineage else None
         return RemedyResult(
             RemedyOperation.REPAIR,
             checkpoint_id,
             new_checkpoint_id=prior.new_checkpoint_id,
-            outcome=lineage.outcome if lineage else None,
+            outcome=outcome,
             already_applied=True,
+            note=(
+                None
+                if outcome is RedOutcome.EXPECTED_FAIL
+                else (
+                    "that lineage was opened by a version that superseded the standing red "
+                    "before replaying, so this task has no confirmed red and stays gated "
+                    "until one is established"
+                )
+            ),
         )
 
     active = _swap(state, namespace, task_id, checkpoint_id)
@@ -469,8 +479,13 @@ def _unestablished_repair(
       leave the task with no confirmed red at all).
 
     The phase history is still read — for the *advice*, not for the verdict.
-    A test that passes on a tree with a verified green passes because of the
-    green, and `resume` is that operator's door.
+    A task with a verified green has a door this one does not, and pointing at
+    it is the whole of what the history is used for. The note deliberately
+    reports the two things that were **observed** — the replay passed, a
+    verified green exists — and does not say the implementation is why it
+    passed (Copilot, PR #264). Nothing here can tell that apart from an
+    operator who repaired the test into a weaker one, and naming the wrong
+    cause is how the refusal this fixes read as authoritative.
     """
     from .lifecycle import TddPhase, has_reached
 
@@ -478,8 +493,8 @@ def _unestablished_repair(
         state, namespace, task_id, TddPhase.GREEN_VERIFYING
     ):
         note = (
-            "the test passes on the repaired commit, and this task has a verified green — "
-            "the implementation is what makes it pass. Use `spec-runner tdd resume` to "
+            "the test passes on the repaired commit, and this task has a verified green, so a "
+            "repair cannot re-establish a red from here. Use `spec-runner tdd resume` to "
             "reinstate the confirmed red instead"
         )
     elif verification.outcome is RedOutcome.NOT_RED:
@@ -693,10 +708,18 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         return 1
 
     if result.already_applied:
-        print(f"✔️  Already applied — {result.operation.value} on {result.checkpoint_id}")
         # A repeat must reach the same verdict as the first call: an
         # already-applied repair whose lineage is not a confirmed red is still
-        # not a success.
+        # not a success — and must not be *announced* as one either (Copilot,
+        # PR #264). Such lineages can only come from a version that wrote them
+        # before #263, and a ✔️ over an exit code of 2 is the same
+        # tick-then-refuse mismatch this issue is about.
+        unconfirmed = (
+            result.operation is RemedyOperation.REPAIR
+            and result.outcome is not RedOutcome.EXPECTED_FAIL
+        )
+        mark = "⛔" if unconfirmed else "✔️ "
+        print(f"{mark} Already applied — {result.operation.value} on {result.checkpoint_id}")
         if result.operation is RemedyOperation.REPAIR:
             return _repair_exit(result)
         return 0

@@ -225,6 +225,24 @@ class TestARealGreenIsStillRefused:
         assert "tdd resume" not in result.note
         assert "untouched" in result.note
 
+    def test_the_note_reports_what_was_observed_and_not_a_cause(self, tmp_path):
+        """Copilot, PR #264. The code knows two things: the replay passed, and
+        a verified green exists. It does **not** know that the implementation
+        is what makes the test pass — an operator who repaired the test into a
+        weaker one produces the same two observations. Naming the wrong cause
+        with authority is precisely what the refusal this fixes did."""
+        root, cfg, cp = _bed(tmp_path)
+        head = _a_real_green(root, cfg)
+
+        with ExecutorState(cfg) as state:
+            result = repair(cfg, state, "TASK-104", cp.checkpoint_id, head, reason="fix it")
+
+        assert result.note is not None
+        assert "passes on the repaired commit" in result.note
+        assert "verified green" in result.note
+        assert "tdd resume" in result.note
+        assert "makes it pass" not in result.note, "that is an inference, not an observation"
+
     def test_an_attempted_green_is_not_a_verified_one_in_the_advice_either(self, tmp_path):
         """The same distinction the verdict now makes, one level down. An
         operator whose repaired test passes after a *reverted* attempt has no
@@ -280,6 +298,69 @@ class TestTheCommandSaysWhatStillStands:
         assert code == 0
         assert "Repaired: new lineage" in out
         assert "Red re-confirmed" in out
+
+
+@pytest.mark.slow
+class TestALegacyNotRedLineage:
+    """Databases written before #263 hold what this version will never write: a
+    repair record pointing at a lineage that is not a confirmed red. Reading
+    those rows is the whole reason the idempotent path still exists (Copilot,
+    PR #264) — and it must not announce them with a tick over an exit code
+    of 2, which is the same tick-then-refuse mismatch #263 is about."""
+
+    def _legacy_repair(self, cfg: ExecutorConfig, cp: RedCheckpoint, commit: str) -> None:
+        from spec_runner.remedy import RemedyRecord
+
+        lineage = RedCheckpoint(
+            task_id="TASK-104",
+            namespace=resolve_namespace(cfg),
+            commit_sha=commit,
+            baseline_sha=cp.commit_sha,
+            selector=cp.selector,
+            environment_id="unpinned",
+            execution_mode="tdd",
+            config_hash=cp.config_hash,
+            outcome=RedOutcome.NOT_RED,
+            timestamp="2026-08-12T00:00:00",
+        )
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(lineage)
+            state.record_remedy(
+                RemedyRecord(
+                    namespace=resolve_namespace(cfg),
+                    task_id="TASK-104",
+                    checkpoint_id=cp.checkpoint_id,
+                    operation=RemedyOperation.REPAIR,
+                    reason="an older version's repair",
+                    actor="operator@example.com",
+                    timestamp="2026-08-12T00:00:00",
+                    new_checkpoint_id=lineage.checkpoint_id,
+                )
+            )
+
+    def test_the_repeat_does_not_read_as_success(self, tmp_path, capsys):
+        root, cfg, cp = _bed(tmp_path)
+        repaired = _attempted_and_reverted(root, cfg)
+        self._legacy_repair(cfg, cp, repaired)
+
+        code = cmd_tdd(
+            argparse.Namespace(
+                tdd_command="repair",
+                task_id="TASK-104",
+                checkpoint=cp.checkpoint_id,
+                commit=repaired,
+                reason="again",
+                actor=None,
+            ),
+            cfg,
+        )
+        out = capsys.readouterr().out
+
+        assert code == 2
+        assert "✔️" not in out, "a tick over an exit code of 2 reads as a repair that worked"
+        assert "Already applied" in out, "the record is still a fact"
+        assert "did not establish a red" in out
+        assert "stays gated" in out, "and say what that means for the task"
 
 
 @pytest.mark.slow

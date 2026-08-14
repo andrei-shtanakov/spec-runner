@@ -40,7 +40,9 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
   Behaviour change to a shipped command: a repair whose test passes no longer
   records a `not_red` lineage. It exits 2 as before, and now reports that the
-  standing checkpoint still stands.
+  standing checkpoint still stands. Such lineages can still be *read* — a
+  database written by an earlier version holds them — and a repeat over one no
+  longer prints a tick above its exit code of 2.
 
 - **The lifecycle machine reads the evidence, not the previous row** (#253,
   F-31). Its contract is *GREEN may not be reached without a confirmed red* —
