@@ -601,8 +601,16 @@ def _announce_budget_stop(state: ExecutorState, config: ExecutorConfig) -> bool:
     if cause is None or cause[0] != "budget_exceeded":
         return False
     note = authorization_note(state, "run", None, config)
-    print(f"⛔ Budget: {cause[1]}{note}")
-    print("   The work already finished stands; no further paid work will start.")
+    # **stderr**, not stdout (Copilot, PR #279). `run --json-result` stdout is a
+    # pinned interop surface — Maestro parses the whole stream — and measuring
+    # it showed that today it is pure JSON, every human line already going to
+    # stderr through structlog. An operator sentence printed on stdout would
+    # have broken a contract to say something friendly.
+    print(f"⛔ Budget: {cause[1]}{note}", file=sys.stderr)
+    print(
+        "   The work already finished stands; no further paid work will start.",
+        file=sys.stderr,
+    )
     return True
 
 

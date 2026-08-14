@@ -66,7 +66,7 @@ class TestTheAnnouncement:
         with ExecutorState(cfg) as state:
             announced = cli._announce_budget_stop(state, cfg)
 
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert announced is True
         assert "$5.92" in out and "$5.00" in out
 
@@ -81,7 +81,7 @@ class TestTheAnnouncement:
         with ExecutorState(cfg) as state:
             cli._announce_budget_stop(state, cfg)
 
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "already finished stands" in out
         assert "no further paid work" in out
 
@@ -104,7 +104,7 @@ class TestTheAnnouncement:
             )
             cli._announce_budget_stop(state, cfg)
 
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "authorization #1" in out
         assert "operator@example.com" in out
         assert "reserved for review" in out
@@ -120,7 +120,7 @@ class TestTheAnnouncement:
             announced = cli._announce_budget_stop(state, cfg)
 
         assert announced is False
-        assert capsys.readouterr().out == ""
+        assert capsys.readouterr().err == ""
 
     def test_it_says_nothing_about_a_different_kind_of_stop(self, tmp_path, capsys):
         """`max_consecutive_failures` is not a budget event, and a budget line
@@ -135,7 +135,7 @@ class TestTheAnnouncement:
             announced = cli._announce_budget_stop(state, cfg)
 
         assert announced is False
-        assert capsys.readouterr().out == ""
+        assert capsys.readouterr().err == ""
 
 
 class TestBothPathsRead:
@@ -194,7 +194,7 @@ class TestBothPathsRead:
 
         cli.cmd_retry(argparse.Namespace(task_id="TASK-101", fresh=False), cfg)
 
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "Budget:" in out
         assert "$5.92" in out
 
@@ -209,7 +209,7 @@ class TestBothPathsRead:
         with pytest.raises(SystemExit):
             cli.cmd_run(self._args(), cfg)
 
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "Budget:" in out
         assert "$5.92" in out
 
@@ -247,6 +247,34 @@ class TestBothPathsRead:
 
         assert ("TASK-101", "done") in recorded
         assert ("TASK-101", "blocked") not in recorded
+
+    def test_json_result_stdout_stays_parseable(self, tmp_path, capsys, monkeypatch):
+        """The announcement is an operator sentence, and `run --json-result`
+        stdout is a **pinned interop surface** — Maestro parses the whole
+        stream (`docs/state-schema.md` §3). Measured before this was written:
+        that stdout is pure JSON today, every human line already going to
+        stderr. A friendly print there would have broken a contract (Copilot,
+        PR #279).
+
+        Pinned as the invariant rather than as "this one function uses
+        stderr", so the next line someone adds is caught too.
+        """
+        import json
+
+        from spec_runner import cli
+
+        cfg = _cfg(tmp_path)
+        self._tasks(cfg)
+        _spend(cfg, 3.16)
+        self._stub(monkeypatch, 2.76)
+
+        with pytest.raises(SystemExit):
+            cli.cmd_run(self._args(json_result=True), cfg)
+
+        captured = capsys.readouterr()
+        assert "Budget:" in captured.err, "the operator still hears about it"
+        payload = json.loads(captured.out)
+        assert payload["task_id"] == "TASK-101"
 
     def test_the_next_run_is_still_refused_before_it_starts(self, tmp_path, capsys, monkeypatch):
         """The other half of "further paid work stops": the announcement is
