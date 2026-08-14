@@ -96,14 +96,35 @@ def authorize(
     namespace = resolve_namespace(config)
     written: list[dict] = []
 
+    # **Every scope is checked before any is written** (#289). Both checks are
+    # pure reads, so hoisting them costs nothing — and not hoisting them cost
+    # an operator a half-applied decision: raising both ceilings with a single
+    # `--after` wrote the task row, then refused the run row as stale, exited 1
+    # and said nothing about the half that landed. Their next attempt, with the
+    # corrected id for the run scope, would then be refused on the task scope
+    # as stale against the row that failure had just written.
+    #
+    # One invocation, one decision: it applies fully or not at all.
+    task_previous: float | None = None
     if task_budget_usd is not None:
         assert task_id is not None
         current = state.latest_budget_authorization(
             TASK_SCOPE, task_id=task_id, namespace=namespace
         )
         _check_cas(current, after, TASK_SCOPE)
-        previous, _run = effective_limits(config, state, task_id)
-        _check_monotonic(previous, task_budget_usd, TASK_SCOPE)
+        task_previous, _run = effective_limits(config, state, task_id)
+        _check_monotonic(task_previous, task_budget_usd, TASK_SCOPE)
+
+    run_previous: float | None = None
+    if run_budget_usd is not None:
+        current_run = state.latest_budget_authorization(RUN_SCOPE)
+        _check_cas(current_run, after, RUN_SCOPE)
+        _task, run_previous = effective_limits(config, state, None)
+        _check_monotonic(run_previous, run_budget_usd, RUN_SCOPE)
+
+    if task_budget_usd is not None:
+        assert task_id is not None
+        previous = task_previous
         written.append(
             _write(
                 state,
@@ -121,10 +142,7 @@ def authorize(
         )
 
     if run_budget_usd is not None:
-        current = state.latest_budget_authorization(RUN_SCOPE)
-        _check_cas(current, after, RUN_SCOPE)
-        _task, previous = effective_limits(config, state, None)
-        _check_monotonic(previous, run_budget_usd, RUN_SCOPE)
+        previous = run_previous
         written.append(
             _write(
                 state,
