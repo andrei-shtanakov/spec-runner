@@ -206,7 +206,7 @@ def check_before_call(
             TASK_BUDGET,
             f"Task budget reached before the {provenance} call "
             f"(${task_spent:.2f} >= ${task_limit:.2f}) — not starting it"
-            + _authorization_note(state, "task", task_id, config, provenance),
+            + authorization_note(state, "task", task_id, config, provenance),
         )
 
     if run_limit is not None:
@@ -216,7 +216,7 @@ def check_before_call(
                 RUN_BUDGET,
                 f"Run budget reached before the {provenance} call "
                 f"(${run_spent:.2f} >= ${run_limit:.2f}) — not starting it"
-                + _authorization_note(state, "run", None, config, provenance),
+                + authorization_note(state, "run", None, config, provenance),
             )
 
     # Fail closed on an unprovable remainder. Checked *after* the caps so an
@@ -253,7 +253,7 @@ def _unpriced_in_scope(config: ExecutorConfig, state: ExecutorState, task_id: st
     return state.unmeasured_calls(task_id)
 
 
-def _authorization_note(
+def authorization_note(
     config_scope_state: ExecutorState,
     scope: str,
     task_id: str | None,
@@ -261,6 +261,11 @@ def _authorization_note(
     provenance: str = "",
 ) -> str:
     """What an operator needs in order to raise this ceiling (#230 §7.3).
+
+    Public because the *report* of an overshoot needs the same sentence as the
+    *refusal* of a call (#255): which authorization is in force, who set it,
+    when, and what part of it is reserved. Two compositions of that sentence
+    would be two places to drift.
 
     A refusal that names only the number sends someone to `git log` to find the
     authorization id before they can pass `--after`, and an operator who cannot
@@ -302,5 +307,6 @@ __all__ = [
     "BudgetRefused",
     "budget_is_active",
     "check_before_call",
+    "authorization_note",
     "effective_limits",
 ]

@@ -12,6 +12,28 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **An overshoot is said out loud, on both paths** (#255 part 1). A task that
+  completed $0.92 over the ceiling said **nothing** through `retry` — the
+  pilot's own completing operation — and through `run` produced a log line
+  about the loop stopping, which is a different fact. `run` asked
+  `should_stop()` after every task; `cmd_retry` never asked.
+
+  One announcer now, used by both run loops and by `retry`, reading the
+  effective ceiling (#256) and quoting the same authorization sentence the
+  refusals use (#230 §7.3) — id, actor, timestamp, and the part reserved for a
+  stage (#267). So the number in the report is the number that stopped the
+  work, and the id in it is the one to pass to `--after`.
+
+  What it does **not** do: change any outcome. A task that finished, finished
+  (#219) — the line says so, because an operator reading a budget stop must
+  not think their work was rolled back. And the premise from the report is
+  corrected in passing: the pre-call guard was never absent on the success
+  path; it runs at all three paid sites, and $0.92 over is the documented
+  guarantee working. What differed was `retry` versus `run`.
+
+  Pre-stage estimation is deliberately not introduced: it would be an unproven
+  heuristic in the shape of a financial guarantee.
+
 - **One classifier for both review paths, and markers are lines** (#270). The
   sequential path tried `REVIEW_PASSED` → `REVIEW_FIXED` → `REVIEW_FAILED`; the
   per-role path tried them in the opposite order. A reviewer that stated two of
