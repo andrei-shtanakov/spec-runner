@@ -2098,6 +2098,13 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_auth.add_argument(
         "--run-limit", type=float, help="New absolute run ceiling in USD (raises only)"
     )
+    budget_auth.add_argument(
+        "--reserve",
+        metavar="STAGE=USD",
+        help="Withhold this much from every call that is not that stage's "
+        "(e.g. review=2.00) — review is the last paid call, so it is the one "
+        "the remaining budget otherwise starves",
+    )
     budget_auth.add_argument("--reason", required=True, help="Why — recorded, and not optional")
     budget_auth.add_argument("--actor", help="Who (default: git user.email)")
     budget_auth.add_argument(

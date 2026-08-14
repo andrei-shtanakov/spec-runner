@@ -94,8 +94,41 @@ def budget_is_active(config: ExecutorConfig) -> bool:
     return config.task_budget_usd is not None or config.budget_usd is not None
 
 
+#: The provenance prefix of the calls a `review` reserve is *for*. Review runs
+#: as `review` and, per role, `review:<role>` — one prefix covers both, and the
+#: reserve must cover both or a five-role review would spend past it.
+REVIEW_PROVENANCE = "review"
+
+
+def is_reserved_for(stage: str, provenance: str) -> bool:
+    """Whether ``provenance`` is a call the reserve on ``stage`` is meant for.
+
+    Prefix-matched on purpose (#267): `review` and `review:security` are the
+    same stage's calls, and a reserve that covered only the bare name would be
+    spent by the first role.
+    """
+    return provenance == stage or provenance.startswith(f"{stage}:")
+
+
+def _reserve_for(row: dict | None, provenance: str) -> float:
+    """How much of an authorization's ceiling is withheld from this call.
+
+    Zero for the stage the reserve is for — that is what it was set aside for —
+    and zero when there is no reserve at all, which is every authorization
+    written before #267.
+    """
+    if not row or not row.get("reserve_usd") or not row.get("reserve_stage"):
+        return 0.0
+    if is_reserved_for(str(row["reserve_stage"]), provenance):
+        return 0.0
+    return float(row["reserve_usd"])
+
+
 def effective_limits(
-    config: ExecutorConfig, state: ExecutorState, task_id: str | None = None
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task_id: str | None = None,
+    provenance: str | None = None,
 ) -> tuple[float | None, float | None]:
     """`(task_limit, run_limit)` after operator authorizations (#230 part 2).
 
@@ -109,6 +142,11 @@ def effective_limits(
     Scoping is the sign-off's: a task ceiling is `(domain, namespace, task)`, a
     run ceiling belongs to the whole budget domain and carries no namespace —
     `budget_usd` bounds the DB, and a per-namespace "global" cap is not global.
+
+    ``provenance`` names the call the limits are being resolved *for*, and only
+    a reserve makes it matter (#267). Without it the answer is the ceiling as
+    authorised — which is what every reader that asks a question about the run
+    as a whole (the preflight, `costs`) wants, and what `None` means here.
     """
     task_limit = config.task_budget_usd
     run_limit = config.budget_usd
@@ -120,9 +158,13 @@ def effective_limits(
         )
         if row is not None:
             task_limit = float(row["new_limit_usd"])
+            if provenance is not None:
+                task_limit -= _reserve_for(row, provenance)
     run_row = state.latest_budget_authorization("run")
     if run_row is not None:
         run_limit = float(run_row["new_limit_usd"])
+        if provenance is not None:
+            run_limit -= _reserve_for(run_row, provenance)
     return task_limit, run_limit
 
 
@@ -157,14 +199,14 @@ def check_before_call(
             f"— not starting the {provenance} call",
         )
 
-    task_limit, run_limit = effective_limits(config, state, task_id)
+    task_limit, run_limit = effective_limits(config, state, task_id, provenance)
     task_spent = state.task_cost(task_id) + pending_cost
     if task_limit is not None and task_spent >= task_limit:
         return BudgetRefusal(
             TASK_BUDGET,
             f"Task budget reached before the {provenance} call "
             f"(${task_spent:.2f} >= ${task_limit:.2f}) — not starting it"
-            + _authorization_note(state, "task", task_id, config),
+            + _authorization_note(state, "task", task_id, config, provenance),
         )
 
     if run_limit is not None:
@@ -174,7 +216,7 @@ def check_before_call(
                 RUN_BUDGET,
                 f"Run budget reached before the {provenance} call "
                 f"(${run_spent:.2f} >= ${run_limit:.2f}) — not starting it"
-                + _authorization_note(state, "run", None, config),
+                + _authorization_note(state, "run", None, config, provenance),
             )
 
     # Fail closed on an unprovable remainder. Checked *after* the caps so an
@@ -212,7 +254,11 @@ def _unpriced_in_scope(config: ExecutorConfig, state: ExecutorState, task_id: st
 
 
 def _authorization_note(
-    config_scope_state: ExecutorState, scope: str, task_id: str | None, config: ExecutorConfig
+    config_scope_state: ExecutorState,
+    scope: str,
+    task_id: str | None,
+    config: ExecutorConfig,
+    provenance: str = "",
 ) -> str:
     """What an operator needs in order to raise this ceiling (#230 §7.3).
 
@@ -232,11 +278,19 @@ def _authorization_note(
         row = config_scope_state.latest_budget_authorization("run")
     if row is None:
         return ". The limit is the configured one; `spec-runner budget authorize` can raise it"
-    return (
+    note = (
         f". The limit is authorization #{row['id']} (${float(row['new_limit_usd']):.2f}, "
-        f"{row['actor']}, {row['timestamp']}); raise it with "
-        f"`spec-runner budget authorize --after {row['id']}`"
+        f"{row['actor']}, {row['timestamp']})"
     )
+    withheld = _reserve_for(row, provenance)
+    if withheld:
+        # Without this the arithmetic looks wrong: the operator sees a ceiling
+        # they raised and a refusal below it, and nothing says why (#267).
+        note += (
+            f", of which ${withheld:.2f} is reserved for {row['reserve_stage']} and is not "
+            "available to this call"
+        )
+    return note + f"; raise it with `spec-runner budget authorize --after {row['id']}`"
 
 
 __all__ = [
