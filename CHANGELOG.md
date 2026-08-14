@@ -10,6 +10,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-08-14
+
+**Patch.** One defect fix and nothing else. No flag, key, schema or exit code
+moves — checked by diffing `schemas/`, `docs/state-schema.md` and the
+`add_argument` lines against v2.32.0. What does change is that a run **refuses**
+in one state it used to proceed in, and the state is one where proceeding
+destroyed the run ledger without saying so. Shipped on its own, ahead of the
+larger work in flight, because a data-loss guard should not wait for it.
+
 ### Fixed
 
 - **A git-tracked state database is refused instead of destroyed** (#273, found
@@ -2856,7 +2865,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...HEAD
+[2.32.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...v2.32.1
 [2.32.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...v2.30.0
