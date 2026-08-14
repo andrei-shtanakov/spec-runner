@@ -101,17 +101,26 @@ def append_output(
     *,
     returncode: int | None = None,
     cost_usd: float | None = None,
+    note: str | None = None,
 ) -> None:
     """Append what the call answered to the file its prompt went to.
 
     The review path has always kept the two together, and they belong
     together: a prompt without its answer says what was asked and not what
     came back. Same bound, same silence-on-failure rule.
+
+    `note` states why a call that *ran* has nothing to show — a timeout is the
+    case that exists. Without it the artefact of a timed-out call is an empty
+    output block, which is true and unreadable: the call ran, it was billed for
+    as long as it ran, and the file should say that rather than leave it to be
+    inferred from a synthetic return code.
     """
     if path is None:
         return
     try:
         with path.open("a") as handle:
+            if note:
+                handle.write(f"\n=== NO RESULT: {bound(note)} ===\n")
             handle.write(f"\n=== OUTPUT ===\n{bound(output)}\n")
             if stderr.strip():
                 handle.write(f"\n=== STDERR ===\n{bound(stderr)}\n")
@@ -125,6 +134,34 @@ def append_output(
                 handle.write(f"=== COST: {shown} ===\n")
     except OSError as exc:
         logger.warning("Could not log the call's output", path=str(path), error=str(exc))
+
+
+def append_not_started(path: Path | None, reason: str) -> None:
+    """Close an artefact whose call never launched, saying so (#296).
+
+    The prompt is written before the call, so a guard that refuses afterwards
+    used to leave a file holding a complete prompt and nothing else — the same
+    bytes a call that started and died leaves behind. An operator listing the
+    log directory saw a review prompt for a review that was never bought, and
+    the artefact could not tell them which of the two had happened.
+
+    Deliberately **not** an `=== OUTPUT ===` block with an empty body: the
+    per-role path's own comment had it right — "a log claiming an answer would
+    say money was spent that was not". This claims the opposite, explicitly,
+    and keeps the prompt, which is what an operator reads when deciding whether
+    to raise the ceiling that refused it.
+
+    With this, an artefact that ends without a terminal section means exactly
+    one thing: the call launched and the runner died before it could record the
+    result.
+    """
+    if path is None:
+        return
+    try:
+        with path.open("a") as handle:
+            handle.write(f"\n=== NOT STARTED: {bound(reason)} ===\n")
+    except OSError as exc:
+        logger.warning("Could not log the refusal", path=str(path), error=str(exc))
 
 
 def log_prompt(config: ExecutorConfig, task_id: str, provenance: str, prompt: str) -> Path | None:
@@ -161,4 +198,11 @@ def log_prompt(config: ExecutorConfig, task_id: str, provenance: str, prompt: st
         return None
 
 
-__all__ = ["KEEP_EACH_END", "append_output", "bound", "log_prompt", "provenance_slug"]
+__all__ = [
+    "KEEP_EACH_END",
+    "append_not_started",
+    "append_output",
+    "bound",
+    "log_prompt",
+    "provenance_slug",
+]

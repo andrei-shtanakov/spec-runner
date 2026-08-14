@@ -10,6 +10,54 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+**Patch.** Observability only: no public surface moves, no schema changes.
+
+- **Every prompt artefact now ends by saying what became of the call** (#295 and
+  #296, both found in the artefacts of a real run rather than by reading code).
+
+  Two bugs wearing one shape. The RED path called `log_prompt` and never
+  `append_output`, so the artefact held the question and not the answer — on the
+  call whose output decides which file is frozen for the rest of the task, and
+  which was the most expensive of the run that found it ($2.69, 27 520 output
+  tokens). Its cause was a lossy seam, not a forgotten line: `AgentCall` carried
+  the text and the cost and dropped the process's stderr and return code, so no
+  call site could have appended them. Both now travel with the call.
+
+  And a review refused by the budget guard left a file holding a complete prompt
+  and nothing else — the prompt is written before the guard runs, so the artefact
+  was byte-shape identical to one from a call that launched and died. It now ends
+  with `=== NOT STARTED: <reason> ===`, quoting the ceiling that refused it. The
+  prompt is deliberately kept: it is what an operator reads when deciding whether
+  to raise that ceiling. Deleting the artefact would have removed the ambiguity
+  and that along with it.
+
+  Together they buy one invariant, which is the point: **an artefact that ends
+  without a terminal section means the runner died mid-call**, and nothing else.
+
+  Holding that claim up took a third fix (Copilot, PR #298). A call that never
+  *returns* left the artefact open too, and measuring found it at four sites,
+  not the one that was pointed at: the RED agent failing to launch or timing
+  out, and either review path failing to launch — where the exception is caught,
+  the verdict becomes `error`, and the runner demonstrably carries on. Those two
+  made the claim false rather than merely incomplete. A launch failure now
+  closes the file with `=== NOT STARTED: … ===` (no subprocess, so no spend, the
+  distinction the ledger draws by writing no row), and a timeout with
+  `=== NO RESULT: timed out after Nm ===` — because an empty output block is
+  true and unreadable.
+
+  Third finding, from reading both review paths side by side: on a **timeout**
+  the single path returned before appending while the per-role path appended. A
+  timed-out call ran, and was billed for as long as it ran. The same
+  two-paths-disagree shape as #270, in the artefact instead of the verdict.
+
+  Why the rehearsal of 2.33.1 did not catch #295: it asserted `=== OUTPUT ===`
+  on the green and review artefacts and, for RED, only that the prompt text was
+  present. It passed vacuously. The new tests drive the real call sites, and the
+  seam test runs a real process — the stubbed tests all still passed with the
+  seam's two fields deleted, which is the same vacuum measured a second time.
+
 ## [2.33.2] - 2026-08-14
 
 **Patch, and not a cosmetic one.** One fix: `budget authorize` no longer

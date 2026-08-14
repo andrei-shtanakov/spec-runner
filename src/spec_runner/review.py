@@ -14,7 +14,7 @@ from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, neutralise_markers, render_template
-from .prompts_log import append_output, log_prompt
+from .prompts_log import append_not_started, append_output, log_prompt
 from .runner import (
     AgentAnswer,
     CliResult,
@@ -544,29 +544,37 @@ def run_code_review(
             task.id,
         )
 
-        call = _run_reviewer(
-            config,
-            task.id,
-            REVIEW_PROVENANCE,
-            prompt,
-            review_cmd,
-            review_model,
-            review_template,
-            pending_cost,
-        )
+        # A reviewer that never launches raises, and the `except Exception`
+        # below catches it — the runner survives and the verdict becomes
+        # `error`, so an artefact left holding the prompt alone is the one
+        # shape the invariant reserves for a runner that died (Copilot, PR
+        # #298). Measured: with the binary missing, that file was open.
+        try:
+            call = _run_reviewer(
+                config,
+                task.id,
+                REVIEW_PROVENANCE,
+                prompt,
+                review_cmd,
+                review_model,
+                review_template,
+                pending_cost,
+            )
+        except OSError as exc:
+            append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
+            raise
         if call.budget_refusal:
             # NOT_RUN, never SKIPPED: `skipped` is what a *policy* decision
             # looks like, and under `review_policy: advisory` the absence of a
             # review must not read as a review that went fine. Nothing was
             # asked, so nothing is known about this code.
+            #
+            # The artefact says so too (#296). The prompt is already on disk —
+            # it is written before the guard runs — and a file holding a
+            # complete review prompt and nothing else is byte-shape identical
+            # to one from a call that launched and died.
+            append_not_started(prompt_log, call.budget_refusal)
             return ReviewVerdict.NOT_RUN, call.budget_refusal, None
-        if call.timed_out:
-            log_progress(
-                "⏰ Code review produced no verdict: timed out after "
-                f"{config.review_timeout_minutes}m",
-                task.id,
-            )
-            return ReviewVerdict.NOT_RUN, "Review timed out", None
 
         output = call.text
         stderr = call.stderr
@@ -575,13 +583,28 @@ def run_code_review(
         # Save the answer beside the prompt it answered — including the two
         # facts that make it readable later: what the process returned, and
         # what the call cost (`unknown` when the CLI reported none, never 0.0).
+        #
+        # Above the timeout check, so a timed-out call leaves a record too: it
+        # ran, and it was billed for as long as it ran. This path used to
+        # return first and write nothing, while the per-role path below wrote
+        # the block — the same two-paths-disagree shape as #270, in the
+        # artefact instead of the verdict.
         append_output(
             prompt_log,
             output,
             stderr,
             returncode=call.returncode,
             cost_usd=call.cost_usd,
+            note=(f"timed out after {config.review_timeout_minutes}m" if call.timed_out else None),
         )
+
+        if call.timed_out:
+            log_progress(
+                "⏰ Code review produced no verdict: timed out after "
+                f"{config.review_timeout_minutes}m",
+                task.id,
+            )
+            return ReviewVerdict.NOT_RUN, "Review timed out", None
 
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
@@ -694,19 +717,26 @@ def _run_single_role_review(
     # own ledger row.
     prompt_log = log_prompt(config, task_id, role_provenance(role), full_prompt)
     try:
-        call = _run_reviewer(
-            config,
-            task_id,
-            role_provenance(role),
-            full_prompt,
-            review_cmd,
-            review_model,
-            review_template,
-            pending_cost,
-        )
+        try:
+            call = _run_reviewer(
+                config,
+                task_id,
+                role_provenance(role),
+                full_prompt,
+                review_cmd,
+                review_model,
+                review_template,
+                pending_cost,
+            )
+        except OSError as exc:
+            append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
+            raise
         if call.budget_refusal:
             # No call was made, so there is no answer to record — and a log
-            # claiming one would say money was spent that was not.
+            # claiming one would say money was spent that was not. What the
+            # artefact does record is that refusal itself (#296): silence left
+            # it indistinguishable from a call that died mid-flight.
+            append_not_started(prompt_log, call.budget_refusal)
             return role, ReviewVerdict.NOT_RUN, call.budget_refusal
         # Beside the prompt it answered, exactly as the single path does
         # (Copilot, PR #287): a role log holding the question and not the
@@ -717,6 +747,7 @@ def _run_single_role_review(
             call.stderr,
             returncode=call.returncode,
             cost_usd=call.cost_usd,
+            note=(f"timed out after {config.review_timeout_minutes}m" if call.timed_out else None),
         )
         if call.timed_out:
             return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
