@@ -10,6 +10,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-08-14
+
+**Patch.** One defect fix and nothing else. No flag, key or schema moves —
+checked by diffing `schemas/`, `docs/state-schema.md` and the `add_argument`
+lines against v2.32.0 rather than asserted.
+
+Exit codes deserve their own sentence, since a guard is being added: every
+existing outcome keeps the code it had, and a **new refusal** is introduced
+that exits 1. It fires only where a run previously exited **0** after emptying
+the state database — so the change of code in that state is the fix, not a side
+effect of it. That is the reasoning for calling this a patch rather than a
+minor; the alternative reading, that any new non-zero exit is a minor, would
+have kept a silent data-loss guard waiting behind the larger work in flight.
+
 ### Fixed
 
 - **A git-tracked state database is refused instead of destroyed** (#273, found
@@ -2856,7 +2870,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...HEAD
+[2.32.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...v2.32.1
 [2.32.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...v2.30.0
