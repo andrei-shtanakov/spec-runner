@@ -162,17 +162,29 @@ class TestItNeverCostsTheTask:
 
     def _read_only_logs(self, cfg: ExecutorConfig) -> None:
         """A real unwritable directory rather than a patched `write_text`: what
-        is under test is the handling of a filesystem that says no."""
+        is under test is the handling of a filesystem that says no.
+
+        Skips when the mode is not enforced, asked as a **probe** rather than
+        as `os.geteuid() == 0` (Copilot, PR #284). Root is one reason a
+        chmod-ed directory stays writable; a container, a mounted filesystem
+        that ignores modes, or an ACL are others, and each would make these
+        tests pass while proving nothing. Asking the condition the test
+        actually depends on covers all of them — and does not need to know
+        which platform it is on.
+        """
         cfg.logs_dir.mkdir(parents=True, exist_ok=True)
         cfg.logs_dir.chmod(0o500)
+        probe = cfg.logs_dir / ".probe"
+        try:
+            probe.write_text("x")
+        except OSError:
+            return  # the mode holds; the test can run
+        probe.unlink()
+        cfg.logs_dir.chmod(0o700)
+        pytest.skip("this filesystem does not enforce a read-only directory")
 
     def test_an_unwritable_log_directory_does_not_fail_the_red(self, tmp_path, monkeypatch):
-        import os
-
         from spec_runner.tdd import RedOutcome
-
-        if os.geteuid() == 0:
-            pytest.skip("root ignores directory permissions")
 
         cfg = _repo(tmp_path)
         _agent(monkeypatch)
@@ -186,12 +198,7 @@ class TestItNeverCostsTheTask:
         assert result.outcome is RedOutcome.EXPECTED_FAIL
 
     def test_the_failure_is_logged_rather_than_swallowed(self, tmp_path, monkeypatch):
-        import os
-
         from spec_runner import tdd
-
-        if os.geteuid() == 0:
-            pytest.skip("root ignores directory permissions")
 
         said: list[tuple[str, str]] = []
 
