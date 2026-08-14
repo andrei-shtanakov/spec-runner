@@ -42,6 +42,7 @@ from .git_ops import (
     finalize_integration_branch,
     make_integration_branch_name,
     spec_dirty_paths,
+    tracked_state_paths,
 )
 from .logging import get_logger
 from .preflight import cmd_preflight
@@ -698,6 +699,44 @@ def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
+def _enforce_untracked_state(config: ExecutorConfig) -> None:
+    """Refuse to run when git is tracking the state database (#273).
+
+    Not a tidiness rule — a data-loss stop, and the loss is silent. Staging
+    untracks the live SQLite file (`git rm --cached`, which is right and exists
+    so runtime state never lands in a task's commit), the task commit removes
+    it from the tree, and the next `git checkout -- .` writes that absence over
+    the open connection. Measured on the published 2.32.0: the database ends as
+    **zero bytes**, the run exits 0 and reports a completed task, and the cost
+    ledger, the budget authorizations, every red checkpoint and every claim are
+    gone with no message.
+
+    Same shape as the dirty-spec guard (#69), including its dormancy: without
+    git automation nothing here touches the tree, so nothing can destroy the
+    file and a read-only project is never stopped. **No override flag.** The
+    dirty-spec guard has one because dirt is sometimes deliberate; there is no
+    state in which running over a tracked ledger is what someone meant, and the
+    fix is two commands the refusal prints.
+    """
+    if not (getattr(config, "auto_commit", False) or getattr(config, "create_git_branch", False)):
+        return
+    tracked = tracked_state_paths(config)
+    if not tracked:
+        return
+
+    logger.error("Refusing to run: the state database is tracked by git", files=tracked)
+    print("⛔ Refusing to run: git is tracking the executor's state database:")
+    for path in tracked:
+        print(f"   {path}")
+    print("   A run would empty it — staging untracks it, and the next branch")
+    print("   switch writes nothing over the open connection. The ledger, the")
+    print("   budget authorizations and every red checkpoint would go with it.")
+    print("   Untrack it first, keeping the file:")
+    print(f"       git rm --cached {' '.join(tracked)}")
+    print("       git commit -m 'stop tracking executor runtime state'")
+    sys.exit(1)
+
+
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
@@ -707,6 +746,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     _enforce_spec_governance(config)
 
     _enforce_clean_spec(args, config)
+    _enforce_untracked_state(config)
 
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
@@ -1318,6 +1358,7 @@ def cmd_retry(args, config: ExecutorConfig):
     # Dirty-spec guard (#69) — retry executes tasks and runs the git
     # automation hooks, so it must not bypass the guard either.
     _enforce_clean_spec(args, config)
+    _enforce_untracked_state(config)
 
     tasks = parse_tasks(config.tasks_file)
 
@@ -1384,6 +1425,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # Dirty-spec guard (#69) — same enforcement as `run`, checked once
     # before the loop starts (mid-run DONE writes dirty tasks.md by design).
     _enforce_clean_spec(args, config)
+    _enforce_untracked_state(config)
 
     # Pre-run validation
     pre_result = validate_all(
