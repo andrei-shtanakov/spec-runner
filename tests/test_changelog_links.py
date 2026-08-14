@@ -154,6 +154,56 @@ class TestDuplicateSectionsAreCaught:
         assert not [p for p in check(Path(__file__).resolve().parent.parent) if "sections" in p]
 
 
+class TestDuplicateEntriesAreCaught:
+    """The failure mode one level down (Copilot, PR #265): not two headings but
+    the same *entry* twice.
+
+    Both times it was written by a script whose first run failed after the
+    insertion, so the re-run appended a near-identical bullet — which is why
+    the check keys on the bolded title rather than the body. Release notes are
+    read by people who count the entries."""
+
+    def _write(self, tmp_path: Path, changelog: str) -> Path:
+        (tmp_path / "pyproject.toml").write_text('[project]\nversion = "2.25.0"\n')
+        (tmp_path / "CHANGELOG.md").write_text(changelog)
+        return tmp_path
+
+    def test_the_same_entry_twice_in_one_version_is_a_problem(self, tmp_path):
+        body = _changelog().replace(
+            "## [Unreleased]",
+            "## [Unreleased]\n\n### Fixed\n\n- **Claims are released** (#260). one\n\n"
+            "- **Claims are released** (#260). one, again with a different word",
+            1,
+        )
+        problems = check(self._write(tmp_path, body))
+        assert any("two entries titled 'Claims are released'" in p for p in problems)
+
+    def test_different_entries_are_fine(self, tmp_path):
+        body = _changelog().replace(
+            "## [Unreleased]",
+            "## [Unreleased]\n\n### Fixed\n\n- **Claims are released** (#260). one\n\n"
+            "- **Repair reads the replay** (#263). two",
+            1,
+        )
+        assert not [p for p in check(self._write(tmp_path, body)) if "entries titled" in p]
+
+    def test_the_same_title_in_different_versions_is_fine(self, tmp_path):
+        """A fix released twice — a backport, a revert-and-reland — is two
+        entries in two sections, and neither is a duplicate of the other."""
+        body = (
+            _changelog()
+            .replace("## [2.25.0] - 2026-08-11\n- something", "## [2.25.0]\n\n- **X** (#1). a")
+            .replace(
+                "## [2.24.0] - 2026-08-10\n- something older", "## [2.24.0]\n\n- **X** (#1). a"
+            )
+        )
+        assert not [p for p in check(self._write(tmp_path, body)) if "entries titled" in p]
+
+    def test_the_real_changelog_has_no_duplicate_entries(self):
+        root = Path(__file__).resolve().parent.parent
+        assert not [p for p in check(root) if "entries titled" in p]
+
+
 class TestTheTagTimeCheck:
     """The second enforcement point (#192 follow-up, owner's item 3).
 

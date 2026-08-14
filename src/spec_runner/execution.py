@@ -60,6 +60,33 @@ def _record_phase(state, config, task, phase, detail=None) -> None:
         advance(state, resolve_namespace(config), task.id, phase, detail)
 
 
+def _release_claims(state, config, task) -> None:
+    """Unlock this task's evidence now that the task is done (#260).
+
+    Beside the DONE row and for the same reason: the hook has several
+    successful exits, and what matters here is only that the task finished. A
+    claim guards the evidential test from the confirmed red to the terminal
+    gate; past that gate it protects nothing and freezes the file for every
+    later task in the workstream — which is how three completed tasks left a
+    workstream unable to author its next red.
+
+    Failure is loud but never fatal. The work is merged by the time this runs,
+    so raising would turn a finished task into a failed one; and an unreleased
+    claim has an operator door (`tdd release`), while a task falsely recorded
+    as failed has none.
+    """
+    from .claims import release_claims
+    from .tdd import resolve_namespace
+
+    try:
+        freed = release_claims(state, resolve_namespace(config), task.id)
+    except Exception as exc:  # pragma: no cover - defensive, mirrors _record_phase
+        logger.error("Could not release claims", task_id=task.id, error=str(exc))
+        return
+    if freed:
+        logger.info("Claims released", task_id=task.id, count=freed)
+
+
 def _refusal_error_code(refusal: str) -> ErrorCode:
     """Classify a refusal: a verdict on the work, or a broken instrument.
 
@@ -487,6 +514,7 @@ def execute_task(
                 # happened — only that the task finished.
                 if config.resolve_execution_mode(task) == "tdd":
                     _record_phase(state, config, task, TddPhase.DONE)
+                    _release_claims(state, config, task)
                 state.record_attempt(
                     task_id,
                     True,

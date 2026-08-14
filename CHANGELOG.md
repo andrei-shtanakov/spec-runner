@@ -12,6 +12,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A completed task's claims are released** (#260, F-35). A claim froze its
+  test file and nothing ever unfroze it, so the shipped invariant was: *once a
+  task completes, its claimed file is frozen for the workstream forever*. The
+  pilot's TASK-102 finished and merged through the human gate; its test file
+  then changed twice, both times legitimately and both times through that gate
+  (a review fix, an assertion hardening) — and TASK-104, a brand-new task, could
+  not author its red. Three DONE tasks were still holding active claims. A TDD
+  workstream degraded exactly as fast as its code lived.
+
+  A claim guards the evidential test from the confirmed red to the terminal
+  gate; past that gate there is no lifecycle left to protect. Completion now
+  retires them with a status of their own, `released` — nothing went wrong, so
+  `abandoned` ("this red was no good") and `superseded` ("a later lineage
+  replaced it") would both be lies about it. Nothing is deleted, as ever.
+
+  For the state the previous version left behind, a door: **`spec-runner tdd
+  release TASK-ID --reason ...`**. Admissibility is evidence, not a flag — the
+  lifecycle must have reached DONE, because releasing a live task's lock is
+  precisely the laundering the lock exists to prevent, and `abandon` (which
+  retires the red *with* its lock) is the honest door mid-flight. It reports
+  how many claims it freed, and says so when there were none: an operator
+  unwedging a workstream needs to know the wedge is somewhere else.
+
 - **`tdd repair` reads the replay, not a phase row** (#263, F-37). The agent
   implemented TASK-104, discovered empirically that the frozen test asserts a
   shape the requirement contradicts, **reverted everything** and reported
