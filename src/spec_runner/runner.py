@@ -90,6 +90,60 @@ def classify_agent_answer(
     return AgentAnswer.ANSWERED
 
 
+#: The three terminal markers an implementation pass may state about itself.
+#: Their meanings are `execution`'s business; their *shape* is this module's,
+#: for the same reason `classify_agent_answer` lives here (#241): one reading.
+TERMINAL_MARKERS = ("TASK_COMPLETE", "TASK_FAILED", "TASK_BLOCKED")
+
+#: A marker is a **line**, not a substring (#266). Optional leading whitespace,
+#: an optional `: reason`, nothing else on the line. Written as one pattern so
+#: "what counts as a marker" cannot be answered differently in two places.
+_MARKER_LINE = re.compile(
+    rf"^[ \t]*(?P<kind>{'|'.join(TERMINAL_MARKERS)})[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class TerminalMarker:
+    """One marker an agent stated, with its reason if it gave one."""
+
+    kind: str
+    reason: str | None = None
+
+
+def terminal_markers(output: str) -> list[TerminalMarker]:
+    """Every terminal marker in ``output``, in the order stated (#266).
+
+    Substring matching read a *mention* as a verdict. An attempt that finished
+    the job — tests green, frozen files untouched — and ended with a clean
+    `TASK_COMPLETE` was recorded as failed because its summary described
+    history: "the prior `TASK_BLOCKED` was resolved upstream…". Mid-sentence,
+    in backticks, with no reason, and it outranked the terminal marker.
+
+    Worse, the trap primes itself: the failure text quoting the token goes into
+    the next attempt's prompt, so an honest agent summarising what came before
+    is likely to utter it again. `prompt.neutralise_markers` closes that half.
+
+    Line-anchoring alone reads the reported run correctly, which is why the
+    other two candidates in the report are not taken here:
+
+    - *requiring `: reason` for `TASK_BLOCKED`* would silently demote a bare
+      escalation on its own line to "no marker", and with exit code 0 that
+      reads as implicit success — a blocked task treated as done;
+    - *last occurrence wins* would reverse #140's deliberate precedence, where
+      BLOCKED outranks COMPLETE because an agent that says both has not
+      finished. That is a policy change and belongs to the owner.
+
+    A marker quoted on a line of its own — inside a fenced block, say — is
+    therefore still read as stated. Narrowing that further needs the rule above.
+    """
+    return [
+        TerminalMarker(m.group("kind"), (m.group("reason") or "").strip() or None)
+        for m in _MARKER_LINE.finditer(output or "")
+    ]
+
+
 @dataclass
 class CliInvocation:
     """A built CLI command plus how to parse its output."""
