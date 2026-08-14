@@ -156,6 +156,25 @@ class TestBothPathsAgree:
         assert self._single(output, tmp_path, monkeypatch) is expected
         assert self._role(output, tmp_path, monkeypatch) is expected
 
+    def test_the_role_path_keeps_the_reviewer_s_words(self, tmp_path, monkeypatch):
+        """The branch exists so a person can read what the reviewer said, so it
+        must not delete it (Copilot, PR #278). The aggregate report quotes this
+        text under the role's heading — the explanation is prefixed, and the
+        function keeps its `(role, verdict, output)` contract."""
+        from spec_runner import review
+
+        monkeypatch.setattr(review, "_run_reviewer", lambda *a, **k: self._call(self.CONTRADICTION))
+        cfg = _cfg(tmp_path)
+
+        _role, verdict, output = review._run_single_role_review(
+            "security", "role prompt", "base", "cli", "", "", cfg, "TASK-001"
+        )
+
+        assert verdict is ReviewVerdict.ERROR
+        assert "conflicting verdicts" in output
+        assert "the migration is unsafe" in output or "unsafe" in output
+        assert self.CONTRADICTION in output, "the reviewer's own text, verbatim"
+
     def test_the_message_names_what_was_stated(self, tmp_path, monkeypatch):
         """An error an operator cannot act on is a shrug: the point of refusing
         to choose is that a person now has to read it."""

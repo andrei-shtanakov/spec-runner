@@ -709,10 +709,16 @@ def _run_single_role_review(
         signal = read_review(output)
         if signal.conflicting:
             stated = ", ".join(signal.stated)
+            # The explanation is **prefixed**, not substituted (Copilot, PR
+            # #278). This branch exists so that a person reads what the
+            # reviewer said; returning the message alone would delete exactly
+            # that, and the function's contract is `(role, verdict, output)` —
+            # the aggregate report quotes this text under the role's heading.
             return (
                 role,
                 ReviewVerdict.ERROR,
-                f"Review stated conflicting verdicts ({stated}); a person has to read it",
+                f"Review stated conflicting verdicts ({stated}); a person has to read it.\n\n"
+                f"{output}",
             )
         if signal.only == "REVIEW_FAILED":
             return role, ReviewVerdict.FAILED, output
