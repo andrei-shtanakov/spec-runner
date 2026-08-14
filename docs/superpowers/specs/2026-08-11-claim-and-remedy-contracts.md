@@ -166,6 +166,12 @@ against what the operator last saw silently applies to whatever arrived since.
   is the practice being replaced.
 - `abandon` returns the task to RED authoring. The red was no good; start again
   honestly, with the commit still in history.
+- A red commit the gate rejected is **evidence, not litter** (#261). It stays
+  on the branch, and the next authoring pass may adopt it rather than demand a
+  fresh diff — only when HEAD's own subject names this task and the reported
+  selector, and no checkpoint was ever recorded for it. Deleting it would be
+  the other way to end the starvation, and the wrong one: it is the agent's
+  work.
 - A claim's life ends at the **terminal gate**, not at the end of time (#260).
   Completion retires the task's claims as `released` — a status of its own,
   because nothing went wrong. Holding them past completion froze the file for

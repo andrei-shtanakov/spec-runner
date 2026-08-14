@@ -1021,6 +1021,20 @@ class ExecutorState:
                 return candidate
         return None
 
+    def checkpoint_exists_for_commit(self, namespace: str, commit_sha: str) -> bool:
+        """Whether any checkpoint — any status — was ever recorded for a commit.
+
+        Asked before adopting a red commit the tree already carries (#261): a
+        commit that once had a checkpoint is not unregistered, and adopting it
+        again would quietly re-litigate whatever retired it.
+        """
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT 1 FROM red_checkpoints WHERE namespace = ? AND commit_sha = ? LIMIT 1",
+            (namespace, commit_sha),
+        ).fetchone()
+        return row is not None
+
     def active_checkpoints(
         self, namespace: str, task_id: str | None = None
     ) -> list["RedCheckpointT"]:
