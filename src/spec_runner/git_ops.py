@@ -69,13 +69,17 @@ def tracked_state_paths(config: ExecutorConfig) -> list[str]:
             continue  # outside the repo — git never saw it
     if not rels:
         return []
-    listed = _git(config, "ls-files", "--", *rels)
+    # `-z`, so paths come back raw. Plain `ls-files` C-quotes anything
+    # non-ASCII — `"wei rd/\303\251.db"` — and the guard prints its findings
+    # into a command an operator is meant to paste (Copilot, PR #275). A
+    # mangled path there is worse than no advice.
+    listed = _git(config, "ls-files", "-z", "--", *rels)
     if listed.returncode != 0:
         # Fail *open* here, unlike the destructive-path guards: this reads the
         # index to protect data, and a repo git cannot read at all is a
         # different problem that its own callers will report.
         return []
-    return [line for line in listed.stdout.splitlines() if line.strip()]
+    return [path for path in listed.stdout.split("\0") if path.strip()]
 
 
 class WorktreeStatusError(RuntimeError):

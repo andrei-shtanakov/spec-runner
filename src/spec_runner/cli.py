@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shlex
 import signal
 import sys
 import time
@@ -732,7 +733,12 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
     print("   switch writes nothing over the open connection. The ledger, the")
     print("   budget authorizations and every red checkpoint would go with it.")
     print("   Untrack it first, keeping the file:")
-    print(f"       git rm --cached {' '.join(tracked)}")
+    # `--` and shell quoting, because this line exists to be pasted: a path
+    # beginning with `-` would be read as an option and one with a space as
+    # two arguments, and whoever is pasting it is already in a bad state
+    # (Copilot, PR #275).
+    quoted = " ".join(shlex.quote(path) for path in tracked)
+    print(f"       git rm --cached -- {quoted}")
     print("       git commit -m 'stop tracking executor runtime state'")
     sys.exit(1)
 

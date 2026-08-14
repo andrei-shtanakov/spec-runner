@@ -112,6 +112,20 @@ class TestTheQuestionIsAskedOfGit:
 
         assert tracked_state_paths(cfg) == ["spec/.executor-state.db-wal"]
 
+    def test_an_awkward_path_comes_back_intact(self, tmp_path):
+        """`git ls-files` C-quotes anything non-ASCII — `"wei rd/\303\251.db"` —
+        and this list is printed into a command an operator pastes. Measured
+        before fixing: plain `ls-files` mangles it, `-z` does not (Copilot,
+        PR #275)."""
+        cfg = _project(tmp_path, state_file=tmp_path / "repo" / "wei rd" / "é.db")
+        cfg.state_file.parent.mkdir(parents=True, exist_ok=True)
+        with ExecutorState(cfg) as state:
+            state.set_meta("x", "y")
+        _git(cfg.project_root, "add", "-f", "--", "wei rd")
+        _git(cfg.project_root, "commit", "-qm", "track an awkward path")
+
+        assert tracked_state_paths(cfg) == ["wei rd/é.db"]
+
     def test_a_state_file_outside_the_repo_is_not_git_business(self, tmp_path):
         """`--spec-prefix` and orchestrators can put it anywhere; a path git
         never saw cannot be tracked, and asking would be a category error."""
@@ -175,7 +189,27 @@ class TestTheRunIsRefused:
             cli.cmd_run(self._args(), cfg)
 
         out = capsys.readouterr().out
-        assert "git rm --cached spec/.executor-state.db" in out
+        assert "git rm --cached -- spec/.executor-state.db" in out
+
+    def test_the_printed_command_survives_an_awkward_path(self, tmp_path, capsys):
+        """The refusal's whole value is that the command can be pasted. A path
+        with a space would split into two arguments and one starting with `-`
+        would be read as an option, so the paths are quoted and `--` ends the
+        options."""
+        from spec_runner import cli
+
+        cfg = _project(tmp_path, state_file=tmp_path / "repo" / "my spec" / "state.db")
+        cfg.state_file.parent.mkdir(parents=True, exist_ok=True)
+        with ExecutorState(cfg) as state:
+            state.set_meta("x", "y")
+        _git(cfg.project_root, "add", "-f", "--", "my spec")
+        _git(cfg.project_root, "commit", "-qm", "track it")
+
+        with pytest.raises(SystemExit):
+            cli.cmd_run(self._args(), cfg)
+
+        out = capsys.readouterr().out
+        assert "git rm --cached -- 'my spec/state.db'" in out
 
     def test_the_ledger_is_still_there_after_the_refusal(self, tmp_path):
         """The point of stopping early: what the run would have destroyed is
