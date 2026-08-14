@@ -166,6 +166,13 @@ against what the operator last saw silently applies to whatever arrived since.
   is the practice being replaced.
 - `abandon` returns the task to RED authoring. The red was no good; start again
   honestly, with the commit still in history.
+- A claim's life ends at the **terminal gate**, not at the end of time (#260).
+  Completion retires the task's claims as `released` — a status of its own,
+  because nothing went wrong. Holding them past completion froze the file for
+  the whole workstream, so every later legitimate edit wedged every subsequent
+  task. `tdd release` is the same act performed by an operator on state written
+  before this rule, and it is admissible only once the lifecycle reached DONE:
+  releasing a live task's lock is the laundering the lock exists to prevent.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
   superseded and linked.

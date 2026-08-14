@@ -62,6 +62,14 @@ class ClaimStatus(str, Enum):
     SUPERSEDED = "superseded"
     #: The red it belonged to was given up on (`tdd abandon`).
     ABANDONED = "abandoned"
+    #: The task it protected completed (#260). Distinct from the two above
+    #: because nothing went wrong: a claim guards the evidence between the
+    #: confirmed red and the terminal gate, and after that gate there is no
+    #: lifecycle left to protect. Holding the lock past completion froze the
+    #: file for the whole workstream forever — every later legitimate edit
+    #: (a review fix, a refactor, a new test in the same file) wedged every
+    #: subsequent task, so a workstream degraded exactly as its code lived.
+    RELEASED = "released"
 
 
 class ViolationKind(str, Enum):
@@ -313,6 +321,25 @@ def record_claims(
     return recorded
 
 
+def release_claims(state: ExecutorState, namespace: str, task_id: str) -> int:
+    """Retire ``task_id``'s claims because the task finished (#260).
+
+    A claim protects the evidential test from the confirmed red until the
+    terminal gate. Past that gate the lifecycle it guarded is over, the work
+    has been through whatever human gate the project has, and the lock protects
+    nothing — while still costing everything: the pilot's three completed tasks
+    held their test files frozen for the whole workstream, so a review fix and
+    an assertion hardening (both merged through that human gate) wedged the
+    *next* task's red before it could be authored.
+
+    Retired, not deleted, like every other status change here: what was
+    believed and when is evidence too. The count is returned so the caller can
+    say what it did — a release that quietly touched nothing reads the same as
+    one that unlocked a file.
+    """
+    return state.supersede_claims(namespace, task_id, ClaimStatus.RELEASED)
+
+
 def ensure_claimable(config: ExecutorConfig, selector: Selector) -> list[str]:
     """The paths ``selector`` will claim, or raise `ClaimRefused`.
 
@@ -458,5 +485,6 @@ __all__ = [
     "describe_violations",
     "ensure_claimable",
     "record_claims",
+    "release_claims",
     "validate_claim_path",
 ]

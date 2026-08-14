@@ -2058,6 +2058,15 @@ def _build_parser() -> argparse.ArgumentParser:
     tdd_resume.add_argument("--reason", required=True, help="Why — recorded, and not optional")
     tdd_resume.add_argument("--actor", help="Who (default: git user.email)")
 
+    tdd_release = tdd_sub.add_parser(
+        "release",
+        parents=[common],
+        help="The task is done: unlock the files its red froze (#260)",
+    )
+    tdd_release.add_argument("task_id", help="Completed task whose claims are being released")
+    tdd_release.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    tdd_release.add_argument("--actor", help="Who (default: git user.email)")
+
     tdd_status = tdd_sub.add_parser(
         "status", parents=[common], help="Show checkpoints, claims and remedies (#141)"
     )

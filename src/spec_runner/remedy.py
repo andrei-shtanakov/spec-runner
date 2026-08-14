@@ -29,7 +29,14 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from .claims import ClaimRefused, ClaimStatus, ensure_claimable, record_claims, selector_of
+from .claims import (
+    ClaimRefused,
+    ClaimStatus,
+    ensure_claimable,
+    record_claims,
+    release_claims,
+    selector_of,
+)
 from .logging import get_logger
 from .tdd import RedCheckpoint, RedOutcome, RedVerification, resolve_namespace, verify_red
 
@@ -50,6 +57,9 @@ class RemedyError(RuntimeError):
 class RemedyOperation(str, Enum):
     ABANDON = "abandon"
     REPAIR = "repair"
+    #: #260: the claim outlived the task it protected. Not a failure like the
+    #: two above — the lifecycle ended, so the lock has nothing left to guard.
+    RELEASE = "release"
     #: #232: the post-green half finally has one. `abandon` and `repair` both
     #: ask questions about a *red*; an operator meeting a crash after green had
     #: no remedy that fitted, reached for `repair`, and superseded the very
@@ -87,6 +97,9 @@ class RemedyResult:
     new_checkpoint_id: str | None = None
     outcome: RedOutcome | None = None
     already_applied: bool = False
+    #: How many claims a `release` retired. Reported because a release that
+    #: touched nothing reads exactly like one that unlocked a file (#260).
+    released: int = 0
     #: What to tell the operator beyond the verdict — the door out of the
     #: state they are in. Set where the state is known (#263), printed by the
     #: CLI, so the two cannot drift into different advice.
@@ -139,6 +152,56 @@ def abandon(
     )
     logger.info("Red abandoned", task_id=task_id, checkpoint=checkpoint_id)
     return RemedyResult(RemedyOperation.ABANDON, checkpoint_id)
+
+
+def release(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task_id: str,
+    *,
+    reason: str,
+    actor: str | None = None,
+) -> RemedyResult:
+    """The task is done; unlock its evidence (#260).
+
+    Completion releases claims by itself. This door exists for the state that
+    version left behind: workstreams where completed tasks still hold their
+    test files frozen, so the next red cannot be authored. Until it existed the
+    only retirement door was `abandon`, whose meaning — *this red was no good*
+    — is a lie about a task that finished.
+
+    Admissibility is **evidence, not a flag**: the lifecycle must have reached
+    DONE. Releasing a claim before that is precisely the laundering the lock
+    prevents — a confirmed red whose bytes may then change silently, with the
+    gate none the wiser. An operator who genuinely wants out mid-flight has
+    `abandon`, which retires the red *and* the lock together, keeping the two
+    in step.
+
+    No checkpoint id and so no compare-and-swap: a completed task's claims are
+    released as a set, whatever lineage they came from, because the thing that
+    ended is the task.
+    """
+    from .lifecycle import TddPhase, has_reached
+
+    namespace = _guard(config, reason)
+    if not has_reached(state, namespace, task_id, TddPhase.DONE):
+        raise RemedyError(
+            f"{task_id} has not reached DONE in this workstream: its claims still protect a "
+            "red that has not been through the terminal gate. Use `spec-runner tdd abandon` "
+            "to give the red up, which retires the lock with it"
+        )
+
+    # No checkpoint id to compare against, so idempotency is keyed on the task
+    # and the operation alone — which is what "this task's claims are released"
+    # means. The stored row carries "" for the same reason.
+    prior = _existing(state, namespace, task_id, "", RemedyOperation.RELEASE)
+    if prior is not None:
+        return RemedyResult(RemedyOperation.RELEASE, prior.checkpoint_id, already_applied=True)
+
+    freed = release_claims(state, namespace, task_id)
+    _record(state, namespace, task_id, "", RemedyOperation.RELEASE, reason, actor, config)
+    logger.info("Claims released", task_id=task_id, count=freed)
+    return RemedyResult(RemedyOperation.RELEASE, "", released=freed)
 
 
 def repair(
@@ -673,6 +736,8 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
 
     if args.tdd_command == "resume":
         return _cmd_resume(args, config)
+    if args.tdd_command == "release":
+        return _cmd_release(args, config)
 
     try:
         with ExecutorState(config) as state:
@@ -737,6 +802,41 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
     return _repair_exit(result)
 
 
+def _cmd_release(args, config: ExecutorConfig) -> int:
+    """`spec-runner tdd release`. 0 when the task's evidence is unlocked.
+
+    Kept out of `cmd_tdd`'s common path because that path opens with
+    `resolve_checkpoint`, and a release has no checkpoint to resolve: the thing
+    that ended is the task, and its claims go as a set.
+    """
+    from .state import ExecutorState
+
+    try:
+        with ExecutorState(config) as state:
+            result = release(
+                config,
+                state,
+                args.task_id,
+                reason=args.reason,
+                actor=getattr(args, "actor", None),
+            )
+    except RemedyError as exc:
+        print(f"⛔ {exc}")
+        return 1
+
+    if result.already_applied:
+        print(f"✔️  Already applied — release on {args.task_id}")
+        return 0
+    if result.released == 0:
+        # Not an error, and not silence either: an operator who ran this to
+        # unwedge a workstream needs to know it was already unlocked, or they
+        # will look for the wedge in the wrong place.
+        print(f"✔️  {args.task_id} held no active claims; nothing to release")
+        return 0
+    print(f"✔️  Released {result.released} claim(s) held by {args.task_id}; the files are open")
+    return 0
+
+
 def _cmd_resume(args, config: ExecutorConfig) -> int:
     """`spec-runner tdd resume`. 0 when the task can proceed, 2 when the
     decision is recorded but the claimed bytes no longer match.
@@ -796,6 +896,7 @@ def _repair_exit(result: RemedyResult) -> int:
 
 __all__ = [
     "AGENT_MARKER",
+    "release",
     "CheckpointStatus",
     "ResumeConflict",
     "RemedyError",
