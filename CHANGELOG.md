@@ -10,6 +10,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.33.0] - 2026-08-14
+
+**Minor.** No flag, key or schema moves — `git diff v2.32.1..HEAD -- schemas/`
+is empty and no `add_argument` line changed — but three protocols get stricter,
+and each can refuse a configuration that used to be accepted by accident:
+
+- a review verdict must be stated on a line of its own, and a reviewer that
+  states two different ones is an error rather than a ranking;
+- a RED's failing test must be written to a file that did not exist at its
+  baseline;
+- a run whose spend passes the ceiling says so, on both `run` and `retry`.
+
+That is why this is a minor rather than a patch. All three are corrections of
+protocols that were ambiguous, and the ambiguity was not free: a reviewer's
+verdict depended on whether a budget was active, a task could be made
+unfinishable by its own green, and $0.92 of overshoot went unmentioned.
+
+Every one of them came from the same paid pilot phase, and the last two were
+decided by the owner rather than inferred — the design for #252 is in
+`docs/superpowers/specs/2026-08-13-what-a-claim-protects-design.md`.
+
 ### Changed
 
 - **The evidential test of a RED lives in a file of its own** (#252, variant D,
@@ -2959,7 +2980,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...HEAD
+[2.33.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...v2.33.0
 [2.32.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...v2.32.1
 [2.32.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...v2.31.0
