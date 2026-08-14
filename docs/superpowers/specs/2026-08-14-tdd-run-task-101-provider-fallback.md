@@ -11,6 +11,12 @@ memory; fields that no artefact answers are marked **observability gap**.
 **Task:** a real product task from kapelle's m2 backlog — deterministic
 provider fallback in the catalog. Not written for this experiment.
 
+> **Counts as evidence run for the #285 trigger.**
+> Earlier attempts on this same task are recorded separately as attempt
+> records (`2026-08-12-tdd-run-provider-fallback.md` and
+> `…-attempt-3.md`). They are **not** additional runs: this file is the
+> completed one, and the counter counts completed runs.
+
 ---
 
 ## 1. Product verdict
