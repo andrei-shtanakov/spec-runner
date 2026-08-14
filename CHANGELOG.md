@@ -10,6 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.32.0] - 2026-08-14
+
+**Minor.** Two additive operator surfaces — `spec-runner tdd release` and
+`budget authorize --reserve <stage>=<usd>` — plus two nullable columns on
+`budget_authorizations`. Checked against v2.31.0 by diffing `schemas/`,
+`docs/state-schema.md` and the `add_argument` lines rather than asserted:
+**no vendored schema moved**, so nothing downstream needs to sync this time,
+and `--json-result` is untouched.
+
+The theme is the TDD lifecycle's **doors**. Every fix here came from one paid
+pilot phase that could not finish: a claim that outlived the task it protected
+froze the workstream, a rejected red starved every later attempt, a repair
+refused the one state it was built for, and an agent that finished the job was
+recorded as having failed because its summary mentioned a marker. Four of the
+five were found by running the tool, not by reading it.
+
+One behaviour change to a shipped command, deliberate: a `tdd repair` whose
+test passes no longer records a `not_red` lineage. It exits 2 as before.
+
 ### Added
 
 - **A review reserve that is actually enforced** (#267, F-39):
@@ -2814,7 +2833,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...HEAD
+[2.32.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.28.3...v2.29.0
