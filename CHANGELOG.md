@@ -10,6 +10,27 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **The RED authoring prompt is written to the log directory** (#282, found by
+  rehearsing the published 2.33.0). The implementation pass has logged its
+  prompt for a long time; the RED pass — a **paid** call whose output becomes
+  the checkpoint's selector, and so decides which file is frozen for the rest
+  of the task — logged nothing. After a run there was no record of what was
+  asked.
+
+  Three ways that bit, all already in this repo's history: a published artifact
+  could not be checked against its own prompt (which is what the rehearsal was
+  trying to do); #198 and #220 were both wrong *instructions*, catchable only
+  by reading the code rather than a run's logs; and `agent_calls` recorded what
+  the call cost with no way to see what the money bought.
+
+  Written as `<TASK>-red-<timestamp>.log`, beside the implementation prompt and
+  named the same way. A reused red writes nothing — no call, no prompt. Failing
+  to write it is a warning and never fails the task: bookkeeping that can fail
+  work is a second, weaker gate, and this one would fail it *before* the call
+  it describes.
+
 ## [2.33.0] - 2026-08-14
 
 **Minor.** No flag, key or schema moves — `git diff v2.32.1..HEAD -- schemas/`
