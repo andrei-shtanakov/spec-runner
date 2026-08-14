@@ -36,6 +36,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
   Together they buy one invariant, which is the point: **an artefact that ends
   without a terminal section means the runner died mid-call**, and nothing else.
 
+  Holding that claim up took a third fix (Copilot, PR #298). A call that never
+  *returns* left the artefact open too, and measuring found it at four sites,
+  not the one that was pointed at: the RED agent failing to launch or timing
+  out, and either review path failing to launch — where the exception is caught,
+  the verdict becomes `error`, and the runner demonstrably carries on. Those two
+  made the claim false rather than merely incomplete. A launch failure now
+  closes the file with `=== NOT STARTED: … ===` (no subprocess, so no spend, the
+  distinction the ledger draws by writing no row), and a timeout with
+  `=== NO RESULT: timed out after Nm ===` — because an empty output block is
+  true and unreadable.
+
   Third finding, from reading both review paths side by side: on a **timeout**
   the single path returned before appending while the per-role path appended. A
   timed-out call ran, and was billed for as long as it ran. The same

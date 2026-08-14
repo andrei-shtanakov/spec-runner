@@ -101,17 +101,26 @@ def append_output(
     *,
     returncode: int | None = None,
     cost_usd: float | None = None,
+    note: str | None = None,
 ) -> None:
     """Append what the call answered to the file its prompt went to.
 
     The review path has always kept the two together, and they belong
     together: a prompt without its answer says what was asked and not what
     came back. Same bound, same silence-on-failure rule.
+
+    `note` states why a call that *ran* has nothing to show — a timeout is the
+    case that exists. Without it the artefact of a timed-out call is an empty
+    output block, which is true and unreadable: the call ran, it was billed for
+    as long as it ran, and the file should say that rather than leave it to be
+    inferred from a synthetic return code.
     """
     if path is None:
         return
     try:
         with path.open("a") as handle:
+            if note:
+                handle.write(f"\n=== NO RESULT: {bound(note)} ===\n")
             handle.write(f"\n=== OUTPUT ===\n{bound(output)}\n")
             if stderr.strip():
                 handle.write(f"\n=== STDERR ===\n{bound(stderr)}\n")

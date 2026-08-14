@@ -138,6 +138,16 @@ def _logs(cfg: ExecutorConfig, pattern: str) -> list[Path]:
     return sorted(cfg.logs_dir.glob(pattern))
 
 
+def _raiser(exc: BaseException):
+    """A call that fails instead of returning — the case the artefact could not
+    survive."""
+
+    def _boom(*args, **kwargs):
+        raise exc
+
+    return _boom
+
+
 REFUSAL = (
     "Task budget reached before the review call ($4.16 >= $4.00) — not starting it. "
     "The limit is authorization #10"
@@ -318,6 +328,106 @@ class TestATimedOutCallIsStillACall:
         body = _logs(cfg, "*review-quality*")[0].read_text()
         assert "=== OUTPUT ===" in body
         assert "=== COST: unknown ===" in body
+
+
+class TestACallThatNeverReturnsClosesItsArtefactToo:
+    """Copilot, PR #298 — and the hole was wider than the site it named.
+
+    Measured before fixing, by making the call raise at each site:
+
+    | site | what happened | artefact |
+    |---|---|---|
+    | RED, binary missing | raised `FileNotFoundError` | **open** |
+    | RED, timeout | raised `TimeoutExpired` | **open** |
+    | review, binary missing | caught; verdict `error` | **open** |
+    | review role, binary missing | caught; verdict `error` | **open** |
+
+    The two review rows are the ones that make the invariant false rather than
+    merely incomplete: the exception is swallowed, the runner carries on, and
+    the file it left behind claims — under the rule this PR was written to
+    establish — that the runner died.
+    """
+
+    @pytest.mark.slow
+    def test_a_red_agent_that_does_not_launch(self, tmp_path, monkeypatch):
+        from spec_runner import tdd
+
+        cfg = _repo(tmp_path)
+        monkeypatch.setattr(
+            tdd,
+            "_run_agent",
+            _raiser(FileNotFoundError(2, "No such file or directory: 'claude'")),
+        )
+
+        with ExecutorState(cfg) as state, pytest.raises(OSError):
+            run_red_phase(_task(), cfg, state)
+
+        body = _logs(cfg, "*-red-*.log")[0].read_text()
+        assert "=== NOT STARTED:" in body
+        assert "did not launch" in body
+        assert "=== OUTPUT ===" not in body, "no subprocess, so no answer and no spend"
+
+    @pytest.mark.slow
+    def test_a_red_agent_that_times_out(self, tmp_path, monkeypatch):
+        """It ran. The artefact says so, and says why there is nothing in it."""
+        from spec_runner import tdd
+
+        cfg = _repo(tmp_path)
+        monkeypatch.setattr(
+            tdd, "_run_agent", _raiser(subprocess.TimeoutExpired(cmd="agent", timeout=1))
+        )
+
+        with ExecutorState(cfg) as state, pytest.raises(subprocess.TimeoutExpired):
+            run_red_phase(_task(), cfg, state)
+
+        body = _logs(cfg, "*-red-*.log")[0].read_text()
+        assert "=== NO RESULT: timed out after" in body
+        assert "=== NOT STARTED:" not in body, "it started; it just produced nothing"
+
+    def test_a_reviewer_that_does_not_launch(self, tmp_path, monkeypatch):
+        from spec_runner import review
+
+        cfg = _cfg(tmp_path)
+        monkeypatch.setattr(review, "build_review_prompt", lambda *a, **k: "REVIEW THIS")
+        monkeypatch.setattr(review, "_run_reviewer", _raiser(FileNotFoundError(2, "nope")))
+
+        verdict, _detail, _ = review.run_code_review(_task(), cfg)
+
+        body = _logs(cfg, "*-review-*.log")[0].read_text()
+        assert "=== NOT STARTED:" in body
+        assert "did not launch" in body
+        assert verdict.value == "error", "the existing control flow is unchanged"
+
+    def test_a_role_reviewer_that_does_not_launch(self, tmp_path, monkeypatch):
+        from spec_runner import review
+
+        cfg = _cfg(tmp_path)
+        monkeypatch.setattr(review, "_run_reviewer", _raiser(FileNotFoundError(2, "nope")))
+
+        _role, verdict, _detail = review._run_single_role_review(
+            "quality", "look for bugs", "base", "cli", "", "", cfg, "TASK-104"
+        )
+
+        body = _logs(cfg, "*review-quality*")[0].read_text()
+        assert "=== NOT STARTED:" in body
+        assert verdict.value == "error"
+
+    def test_a_timed_out_review_says_why_it_is_empty(self, tmp_path, monkeypatch):
+        """An empty output block is true and unreadable. Both paths."""
+        from spec_runner import review
+
+        cfg = _cfg(tmp_path)
+        monkeypatch.setattr(review, "build_review_prompt", lambda *a, **k: "REVIEW THIS")
+        monkeypatch.setattr(review, "_run_reviewer", lambda *a, **k: _timed_out_call())
+
+        review.run_code_review(_task(), cfg)
+        review._run_single_role_review(
+            "quality", "look for bugs", "base", "cli", "", "", cfg, "TASK-104"
+        )
+
+        for pattern in ("*-review-2*.log", "*review-quality*"):
+            body = _logs(cfg, pattern)[0].read_text()
+            assert "=== NO RESULT: timed out after" in body, pattern
 
 
 class TestTheInvariant:

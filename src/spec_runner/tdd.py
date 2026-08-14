@@ -50,7 +50,7 @@ from .claims import check_claims, describe_violations, ensure_claimable, record_
 from .git_ops import is_composite_shell_command
 from .lifecycle import TddPhase
 from .logging import get_logger
-from .prompts_log import append_output
+from .prompts_log import append_not_started, append_output
 from .tdd_runners import (
     ReplayEnvironmentRefusal,
     RunOutcome,
@@ -513,7 +513,21 @@ def run_red_phase(
     _say("\U0001f534 RED: authoring a failing test")
     red_prompt = build_red_prompt(task, config)
     prompt_log = _log_prompt(config, task, red_prompt)
-    call = _run_agent(config, red_prompt)
+    # A call that never returns still has to close its artefact (Copilot, PR
+    # #298). Measured before fixing: with the agent binary missing, and again
+    # on a timeout, the file was left holding the prompt alone — the exact
+    # shape the invariant reserves for "the runner died mid-call", while the
+    # runner was alive and the retry loop carried on.
+    try:
+        call = _run_agent(config, red_prompt)
+    except subprocess.TimeoutExpired:
+        append_output(prompt_log, "", note=f"timed out after {config.task_timeout_minutes}m")
+        raise
+    except OSError as exc:
+        # No subprocess, so no spend — the same distinction the ledger draws by
+        # writing no row here.
+        append_not_started(prompt_log, f"the agent did not launch: {exc}")
+        raise
     # Recorded before anything can refuse the result: the call happened and was
     # paid for whether or not it produced something usable.
     state.record_agent_call(

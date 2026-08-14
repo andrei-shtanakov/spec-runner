@@ -544,16 +544,25 @@ def run_code_review(
             task.id,
         )
 
-        call = _run_reviewer(
-            config,
-            task.id,
-            REVIEW_PROVENANCE,
-            prompt,
-            review_cmd,
-            review_model,
-            review_template,
-            pending_cost,
-        )
+        # A reviewer that never launches raises, and the `except Exception`
+        # below catches it — the runner survives and the verdict becomes
+        # `error`, so an artefact left holding the prompt alone is the one
+        # shape the invariant reserves for a runner that died (Copilot, PR
+        # #298). Measured: with the binary missing, that file was open.
+        try:
+            call = _run_reviewer(
+                config,
+                task.id,
+                REVIEW_PROVENANCE,
+                prompt,
+                review_cmd,
+                review_model,
+                review_template,
+                pending_cost,
+            )
+        except OSError as exc:
+            append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
+            raise
         if call.budget_refusal:
             # NOT_RUN, never SKIPPED: `skipped` is what a *policy* decision
             # looks like, and under `review_policy: advisory` the absence of a
@@ -586,6 +595,7 @@ def run_code_review(
             stderr,
             returncode=call.returncode,
             cost_usd=call.cost_usd,
+            note=(f"timed out after {config.review_timeout_minutes}m" if call.timed_out else None),
         )
 
         if call.timed_out:
@@ -707,16 +717,20 @@ def _run_single_role_review(
     # own ledger row.
     prompt_log = log_prompt(config, task_id, role_provenance(role), full_prompt)
     try:
-        call = _run_reviewer(
-            config,
-            task_id,
-            role_provenance(role),
-            full_prompt,
-            review_cmd,
-            review_model,
-            review_template,
-            pending_cost,
-        )
+        try:
+            call = _run_reviewer(
+                config,
+                task_id,
+                role_provenance(role),
+                full_prompt,
+                review_cmd,
+                review_model,
+                review_template,
+                pending_cost,
+            )
+        except OSError as exc:
+            append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
+            raise
         if call.budget_refusal:
             # No call was made, so there is no answer to record — and a log
             # claiming one would say money was spent that was not. What the
@@ -733,6 +747,7 @@ def _run_single_role_review(
             call.stderr,
             returncode=call.returncode,
             cost_usd=call.cost_usd,
+            note=(f"timed out after {config.review_timeout_minutes}m" if call.timed_out else None),
         )
         if call.timed_out:
             return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
