@@ -12,12 +12,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [2.32.1] - 2026-08-14
 
-**Patch.** One defect fix and nothing else. No flag, key, schema or exit code
-moves — checked by diffing `schemas/`, `docs/state-schema.md` and the
-`add_argument` lines against v2.32.0. What does change is that a run **refuses**
-in one state it used to proceed in, and the state is one where proceeding
-destroyed the run ledger without saying so. Shipped on its own, ahead of the
-larger work in flight, because a data-loss guard should not wait for it.
+**Patch.** One defect fix and nothing else. No flag, key or schema moves —
+checked by diffing `schemas/`, `docs/state-schema.md` and the `add_argument`
+lines against v2.32.0 rather than asserted.
+
+Exit codes deserve their own sentence, since a guard is being added: every
+existing outcome keeps the code it had, and a **new refusal** is introduced
+that exits 1. It fires only where a run previously exited **0** after emptying
+the state database — so the change of code in that state is the fix, not a side
+effect of it. That is the reasoning for calling this a patch rather than a
+minor; the alternative reading, that any new non-zero exit is a minor, would
+have kept a silent data-loss guard waiting behind the larger work in flight.
 
 ### Fixed
 
