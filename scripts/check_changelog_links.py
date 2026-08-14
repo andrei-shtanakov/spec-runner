@@ -39,6 +39,8 @@ VERSION_RE = re.compile(r'^version = "(?P<v>[^"]+)"', re.MULTILINE)
 SECTION_RE = re.compile(r"^## \[(?P<v>\d+\.\d+\.\d+)\]", re.MULTILINE)
 VERSION_HEADING_RE = re.compile(r"^## \[(?P<label>[^\]]+)\]", re.MULTILINE)
 SUBSECTION_RE = re.compile(r"^### (?P<name>.+)$", re.MULTILINE)
+#: An entry's own heading — the bolded lead of a top-level bullet.
+ENTRY_RE = re.compile(r"^- \*\*(?P<title>.+?)\*\*", re.MULTILINE)
 LINK_RE = re.compile(r"^\[(?P<label>Unreleased|\d+\.\d+\.\d+)\]:\s*(?P<url>\S+)\s*$", re.MULTILINE)
 
 
@@ -84,6 +86,7 @@ def check(root: Path, tag: str | None = None) -> list[str]:
     links = {m.group("label"): m.group("url") for m in LINK_RE.finditer(changelog)}
     problems: list[str] = []
     problems.extend(_duplicate_subsections(changelog))
+    problems.extend(_duplicate_entries(changelog))
     if tag is not None:
         problems.extend(_tag_problems(tag, current, sections))
 
@@ -164,6 +167,30 @@ def _duplicate_subsections(changelog: str) -> list[str]:
             if name in seen:
                 problems.append(f"[{label}] has two '### {name}' sections; merge them")
             seen.add(name)
+    return problems
+
+
+def _duplicate_entries(changelog: str) -> list[str]:
+    """One bullet per change, not two (Copilot, PR #265).
+
+    An entry is written by editing a file long enough that the duplicate is off
+    screen, and more than once here it was written by a *script* whose first run
+    failed after the insertion — so the re-run added a second, near-identical
+    bullet. Release notes are read by people who count the entries.
+
+    Keyed on the bolded heading rather than the body: two runs of the same
+    edit can differ in a word and still be the same entry twice.
+    """
+    problems: list[str] = []
+    starts = [(m.start(), m.group("label")) for m in VERSION_HEADING_RE.finditer(changelog)]
+    for index, (offset, label) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(changelog)
+        seen: set[str] = set()
+        for entry in ENTRY_RE.finditer(changelog[offset:end]):
+            title = entry.group("title").strip()
+            if title in seen:
+                problems.append(f"[{label}] has two entries titled '{title}'; keep one")
+            seen.add(title)
     return problems
 
 
