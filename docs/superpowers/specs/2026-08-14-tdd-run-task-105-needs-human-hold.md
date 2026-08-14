@@ -89,8 +89,8 @@ Working, visibly, for the first time in production:
 - **claims released at DONE (#260)** — `Claims released count=1`; the claim on
   `test/task_105_red_test.exs` is `released`, not left `active`;
 - **`integration_pr` (#254)** — master was never touched: the merge went into
-  `spec-runner/run-20260814-183849` and PR #19 was opened for the human. The
-  base branch still reads `⬜ TODO` for TASK-105, and the run said so.
+  `spec-runner/run-20260814-183849` and kapelle PR #19 was opened for the
+  human. The base branch still reads `⬜ TODO` for TASK-105, and the run said so.
 
 ### Defect A — the RED artefact records the question and not the answer
 
@@ -186,8 +186,8 @@ piece of debt the run left — the hardcoded happy-path fixture helper — is
 *test-support* debt the agent itself named, not something a refactor pass over
 the diff would have found.
 
-Human review of the merged code is still pending: PR #19 is open, and this
-task's review was never bought. **That absence is itself the observation** —
+Human review of the merged code is still pending: kapelle PR #19 is open, and
+this task's review was never bought. **That absence is itself the observation** —
 two of three evidence runs merged without any machine review at all.
 
 ## 6. Reading for #285
