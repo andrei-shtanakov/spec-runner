@@ -221,22 +221,23 @@ class TestTheRedPhaseEnforcesIt:
         assert result.outcome is RedOutcome.UNVERIFIABLE
         assert "does not collect" in (result.detail or "")
 
-    def test_git_failing_to_answer_is_an_instrument_error(self, tmp_path, monkeypatch):
+    def test_an_unreadable_baseline_is_an_instrument_error(self, tmp_path, monkeypatch):
         """Condition 3, and #245's rule: "we could not look" is not "the file
-        is new". The run must not proceed on an unread index."""
+        is new". Measured rather than mocked — the baseline handed to git is a
+        real object name that resolves to nothing, which is what a corrupted
+        state file or a garbage-collected commit produces.
+
+        The tool matters here (Copilot, PR #280): `git cat-file -e` answers
+        **128 for everything** — absent path, invalid revision, not a
+        repository — so a returncode read there let a bad baseline pass as "the
+        file is new". `ls-tree` separates the questions by construction.
+        """
         from spec_runner import tdd
         from spec_runner.state import ExecutorState
 
         cfg = _repo(tmp_path)
         _agent_writing(monkeypatch, "tests/test_task_104_red.py")
-        real = subprocess.run
-
-        def _broken(argv, *a, **k):
-            if argv[:3] == ["git", "cat-file", "-e"]:
-                return subprocess.CompletedProcess(argv, 129, "", "fatal: not a git repository")
-            return real(argv, *a, **k)
-
-        monkeypatch.setattr(tdd.subprocess, "run", _broken)
+        monkeypatch.setattr(tdd, "_head", lambda config: "0" * 40)
 
         with ExecutorState(cfg) as state:
             result = run_red_phase(_task(), cfg, state)
@@ -244,6 +245,21 @@ class TestTheRedPhaseEnforcesIt:
         assert result.instrument_error is True
         assert "could not say" in (result.detail or "")
         assert result.checkpoint is None
+
+    def test_the_two_git_answers_are_told_apart(self, tmp_path, monkeypatch):
+        """The distinction the previous version could not make: a path absent
+        from a good tree is *new* (proceed), a tree git cannot read is *unknown*
+        (stop). Both are exercised through the same code path."""
+        from spec_runner.state import ExecutorState
+
+        cfg = _repo(tmp_path)
+        _agent_writing(monkeypatch, "tests/test_task_104_red.py")
+
+        with ExecutorState(cfg) as state:
+            good = run_red_phase(_task(), cfg, state)
+
+        assert good.outcome is RedOutcome.EXPECTED_FAIL, "absent from a good tree means new"
+        assert good.instrument_error is False
 
 
 class TestTheKindReachesTheOperator:

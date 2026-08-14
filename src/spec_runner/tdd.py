@@ -666,27 +666,39 @@ def _refuse_pre_existing_file(
                 f"the red was written to {path}, which this project's runner does not "
                 f"collect — see `{adapter.evidential_file('TASK-ID')}` for the shape it does",
             )
-        existed = subprocess.run(
-            ["git", "cat-file", "-e", f"{baseline}:{path}"],
+        # `ls-tree`, not `cat-file -e` (Copilot, PR #280). Measured: `cat-file
+        # -e` answers **128 for everything** — a path absent from a valid tree,
+        # an invalid revision, a directory that is not a repository — and the
+        # only difference is the wording of a fatal message. Reading a
+        # returncode there let a bad baseline pass as "the file is new", which
+        # is #245's rule broken in a new place. `ls-tree` separates the two
+        # questions by construction:
+        #
+        #     rc 0, output    the path is in that tree
+        #     rc 0, empty     it is not
+        #     rc != 0         git could not answer — never "it is not"
+        #
+        # It is also the call `check_claims` already uses, so "is this path in
+        # that tree" has one answer in this codebase.
+        listed = subprocess.run(
+            ["git", "ls-tree", "-z", "--name-only", baseline, "--", str(path)],
             cwd=config.project_root,
             capture_output=True,
             text=True,
         )
-        if existed.returncode == 0:
+        if listed.returncode != 0:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                f"git could not say whether {path} existed at {baseline[:12]} "
+                f"({listed.stderr.strip()[:120] or f'exit {listed.returncode}'})",
+                instrument_error=True,
+            )
+        if listed.stdout.strip("\0\n "):
             return RedPhaseResult(
                 RedOutcome.UNVERIFIABLE,
                 f"the red was written into {path}, which already existed before this task "
                 "started. A claim freezes the whole file, so the implementation could not "
                 "add to it afterwards — write the failing test in a file of its own",
-            )
-        if "does not exist" not in existed.stderr and existed.returncode not in (1, 128):
-            # `cat-file -e` answers 1 for "not in that tree" and 128 for a bad
-            # revision; anything else is git failing to answer at all (#245).
-            return RedPhaseResult(
-                RedOutcome.UNVERIFIABLE,
-                f"git could not say whether {path} existed at {baseline[:12]} "
-                f"({existed.stderr.strip()[:120] or f'exit {existed.returncode}'})",
-                instrument_error=True,
             )
     return None
 
