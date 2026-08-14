@@ -235,17 +235,23 @@ class TestTheRemedyLoopEndToEnd:
         with ExecutorState(cfg) as state:
             abandon(cfg, state, "TASK-001", checkpoint.checkpoint_id, reason="wrong test entirely")
 
-        _agent(
-            monkeypatch,
-            selector="tests/test_x.py::test_y",
-            writes={"tests/test_x.py": FAILING.replace("not implemented", "take two")},
-        )
-        with ExecutorState(cfg) as state:
-            result = run_red_phase(_task("TASK-002"), cfg, state)
-            owners = [c.task_id for c in state.active_claims(resolve_namespace(cfg))]
+        # The release is asserted directly rather than by having a second task
+        # author a red into the same file: since #252 D a red must be written
+        # to a file that did not exist at its baseline, so that route is closed
+        # — the hostage situation is now prevented rather than cured. What
+        # `abandon` still owes is exactly this: the file is free, and a tree
+        # that modifies it passes the claims gate.
+        (root / "tests" / "test_x.py").write_text(FAILING.replace("not implemented", "take two"))
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "someone else edits the freed file")
+        candidate = _head(root)
 
-        assert result.outcome is RedOutcome.EXPECTED_FAIL
-        assert owners == ["TASK-002"]
+        with ExecutorState(cfg) as state:
+            owners = [c.task_id for c in state.active_claims(resolve_namespace(cfg))]
+            violations = check_claims(cfg, state, resolve_namespace(cfg), candidate)
+
+        assert owners == [], "the abandoned red holds nothing"
+        assert violations == []
         assert _git(root, "cat-file", "-t", before).stdout.strip() == "commit", (
             "the abandoned red's commit stays in history"
         )

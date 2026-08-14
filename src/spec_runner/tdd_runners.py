@@ -204,6 +204,26 @@ class TddRunnerAdapter(Protocol):
         """The files this selector depends on, for the byte-lock."""
         ...
 
+    def evidential_file(self, task_id: str) -> PurePosixPath:
+        """Where this task's RED should write its failing test (#252).
+
+        The **adapter** names it, never a shared heuristic: a Python-shaped
+        guess is how an Elixir suite was told to write `tests/test_x_red.py`,
+        and the same class of mistake as #198 and #220. The name it returns
+        must be one this runner's ordinary discovery picks up — a test nothing
+        collects is a red that cannot be replayed.
+        """
+        ...
+
+    def is_discoverable(self, path: PurePosixPath) -> bool:
+        """Whether this runner's ordinary discovery would collect ``path``.
+
+        Asked of the file the red actually claimed, so a red written somewhere
+        the runner never looks is refused while it is still cheap — rather than
+        replayed, found to select nothing, and recorded `unverifiable`.
+        """
+        ...
+
     def contract_selectors(self) -> tuple[str, ...]:
         """Canonical selectors this adapter must parse. The machine contract,
         kept apart from the human-readable `selector_instruction` so that
@@ -332,6 +352,18 @@ class PytestAdapter:
         `conftest.py` does not claim that conftest.
         """
         return (selector.path,)
+
+    def evidential_file(self, task_id: str) -> PurePosixPath:
+        """`tests/test_<task>_red.py` — collected by pytest's default
+        `test_*.py`, and under `tests/`, which is where a pytest project's
+        discovery is rooted by convention."""
+        slug = task_id.strip().lower().replace("-", "_") or "task"
+        return PurePosixPath("tests") / f"test_{slug}_red.py"
+
+    def is_discoverable(self, path: PurePosixPath) -> bool:
+        """pytest's default patterns: `test_*.py` or `*_test.py`."""
+        name = path.name
+        return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
     def contract_selectors(self) -> tuple[str, ...]:
         return (
@@ -605,6 +637,18 @@ class ExUnitAdapter:
     def claim_paths(self, selector: Selector) -> tuple[PurePosixPath, ...]:
         """One `path:line` names one file."""
         return (selector.path,)
+
+    def evidential_file(self, task_id: str) -> PurePosixPath:
+        """`test/<task>_red_test.exs` — under `test/`, ending in `_test.exs`,
+        which is what `mix test` collects by default. A file named any other
+        way is simply never run, and a red nothing runs cannot be replayed."""
+        slug = task_id.strip().lower().replace("-", "_") or "task"
+        return PurePosixPath("test") / f"{slug}_red_test.exs"
+
+    def is_discoverable(self, path: PurePosixPath) -> bool:
+        """`mix test`'s default: `test/**/*_test.exs`."""
+        parts = path.parts
+        return bool(parts) and parts[0] == "test" and path.name.endswith("_test.exs")
 
     def contract_selectors(self) -> tuple[str, ...]:
         return ("test/thing_test.exs:12",)

@@ -10,7 +10,46 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The evidential test of a RED lives in a file of its own** (#252, variant D,
+  owner-signed). A claim freezes the whole file; the green legitimately appends
+  tests to that same file; so after `tdd resume` no tree containing the
+  implementation could satisfy the reinstated claim. The pilot's TASK-101 was
+  unfinishable through the loop.
+
+  The byte-lock stays exactly what it is — a whole-file hash, the cheapest
+  instrument that cannot be fooled by formatting, by moved lines, or by an AST
+  that parses differently in two versions of a runner. What changes is that the
+  conflict becomes impossible rather than adjudicated: the RED prompt asks for
+  a **new file**, and a red written into a file that existed at its
+  `baseline_sha` is refused before anything is claimed or recorded.
+
+  The name is formed by the **adapter** (`tests/test_<task>_red.py`,
+  `test/<task>_red_test.exs`), never by a shared Python-shaped heuristic — the
+  mistake of #198's selector and #220's linter — and each adapter's name is
+  one its own discovery collects, which is checked too: a red the runner never
+  runs cannot be replayed.
+
+  Per the sign-off: **no exemption** for a file the task itself created
+  earlier (the invariant stays "did it exist at the baseline", which is
+  provable); a git failure during that check is an `INSTRUMENT_ERROR`, not a
+  verdict; and legacy checkpoints are neither migrated nor reinterpreted — the
+  check lives in the authoring path, so a reused or resumed red never meets it.
+
+  Consequence worth naming: a second task can no longer author a red into a
+  file another task's abandoned red used. That hostage situation is now
+  prevented rather than cured, and `abandon` still owes what it always owed —
+  the file is free and a tree that modifies it passes the claims gate.
+
 ### Fixed
+
+- **The RED site's instrument error carried the wrong kind** (#252, found by
+  mutation). When the red phase failed to *look* — git unable to answer —
+  the message said "infrastructure" while the refusal carried
+  `HOOK_FAILURE`, so CI would have been told "the work is bad" about work
+  nothing had judged. That is #230 exactly, in a branch nothing asserted the
+  kind of.
 
 - **An overshoot is said out loud, on both paths** (#255 part 1). A task that
   completed $0.92 over the ceiling said **nothing** through `retry` — the

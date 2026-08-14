@@ -178,8 +178,23 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     # and nothing read it: the classifier matched a different prefix, so a
     # broken replay environment was recorded as a failed task and CI was told
     # exit 1 — "the work is bad" — about work nothing had judged.
-    if outcome.status is GateStatus.INSTRUMENT_ERROR:
-        return refusal_for(outcome.status, f"RED could not be verified (infrastructure): {detail}")
+    # The observer knows something the gate cannot: whether there is no
+    # confirmed red because it looked and found none, or because it could not
+    # look at all (#252, the same distinction as #245). The gate decides
+    # *whether* the task may proceed; the kind of a not-confirmed comes from
+    # whoever failed to establish it, since that is what separates exit 1 from
+    # exit 2.
+    if outcome.status is GateStatus.INSTRUMENT_ERROR or red.instrument_error:
+        # `INSTRUMENT_ERROR` explicitly, not `outcome.status`: when the red
+        # phase failed to *look*, the gate has only seen that no checkpoint
+        # exists and answers UNSATISFIED. Passing that here would print the
+        # word "infrastructure" while carrying the kind of a failed task —
+        # which is #230 itself, and was in this branch until a mutation
+        # exposed that nothing asserted the kind.
+        return refusal_for(
+            GateStatus.INSTRUMENT_ERROR,
+            f"RED could not be verified (infrastructure): {detail}",
+        )
     return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 

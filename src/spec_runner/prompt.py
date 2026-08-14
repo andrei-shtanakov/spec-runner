@@ -521,6 +521,27 @@ def _parse_stage_marker(output: str, stage: StageDef) -> str | None:
     return output[start:end].strip()
 
 
+def _evidential_file(task: "Task", config: "ExecutorConfig") -> str:
+    """The path the RED pass is asked to write, named by the **adapter** (#252).
+
+    Not a shared heuristic: a Python-shaped guess told an Elixir project to
+    write `tests/test_x_red.py`, which `mix test` never collects — the same
+    class of mistake as #198's selector and #220's linter.
+
+    The sentence the prompt builds from this and the check that follows say the
+    same thing. The prompt names a file that does not exist; the check refuses
+    a claimed file that existed at the baseline. What it cannot do is state a
+    path when no adapter is resolved — there the rule is stated without an
+    example, because inventing one would be the heuristic this avoids.
+    """
+    from .tdd import resolve_adapter
+
+    adapter = resolve_adapter(config)
+    if adapter is None:
+        return "(a new test file this project's runner collects)"
+    return f"`{adapter.evidential_file(task.id)}`"
+
+
 def _selector_instruction(config: "ExecutorConfig") -> str:
     """How to ask this project's runner for a selector (#198).
 
@@ -600,7 +621,11 @@ You are writing **one failing test** and nothing else.
 3. The test must fail for the *right* reason — an assertion about the missing
    behaviour, not an import error or a syntax error. A test that cannot be
    collected demonstrates nothing.
-4. Report the test's selector on its own line, exactly:
+4. Write it in a **new file that does not exist yet**: {_evidential_file(task, config)}
+   The file this test lives in is frozen byte-for-byte until the task finishes,
+   so a test added to an existing file would freeze work the implementation
+   still needs. A red written into a file that already existed is refused.
+5. Report the test's selector on its own line, exactly:
 
    {_selector_instruction(config)}
 
