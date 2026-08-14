@@ -171,6 +171,14 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     return result
 
 
+#: U+200B ZERO WIDTH SPACE, written as an escape rather than as the character
+#: itself (Copilot, PR #269). An invisible literal in source survives no
+#: careless edit, no reformatting tool and no copy-paste through a terminal —
+#: and losing it would silently put the marker tokens back into prompts, which
+#: is the failure this constant exists to prevent.
+ZERO_WIDTH_SPACE = "\u200b"
+
+
 def neutralise_markers(text: str) -> str:
     """Quote terminal-marker tokens so a prompt cannot teach them back (#266).
 
@@ -180,16 +188,16 @@ def neutralise_markers(text: str) -> str:
     it again. Line-anchored parsing breaks the first half; this breaks the
     second, because the tokens reach the agent only as history to describe.
 
-    Zero-width-joined rather than removed: an operator reading the prompt still
-    sees which marker is being talked about, and the agent still reads the word
-    — it just cannot be echoed back as a line the parser would count. Applied
-    only where **previous** output is quoted into a prompt; the instruction
-    that asks for a marker is written by us and must stay verbatim.
+    Split rather than removed: an operator reading the prompt still sees which
+    marker is being talked about, and the agent still reads the word — it just
+    cannot be echoed back as a line the parser would count. Applied only where
+    **previous** output is quoted into a prompt; the instruction that asks for
+    a marker is written by us and must stay verbatim.
     """
     from .runner import TERMINAL_MARKERS
 
     for marker in TERMINAL_MARKERS:
-        text = text.replace(marker, f"{marker[:-1]}​{marker[-1]}")
+        text = text.replace(marker, f"{marker[:-1]}{ZERO_WIDTH_SPACE}{marker[-1]}")
     return text
 
 

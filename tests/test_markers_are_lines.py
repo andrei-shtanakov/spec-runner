@@ -193,6 +193,16 @@ class TestTheLoopDoesNotPrimeItself:
         assert "TASK_BLOCKE" in quoted, "the operator must still see which marker is meant"
         assert terminal_markers(quoted) == []
 
+    def test_the_separator_is_the_named_character(self):
+        """Pinned by codepoint (Copilot, PR #269). The separator used to be an
+        invisible literal in the source: an editor, a formatter or a paste
+        through a terminal could drop it, and nothing here would have noticed —
+        the tokens would simply be back in prompts."""
+        from spec_runner.prompt import ZERO_WIDTH_SPACE, neutralise_markers
+
+        assert ZERO_WIDTH_SPACE == "\u200b"
+        assert neutralise_markers("TASK_COMPLETE") == "TASK_COMPLET\u200bE"
+
     def test_the_retry_prompt_carries_the_broken_form(self, tmp_path):
         from spec_runner.config import ExecutorConfig
         from spec_runner.prompt import build_task_prompt
