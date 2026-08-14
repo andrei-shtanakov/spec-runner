@@ -172,6 +172,14 @@ against what the operator last saw silently applies to whatever arrived since.
 - After `repair`, a **new RED replay is mandatory**. Accepting repaired bytes
   without re-demonstrating the red would make `repair` a way to launder an
   unverified claim — the exact hole the whole contract closes.
+- The replay runs **before anything is written** (#263). Only `expected_fail`
+  supersedes the standing lineage; a repaired test that passes, or a replay
+  that cannot run, leaves the checkpoint and its claims exactly as they were.
+  This is also the whole of the post-green protection: a test that the
+  implementation satisfies cannot re-establish a red, and the operator is sent
+  to `resume`. It is deliberately **not** a phase-history check — "an
+  implementation call was started" is not "an implementation exists", and an
+  attempted-and-reverted green must leave `repair` available.
 - Gate verdicts from before the remedy become **stale**. They are statements
   about a tree and a policy that no longer apply, which is #164 criterion 5
   arriving here on schedule.

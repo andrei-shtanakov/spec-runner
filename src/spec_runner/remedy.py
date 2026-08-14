@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 
 from .claims import ClaimRefused, ClaimStatus, ensure_claimable, record_claims, selector_of
 from .logging import get_logger
-from .tdd import RedCheckpoint, RedOutcome, resolve_namespace, verify_red
+from .tdd import RedCheckpoint, RedOutcome, RedVerification, resolve_namespace, verify_red
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
@@ -87,6 +87,10 @@ class RemedyResult:
     new_checkpoint_id: str | None = None
     outcome: RedOutcome | None = None
     already_applied: bool = False
+    #: What to tell the operator beyond the verdict — the door out of the
+    #: state they are in. Set where the state is known (#263), printed by the
+    #: CLI, so the two cannot drift into different advice.
+    note: str | None = None
 
 
 def resolve_actor(config: ExecutorConfig, actor: str | None) -> str:
@@ -149,19 +153,23 @@ def repair(
 ) -> RemedyResult:
     """The edit to the locked file is legitimate. Open a new lineage from it.
 
-    Not "accept these bytes": the new lineage is replayed immediately, and what
-    it establishes is recorded honestly — including a repaired test that turns
-    out to pass, which is not a red and must not be recorded as one.
+    Not "accept these bytes": the new lineage is replayed immediately, and only
+    a replay that re-establishes a red changes anything. A repaired test that
+    turns out to pass is reported as what it is and leaves the standing
+    evidence alone — see `_unestablished_repair`, which is also where the
+    post-green protection now lives.
     """
     namespace = _guard(config, reason)
-    _refuse_repair_after_green(state, namespace, task_id)
 
     prior = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REPAIR)
     if prior is not None:
         # Carry the lineage's outcome, not just its id. Without it a repeated
         # `repair` reports a bare success over a lineage that never
         # re-established a red — the first call said so and exited 2, and the
-        # second must not quietly disagree.
+        # second must not quietly disagree. Since #263 no such lineage is
+        # written any more, so this now speaks for state a **previous version**
+        # recorded: those rows are still in operators' databases, and a repeat
+        # must keep reading them the way the first call did.
         lineage = (
             state.checkpoint_by_id(namespace, prior.new_checkpoint_id)
             if prior.new_checkpoint_id
@@ -182,6 +190,9 @@ def repair(
     verification = verify_red(
         config, sha=commit, selector=active.selector, baseline_sha=active.commit_sha
     )
+    if verification.outcome is not RedOutcome.EXPECTED_FAIL:
+        return _unestablished_repair(state, namespace, task_id, checkpoint_id, verification)
+
     lineage = RedCheckpoint(
         task_id=task_id,
         namespace=namespace,
@@ -197,20 +208,18 @@ def repair(
         timestamp=datetime.now().isoformat(),
     )
 
-    if verification.outcome is RedOutcome.EXPECTED_FAIL:
-        # Refuse before touching anything: a lineage recorded as a confirmed
-        # red whose file cannot be locked is the same hole in a different
-        # doorway, and by then the old lock would already be gone.
-        try:
-            parsed = selector_of(config, lineage)
-            if parsed is None:
-                raise ClaimRefused(
-                    f"selector {lineage.selector!r} cannot be parsed by this "
-                    "project's runner adapter"
-                )
-            ensure_claimable(config, parsed)
-        except ClaimRefused as exc:
-            raise RemedyError(f"the repaired red cannot be locked: {exc}") from exc
+    # Refuse before touching anything: a lineage recorded as a confirmed red
+    # whose file cannot be locked is the same hole in a different doorway, and
+    # by then the old lock would already be gone.
+    try:
+        parsed = selector_of(config, lineage)
+        if parsed is None:
+            raise ClaimRefused(
+                f"selector {lineage.selector!r} cannot be parsed by this project's runner adapter"
+            )
+        ensure_claimable(config, parsed)
+    except ClaimRefused as exc:
+        raise RemedyError(f"the repaired red cannot be locked: {exc}") from exc
 
     state.set_checkpoint_status(namespace, active.checkpoint_id, CheckpointStatus.SUPERSEDED)
     state.supersede_claims(
@@ -219,8 +228,7 @@ def repair(
     # Claims before the checkpoint, for the reason spelled out in
     # `run_red_phase`: a crash between the two must not leave a confirmed red
     # with no lock.
-    if verification.outcome is RedOutcome.EXPECTED_FAIL:
-        record_claims(config, state, lineage)
+    record_claims(config, state, lineage)
     state.record_red_checkpoint(lineage)
     _record(
         state,
@@ -429,28 +437,73 @@ def _is_ancestor(config: ExecutorConfig, ancestor: str, descendant: str) -> bool
     return result.returncode == 0
 
 
-def _refuse_repair_after_green(state: ExecutorState, namespace: str, task_id: str) -> None:
-    """Repair asks "is this changed test still a red?" — a question with no
-    honest answer once the implementation exists (#232 §5).
+def _unestablished_repair(
+    state: ExecutorState,
+    namespace: str,
+    task_id: str,
+    checkpoint_id: str,
+    verification: RedVerification,
+) -> RemedyResult:
+    """The replay did not establish a red, so nothing is changed (#263).
 
-    Answering it costs a replay and, worse, retires the evidence: that is how
-    the pilot ended with a `not_red` lineage, a superseded confirmed red, and a
-    task that could not finish. A behaviour change to a shipped command, made
-    deliberately — what worked yesterday produced a wedge.
+    This *is* the post-green guard. The one it replaces asked the phase
+    history whether green had been reached — and "an implementation call was
+    started" is not "an implementation exists". An agent that implemented,
+    found the frozen test structurally impossible, reverted everything and
+    reported `TASK_BLOCKED` had reached `green_implementing`, so the guard
+    refused the repair the blocked message itself tells the operator to run,
+    on the grounds that "the replay would pass" — while the replay would have
+    failed, twice, at the selector.
+
+    What the guard was protecting is real and is kept: a repair after a green
+    replays a test the implementation now satisfies, and recording that
+    retires the confirmed red the task still needs. The protection just moves
+    to where the answer actually lives. The replay runs first — against the
+    repaired **commit**, in a disposable worktree — and its verdict decides:
+
+    - `expected_fail`: this repair re-established a red, whatever the phase
+      history says; proceed.
+    - anything else: change nothing. The standing checkpoint and its claims
+      are left exactly as they were, which is strictly better than what the
+      old order did (supersede first, then record a `not_red` lineage and
+      leave the task with no confirmed red at all).
+
+    The phase history is still read — for the *advice*, not for the verdict.
+    A test that passes on a tree with a verified green passes because of the
+    green, and `resume` is that operator's door.
     """
     from .lifecycle import TddPhase, has_reached
 
-    # The same correction as `resume`'s, mirrored — and the more dangerous half
-    # (#249). Asked of `current_phase`, this guard went **quiet** exactly where
-    # it is needed: a task that reached green and was then retried reads as
-    # `red_authoring`, so the repair that creates the wedge was still allowed.
-    # That is how the pilot got here in the first place.
-    if has_reached(state, namespace, task_id, TddPhase.GREEN_IMPLEMENTING):
-        raise RemedyError(
-            f"{task_id} has reached green in this workstream: a red cannot be repaired once the "
-            "implementation exists — the replay would pass, and recording that supersedes the "
-            "confirmed red this task still needs. Use `spec-runner tdd resume` to reinstate it"
+    if verification.outcome is RedOutcome.NOT_RED and has_reached(
+        state, namespace, task_id, TddPhase.GREEN_VERIFYING
+    ):
+        note = (
+            "the test passes on the repaired commit, and this task has a verified green — "
+            "the implementation is what makes it pass. Use `spec-runner tdd resume` to "
+            "reinstate the confirmed red instead"
         )
+    elif verification.outcome is RedOutcome.NOT_RED:
+        note = (
+            "the repaired test passes on its own commit, so it cannot re-establish a red. "
+            "Nothing was changed: the standing checkpoint and its claims are untouched"
+        )
+    else:
+        note = (
+            f"the replay could not run ({verification.detail or 'no detail'}), so nothing is "
+            "proven either way. Nothing was changed"
+        )
+    logger.warning(
+        "Repair did not establish a red",
+        task_id=task_id,
+        checkpoint=checkpoint_id,
+        outcome=verification.outcome.value,
+    )
+    return RemedyResult(
+        RemedyOperation.REPAIR,
+        checkpoint_id,
+        outcome=verification.outcome,
+        note=note,
+    )
 
 
 def _guard(config: ExecutorConfig, reason: str) -> str:
@@ -651,6 +704,12 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         print(f"✔️  Abandoned {result.checkpoint_id}; {args.task_id} returns to RED authoring")
         return 0
 
+    if result.new_checkpoint_id is None:
+        # Nothing was opened, so nothing is announced as opened (#263). The
+        # verdict and the way out are printed by `_repair_exit`.
+        print(f"⛔ Not repaired: {result.checkpoint_id} still stands")
+        return _repair_exit(result)
+
     print(f"✔️  Repaired: new lineage {result.new_checkpoint_id} (was {result.checkpoint_id})")
     return _repair_exit(result)
 
@@ -707,7 +766,8 @@ def _repair_exit(result: RemedyResult) -> int:
         return 0
     outcome = result.outcome.value if result.outcome else "no verdict"
     print(f"   ⚠️  The repaired commit did not establish a red ({outcome}).")
-    print("   The task has no confirmed red and will be gated until it does.")
+    if result.note:
+        print(f"   {result.note}.")
     return 2
 
 

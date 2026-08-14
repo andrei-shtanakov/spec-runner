@@ -494,24 +494,35 @@ class TestRepairAfterGreen:
     def test_it_is_refused_and_points_at_resume(self, tmp_path):
         """§5: repair asks whether a changed test is still a red, which has no
         honest answer once the implementation exists — and answering it retires
-        the evidence. That is how the pilot got here."""
-        root, cfg, cp = _pilot(tmp_path)
+        the evidence. That is how the pilot got here.
+
+        Since #263 the refusal comes from the **replay** rather than from a
+        phase row, and it is a verdict rather than an exception: the test
+        passes on that commit, so no red was established and nothing changed.
+        The advice is where the phase history is still read.
+        """
+        root, cfg, cp = _pilot(tmp_path, green_touches_test=True)
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
 
-        with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="resume") as exc:
-            repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
+        with ExecutorState(cfg) as state:
+            result = repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
+            still = state.red_checkpoint("TASK-101", resolve_namespace(cfg))
 
-        assert "has reached green" in str(exc.value)
+        assert result.new_checkpoint_id is None
+        assert result.note is not None and "tdd resume" in result.note
+        assert still is not None and still.checkpoint_id == cp.checkpoint_id
 
     def test_it_is_refused_after_the_wedges_own_retries(self, tmp_path):
-        """The mirrored half of #249, and the more dangerous one.
+        """The mirrored half of #249 — and the reason the answer moved off the
+        phase rows entirely.
 
         Asked of `current_phase`, this guard went **quiet** exactly where it is
         needed: a task that reached green and was then retried reads as
         `red_authoring`, so the repair that creates the wedge was still
-        allowed. That is how the pilot arrived here in the first place.
+        allowed. Asked of the high-water mark it went *loud* where it must not
+        (#263). The replay is indifferent to both: it looks at the tree.
         """
-        root, cfg, cp = _pilot(tmp_path)  # its history ends in two red_authoring rows
+        root, cfg, cp = _pilot(tmp_path, green_touches_test=True)
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         from spec_runner.lifecycle import current_phase
 
@@ -519,8 +530,10 @@ class TestRepairAfterGreen:
             assert current_phase(state, resolve_namespace(cfg), "TASK-101") is (
                 TddPhase.RED_AUTHORING
             ), "the fixture must reproduce the wedge's tail, or this proves nothing"
-            with pytest.raises(RemedyError, match="has reached green"):
-                repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
+            result = repair(cfg, state, "TASK-101", cp.checkpoint_id, head, reason="fix it")
+
+        assert result.outcome is RedOutcome.NOT_RED
+        assert result.new_checkpoint_id is None
 
     def test_before_green_it_still_works(self, tmp_path):
         """The refusal must not swallow the case repair was built for."""
