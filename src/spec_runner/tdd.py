@@ -510,7 +510,9 @@ def run_red_phase(
         raise BudgetRefused(refusal)
 
     _say("\U0001f534 RED: authoring a failing test")
-    call = _run_agent(config, build_red_prompt(task, config))
+    red_prompt = build_red_prompt(task, config)
+    _log_prompt(config, task, red_prompt)
+    call = _run_agent(config, red_prompt)
     # Recorded before anything can refuse the result: the call happened and was
     # paid for whether or not it produced something usable.
     state.record_agent_call(
@@ -789,6 +791,31 @@ class AgentCall:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+
+
+def _log_prompt(config: ExecutorConfig, task, prompt: str) -> None:
+    """Write the RED prompt beside the implementation pass's (#282).
+
+    The implementation prompt has been logged since long before this; the RED
+    prompt — a **paid** call whose output becomes the checkpoint's selector and
+    decides which file is frozen for the rest of the task — was written
+    nowhere. After a run there was no record of what was asked, which is how
+    #198 (a pytest-shaped selector demanded of an ExUnit project) and #220 (a
+    Python linter applied to an Elixir file) could only be found by reading the
+    code rather than the logs, and why a published artifact could not be
+    checked against its own prompt.
+
+    Never fatal. A prompt that could not be written is worth a warning; it is
+    not worth failing a task over, and least of all *before* the call it
+    describes.
+    """
+    try:
+        config.logs_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = config.logs_dir / f"{task.id}-red-{stamp}.log"
+        path.write_text(f"=== RED PROMPT ===\n{prompt}\n")
+    except OSError as exc:
+        logger.warning("Could not log the RED prompt", task_id=task.id, error=str(exc))
 
 
 def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
