@@ -439,11 +439,24 @@ class ExecutorState:
                 actor TEXT NOT NULL,
                 reason TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
+                reserve_stage TEXT,
+                reserve_usd REAL,
                 CHECK (scope IN ('task', 'run')),
                 CHECK (scope != 'run' OR (namespace IS NULL AND task_id IS NULL)),
-                CHECK (scope != 'task' OR task_id IS NOT NULL)
+                CHECK (scope != 'task' OR task_id IS NOT NULL),
+                CHECK (reserve_usd IS NULL OR reserve_usd > 0),
+                CHECK ((reserve_stage IS NULL) = (reserve_usd IS NULL))
             )
         """)
+        # #267: a reserve rides on the authorization that carries the ceiling.
+        # An older domain has neither column and every row reads as "no
+        # reserve", which is what those authorizations meant.
+        _auth_columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(budget_authorizations)")
+        }
+        for column in ("reserve_stage TEXT", "reserve_usd REAL"):
+            if column.split()[0] not in _auth_columns:
+                self._conn.execute(f"ALTER TABLE budget_authorizations ADD COLUMN {column}")
         # #141 slice 2: a claim's own table, not a JSON column on the
         # checkpoint — enforcement queries by (namespace, path, status) across
         # tasks, and two tasks claiming one path is the case that has to be
@@ -1405,6 +1418,8 @@ class ExecutorState:
         task_id: str | None = None,
         namespace: str | None = None,
         previous_limit_usd: float | None = None,
+        reserve_stage: str | None = None,
+        reserve_usd: float | None = None,
     ) -> int:
         """Append one authorization and return its id. Never updates a row."""
         assert self._conn is not None
@@ -1412,7 +1427,8 @@ class ExecutorState:
             cur = self._conn.execute(
                 "INSERT INTO budget_authorizations (domain_id, scope, task_id, namespace, "
                 "previous_limit_usd, new_limit_usd, recorded_spend_usd, unmeasured_calls, "
-                "actor, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "actor, reason, timestamp, reserve_stage, reserve_usd) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self.budget_domain_id(),
                     scope,
@@ -1425,6 +1441,8 @@ class ExecutorState:
                     actor,
                     reason,
                     datetime.now().isoformat(),
+                    reserve_stage,
+                    reserve_usd,
                 ),
             )
         return int(cur.lastrowid or 0)
@@ -1440,7 +1458,8 @@ class ExecutorState:
         assert self._conn is not None
         sql = (
             "SELECT id, scope, task_id, namespace, previous_limit_usd, new_limit_usd, "
-            "recorded_spend_usd, unmeasured_calls, actor, reason, timestamp "
+            "recorded_spend_usd, unmeasured_calls, actor, reason, timestamp, "
+            "reserve_stage, reserve_usd "
             "FROM budget_authorizations WHERE domain_id = ? AND scope = ?"
         )
         params: list[object] = [self.budget_domain_id(), scope]
@@ -1466,6 +1485,8 @@ class ExecutorState:
             "actor",
             "reason",
             "timestamp",
+            "reserve_stage",
+            "reserve_usd",
         )
         return dict(zip(cols, row, strict=True))
 

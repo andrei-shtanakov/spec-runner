@@ -10,6 +10,33 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **A review reserve that is actually enforced** (#267, F-39):
+  `spec-runner budget authorize --reserve review=2.00`. Review is the last paid
+  call of an attempt, so whatever the earlier stages spend, it is the one that
+  meets the ceiling — three of four pilot tasks completed unreviewed for that
+  reason alone, the last of them after an operator raised the ceiling *naming a
+  review reserve in the authorization's reason*. Prose; nothing stopped the
+  exec pass from spending it.
+
+  A reserve rides on the authorization that carries the ceiling it partitions,
+  in both scopes. Every call that is not the reserved stage's sees `ceiling -
+  reserve`; the reserved stage's own calls — `review` and each `review:<role>`,
+  matched by prefix so a five-role review is covered — see the whole ceiling.
+  Refusals say which part is withheld and for what, since otherwise the
+  arithmetic looks broken: a ceiling of $7.00 and a refusal at $5.10.
+
+  Deliberately not a lower ceiling: readers asking about the run as a whole
+  (the preflight, `costs`) still get the ceiling as authorised, so a reserve
+  never stops a run from starting. A reserve at or above the ceiling is refused
+  at authorize time — it would wedge every earlier stage rather than reserve
+  anything.
+
+  And the minimum the report asked for, kept even though the mechanism exists:
+  an authorization whose *reason* talks about a reserve without setting one now
+  says that this is decoration.
+
 ### Fixed
 
 - **Terminal markers are read as lines, not substrings** (#266, F-38). An

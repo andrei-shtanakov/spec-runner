@@ -140,7 +140,13 @@ updated or deleted, and the standing limit for a scope is the newest row.
 Columns: `domain_id` (see below), `scope` (`task`/`run`), `task_id` and
 `namespace` (both set for a task scope, both **NULL** for a run scope — a
 `CHECK` enforces it), `previous_limit_usd`, `new_limit_usd`,
-`recorded_spend_usd`, `unmeasured_calls`, `actor`, `reason`, `timestamp`.
+`recorded_spend_usd`, `unmeasured_calls`, `actor`, `reason`, `timestamp`, and
+(v2.32.0) `reserve_stage` / `reserve_usd` — both NULL or both set, a `CHECK`
+enforces it. A reserve withholds that much of the ceiling from every call whose
+provenance is not that stage's (#267): review is the last paid call of an
+attempt, so it is structurally the one the remainder starves. Added by
+migration, so authorizations written before it read as "no reserve", which is
+what they meant.
 
 `recorded_spend_usd` and `unmeasured_calls` capture *what the human was looking
 at*: $6.00 authorised against a proven $2.53 means something different from

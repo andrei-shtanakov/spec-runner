@@ -43,12 +43,21 @@ def authorize(
     run_budget_usd: float | None = None,
     actor: str | None = None,
     after: int | None = None,
+    reserve: tuple[str, float] | None = None,
 ) -> list[dict]:
     """Raise one or both ceilings. Returns the rows written.
 
     Both axes are accepted because neither implies the other: raising only the
     task ceiling leaves `budget_usd` refusing the very next call, and raising
     only the run ceiling leaves the task's own cap in place.
+
+    ``reserve`` is `(stage, usd)` withheld from every call that is not that
+    stage's (#267). Review is the last paid call of an attempt, so it is
+    structurally the one the remaining budget cannot cover: three of four pilot
+    tasks completed unreviewed, the last of them after an operator raised the
+    ceiling *naming a review reserve in the reason* — prose, which nothing
+    enforced. The reserve rides on the authorization because that is where the
+    ceiling it partitions lives.
     """
     from .budget import effective_limits
     from .remedy import _refuse_if_running
@@ -64,6 +73,18 @@ def authorize(
         raise AuthorizationError("nothing to authorize: name --task-limit, --run-limit, or both")
     if task_budget_usd is not None and not task_id:
         raise AuthorizationError("--task-limit needs the task it applies to")
+    if reserve is not None:
+        stage, amount = reserve
+        if amount <= 0:
+            raise AuthorizationError(f"a reserve of ${amount:.2f} reserves nothing")
+        for limit, axis in ((task_budget_usd, "--task-limit"), (run_budget_usd, "--run-limit")):
+            if limit is not None and amount >= limit:
+                # Everything before the reserved stage would be refused
+                # immediately, which is a wedge rather than a reserve.
+                raise AuthorizationError(
+                    f"a ${amount:.2f} reserve for {stage} leaves nothing under the "
+                    f"${limit:.2f} {axis} ceiling for the stages before it"
+                )
     try:
         _refuse_if_running(config)
     except RemedyError as exc:
@@ -95,6 +116,7 @@ def authorize(
                 reason=reason.strip(),
                 task_id=task_id,
                 namespace=namespace,
+                reserve=reserve,
             )
         )
 
@@ -118,6 +140,7 @@ def authorize(
                 # workstream its own "global" cap.
                 task_id=None,
                 namespace=None,
+                reserve=reserve,
             )
         )
     return written
@@ -178,6 +201,7 @@ def _write(
     reason: str,
     task_id: str | None,
     namespace: str | None,
+    reserve: tuple[str, float] | None = None,
 ) -> dict:
     auth_id = state.record_budget_authorization(
         scope=scope,
@@ -189,6 +213,8 @@ def _write(
         task_id=task_id,
         namespace=namespace,
         previous_limit_usd=previous,
+        reserve_stage=reserve[0] if reserve else None,
+        reserve_usd=reserve[1] if reserve else None,
     )
     logger.info(
         "Budget authorized",
@@ -210,6 +236,8 @@ def _write(
         "recorded_spend_usd": spend,
         "unmeasured_calls": unmeasured,
         "actor": actor,
+        "reserve_stage": reserve[0] if reserve else None,
+        "reserve_usd": reserve[1] if reserve else None,
     }
 
 
@@ -218,6 +246,23 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
     if getattr(args, "budget_command", None) != "authorize":
         print("Usage: spec-runner budget authorize [TASK-ID] --reason ... [--task-limit N]")
         return 1
+    try:
+        reserve = parse_reserve(getattr(args, "reserve", None))
+    except AuthorizationError as exc:
+        print(f"⛔ {exc}")
+        return 1
+
+    if reserve is None and _reads_like_a_reserve(args.reason or ""):
+        # The pilot's authorization #8 said the reserve in its reason and
+        # nothing enforced it (#267). Saying so at the moment of the decision
+        # is the cheapest possible version of this fix, and it stays useful
+        # after the real one exists.
+        print(
+            "⚠️  The reason mentions a reserve, but none was set. A reserve stated in prose "
+            "is not enforced — pass `--reserve review=2.00` to withhold it from the "
+            "earlier stages."
+        )
+
     try:
         with ExecutorState(config) as state:
             rows = authorize(
@@ -229,6 +274,7 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
                 run_budget_usd=getattr(args, "run_limit", None),
                 actor=getattr(args, "actor", None),
                 after=getattr(args, "after", None),
+                reserve=reserve,
             )
     except AuthorizationError as exc:
         print(f"⛔ {exc}")
@@ -250,8 +296,40 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
                 else ""
             )
         )
+        if row["reserve_usd"]:
+            print(
+                f"   reserved for {row['reserve_stage']}: ${float(row['reserve_usd']):.2f} "
+                "— the earlier stages see the ceiling minus this"
+            )
         print(f"   actor: {row['actor']}")
     return 0
 
 
-__all__ = ["AuthorizationError", "authorize", "cmd_budget"]
+def parse_reserve(value: str | None) -> tuple[str, float] | None:
+    """`--reserve review=2.00` → `("review", 2.0)`.
+
+    The stage is not validated against a list of stages: provenance labels are
+    the runtime's vocabulary (`red_authoring`, `green`, `review`,
+    `review:<role>`), and a typo produces a reserve that withholds money from
+    everything and is spent by nothing — visible immediately in the refusal,
+    which names the stage it is reserved for.
+    """
+    if value is None:
+        return None
+    stage, sep, amount = value.partition("=")
+    if not sep or not stage.strip():
+        raise AuthorizationError(f"--reserve wants stage=amount, got {value!r}")
+    try:
+        parsed = float(amount)
+    except ValueError:
+        raise AuthorizationError(f"--reserve amount {amount!r} is not a number") from None
+    return stage.strip(), parsed
+
+
+def _reads_like_a_reserve(reason: str) -> bool:
+    """Whether a reason is *talking about* a reserve it did not set."""
+    lowered = reason.lower()
+    return "reserve" in lowered or "reserved" in lowered
+
+
+__all__ = ["AuthorizationError", "authorize", "cmd_budget", "parse_reserve"]
