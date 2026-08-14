@@ -12,6 +12,38 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`tdd repair` reads the replay, not a phase row** (#263, F-37). The agent
+  implemented TASK-104, discovered empirically that the frozen test asserts a
+  shape the requirement contradicts, **reverted everything** and reported
+  `TASK_BLOCKED` exactly as instructed — "only an operator may abandon or
+  repair a claim". The operator did that, and was refused: *"TASK-104 has
+  reached green: a red cannot be repaired once the implementation exists — the
+  replay would pass"*. No implementation existed. The replay would have failed,
+  twice, at the selector. `resume` — the door the refusal offered — would have
+  refused too, correctly, there being no green to resume past. Three closed
+  doors around a tree that was honestly red.
+
+  The guard asked `has_reached(GREEN_IMPLEMENTING)`, and *an implementation
+  call was started* is not *an implementation exists*. What it protected is
+  real — a repair after a genuine green replays a test the implementation now
+  satisfies, and recording that retires the confirmed red the task still needs
+  (#232) — so the protection moves to where the answer lives: the replay runs
+  first, against the repaired commit, in a disposable worktree, and only
+  `expected_fail` changes anything.
+
+  That reordering is strictly safer than what it replaces. The old code
+  superseded the standing checkpoint and its claims **before** learning the
+  verdict, so a repair that established no red left the task with no confirmed
+  red at all — the wedge, dealt by the remedy for it. A repair that establishes
+  nothing now changes nothing, and says which door is the operator's: `resume`
+  only when the lifecycle actually reached a **verified** green.
+
+  Behaviour change to a shipped command: a repair whose test passes no longer
+  records a `not_red` lineage. It exits 2 as before, and now reports that the
+  standing checkpoint still stands. Such lineages can still be *read* — a
+  database written by an earlier version holds them — and a repeat over one no
+  longer prints a tick above its exit code of 2.
+
 - **The lifecycle machine reads the evidence, not the previous row** (#253,
   F-31). Its contract is *GREEN may not be reached without a confirmed red* —
   a statement about evidence, decided from the last recorded phase. Those

@@ -190,14 +190,23 @@ class TestRepair:
 
     def test_the_new_lineage_must_prove_its_own_red(self, tmp_path):
         """`repair` is not "these bytes are fine". A repaired test that passes
-        is not a red, and saying so is the whole point of re-replaying."""
+        is not a red, and saying so is the whole point of re-replaying.
+
+        Since #263 that verdict also decides whether anything is written: the
+        replay runs before any status change, and a repair that establishes no
+        red leaves the standing checkpoint and its claims exactly as they were.
+        The old order superseded first and then recorded the `not_red` lineage,
+        which left the task with no confirmed red at all — the wedge.
+        """
         root, cfg, cp = _establish(tmp_path)
         fixed = self._repaired_commit(root, PASSING)
         with ExecutorState(cfg) as state:
             result = repair(cfg, state, "TASK-001", cp.checkpoint_id, fixed, reason="typo")
             active = state.red_checkpoint("TASK-001", resolve_namespace(cfg))
         assert result.outcome is RedOutcome.NOT_RED
-        assert active.outcome is RedOutcome.NOT_RED
+        assert result.new_checkpoint_id is None
+        assert active.checkpoint_id == cp.checkpoint_id
+        assert active.outcome is RedOutcome.EXPECTED_FAIL, "the standing red still stands"
 
     def test_a_confirmed_repair_claims_the_new_bytes(self, tmp_path):
         root, cfg, cp = _establish(tmp_path)
@@ -427,6 +436,10 @@ class TestARepeatDoesNotLaunderTheVerdict:
         return argparse.Namespace(**kw)
 
     def test_a_repeated_repair_of_a_not_red_lineage_still_exits_2(self, tmp_path, capsys):
+        """Since #263 the first call records nothing, so the repeat is not an
+        idempotent replay of a stored verdict — it re-replays and reaches the
+        same one. The property this class exists for is unchanged: running the
+        command twice must not turn a refusal into a success."""
         from spec_runner.remedy import cmd_tdd
 
         root, cfg, cp = _establish(tmp_path)
@@ -444,8 +457,8 @@ class TestARepeatDoesNotLaunderTheVerdict:
 
         assert cmd_tdd(args, cfg) == 2, "the repeat must reach the same verdict as the first call"
         out = capsys.readouterr().out
-        assert "Already applied" in out
         assert "did not establish a red" in out
+        assert "Not repaired" in out
 
     def test_a_repeated_repair_of_a_confirmed_red_still_exits_0(self, tmp_path):
         from spec_runner.remedy import cmd_tdd
