@@ -10,6 +10,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.33.2] - 2026-08-14
+
+**Patch, and not a cosmetic one.** One fix: `budget authorize` no longer
+applies half a decision. Without it a failed dual-axis command can leave a
+**partial financial decision** on the record — one ceiling raised, the other
+refused, exit 1, and nothing said about the half that landed. A paid run must
+not be built on a version with a known non-atomic authority operation.
+
+No flag, key, schema or exit code moves — checked by diffing `schemas/`,
+`docs/state-schema.md` and the `add_argument` lines against v2.33.1. What
+changes is that a refusal now refuses everything.
+
 ### Fixed
 
 - **`budget authorize` applies fully or not at all** (#289). Raising both
@@ -3062,7 +3074,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...HEAD
+[2.33.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...v2.33.2
 [2.33.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...v2.33.1
 [2.33.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...v2.33.0
 [2.32.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...v2.32.1
