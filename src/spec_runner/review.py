@@ -692,7 +692,7 @@ def _run_single_role_review(
     # question from `review:performance`, and one aggregate log would hide
     # which role was asked what — the same reasoning that gave each role its
     # own ledger row.
-    log_prompt(config, task_id, role_provenance(role), full_prompt)
+    prompt_log = log_prompt(config, task_id, role_provenance(role), full_prompt)
     try:
         call = _run_reviewer(
             config,
@@ -705,7 +705,19 @@ def _run_single_role_review(
             pending_cost,
         )
         if call.budget_refusal:
+            # No call was made, so there is no answer to record — and a log
+            # claiming one would say money was spent that was not.
             return role, ReviewVerdict.NOT_RUN, call.budget_refusal
+        # Beside the prompt it answered, exactly as the single path does
+        # (Copilot, PR #287): a role log holding the question and not the
+        # answer is the half of a postmortem nobody needs.
+        append_output(
+            prompt_log,
+            call.text,
+            call.stderr,
+            returncode=call.returncode,
+            cost_usd=call.cost_usd,
+        )
         if call.timed_out:
             return role, ReviewVerdict.NOT_RUN, f"Review timeout ({role})"
         output = call.text + "\n" + call.stderr

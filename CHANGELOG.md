@@ -13,7 +13,7 @@ is a **breaking change** and requires a major version bump plus an entry here.
 ### Added
 
 - **Every paid stage's prompt is recorded, in one format** (#282 and its
-  follow-up). Measuring first narrowed what was missing: the **single** review
+  follow-up) — RED, the implementation pass, review, and each `review:<role>`. Measuring first narrowed what was missing: the **single** review
   path already wrote its prompt, the **per-role** path wrote nothing — so a
   parallel review left five paid calls and no record of what any of them was
   asked — and neither shared a format, a bound or a provenance with the RED
@@ -31,9 +31,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
   Bounded, keeping head **and** tail: the frozen-files block is appended last
   (#214), so a head-only truncation would drop precisely what a claims refusal
-  sends an operator to read. A role name reaches the filename through a
-  whitelist, so config cannot name a file outside the log directory or one that
-  hides from `ls`.
+  sends an operator to read. The truncation marker carries the original size
+  and the **SHA-256 of the full text**, so a shortened log can still be matched
+  against a prompt reproduced later — *was the agent sent this* is the question,
+  and a hash answers it where a middle-less copy cannot. The bound applies to
+  the answer and the stderr as well, not only to the prompt.
+
+  Both the **role name and the task id** reach the filename through a
+  whitelist, and the file's header comes from the sanitised slug: config cannot
+  name a file outside the log directory, one that hides from `ls`, or — with a
+  newline — a fake section inside the file. Measured before fixing: a task id
+  of `../../escaped` wrote outside `logs_dir`.
 
 - **The RED authoring prompt is written to the log directory** (#282, found by
   rehearsing the published 2.33.0). The implementation pass has logged its
