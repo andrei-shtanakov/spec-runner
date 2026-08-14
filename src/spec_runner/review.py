@@ -8,13 +8,13 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
 
 from .budget import budget_is_active
 from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, neutralise_markers, render_template
+from .prompts_log import append_output, log_prompt
 from .runner import (
     AgentAnswer,
     CliResult,
@@ -531,10 +531,12 @@ def run_code_review(
         previous_error=previous_error,
     )
 
-    # Save review prompt to log
-    log_file = config.logs_dir / f"{task.id}-review-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    with open(log_file, "w") as f:
-        f.write(f"=== REVIEW PROMPT ===\n{prompt}\n\n")
+    # The prompt as sent, through the writer every paid stage shares (#282
+    # follow-up). This path already logged its prompt; what it did not do was
+    # use the same format, the same bound, or the same provenance as the RED
+    # pass — and the per-role path below logged nothing at all, so a parallel
+    # review left five paid calls and no record of what any of them was asked.
+    prompt_log = log_prompt(config, task.id, REVIEW_PROVENANCE, prompt)
 
     try:
         log_progress(
@@ -570,12 +572,16 @@ def run_code_review(
         stderr = call.stderr
         combined_output = output + "\n" + stderr
 
-        # Save output
-        with open(log_file, "a") as f:
-            f.write(f"=== OUTPUT ===\n{output}\n\n")
-            f.write(f"=== STDERR ===\n{stderr}\n\n")
-            f.write(f"=== RETURN CODE: {call.returncode} ===\n")
-            f.write(f"=== COST: {'unknown' if call.cost_usd is None else call.cost_usd} ===\n")
+        # Save the answer beside the prompt it answered — including the two
+        # facts that make it readable later: what the process returned, and
+        # what the call cost (`unknown` when the CLI reported none, never 0.0).
+        append_output(
+            prompt_log,
+            output,
+            stderr,
+            returncode=call.returncode,
+            cost_usd=call.cost_usd,
+        )
 
         # Check for API errors
         error_pattern = check_error_patterns(combined_output)
@@ -682,6 +688,11 @@ def _run_single_role_review(
     expensive and which one was never measured at all.
     """
     full_prompt = f"{role_prompt}\n\n{base_prompt}"
+    # Per role, under its own provenance: `review:security` is a different
+    # question from `review:performance`, and one aggregate log would hide
+    # which role was asked what — the same reasoning that gave each role its
+    # own ledger row.
+    log_prompt(config, task_id, role_provenance(role), full_prompt)
     try:
         call = _run_reviewer(
             config,

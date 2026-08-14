@@ -12,6 +12,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Every paid stage's prompt is recorded, in one format** (#282 and its
+  follow-up). Measuring first narrowed what was missing: the **single** review
+  path already wrote its prompt, the **per-role** path wrote nothing — so a
+  parallel review left five paid calls and no record of what any of them was
+  asked — and neither shared a format, a bound or a provenance with the RED
+  prompt.
+
+  One writer now (`prompts_log`), for RED, review, and each `review:<role>`.
+  It records the prompt **as sent** (after template rendering and after every
+  appended block), its own provenance, and — where the caller has one — the
+  answer, the return code and the cost, written `unknown` rather than `0.0`
+  when the CLI reported none, because an unreported cost is exactly what the
+  budget guard refuses to spend against (#213).
+
+  Deliberately **not** recorded: argv, environment, model or command name.
+  Those are the runner's business and the place a secret would live.
+
+  Bounded, keeping head **and** tail: the frozen-files block is appended last
+  (#214), so a head-only truncation would drop precisely what a claims refusal
+  sends an operator to read. A role name reaches the filename through a
+  whitelist, so config cannot name a file outside the log directory or one that
+  hides from `ls`.
+
 - **The RED authoring prompt is written to the log directory** (#282, found by
   rehearsing the published 2.33.0). The implementation pass has logged its
   prompt for a long time; the RED pass — a **paid** call whose output becomes
