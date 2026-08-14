@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.33.1] - 2026-08-14
+
+**Patch.** Observability only: every paid call's prompt is now recorded, and
+nothing else changes. No flag, key, schema or exit code moves — checked by
+diffing `schemas/`, `docs/state-schema.md` and the `add_argument` lines against
+v2.33.0 rather than asserted. The only new artefacts are files under
+`logs_dir`, which is already the directory the implementation prompt has been
+written to for a long time.
+
+Cut before the next paid run rather than after it, at the owner's direction:
+the three paid stages had asymmetric observability, and the point of the run is
+to produce evidence that can be read afterwards.
+
 ### Added
 
 - **Every paid stage's prompt is recorded, in one format** (#282 and its
@@ -3032,7 +3045,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...HEAD
+[2.33.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...v2.33.1
 [2.33.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...v2.33.0
 [2.32.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.0...v2.32.1
 [2.32.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.31.0...v2.32.0
