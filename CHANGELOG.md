@@ -10,6 +10,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A git-tracked state database is refused instead of destroyed** (#273, found
+  by the free rehearsal of the published 2.32.0 artifact). If git tracks
+  `spec/.executor-state.db`, a run empties it — measured: **zero bytes**, exit
+  **0**, a completed task reported, and the cost ledger, the budget
+  authorizations, every red checkpoint and every claim gone without a message.
+
+  The mechanism is the fix for the other half of this hazard (#62/#67) seen
+  from behind. `stage_all_except_runtime` untracks the live file with
+  `git rm --cached` — which is right, and is what keeps runtime state out of a
+  task's commit — the task commit removes it from the tree, and the next branch
+  operation writes that absence over the open SQLite connection. The tool
+  prevented *creating* this state and never checked whether it was already *in*
+  it; a repository that committed the database before adopting the gitignore,
+  or lost the gitignore in a merge, was one run away.
+
+  `run`, `retry` and `watch` now refuse before anything executes, name the
+  tracked paths and print the two commands that fix it (the file survives
+  both). Same dormancy as the dirty-spec guard (#69) — without git automation
+  nothing touches the tree — and deliberately **no override flag**: dirt is
+  sometimes intended, running over a tracked ledger never is.
+
 ## [2.32.0] - 2026-08-14
 
 **Minor.** Two additive operator surfaces — `spec-runner tdd release` and

@@ -42,6 +42,46 @@ def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
     ]
 
 
+def tracked_state_paths(config: ExecutorConfig) -> list[str]:
+    """The state-DB paths git is **tracking**, repo-relative. Empty is healthy.
+
+    The hazard this answers is the one `runtime_state_paths` was written for
+    (#67), from the other side. That fix keeps the live SQLite file *out* of new
+    commits; it cannot help a repository where the file is already tracked —
+    and there the same machinery is what destroys it. Staging untracks it with
+    `git rm --cached`, the task commit removes it from the tree, and the next
+    `git checkout -- .` writes that absence over the open connection. Measured
+    on 2.32.0: the database ends as **zero bytes**, taking the cost ledger, the
+    budget authorizations, every red checkpoint and every claim with it, while
+    the run reports success (#273).
+
+    Only the database and its sidecars, deliberately: a tracked log file is
+    untidy, a tracked ledger is unrecoverable, and a guard that refuses to run
+    over untidiness would be one people learn to bypass.
+    """
+    state = config.state_file
+    candidates = [state, state.with_name(state.name + "-wal"), state.with_name(state.name + "-shm")]
+    rels: list[str] = []
+    for path in candidates:
+        try:
+            rels.append(str(path.relative_to(config.project_root)))
+        except ValueError:
+            continue  # outside the repo — git never saw it
+    if not rels:
+        return []
+    # `-z`, so paths come back raw. Plain `ls-files` C-quotes anything
+    # non-ASCII — `"wei rd/\303\251.db"` — and the guard prints its findings
+    # into a command an operator is meant to paste (Copilot, PR #275). A
+    # mangled path there is worse than no advice.
+    listed = _git(config, "ls-files", "-z", "--", *rels)
+    if listed.returncode != 0:
+        # Fail *open* here, unlike the destructive-path guards: this reads the
+        # index to protect data, and a repo git cannot read at all is a
+        # different problem that its own callers will report.
+        return []
+    return [path for path in listed.stdout.split("\0") if path.strip()]
+
+
 class WorktreeStatusError(RuntimeError):
     """`git status` could not be read (index lock, permissions, broken repo).
 
