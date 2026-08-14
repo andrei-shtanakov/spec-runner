@@ -12,6 +12,33 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A rejected red commit no longer starves the next authoring pass** (#261,
+  F-36). A red rejected *after* being committed — for violating an active claim,
+  or for lint debt in the file about to be frozen — stayed on the task branch
+  with no checkpoint. The next authoring pass then found the failing test
+  already in the tree, quite reasonably changed nothing, and the phase refused:
+  *"the authoring pass changed nothing, so there is no red commit to replay"*.
+  One rejected red starved every later attempt, each of them paid for.
+
+  The residue is not the problem; discarding it would be. It is the agent's
+  work, and #231 is the standing lesson about a tool that deletes work it did
+  not like. What was missing is that nothing ever **looked** at it. The phase
+  now adopts an unregistered red commit the tree already carries, replays it
+  like any other, and says `♻️ RED: adopting the unregistered red commit <sha>`
+  so nobody reads it as a fresh authoring.
+
+  Narrow by construction, because a checkpoint on the wrong commit is worse
+  than the wedge: HEAD's subject must be exactly what this task's red commit
+  writes for the selector the agent just reported, and no checkpoint may ever
+  have been recorded for it in any status — an adopted `abandon`ed commit would
+  undo a remedy silently. The adopted red's baseline is the commit's own
+  parent; taken from HEAD it would have been the red itself.
+
+  One more distinction falls out of it: `_commit_red` returned "" both when
+  there was nothing to commit and when the commit **failed** with the work
+  staged. Those now get different answers, and the second is never adopted
+  over.
+
 - **A completed task's claims are released** (#260, F-35). A claim froze its
   test file and nothing ever unfroze it, so the shipped invariant was: *once a
   task completes, its claimed file is frozen for the workstream forever*. The

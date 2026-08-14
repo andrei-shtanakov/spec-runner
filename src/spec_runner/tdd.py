@@ -543,10 +543,24 @@ def run_red_phase(
 
     sha = _commit_red(config, task, selector)
     if not sha:
-        return RedPhaseResult(
-            RedOutcome.UNVERIFIABLE,
-            "the authoring pass changed nothing, so there is no red commit to replay",
-        )
+        if _staged(config):
+            # `_commit_red` returns "" for two different events, and they need
+            # different answers (#261). This one is *the commit failed with the
+            # authored work staged* — a hook, a lock, a bad identity — and
+            # adopting an older commit here would step over work that exists.
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                "the red could not be committed; the authored work is staged and uncommitted",
+            )
+        sha = _unregistered_red(config, state, task, selector)
+        if not sha:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                "the authoring pass changed nothing, and the tree holds no unregistered red "
+                "commit for this task to replay",
+            )
+        _say(f"♻️  RED: adopting the unregistered red commit {sha[:12]}")
+    baseline = _parent_of(config, sha) or baseline
 
     # #141 slice 2. Two checks before this commit may become a checkpoint.
     #
@@ -756,6 +770,89 @@ def _commit_red(config: ExecutorConfig, task, selector: str) -> str:
         logger.warning("Red commit failed", stderr=committed.stderr.strip()[:200])
         return ""
     return _head(config)
+
+
+def _parent_of(config: ExecutorConfig, sha: str) -> str:
+    """``sha``'s first parent, or "" for a root commit.
+
+    The baseline of a red is the tree it was authored against. On the ordinary
+    path that is HEAD before the commit — the same thing, read from the commit
+    itself so the two cannot disagree; on the adoption path (#261) it is the
+    only way to get it, since HEAD *is* the red.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", f"{sha}^"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, selector: str) -> str:
+    """A red commit this task left on the branch and never registered (#261).
+
+    A red rejected *after* being committed — for violating a claim, or for lint
+    debt in the file about to be frozen — stays on the task branch with no
+    checkpoint. The next authoring pass then finds the failing test already in
+    the tree, quite reasonably changes nothing, and the phase refuses because
+    there is no diff to commit. So one rejected red starved every later attempt,
+    each of them paid for.
+
+    The residue is not the problem; discarding it would be. It is the agent's
+    work, and #231 is the standing lesson about a tool that deletes work it did
+    not like. What was missing is that nothing ever *looked* at it.
+
+    Two conditions, both narrow, because adopting the wrong commit would put a
+    checkpoint on a tree nobody proposed:
+
+    - HEAD's subject is exactly what `_commit_red` writes for **this** task and
+      **the selector the agent just reported** — an agent that names a different
+      test is not talking about this commit;
+    - no checkpoint was ever recorded for it, in any status: a commit that had
+      one is registered, and re-adopting it would re-litigate whatever retired
+      it.
+
+    The subject check subsumes what a baseline comparison would have caught: a
+    HEAD that is still the baseline cannot carry this task's red-commit
+    subject, because that subject is only ever written by `_commit_red`. And
+    the caller has already established that nothing is staged — the difference
+    between "there was nothing to commit" and "the commit failed with the work
+    pending", of which only the first may be adopted over.
+    """
+    head = _head(config)
+    if not head:
+        return ""
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s", head],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if subject.returncode != 0 or subject.stdout.strip() != f"{task.id}: red for {selector}":
+        return ""
+    if state.checkpoint_exists_for_commit(resolve_namespace(config), head):
+        return ""
+    return head
+
+
+def _staged(config: ExecutorConfig) -> bool:
+    """Whether anything is staged. Asked of the index rather than the tree
+    because the index is what `_commit_red` just prepared: it holds everything
+    except the runtime state, which is precisely the set that should have been
+    committed. Untracked runtime files are therefore not "dirt" here, and the
+    two notions of dirtiness cannot drift apart.
+
+    Fail-closed: an unreadable index counts as staged, since "we could not
+    look" must not become "there was nothing there".
+    """
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode != 0
 
 
 def _reusable_checkpoint(config: ExecutorConfig, state: ExecutorState, task):
