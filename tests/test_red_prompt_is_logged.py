@@ -198,20 +198,24 @@ class TestItNeverCostsTheTask:
         assert result.outcome is RedOutcome.EXPECTED_FAIL
 
     def test_the_failure_is_logged_rather_than_swallowed(self, tmp_path, monkeypatch):
-        from spec_runner import tdd
-
         said: list[tuple[str, str]] = []
+        fields: list[tuple[str, str, dict]] = []
 
         class _Recorder:
             def __getattr__(self, level):
                 def log(event, **kw):
                     said.append((level, event))
+                    fields.append((level, event, kw))
 
                 return log
 
+        from spec_runner import prompts_log
+
         cfg = _repo(tmp_path)
         _agent(monkeypatch)
-        monkeypatch.setattr(tdd, "logger", _Recorder())
+        # The writer is shared with the review stages now, so the warning comes
+        # from there and names *which* prompt could not be written.
+        monkeypatch.setattr(prompts_log, "logger", _Recorder())
         self._read_only_logs(cfg)
         try:
             with ExecutorState(cfg) as state:
@@ -219,4 +223,5 @@ class TestItNeverCostsTheTask:
         finally:
             cfg.logs_dir.chmod(0o700)
 
-        assert ("warning", "Could not log the RED prompt") in said
+        assert ("warning", "Could not log the prompt") in said
+        assert any(kw.get("provenance") == "red" for _lvl, _ev, kw in fields), fields

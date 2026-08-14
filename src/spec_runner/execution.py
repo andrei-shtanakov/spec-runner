@@ -14,6 +14,7 @@ from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal
 from .prompt import build_task_prompt, extract_test_failures
+from .prompts_log import append_output, log_prompt
 from .runner import (
     agent_env,
     build_cli_invocation,
@@ -311,12 +312,11 @@ def execute_task(
     # Build prompt with RetryContext
     prompt = build_task_prompt(task, config, previous_attempts, retry_context=retry_context)
 
-    # Save prompt to log
-    config.logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = config.logs_dir / f"{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-
-    with open(log_file, "w") as f:
-        f.write(f"=== PROMPT ===\n{prompt}\n\n")
+    # Through the writer the RED and review passes use (Copilot, PR #287): the
+    # module claimed to serve every paid call's prompt while this one, the
+    # oldest of the three, still had its own format. Same bound, same
+    # provenance, same never-fatal rule.
+    log_file = log_prompt(config, task_id, "green", prompt)
 
     # Run Claude
     start_time = datetime.now()
@@ -375,11 +375,14 @@ def execute_task(
         output_tokens = cli_result.output_tokens
         cost_usd = cli_result.cost_usd
 
-        # Save output
-        with open(log_file, "a") as f:
-            f.write(f"=== OUTPUT ===\n{output}\n\n")
-            f.write(f"=== STDERR ===\n{result.stderr}\n\n")
-            f.write(f"=== RETURN CODE: {result.returncode} ===\n")
+        # Save output beside the prompt it answered
+        append_output(
+            log_file,
+            output,
+            result.stderr,
+            returncode=result.returncode,
+            cost_usd=cost_usd,
+        )
 
         # Check for API errors (rate limits, etc.)
         error_pattern = check_error_patterns(combined_output)

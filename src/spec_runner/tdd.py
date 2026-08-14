@@ -794,28 +794,10 @@ class AgentCall:
 
 
 def _log_prompt(config: ExecutorConfig, task, prompt: str) -> None:
-    """Write the RED prompt beside the implementation pass's (#282).
+    """The RED prompt, through the shared writer (#282)."""
+    from .prompts_log import log_prompt
 
-    The implementation prompt has been logged since long before this; the RED
-    prompt — a **paid** call whose output becomes the checkpoint's selector and
-    decides which file is frozen for the rest of the task — was written
-    nowhere. After a run there was no record of what was asked, which is how
-    #198 (a pytest-shaped selector demanded of an ExUnit project) and #220 (a
-    Python linter applied to an Elixir file) could only be found by reading the
-    code rather than the logs, and why a published artifact could not be
-    checked against its own prompt.
-
-    Never fatal. A prompt that could not be written is worth a warning; it is
-    not worth failing a task over, and least of all *before* the call it
-    describes.
-    """
-    try:
-        config.logs_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = config.logs_dir / f"{task.id}-red-{stamp}.log"
-        path.write_text(f"=== RED PROMPT ===\n{prompt}\n")
-    except OSError as exc:
-        logger.warning("Could not log the RED prompt", task_id=task.id, error=str(exc))
+    log_prompt(config, task.id, "red", prompt)
 
 
 def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
