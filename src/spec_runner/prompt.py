@@ -171,6 +171,36 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     return result
 
 
+#: U+200B ZERO WIDTH SPACE, written as an escape rather than as the character
+#: itself (Copilot, PR #269). An invisible literal in source survives no
+#: careless edit, no reformatting tool and no copy-paste through a terminal —
+#: and losing it would silently put the marker tokens back into prompts, which
+#: is the failure this constant exists to prevent.
+ZERO_WIDTH_SPACE = "\u200b"
+
+
+def neutralise_markers(text: str) -> str:
+    """Quote terminal-marker tokens so a prompt cannot teach them back (#266).
+
+    The trap in that finding is self-priming: an attempt is failed for a marker
+    it only *mentioned*, the failure text quoting that token goes into the next
+    attempt's prompt, and an honest agent summarising what came before utters
+    it again. Line-anchored parsing breaks the first half; this breaks the
+    second, because the tokens reach the agent only as history to describe.
+
+    Split rather than removed: an operator reading the prompt still sees which
+    marker is being talked about, and the agent still reads the word — it just
+    cannot be echoed back as a line the parser would count. Applied only where
+    **previous** output is quoted into a prompt; the instruction that asks for
+    a marker is written by us and must stay verbatim.
+    """
+    from .runner import TERMINAL_MARKERS
+
+    for marker in TERMINAL_MARKERS:
+        text = text.replace(marker, f"{marker[:-1]}{ZERO_WIDTH_SPACE}{marker[-1]}")
+    return text
+
+
 def format_error_summary(error: str, output: str | None = None, max_lines: int = 10) -> str:
     """Format a concise error summary for display.
 
@@ -647,8 +677,8 @@ def _render_task_prompt(
             f"\n## \u26a0\ufe0f RETRY \u2014 Attempt {retry_context.attempt_number}"
             f" of {retry_context.max_attempts}\n\n"
             f"**Error type:** {retry_context.previous_error_code.value}\n"
-            f"**What was tried:** {retry_context.what_was_tried}\n"
-            f"**Error:** {retry_context.previous_error}\n"
+            f"**What was tried:** {neutralise_markers(retry_context.what_was_tried)}\n"
+            f"**Error:** {neutralise_markers(retry_context.previous_error)}\n"
         )
         if retry_context.test_failures:
             attempts_section += f"\n**Test failures:**\n```\n{retry_context.test_failures}\n```\n"
@@ -671,7 +701,7 @@ def _render_task_prompt(
             for i, attempt in enumerate(recent, len(failed_attempts) - len(recent) + 1):
                 attempts_section += f"### Attempt {i} (failed):\n"
                 if attempt.error:
-                    error_text = attempt.error[:2000]
+                    error_text = neutralise_markers(attempt.error[:2000])
                     attempts_section += f"**Error:** {error_text}\n\n"
                 if attempt.claude_output:
                     failures = extract_test_failures(attempt.claude_output)

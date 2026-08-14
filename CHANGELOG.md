@@ -12,6 +12,32 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Terminal markers are read as lines, not substrings** (#266, F-38). An
+  attempt that did the whole job — wiring, migrations, 306 tests green, format
+  clean, frozen files untouched — ended its output with `TASK_COMPLETE` and was
+  recorded as **failed**, because its summary described history: *"the prior
+  `TASK_BLOCKED` was resolved upstream…"*. A word mid-sentence, in backticks,
+  with no colon and no reason, outranked the marker the same attempt ended
+  with. The finished tree survived only because of #231.
+
+  A marker is now a **line**: optional whitespace, the token, an optional
+  `: reason`, nothing else. One pattern, in `runner` beside
+  `classify_agent_answer` and for the same reason (#241) — so what counts as a
+  marker cannot be answered differently in two places, and the reason can never
+  be found for a marker that did not count.
+
+  The trap primed itself: the failure text quoting the token went into the next
+  attempt's prompt, so an honest agent summarising what came before was likely
+  to utter it again. Quoted history now reaches the agent with the tokens
+  broken by a zero-width joiner — readable by a person, unmatchable by the
+  parser. The instruction that *asks* for a marker is untouched.
+
+  Two stricter options from the report were deliberately not taken: requiring
+  `: reason` for `TASK_BLOCKED` would demote a bare escalation to "no marker",
+  which at exit code 0 reads as implicit success; and "last occurrence wins"
+  would reverse #140's deliberate precedence, where BLOCKED outranks COMPLETE.
+  Line-anchoring alone reads the reported run correctly.
+
 - **A rejected red commit no longer starves the next authoring pass** (#261,
   F-36). A red rejected *after* being committed — for violating an active claim,
   or for lint debt in the file about to be frozen — stayed on the task branch

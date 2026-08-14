@@ -1,6 +1,5 @@
 """Task execution core: execute_task, retry strategy, run_with_retries."""
 
-import re
 import subprocess
 import time
 from datetime import datetime
@@ -22,6 +21,7 @@ from .runner import (
     log_progress,
     parse_cli_result,
     send_callback,
+    terminal_markers,
 )
 from .stages import StageReporter
 from .state import (
@@ -435,14 +435,20 @@ def execute_task(
         # Success if:
         # 1. Explicitly says TASK_COMPLETE, or
         # 2. Return code 0 and no TASK_FAILED (Claude forgot the marker)
-        has_complete_marker = "TASK_COMPLETE" in output
-        has_failed_marker = "TASK_FAILED" in output
+        # #266: markers are read as **lines**, never as substrings. A summary
+        # that mentioned `TASK_BLOCKED` in prose — describing history, in
+        # backticks, with no reason — outranked the `TASK_COMPLETE` the same
+        # attempt ended with, and a finished, green task was recorded failed.
+        stated = terminal_markers(output)
+        kinds = {marker.kind for marker in stated}
+        has_complete_marker = "TASK_COMPLETE" in kinds
+        has_failed_marker = "TASK_FAILED" in kinds
         # #140: a deliberate escalation — "this cannot be done within the
         # rules, an operator is needed" — as opposed to "I did not manage it".
         # It outranks both other markers: an agent that says COMPLETE and
         # BLOCKED has not finished, and one that says FAILED and BLOCKED has
         # given a reason no retry can resolve.
-        has_blocked_marker = "TASK_BLOCKED" in output
+        has_blocked_marker = "TASK_BLOCKED" in kinds
         implicit_success = (
             result.returncode == 0
             and not has_failed_marker
@@ -606,21 +612,24 @@ def execute_task(
                 if has_blocked_marker
                 else ("failure marker" if has_failed_marker else "no completion marker"),
             )
-            blocked_match = re.search(r"TASK_BLOCKED:\s*(.+)", output)
-            error_match = re.search(r"TASK_FAILED:\s*(.+)", output)
+            # The same reading as the detection above — one parse, so a
+            # reason can never be found for a marker that did not count, nor
+            # missed for one that did.
+            blocked_reason = next(
+                (m.reason for m in stated if m.kind == "TASK_BLOCKED" and m.reason), None
+            )
+            failed_reason = next(
+                (m.reason for m in stated if m.kind == "TASK_FAILED" and m.reason), None
+            )
             if has_blocked_marker:
                 # The agent's own words, verbatim: the operator has to act on
                 # this escalation, and a paraphrase is not actionable (#140).
                 # A bare marker with no reason is still terminal — refusing to
                 # retry a stated refusal is the safe side of that ambiguity.
-                error = (
-                    blocked_match.group(1)
-                    if blocked_match
-                    else "agent reported TASK_BLOCKED without a reason"
-                )
+                error = blocked_reason or "agent reported TASK_BLOCKED without a reason"
                 error_kind = "blocked"
-            elif error_match:
-                error = error_match.group(1)
+            elif failed_reason:
+                error = failed_reason
                 error_kind = "cli_error"
             else:
                 error_kind, error = classify(combined_output, result.returncode)
