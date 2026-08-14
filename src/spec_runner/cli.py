@@ -578,6 +578,42 @@ def _ready_work_remains(config: ExecutorConfig, executed_ids: set[str]) -> bool:
     return any(task.id not in executed_ids for task in get_next_tasks(tasks))
 
 
+def _announce_budget_stop(state: ExecutorState, config: ExecutorConfig) -> bool:
+    """Say, to the operator, that spending has passed the ceiling (#255).
+
+    The guard (#213) stops the *next* paid call, and it is exact: no call
+    starts once recorded spend reaches the limit, and the overshoot is bounded
+    by the one call in flight. What was missing is the sentence afterwards. A
+    task that completed $0.92 over the ceiling said nothing at all through
+    `retry` — the pilot's own path — and through `run` it produced a log line
+    about the loop stopping, which is a different fact.
+
+    One reader for both, and it is the same one the refusals use: the effective
+    ceiling from `state.stop_cause` (#256) and the authorization sentence from
+    `budget.authorization_note`, so the number quoted here is the number that
+    stopped the work and the id quoted is the one to pass to `--after`.
+
+    Returns True when an overshoot was announced, so a caller can stop.
+    """
+    from .budget import authorization_note
+
+    cause = state.stop_cause()
+    if cause is None or cause[0] != "budget_exceeded":
+        return False
+    note = authorization_note(state, "run", None, config)
+    # **stderr**, not stdout (Copilot, PR #279). `run --json-result` stdout is a
+    # pinned interop surface — Maestro parses the whole stream — and measuring
+    # it showed that today it is pure JSON, every human line already going to
+    # stderr through structlog. An operator sentence printed on stdout would
+    # have broken a contract to say something friendly.
+    print(f"⛔ Budget: {cause[1]}{note}", file=sys.stderr)
+    print(
+        "   The work already finished stands; no further paid work will start.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str, str]:
     """Resolve the (stop_reason, stop_detail) pair for a mid-run stop.
 
@@ -1180,6 +1216,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                 if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
+                    _announce_budget_stop(state, config)
                     # A successful task does not by itself make the run a
                     # failure — but stopping with work still ready does, and
                     # the computation below cannot see it: `considered` is
@@ -1250,6 +1287,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                 if state.should_stop():
                     stop_reason, stop_detail = _stop_reason_for(state, config)
                     logger.warning("Stopping run", reason=stop_reason, detail=stop_detail)
+                    _announce_budget_stop(state, config)
                     if result is not True:
                         # A successful task does not make the run a failure.
                         # The exit code is recomputed below from what this run
@@ -1413,6 +1451,11 @@ def cmd_retry(args, config: ExecutorConfig):
                 mark_all_checklist_done(config.tasks_file, task.id)
             else:
                 update_task_status(config.tasks_file, task.id, "blocked")
+            # #255: a retry that ends over the ceiling used to say nothing —
+            # the pilot's completing operation was a retry, and $0.92 of
+            # overshoot went unmentioned. The task's own outcome is untouched:
+            # what finished, finished (#219).
+            _announce_budget_stop(state, config)
         finally:
             if integration is not None:
                 pr_url = finalize_integration_branch(config, integration)
