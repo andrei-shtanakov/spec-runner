@@ -10,6 +10,43 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+**Patch.** Observability only: no public surface moves, no schema changes.
+
+- **Every prompt artefact now ends by saying what became of the call** (#295 and
+  #296, both found in the artefacts of a real run rather than by reading code).
+
+  Two bugs wearing one shape. The RED path called `log_prompt` and never
+  `append_output`, so the artefact held the question and not the answer — on the
+  call whose output decides which file is frozen for the rest of the task, and
+  which was the most expensive of the run that found it ($2.69, 27 520 output
+  tokens). Its cause was a lossy seam, not a forgotten line: `AgentCall` carried
+  the text and the cost and dropped the process's stderr and return code, so no
+  call site could have appended them. Both now travel with the call.
+
+  And a review refused by the budget guard left a file holding a complete prompt
+  and nothing else — the prompt is written before the guard runs, so the artefact
+  was byte-shape identical to one from a call that launched and died. It now ends
+  with `=== NOT STARTED: <reason> ===`, quoting the ceiling that refused it. The
+  prompt is deliberately kept: it is what an operator reads when deciding whether
+  to raise that ceiling. Deleting the artefact would have removed the ambiguity
+  and that along with it.
+
+  Together they buy one invariant, which is the point: **an artefact that ends
+  without a terminal section means the runner died mid-call**, and nothing else.
+
+  Third finding, from reading both review paths side by side: on a **timeout**
+  the single path returned before appending while the per-role path appended. A
+  timed-out call ran, and was billed for as long as it ran. The same
+  two-paths-disagree shape as #270, in the artefact instead of the verdict.
+
+  Why the rehearsal of 2.33.1 did not catch #295: it asserted `=== OUTPUT ===`
+  on the green and review artefacts and, for RED, only that the prompt text was
+  present. It passed vacuously. The new tests drive the real call sites, and the
+  seam test runs a real process — the stubbed tests all still passed with the
+  seam's two fields deleted, which is the same vacuum measured a second time.
+
 ## [2.33.2] - 2026-08-14
 
 **Patch, and not a cosmetic one.** One fix: `budget authorize` no longer

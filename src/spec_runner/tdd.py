@@ -50,6 +50,7 @@ from .claims import check_claims, describe_violations, ensure_claimable, record_
 from .git_ops import is_composite_shell_command
 from .lifecycle import TddPhase
 from .logging import get_logger
+from .prompts_log import append_output
 from .tdd_runners import (
     ReplayEnvironmentRefusal,
     RunOutcome,
@@ -511,7 +512,7 @@ def run_red_phase(
 
     _say("\U0001f534 RED: authoring a failing test")
     red_prompt = build_red_prompt(task, config)
-    _log_prompt(config, task, red_prompt)
+    prompt_log = _log_prompt(config, task, red_prompt)
     call = _run_agent(config, red_prompt)
     # Recorded before anything can refuse the result: the call happened and was
     # paid for whether or not it produced something usable.
@@ -520,6 +521,18 @@ def run_red_phase(
         RED_AUTHORING,
         input_tokens=call.input_tokens,
         output_tokens=call.output_tokens,
+        cost_usd=call.cost_usd,
+    )
+    # Beside the prompt it answered (#295). Until this, the RED artefact held
+    # the question and not the answer, on the one call whose output decides
+    # which file is frozen for the rest of the task — and it was the most
+    # expensive call of the run that found it ($2.69). The ledger knew what the
+    # call cost; nothing knew what the money had bought.
+    append_output(
+        prompt_log,
+        call.text,
+        call.stderr,
+        returncode=call.returncode,
         cost_usd=call.cost_usd,
     )
     output = call.text
@@ -791,13 +804,22 @@ class AgentCall:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    #: What the process printed and returned. Carried for the record only
+    #: (#295): the RED artefact could not hold the call's answer because this
+    #: seam dropped both before the call site ever saw them.
+    stderr: str = ""
+    returncode: int = 0
 
 
-def _log_prompt(config: ExecutorConfig, task, prompt: str) -> None:
-    """The RED prompt, through the shared writer (#282)."""
+def _log_prompt(config: ExecutorConfig, task, prompt: str) -> Path | None:
+    """The RED prompt, through the shared writer (#282).
+
+    Returns the path so the call site can append the answer beside it, which is
+    the half that was missing (#295).
+    """
     from .prompts_log import log_prompt
 
-    log_prompt(config, task.id, "red", prompt)
+    return log_prompt(config, task.id, "red", prompt)
 
 
 def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
@@ -828,6 +850,8 @@ def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
         input_tokens=parsed.input_tokens,
         output_tokens=parsed.output_tokens,
         cost_usd=parsed.cost_usd,
+        stderr=result.stderr,
+        returncode=result.returncode,
     )
 
 
