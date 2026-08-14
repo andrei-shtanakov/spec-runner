@@ -1421,7 +1421,21 @@ class ExecutorState:
         reserve_stage: str | None = None,
         reserve_usd: float | None = None,
     ) -> int:
-        """Append one authorization and return its id. Never updates a row."""
+        """Append one authorization and return its id. Never updates a row.
+
+        A reserve is a `(stage, amount)` pair or nothing at all; half of one
+        would withhold an unnamed amount, or name a stage that withholds
+        nothing. A fresh database refuses that with a `CHECK` — but a database
+        upgraded by `ALTER TABLE ... ADD COLUMN` has the columns **without** the
+        table's constraints, since SQLite cannot add one to an existing table
+        (Copilot, PR #271). So the writer refuses it too, and the invariant
+        holds the same on both.
+        """
+        if (reserve_stage is None) != (reserve_usd is None):
+            raise ValueError(
+                "a reserve needs both a stage and an amount; "
+                f"got stage={reserve_stage!r}, amount={reserve_usd!r}"
+            )
         assert self._conn is not None
         with self._conn:
             cur = self._conn.execute(

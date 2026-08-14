@@ -284,6 +284,81 @@ class TestTheStageMatch:
         assert is_reserved_for(stage, provenance) is expected
 
 
+class TestHalfAReserveIsRefused:
+    """A reserve is a `(stage, amount)` pair or nothing: half of one withholds
+    an unnamed amount, or names a stage that withholds nothing.
+
+    A fresh database refuses it with a `CHECK`. A database **upgraded** to this
+    version has the columns without the constraint — SQLite cannot add one to
+    an existing table with `ALTER TABLE ... ADD COLUMN` (Copilot, PR #271) — so
+    the writer refuses it too, which is what makes the invariant the same on
+    both. Measured, not assumed: on a migrated database SQLite accepts the
+    half-set row happily.
+    """
+
+    def _old_schema_db(self, tmp_path: Path, **overrides) -> ExecutorConfig:
+        """A state file written before #267: the columns do not exist yet."""
+        import sqlite3
+
+        cfg = _cfg(tmp_path, **overrides)
+        cfg.state_file.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(cfg.state_file)
+        conn.execute(
+            "CREATE TABLE budget_authorizations ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, domain_id TEXT NOT NULL, "
+            "scope TEXT NOT NULL, task_id TEXT, namespace TEXT, previous_limit_usd REAL, "
+            "new_limit_usd REAL NOT NULL, recorded_spend_usd REAL NOT NULL, "
+            "unmeasured_calls INTEGER NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, "
+            "timestamp TEXT NOT NULL, CHECK (scope IN ('task', 'run')))"
+        )
+        conn.commit()
+        conn.close()
+        return cfg
+
+    @pytest.mark.parametrize(("stage", "amount"), [("review", None), (None, 2.00)])
+    def test_the_writer_refuses_half_of_one(self, tmp_path, stage, amount):
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state, pytest.raises(ValueError, match="both a stage and"):
+            state.record_budget_authorization(
+                scope="run",
+                new_limit_usd=7.00,
+                recorded_spend_usd=0.0,
+                unmeasured_calls=0,
+                actor="o@e.c",
+                reason="r",
+                reserve_stage=stage,
+                reserve_usd=amount,
+            )
+
+    def test_it_refuses_on_a_migrated_database_too(self, tmp_path):
+        """Where the CHECK is absent, so this is the only thing standing."""
+        cfg = self._old_schema_db(tmp_path)
+
+        with ExecutorState(cfg) as state, pytest.raises(ValueError, match="both a stage and"):
+            state.record_budget_authorization(
+                scope="run",
+                new_limit_usd=7.00,
+                recorded_spend_usd=0.0,
+                unmeasured_calls=0,
+                actor="o@e.c",
+                reason="r",
+                reserve_stage="review",
+                reserve_usd=None,
+            )
+
+    def test_a_migrated_database_carries_a_whole_reserve(self, tmp_path):
+        """The migration itself works: the columns arrive, and a reserve
+        written through them is enforced by the guard like any other."""
+        cfg = self._old_schema_db(tmp_path, task_budget_usd=None)
+        _spend(cfg, 5.10)
+
+        with ExecutorState(cfg) as state:
+            authorize(cfg, state, reason=REASON, run_budget_usd=7.00, reserve=("review", 2.00))
+
+            assert check_before_call(cfg, state, "TASK-104", "green") is not None
+            assert check_before_call(cfg, state, "TASK-104", "review") is None
+
+
 class TestOlderDomains:
     def test_authorizations_written_before_this_carry_no_reserve(self, tmp_path):
         """The columns are added by migration and read as NULL, which is what

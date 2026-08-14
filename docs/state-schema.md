@@ -141,8 +141,11 @@ Columns: `domain_id` (see below), `scope` (`task`/`run`), `task_id` and
 `namespace` (both set for a task scope, both **NULL** for a run scope — a
 `CHECK` enforces it), `previous_limit_usd`, `new_limit_usd`,
 `recorded_spend_usd`, `unmeasured_calls`, `actor`, `reason`, `timestamp`, and
-(v2.32.0) `reserve_stage` / `reserve_usd` — both NULL or both set, a `CHECK`
-enforces it. A reserve withholds that much of the ceiling from every call whose
+(v2.32.0) `reserve_stage` / `reserve_usd` — both NULL or both set. A database
+created by this version enforces that with a `CHECK`; one **upgraded** to it
+has the columns without the constraint, because SQLite's `ALTER TABLE ... ADD
+COLUMN` cannot add one to an existing table. The invariant is therefore
+enforced by the writer, on both. A reserve withholds that much of the ceiling from every call whose
 provenance is not that stage's (#267): review is the last paid call of an
 attempt, so it is structurally the one the remainder starves. Added by
 migration, so authorizations written before it read as "no reserve", which is
