@@ -11,6 +11,7 @@ fields are marked **observability gap** rather than reconstructed.
 deterministic fallback chain into routed execution. Not written for this
 experiment, and the successor of run 1's work.
 
+> **Counts as evidence run for the #285 trigger.**
 ---
 
 ## 1. Product verdict

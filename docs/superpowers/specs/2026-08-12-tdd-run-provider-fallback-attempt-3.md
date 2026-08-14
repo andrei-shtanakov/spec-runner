@@ -1,4 +1,12 @@
-# TDD evidence run — kapelle, provider fallback, attempt 3
+# TDD attempt record — kapelle, provider fallback, attempt 3
+
+> [!NOTE]
+> **This is an attempt record, not a completed evidence run.** It documents
+> attempts on kapelle m2 **TASK-101** that did not finish. The completed record
+> for that task — the one the #285 counter counts — is
+> [`2026-08-14-tdd-run-task-101-provider-fallback.md`](2026-08-14-tdd-run-task-101-provider-fallback.md).
+> Counting the files in this directory as runs would over-count the trigger,
+> which is why each says which it is.
 
 **Subject:** `spec-runner==2.28.3` from PyPI, version asserted immediately
 before the run. Target: kapelle `master`, `execution_mode: tdd`,
