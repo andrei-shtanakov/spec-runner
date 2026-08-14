@@ -10,6 +10,23 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`budget authorize` applies fully or not at all** (#289). Raising both
+  ceilings in one command — the documented way, since neither implies the
+  other (#230) — wrote the task row, then refused the run row for a stale
+  `--after`, exited 1, and said nothing about the half that had landed.
+  Measured on the published 2.33.1 while preparing a real authorization.
+
+  Worse than losing a write: the operator's next attempt, with the corrected id
+  for the run scope, was then refused on the **task** scope as stale against
+  the row that failure had just written. The CAS exists so an authorization is
+  made against a state the operator has *seen*, and a half-applied one
+  guarantees they have not.
+
+  Every scope's compare-and-swap and monotonic check now runs before any scope
+  is written. Both were pure reads, so hoisting them costs nothing.
+
 ## [2.33.1] - 2026-08-14
 
 **Patch.** Observability only: every paid call's prompt is now recorded, and
