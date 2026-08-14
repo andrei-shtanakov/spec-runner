@@ -417,7 +417,7 @@ class TestRunCodeReview:
         (tmp_path / "logs").mkdir()
         with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
-                stdout="All good. REVIEW_PASSED",
+                stdout="All good.\nREVIEW_PASSED",
                 stderr="",
                 returncode=0,
             )
@@ -436,7 +436,7 @@ class TestRunCodeReview:
         (tmp_path / "logs").mkdir()
         with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
-                stdout="Fixed issue. REVIEW_FIXED",
+                stdout="Fixed issue.\nREVIEW_FIXED",
                 stderr="",
                 returncode=0,
             )
@@ -453,7 +453,7 @@ class TestRunCodeReview:
         (tmp_path / "logs").mkdir()
         with patch("spec_runner.review.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
-                stdout="MAJOR issue. REVIEW_FAILED",
+                stdout="MAJOR issue.\nREVIEW_FAILED",
                 stderr="",
                 returncode=0,
             )
@@ -640,7 +640,7 @@ class TestHitlReviewGate:
         )
         (tmp_path / "logs").mkdir()
         mock_run.return_value = MagicMock(
-            stdout="REVIEW_PASSED some findings",
+            stdout="some findings\nREVIEW_PASSED",
             stderr="",
             returncode=0,
         )
@@ -672,7 +672,7 @@ class TestHitlReviewGate:
         )
         (tmp_path / "logs").mkdir()
         mock_run.return_value = MagicMock(
-            stdout="REVIEW_PASSED all good",
+            stdout="all good\nREVIEW_PASSED",
             stderr="",
             returncode=0,
         )

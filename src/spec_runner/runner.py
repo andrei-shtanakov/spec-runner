@@ -95,13 +95,33 @@ def classify_agent_answer(
 #: for the same reason `classify_agent_answer` lives here (#241): one reading.
 TERMINAL_MARKERS = ("TASK_COMPLETE", "TASK_FAILED", "TASK_BLOCKED")
 
-#: A marker is a **line**, not a substring (#266). Optional leading whitespace,
-#: an optional `: reason`, nothing else on the line. Written as one pattern so
-#: "what counts as a marker" cannot be answered differently in two places.
-_MARKER_LINE = re.compile(
-    rf"^[ \t]*(?P<kind>{'|'.join(TERMINAL_MARKERS)})[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
-    re.MULTILINE,
-)
+#: The three verdict markers a review pass may state about the code (#270).
+#: Its own vocabulary: `review` parses none of the terminal markers and
+#: `execution` parses none of these, which is why an agent told to escalate
+#: from a review is told to say `REVIEW_FAILED` (see `claims.ESCAPE_REVIEW`).
+REVIEW_MARKERS = ("REVIEW_PASSED", "REVIEW_FIXED", "REVIEW_FAILED")
+
+
+def _marker_pattern(names: tuple[str, ...], *, ignore_case: bool) -> re.Pattern[str]:
+    """A marker is a **line**, not a substring (#266, #270).
+
+    Optional leading whitespace, the token, an optional `: reason`, nothing
+    else on the line. One pattern builder for both vocabularies, so "what
+    counts as a marker" cannot be answered differently in two places — the
+    defect that made a prose mention outrank a real verdict.
+    """
+    flags = re.MULTILINE | (re.IGNORECASE if ignore_case else 0)
+    return re.compile(
+        rf"^[ \t]*(?P<kind>{'|'.join(names)})[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
+        flags,
+    )
+
+
+_MARKER_LINE = _marker_pattern(TERMINAL_MARKERS, ignore_case=False)
+#: Case-insensitive, unlike the terminal one: the review path has always
+#: accepted a lowercase marker and this change is about *where* a marker may
+#: appear, not about tightening its spelling at the same time.
+_REVIEW_LINE = _marker_pattern(REVIEW_MARKERS, ignore_case=True)
 
 
 @dataclass(frozen=True)
@@ -110,6 +130,26 @@ class TerminalMarker:
 
     kind: str
     reason: str | None = None
+
+
+def review_markers(output: str) -> list[str]:
+    """The **distinct** review verdicts stated in ``output``, in order (#270).
+
+    Distinct, because a reviewer repeating its own verdict — in a summary, in a
+    heading, once per file — has said one thing three times, and only a
+    *disagreement* is a problem. What the caller does with more than one is
+    policy and lives in `review`; what counts as having been said is here.
+
+    Read as lines for the same reason terminal markers are (#266): a reviewer
+    writing "this is not a REVIEW_FAILED situation" was being read as having
+    failed the review.
+    """
+    seen: list[str] = []
+    for match in _REVIEW_LINE.finditer(output or ""):
+        kind = match.group("kind").upper()
+        if kind not in seen:
+            seen.append(kind)
+    return seen
 
 
 def terminal_markers(output: str) -> list[TerminalMarker]:
