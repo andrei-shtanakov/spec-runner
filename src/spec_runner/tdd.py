@@ -448,6 +448,11 @@ class RedPhaseResult:
     outcome: RedOutcome
     detail: str | None = None
     checkpoint: RedCheckpoint | None = None
+    #: The phase failed to *look*, rather than looking and finding the answer
+    #: (#252, #245). The gate can only see that no checkpoint exists; which
+    #: kind of nothing that is belongs to whoever tried to observe it, and the
+    #: difference is exit 1 versus exit 2.
+    instrument_error: bool = False
 
 
 def run_red_phase(
@@ -562,6 +567,16 @@ def run_red_phase(
         _say(f"♻️  RED: adopting the unregistered red commit {sha[:12]}")
     baseline = _parent_of(config, sha) or baseline
 
+    # #252 D: the evidential test lives in a file of its own. A claim freezes
+    # the whole file, so a red written into a file the project already had
+    # freezes work the green legitimately needs — the pilot's TASK-101 could
+    # not be resumed at all, because its own green had appended tests to the
+    # claimed file. Checked here, before anything is claimed or recorded, so a
+    # refused red leaves no lock behind.
+    novelty = _refuse_pre_existing_file(config, parsed_selector, baseline)
+    if novelty is not None:
+        return novelty
+
     # #141 slice 2. Two checks before this commit may become a checkpoint.
     #
     # First: did authoring the red touch a file someone else has frozen? A
@@ -619,6 +634,61 @@ def run_red_phase(
             )
     state.record_red_checkpoint(checkpoint)
     return RedPhaseResult(verification.outcome, verification.detail, checkpoint)
+
+
+def _refuse_pre_existing_file(
+    config: ExecutorConfig, selector: Selector, baseline: str
+) -> RedPhaseResult | None:
+    """Refuse a red written into a file that existed at ``baseline`` (#252 D).
+
+    The rule is deliberately about **existence at the baseline**, not about the
+    name: an exemption for "a file this task created earlier" would blur a
+    simple, provable invariant into a story about who wrote what when. The
+    adapter's `evidential_file` is what the prompt asks for; this is what the
+    prompt's request has to mean, and the two say the same thing.
+
+    Two failures with different answers, per the owner's decision:
+
+    - the file **existed** — a policy refusal. No checkpoint is recorded, so
+      the gate answers "no confirmed red" and the task fails as it does for a
+      lint failure: one paid RED call, no retry.
+    - git **could not answer** — an instrument error. "We could not look" is
+      not "the file is new", and the run must not proceed on an unread index.
+
+    Legacy checkpoints are neither migrated nor reinterpreted: this runs in the
+    authoring path only, so a reused or resumed red never passes through it.
+    """
+    adapter = resolve_adapter(config)
+    for path in adapter.claim_paths(selector) if adapter else ():
+        if adapter is not None and not adapter.is_discoverable(path):
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                f"the red was written to {path}, which this project's runner does not "
+                f"collect — see `{adapter.evidential_file('TASK-ID')}` for the shape it does",
+            )
+        existed = subprocess.run(
+            ["git", "cat-file", "-e", f"{baseline}:{path}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if existed.returncode == 0:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                f"the red was written into {path}, which already existed before this task "
+                "started. A claim freezes the whole file, so the implementation could not "
+                "add to it afterwards — write the failing test in a file of its own",
+            )
+        if "does not exist" not in existed.stderr and existed.returncode not in (1, 128):
+            # `cat-file -e` answers 1 for "not in that tree" and 128 for a bad
+            # revision; anything else is git failing to answer at all (#245).
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                f"git could not say whether {path} existed at {baseline[:12]} "
+                f"({existed.stderr.strip()[:120] or f'exit {existed.returncode}'})",
+                instrument_error=True,
+            )
+    return None
 
 
 def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:

@@ -203,16 +203,21 @@ class TestTheConditionsAreNarrow:
     def test_a_tree_with_something_to_commit_takes_the_ordinary_path(self, tmp_path, monkeypatch):
         """The complementary half: when there *is* a diff, the phase commits it
         and adoption never happens — so the residue can only be reached when
-        nothing else could be."""
+        nothing else could be.
+
+        The new red goes to a **new** file, because since #252 D a red written
+        into a file that existed at its baseline is refused — and the rejected
+        red's file is exactly that.
+        """
         from spec_runner import tdd
 
         root, cfg = _repo_with_a_rejected_red(tmp_path)
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
 
         def _write_more(config, prompt, **kw):
-            path = Path(config.project_root) / "tests" / "test_thing.py"
-            path.write_text(FAILING + "\n\ndef test_more():\n    assert False\n")
-            return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+            path = Path(config.project_root) / "tests" / "test_task_104_red.py"
+            path.write_text("def test_more():\n    assert False\n")
+            return tdd.AgentCall(text="TDD_SELECTOR: tests/test_task_104_red.py::test_more")
 
         monkeypatch.setattr(tdd, "_run_agent", _write_more)
         said: list[str] = []
