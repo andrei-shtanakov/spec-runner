@@ -10,6 +10,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **One classifier for both review paths, and markers are lines** (#270). The
+  sequential path tried `REVIEW_PASSED` → `REVIEW_FIXED` → `REVIEW_FAILED`; the
+  per-role path tried them in the opposite order. A reviewer that stated two of
+  them was therefore recorded **passed** when roles ran one at a time and
+  **failed** when they ran together — and what makes them run one at a time is
+  an active budget (#213). The verdict depended on how much money was left.
+
+  Both also matched substrings, exactly as the terminal markers did before
+  #266: "this is not a REVIEW_FAILED situation" was a failed review.
+
+  Now one reading, shared: a marker is a line of its own; repeating the same
+  verdict is one statement made twice; **two different verdicts are an error**,
+  not a ranking problem. Precedence would have removed the divergence and kept
+  the ambiguity — a reviewer that says both has not decided, and choosing for it
+  would be the tool inventing a verdict. There is no first/last/priority rule
+  anywhere. Quoted history reaching a later prompt is neutralised, so a reviewer
+  cannot be taught the token by the errors it is handed.
+
+  Under `review_policy: required` the error blocks; under `advisory` it is
+  recorded as what it is and never as passed.
+
+  **This can refuse a configuration that used to be accepted**: a reviewer
+  whose marker only ever appeared inline in prose now produces no verdict.
+  That is the correctness fix, not a reason to keep a substring protocol — and
+  it is why this is a minor rather than a patch.
+
 ## [2.32.1] - 2026-08-14
 
 **Patch.** One defect fix and nothing else. No flag, key or schema moves —

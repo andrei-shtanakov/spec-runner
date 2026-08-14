@@ -188,15 +188,19 @@ def neutralise_markers(text: str) -> str:
     it again. Line-anchored parsing breaks the first half; this breaks the
     second, because the tokens reach the agent only as history to describe.
 
+    Both vocabularies (#270): a review's own findings are quoted into later
+    prompts too, and a reviewer reading `REVIEW_FAILED` in the history it is
+    given is in exactly the position the implementation agent was in.
+
     Split rather than removed: an operator reading the prompt still sees which
     marker is being talked about, and the agent still reads the word — it just
     cannot be echoed back as a line the parser would count. Applied only where
     **previous** output is quoted into a prompt; the instruction that asks for
     a marker is written by us and must stay verbatim.
     """
-    from .runner import TERMINAL_MARKERS
+    from .runner import REVIEW_MARKERS, TERMINAL_MARKERS
 
-    for marker in TERMINAL_MARKERS:
+    for marker in (*TERMINAL_MARKERS, *REVIEW_MARKERS):
         text = text.replace(marker, f"{marker[:-1]}{ZERO_WIDTH_SPACE}{marker[-1]}")
     return text
 

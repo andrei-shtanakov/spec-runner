@@ -80,7 +80,7 @@ class TestOneRowPerCall:
         cfg = _cfg(tmp_path)
 
         with patch("spec_runner.review.subprocess.run") as run:
-            run.return_value = _claude_json("Looks fine. REVIEW_PASSED")
+            run.return_value = _claude_json("Looks fine.\nREVIEW_PASSED")
             verdict, _error, _out = run_code_review(_task(), cfg)
             argv = run.call_args.args[0]
 

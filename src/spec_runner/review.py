@@ -14,7 +14,7 @@ from .budget import budget_is_active
 from .config import ExecutorConfig
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
-from .prompt import load_prompt_template, render_template
+from .prompt import load_prompt_template, neutralise_markers, render_template
 from .runner import (
     AgentAnswer,
     CliResult,
@@ -22,11 +22,49 @@ from .runner import (
     check_error_patterns,
     classify_agent_answer,
     log_progress,
+    review_markers,
 )
 from .state import ReviewVerdict
 from .task import Task
 
 logger = get_logger("review")
+
+
+#: What a reviewer's output says, once. Both review paths ask this — the
+#: sequential one and the per-role one — because they used to answer it
+#: differently: the first tried PASSED → FIXED → FAILED, the second FAILED →
+#: FIXED → PASSED. A reviewer that stated two of them was therefore recorded
+#: *passed* when roles ran one at a time and *failed* when they ran together —
+#: and what makes them run one at a time is an active budget (#213). The
+#: verdict depended on how much money was left (#270).
+@dataclass(frozen=True)
+class ReviewSignal:
+    """The distinct verdict markers a review stated, in the order stated."""
+
+    stated: tuple[str, ...]
+
+    @property
+    def conflicting(self) -> bool:
+        """More than one **different** verdict. A repeat is not a conflict:
+        saying `REVIEW_PASSED` in a heading and again in a summary is one
+        statement made twice."""
+        return len(self.stated) > 1
+
+    @property
+    def only(self) -> str | None:
+        return self.stated[0] if len(self.stated) == 1 else None
+
+
+def read_review(output: str) -> ReviewSignal:
+    """The one place a reviewer's output is turned into a verdict claim (#270).
+
+    Deliberately **not** a precedence rule. Ranking the markers would have
+    removed the sequential/parallel divergence while keeping the ambiguity: a
+    reviewer that says both `REVIEW_PASSED` and `REVIEW_FAILED` has not decided,
+    and picking one for it is the tool inventing a verdict. Two different
+    verdicts are an error, and an error is something a person resolves.
+    """
+    return ReviewSignal(tuple(review_markers(output)))
 
 
 def _resolve_review_template(config: ExecutorConfig, review_cmd: str) -> str:
@@ -194,7 +232,12 @@ def _render_review_prompt(
     # Previous errors
     error_section = ""
     if previous_error:
-        error_section = f"\n## Previous Errors (from retry)\n{previous_error[:1024]}\n"
+        # Quoted history reaches the reviewer with the marker tokens broken
+        # (#266/#270): a reviewer that reads `REVIEW_FAILED` in the errors it
+        # was handed is one summary away from stating it, and the parser cannot
+        # tell a quotation from a verdict.
+        quoted = neutralise_markers(previous_error[:1024])
+        error_section = f"\n## Previous Errors (from retry)\n{quoted}\n"
 
     # Reviewer persona system prompt
     persona_section = ""
@@ -565,12 +608,22 @@ def run_code_review(
             log_progress("⚠️ Code review produced no verdict: empty response", task.id)
             return ReviewVerdict.NOT_RUN, "Review returned empty response", None
 
-        # Check review result (case-insensitive, check both stdout and stderr)
-        output_upper = combined_output.upper()
-        if "REVIEW_PASSED" in output_upper:
+        # One reading for both paths (#270), and markers are lines rather than
+        # substrings — a reviewer writing "this is not a REVIEW_FAILED
+        # situation" used to be recorded as having failed the review.
+        signal = read_review(combined_output)
+        if signal.conflicting:
+            stated = ", ".join(signal.stated)
+            log_progress(f"⚠️ Code review stated conflicting verdicts: {stated}", task.id)
+            return (
+                ReviewVerdict.ERROR,
+                f"Review stated conflicting verdicts ({stated}); a person has to read it",
+                output,
+            )
+        if signal.only == "REVIEW_PASSED":
             log_progress("✅ Code review passed", task.id)
             return ReviewVerdict.PASSED, None, output
-        elif "REVIEW_FIXED" in output_upper:
+        elif signal.only == "REVIEW_FIXED":
             log_progress("✅ Code review: issues fixed", task.id)
             # Commit the fixes — runtime state stays out of the commit (#62)
             if stage_all_except_runtime(config):
@@ -586,7 +639,7 @@ def run_code_review(
                         stderr=commit_result.stderr.strip()[:200],
                     )
             return ReviewVerdict.FIXED, None, output
-        elif "REVIEW_FAILED" in output_upper:
+        elif signal.only == "REVIEW_FAILED":
             log_progress("❌ Code review found unresolved issues", task.id)
             preview = output.strip()[-300:]
             log_progress(f"   Review output (last 300 chars): {preview}", task.id)
@@ -649,12 +702,23 @@ def _run_single_role_review(
             # Same rule as the single path: a role that crashed — or whose CLI
             # said it failed while exiting 0 — has no verdict.
             return role, ReviewVerdict.ERROR, output
-        output_upper = output.upper()
-        if "REVIEW_FAILED" in output_upper:
+        # The same reading as the single path — one classifier, so the two
+        # cannot disagree again (#270). This path used to try FAILED first and
+        # the other PASSED first, which made a self-contradicting reviewer's
+        # verdict depend on whether a budget was active.
+        signal = read_review(output)
+        if signal.conflicting:
+            stated = ", ".join(signal.stated)
+            return (
+                role,
+                ReviewVerdict.ERROR,
+                f"Review stated conflicting verdicts ({stated}); a person has to read it",
+            )
+        if signal.only == "REVIEW_FAILED":
             return role, ReviewVerdict.FAILED, output
-        elif "REVIEW_FIXED" in output_upper:
+        elif signal.only == "REVIEW_FIXED":
             return role, ReviewVerdict.FIXED, output
-        elif "REVIEW_PASSED" in output_upper:
+        elif signal.only == "REVIEW_PASSED":
             return role, ReviewVerdict.PASSED, output
         # Same rule as the single-review path (#138): no marker means this role
         # produced no verdict, not that it approved.
