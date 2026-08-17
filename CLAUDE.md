@@ -12,13 +12,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 spec-runner's role in the ecosystem: the only **working** cross-project link (Maestro→spec-runner). Contract stability (`.executor-state.db` SQLite schema, `--json-result` stdout) is the main ecosystem responsibility — see `docs/state-schema.md`, `schemas/*.json`, and `tests/test_json_result_contract.py`. Any breaking change needs a major version bump.
 
-## `../_cowork_output/` is dev-only — never a code/runtime resource
+## `../_cowork_output/` — dev-only
 
-`../_cowork_output/` (the polyrepo **sibling** workspace — not to be confused with this repo's own local `./_cowork_output/` scratch directory) is the development-time coordination area (cross-team ADRs, status notes, contract drafts, PM/dev tooling). Users and teams installing or cloning this project do NOT have it. Rules:
-
-- Shipped/runtime code must never read, import, or resolve paths under `../_cowork_output/`.
-- Canonical shippable facts live inside the owning repo (e.g. the ecosystem agents-catalog SSOT is `atp-platform/method/agents-catalog.toml`). Cross-repo contracts this repo depends on must be **vendored in** as pinned copies (as with the observability-contract pin) — never referenced from `../_cowork_output/` at runtime.
-- Only workspace-local dev tooling (e.g. `../_cowork_output/devtools/`) and documentation may reference it.
+Координационный dev-scratch воркспейса; у пользователей и клонов проекта его НЕТ.
+Shipped/runtime-код никогда не читает и не резолвит пути под ним; кросс-репные
+контракты вендорятся пиненой копией внутрь, не ссылкой наружу. Ссылаться на него
+могут только dev-тулинг самого воркспейса и документация. Канонические факты живут
+в репо-владельце (пример: SSOT agents-catalog — `atp-platform/method/agents-catalog.toml`,
+ADR-ECO-003). Полное правило (SSOT): `../prograph-vault/authored/rules/cowork-output.md`.
 
 ## Project Overview
 
@@ -318,7 +319,10 @@ Tests use pytest. Test files: `test_adopt_gate.py` (`spec adopt` validate-first 
 ## Repo scope & boundaries
 
 - **Этот репо:** `spec-runner` — git-корень `all_ai_orchestrators/spec-runner/`, remote `git@github.com:andrei-shtanakov/spec-runner.git`.
-- **Соседи (READ-ONLY reference):** `../arbiter/`, `../atp-platform/`, `../deployer/`, `../dispatcher/`, `../maestro/`, `../libretto/`, `../proctor/`, `../prograph/`, `../prograph-vault/`, `../robin-runtime/`, `../robin-toolkit/`, `../spec-runner-vscode/`, `../steward/` — их код не редактировать.
+- **Соседи (READ-ONLY reference):** все остальные подпроекты воркспейса — их код не
+  редактировать. Состав флота — `ai-orchestrators-workspace/workspace-manifest.toml`
+  (SSOT); рукописные списки соседей в CLAUDE.md не ведём — они дрейфуют.
+- **Канон имени репо = имя каталога после обычного `git clone`** (`maestro`, `libretto`).
 - Нужна правка у соседа → **стоп**: запиши handoff в `../prograph-vault/authored/notes/`
   (кросс-проектное) или `../_cowork_output/` (черновик), не трогай его файлы.
 - Кросс-репные контракты — **вендорить пиненой копией внутрь**, не ссылаться наружу.
@@ -326,13 +330,18 @@ Tests use pytest. Test files: `test_adopt_gate.py` (`spec adopt` validate-first 
 
 ## Git workflow (у репо есть remote)
 
-- Ветка `<type>/<slug>` → push → `gh pr create`. **Прямые коммиты в `master` запрещены.**
+- Ветка `<type>/<slug>` → push → `gh pr create`. **Прямые коммиты в `master`
+  запрещены**, как и локальный мерж ветки в `master` в обход PR.
 - После открытия PR — прочитать ревью **GitHub Copilot**: валидные замечания исправлять
   новыми коммитами в ту же ветку; невалидные — ответить с обоснованием, **не применять
-  вслепую**; итерировать, пока не останется открытых замечаний.
+  вслепую**; итерировать, пока не останется открытых замечаний. Ревью не всегда
+  запрашивается само — если его нет, запросить явно:
+  `gh api -X POST repos/<owner>/<repo>/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`.
 - **Не мержить.** Мерж делает пользователь.
 - После мержа пользователем: `git switch master && git pull --ff-only`, затем удалить
-  влитую ветку (`git branch -d <branch>`) и `git fetch --prune`; убрать прочие влитые ветки.
+  влитую ветку в **обеих половинах**: локально `git branch -d` (после squash-мержа `-d`
+  откажется — сверить, что `git diff master <ветка>` пуст, и удалить `-D`) и на origin
+  `git push origin --delete <ветка>`, если GitHub не удалил сам; затем `git fetch --prune`.
 - Никогда не делать force-push в общие ветки; не трогать другие репо (см. scope выше).
 - Полное правило (SSOT): `../prograph-vault/authored/rules/git-workflow.md`.
 
@@ -347,3 +356,9 @@ Issue с лейблом `inbox` — запрос от соседнего реп�
 (`slug:` + `from:` + проза). Правило: ADR-ECO-006 — канон в `ecosystem-kb`
 (каталог `prograph-vault/` в корне воркспейса),
 `authored/decisions/2026-07-28-adr-eco-006-cross-repo-issue-inbox.md`.
+
+Исходящее ожидание — вторая половина того же ритуала: «ждём соседа» существует
+**только** как чекбокс `TODO.md` с `@blocked_by:todo://<repo>/<id>` (переходно —
+`<repo>#<номер>`); память сессий, заметки и handoff-доки — лишь зеркало. Находка
+PF-BLOCKER-STALE по этому репо = «ожидание доставлено — действуй или переставь тег».
+Правило (SSOT): `../prograph-vault/authored/rules/cross-repo-waits.md`.
