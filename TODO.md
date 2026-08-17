@@ -928,7 +928,7 @@ package data именно для сверки потребителями — т�
 - [x] `src/spec_runner/contract_fixtures/spec_meta_contract_v2.md` — `owner_role: platform` (`46e5b0e`) @owner:github:andrei-shtanakov @id:dec007-fixture
 - [x] `src/spec_runner/spec.py` — инлайн-комментарий переписан под DEC-007 (`46e5b0e`) @owner:github:andrei-shtanakov @id:dec007-inline-comment
 - [x] Вопрос патч-релиза снят: правка доехала до потребителей в **v2.15.0** (`1adec1f`), отдельная 2.11.1 не понадобилась @owner:github:andrei-shtanakov @id:dec007-patch-release-decision
-- [ ] Обновить заметку vault'а — она всё ещё велит steward игнорировать примеры из фикстуры v2.11.0. Ждать релиза с #135: фикстура там меняется снова (`traces_to` списком, пин только прямого upstream), и переписывать заметку дважды смысла нет @owner:github:andrei-shtanakov @blocked_by:todo://spec-runner/authoring-contract-traces-pins @id:dec007-vault-note-update
+- [x] Обновить заметку vault'а — она всё ещё велит steward игнорировать примеры из фикстуры v2.11.0. Ждать релиза с #135: фикстура там меняется снова (`traces_to` списком, пин только прямого upstream), и переписывать заметку дважды смысла нет. Сделано 2026-08-17: prograph-vault#71 — датированный UPDATE-блок в разделе 0 заметки (doc-фикс `46e5b0e` вышел в v2.15.0, релиз с #135 поправил фикстуру; текущие v2.33.x несут корректные примеры) @owner:github:andrei-shtanakov @blocked_by:todo://spec-runner/authoring-contract-traces-pins @id:dec007-vault-note-update
 
 ### Дотегать и опубликовать v2.10.0 (2026-07-26)
 
