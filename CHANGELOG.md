@@ -12,7 +12,42 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
-**Patch.** Observability only: no public surface moves, no schema changes.
+**Patch.** No public surface moves, no schema changes: the generated `tasks.md`
+gains no field, and the only prompt that changes is the one `plan --full` sends.
+
+- **`plan --full` no longer returns a spec its own `run` refuses** (#301, from
+  a Maestro-orchestrated run). Every task of the generated file carried
+  `🔴 **P0** | Est: **2h** | **Depends on:** —` — bold around the tokens the
+  parser anchors on, and no status word — so `run --all` refused all of it
+  before a single task started, while generation had reported success.
+
+  Three things were true at once, and the cheapest one is the root cause: the
+  `--full` pipeline builds its prompt from the stage's `prompt_text` alone and
+  **never sends the bundled template**, so it asked for "priorities, estimates,
+  checklists" without once showing the meta line the parser reads. The gated
+  pipeline embeds that template, which is why it was never the path that
+  reported this. The `lite` profile's tasks prompt now states the shape and
+  names the deviation (`**P0**` is not recognized).
+
+  Second, the recoverable half is normalized like the headers already were
+  (`normalize_task_meta`, sibling of `normalize_task_headers`): bold stripped
+  from priority/status/estimate, and a meta line that names a priority but no
+  status given the only status a new task can have. A rewrite is adopted only
+  when it yields a line `TASK_META` actually recognizes.
+
+  Third, the gate itself: `validate_generated_tasks` asked "does at least one
+  task parse", which is strictly weaker than what `run` asks. It now runs the
+  same `validate_tasks` and exits 1 with the validator's own errors — so a
+  discrepancy comes back as a **generation error**, not as a successful
+  generation followed by an execution refusal. That is what made the defect
+  expensive: the orchestrator retried full generation three times on input no
+  regeneration could improve.
+
+  Found while fixing it, and worth its own line: `parse_tasks` stops reading a
+  meta line at the estimate, so `**Depends on:**` declared *there* validated
+  cleanly and ordered nothing. Normalization moves those fields onto their own
+  lines. Merely un-bolding the reported file would have produced a spec that
+  passed every check with its entire dependency graph silently dropped.
 
 - **Every prompt artefact now ends by saying what became of the call** (#295 and
   #296, both found in the artefacts of a real run rather than by reading code).
