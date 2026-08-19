@@ -131,9 +131,26 @@
           "type": ["string", "null"]
         },
         "error_kind": {
-          "description": "Classified failure kind (experimental, added v2.3.0)",
+          "description": "Classified failure kind (experimental, added v2.3.0; widened in #301 to the kinds the writer actually produces — the first five come from errors.classify, the rest from the execution path. 'policy'/'instrument'/'budget' are RefusalKind's own values: a gate said no, a gate could not answer, there was no money left to find out. The single source is errors.ERROR_KINDS, and a test compares this list to it)",
           "type": ["string", "null"],
-          "enum": ["rate_limit", "auth", "network", "cli_error", "unknown", null]
+          "enum": [
+            "rate_limit",
+            "auth",
+            "network",
+            "cli_error",
+            "unknown",
+            "api_error",
+            "blocked",
+            "policy",
+            "instrument",
+            "budget",
+            "hook_failure",
+            "harness_guard",
+            "timeout",
+            "interrupted",
+            "internal_error",
+            null
+          ]
         },
         "error_stage": {
           "description": "Sub-stage when the failure occurred (experimental, added v2.3.0). 'exec' replaced 'codex' as the agent-execution stage name in v2.13; 'codex' remains valid for rows written by <=2.12.",

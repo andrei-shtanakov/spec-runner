@@ -12,11 +12,62 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
-**Patch.** No public surface moves, no schema changes: the generated `tasks.md`
-gains no field, and the only prompt that changes is the one `plan --full` sends.
+**Patch.** No stable surface moves. One **experimental** field's documented
+vocabulary is corrected (`attempts.error_kind`) — see below for why that is a
+correction and not a widening.
+
+- **A failing run now says why, in the channels a caller reads** (#301, second
+  half — the observability defect found in the same orchestrated run as the
+  `plan --full` one below).
+
+  The reported symptom was that a TDD-gate refusal after 2.5 minutes left the
+  caller with `spec-runner exited with code 1` and nothing else. Measured first,
+  on the end-to-end harness: the text **was** on stderr, **was** in the jsonl,
+  and **was** in `attempts.error`. Three things around it were not.
+
+  **The machine-readable half was missing.** `error_kind` and `error_stage` are
+  optional keyword arguments of `record_attempt`, so recording them is opt-in
+  per call site — and only 3 of 11 sites opted in. The RED-refusal site was not
+  one of them, so `status` showed a bare failure and a consumer reading the DB
+  got NULLs on exactly the failure the issue was about. Every failure site now
+  passes both, the kind of a refusal comes from the `Refusal` itself (the same
+  source `_refusal_error_code` reads, so the two cannot drift as they did in
+  #230), and an AST test refuses a `record_attempt(..., False, ...)` in
+  `execution.py` without them — the omission was structural, not careless.
+
+  **The run's log counted failures and named none.** `Execution summary` said
+  `failed=1`; the reason lived only in the DB and the progress mirror. A failing
+  run now emits one ERROR record per failed task carrying `task_id`,
+  `error_kind`, `error_stage`, `error_code` and the full text — which is both
+  the jsonl and the stderr channel, since the console mirrors it.
+
+  **The artefact the reporter opened was a decoy.** `init_logging` opened its
+  sink eagerly, so *every* invocation left `logs/<ULID>/spec-runner-<pid>.jsonl`
+  behind — empty when the command logged nothing (`status` logs nothing at all),
+  in a fresh ULID directory each time. An empty file there reads as "the run
+  wrote nothing" while the run's own file sits elsewhere. The sink is now
+  created by its first record: a file that exists has content, and its absence
+  means nothing was logged. This is in `obs.py`, the vendored reference
+  implementation — consumers carry their own pinned copies and are unaffected
+  until they re-vendor.
+
+  Two things found while measuring, both fixed here:
+
+  - `status` printed `last_error[:50] + "..."`. The reported refusal named the
+    cause *and* the fix ("write the failing test in a file of its own"), and the
+    half an operator acts on is at the end. It prints in full now.
+  - **`error_kind`'s enum in `schemas/executor-state.schema.json` was already
+    false.** It listed the five kinds `errors.classify` produces, while the
+    execution path had been writing `blocked` and `api_error` — a consumer
+    validating rows spec-runner itself writes would have rejected them. The
+    enum now matches `errors.ERROR_KINDS`, and a test compares the two, so it
+    cannot drift again. Experimental field, and the correction makes previously
+    invalid rows valid rather than the reverse.
 
 - **`plan --full` no longer returns a spec its own `run` refuses** (#301, from
-  a Maestro-orchestrated run). Every task of the generated file carried
+  a Maestro-orchestrated run). No public surface moves: the generated
+  `tasks.md` gains no field, and the only prompt that changes is the one
+  `plan --full` sends. Every task of the generated file carried
   `🔴 **P0** | Est: **2h** | **Depends on:** —` — bold around the tokens the
   parser anchors on, and no status word — so `run --all` refused all of it
   before a single task started, while generation had reported success.

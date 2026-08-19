@@ -169,7 +169,14 @@ def print_status(config: ExecutorConfig) -> None:
                 if ts.status == "failed" and ts.last_error:
                     kind = ts.attempts[-1].error_kind if ts.attempts else None
                     kind_tag = f"[{kind}] " if kind else ""
-                    print(f"      Last error: {kind_tag}{ts.last_error[:50]}...")
+                    # In full (#301). Fifty characters plus an ellipsis cut the
+                    # reported refusal mid-diagnosis — it named both the cause
+                    # and the fix ("write the failing test in a file of its
+                    # own"), and the half an operator acts on is at the end.
+                    # The reason exists; the only thing between it and the
+                    # operator was this slice.
+                    reason = "\n         ".join(ts.last_error.strip().splitlines())
+                    print(f"      Last error: {kind_tag}{reason}")
                 elif ts.status == "running" and ts.last_error:
                     print(f"      ⚠️  Last attempt failed: {ts.last_error[:50]}...")
                 # Second-pass hint

@@ -111,6 +111,21 @@ def _refusal_error_code(refusal: str) -> ErrorCode:
     return ErrorCode.HOOK_FAILURE
 
 
+def _refusal_error_kind(refusal: str) -> str:
+    """The diagnostic half of the same question, for `attempts.error_kind`.
+
+    Sibling of `_refusal_error_code` and deliberately reading the same source:
+    the exit code says *how bad*, the kind says *what happened*, and a refusal
+    already carries the answer to both. An untyped refusal string is still a
+    refusal — it just cannot say more than that (#301).
+    """
+    if isinstance(refusal, Refusal):
+        return refusal.kind.value
+    if refusal.startswith(GATE_INSTRUMENT_ERROR_PREFIX):
+        return "instrument"
+    return "hook_failure"
+
+
 def _headline(reason: str, limit: int = 120) -> str:
     """One line naming why the attempt failed, for the progress log (#229).
 
@@ -240,6 +255,8 @@ def execute_task(
             0.0,
             error="Pre-start hook failed",
             error_code=ErrorCode.HOOK_FAILURE,
+            error_kind="hook_failure",
+            error_stage=reporter.current,
         )
         return "HOOK_ERROR"
 
@@ -260,7 +277,7 @@ def execute_task(
             # this task in the same shape every other budget stop takes, so
             # the checkpoint (if any) and the tree are left exactly as they
             # were and the task resumes when the cap is raised.
-            _fail_for_budget(task, config, state, str(stop))
+            _fail_for_budget(task, config, state, str(stop), reporter.current)
             return False
         if refusal is not None:
             log_progress(f"⛔ {refusal}", task_id)
@@ -270,6 +287,8 @@ def execute_task(
                 0.0,
                 error=refusal,
                 error_code=_refusal_error_code(refusal),
+                error_kind=_refusal_error_kind(refusal),
+                error_stage=reporter.current,
             )
             return False
 
@@ -303,7 +322,7 @@ def execute_task(
     # resumes on the same checkpoint rather than re-authoring it.
     green_refusal = check_before_call(config, state, task_id, "green")
     if green_refusal is not None:
-        _fail_for_budget(task, config, state, green_refusal.reason)
+        _fail_for_budget(task, config, state, green_refusal.reason, reporter.current)
         return False
 
     if config.resolve_execution_mode(task) == "tdd":
@@ -505,6 +524,7 @@ def execute_task(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
+                    error_kind="harness_guard",
                     error_stage=reporter.current,
                 )
                 send_callback(config.callback_url, task_id, "failed", duration, error)
@@ -584,6 +604,11 @@ def execute_task(
                         # not answer" — the second is an instrument failure and
                         # the run exits 2 rather than 1.
                         error_code = _refusal_error_code(hook_error)
+                # The kind reads the same refusal the code did (#301): a
+                # pre-terminal gate that could not answer is `instrument`
+                # whatever sentence it wrote, and everything the branches above
+                # recognised is a policy hook saying no.
+                error_kind = _refusal_error_kind(hook_error) if hook_error else "hook_failure"
                 # Combine Claude output with test failures for context
                 full_output = output
                 if hook_error:
@@ -600,6 +625,8 @@ def execute_task(
                     cost_usd=cost_usd,
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
+                    error_kind=error_kind,
+                    error_stage=reporter.current,
                 )
                 log_progress(f"\u274c Failed: {_headline(error)}", task_id)
                 send_callback(
@@ -688,6 +715,8 @@ def execute_task(
             duration,
             error=error,
             error_code=ErrorCode.TIMEOUT,
+            error_kind="timeout",
+            error_stage=reporter.current,
         )
         log_progress(f"\u23f0 Timeout after {config.task_timeout_minutes}m", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
@@ -701,6 +730,8 @@ def execute_task(
             duration,
             error="Interrupted by signal",
             error_code=ErrorCode.INTERRUPTED,
+            error_kind="interrupted",
+            error_stage=reporter.current,
         )
         log_progress("Interrupted by signal", task_id)
         return False
@@ -714,6 +745,8 @@ def execute_task(
             duration,
             error=error,
             error_code=ErrorCode.UNKNOWN,
+            error_kind="internal_error",
+            error_stage=reporter.current,
         )
         log_progress(f"\U0001f4a5 Error: {error[:50]}", task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
@@ -841,8 +874,16 @@ def _fail_for_budget(
     config: ExecutorConfig,
     state: ExecutorState,
     message: str,
+    stage: str | None = None,
 ) -> None:
-    """Record a BUDGET_EXCEEDED attempt and mark the task failed."""
+    """Record a BUDGET_EXCEEDED attempt and mark the task failed.
+
+    Args:
+        stage: the sub-stage the refusal landed on, when there is one. The
+            retry loop's pre- and post-attempt checks sit *between* attempts
+            and pass None — a stage name there would be invented, and the one
+            thing `error_stage` must not be is a guess (#301).
+    """
     log_progress(message, task.id)
     state.record_attempt(
         task.id,
@@ -850,6 +891,8 @@ def _fail_for_budget(
         0.0,
         error=message,
         error_code=ErrorCode.BUDGET_EXCEEDED,
+        error_kind="budget",
+        error_stage=stage,
     )
     # LABS-41: budget exhaustion is terminal, not a dependency wait. That
     # distinction lives in the state DB (status "failed", error_code
