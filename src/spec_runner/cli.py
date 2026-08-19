@@ -1345,6 +1345,31 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         run_completed = state.total_completed - completed_before
         run_failed = state.total_failed - failed_before
 
+        # #301: the run's log counted failures and named none. For a caller
+        # that reads the log file and the exit code — which is what an
+        # orchestrator has — a TDD-gate refusal was indistinguishable from any
+        # other `exit 1`, and the reason (which named both the cause and the
+        # fix) was reachable only by reproducing the run by hand. It is already
+        # in `attempts`; saying it costs nothing. ERROR, because that is the
+        # severity a consumer filters on.
+        for task_id_done, ts in state.tasks.items():
+            if ts.status != "failed":
+                continue
+            new_failures = [
+                a for a in ts.attempts[attempts_before.get(task_id_done, 0) :] if not a.success
+            ]
+            if not new_failures:
+                continue
+            last_failure = new_failures[-1]
+            logger.error(
+                "Task failed",
+                task_id=task_id_done,
+                error_kind=last_failure.error_kind,
+                error_stage=last_failure.error_stage,
+                error_code=getattr(last_failure.error_code, "value", last_failure.error_code),
+                error=last_failure.error,
+            )
+
         logger.info(
             "Execution summary",
             completed=run_completed,

@@ -84,6 +84,43 @@ PATTERNS: list[ErrorPattern] = [
 ]
 
 
+#: Every value `attempts.error_kind` may carry, in one place (#301).
+#:
+#: The column had a **closed enum** in `schemas/executor-state.schema.json`
+#: listing the five kinds this module's patterns produce — while the execution
+#: path was already writing `blocked` and `api_error`, so a consumer validating
+#: rows spec-runner itself writes would have rejected them. The enum drifted
+#: because nothing compared it to the code; `TestTheDeclaredVocabularyIsTheOneOnDisk`
+#: now does, against this set.
+#:
+#: The three refusal kinds are `RefusalKind`'s own values, not synonyms of
+#: them: a gate that answered "no" (`policy`), an instrument that could not
+#: answer (`instrument`), and no money left to find out (`budget`) are the
+#: distinction the exit code already draws, and inventing a second vocabulary
+#: for the same three states is how #230 happened.
+ERROR_KINDS: frozenset[str] = frozenset(
+    {
+        # classifier (this module)
+        "rate_limit",
+        "auth",
+        "network",
+        "cli_error",
+        "unknown",
+        # written by the execution path
+        "api_error",
+        "blocked",
+        "policy",
+        "instrument",
+        "budget",
+        "hook_failure",
+        "harness_guard",
+        "timeout",
+        "interrupted",
+        "internal_error",
+    }
+)
+
+
 def classify(stderr: str, returncode: int) -> tuple[str, str]:
     """Return (kind, human_message) for a failed CLI invocation.
 

@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,6 +23,49 @@ from typing import Any, cast
 
 import structlog
 import ulid
+
+
+class _LazyFile:
+    """File-like that creates its file (and directory) on the first write.
+
+    Opening the sink at `init_logging` time meant **every** invocation left a
+    `<log_dir>/<project>-<pid>.jsonl` behind, empty when the command logged
+    nothing — and a new `logs/<ULID>/` directory to hold it. An empty file
+    there is not a record, it is a decoy: it reads as "this run wrote nothing"
+    while the run's own file sits in another directory (#301 — that is the
+    artefact the reporter opened before concluding the failure left no trace).
+
+    Created on first write, so a file that exists always has content, and its
+    absence honestly means nothing was logged.
+
+    The open is guarded by its own lock. `structlog.WriteLogger.msg` already
+    serializes writes per file object, so today two threads cannot reach the
+    open at once — but this module is vendored into projects whose threading
+    and logging setup we do not control, and "safe because the caller's logging
+    library happens to hold a lock" is not a property to inherit blindly
+    (Copilot, PR #303). Double-checked: the common path stays one attribute
+    read.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._handle: Any = None
+        self._open_lock = threading.Lock()
+
+    def write(self, s: str) -> int:
+        handle = self._handle
+        if handle is None:
+            with self._open_lock:
+                if self._handle is None:
+                    self._path.parent.mkdir(parents=True, exist_ok=True)
+                    self._handle = self._path.open("a")
+                handle = self._handle
+        return cast("int", handle.write(s))
+
+    def flush(self) -> None:
+        handle = self._handle
+        if handle is not None:
+            handle.flush()
 
 
 class _StderrProxy:
@@ -205,7 +249,8 @@ def init_logging(
     _initialized = True
 
     log_dir = log_dir or _default_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
+    # The directory is created with the file, not here (#301): a command that
+    # logs nothing should leave neither.
     output_path = log_dir / f"{project}-{os.getpid()}.jsonl"
 
     pipeline_id = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
@@ -246,7 +291,9 @@ def init_logging(
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(min_level),
-        logger_factory=structlog.WriteLoggerFactory(file=output_path.open("a")),
+        logger_factory=structlog.WriteLoggerFactory(
+            file=cast("Any", _LazyFile(output_path)),
+        ),
         cache_logger_on_first_use=True,
     )
 

@@ -89,7 +89,7 @@ CREATE TABLE executor_meta (
 | `cost_usd` | REAL | stable | Attempt cost in USD |
 | `review_status` | TEXT | stable | See `ReviewVerdict` values below |
 | `review_findings` | TEXT | experimental | Free-text review notes |
-| `error_kind` | TEXT | experimental | Added v2.3.0. Classified failure kind: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`; nullable |
+| `error_kind` | TEXT | experimental | Added v2.3.0, vocabulary corrected in #301. Classified failure kind, nullable. From `errors.classify`: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`. From the execution path: `api_error`, `blocked`, `hook_failure`, `harness_guard`, `timeout`, `interrupted`, `internal_error`, and the three refusal kinds `policy` (a gate answered no), `instrument` (a gate could not answer — the run exits 2), `budget`. The single source is `errors.ERROR_KINDS`; a test compares it to this schema, because the enum had drifted — `blocked` and `api_error` were being written while the schema listed five values |
 | `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `exec`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable. `exec` replaced `codex` in v2.13 — rows written by ≤2.12 may still carry `codex` |
 | `no_op` | INTEGER | stable | Added v2.16.0 (#97). 1 when the attempt succeeded with nothing to commit (work already absorbed by earlier tasks); 0/null otherwise. Only meaningful with `auto_commit` on |
 

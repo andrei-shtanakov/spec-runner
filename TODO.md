@@ -480,14 +480,27 @@
       `**Depends on:**` **на ней** проходил валидацию и не задавал порядок —
       простое снятие болда дало бы зелёный файл с молча выброшенным графом
       зависимостей. Тесты: `tests/test_generated_spec_meets_run_contract.py` (28)
-- [ ] **run-failure-reason-reaches-caller** (inbox spec-runner#301, комментарий) @owner:github:andrei-shtanakov @id:run-failure-reason-reaches-caller
-      Второй критерий того же issue, **не** тот же дефект: содержательный отказ
-      (`⛔ RED not confirmed…`, HOOK_FAILURE) виден только при ручном повторе.
-      У прогона: `logs/<ULID>/*.jsonl` — 0 байт, `attempts`/`agent_calls`/
-      `tdd_phases`/`phase_results`/`gate_verdicts` — пусты при созданной схеме,
-      у вызывающего — только `exited with code 1`. Мерить с обеих сторон: что
-      мы **пишем** (attempts до выхода) и что мы **говорим** (stderr/jsonl).
-      Родня с #295/#296 — тот же класс «артефакт есть, следа нет»
+- [x] **run-failure-reason-reaches-caller** (inbox spec-runner#301, комментарий) @owner:github:andrei-shtanakov @id:run-failure-reason-reaches-caller
+      Измерено до правок на e2e-харнессе `test_infrastructure_classification`:
+      текст отказа **есть** и на stderr, и в jsonl, и в `attempts.error` —
+      симптомы из issue в дефолте не воспроизводятся. Не хватало трёх вещей.
+      **(1)** Машиночитаемой половины: `error_kind`/`error_stage` — опциональные
+      kwarg'и `record_attempt`, поэтому пишутся по желанию точки вызова, и из 11
+      точек их передавали 3; RED-отказ — не из них, так что `status` показывал
+      голый провал, а потребитель БД получал NULL ровно на том отказе, о котором
+      issue. Теперь передают все, kind у отказа берётся из самого `Refusal` (тот
+      же источник, что читает `_refusal_error_code` — чтобы не разъехались, как
+      в #230), а AST-тест отказывает `record_attempt(..., False, ...)` без них.
+      **(2)** Прогон считал провалы и не называл ни одного: теперь на каждый
+      упавший таск — ERROR-запись с `task_id`/`error_kind`/`error_stage`/
+      `error_code` и полным текстом. **(3)** Пустой jsonl оказался приманкой:
+      sink открывался при инициализации, поэтому **любой** вызов оставлял файл
+      (у `status` — нулевой) в новом ULID-каталоге. Теперь файл создаётся первой
+      записью. Попутно: `status` печатал `last_error[:50]` — обрезал ровно ту
+      половину, где написано, что делать; и enum `error_kind` в схеме **уже был
+      неверен** (код писал `blocked`/`api_error`, которых там нет) — сведён к
+      `errors.ERROR_KINDS`, тест сверяет. Тесты:
+      `tests/test_failure_reason_reaches_the_caller.py` (13)
 
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
