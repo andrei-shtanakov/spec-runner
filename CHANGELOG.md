@@ -10,11 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-### Fixed
+## [2.34.0] - 2026-08-19
 
-**Patch.** No stable surface moves. One **experimental** field's documented
-vocabulary is corrected (`attempts.error_kind`) — see below for why that is a
-correction and not a widening.
+**Minor, and the reason is one line in a schema.** Everything here is a defect
+fix and no flag, exit code, table, column or `--json-result` key moves — the
+diff against v2.33.2 touches `schemas/` and `docs/state-schema.md` and nothing
+else the runbook asks about. But it does touch them: `attempts.error_kind`'s
+enum is widened, and a field that used to be NULL on most failures now carries
+a value. A consumer holding a pinned copy of the old schema (Maestro vendors
+ours) would reject rows spec-runner writes, which is exactly what a minor bump
+exists to announce. Calling it a patch would be true about the code and false
+about the contract.
+
+Worth stating plainly: that enum was **already wrong** before this release. It
+listed the five kinds `errors.classify` produces while the execution path had
+been writing `blocked` and `api_error` since v2.3.0. This release makes the
+schema true and adds the test that keeps it true; previously invalid rows
+become valid, never the reverse.
+
+### Fixed
 
 - **A failing run now says why, in the channels a caller reads** (#301, second
   half — the observability defect found in the same orchestrated run as the
@@ -3208,7 +3222,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...HEAD
+[2.34.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...v2.34.0
 [2.33.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...v2.33.2
 [2.33.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...v2.33.1
 [2.33.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.32.1...v2.33.0
