@@ -158,6 +158,13 @@ class TestMetaNormalizationIsConservative:
             ("🔴 **P0** | Est: **2h**", "🔴 P0 | ⬜ TODO | Est: 2h"),
             ("- 🟢 **P3** | Est: 1d", "- 🟢 P3 | ⬜ TODO | Est: 1d"),
             ("P0 | Est: 1d", "P0 | ⬜ TODO | Est: 1d"),
+            # The bold wraps the whole segment, emoji included (Copilot, PR
+            # #302): matching only the word left the status unrecognized, so
+            # the missing-status branch appended a second one and the bolded
+            # original stayed behind as a stray `**⬜ TODO**` line.
+            ("🔴 P0 | **⬜ TODO** | Est: 1d", "🔴 P0 | ⬜ TODO | Est: 1d"),
+            ("**🔴 P0** | **⬜ TODO** | Est: **2h**", "🔴 P0 | ⬜ TODO | Est: 2h"),
+            ("🟡 P2 | **🔄 IN_PROGRESS** | Est: 1d", "🟡 P2 | 🔄 IN_PROGRESS | Est: 1d"),
         ],
     )
     def test_variants_normalized(self, raw: str, expected: str) -> None:
@@ -191,6 +198,11 @@ class TestMetaNormalizationIsConservative:
         text = "### TASK-001: T\n\n🔴 **P0** | ✅ **DONE** | Est: 1d\n"
         out = normalize_task_meta(text)
         assert "DONE" in out and "TODO" not in out
+
+    def test_a_bolded_status_leaves_no_stray_line(self) -> None:
+        out = normalize_task_meta("### TASK-001: T\n\n🔴 P0 | **✅ DONE** | Est: 1d\n")
+        assert out.count("DONE") == 1
+        assert "**" not in out
 
     def test_idempotent(self) -> None:
         once = normalize_task_meta(REPORTED)

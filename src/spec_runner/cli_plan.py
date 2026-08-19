@@ -430,8 +430,13 @@ _PRIORITY_EMOJI = r"(?:🔴|🟠|🟡|🟢)"
 _META_LINE_ANCHOR = re.compile(
     rf"^(?:[ \t]*[-*]\s+)?\*{{0,2}}(?:{_PRIORITY_EMOJI}\s+)?\*{{0,2}}P\d\*{{0,2}}\s*\|"
 )
+_STATUS_EMOJI = r"(?:⬜|🔄|🔍|✅|⏸️)"
 _BOLD_PRIORITY = re.compile(rf"\*\*((?:{_PRIORITY_EMOJI}\s+)?P\d)\*\*")
-_BOLD_STATUS = re.compile(rf"\*\*((?i:{'|'.join(TASK_STATUS_WORDS)}))\*\*")
+# The bold may wrap the emoji too (`**⬜ TODO**`), and it is the whole segment
+# that gets decorated more often than the bare word — matching only the word
+# left the segment unrecognized, and the missing-status branch then appended a
+# second status while the bolded one stayed behind as a stray line.
+_BOLD_STATUS = re.compile(rf"\*\*((?:{_STATUS_EMOJI}\s+)?(?i:{'|'.join(TASK_STATUS_WORDS)}))\*\*")
 _BOLD_ESTIMATE = re.compile(r"(Est:\s*)\*\*([^*]+?)\*\*")
 _PRIORITY_SEGMENT = re.compile(rf"^((?:[ \t]*[-*]\s+)?(?:{_PRIORITY_EMOJI}\s+)?P\d\s*\|\s*)")
 
