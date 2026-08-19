@@ -37,9 +37,16 @@ from .spec import (
 )
 from .task import (
     ID_PATTERN,
+    TASK_META,
+    TASK_STATUS_WORDS,
     parse_tasks,
 )
-from .validate import validate_spec_stage, verdict_from_result
+from .validate import (
+    format_results,
+    validate_spec_stage,
+    validate_tasks,
+    verdict_from_result,
+)
 
 logger = get_logger("cli")
 
@@ -177,6 +184,13 @@ def _generate_stage_draft(
             print(f"no {stage} content produced (marker missing)")
             _restore(path, previous)
             return 1
+
+        # Same recoverable generator deviations as the `--full` pipeline
+        # (#301): normalizing them here spends no regeneration attempt on a
+        # bold meta line. Anything left is still refused by the validator
+        # below — the gate does not move, only what reaches it.
+        if stage == "tasks":
+            body = normalize_task_meta(normalize_task_headers(body))
 
         meta = SpecMeta(
             spec_stage=stage,
@@ -407,12 +421,74 @@ def normalize_task_headers(text: str) -> str:
     return _TASK_HEADER_VARIANT.sub(lambda m: f"### {m.group(1)}: {m.group(2)}", text)
 
 
-def validate_generated_tasks(tasks_file: Path) -> int:
-    """Ensure a generated tasks.md parses with the runner's own parser.
+# The meta line is decorated by the generation LLM the same way the headers
+# are (#301): bold around the very tokens the parser anchors on — `🔴 **P0**`,
+# `Est: **2h**` — and, in the reported file, no status word at all. Anchoring
+# on `P\d |` at line start is the same anchor TASK_META uses, so prose and
+# checklist items are never mistaken for a meta line.
+_PRIORITY_EMOJI = r"(?:🔴|🟠|🟡|🟢)"
+_META_LINE_ANCHOR = re.compile(
+    rf"^(?:[ \t]*[-*]\s+)?\*{{0,2}}(?:{_PRIORITY_EMOJI}\s+)?\*{{0,2}}P\d\*{{0,2}}\s*\|"
+)
+_BOLD_PRIORITY = re.compile(rf"\*\*((?:{_PRIORITY_EMOJI}\s+)?P\d)\*\*")
+_BOLD_STATUS = re.compile(rf"\*\*((?i:{'|'.join(TASK_STATUS_WORDS)}))\*\*")
+_BOLD_ESTIMATE = re.compile(r"(Est:\s*)\*\*([^*]+?)\*\*")
+_PRIORITY_SEGMENT = re.compile(rf"^((?:[ \t]*[-*]\s+)?(?:{_PRIORITY_EMOJI}\s+)?P\d\s*\|\s*)")
 
-    Returns the parsed task count; exits 1 when zero tasks parse (the file is
-    left in place for debugging). Guards the plan->run format contract:
-    task headers must match ``^### (TASK-\\d+): `` (task.py TASK_HEADER).
+
+def _split_meta_line(line: str) -> list[str]:
+    """Move ``**Field:** value`` segments off the meta line onto their own.
+
+    `parse_tasks` stops reading a meta line once it has the priority, status
+    and estimate, so ``🔴 P0 | … | **Depends on:** [TASK-001]`` validates
+    cleanly while its ordering is silently dropped — the generated file in
+    #301 declared every dependency there. The canonical template puts those
+    fields on their own lines, which is where the parser looks for them.
+    """
+    segments = [s.strip() for s in line.split("|")]
+    head = [s for s in segments if not s.startswith("**")]
+    fields = [s for s in segments if s.startswith("**")]
+    if not fields:
+        return [line]
+    return [" | ".join(head), *fields]
+
+
+def normalize_task_meta(text: str) -> str:
+    """Normalize recoverable task-meta variants to the parseable form.
+
+    Sibling of `normalize_task_headers` for the line below the header (#301):
+    the bold is stripped from priority, status and estimate, a meta line that
+    names a priority but no status is given the only status a freshly
+    generated task can have — ``⬜ TODO`` — and trailing ``**Field:**``
+    segments are moved onto their own lines. A rewrite is adopted only if it
+    actually yields a line `TASK_META` recognizes, so a line this cannot bring
+    to canonical form is left exactly as written for the validator to refuse.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        if not _META_LINE_ANCHOR.match(line):
+            out.append(line)
+            continue
+        fixed = _BOLD_PRIORITY.sub(r"\1", line)
+        fixed = _BOLD_STATUS.sub(r"\1", fixed)
+        fixed = _BOLD_ESTIMATE.sub(r"\1\2", fixed)
+        if not TASK_META.match(fixed):
+            fixed = _PRIORITY_SEGMENT.sub(r"\g<1>⬜ TODO | ", fixed, count=1)
+        if fixed != line and TASK_META.match(fixed):
+            out.extend(_split_meta_line(fixed))
+        else:
+            out.extend(_split_meta_line(line) if TASK_META.match(line) else [line])
+    return "\n".join(out)
+
+
+def validate_generated_tasks(tasks_file: Path) -> int:
+    """Ensure a generated tasks.md passes the validation `run` performs.
+
+    Returns the parsed task count; exits 1 when zero tasks parse or when the
+    file carries a validation error (the file is left in place for debugging).
+    Guards the plan->run format contract: asking only "does anything parse"
+    was strictly weaker than the question `run` asks, so a file every task of
+    which `run` refused (#301) was returned as a successful generation.
     """
     parsed = parse_tasks(tasks_file)
     if not parsed:
@@ -422,6 +498,18 @@ def validate_generated_tasks(tasks_file: Path) -> int:
             f"match '### TASK-NNN: Title' (the exact parser `run` uses). "
             f"The file is kept for inspection; re-run plan."
         )
+        sys.exit(1)
+
+    result = validate_tasks(tasks_file)
+    if not result.ok:
+        logger.error(
+            "Generated tasks.md fails the run validator",
+            file=str(tasks_file),
+            errors=len(result.errors),
+        )
+        print(f"Generated {tasks_file} does not pass the validation `run` performs:")
+        print(format_results(result))
+        print("\nThe file is kept for inspection; re-run plan.")
         sys.exit(1)
     return len(parsed)
 
@@ -457,7 +545,10 @@ def apply_plan_confirmation(
     tasks_file = config.tasks_file
     content = tasks_file.read_text() if tasks_file.exists() else "# Tasks\n\n"
     for block in task_blocks:
-        content += f"\n### {block.strip()}\n"
+        # Only the appended proposal is normalized (#301) — the same generator
+        # decorates the meta line here as in `--full`, and whatever the file
+        # already held is the operator's, not ours to rewrite.
+        content += f"\n### {normalize_task_meta(block.strip())}\n"
 
     tasks_file.parent.mkdir(parents=True, exist_ok=True)
     tasks_file.write_text(content)
@@ -588,9 +679,9 @@ def cmd_plan(args, config: ExecutorConfig):
             # (em-dash, wrong heading depth) are normalized BEFORE the single
             # write, so the file, the validation and `context` all agree.
             if stage == "tasks":
-                normalized = normalize_task_headers(content)
+                normalized = normalize_task_meta(normalize_task_headers(content))
                 if normalized != content:
-                    logger.info("Task headers normalized", stage=stage)
+                    logger.info("Task headers/meta normalized", stage=stage)
                 content = normalized
 
             output_file = stage_files[stage]

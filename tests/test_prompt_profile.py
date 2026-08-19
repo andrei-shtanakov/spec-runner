@@ -59,12 +59,31 @@ _GOLDEN_GEN = {
         "\nProject description: DESC\n"
         "\n## Requirements (already generated)\nRRR",
     ),
+    # Regenerated 2026-08-19 (#301): the `--full` pipeline sends only this
+    # text — never the bundled template — so it had asked for "priorities,
+    # estimates, checklists" without once showing the meta line the parser
+    # reads. The shape is now stated here, and the deviation it produced is
+    # what `run` refused.
     "tasks": (
         {"requirements": "RRR", "design": "DDD"},
         "Generate a tasks document based on the requirements and design below. "
         "Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, "
         "checklists, dependencies, and traceability refs to [REQ-XXX] and "
-        "[DESIGN-XXX]. When done, output the tasks between markers:\n"
+        "[DESIGN-XXX].\n"
+        "\nEvery task must have exactly this shape — the runner parses it "
+        "literally and refuses a spec it cannot read:\n"
+        "\n### TASK-001: <title>\n"
+        "🔴 P0 | ⬜ TODO | Est: 2d\n"
+        "\n**Checklist:**\n- [ ] <step>\n"
+        "\n**Traces to:** [REQ-001], [DESIGN-001]\n"
+        "**Depends on:** [TASK-000]\n"
+        "**Blocks:** [TASK-002]\n"
+        "\nThe line under the header carries priority, then the status word "
+        "(always ⬜ TODO for a new task), then the estimate — nothing else. "
+        "No bold markup anywhere on it (`**P0**` is not recognized), and "
+        "Traces to / Depends on / Blocks each go on their own line, never "
+        "appended to it. Use `—` for an empty Depends on / Blocks.\n"
+        "\nWhen done, output the tasks between markers:\n"
         "SPEC_TASKS_READY\n<your tasks>\nSPEC_TASKS_END\n"
         "\nProject description: DESC\n"
         "\n## Requirements (already generated)\nRRR\n"

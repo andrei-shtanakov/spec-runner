@@ -462,6 +462,33 @@
       вживую: `review-pr 99 --json > out.json` на закрытом PR → `json.loads` ок.
       Тесты: `TestJsonStdoutPurity` (6) (PR #117)
 
+**Принято 2026-08-19: #301** (inbox, from discovery) — `plan --full` отдал файл,
+который его же валидатор отвергает. Разбито на два пункта: дефект генерации
+(принят под именем из issue) и наблюдаемость отказа (отдельный слаг — это
+другой дефект, о том же прогоне).
+
+- [x] **plan-full-meta-line-contract** (inbox spec-runner#301, from discovery) @owner:github:andrei-shtanakov @id:plan-full-meta-line-contract
+      Корневая причина оказалась дешевле заявленной: `--full` строит промпт
+      **только** из `prompt_text` профиля и никогда не шлёт bundled-шаблон —
+      то есть просил «приоритеты, оценки, чеклисты», ни разу не показав
+      мета-строку, которую читает парсер (gated-путь шаблон вкладывает, потому
+      этот путь и не жаловался). Три правки: формат назван в `lite.yaml`;
+      восстановимое отклонение нормализуется (`normalize_task_meta` — рядом с
+      `normalize_task_headers`); калитка `validate_generated_tasks` теперь
+      гоняет тот же `validate_tasks`, что и `run`, и выходит 1 его же словами.
+      Побочная находка: `parse_tasks` дочитывает мета-строку до оценки, поэтому
+      `**Depends on:**` **на ней** проходил валидацию и не задавал порядок —
+      простое снятие болда дало бы зелёный файл с молча выброшенным графом
+      зависимостей. Тесты: `tests/test_generated_spec_meets_run_contract.py` (28)
+- [ ] **run-failure-reason-reaches-caller** (inbox spec-runner#301, комментарий) @owner:github:andrei-shtanakov @id:run-failure-reason-reaches-caller
+      Второй критерий того же issue, **не** тот же дефект: содержательный отказ
+      (`⛔ RED not confirmed…`, HOOK_FAILURE) виден только при ручном повторе.
+      У прогона: `logs/<ULID>/*.jsonl` — 0 байт, `attempts`/`agent_calls`/
+      `tdd_phases`/`phase_results`/`gate_verdicts` — пусты при созданной схеме,
+      у вызывающего — только `exited with code 1`. Мерить с обеих сторон: что
+      мы **пишем** (attempts до выхода) и что мы **говорим** (stderr/jsonl).
+      Родня с #295/#296 — тот же класс «артефакт есть, следа нет»
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),

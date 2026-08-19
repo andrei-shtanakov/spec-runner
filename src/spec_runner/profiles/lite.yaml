@@ -26,7 +26,23 @@ stages:
     validator: tasks
     upstream: [design]
     prompt_text: |-
-      Generate a tasks document based on the requirements and design below. Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, checklists, dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX]. When done, output the tasks between markers:
+      Generate a tasks document based on the requirements and design below. Use TASK-001, TASK-002, etc. with priorities (P0-P3), estimates, checklists, dependencies, and traceability refs to [REQ-XXX] and [DESIGN-XXX].
+
+      Every task must have exactly this shape — the runner parses it literally and refuses a spec it cannot read:
+
+      ### TASK-001: <title>
+      🔴 P0 | ⬜ TODO | Est: 2d
+
+      **Checklist:**
+      - [ ] <step>
+
+      **Traces to:** [REQ-001], [DESIGN-001]
+      **Depends on:** [TASK-000]
+      **Blocks:** [TASK-002]
+
+      The line under the header carries priority, then the status word (always ⬜ TODO for a new task), then the estimate — nothing else. No bold markup anywhere on it (`**P0**` is not recognized), and Traces to / Depends on / Blocks each go on their own line, never appended to it. Use `—` for an empty Depends on / Blocks.
+
+      When done, output the tasks between markers:
       SPEC_TASKS_READY
       <your tasks>
       SPEC_TASKS_END
