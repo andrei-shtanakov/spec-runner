@@ -238,6 +238,42 @@ class TestAnEmptyLogFileIsNeverLeftBehind:
         assert path.stat().st_size > 0
         assert json.loads(path.read_text().splitlines()[0])["Body"] == "something happened"
 
+    def test_concurrent_first_writes_open_the_file_once(self, tmp_path, monkeypatch):
+        """`obs.py` is vendored into projects whose threading we do not control
+        (Copilot, PR #303). structlog serializes writes per file object today,
+        so the open is already reached by one thread at a time — but that is
+        the caller's library's property, not this class's."""
+        import threading
+
+        from spec_runner.obs import _LazyFile
+
+        real_open = Path.open
+        opens = []
+
+        def counting_open(self, *args, **kwargs):
+            opens.append(self)
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", counting_open)
+
+        sink = _LazyFile(tmp_path / "deep" / "probe.jsonl")
+        start = threading.Barrier(8)
+
+        def hammer() -> None:
+            start.wait()
+            for _ in range(25):
+                sink.write("line\n")
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        sink.flush()
+
+        assert len(opens) == 1, f"opened {len(opens)} handles — one of them leaks its writes"
+        assert (tmp_path / "deep" / "probe.jsonl").read_text().count("line\n") == 200
+
     @pytest.mark.slow
     def test_a_real_command_that_logs_nothing_leaves_no_decoy(self, tmp_path):
         root = _tdd_project(tmp_path, assertion="False", test_command="true")

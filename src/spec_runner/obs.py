@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,21 +37,35 @@ class _LazyFile:
 
     Created on first write, so a file that exists always has content, and its
     absence honestly means nothing was logged.
+
+    The open is guarded by its own lock. `structlog.WriteLogger.msg` already
+    serializes writes per file object, so today two threads cannot reach the
+    open at once — but this module is vendored into projects whose threading
+    and logging setup we do not control, and "safe because the caller's logging
+    library happens to hold a lock" is not a property to inherit blindly
+    (Copilot, PR #303). Double-checked: the common path stays one attribute
+    read.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._handle: Any = None
+        self._open_lock = threading.Lock()
 
     def write(self, s: str) -> int:
-        if self._handle is None:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._handle = self._path.open("a")
-        return cast("int", self._handle.write(s))
+        handle = self._handle
+        if handle is None:
+            with self._open_lock:
+                if self._handle is None:
+                    self._path.parent.mkdir(parents=True, exist_ok=True)
+                    self._handle = self._path.open("a")
+                handle = self._handle
+        return cast("int", handle.write(s))
 
     def flush(self) -> None:
-        if self._handle is not None:
-            self._handle.flush()
+        handle = self._handle
+        if handle is not None:
+            handle.flush()
 
 
 class _StderrProxy:
