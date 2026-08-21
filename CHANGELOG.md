@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-08-21
+
+**Minor: one extension point is added, nothing existing moves.** The diff
+against v2.34.0 leaves `schemas/`, `docs/state-schema.md` and every
+`add_argument` in `cli.py` untouched — no flag, exit code, table, column or
+`--json-result` key changes, and a plugin manifest that never names the new
+point sees v2.34.0 behaviour exactly. What is additive is the vocabulary a
+manifest may use: `post_review` joins the hook points that already existed,
+with the same `command` / `run_on` / `blocking` fields and the same
+`build_task_env` environment. Calling that a patch would be true about
+existing callers and false about the contract — an extension point, once
+published, is a promise consumers pin to.
+
 ### Added
 
 - **`post_review` plugin hook point** (#307, inbox from disputatio) — a plugin
@@ -3261,7 +3274,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...HEAD
+[2.35.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...v2.35.0
 [2.34.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...v2.34.0
 [2.33.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...v2.33.2
 [2.33.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.0...v2.33.1
