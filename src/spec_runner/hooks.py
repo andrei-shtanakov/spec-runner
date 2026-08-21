@@ -27,7 +27,7 @@ from .git_ops import (
 )
 from .lifecycle import TddPhase
 from .logging import get_logger
-from .phases import Refusal
+from .phases import Refusal, RefusalKind
 from .review import (
     REVIEW_ROLES,
     build_review_prompt,
@@ -300,18 +300,7 @@ def pre_start_hook(
             pass  # git not installed
 
     # Run plugin pre_start hooks
-    from .plugins import build_task_env, discover_plugins, run_plugin_hooks
-
-    plugins = discover_plugins(config.plugins_dir)
-    if plugins:
-        task_env = build_task_env(task, config, success=None)
-        results = run_plugin_hooks("pre_start", plugins, task_env=task_env)
-        for name, ok, blocking in results:
-            if not ok and blocking:
-                logger.error("Blocking plugin failed in pre_start", plugin=name)
-                return False
-
-    return True
+    return run_plugin_hooks_for("pre_start", task, config, success=None) is None
 
 
 def commit_task_work(task: Task, config: ExecutorConfig) -> str:
@@ -352,6 +341,28 @@ def commit_task_work(task: Task, config: ExecutorConfig) -> str:
         return "committed"
     logger.warning("Commit failed", stderr=commit_result.stderr.strip()[:200])
     return "failed"
+
+
+def run_plugin_hooks_for(
+    event: str, task: Task, config: ExecutorConfig, *, success: bool | None
+) -> str | None:
+    """Run every plugin hook declared for ``event``; name the blocking failure.
+
+    Returns None when nothing blocked. One helper rather than three copies:
+    the hook points differ only in *when* they fire, and #307 added a third
+    where the difference has to be the position and nothing else.
+    """
+    from .plugins import build_task_env, discover_plugins, run_plugin_hooks
+
+    plugins = discover_plugins(config.plugins_dir)
+    if not plugins:
+        return None
+    task_env = build_task_env(task, config, success=success)
+    for name, ok, blocking in run_plugin_hooks(event, plugins, task_env=task_env):
+        if not ok and blocking:
+            logger.error("Blocking plugin failed", plugin=name, hook_event=event)
+            return f"Blocking plugin '{name}' failed in {event}"
+    return None
 
 
 def _head_sha(config: ExecutorConfig) -> str:
@@ -1057,6 +1068,34 @@ def post_done_hook(
     # a reader to wonder whether something ran.
     _record_tdd_phase(config, task, TddPhase.REFACTORING)
 
+    # The plugin edge between the verdict and the commit (#307).
+    #
+    # Deliberately here and nowhere else. Everything a project may want to
+    # record about the attempt is now known — the review verdict, the phases,
+    # the gates' answer — and `commit_task_work` has not run, so whatever the
+    # plugin writes into the working tree is swept into the commit and travels
+    # with the work. That is the same ordering this hook already relies on for
+    # `tasks.md` a few lines below, for the same reason.
+    #
+    # After the gates, not before: a gate that says "do not proceed" makes an
+    # export of evidence about the attempt an artifact that reads as work which
+    # finished — the defect class the gates exist to prevent. A blocked task
+    # exports nothing, and whatever a failed exporter left behind stays dirty
+    # in the tree rather than being committed as evidence.
+    plugin_blocked = run_plugin_hooks_for("post_review", task, config, success=True)
+    if plugin_blocked is not None:
+        # The same resumable shape as the gate refusal above: the candidate
+        # commit stands, nothing is merged, the task is not marked done, and
+        # the harness-written `review` flip is committed so the next run does
+        # not meet the dirty-spec guard.
+        blocked = _commit_blocked_status(
+            task,
+            config,
+            Refusal(plugin_blocked, RefusalKind.POLICY),
+            gated_sha or _head_sha(config),
+        )
+        return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
+
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the
     # old code did in execution.py) left the update in the working tree post-merge
@@ -1237,21 +1276,14 @@ def post_done_hook(
             logger.error("Merge failed", error=str(e))
 
     # Run plugin post_done hooks
-    from .plugins import build_task_env, discover_plugins, run_plugin_hooks
-
-    plugins = discover_plugins(config.plugins_dir)
-    if plugins:
-        task_env = build_task_env(task, config, success=success)
-        results = run_plugin_hooks("post_done", plugins, task_env=task_env)
-        for name, ok, blocking in results:
-            if not ok and blocking:
-                logger.error("Blocking plugin failed in post_done", plugin=name)
-                return (
-                    False,
-                    f"Blocking plugin '{name}' failed",
-                    review_verdict.value,
-                    (review_output or "")[:2048],
-                    False,
-                )
+    post_done_blocked = run_plugin_hooks_for("post_done", task, config, success=success)
+    if post_done_blocked is not None:
+        return (
+            False,
+            post_done_blocked,
+            review_verdict.value,
+            (review_output or "")[:2048],
+            False,
+        )
 
     return True, None, review_verdict.value, (review_output or "")[:2048], no_op

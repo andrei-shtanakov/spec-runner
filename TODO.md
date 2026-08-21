@@ -536,6 +536,29 @@
       `errors.ERROR_KINDS`, тест сверяет. Тесты:
       `tests/test_failure_reason_reaches_the_caller.py` (13)
 
+**Принято 2026-08-21: #307** (inbox, from disputatio) — вариант A из двух
+предложенных. Вариант B (расширить `audit_log` событиями TDD-слоя) отклонён как
+решение именно этой задачи: его посылка неверна — документированный
+`audit_log_path` (`spec/.executor-audit.jsonl`) попадает под паттерн
+`.executor-*`, который `ensure_runtime_gitignore` сам пишет в `spec/.gitignore`,
+так что `git add -A` его не стейджит и tracked evidence не выходит (проверено в
+чистом репо); плюс он связал бы объявленно стабильный event API с
+экспериментальной TDD-схемой.
+
+- [ ] **post-review-plugin-edge** (inbox spec-runner#307, from disputatio) @owner:github:andrei-shtanakov @id:post-review-plugin-edge
+      Точка расширения между ревью и финальным коммитом: записанное плагином в
+      рабочее дерево должно попасть в коммит. Место — после вердикта ревью,
+      записи `REFACTORING` и **успешных** пре-терминальных гейтов,
+      непосредственно перед DONE-обновлением `tasks.md` и `commit_task_work`.
+      Generic plugin API не меняется: `run_plugin_hooks` резолвит точку по
+      строке из манифеста, поэтому нужен только новый call-site — те же
+      `command`/`run_on`/`blocking` и тот же `build_task_env`. Блокирующий отказ
+      отдаётся в существующей resumable-форме через `_commit_blocked_status`.
+      Дрейф-гард это переживает: `_detect_candidate_drift` ключуется на subject
+      коммита, а не на содержимом дерева. Оговорка согласована с заявителем:
+      под `wants_candidate` evidence ложится в финальный bookkeeping-коммит, а
+      не в candidate — требование уточнено до «в одной доставляемой истории/PR».
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),

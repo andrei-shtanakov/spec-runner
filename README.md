@@ -580,6 +580,51 @@ Verdict: **READY** / **DEGRADED** (works, but something like cost tracking is
 unavailable) / **BROKEN**. It makes real, billable model calls (capped by
 `--budget`, default $0.50) and asks for confirmation unless `--yes`.
 
+## Plugins
+
+A plugin is a directory under `spec/plugins/` with a `plugin.yaml` manifest. Each
+hook entry takes `command` (run with the plugin directory as cwd), `run_on`
+(`always` | `on_success` | `on_failure`) and `blocking` (a failing blocking hook
+stops the task).
+
+```yaml
+name: tdd-evidence
+description: Export the attempt's evidence as a tracked repo artifact
+version: "1.0"
+hooks:
+  post_review:
+    command: ./export.sh
+    blocking: true
+```
+
+Three hook points, distinguished by **when** they fire relative to the commit:
+
+| Point | Fires | Its writes reach the commit? |
+|---|---|---|
+| `pre_start` | before the agent runs, after the branch/dep-sync stage | yes — the task's own commit |
+| `post_review` | after the review verdict and after the pre-terminal gates **passed**, immediately before the DONE flip and `commit_task_work` | **yes** — this is the point of it |
+| `post_done` | after the commit **and** the merge | no |
+
+`post_review` (#307) exists for artifacts that must be delivered *with* the work:
+everything about the attempt is decided by then — the review verdict, the TDD
+phases, the gates' answer — and the commit has not happened, so what the plugin
+writes into the working tree is swept into it by `stage_all_except_runtime` and
+travels in the same pull request. It is deliberately generic: nothing about it is
+TDD-specific.
+
+It runs only on the path where the task completes. A gate that blocked, a
+rejecting HITL verdict or a failed task never reach it — exporting evidence about
+an attempt that was stopped would produce an artifact that reads as work which
+finished. A **blocking** failure there stops the task in the same resumable shape
+as a gate refusal: the candidate commit stands, nothing is merged, the task is not
+marked done, and the harness-written `🔍 REVIEW` status flip is committed so the
+next run does not meet the dirty-spec guard. Whatever the failed hook left in the
+tree stays uncommitted.
+
+Every hook gets the same environment from `build_task_env`: `SR_TASK_ID`,
+`SR_TASK_NAME`, `SR_TASK_STATUS`, `SR_TASK_PRIORITY`, `SR_PROJECT_ROOT`,
+`SR_ATTEMPT_NUMBER`, `SR_DURATION_SECONDS`, `SR_ERROR`, `SR_ERROR_CODE`.
+
 ## Project Structure
 
 ```
