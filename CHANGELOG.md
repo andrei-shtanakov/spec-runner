@@ -10,6 +10,45 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`post_review` plugin hook point** (#307, inbox from disputatio) — a plugin
+  edge between the review verdict and the final commit. It fires after the
+  verdict, after the `REFACTORING` record and after the pre-terminal gates have
+  **passed**, immediately before the DONE flip and `commit_task_work`, so
+  whatever a plugin writes into the working tree is swept into the commit by
+  `stage_all_except_runtime` and is delivered with the work.
+
+  The gap it closes, as measured on 2.34.0: `commands.test`/`commands.lint` run
+  before the candidate commit, the second test pass is conditional on
+  `ReviewVerdict.FIXED` (a task the reviewer did not touch never reaches it),
+  and plugin `post_done` runs after the commit *and* the merge. Between the
+  verdict and the commit there was nothing, so no artifact describing the whole
+  RED → GREEN → review chain could be made a tracked part of the same pull
+  request.
+
+  Deliberately generic — nothing about it is TDD-specific — and the plugin API
+  is unchanged: `run_plugin_hooks` resolves a point by the string in the
+  manifest, so this is a call site and the same `command`/`run_on`/`blocking`
+  fields and `build_task_env` environment as the other two points.
+
+  It runs only on the path where the task completes: a blocking gate, a
+  rejecting HITL verdict or a failed task never reach it, because exporting
+  evidence about a stopped attempt produces an artifact that reads as work which
+  finished. A **blocking** failure stops the task in the same resumable shape as
+  a gate refusal — candidate commit stands, nothing merged, task not marked
+  done, and, under `auto_commit`, the harness-written `🔍 REVIEW` flip committed
+  so the next run does not meet the dirty-spec guard; what the failed hook left
+  in the tree stays uncommitted. Tests: `tests/test_post_review_plugin_edge.py` (18).
+
+  The alternative the request offered (extend `audit_log` with TDD lifecycle
+  events) was rejected as a solution to this: its premise does not hold. The
+  documented `audit_log_path`, `spec/.executor-audit.jsonl`, matches the
+  `.executor-*` pattern `ensure_runtime_gitignore` itself writes into
+  `spec/.gitignore`, so `git add -A` never stages it and no tracked evidence
+  results — measured in a clean repo. It would also have bound an event API
+  declared stable to the experimental TDD schema.
+
 ## [2.34.0] - 2026-08-19
 
 **Minor, and the reason is one line in a schema.** Everything here is a defect
