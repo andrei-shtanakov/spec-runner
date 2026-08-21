@@ -1085,9 +1085,11 @@ def post_done_hook(
     plugin_blocked = run_plugin_hooks_for("post_review", task, config, success=True)
     if plugin_blocked is not None:
         # The same resumable shape as the gate refusal above: the candidate
-        # commit stands, nothing is merged, the task is not marked done, and
-        # the harness-written `review` flip is committed so the next run does
-        # not meet the dirty-spec guard.
+        # commit stands, nothing is merged, the task is not marked done, and —
+        # under `auto_commit`, which is all `_commit_blocked_status` acts under
+        # — the harness-written `review` flip is committed so the next run does
+        # not meet the dirty-spec guard. Without it nothing here commits, and
+        # the tree is the operator's to clean, as everywhere else.
         blocked = _commit_blocked_status(
             task,
             config,

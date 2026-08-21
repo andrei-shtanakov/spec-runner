@@ -355,6 +355,19 @@ class TestABlockingFailureStaysResumable:
         names = _git(root, "show", "--name-only", "--format=", "HEAD").stdout.split()
         assert names == ["spec/tasks.md"]
 
+    def test_without_auto_commit_there_is_no_flip_to_commit(self, tmp_path, monkeypatch):
+        """Characterisation, pinned because the documentation now describes it
+        (Copilot, PR #308): the resumable shape is `_commit_blocked_status`'s,
+        and that helper commits nothing under `auto_commit: false` — a run that
+        does not commit the task's work either leaves a tree dirty for reasons
+        the bookkeeping commit cannot fix. The refusal still stands; only the
+        recovery half is the operator's."""
+        root, _cfg_, (ok, error, *_) = self._run(tmp_path, monkeypatch, auto_commit=False)
+
+        assert ok is False and "breaks" in (error or "")
+        assert _subjects(root) == ["spec"], "nothing was committed"
+        assert "🔍 REVIEW" in (root / "spec" / "tasks.md").read_text(), "the flip is in the tree"
+
     def test_a_non_blocking_failure_does_not_stop_the_task(self, tmp_path, monkeypatch):
         from spec_runner import hooks
 

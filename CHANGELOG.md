@@ -37,9 +37,9 @@ is a **breaking change** and requires a major version bump plus an entry here.
   evidence about a stopped attempt produces an artifact that reads as work which
   finished. A **blocking** failure stops the task in the same resumable shape as
   a gate refusal — candidate commit stands, nothing merged, task not marked
-  done, and the harness-written `🔍 REVIEW` flip committed so the next run does
-  not meet the dirty-spec guard; what the failed hook left in the tree stays
-  uncommitted. Tests: `tests/test_post_review_plugin_edge.py` (17).
+  done, and, under `auto_commit`, the harness-written `🔍 REVIEW` flip committed
+  so the next run does not meet the dirty-spec guard; what the failed hook left
+  in the tree stays uncommitted. Tests: `tests/test_post_review_plugin_edge.py` (18).
 
   The alternative the request offered (extend `audit_log` with TDD lifecycle
   events) was rejected as a solution to this: its premise does not hold. The

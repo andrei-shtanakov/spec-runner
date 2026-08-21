@@ -605,6 +605,9 @@ Three hook points, distinguished by **when** they fire relative to the commit:
 | `post_review` | after the review verdict and after the pre-terminal gates **passed**, immediately before the DONE flip and `commit_task_work` | **yes** — this is the point of it |
 | `post_done` | after the commit **and** the merge | no |
 
+The commit column assumes `auto_commit` — with it off nothing here commits at
+all, and the hook's writes are left in the tree with the rest of the work.
+
 `post_review` (#307) exists for artifacts that must be delivered *with* the work:
 everything about the attempt is decided by then — the review verdict, the TDD
 phases, the gates' answer — and the commit has not happened, so what the plugin
@@ -617,9 +620,9 @@ rejecting HITL verdict or a failed task never reach it — exporting evidence ab
 an attempt that was stopped would produce an artifact that reads as work which
 finished. A **blocking** failure there stops the task in the same resumable shape
 as a gate refusal: the candidate commit stands, nothing is merged, the task is not
-marked done, and the harness-written `🔍 REVIEW` status flip is committed so the
-next run does not meet the dirty-spec guard. Whatever the failed hook left in the
-tree stays uncommitted.
+marked done, and — under `auto_commit` — the harness-written `🔍 REVIEW` status
+flip is committed so the next run does not meet the dirty-spec guard. Whatever
+the failed hook left in the tree stays uncommitted.
 
 Every hook gets the same environment from `build_task_env`: `SR_TASK_ID`,
 `SR_TASK_NAME`, `SR_TASK_STATUS`, `SR_TASK_PRIORITY`, `SR_PROJECT_ROOT`,
