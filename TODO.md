@@ -503,6 +503,23 @@
 
 ## Активные задачи
 
+### codex-review: пилот-потребитель кита steward
+
+- [ ] PR-B пилота: caller-workflow гейта codex-review (по образцу steward:
+      механика из base, потолки, generated-декларация, экономный триггер по
+      драфту/лейблу) + лейбл `codex-review` + секрет `CODEX_REVIEW_API_KEY`
+      (кладёт владелец в настройки репо) — после мержа PR-A
+      @owner:github:andrei-shtanakov @id:codex-review-caller
+
+  PR-A (этот): кит завендорен — `scripts/review/` (5 скриптов) +
+  `.github/codex/review-schema.json`, PIN @ steward `79a2a60`;
+  copy-integrity — джоба `review-kit-integrity` в ci.yml, чекер из base
+  (бутстрап-контракт шапки checksum.sh, на первом PR — детекция и notice);
+  upstream-drift — вахта `review-kit-drift.yml` (не PR-гейт); стартовая
+  копия `review-prompt.md` — данные репо, вне integrity; `.gitattributes`
+  объявил `uv.lock`. Ре-вендор: рецепт в комментарии PIN; смена состава —
+  двухшаговая дисциплина из шапки checksum.sh.
+
 ### Входящие (ADR-ECO-006)
 
 **Исходящее 2026-08-10:** заведён **maestro#169** — смена exit-кодов (класс A) едет
