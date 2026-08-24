@@ -1,2 +1,9 @@
 # CODEOWNERS
 * @andrei-shtanakov
+
+# Явная строка поверх покрывающей «*» — документирующая, не расширяющая:
+# .github/workflows/ — граница доверия гейта codex-review. YAML workflow
+# исполняется из head PR (эшелон, не граница — довод в шапке
+# .github/workflows/codex-review.yml), поэтому правка контура ревью обязана
+# проходить ревью владельца; CODEOWNERS + человек на мерже и есть граница.
+/.github/workflows/ @andrei-shtanakov
