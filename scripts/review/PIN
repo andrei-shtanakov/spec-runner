@@ -1,9 +1,11 @@
-# SOURCE: steward @ 79a2a60 (feat/review-kit-checksum → master, 2026-08-23)
+# SOURCE: steward @ 761285f (master, 2026-08-24; ре-вендор #106 jq-префлайт
+#   apply-threshold + #107 комментарий collect-context; остальные 4 файла
+#   не менялись с 79a2a60)
 # Ре-вендор: скопировать 6 файлов из steward, пересчитать строки:
 #   shasum -a 256 <файл>  — формат строки: '<sha256>  <путь-от-корня>'
 d5edbcef9192974161ccba2754b5b191d66bf5ae23ee87367e8c5cdec613fa92  scripts/review/build-prompt.sh
-3bf687b51ec8ec3dc8062968478b816bf1436f07ddd5aa216d72b74023db66c3  scripts/review/collect-context.sh
-29e284a72d608ec46af1991fdc95f9c94a36b51eec66fe22e802c5e300e04f8c  scripts/review/apply-threshold.sh
+996ddbb0f7a61e52db29698c5b34d800f57d7ef57d1d50fb2cf408d76a53fc5f  scripts/review/collect-context.sh
+eddc90d16f50562f472918a606c4f0957c4f7b9f06c0f16e10f8c12773e319b1  scripts/review/apply-threshold.sh
 4214c3e25c17e571f8985690d81c05d170a1b60d443b760316a37d795c650d08  scripts/review/local.sh
 0e89a08d44b7a82960cdefd9faa557991fd85cf98800f6e8f98fd78f43f2045f  scripts/review/checksum.sh
 119004344e8930d8ab5d78b560e88964446b982c110947b94a99e991bb8d1eb6  .github/codex/review-schema.json
