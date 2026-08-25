@@ -699,18 +699,18 @@ A/B — дефекты подтверждённого поведения, C — 
 
 #### B. Producer/parser: спека проходит валидацию и падает в рантайме
 
-- [ ] **#133 plan-meta-normalizer** — третья наблюдённая форма meta-строки от @owner:github:andrei-shtanakov @id:plan-meta-normalizer
+- [ ] **#133 plan-meta-normalizer** — третья наблюдённая форма meta-строки от @owner:github:andrei-shtanakov @id:plan-meta-normalizer @epic:eco.spec-toolchain
       `plan --full` за один пилот (`- TASK-023 | 🔄 IN_PROGRESS | P0 | …`, ID и статус
       перед приоритетом). `TASK_META` её не узнаёт → статусы дефолтятся в TODO →
       `update_task_status` fail-closed возвращает False → гейт 2.22.0 честно валит ран.
       Цепочка отработала; корень — producer. Два предложения: канонический
       нормализатор на выходе генерации + validate-правило «задача без распознанной
       TASK_META = error» (сейчас такой файл валидацию проходит).
-- [ ] **#128 task-meta-status-whitelist** — `TASK_META` парсит статус как `(\w+)`: @owner:github:andrei-shtanakov @id:task-meta-status-whitelist
+- [ ] **#128 task-meta-status-whitelist** — `TASK_META` парсит статус как `(\w+)`: @owner:github:andrei-shtanakov @id:task-meta-status-whitelist @epic:eco.spec-toolchain
       `- P0 | high priority stuff` даст статус `high`. Bullet-допуск 2.22.0 расширил
       поверхность. Сузить до альтернации известных статусов, осторожно с обратной
       совместимостью (см. также #133 — тот же шов с другой стороны).
-- [ ] **#139 scoped-test-command** — `build_scoped_test_command` (`git_ops.py:286`) @owner:github:andrei-shtanakov @id:scoped-test-command
+- [ ] **#139 scoped-test-command** — `build_scoped_test_command` (`git_ops.py:286`) @owner:github:andrei-shtanakov @id:scoped-test-command @epic:eco.spec-toolchain
       дописывает пути тестов в конец **всей** shell-цепочки: при
       `pytest -q && pyrefly check` пути уедут в `pyrefly`. Плюс деградация полного
       suite до выборочного не видна в evidence. Оговорка автора: найдено чтением
@@ -732,7 +732,7 @@ A/B — дефекты подтверждённого поведения, C — 
       `uv sync` стал бы нарушением на каждом ране. Тесты:
       `tests/test_harness_guard_retry.py` (6); проверено, что два ключевых краснеют
       без фикса.
-- [ ] **harness-guard-companions** — четыре сопутствующих пункта из #137, @owner:github:andrei-shtanakov @id:harness-guard-companions
+- [ ] **harness-guard-companions** — четыре сопутствующих пункта из #137, @owner:github:andrei-shtanakov @id:harness-guard-companions @epic:eco.spec-toolchain
       каждый самостоятельный (issue закрыт по главному дефекту, эти — нет):
       1. **Control-plane не защищён** — `spec-runner.config.yaml` не входит ни в
          `HARNESS_CANDIDATES`, ни в дефолтный `harness_files`: агент, работающий в
@@ -746,7 +746,7 @@ A/B — дефекты подтверждённого поведения, C — 
       4. **Нет preflight'а** на пересечение declared scope задачи с оракульными
          файлами. TASK-022 была невыполнимым контрактом с самого начала — это
          выявляется статически, за секунды, до запуска агента.
-- [ ] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open
+- [ ] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.
       Три пути: таймаут → `FAILED`, но `hooks.py:415` явным комментарием делает его
       advisory; **нет маркера в выводе → `PASSED`** (`review.py:343` — пустой вывод
@@ -756,7 +756,7 @@ A/B — дефекты подтверждённого поведения, C — 
       за советы, которых не было, все шесть задач закрыты DONE.
       Решить: различать в evidence «прошло / не состоялось / нашло проблемы»,
       блокирующий режим вне HITL, порядок ревью относительно commit.
-- [ ] **#140 terminal-refusal-no-retry** (inbox, from disputatio) — ретраи не отличают @owner:github:andrei-shtanakov @id:terminal-refusal-no-retry
+- [ ] **#140 terminal-refusal-no-retry** (inbox, from disputatio) — ретраи не отличают @owner:github:andrei-shtanakov @id:terminal-refusal-no-retry @epic:eco.spec-toolchain
       переходный сбой от осознанной эскалации к оператору: агент, честно
       остановившийся по конституции проекта, получает попытки 2-3 с припиской
       «Do not repeat the same mistake», хотя единственный неошибочный путь ему
@@ -818,7 +818,7 @@ A/B — дефекты подтверждённого поведения, C — 
 значило бы, что при провале непонятно, что сломалось. Объём каждой — уровень
 minor-релиза, а не багфикса.
 
-- [ ] **#141 D7-A tdd-execution-mode** — `execution_mode: standard | tdd` @owner:TBD @id:tdd-execution-mode
+- [ ] **#141 D7-A tdd-execution-mode** — `execution_mode: standard | tdd` @owner:TBD @id:tdd-execution-mode @epic:eco.spec-toolchain
       как контракт исполнителя: фазы `RED_AUTHORING → RED_VERIFYING → GREEN_* →
       REFACTORING`, переход в green запрещён без **подтверждённого** red (селектор
       реально прогонялся и упал), типизированные per-phase вердикты
@@ -836,7 +836,7 @@ minor-релиза, а не багфикса.
       типовая проверка в пер-тасковом гейте, и #140.
       Известный блокирующий вход: `post_done` срабатывает **после** commit/merge,
       т.е. фазовая проверка не может стоять до коммита (пересекается с #138 п.3).
-- [ ] **#142 D7-B greenfield-preflight-bootstrap** — нулевого этапа у spec-runner нет. @owner:TBD @id:greenfield-preflight-bootstrap
+- [ ] **#142 D7-B greenfield-preflight-bootstrap** — нулевого этапа у spec-runner нет. @owner:TBD @id:greenfield-preflight-bootstrap @epic:eco.spec-toolchain
       Две раздельные команды: `preflight` (только диагностика, JSON-вывод для
       оркестратора) и `bootstrap --check|--plan|--apply` (создание, стековые detectors
       + **явные** presets, не эвристика). Главное из пилота: bootstrap обязан оставить
@@ -870,7 +870,7 @@ minor-релиза, а не багфикса.
       `review_policy` случайно становилась бы правкой TDD-контракта.
       Порядок: дизайн → Slice 0 (общий PhaseOutcome) → код #164 → #157 → #141.
       Код не начинать раньше Slice 0, иначе появится второй временный словарь.
-- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required
+- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @epic:eco.spec-toolchain
       2026-08-11: блокер #164 снят (PR #168 влит). Дизайн-док на ревью — PR #169,
       `docs/superpowers/specs/2026-08-11-review-policy-design.md`. Три решения,
       которых в принятой политике нет и которые нужны до кода: (1) гейт судит
@@ -884,12 +884,12 @@ minor-релиза, а не багфикса.
       В required блокируют `failed` и **`not_run`** («не знаю» ≠ «нормально»),
       `error` — bounded retry и затем infrastructure error, а не NEEDS_HUMAN.
       Таблица вердиктов и lifecycle записаны в issue. Закрывает п.4 из #134.
-- [ ] **certify-oracle** — сертификация оракула отдельным направлением @owner:TBD @id:certify-oracle @trigger:"владелец решил, что пора; bootstrap при этом НЕ берём"
+- [ ] **certify-oracle** — сертификация оракула отдельным направлением @owner:TBD @id:certify-oracle @trigger:"владелец решил, что пора; bootstrap при этом НЕ берём" @epic:eco.spec-toolchain
       после закрытия #159: только disposable worktree, фактический
       `test_command`, baseline принадлежит проекту (spec-runner его не
       создаёт), проверяются и mutation, и восстановление, evidence несёт SHA,
       команду, идентичность окружения и результат. Не запланировано.
-- [ ] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design
+- [ ] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design @epic:eco.spec-toolchain
       `execution_mode: tdd` добавляет state machine, durable-чекпоинты, модель
       evidence, replay, операторские remedy, миграцию состояния и новую
       терминальную семантику — каждый пункт со своим радиусом поражения.
@@ -1061,7 +1061,7 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 - [x] `docs/CONTRACTS.md` создан: матрица полей, семантика `approved_by`/`generated_by`, политика бампа (`bede398`)
 - [x] Golden-фикстура в package data (`spec_runner.contract_fixtures`) + round-trip тест (`bede398`)
 - [x] `upstream_hashes` и любые чужие ключи сохраняются через `SpecMeta.extra` losslessly — шире, чем просили (`d3626c5`, `b1346d2`)
-- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:github:andrei-shtanakov @id:steward-specmeta-v2-handoff
+- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:github:andrei-shtanakov @id:steward-specmeta-v2-handoff @epic:eco.spec-toolchain
 
 #### Follow-up: форма `owner_role` устарела по DEC-007 (найдено 2026-07-26, после релиза)
 
@@ -1147,7 +1147,7 @@ package data именно для сверки потребителями — т�
 Дальнейшие шаги:
 - [x] **Вендорить `obs.py` в Maestro / arbiter / ATP** — выполнено на стороне потребителей (Maestro M1+M2, arbiter Rust `arbiter-core::obs`, log-schema.json @ `be29b16`). Подтверждено в `../prograph-vault/authored/notes/status/2026-05-22-status.md`.
 - [x] **CHANGELOG + версия следующего релиза** — `v2.1.0` тегнут 2026-05-23
-- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:github:andrei-shtanakov @trigger:"в log-schema.json появилась секция метрик" @id:obs-runtime-metrics
+- [ ] Расширить `obs.py` метриками runtime (сейчас только logs/spans) — **only-if** контракт `log-schema.json` будет расширен; неблокирующее @owner:github:andrei-shtanakov @trigger:"в log-schema.json появилась секция метрик" @id:obs-runtime-metrics @epic:eco.observability
   - `maestro#log-schema-metrics` снят как blocker: принятого узла/issue с таким slug
     нет; готовность полностью определяется изменением контракта из trigger выше
 
