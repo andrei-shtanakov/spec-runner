@@ -152,6 +152,34 @@ class TestTheWarningIsQuietWhenItShouldBe:
 
         assert "⚠️" not in capsys.readouterr().out
 
+    def test_a_prefix_carrying_a_separator_is_still_found(self, tmp_path, capsys):
+        """`--spec-prefix foo/` is interpolated into the path and produces a
+        nested domain — a working one, measured — which a flat
+        `.executor-*state.db` glob missed (codex review, PR #333). The whole
+        point of the warning is that the operator does not know the second file
+        is there, so the shape it takes must not decide whether they are told."""
+        nested = _cfg(tmp_path, "foo/", state_file=tmp_path / "spec" / ".executor-foo/state.db")
+        with ExecutorState(nested):
+            pass
+
+        default = _cfg(tmp_path)
+        assert sibling_domains(default) == ["spec/.executor-foo/state.db"]
+
+        cmd_budget(_args(run_limit=20.0), default)
+        out = capsys.readouterr().out
+        assert "⚠️" in out and "spec/.executor-foo/state.db" in out
+
+    def test_a_change_domain_is_not_listed(self, tmp_path):
+        """Naming a change is already an explicit choice of domain."""
+        change = _cfg(
+            tmp_path,
+            state_file=tmp_path / "spec" / "changes" / "dark-mode" / ".executor-state.db",
+        )
+        with ExecutorState(change):
+            pass
+
+        assert sibling_domains(_cfg(tmp_path)) == []
+
     def test_siblings_exclude_the_active_file_and_its_journals(self, tmp_path):
         """A WAL file is not another domain."""
         cfg = _cfg(tmp_path)

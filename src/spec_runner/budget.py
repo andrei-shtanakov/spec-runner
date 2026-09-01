@@ -105,18 +105,34 @@ def domain_label(config: ExecutorConfig) -> str:
 def sibling_domains(config: ExecutorConfig) -> list[str]:
     """Other state DBs sitting beside this one, as labels.
 
-    Same directory only. A `--spec-prefix` writes its file next to the default
-    one, and that pair is the whole ambiguity; a `--change` domain lives in its
-    own directory and is selected by naming the change, which is a choice the
-    operator has already made out loud.
+    Anchored at this domain's own directory, which for the caller that matters
+    — an authorization typed without a prefix — is the spec dir itself.
+
+    Found by *what produced the path* rather than by a flat pattern. A prefix
+    is interpolated straight into the state path, so one carrying a separator
+    (`--spec-prefix foo/`) produces `spec/.executor-foo/state.db`: a working
+    domain, measured, that a `.executor-*state.db` glob does not see (codex
+    review, PR #333). A `--change` domain lives under `changes/` and is
+    excluded by the same test — naming a change is already an explicit choice
+    of domain, and listing those would be noise.
     """
     path = Path(config.state_file)
     try:
         active = path.resolve()
-        found = [p for p in path.parent.glob(".executor-*state.db") if p.resolve() != active]
+        found = [
+            p
+            for p in path.parent.rglob("*state.db")
+            if p.resolve() != active and _is_executor_domain(p, path.parent)
+        ]
     except OSError:  # pragma: no cover - unreadable spec dir
         return []
     return sorted(_relative(p, config) for p in found)
+
+
+def _is_executor_domain(candidate: Path, root: Path) -> bool:
+    """Whether ``candidate`` is a state DB the `.executor-` naming produced."""
+    parts = candidate.relative_to(root).parts
+    return bool(parts) and parts[0].startswith(".executor-")
 
 
 def _relative(path: Path, config: ExecutorConfig) -> str:
