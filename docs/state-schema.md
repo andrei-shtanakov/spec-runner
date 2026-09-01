@@ -163,6 +163,16 @@ the cap that refused had never seen the earlier spend. Moving a pilot to a new
 state file therefore requires an explicit opening balance or a fresh decision;
 archived state files are evidence, never runtime inputs.
 
+`--spec-prefix` selects a different state file, and so a different domain: a
+ceiling raised without the flag does not apply to a run under one. That is the
+intended semantics — a `--budget` bounds one file's lifetime spend, and phases
+run under separate prefixes precisely to account separately — but it used to be
+invisible, so every sentence that quotes a ceiling now names the file it came
+from: `budget authorize`'s decision and its refusals, the run's
+`budget_exceeded` detail, and the pre-call guard's refusal. Authorizing without
+a prefix while prefixed state files exist beside the default one also warns,
+before the decision rather than after a paid run refuses (#330).
+
 ### `phase_results` / `phase_waivers` (experimental, slice 0)
 
 Added by slice 0 of the lifecycle contract (#164 / #141 Part A). **Nothing

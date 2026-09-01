@@ -37,6 +37,7 @@ Two consequences follow from the guarantee rather than from taste:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .logging import get_logger
@@ -82,6 +83,64 @@ class BudgetRefused(Exception):
     def __init__(self, refusal: BudgetRefusal) -> None:
         super().__init__(refusal.reason)
         self.refusal = refusal
+
+
+def domain_label(config: ExecutorConfig) -> str:
+    """The budget domain, spelled the way an operator can act on it (#330).
+
+    The domain **is** the state DB — `state.budget_domain_id` mints one id per
+    file, so a new file inherits no authorization and no spend — and
+    `--spec-prefix` selects a different file. Two commands run with different
+    flags therefore speak about different ceilings, each of them truthfully:
+    the live incident was `authorize` answering "already $35.95" from the
+    default DB while a prefixed run refused at $1.82, with nothing in either
+    sentence to say they were about different files.
+
+    The path rather than the minted id: the id is what rows join on, the path
+    is what an operator can pass a flag about.
+    """
+    return _relative(Path(config.state_file), config)
+
+
+def sibling_domains(config: ExecutorConfig) -> list[str]:
+    """Other state DBs sitting beside this one, as labels.
+
+    Anchored at this domain's own directory, which for the caller that matters
+    — an authorization typed without a prefix — is the spec dir itself.
+
+    Found by *what produced the path* rather than by a flat pattern. A prefix
+    is interpolated straight into the state path, so one carrying a separator
+    (`--spec-prefix foo/`) produces `spec/.executor-foo/state.db`: a working
+    domain, measured, that a `.executor-*state.db` glob does not see (codex
+    review, PR #333). A `--change` domain lives under `changes/` and is
+    excluded by the same test — naming a change is already an explicit choice
+    of domain, and listing those would be noise.
+    """
+    path = Path(config.state_file)
+    try:
+        active = path.resolve()
+        found = [
+            p
+            for p in path.parent.rglob("*state.db")
+            if p.resolve() != active and _is_executor_domain(p, path.parent)
+        ]
+    except OSError:  # pragma: no cover - unreadable spec dir
+        return []
+    return sorted(_relative(p, config) for p in found)
+
+
+def _is_executor_domain(candidate: Path, root: Path) -> bool:
+    """Whether ``candidate`` is a state DB the `.executor-` naming produced."""
+    parts = candidate.relative_to(root).parts
+    return bool(parts) and parts[0].startswith(".executor-")
+
+
+def _relative(path: Path, config: ExecutorConfig) -> str:
+    """A path an operator recognises: project-relative where that is possible."""
+    try:
+        return str(path.resolve().relative_to(Path(config.project_root).resolve()))
+    except (ValueError, OSError):
+        return str(path)
 
 
 def budget_is_active(config: ExecutorConfig) -> bool:
@@ -142,6 +201,16 @@ def effective_limits(
     Scoping is the sign-off's: a task ceiling is `(domain, namespace, task)`, a
     run ceiling belongs to the whole budget domain and carries no namespace —
     `budget_usd` bounds the DB, and a per-namespace "global" cap is not global.
+
+    "No namespace" is a statement *within* a domain, and the domain is the
+    state file (`state.budget_domain_id`). `--spec-prefix` selects a different
+    file, so it does partition the run ceiling — one level above the namespace,
+    by choosing which DB the question is asked of. That is the intended
+    semantics and not an accident of pathing: a `--budget` bounds a state
+    file's lifetime spend, and phases run under separate prefixes precisely to
+    account separately. What was wrong was this sentence, which read as though
+    one ceiling spanned every prefix (#330). Every message that quotes a
+    ceiling now names the domain it came from.
 
     ``provenance`` names the call the limits are being resolved *for*, and only
     a reserve makes it matter (#267). Without it the answer is the ceiling as
@@ -281,11 +350,18 @@ def authorization_note(
         )
     elif scope == "run":
         row = config_scope_state.latest_budget_authorization("run")
+    # Every ceiling sentence names its domain (#330): an operator reading a
+    # refusal must not have to know that `--spec-prefix` moved the file the
+    # number lives in.
+    domain = domain_label(config)
     if row is None:
-        return ". The limit is the configured one; `spec-runner budget authorize` can raise it"
+        return (
+            f". The limit is the configured one for {domain}; `spec-runner budget authorize` "
+            "can raise it"
+        )
     note = (
-        f". The limit is authorization #{row['id']} (${float(row['new_limit_usd']):.2f}, "
-        f"{row['actor']}, {row['timestamp']})"
+        f". The limit is authorization #{row['id']} in {domain} "
+        f"(${float(row['new_limit_usd']):.2f}, {row['actor']}, {row['timestamp']})"
     )
     withheld = _reserve_for(row, provenance)
     if withheld:
@@ -307,6 +383,8 @@ __all__ = [
     "BudgetRefused",
     "budget_is_active",
     "check_before_call",
+    "domain_label",
     "authorization_note",
     "effective_limits",
+    "sibling_domains",
 ]
