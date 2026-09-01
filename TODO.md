@@ -505,14 +505,13 @@
 
 ### codex-review: пилот-потребитель кита steward
 
-- [x] PR-B пилота: caller-workflow гейта codex-review (по образцу steward:
-      механика из base, потолки, generated-декларация, экономный триггер по
-      драфту/лейблу) + лейбл `codex-review` + секрет `CODEX_REVIEW_API_KEY`
-      (кладёт владелец в настройки репо) — после мержа PR-A — влит #313
-      (`a35cdc3`, 2026-08-23); приёмка живая, одним платным прогоном; первый
-      вердикт (blocker про YAML-из-head) — принятая граница эшелона, довод в
-      шапке workflow и в комментарии мержа
-      @owner:github:andrei-shtanakov @id:codex-review-caller
+- [x] PR-B пилота: caller-workflow гейта codex-review — влит #313 (`a35cdc3`, 2026-08-23) @owner:github:andrei-shtanakov @id:codex-review-caller
+      По образцу steward: механика из base, потолки, generated-декларация,
+      экономный триггер по драфту/лейблу; плюс лейбл `codex-review` и секрет
+      `CODEX_REVIEW_API_KEY` (кладёт владелец в настройки репо) — после мержа
+      PR-A. Приёмка живая, одним платным прогоном; первый вердикт (blocker про
+      YAML-из-head) — принятая граница эшелона, довод в шапке workflow и в
+      комментарии мержа.
 
   PR-A (этот): кит завендорен — `scripts/review/` (5 скриптов) +
   `.github/codex/review-schema.json`, PIN @ steward `79a2a60`;
