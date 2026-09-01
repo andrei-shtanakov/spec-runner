@@ -10,6 +10,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **No cap configured now means no cap at every site.** The between-attempts
+  task check (`execution._check_task_budget`) resolved `effective_limits`
+  unconditionally, and that function answers with a standing authorization even
+  when the config names no ceiling. A `budget authorize` row written during an
+  earlier experiment therefore kept blocking a task in a project whose YAML no
+  longer mentions a budget — and removing the budget keys, the documented way to
+  have no budget, did not remove it. That site now asks `budget_is_active` first,
+  exactly as the pre-call guard does and as `stop_cause` already did on the run
+  axis. A configured cap is unaffected: the authorization is still what it reads.
+  `max_retry_cost_usd` is an independent cap and still fires on its own.
+  Regression: `tests/test_budget_dormancy.py` (5).
+
 ## [2.35.0] - 2026-08-21
 
 **Minor: one extension point is added, nothing existing moves.** The diff

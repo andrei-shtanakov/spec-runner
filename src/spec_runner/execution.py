@@ -828,12 +828,23 @@ def _check_task_budget(
     # operator authorization must not be honoured at one site and ignored at
     # the other, or raising a limit would unblock the next call and still lose
     # the task between attempts.
-    from .budget import effective_limits
+    #
+    # Dormancy is asked the same way, and for the same reason. `effective_limits`
+    # answers with a standing authorization even when the config names no cap,
+    # so this site alone kept enforcing a ceiling that every other site had
+    # stopped reading: a leftover authorization from an earlier experiment bound
+    # a task in a project whose YAML no longer mentions a budget, and removing
+    # the keys — the documented way to have no budget — did not remove it. The
+    # run scope already asks this (`stop_cause` returns before reading an
+    # authorization when `budget_usd` is None, Copilot PR #257); this is the
+    # same question on the task axis.
+    from .budget import budget_is_active, effective_limits
 
-    task_limit, _run_limit = effective_limits(config, state, task_id)
-    spent = state.task_cost(task_id)
-    if task_limit is not None and spent >= task_limit:
-        return f"Task budget exceeded (${spent:.2f} >= ${task_limit:.2f})"
+    if budget_is_active(config):
+        task_limit, _run_limit = effective_limits(config, state, task_id)
+        spent = state.task_cost(task_id)
+        if task_limit is not None and spent >= task_limit:
+            return f"Task budget exceeded (${spent:.2f} >= ${task_limit:.2f})"
 
     if config.max_retry_cost_usd is not None and attempt_index > 0:
         ts = state.get_task_state(task_id)
