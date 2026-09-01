@@ -1856,13 +1856,21 @@ class ExecutorState:
         # against a number the operator had already superseded.
         if self.config.budget_usd is None:
             return None
-        from .budget import effective_limits
+        from .budget import domain_label, effective_limits
 
         _task_limit, run_limit = effective_limits(self.config, self, None)
         if run_limit is not None:
             cost = self.total_cost()
             if cost > run_limit:
-                return ("budget_exceeded", f"total cost ${cost:.2f} > budget ${run_limit:.2f}")
+                # The domain by name (#330). This sentence and `budget authorize`'s
+                # refusal are the pair an operator holds side by side, and until
+                # both named their state file the only way to see that they were
+                # about different files was to read `config.py`.
+                return (
+                    "budget_exceeded",
+                    f"total cost ${cost:.2f} > budget ${run_limit:.2f} "
+                    f"in {domain_label(self.config)}",
+                )
         return None
 
     def should_stop(self) -> bool:

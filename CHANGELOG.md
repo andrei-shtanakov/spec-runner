@@ -10,6 +10,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every sentence about a budget ceiling names the state file it came from**
+  (#330). A ceiling belongs to one state DB, and `--spec-prefix` selects a
+  different one — so `budget authorize` typed without the prefix and a run
+  under it were quoting two different, both truthful, ceilings with nothing to
+  tell them apart. Now named in: the authorize decision and its CAS/monotonic
+  refusals, the run's `budget_exceeded` stop detail, and the pre-call guard's
+  refusal, all through one resolver so the sentences cannot drift.
+  `budget authorize` without `--spec-prefix` also warns when prefixed state
+  files exist beside the default one, before the decision instead of after a
+  paid run refuses. The split itself is unchanged and intended: a `--budget`
+  bounds one state file's lifetime spend, and the `effective_limits` docstring
+  that read as though one run ceiling spanned every prefix has been corrected
+  to say so. Tests: `tests/test_budget_domain_is_named.py` (11).
+
 ### Fixed
 
 - **No cap configured now means no cap at every site.** The between-attempts

@@ -59,7 +59,7 @@ def authorize(
     enforced. The reserve rides on the authorization because that is where the
     ceiling it partitions lives.
     """
-    from .budget import effective_limits
+    from .budget import domain_label, effective_limits
     from .remedy import _refuse_if_running
     from .tdd import resolve_namespace
 
@@ -94,6 +94,10 @@ def authorize(
 
     resolved_actor = resolve_actor(config, actor)
     namespace = resolve_namespace(config)
+    # Every refusal below quotes a ceiling, and a ceiling is per state file
+    # (#330). Naming it here means the two refusals an operator sees — this
+    # command's and the run's — can be compared instead of contradicting.
+    domain = domain_label(config)
     written: list[dict] = []
 
     # **Every scope is checked before any is written** (#289). Both checks are
@@ -111,16 +115,16 @@ def authorize(
         current = state.latest_budget_authorization(
             TASK_SCOPE, task_id=task_id, namespace=namespace
         )
-        _check_cas(current, after, TASK_SCOPE)
+        _check_cas(current, after, TASK_SCOPE, domain)
         task_previous, _run = effective_limits(config, state, task_id)
-        _check_monotonic(task_previous, task_budget_usd, TASK_SCOPE)
+        _check_monotonic(task_previous, task_budget_usd, TASK_SCOPE, domain)
 
     run_previous: float | None = None
     if run_budget_usd is not None:
         current_run = state.latest_budget_authorization(RUN_SCOPE)
-        _check_cas(current_run, after, RUN_SCOPE)
+        _check_cas(current_run, after, RUN_SCOPE, domain)
         _task, run_previous = effective_limits(config, state, None)
-        _check_monotonic(run_previous, run_budget_usd, RUN_SCOPE)
+        _check_monotonic(run_previous, run_budget_usd, RUN_SCOPE, domain)
 
     if task_budget_usd is not None:
         assert task_id is not None
@@ -176,25 +180,25 @@ def _refuse_if_agent_or_error() -> None:
         ) from exc
 
 
-def _check_cas(current: dict | None, after: int | None, scope: str) -> None:
+def _check_cas(current: dict | None, after: int | None, scope: str, domain: str) -> None:
     """An authorization is made against a state the operator has seen."""
     if current is None:
         return
     if after is None:
         raise AuthorizationError(
-            f"the {scope} ceiling is already authorization #{current['id']} "
+            f"the {scope} ceiling in {domain} is already authorization #{current['id']} "
             f"(${float(current['new_limit_usd']):.2f}, {current['actor']}, "
             f"{current['timestamp']}); pass --after {current['id']} to raise it from there"
         )
     if int(after) != int(current["id"]):
         raise AuthorizationError(
-            f"--after {after} is stale: the standing {scope} authorization is "
+            f"--after {after} is stale: the standing {scope} authorization in {domain} is "
             f"#{current['id']} (${float(current['new_limit_usd']):.2f}, {current['actor']}, "
             f"{current['timestamp']}). Read it, then decide again"
         )
 
 
-def _check_monotonic(previous: float | None, new_limit: float, scope: str) -> None:
+def _check_monotonic(previous: float | None, new_limit: float, scope: str, domain: str) -> None:
     """Only upwards. Lowering is not supported — by this command or any flag on
     it — because lowering a ceiling someone authorised is either a mistake or a
     new decision, and the answer to both is a new budget domain."""
@@ -202,8 +206,8 @@ def _check_monotonic(previous: float | None, new_limit: float, scope: str) -> No
         raise AuthorizationError(f"a {scope} ceiling of ${new_limit:.2f} is not a ceiling")
     if previous is not None and new_limit <= previous:
         raise AuthorizationError(
-            f"the {scope} ceiling is already ${previous:.2f}; this command only raises "
-            f"(asked for ${new_limit:.2f})"
+            f"the {scope} ceiling in {domain} is already ${previous:.2f}; this command only "
+            f"raises (asked for ${new_limit:.2f})"
         )
 
 
@@ -261,6 +265,8 @@ def _write(
 
 def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """`spec-runner budget authorize` — print the decision, or the refusal."""
+    from .budget import domain_label
+
     if getattr(args, "budget_command", None) != "authorize":
         print("Usage: spec-runner budget authorize [TASK-ID] --reason ... [--task-limit N]")
         return 1
@@ -281,6 +287,8 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
             "earlier stages."
         )
 
+    _warn_about_sibling_domains(config)
+
     try:
         with ExecutorState(config) as state:
             rows = authorize(
@@ -298,10 +306,13 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
         print(f"⛔ {exc}")
         return 1
 
+    domain = domain_label(config)
     for row in rows:
         was = "—" if row["previous_limit_usd"] is None else f"${row['previous_limit_usd']:.2f}"
         floor = "≥" if row["unmeasured_calls"] else ""
-        target = row["task_id"] or "this state file"
+        # The state file by name, not "this state file" (#330): the operator who
+        # has to find out *which* one is exactly the operator this line failed.
+        target = f"{row['task_id']} in {domain}" if row["task_id"] else domain
         print(
             f"✅ authorization #{row['id']}: {row['scope']} ceiling for {target} "
             f"{was} → ${row['new_limit_usd']:.2f}"
@@ -321,6 +332,32 @@ def cmd_budget(args: argparse.Namespace, config: ExecutorConfig) -> int:
             )
         print(f"   actor: {row['actor']}")
     return 0
+
+
+def _warn_about_sibling_domains(config: ExecutorConfig) -> None:
+    """Say it before the decision, not after the run refuses (#330).
+
+    Only when the operator named no domain. `--spec-prefix` writes its state
+    file next to the default one, and an authorization typed without the flag
+    lands in the default while a prefixed run reads its own — two true
+    sentences about two ceilings, and the incident that produced this warning
+    was resolved by reading `config.py`. An operator who *did* pass the flag
+    has already said which domain they mean, and telling them about the others
+    is noise.
+    """
+    from .budget import domain_label, sibling_domains
+
+    if config.spec_prefix or config.change_id:
+        return
+    others = sibling_domains(config)
+    if not others:
+        return
+    print(
+        f"⚠️  This authorization applies to {domain_label(config)}. Other state files exist "
+        f"beside it: {', '.join(others)}. A ceiling belongs to one state file, and "
+        "`--spec-prefix` is what selects it — a run under a prefix will not see this "
+        "authorization."
+    )
 
 
 def parse_reserve(value: str | None) -> tuple[str, float] | None:
