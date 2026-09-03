@@ -290,8 +290,11 @@ Review test coverage:
 ## Output:
 
 For each issue found, describe it briefly.
-If issues are found, fix them and respond with: "REVIEW_FIXED"
-If no issues found, respond with: "REVIEW_PASSED"
+Then end your reply with EXACTLY ONE verdict marker on its own line,
+plain text — no markdown, no quotes, no heading, nothing else on the line:
+- issues were found and fixed: REVIEW_FIXED
+- no issues found: REVIEW_PASSED
+A reply without that final marker line is invalid and will be discarded.
 """
 
 
