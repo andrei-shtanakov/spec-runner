@@ -144,9 +144,7 @@ _MARKER_LINE = _marker_pattern(TERMINAL_MARKERS, ignore_case=False)
 #: appear, not about tightening its spelling at the same time.
 #: Markdown-tolerant (#336): review verdicts come from a free-form reviewer
 #: reply, where `**REVIEW_FIXED**` is a statement of the same verdict.
-_REVIEW_LINE = _marker_pattern(
-    REVIEW_MARKERS, ignore_case=True, markdown_tolerant=True
-)
+_REVIEW_LINE = _marker_pattern(REVIEW_MARKERS, ignore_case=True, markdown_tolerant=True)
 
 
 @dataclass(frozen=True)

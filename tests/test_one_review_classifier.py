@@ -295,9 +295,7 @@ class TestMarkdownTolerantReviewMarkers:
             assert kinds == [wrapped.strip('*_`"').upper()], wrapped
 
     def test_wrapped_marker_with_reason(self):
-        assert review_markers("**REVIEW_FAILED**: unsafe eval\n") == [
-            "REVIEW_FAILED"
-        ]
+        assert review_markers("**REVIEW_FAILED**: unsafe eval\n") == ["REVIEW_FAILED"]
 
     def test_asymmetric_wrapper_does_not_count(self):
         assert review_markers("**REVIEW_PASSED*\n") == []
