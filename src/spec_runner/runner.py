@@ -102,17 +102,38 @@ TERMINAL_MARKERS = ("TASK_COMPLETE", "TASK_FAILED", "TASK_BLOCKED")
 REVIEW_MARKERS = ("REVIEW_PASSED", "REVIEW_FIXED", "REVIEW_FAILED")
 
 
-def _marker_pattern(names: tuple[str, ...], *, ignore_case: bool) -> re.Pattern[str]:
+def _marker_pattern(
+    names: tuple[str, ...], *, ignore_case: bool, markdown_tolerant: bool = False
+) -> re.Pattern[str]:
     """A marker is a **line**, not a substring (#266, #270).
 
     Optional leading whitespace, the token, an optional `: reason`, nothing
     else on the line. One pattern builder for both vocabularies, so "what
     counts as a marker" cannot be answered differently in two places — the
     defect that made a prose mention outrank a real verdict.
+
+    ``markdown_tolerant`` (#336, four live hits on the devtools conveyor in
+    two days): additionally accept a **symmetric** markdown/quote wrapper
+    around the token — ``**X**``, ``*X*``, ``__X__``, `` `X` ``, ``"X"`` —
+    on an otherwise-empty line. Models naturally bold their final verdict,
+    and the built-in prompt itself spelled the marker inside double quotes
+    for years, so a model following it literally never matched. This stays
+    line-anchored and symmetric-only: prose mentions and asymmetric
+    wrappers still do not count. Terminal markers deliberately keep the
+    strict form — their vocabulary interacts with ``neutralise_markers``
+    and precedence rules (#140/#266), widening it is a separate decision.
     """
     flags = re.MULTILINE | (re.IGNORECASE if ignore_case else 0)
+    alternatives = "|".join(names)
+    if markdown_tolerant:
+        return re.compile(
+            rf"^[ \t]*(?:(?P<wrap>\*\*|__|\*|_|`|\")(?P<kindw>{alternatives})(?P=wrap)"
+            rf"|(?P<kind>{alternatives}))"
+            rf"[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
+            flags,
+        )
     return re.compile(
-        rf"^[ \t]*(?P<kind>{'|'.join(names)})[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
+        rf"^[ \t]*(?P<kind>{alternatives})[ \t]*(?::[ \t]*(?P<reason>.*?))?[ \t]*$",
         flags,
     )
 
@@ -121,7 +142,11 @@ _MARKER_LINE = _marker_pattern(TERMINAL_MARKERS, ignore_case=False)
 #: Case-insensitive, unlike the terminal one: the review path has always
 #: accepted a lowercase marker and this change is about *where* a marker may
 #: appear, not about tightening its spelling at the same time.
-_REVIEW_LINE = _marker_pattern(REVIEW_MARKERS, ignore_case=True)
+#: Markdown-tolerant (#336): review verdicts come from a free-form reviewer
+#: reply, where `**REVIEW_FIXED**` is a statement of the same verdict.
+_REVIEW_LINE = _marker_pattern(
+    REVIEW_MARKERS, ignore_case=True, markdown_tolerant=True
+)
 
 
 @dataclass(frozen=True)
@@ -146,7 +171,8 @@ def review_markers(output: str) -> list[str]:
     """
     seen: list[str] = []
     for match in _REVIEW_LINE.finditer(output or ""):
-        kind = match.group("kind").upper()
+        # bare или symmetric-wrapped форма (#336) — один и тот же вердикт.
+        kind = (match.group("kind") or match.group("kindw")).upper()
         if kind not in seen:
             seen.append(kind)
     return seen

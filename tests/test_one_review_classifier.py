@@ -274,3 +274,40 @@ class TestTheSignalItself:
     def test_one_marker_is_not_a_conflict(self):
         assert ReviewSignal(("REVIEW_FIXED",)).only == "REVIEW_FIXED"
         assert ReviewSignal(("REVIEW_FIXED",)).conflicting is False
+
+
+class TestMarkdownTolerantReviewMarkers:
+    """#336, four live hits on the devtools conveyor in two days: models
+    naturally bold the final verdict, and the built-in prompt itself spelled
+    the marker inside double quotes — a model following it literally never
+    matched. Symmetric wrapping on an otherwise-empty line is the same
+    statement; prose and asymmetric wrappers still are not."""
+
+    def test_symmetric_wrappers_count(self):
+        for wrapped in (
+            "**REVIEW_FIXED**",
+            "*REVIEW_PASSED*",
+            "__REVIEW_PASSED__",
+            "`REVIEW_FIXED`",
+            '"REVIEW_PASSED"',
+        ):
+            kinds = review_markers(f"summary…\n{wrapped}\n")
+            assert kinds == [wrapped.strip('*_`"').upper()], wrapped
+
+    def test_wrapped_marker_with_reason(self):
+        assert review_markers("**REVIEW_FAILED**: unsafe eval\n") == [
+            "REVIEW_FAILED"
+        ]
+
+    def test_asymmetric_wrapper_does_not_count(self):
+        assert review_markers("**REVIEW_PASSED*\n") == []
+        assert review_markers('"REVIEW_PASSED\n') == []
+
+    def test_prose_mention_still_does_not_count(self):
+        assert review_markers("this is not a **REVIEW_FAILED** situation\n") == []
+        assert review_markers("we should say REVIEW_PASSED here\n") == []
+
+    def test_terminal_markers_stay_strict(self):
+        from spec_runner.runner import terminal_markers
+
+        assert terminal_markers("**TASK_COMPLETE**\n") == []
