@@ -102,9 +102,18 @@ class TestThePromptIsOnDisk:
             run_red_phase(_task(), cfg, state)
 
         body = _red_logs(cfg)[0].read_text()
-        assert "new file that does not exist yet" in body, "#252's rule"
-        assert "tests/test_task_104_red.py" in body, "the adapter's own path"
-        assert "TDD_SELECTOR" in body, "the marker contract the selector depends on"
+        # The path assertion binds to the PROMPT section: the stub agent's
+        # answer (appended after `=== OUTPUT ===`) echoes an old-style path,
+        # and matching against the whole file let the echo satisfy the assert
+        # once the prompt's own path grew a namespace segment (#355 review).
+        prompt_section = body.split("=== OUTPUT ===")[0]
+        from spec_runner.tdd import resolve_namespace
+        from spec_runner.tdd_runners import ADAPTERS
+
+        expected = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
+        assert "new file that does not exist yet" in prompt_section, "#252's rule"
+        assert str(expected) in prompt_section, "the adapter's own path"
+        assert "TDD_SELECTOR" in prompt_section, "the marker contract the selector depends on"
 
     def test_the_file_names_the_task(self, tmp_path, monkeypatch):
         """A workstream runs many tasks; a log nobody can attribute is close to

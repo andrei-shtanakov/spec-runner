@@ -94,11 +94,14 @@ class TestTheAdapterNamesTheFile:
     def test_each_adapter_answers_for_itself(self):
         """A shared guess is the defect this avoids: `tests/test_x_red.py` in
         an Elixir project is a file `mix test` never collects."""
-        assert ADAPTERS["pytest"].evidential_file("TASK-104") == PurePosixPath(
-            "tests/test_task_104_red.py"
+        from spec_runner.tdd_runners import namespace_segment
+
+        segment = namespace_segment("ws")
+        assert ADAPTERS["pytest"].evidential_file("TASK-104", namespace="ws") == PurePosixPath(
+            f"tests/test_task_104_{segment}_red.py"
         )
-        assert ADAPTERS["exunit"].evidential_file("TASK-104") == PurePosixPath(
-            "test/task_104_red_test.exs"
+        assert ADAPTERS["exunit"].evidential_file("TASK-104", namespace="ws") == PurePosixPath(
+            f"test/task_104_{segment}_red_test.exs"
         )
 
     @pytest.mark.parametrize("name", list(ADAPTERS))
@@ -107,7 +110,7 @@ class TestTheAdapterNamesTheFile:
         happened to think about."""
         adapter = ADAPTERS[name]
 
-        assert adapter.is_discoverable(adapter.evidential_file("TASK-104"))
+        assert adapter.is_discoverable(adapter.evidential_file("TASK-104", namespace="ws"))
 
     @pytest.mark.parametrize(
         ("name", "path"),
@@ -126,24 +129,33 @@ class TestTheAdapterNamesTheFile:
         must demand the same thing, so the prompt states the invariant *and*
         names a file that satisfies it."""
         from spec_runner.prompt import build_red_prompt
+        from spec_runner.tdd import resolve_namespace
 
         cfg = _repo(tmp_path)
         prompt = build_red_prompt(_task(), cfg)
+        expected = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
 
         assert "new file that does not exist yet" in prompt
-        assert "tests/test_task_104_red.py" in prompt
+        assert str(expected) in prompt
 
     def test_with_no_adapter_the_rule_is_stated_without_an_invented_path(self, tmp_path):
         """Naming a file for a runner nothing knows about would be exactly the
         heuristic this replaces."""
         from spec_runner.prompt import build_red_prompt
+        from spec_runner.tdd import resolve_namespace
 
         cfg = _repo(tmp_path)
         cfg.test_command = "make check"
         prompt = build_red_prompt(_task(), cfg)
 
         assert "new file that does not exist yet" in prompt
-        assert "test_task_104_red" not in prompt
+        # The exact stand-in phrase, and the absence of the path an adapter
+        # WOULD have named: the old `"test_task_104_red" not in prompt` became
+        # vacuously true once the name grew a namespace segment (#355 review)
+        # — a regression inventing a pytest path would have stayed green.
+        assert "(a new test file this project's runner collects)" in prompt
+        invented = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
+        assert str(invented) not in prompt
 
 
 @pytest.mark.slow
