@@ -159,11 +159,12 @@ class TestUnfixableFindingKeepsTodaysFailureClass:
 class TestFixAttemptCapIsDeclaredAndRespected:
     """BEH-05: the machine-fix cap is a fixed, declared number — one attempt
     per RED pass — not a loop, and not something that grows with how many
-    times the finding reproduces."""
+    times the finding reproduces. Since TASK-006 (BEH-07), the RED phase also
+    makes exactly one cold agent round for whatever the fix could not clear —
+    itself capped the same way, and gated/recorded under #213 like every
+    other paid call."""
 
-    def test_the_fix_runs_exactly_once_and_the_check_runs_exactly_twice(
-        self, tmp_path_factory, monkeypatch
-    ):
+    def test_the_fix_and_the_agent_round_each_run_at_most_once(self, tmp_path_factory, monkeypatch):
         scripts = tmp_path_factory.mktemp("scripts")
         check_script = scripts / "check_lint.py"
         check_script.write_text(_COUNTING_CHECK_SCRIPT)
@@ -177,6 +178,7 @@ class TestFixAttemptCapIsDeclaredAndRespected:
         with ExecutorState(cfg) as state:
             result = run_red_phase(_task(), cfg, state)
             claims = state.active_claims(resolve_namespace(cfg))
+            recorded = state.agent_calls("TASK-004")
 
         # BEH-04 still holds — the cap is about how the refusal is reached,
         # not a change to what it is.
@@ -187,10 +189,20 @@ class TestFixAttemptCapIsDeclaredAndRespected:
         fix_calls = int((scripts / "fix_calls.count").read_text())
 
         # One machine-fix attempt: the initial check that finds the problem,
-        # one fix invocation, one recheck — never a second fix pass even
-        # though the finding still reproduces after the first.
+        # one fix invocation, one recheck. The finding still stands, so BEH-07
+        # spends its own single agent round — a third check call — and still
+        # does not clear it; there is no second fix pass and no second round.
         assert fix_calls == 1
-        assert check_calls == 2
+        assert check_calls == 3
+
+        # And: the round is a separately gated, separately recorded paid call
+        # (#213) — the authoring call plus the one agent round, not folded
+        # into a single ledger row.
+        assert len(recorded) == 2
+        assert [row["provenance"] for row in recorded] == [
+            "red_authoring",
+            "red_autofix_agent_round",
+        ]
 
 
 class TestOperatorDistinguishesTriedFromUntriedRefusal:
