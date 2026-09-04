@@ -280,6 +280,13 @@ class ExecutorConfig:
     # a declaration.
     lint_command_declared: bool = True
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
+    # Whether the project actually declared `commands.lint_fix` (#341 Q-03),
+    # symmetric to `lint_command_declared`: the python-shaped default above is
+    # a guess, not a declaration, so the pre-freeze machine fix (FR-01) must be
+    # able to tell "no fix invocation was ever asked for" apart from "one just
+    # happens to fail". A config built directly in code is taken at its word,
+    # same convention as `lint_command_declared`.
+    lint_fix_command_declared: bool = True
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
     plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory
@@ -768,6 +775,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             # build_config rather than being dropped with the other Nones.
             "lint_command_declared": bool(commands.get("lint")),
             "lint_fix_command": commands.get("lint_fix"),
+            "lint_fix_command_declared": bool(commands.get("lint_fix")),
             "sync_command": commands.get("sync"),
             "project_root": Path(paths["root"]) if paths.get("root") else None,
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
