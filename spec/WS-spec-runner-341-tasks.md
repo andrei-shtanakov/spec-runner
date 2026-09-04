@@ -184,16 +184,20 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-14 (—BEH-
 **Traces to:** [FR-11], [FR-15]
 
 ### TASK-011: RED-промпт и харнесс называют один и тот же путь (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-16, BEH-19.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-16 (—BEH-19)
 **Depends on:** [TASK-010]
+Закрыто tdd-waiver'ом (red-unverifiable: единый источник имени — побочный
+эффект TASK-009 + стоящий #252 D; spec/.tdd-evidence/waivers/
+c560727b864370c7/TASK-011.json, санкция владельца 2026-09-04) + недостающие
+пины дописаны зелёными (TestThePromptAndHarnessAgree).
 
 **Checklist:**
-- [ ] реализовать BEH-16: RED-промпт и харнесс называют один и тот же путь
-- [ ] реализовать BEH-19: Отказ писать red в существующий файл не ослаблен
-- [ ] проверка группы: tests/test_evidential_file_is_new.py (kind: contract), tests/test_evidential_file_is_new.py (kind: integration) зелёные на BEH-16, BEH-19
+- [x] реализовать BEH-16: RED-промпт и харнесс называют один и тот же путь
+- [x] реализовать BEH-19: Отказ писать red в существующий файл не ослаблен
+- [x] проверка группы: tests/test_evidential_file_is_new.py (kind: contract), tests/test_evidential_file_is_new.py (kind: integration) зелёные на BEH-16, BEH-19
 
 **Traces to:** [FR-12], [FR-16]
 
