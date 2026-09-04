@@ -169,3 +169,50 @@ class TestAFixableLintFindingReachesAConfirmedCheckpoint:
         # And: the gate for phase `tests` answers "confirmed red" — nothing
         # stops the task from continuing on to the GREEN pass.
         assert outcome.status is GateStatus.SATISFIED
+
+
+class TestACompositeLintFixCommandIsNeverNarrowedToPaths:
+    """FR-09's exclusion applies to the fix command too, not only the check.
+
+    Appending claim paths to a *composite* `lint_fix_command` (one that chains
+    several programs) glues the paths onto whichever component happens to sit
+    last in the chain — not necessarily the one meant to receive them. Here
+    the fix script sits last, so a naive implementation would still land the
+    path correctly and clean the file by luck of ordering; the guard must
+    still refuse to run it, because the next project's chain order is not
+    ours to guess right. The attempt then falls through to the same refusal a
+    project with no fix command at all would get.
+    """
+
+    def test_the_fix_is_skipped_even_though_it_would_have_worked(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=f"true && {_shell_command(fix_script)}",
+        )
+        _agent_writing_a_fixable_red(monkeypatch, [])
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+            claims = state.active_claims(resolve_namespace(cfg))
+
+        # Then: no fix was attempted against the composite command — the
+        # attempt refuses instead of continuing, even though appending the
+        # path here would have happened to land on the fix script and clean
+        # the file.
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "lint failed on the file about to be frozen" in (result.detail or "")
+        assert claims == []
+
+        # And: the file is left exactly as authored — nothing ran against it.
+        frozen = (root / "tests/test_x.py").read_text()
+        assert "BADWORD" in frozen
