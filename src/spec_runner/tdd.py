@@ -159,6 +159,37 @@ class RedCheckpoint:
         return hashlib.sha256(seed.encode()).hexdigest()[:12]
 
 
+@dataclass(frozen=True)
+class ScenarioMeasurement:
+    """A live cost measurement of one run of a reproduced scenario.
+
+    BEH-23 (#341, TASK-014): before this existed there was no shared,
+    importable place to hold "what we measured" next to "what this scenario
+    used to cost" — every comparison would have re-typed the baseline. A
+    static artifact file cannot prove a live run happened, so a red checks
+    only this object's properties, never a file's existence (owner decision,
+    2026-09-05); recording one into an artifact is a separate, green
+    concern.
+    """
+
+    elapsed_seconds: float
+    cost_usd: float | None
+    paid_call_count: int
+    checkpoint_reached: bool
+
+
+#: The burned baseline for spec-runner#341, before TASK-001..013 of this
+#: workstream fixed the scenario: 5.5 minutes and one burned attempt on
+#: WS-disputatio-65 TASK-004; $0.88 on TASK-001 (charter, WS-spec-runner-341,
+#: AC-11).
+BASELINE_341 = ScenarioMeasurement(
+    elapsed_seconds=5.5 * 60,
+    cost_usd=0.88,
+    paid_call_count=1,
+    checkpoint_reached=False,
+)
+
+
 def environment_id(project_root: Path) -> str:
     """Identify the environment a replay would run in, by lockfile content.
 
