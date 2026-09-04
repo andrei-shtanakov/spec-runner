@@ -135,9 +135,7 @@ class TestAStrayThatDoesNotCureStillNamesTheOutOfBoundsPaths:
     def test_the_refusal_names_the_stray_paths_even_when_the_fix_did_not_cure(
         self, tmp_path_factory, monkeypatch
     ):
-        root, cfg, result, claims = _run(
-            tmp_path_factory, monkeypatch, _STRAY_NO_CURE_FIX_SCRIPT
-        )
+        root, cfg, result, claims = _run(tmp_path_factory, monkeypatch, _STRAY_NO_CURE_FIX_SCRIPT)
 
         assert result.outcome is RedOutcome.UNVERIFIABLE
         assert claims == []
@@ -159,9 +157,7 @@ class TestAStrayThatCuresStillRefusesAndNamesTheOutOfBoundsPaths:
     def test_the_refusal_names_the_stray_paths_even_when_the_fix_cured(
         self, tmp_path_factory, monkeypatch
     ):
-        root, cfg, result, claims = _run(
-            tmp_path_factory, monkeypatch, _STRAY_AND_CURE_FIX_SCRIPT
-        )
+        root, cfg, result, claims = _run(tmp_path_factory, monkeypatch, _STRAY_AND_CURE_FIX_SCRIPT)
 
         assert result.outcome is RedOutcome.UNVERIFIABLE
         assert claims == []
