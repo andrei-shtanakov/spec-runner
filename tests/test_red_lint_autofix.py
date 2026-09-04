@@ -464,9 +464,12 @@ class TestAPreExistingUntrackedFileIsNotTheFixesFootprint:
 
 
 class TestAnUncuringFixesLeftoversDoNotSurviveTheRefusal:
-    """#345 round-3 minor: a fix that ran, created a side file and did NOT
-    cure must not leave the file behind — the next attempt's `git add -A`
-    would sweep it into a fresh red commit (FR-02)."""
+    """#345 round-3 minor / BEH-03 (#341, TASK-003): a fix that ran, created a
+    side file and did NOT cure must not leave the file behind — the next
+    attempt's `git add -A` would sweep it into a fresh red commit (FR-02).
+    The side file is also a stray (outside the claim), so the refusal now
+    names it rather than returning the generic "lint failed" text — see
+    `tests/test_task_003_red.py` for the dedicated scenario."""
 
     def test_the_leftover_is_removed_on_the_refusal_path(self, tmp_path_factory, monkeypatch):
         root = _repo(tmp_path_factory.mktemp("uncuring"))
@@ -488,7 +491,8 @@ class TestAnUncuringFixesLeftoversDoNotSurviveTheRefusal:
             result = run_red_phase(_task(), cfg, state)
 
         assert result.outcome is RedOutcome.UNVERIFIABLE
-        assert "lint failed" in (result.detail or "")
+        assert "strayed outside the claim" in (result.detail or "")
+        assert "tests/leftover.bak" in (result.detail or "")
         assert not (root / "tests/leftover.bak").exists()
         assert "BADWORD" in (root / "tests/test_x.py").read_text()
 

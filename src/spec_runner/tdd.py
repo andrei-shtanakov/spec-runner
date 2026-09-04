@@ -876,6 +876,36 @@ def _lint_claimed(
 
     tail = _tail(f"{result.stdout}\n{result.stderr}")
     suffix = f" ({skip_reason})" if skip_reason else ""
+    if before is not None:
+        # FR-02/BEH-03: the fix ran and did NOT cure the finding — a fix that
+        # also strayed outside the claim gets a refusal naming the stray
+        # paths, not the generic "lint failed" text (BEH-04's shape), which
+        # says nothing about the boundary violation `_rollback_fix` is about
+        # to discard. Judged by the DELTA against `before`, same as
+        # `_absorb_lint_fix`: pre-existing tree state is not the fix's
+        # footprint.
+        changed, created, delta_error = _fix_delta(config, before)
+        if delta_error:
+            return (
+                f"{delta_error} after the lint fix did not cure the finding; refusing "
+                "rather than guessing whether it left bytes outside the claim",
+                before,
+                True,
+            )
+        allowed = set(paths)
+        strayed = sorted(
+            {path.rstrip("/") for path in [*changed, *created] if path.rstrip("/") not in allowed}
+        )
+        if strayed:
+            return (
+                f"the lint fix strayed outside the claim ({', '.join(strayed)}) and did "
+                f"not cure the finding on the file about to be frozen ({', '.join(paths)}): "
+                f"{tail}. After a checkpoint it is byte-immutable, so this must be fixed "
+                "before the red is fixed."
+                f"{suffix}",
+                before,
+                False,
+            )
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
