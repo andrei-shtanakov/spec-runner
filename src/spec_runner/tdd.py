@@ -915,8 +915,8 @@ def _fix_delta(config: ExecutorConfig, before: set) -> tuple[list[str], list[str
     from .git_ops import runtime_state_paths
 
     after, status_error = _tree_status(config)
-    if status_error:
-        return [], [], status_error
+    if after is None:
+        return [], [], status_error or "could not read `git status`"
 
     runtime: set[str] = set()
     for runtime_path in runtime_state_paths(config):
