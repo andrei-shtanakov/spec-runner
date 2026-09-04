@@ -1,7 +1,10 @@
 ---
 spec_stage: charter
-status: draft
+status: approved
 owner_role: product
+approved_by: andrei-shtanakov
+approved_at: '2026-09-04T05:45:42Z'
+version: 2
 ---
 
 # Charter — WS-spec-runner-341: RED-пас переживает тривиальный линт и соседний workstream

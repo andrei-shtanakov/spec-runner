@@ -1,10 +1,14 @@
 ---
 spec_stage: requirements
-status: draft
+status: approved
 owner_role: product
-traces_to: [charter]
+traces_to:
+- charter
 upstream_hashes:
-  charter: "93b8abd9dfffe119fc7bfa93be8474fbc229502e"
+  charter: f6337c5d7c8de064ecda7fdfad7ca6fcf1190d71
+approved_by: andrei-shtanakov
+approved_at: '2026-09-04T05:45:42Z'
+version: 2
 ---
 
 # Requirements — WS-spec-runner-341: RED-пас переживает тривиальный линт и соседний workstream

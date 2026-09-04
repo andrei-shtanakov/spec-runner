@@ -59,6 +59,12 @@ spec/
 !workstreams/*/spec/
 workstreams/*/spec/*
 !workstreams/*/spec/*.md
+# …и tasks-спеки конвейера в КОРНЕВОМ spec/ (managed-спека `spec/<ws>-tasks.md`
+# доставляется PR-ом и versioned). Runtime-состояние spec-runner внутри spec/
+# (state-DB, .tdd-evidence, прочее) остаётся игнорированным.
+!/spec/
+/spec/*
+!/spec/*-tasks.md
 
 COWORK_CONTEXT.md
 _cowork_output/
