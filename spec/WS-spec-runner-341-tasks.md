@@ -55,16 +55,16 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-01
 **Traces to:** [FR-01], [FR-03]
 
 ### TASK-002: Замороженные байты — ровно те, на которых выполнен реплей (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-02, BEH-25.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-02 (—BEH-25)
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] реализовать BEH-02: Замороженные байты — ровно те, на которых выполнен реплей
-- [ ] реализовать BEH-25: Диф починки предъявим в истории
-- [ ] проверка группы: tests/test_frozen_bytes_are_the_replayed_bytes.py (kind: contract), tests/test_frozen_bytes_are_the_replayed_bytes.py (kind: integration) зелёные на BEH-02, BEH-25
+- [x] реализовать BEH-02: Замороженные байты — ровно те, на которых выполнен реплей
+- [x] реализовать BEH-25: Диф починки предъявим в истории
+- [x] проверка группы: tests/test_frozen_bytes_are_the_replayed_bytes.py (kind: contract), tests/test_frozen_bytes_are_the_replayed_bytes.py (kind: integration) зелёные на BEH-02, BEH-25
 
 **Traces to:** [FR-03], [FR-01], [FR-02]
 
