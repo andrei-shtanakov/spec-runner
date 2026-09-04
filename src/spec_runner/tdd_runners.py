@@ -128,6 +128,21 @@ NAMESPACE_DIGEST_LEN = 8
 _NAMESPACE_SEP_RE = re.compile(r"[^a-z0-9]+")
 
 
+def task_slug(task_id: str) -> str:
+    """The one formula every adapter's `evidential_file` builds its task
+    segment from (#341 BEH-14). A bare `.replace("-", "_")` left every other
+    non-alphanumeric character untouched — a task-id carrying a `/` (an
+    external tracker's `owner/repo#N`-shaped id) then reached
+    `PurePosixPath` unescaped and split into extra path segments, so the
+    resulting file's *name* no longer started with `test_` and pytest's own
+    discovery would not collect it. Folding every such run to a single `_`,
+    the same way `namespace_segment` folds the namespace, keeps the slug to
+    one path component for any adapter's join.
+    """
+    slug = _NAMESPACE_SEP_RE.sub("_", (task_id or "").strip().lower()).strip("_")
+    return slug or "task"
+
+
 def namespace_segment(namespace: str) -> str:
     """The one formula every adapter's `evidential_file` builds its
     namespace segment from (#341 Q-06) — so FR-11 (the adapter names the
@@ -402,7 +417,7 @@ class PytestAdapter:
         """`tests/test_<task>_<namespace>_red.py` — collected by pytest's
         default `test_*.py`, and under `tests/`, which is where a pytest
         project's discovery is rooted by convention."""
-        slug = task_id.strip().lower().replace("-", "_") or "task"
+        slug = task_slug(task_id)
         ns = namespace_segment(namespace)
         return PurePosixPath("tests") / f"test_{slug}_{ns}_red.py"
 
@@ -689,7 +704,7 @@ class ExUnitAdapter:
         `_test.exs`, which is what `mix test` collects by default. A file
         named any other way is simply never run, and a red nothing runs
         cannot be replayed."""
-        slug = task_id.strip().lower().replace("-", "_") or "task"
+        slug = task_slug(task_id)
         ns = namespace_segment(namespace)
         return PurePosixPath("test") / f"{slug}_{ns}_red_test.exs"
 
@@ -915,4 +930,6 @@ __all__ = [
     "lockfile_identity",
     "infer_adapter",
     "normalise_path",
+    "namespace_segment",
+    "task_slug",
 ]
