@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.gates import GateContext, GateStatus, _red_gate
 from spec_runner.state import ExecutorState
@@ -73,6 +75,7 @@ def _cfg(root: Path, lint_command: str, lint_fix_command: str) -> ExecutorConfig
         lint_command=lint_command,
         lint_command_declared=True,
         lint_fix_command=lint_fix_command,
+        lint_fix_command_declared=True,
     )
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)
     return cfg
@@ -96,6 +99,7 @@ def _agent_writing_a_fixable_red(monkeypatch, calls: list) -> None:
     monkeypatch.setattr(tdd, "_run_agent", fake)
 
 
+@pytest.mark.slow
 class TestAFixableLintFindingReachesAConfirmedCheckpoint:
     def test_the_attempt_is_not_refused_and_the_file_ends_up_clean(
         self, tmp_path_factory, monkeypatch
@@ -128,6 +132,34 @@ class TestAFixableLintFindingReachesAConfirmedCheckpoint:
         # And: the claimed file now lints clean with the declared linter.
         frozen = (root / "tests/test_x.py").read_text()
         assert "BADWORD" not in frozen
+
+        # And: the fixed bytes live in the checkpoint commit itself, not only
+        # in the working tree — otherwise the claim byte-locks bytes no commit
+        # holds and the `tdd.claims` gate of the `tests` phase refuses the
+        # attempt it just passed (PR #345 review blocker).
+        committed = subprocess.run(
+            ["git", "show", f"{result.checkpoint.commit_sha}:tests/test_x.py"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert committed == frozen
+        head = _git(root, "rev-parse", "HEAD").stdout.strip()
+        assert result.checkpoint.commit_sha == head
+
+        # And: the whole claims chain agrees — no MODIFIED violation between
+        # the byte-lock and the checkpoint tree.
+        from spec_runner.claims import check_claims
+
+        with ExecutorState(cfg) as state:
+            violations = check_claims(cfg, state, resolve_namespace(cfg), head)
+        assert violations == []
+
+        # And: the amend kept the authored subject — the remainder stays
+        # adoptable by `_unregistered_red` (#261, NFR-08).
+        subject = _git(root, "log", "-1", "--format=%s").stdout.strip()
+        assert subject == "TASK-001: red for tests/test_x.py::test_y"
 
         # And: no second full RED-authoring call happened for the same test.
         assert calls == ["red"]
@@ -171,6 +203,7 @@ class TestAFixableLintFindingReachesAConfirmedCheckpoint:
         assert outcome.status is GateStatus.SATISFIED
 
 
+@pytest.mark.slow
 class TestACompositeLintFixCommandIsNeverNarrowedToPaths:
     """FR-09's exclusion applies to the fix command too, not only the check.
 
@@ -216,3 +249,41 @@ class TestACompositeLintFixCommandIsNeverNarrowedToPaths:
         # And: the file is left exactly as authored — nothing ran against it.
         frozen = (root / "tests/test_x.py").read_text()
         assert "BADWORD" in frozen
+
+
+class TestAnUndeclaredFixInvocationNeverRuns:
+    """FR-05(б): `commands.lint` declared, no fix invocation declared — the
+    python-shaped default `lint_fix_command` must not run (#220 in write
+    mode). The refusal is the honest outcome; the tree stays untouched."""
+
+    def test_the_default_guess_is_not_executed_and_the_refusal_stands(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("undeclared-fix"))
+        check_script = root.parent / "check.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        cfg = ExecutorConfig(
+            project_root=root,
+            state_file=root / ".state.db",
+            logs_dir=root / ".logs",
+            execution_mode="tdd",
+            test_command="python -m pytest",
+            lint_command=_shell_command(check_script),
+            lint_command_declared=True,
+            # lint_fix_command left at the dataclass default on purpose:
+            # nothing was declared, so nothing may run.
+        )
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        assert cfg.lint_fix_command_declared is False  # fail-closed default
+
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "lint failed" in (result.detail or "")
+        # The default `uv run ruff check . --fix` never ran: the authored
+        # finding is still in the file (a fix would have removed BADWORD).
+        red = root / "tests/test_x.py"
+        assert "BADWORD" in red.read_text()

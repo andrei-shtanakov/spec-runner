@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
@@ -68,6 +70,7 @@ def _cfg(root: Path, lint_command: str, lint_fix_command: str) -> ExecutorConfig
         lint_command=lint_command,
         lint_command_declared=True,
         lint_fix_command=lint_fix_command,
+        lint_fix_command_declared=True,
     )
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)
     return cfg
@@ -91,6 +94,7 @@ def _agent_writing_a_fixable_red(monkeypatch, calls: list) -> None:
     monkeypatch.setattr(tdd, "_run_agent", fake)
 
 
+@pytest.mark.slow
 class TestAFixableLintFindingReachesAConfirmedCheckpoint:
     def test_the_attempt_is_not_refused_and_the_file_ends_up_clean(
         self, tmp_path_factory, monkeypatch

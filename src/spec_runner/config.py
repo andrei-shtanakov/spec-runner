@@ -280,13 +280,14 @@ class ExecutorConfig:
     # a declaration.
     lint_command_declared: bool = True
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
-    # Whether the project actually declared `commands.lint_fix` (#341 Q-03),
-    # symmetric to `lint_command_declared`: the python-shaped default above is
-    # a guess, not a declaration, so the pre-freeze machine fix (FR-01) must be
-    # able to tell "no fix invocation was ever asked for" apart from "one just
-    # happens to fail". A config built directly in code is taken at its word,
-    # same convention as `lint_command_declared`.
-    lint_fix_command_declared: bool = True
+    # Whether the project actually declared `commands.lint_fix` (#341 Q-03).
+    # Fail-closed, unlike `lint_command_declared`: the fix invocation WRITES
+    # to the tree, so the python-shaped default above must never run unless
+    # the project asked for it (FR-05: on an Elixir tree the default would be
+    # `ruff --fix` over foreign sources — #220 in write mode). The loader
+    # flips this to True only on an explicit `commands.lint_fix`; a config
+    # built directly in code must opt in explicitly too.
+    lint_fix_command_declared: bool = False
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
     plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory

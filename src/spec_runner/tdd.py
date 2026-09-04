@@ -624,7 +624,22 @@ def run_red_phase(
     # times in one of the pilot's waves.
     lint_failure = _lint_claimed(config, parsed_selector)
     if lint_failure:
+        # A fix that ran but did not cure leaves its bytes in the tree; the
+        # adoptable remainder (#261) must stay the authored commit (FR-02).
+        subprocess.run(
+            ["git", "checkout", "--", "."],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
         return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
+
+    # The fix (if any) rewrote the working tree after `_commit_red`; absorb
+    # it into the candidate before anything replays or byte-locks, so the
+    # checkpoint commit, the replayed bytes and the claim are the same bytes.
+    sha, absorb_failure = _absorb_lint_fix(config, sha, parsed_selector)
+    if absorb_failure:
+        return RedPhaseResult(RedOutcome.UNVERIFIABLE, absorb_failure)
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
@@ -794,7 +809,7 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
         and config.lint_fix_command_declared
         and config.lint_fix_command
     ):
-        fix_command = f"{config.lint_fix_command} {' '.join(shlex.quote(p) for p in paths)}"
+        fix_command = _scoped_fix_command(config.lint_fix_command, paths)
         fix_result = subprocess.run(
             fix_command,
             shell=True,
@@ -822,6 +837,86 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
     )
+
+
+def _scoped_fix_command(base_command: str, paths: list[str]) -> str:
+    """Narrow a declared fix invocation to the claim paths.
+
+    A declared fix command routinely names its own path argument (`uv run
+    ruff check . --fix`), and appending paths does not narrow such a command
+    — its own `.` still covers the whole tree, so the "fix" rewrites files
+    far outside the claim (the same lesson `build_scoped_test_command`
+    records for test commands). The standalone path token is replaced
+    wholesale; a command that names no path gets the paths appended.
+    """
+    quoted = " ".join(shlex.quote(p) for p in paths)
+    scoped, replaced = re.subn(r"(?<!\S)\.(?!\S)", lambda _m: quoted, base_command, count=1)
+    if replaced:
+        return scoped
+    return f"{base_command} {quoted}"
+
+
+def _absorb_lint_fix(
+    config: ExecutorConfig, sha: str, selector: Selector
+) -> tuple[str, str | None]:
+    """Fold what the lint fix rewrote into the commit that may become a checkpoint.
+
+    The fix runs after `_commit_red`, so its bytes exist only in the working
+    tree: a claim recorded at this point would byte-lock bytes no commit
+    holds, and the `tdd.claims` gate of the `tests` phase would refuse the
+    very attempt that just passed the red gate (PR #345 review). The
+    candidate is amended in place — `--no-edit` keeps the subject, so the
+    remainder stays adoptable by `_unregistered_red` (#261). A fix that
+    strayed outside the claim paths is rolled back to the authored commit
+    and refused: out-of-scope bytes must not ride into a checkpoint through
+    the amend (FR-02).
+    """
+    from .claims import claim_paths_for
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    changed = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+    if not changed:
+        return sha, None
+    allowed = set(claim_paths_for(selector))
+    strayed = sorted(path for path in changed if path not in allowed)
+    if strayed:
+        subprocess.run(
+            ["git", "checkout", "--", "."],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        return sha, (
+            f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
+            "the fix was rolled back and the attempt refused — out-of-scope bytes "
+            "must not reach a checkpoint"
+        )
+    subprocess.run(
+        ["git", "add", "--", *changed],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    amend = subprocess.run(
+        ["git", "commit", "--amend", "--no-edit", "-q"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if amend.returncode != 0:
+        return sha, f"could not absorb the lint fix into the red commit: {_tail(amend.stderr)}"
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return head.stdout.strip(), None
 
 
 def _phase(state, config, task, phase, detail=None) -> None:
