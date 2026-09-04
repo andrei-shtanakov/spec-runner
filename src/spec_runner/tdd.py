@@ -876,10 +876,28 @@ def _lint_claimed(
 
     tail = _tail(f"{result.stdout}\n{result.stderr}")
     suffix = f" ({skip_reason})" if skip_reason else ""
+    stray_note = ""
+    if before is not None:
+        # The fix ran and still did not cure the finding — but it may have
+        # strayed onto files outside the claim regardless (BEH-03). The cure
+        # and the scope are two different questions; `_absorb_lint_fix` only
+        # answers the second when the first is also yes, so this is the one
+        # place the "fix ran, did not cure" branch names strays of its own.
+        changed, created, delta_error = _fix_delta(config, before)
+        if not delta_error:
+            allowed = set(paths)
+            strayed = sorted(
+                {p.rstrip("/") for p in [*changed, *created] if p.rstrip("/") not in allowed}
+            )
+            if strayed:
+                stray_note = (
+                    f" The fix also wrote outside the claim ({', '.join(strayed)}); "
+                    "those bytes were rolled back."
+                )
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
-        f"{suffix}",
+        f"{suffix}{stray_note}",
         before,
         False,
     )
