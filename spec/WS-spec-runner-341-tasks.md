@@ -141,7 +141,7 @@ TASK-001–006; spec/.tdd-evidence/waivers/c560727b864370c7/TASK-007.json,
 **Traces to:** [FR-08], [FR-03]
 
 ### TASK-008: Композитная команда линта имеет объявленное, а не выведенное поведение
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-10.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-10
