@@ -62,9 +62,7 @@ def _agent_writing_a_failing_test(monkeypatch):
 
 
 class TestUndeclaredFixNamesItsReason:
-    def test_a_declared_linter_without_a_declared_fix_names_the_reason(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_declared_linter_without_a_declared_fix_names_the_reason(self, tmp_path, monkeypatch):
         root = _repo(tmp_path)
         cfg = _cfg(
             root,
