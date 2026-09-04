@@ -242,3 +242,63 @@ class TestABudgetAlreadySpentByTheAuthoringCallStopsTheRound:
         assert "lint failed on the file about to be frozen" in detail
         assert "a fix ran and did not clear the finding" in detail
         assert "not started" in detail
+
+
+_MESSY_FIX_SCRIPT = """
+import sys
+from pathlib import Path
+
+# Clears BADWORD but also leaves a side file behind — the exception path
+# must sweep it away.
+for p in sys.argv[1:]:
+    path = Path(p)
+    path.write_text(path.read_text().replace("BADWORD", ""))
+Path("tests/leftover.bak").write_text("junk\\n")
+"""
+
+
+class TestAnAgentRoundExceptionStillRollsTheRepairBack:
+    """#352 review blocker: an exception thrown by the agent round (timeout,
+    unlaunchable CLI) must not bypass `_rollback_fix` — otherwise the repair
+    bytes and its side files survive on the branch and the next attempt's
+    `git add -A` sweeps them into a fresh red commit (FR-02/NFR-08)."""
+
+    def test_a_timeout_in_the_round_leaves_the_authored_tree(self, tmp_path_factory, monkeypatch):
+        import pytest
+
+        from spec_runner import tdd
+
+        root = _repo(tmp_path_factory.mktemp("round-timeout"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_MESSY_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=_shell_command(fix_script),
+        )
+
+        calls: list[str] = []
+
+        def fake(config, prompt, **kwargs):
+            path = Path(config.project_root) / "tests/test_x.py"
+            if not calls:
+                calls.append("red")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("def test_y():  # BADWORD AGENTWORD\n    assert False\n")
+                return tdd.AgentCall(text="TDD_SELECTOR: tests/test_x.py::test_y")
+            calls.append("agent_round")
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+
+        monkeypatch.setattr(tdd, "_run_agent", fake)
+
+        with ExecutorState(cfg) as state, pytest.raises(subprocess.TimeoutExpired):
+            run_red_phase(_task(), cfg, state)
+
+        # The repair is rolled back: the fix's side file is gone and the
+        # authored bytes (BADWORD intact) are what the branch holds.
+        assert not (root / "tests/leftover.bak").exists()
+        assert "BADWORD" in (root / "tests/test_x.py").read_text()

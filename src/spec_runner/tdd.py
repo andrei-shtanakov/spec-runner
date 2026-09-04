@@ -877,43 +877,54 @@ def _lint_claimed(
                     None,
                     True,
                 )
-            fix_result = subprocess.run(
-                fix_command,
-                shell=True,
-                cwd=config.project_root,
-                capture_output=True,
-                text=True,
-            )
-            logger.debug(
-                "Ran the declared lint-fix command on the claimed file",
-                path=str(selector.path),
-                returncode=fix_result.returncode,
-            )
-            result = subprocess.run(
-                check_command,
-                shell=True,
-                cwd=config.project_root,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                return None, before, False
-            # BEH-07 (#341, TASK-006): the mechanical fix ran and a finding
-            # survived it. One cold agent round — there is no session to
-            # continue, so the call must carry the remaining findings, the
-            # current red-file and the selector itself.
-            if task is not None and state is not None:
-                result, agent_round_note = _run_lint_agent_round(
-                    config,
-                    state,
-                    task,
-                    raw_selector,
-                    paths,
+            # FR-02/NFR-08: from this point on the tree may carry repair
+            # bytes; ANY exit that is not a normal return — an agent-round
+            # timeout, an unlaunchable CLI, a failed prompt read — must
+            # still roll the tree back to the authored commit, or the next
+            # attempt's `git add -A` sweeps the leftovers into a fresh red
+            # commit (#352 review blocker).
+            try:
+                fix_result = subprocess.run(
+                    fix_command,
+                    shell=True,
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
+                logger.debug(
+                    "Ran the declared lint-fix command on the claimed file",
+                    path=str(selector.path),
+                    returncode=fix_result.returncode,
+                )
+                result = subprocess.run(
                     check_command,
-                    result,
+                    shell=True,
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
                 )
                 if result.returncode == 0:
                     return None, before, False
+                # BEH-07 (#341, TASK-006): the mechanical fix ran and a
+                # finding survived it. One cold agent round — there is no
+                # session to continue, so the call must carry the remaining
+                # findings, the current red-file and the selector itself.
+                if task is not None and state is not None:
+                    result, agent_round_note = _run_lint_agent_round(
+                        config,
+                        state,
+                        task,
+                        raw_selector,
+                        paths,
+                        check_command,
+                        result,
+                    )
+                    if result.returncode == 0:
+                        return None, before, False
+            except Exception:
+                if before is not None:
+                    _rollback_fix(config, before)
+                raise
     elif not composite and not config.lint_fix_command_declared:
         # #341 FR-05/BEH-29: `lint_fix_command` always carries a value — the
         # python-shaped default `uv run ruff check . --fix` — whether or not
@@ -957,7 +968,8 @@ def _lint_claimed(
         )
         if strayed:
             stray_note = (
-                f" The fix also wrote outside the claim ({', '.join(strayed)}); "
+                " The pre-freeze repair (machine fix and/or agent round) also "
+                f"wrote outside the claim ({', '.join(strayed)}); "
                 "those bytes were rolled back."
             )
     # BEH-04/BEH-11 (#341, TASK-004): the two refusals this function can
@@ -1010,8 +1022,19 @@ def _run_lint_agent_round(
     if refusal is not None:
         return check_result, f"an agent round was not started ({refusal.reason})"
 
-    remaining = _tail(f"{check_result.stdout}\n{check_result.stderr}", lines=20)
-    prompt = _lint_agent_round_prompt(config, raw_selector, paths, remaining)
+    from .claims import append_frozen_files
+
+    remaining = _bounded_findings(f"{check_result.stdout}\n{check_result.stderr}")
+    # #214: every agent-facing prompt carries the frozen-files block and the
+    # escape marker — this is the fourth paid prompt and must not be the one
+    # that forgets it (the block is appended after rendering for exactly
+    # that reason, claims.py).
+    prompt = append_frozen_files(
+        _lint_agent_round_prompt(config, raw_selector, paths, remaining),
+        config,
+        task,
+        state=state,
+    )
     prompt_log = _log_prompt_as(config, task, prompt, "red_agent_round")
     try:
         call = _run_agent(config, prompt)
@@ -1045,6 +1068,29 @@ def _run_lint_agent_round(
     if result.returncode == 0:
         return result, None
     return result, "an agent round ran and did not clear the remaining findings"
+
+
+def _bounded_findings(text: str, max_lines: int = 40, max_chars: int = 4000) -> str:
+    """The remaining findings for the agent-round prompt, marked when cut.
+
+    FR-07: the prompt must carry the findings themselves — a cold call fixes
+    only what it is shown. `_tail`'s 300-char ceiling silently swallowed all
+    but the first few findings (#352 review); this keeps whole lines up to a
+    real budget and SAYS when it truncated, the way `prompts_log.bound` does.
+    """
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()]
+    kept: list[str] = []
+    used = 0
+    for ln in lines[:max_lines]:
+        if used + len(ln) > max_chars:
+            break
+        kept.append(ln)
+        used += len(ln) + 1
+    out = "\n".join(kept)
+    dropped = len(lines) - len(kept)
+    if dropped > 0:
+        out += f"\n… (truncated: {dropped} more finding line(s) not shown)"
+    return out
 
 
 def _lint_agent_round_prompt(
@@ -1302,9 +1348,10 @@ def _absorb_lint_fix(
         return (
             sha,
             (
-                f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
-                "the fix was rolled back and the attempt refused — out-of-scope bytes "
-                "must not reach a checkpoint"
+                "the pre-freeze repair (machine fix and/or agent round) modified "
+                f"files outside the claim ({', '.join(strayed)}); "
+                "the repair was rolled back and the attempt refused — out-of-scope "
+                "bytes must not reach a checkpoint"
             ),
             False,
         )
