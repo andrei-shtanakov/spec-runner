@@ -825,6 +825,14 @@ def _lint_claimed(
     before: set | None = None
     skip_reason: str | None = None
     fix_composite = is_composite_shell_command(config.lint_fix_command)
+    # BEH-05 (#341, TASK-004): the machine-fix cap is exactly one attempt per
+    # RED pass, declared here rather than counted — there is no loop below,
+    # so "at most once" holds by construction and does not depend on what the
+    # finding says. The agent round-trip (FR-07, TASK-006) is a second,
+    # independent attempt that does not exist yet; when it lands it is
+    # gated and recorded the same way (#213), so the combined cap stays a
+    # fixed, content-independent number rather than a counter that could
+    # drift.
     if (
         not composite
         and not fix_composite
@@ -905,8 +913,20 @@ def _lint_claimed(
                 f" The fix also wrote outside the claim ({', '.join(strayed)}); "
                 "those bytes were rolled back."
             )
+    # BEH-04/BEH-11 (#341, TASK-004): the two refusals this function can
+    # return — a declared fix that ran and did not cure, and no fix having
+    # run at all (undeclared, composite, or unnarrowable) — must be
+    # distinguishable from the message text alone, without opening logs.
+    # `before is not None` is exactly "the fix invocation was executed": it is
+    # only ever set right before that `subprocess.run`, never on a path that
+    # skips or fails before it.
+    if before is not None:
+        tried_clause = "a fix ran and did not clear the finding — remaining findings: "
+    else:
+        tried_clause = "no fix ran — "
     return (
-        f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
+        f"lint failed on the file about to be frozen ({', '.join(paths)}): "
+        f"{tried_clause}{tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
         f"{suffix}{stray_note}",
         before,

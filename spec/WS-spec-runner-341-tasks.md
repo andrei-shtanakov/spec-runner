@@ -82,17 +82,17 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-03
 **Traces to:** [FR-02]
 
 ### TASK-004: Неустранимая находка сохраняет сегодняшний класс отказа (+2 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-04, BEH-05, BEH-11.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-04 (—BEH-11)
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-04: Неустранимая находка сохраняет сегодняшний класс отказа
-- [ ] реализовать BEH-05: Потолок заходов починки объявлен и соблюдается
-- [ ] реализовать BEH-11: Оператор отличает «красного нет» от «сортировки импортов» по одному сообщению
-- [ ] проверка группы: tests/test_red_lint_autofix_refusal.py (kind: integration) зелёные на BEH-04, BEH-05, BEH-11
+- [x] реализовать BEH-04: Неустранимая находка сохраняет сегодняшний класс отказа
+- [x] реализовать BEH-05: Потолок заходов починки объявлен и соблюдается
+- [x] реализовать BEH-11: Оператор отличает «красного нет» от «сортировки импортов» по одному сообщению
+- [x] проверка группы: tests/test_red_lint_autofix_refusal.py (kind: integration) зелёные на BEH-04, BEH-05, BEH-11
 
 **Traces to:** [FR-04], [FR-06], [FR-01], [FR-09]
 
