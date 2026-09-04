@@ -52,6 +52,10 @@ spec/
 !docs/plans/*/spec/**
 # …и behaviour-бандлы конвейера devtools (workstreams/<ws>/spec/) — они
 # versioned-артефакт, не runtime workspace.
+# Контракт бандла: только md-файлы ВЕРХНЕГО уровня (00-charter/10-requirements/
+# 15-behaviour-spec). Всё прочее в spec/ — runtime, игнорируется НАМЕРЕННО
+# (junk вроде .env/__pycache__ не переоткрывать); понадобится не-md артефакт —
+# расширять правило явно, а не через `**`.
 !workstreams/*/spec/
 workstreams/*/spec/*
 !workstreams/*/spec/*.md
