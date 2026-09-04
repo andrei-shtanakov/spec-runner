@@ -99,7 +99,6 @@ def _agent_writing_a_fixable_red(monkeypatch, calls: list) -> None:
     monkeypatch.setattr(tdd, "_run_agent", fake)
 
 
-@pytest.mark.slow
 class TestAFixableLintFindingReachesAConfirmedCheckpoint:
     def test_the_attempt_is_not_refused_and_the_file_ends_up_clean(
         self, tmp_path_factory, monkeypatch
@@ -369,11 +368,14 @@ class TestAnUnreadableGitStatusFailsClosed:
         adapter = resolve_adapter(cfg)
         selector = adapter.parse_selector("tests/test_x.py::test_y")
         sha_before = _git(root, "rev-parse", "HEAD").stdout.strip()
-        sha, failure = tdd._absorb_lint_fix(cfg, sha_before, selector, set())
+        sha, failure, instrument = tdd._absorb_lint_fix(cfg, sha_before, selector, set())
 
         assert sha == sha_before
         assert failure is not None
         assert "could not read `git status`" in failure
+        # "We could not look" is an INSTRUMENT refusal: retry + exit 2, not a
+        # fatal verdict about the work (#245, #345 round 4).
+        assert instrument is True
 
 
 _UNCURING_FIX_SCRIPT = """
@@ -489,3 +491,78 @@ class TestAnUncuringFixesLeftoversDoNotSurviveTheRefusal:
         assert "lint failed" in (result.detail or "")
         assert not (root / "tests/leftover.bak").exists()
         assert "BADWORD" in (root / "tests/test_x.py").read_text()
+
+
+class TestANonNarrowableFixCommandIsNotRun:
+    """#345 round 4: a declared fix invocation that names its own paths
+    (other than a lone `.`) cannot be narrowed by appending — running it
+    would rewrite the tree outside the claim. It is not run at all, and the
+    refusal names why instead of reporting a stray."""
+
+    def test_the_fix_is_skipped_and_the_refusal_names_the_reason(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("nonnarrow"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            # `tests` exists in the tree — the command names its own path.
+            lint_fix_command="somefixer tests --fix",
+        )
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "could not be narrowed" in (result.detail or "")
+        assert "BADWORD" in (root / "tests/test_x.py").read_text()
+
+
+class TestAnUnreadablePreFixSnapshotIsAnInstrumentRefusal:
+    """#345 round 4 blocker: instrument failures of the fix/absorb path must
+    surface as `instrument_error=True` so execution classifies them as
+    INFRASTRUCTURE (retry, exit 2) — not HOOK_FAILURE (fatal, exit 1)."""
+
+    def test_run_red_phase_marks_the_refusal_as_instrument(self, tmp_path_factory, monkeypatch):
+        import subprocess as real_subprocess
+
+        from spec_runner import tdd
+
+        root = _repo(tmp_path_factory.mktemp("prefix-snapshot"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=_shell_command(fix_script),
+        )
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+
+        original_run = real_subprocess.run
+
+        def broken_status(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd[:2] == ["git", "status"]:
+                return real_subprocess.CompletedProcess(
+                    cmd, 128, stdout="", stderr="fatal: index locked"
+                )
+            return original_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(tdd.subprocess, "run", broken_status)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.instrument_error is True
+        assert "refusing to run the declared fix invocation" in (result.detail or "")

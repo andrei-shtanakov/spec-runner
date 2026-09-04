@@ -622,14 +622,16 @@ def run_red_phase(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
-    lint_failure, tree_before_fix = _lint_claimed(config, parsed_selector)
+    lint_failure, tree_before_fix, lint_instrument = _lint_claimed(config, parsed_selector)
     if lint_failure:
         if tree_before_fix is not None:
             # A fix that ran but did not cure leaves its bytes in the tree;
             # the adoptable remainder (#261) must stay the authored commit,
             # leftovers included (FR-02).
             _rollback_fix(config, tree_before_fix)
-        return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE, lint_failure, instrument_error=lint_instrument
+        )
 
     if tree_before_fix is not None:
         # The fix rewrote the working tree after `_commit_red`; absorb its
@@ -637,9 +639,13 @@ def run_red_phase(
         # the checkpoint commit, the replayed bytes and the claim are the
         # same bytes. No fix ran — nothing to absorb, and the tree's other
         # inhabitants (untracked spec/.gitignore, #96) are none of ours.
-        sha, absorb_failure = _absorb_lint_fix(config, sha, parsed_selector, tree_before_fix)
+        sha, absorb_failure, absorb_instrument = _absorb_lint_fix(
+            config, sha, parsed_selector, tree_before_fix
+        )
         if absorb_failure:
-            return RedPhaseResult(RedOutcome.UNVERIFIABLE, absorb_failure)
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE, absorb_failure, instrument_error=absorb_instrument
+            )
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
@@ -747,8 +753,15 @@ def _refuse_pre_existing_file(
     return None
 
 
-def _lint_claimed(config: ExecutorConfig, selector: Selector) -> tuple[str | None, set | None]:
-    """Lint the file about to be frozen. Returns (refusal, tree_before_fix).
+def _lint_claimed(
+    config: ExecutorConfig, selector: Selector
+) -> tuple[str | None, set | None, bool]:
+    """Lint the file about to be frozen. Returns (refusal, tree_before_fix, instrument).
+
+    `instrument` is True when the refusal says "we could not look" (an
+    unreadable tree snapshot), not "we looked and the lint failed" — the
+    difference between ErrorCode.INFRASTRUCTURE with a retry and a fatal
+    verdict about the work (exit 2 versus exit 1, #245).
 
     The second element is a `_tree_status` snapshot taken just before the
     declared fix ran — None whenever no fix ran. The caller judges only the
@@ -784,16 +797,16 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> tuple[str | Non
     from .git_ops import is_composite_shell_command
 
     if not config.lint_command:
-        return None, None
+        return None, None, False
     if not config.lint_command_declared:
         logger.debug(
             "No commands.lint declared — skipping the pre-freeze lint",
             path=str(selector.path),
         )
-        return None, None
+        return None, None, False
     paths = claim_paths_for(selector)
     if not paths:
-        return None, None
+        return None, None, False
 
     composite = is_composite_shell_command(config.lint_command)
     check_command = config.lint_command
@@ -807,9 +820,10 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> tuple[str | Non
         text=True,
     )
     if result.returncode == 0:
-        return None, None
+        return None, None, False
 
     before: set | None = None
+    skip_reason: str | None = None
     fix_composite = is_composite_shell_command(config.lint_fix_command)
     if (
         not composite
@@ -817,59 +831,94 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> tuple[str | Non
         and config.lint_fix_command_declared
         and config.lint_fix_command
     ):
-        before, status_error = _tree_status(config)
-        if status_error:
-            # Fail-closed: a fix whose footprint cannot be policed must not run.
-            return (
-                f"{status_error}; refusing to run the declared fix invocation "
-                "without a tree snapshot to judge its footprint against",
-                None,
+        fix_command = _scoped_fix_command(config.lint_fix_command, paths, config.project_root)
+        if fix_command is None:
+            # FR-01/FR-09: a fix invocation that names its own paths (other
+            # than a lone `.`) cannot be narrowed by appending — running it
+            # would rewrite the tree far outside the claim, so it is not run
+            # at all, and the refusal names this instead of "strayed".
+            skip_reason = (
+                "the declared fix invocation names its own paths and could not "
+                "be narrowed to the claim; the machine fix was not run"
             )
-        fix_command = _scoped_fix_command(config.lint_fix_command, paths)
-        fix_result = subprocess.run(
-            fix_command,
-            shell=True,
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
-        logger.debug(
-            "Ran the declared lint-fix command on the claimed file",
-            path=str(selector.path),
-            returncode=fix_result.returncode,
-        )
-        result = subprocess.run(
-            check_command,
-            shell=True,
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return None, before
+        else:
+            before, status_error = _tree_status(config)
+            if status_error:
+                # Fail-closed: a fix whose footprint cannot be policed must
+                # not run — and this is an instrument refusal, not a verdict.
+                return (
+                    f"{status_error}; refusing to run the declared fix invocation "
+                    "without a tree snapshot to judge its footprint against",
+                    None,
+                    True,
+                )
+            fix_result = subprocess.run(
+                fix_command,
+                shell=True,
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+            logger.debug(
+                "Ran the declared lint-fix command on the claimed file",
+                path=str(selector.path),
+                returncode=fix_result.returncode,
+            )
+            result = subprocess.run(
+                check_command,
+                shell=True,
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return None, before, False
 
     tail = _tail(f"{result.stdout}\n{result.stderr}")
+    suffix = f" ({skip_reason})" if skip_reason else ""
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
-        "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed.",
+        "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
+        f"{suffix}",
         before,
+        False,
     )
 
 
-def _scoped_fix_command(base_command: str, paths: list[str]) -> str:
-    """Narrow a declared fix invocation to the claim paths.
+def _scoped_fix_command(base_command: str, paths: list[str], project_root: Path) -> str | None:
+    """Narrow a declared fix invocation to the claim paths, or refuse (None).
 
     A declared fix command routinely names its own path argument (`uv run
     ruff check . --fix`), and appending paths does not narrow such a command
     — its own `.` still covers the whole tree, so the "fix" rewrites files
     far outside the claim (the same lesson `build_scoped_test_command`
-    records for test commands). The standalone path token is replaced
-    wholesale; a command that names no path gets the paths appended.
+    records for test commands). Three answers:
+
+    - a lone `.` token is replaced wholesale with the claim paths;
+    - a command whose tokens name nothing on disk gets the paths appended;
+    - a command that names its own existing paths (``ruff check src tests
+      --fix``) cannot be narrowed by either move — running it would rewrite
+      the tree far outside the claim, so the answer is None and the fix is
+      not run at all (FR-01: the refusal names why, instead of running the
+      command and reporting a stray).
     """
     quoted = " ".join(shlex.quote(p) for p in paths)
     scoped, replaced = re.subn(r"(?<!\S)\.(?!\S)", lambda _m: quoted, base_command, count=1)
     if replaced:
         return scoped
+    try:
+        tokens = shlex.split(base_command)
+    except ValueError:
+        return None
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            continue
+        # Only a PROJECT-relative existing path is the command's own target;
+        # absolute tokens are interpreters/scripts living elsewhere.
+        if Path(token).is_absolute():
+            continue
+        if (project_root / token).exists():
+            return None
     return f"{base_command} {quoted}"
 
 
@@ -967,7 +1016,7 @@ def _rollback_fix(config: ExecutorConfig, before: set) -> None:
 
 def _absorb_lint_fix(
     config: ExecutorConfig, sha: str, selector: Selector, before: set
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, bool]:
     """Fold what the lint fix rewrote into the commit that may become a checkpoint.
 
     The fix runs after `_commit_red`, so its bytes exist only in the working
@@ -992,12 +1041,21 @@ def _absorb_lint_fix(
 
     changed, created, delta_error = _fix_delta(config, before)
     if delta_error:
-        return sha, (
-            f"{delta_error} after the lint fix; refusing rather than guessing "
-            "whether the fix left bytes outside the candidate"
+        # Roll back what we can even blind (best-effort by design), then
+        # refuse as an INSTRUMENT failure: "we could not look" earns a retry,
+        # not a verdict about the work (#245).
+        _rollback_fix(config, before)
+        return (
+            sha,
+            (
+                f"{delta_error} after the lint fix; the fix was rolled back "
+                "best-effort and the attempt refused rather than guessing "
+                "whether it left bytes outside the candidate"
+            ),
+            True,
         )
     if not changed and not created:
-        return sha, None
+        return sha, None, False
 
     allowed = set(claim_paths_for(selector))
     strayed = sorted(
@@ -1005,10 +1063,14 @@ def _absorb_lint_fix(
     )
     if strayed:
         _rollback_fix(config, before)
-        return sha, (
-            f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
-            "the fix was rolled back and the attempt refused — out-of-scope bytes "
-            "must not reach a checkpoint"
+        return (
+            sha,
+            (
+                f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
+                "the fix was rolled back and the attempt refused — out-of-scope bytes "
+                "must not reach a checkpoint"
+            ),
+            False,
         )
     add = subprocess.run(
         ["git", "add", "--", *changed, *created],
@@ -1017,7 +1079,7 @@ def _absorb_lint_fix(
         text=True,
     )
     if add.returncode != 0:
-        return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing"
+        return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing", True
     amend = subprocess.run(
         ["git", "commit", "--amend", "--no-edit", "-q"],
         cwd=config.project_root,
@@ -1025,7 +1087,11 @@ def _absorb_lint_fix(
         text=True,
     )
     if amend.returncode != 0:
-        return sha, f"could not absorb the lint fix into the red commit: {_tail(amend.stderr)}"
+        return (
+            sha,
+            f"could not absorb the lint fix into the red commit: {_tail(amend.stderr)}",
+            True,
+        )
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=config.project_root,
@@ -1033,8 +1099,12 @@ def _absorb_lint_fix(
         text=True,
     )
     if head.returncode != 0 or not head.stdout.strip():
-        return sha, f"could not read HEAD after absorbing the lint fix ({_tail(head.stderr)})"
-    return head.stdout.strip(), None
+        return (
+            sha,
+            f"could not read HEAD after absorbing the lint fix ({_tail(head.stderr)})",
+            True,
+        )
+    return head.stdout.strip(), None, False
 
 
 def _phase(state, config, task, phase, detail=None) -> None:
