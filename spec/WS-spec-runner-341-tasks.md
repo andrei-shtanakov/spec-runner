@@ -170,16 +170,16 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-12 (—BEH-
 **Traces to:** [FR-10], [FR-14]
 
 ### TASK-010: Названный путь проходит discovery того же адаптера (+1 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-14, BEH-15.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-14 (—BEH-15)
 **Depends on:** [TASK-009]
 
 **Checklist:**
-- [ ] реализовать BEH-14: Названный путь проходит discovery того же адаптера
-- [ ] реализовать BEH-15: Конвенции pytest и ExUnit сохраняются вместе с сегментом
-- [ ] проверка группы: tests/test_tdd_runners.py (kind: contract) зелёные на BEH-14, BEH-15
+- [x] реализовать BEH-14: Названный путь проходит discovery того же адаптера
+- [x] реализовать BEH-15: Конвенции pytest и ExUnit сохраняются вместе с сегментом
+- [x] проверка группы: tests/test_tdd_runners.py (kind: contract) зелёные на BEH-14, BEH-15
 
 **Traces to:** [FR-11], [FR-15]
 
