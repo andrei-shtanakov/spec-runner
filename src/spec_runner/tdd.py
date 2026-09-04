@@ -622,24 +622,24 @@ def run_red_phase(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
-    lint_failure = _lint_claimed(config, parsed_selector)
+    lint_failure, tree_before_fix = _lint_claimed(config, parsed_selector)
     if lint_failure:
-        # A fix that ran but did not cure leaves its bytes in the tree; the
-        # adoptable remainder (#261) must stay the authored commit (FR-02).
-        subprocess.run(
-            ["git", "checkout", "--", "."],
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
+        if tree_before_fix is not None:
+            # A fix that ran but did not cure leaves its bytes in the tree;
+            # the adoptable remainder (#261) must stay the authored commit,
+            # leftovers included (FR-02).
+            _rollback_fix(config, tree_before_fix)
         return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
 
-    # The fix (if any) rewrote the working tree after `_commit_red`; absorb
-    # it into the candidate before anything replays or byte-locks, so the
-    # checkpoint commit, the replayed bytes and the claim are the same bytes.
-    sha, absorb_failure = _absorb_lint_fix(config, sha, parsed_selector)
-    if absorb_failure:
-        return RedPhaseResult(RedOutcome.UNVERIFIABLE, absorb_failure)
+    if tree_before_fix is not None:
+        # The fix rewrote the working tree after `_commit_red`; absorb its
+        # delta into the candidate before anything replays or byte-locks, so
+        # the checkpoint commit, the replayed bytes and the claim are the
+        # same bytes. No fix ran — nothing to absorb, and the tree's other
+        # inhabitants (untracked spec/.gitignore, #96) are none of ours.
+        sha, absorb_failure = _absorb_lint_fix(config, sha, parsed_selector, tree_before_fix)
+        if absorb_failure:
+            return RedPhaseResult(RedOutcome.UNVERIFIABLE, absorb_failure)
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
@@ -747,8 +747,15 @@ def _refuse_pre_existing_file(
     return None
 
 
-def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
-    """Lint the file about to be frozen. Returns a refusal, or None.
+def _lint_claimed(config: ExecutorConfig, selector: Selector) -> tuple[str | None, set | None]:
+    """Lint the file about to be frozen. Returns (refusal, tree_before_fix).
+
+    The second element is a `_tree_status` snapshot taken just before the
+    declared fix ran — None whenever no fix ran. The caller judges only the
+    DELTA the fix produced against it: the tree legitimately carries
+    non-agent state (an untracked `spec/.gitignore` the harness owns, #96),
+    and judging absolute status would call that state a stray (#345 review
+    round 3 blocker).
 
     Runs **only a linter the project declared** (#220). `lint_command` defaults
     to `uv run ruff check .`, a Python guess; applying it to a project that
@@ -777,16 +784,16 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     from .git_ops import is_composite_shell_command
 
     if not config.lint_command:
-        return None
+        return None, None
     if not config.lint_command_declared:
         logger.debug(
             "No commands.lint declared — skipping the pre-freeze lint",
             path=str(selector.path),
         )
-        return None
+        return None, None
     paths = claim_paths_for(selector)
     if not paths:
-        return None
+        return None, None
 
     composite = is_composite_shell_command(config.lint_command)
     check_command = config.lint_command
@@ -800,8 +807,9 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
         text=True,
     )
     if result.returncode == 0:
-        return None
+        return None, None
 
+    before: set | None = None
     fix_composite = is_composite_shell_command(config.lint_fix_command)
     if (
         not composite
@@ -809,6 +817,14 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
         and config.lint_fix_command_declared
         and config.lint_fix_command
     ):
+        before, status_error = _tree_status(config)
+        if status_error:
+            # Fail-closed: a fix whose footprint cannot be policed must not run.
+            return (
+                f"{status_error}; refusing to run the declared fix invocation "
+                "without a tree snapshot to judge its footprint against",
+                None,
+            )
         fix_command = _scoped_fix_command(config.lint_fix_command, paths)
         fix_result = subprocess.run(
             fix_command,
@@ -830,12 +846,13 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
             text=True,
         )
         if result.returncode == 0:
-            return None
+            return None, before
 
     tail = _tail(f"{result.stdout}\n{result.stderr}")
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
-        "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
+        "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed.",
+        before,
     )
 
 
@@ -856,32 +873,14 @@ def _scoped_fix_command(base_command: str, paths: list[str]) -> str:
     return f"{base_command} {quoted}"
 
 
-def _absorb_lint_fix(
-    config: ExecutorConfig, sha: str, selector: Selector
-) -> tuple[str, str | None]:
-    """Fold what the lint fix rewrote into the commit that may become a checkpoint.
+def _tree_status(config: ExecutorConfig) -> tuple[set | None, str | None]:
+    """Porcelain snapshot as a set of (code, path) records, fail-closed.
 
-    The fix runs after `_commit_red`, so its bytes exist only in the working
-    tree: a claim recorded at this point would byte-lock bytes no commit
-    holds, and the `tdd.claims` gate of the `tests` phase would refuse the
-    very attempt that just passed the red gate (PR #345 review). The
-    candidate is amended in place — `--no-edit` keeps the subject, so the
-    remainder stays adoptable by `_unregistered_red` (#261). A fix that
-    strayed outside the claim paths — files it modified AND files it
-    created — is rolled back to the authored commit and refused:
-    out-of-scope bytes must not ride into a checkpoint through the amend,
-    nor sit untracked for the GREEN pass's `git add -A` to sweep up later
-    (FR-02). Executor runtime files (`runtime_state_paths`) are the one
-    exclusion — they churn on every run and are never committed anyway
-    (#62).
-
-    Fail-closed throughout: an unreadable `git status` (or a failed
-    `git add`) is a refusal with a diagnostic, not "nothing to absorb" —
-    the same doctrine as `_staged` (#245).
+    `-z` keeps paths unquoted (the plain porcelain C-quotes non-ASCII and
+    spaced names); rename/copy entries carry their origin path as a second
+    NUL field, folded here into an explicit ("R<", origin) record so a
+    set-difference over snapshots stays positionally honest.
     """
-    from .claims import claim_paths_for
-    from .git_ops import runtime_state_paths
-
     status = subprocess.run(
         ["git", "status", "--porcelain", "-z"],
         cwd=config.project_root,
@@ -889,11 +888,35 @@ def _absorb_lint_fix(
         text=True,
     )
     if status.returncode != 0:
-        return sha, (
-            f"could not read `git status` after the lint fix ({_tail(status.stderr)}); "
-            "refusing rather than guessing whether the fix left bytes outside "
-            "the candidate"
-        )
+        return None, f"could not read `git status` ({_tail(status.stderr)})"
+    tokens = [tok for tok in status.stdout.split("\0") if tok]
+    records: set = set()
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        code, path = entry[:2], entry[3:]
+        records.add((code, path))
+        if code and code[0] in ("R", "C") and i + 1 < len(tokens):
+            i += 1
+            records.add(("R<", tokens[i]))
+        i += 1
+    return records, None
+
+
+def _fix_delta(config: ExecutorConfig, before: set) -> tuple[list[str], list[str], str | None]:
+    """What the fix wrote: (changed, created, error) relative to `before`.
+
+    Only the DELTA against the pre-fix snapshot is the fix's footprint: the
+    tree legitimately carries non-agent state (untracked `spec/.gitignore`
+    the harness owns, #96, runtime churn) that predates the fix and must not
+    be judged. Executor runtime files are filtered as well — they churn
+    between the two snapshots (#62).
+    """
+    from .git_ops import runtime_state_paths
+
+    after, status_error = _tree_status(config)
+    if status_error:
+        return [], [], status_error
 
     runtime: set[str] = set()
     for runtime_path in runtime_state_paths(config):
@@ -908,24 +931,71 @@ def _absorb_lint_fix(
         clean = path.rstrip("/")
         return any(clean == r or clean.startswith(r + "/") for r in runtime)
 
-    # `-z` gives NUL-separated, unquoted paths: the plain porcelain C-quotes
-    # non-ASCII and spaced names, and the comparison against claim paths
-    # (already unquoted, `normalise_path`) would then call the claimed file
-    # itself a stray.
-    entries = [e for e in status.stdout.split("\0") if e]
     changed: list[str] = []
     created: list[str] = []
-    i = 0
-    while i < len(entries):
-        entry = entries[i]
-        code, path = entry[:2], entry[3:]
-        if code[0] in ("R", "C") and i + 1 < len(entries):
-            i += 1
-            if not _is_runtime(entries[i]):
-                changed.append(entries[i])  # the origin path moved away
-        if not _is_runtime(path):
-            (created if code == "??" else changed).append(path)
-        i += 1
+    for code, path in sorted(after - before):
+        if _is_runtime(path):
+            continue
+        (created if code == "??" else changed).append(path)
+    return changed, created, None
+
+
+def _rollback_fix(config: ExecutorConfig, before: set) -> None:
+    """Undo the fix's footprint so the adoptable remainder is the authored commit.
+
+    Symmetric to the stray branch of `_absorb_lint_fix`: tracked edits are
+    checked out, files the fix CREATED are removed — otherwise the next
+    attempt's `stage_all_except_runtime` (`git add -A`) sweeps the leftovers
+    into a fresh red commit (FR-02). Best-effort by design: this runs on a
+    path that is already refusing.
+    """
+    _, created, _ = _fix_delta(config, before)
+    subprocess.run(
+        ["git", "checkout", "--", "."],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if created:
+        subprocess.run(
+            ["git", "clean", "-fdq", "--", *created],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+
+def _absorb_lint_fix(
+    config: ExecutorConfig, sha: str, selector: Selector, before: set
+) -> tuple[str, str | None]:
+    """Fold what the lint fix rewrote into the commit that may become a checkpoint.
+
+    The fix runs after `_commit_red`, so its bytes exist only in the working
+    tree: a claim recorded at this point would byte-lock bytes no commit
+    holds, and the `tdd.claims` gate of the `tests` phase would refuse the
+    very attempt that just passed the red gate (PR #345 review). The
+    candidate is amended in place — `--no-edit` keeps the subject, so the
+    remainder stays adoptable by `_unregistered_red` (#261).
+
+    Judged strictly by the DELTA against the pre-fix snapshot (`before`):
+    pre-existing tree state is not the fix's footprint. A fix that strayed
+    outside the claim paths — files it modified AND files it created — is
+    rolled back and refused: out-of-scope bytes must not ride into a
+    checkpoint through the amend, nor sit untracked for the GREEN pass's
+    `git add -A` to sweep up later (FR-02).
+
+    Fail-closed throughout: an unreadable `git status` (or a failed
+    `git add`) is a refusal with a diagnostic, not "nothing to absorb" —
+    the same doctrine as `_staged` (#245).
+    """
+    from .claims import claim_paths_for
+
+    changed, created, delta_error = _fix_delta(config, before)
+    if delta_error:
+        return sha, (
+            f"{delta_error} after the lint fix; refusing rather than guessing "
+            "whether the fix left bytes outside the candidate"
+        )
     if not changed and not created:
         return sha, None
 
@@ -934,19 +1004,7 @@ def _absorb_lint_fix(
         {path.rstrip("/") for path in [*changed, *created] if path.rstrip("/") not in allowed}
     )
     if strayed:
-        subprocess.run(
-            ["git", "checkout", "--", "."],
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
-        if created:
-            subprocess.run(
-                ["git", "clean", "-fdq", "--", *created],
-                cwd=config.project_root,
-                capture_output=True,
-                text=True,
-            )
+        _rollback_fix(config, before)
         return sha, (
             f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
             "the fix was rolled back and the attempt refused — out-of-scope bytes "

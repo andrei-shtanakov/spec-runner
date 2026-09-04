@@ -369,8 +369,123 @@ class TestAnUnreadableGitStatusFailsClosed:
         adapter = resolve_adapter(cfg)
         selector = adapter.parse_selector("tests/test_x.py::test_y")
         sha_before = _git(root, "rev-parse", "HEAD").stdout.strip()
-        sha, failure = tdd._absorb_lint_fix(cfg, sha_before, selector)
+        sha, failure = tdd._absorb_lint_fix(cfg, sha_before, selector, set())
 
         assert sha == sha_before
         assert failure is not None
         assert "could not read `git status`" in failure
+
+
+_UNCURING_FIX_SCRIPT = """
+import sys
+from pathlib import Path
+
+# Leaves a side file behind and does NOT cure the finding.
+Path("tests/leftover.bak").write_text("junk\\n")
+"""
+
+
+class TestAPreExistingUntrackedFileIsNotTheFixesFootprint:
+    """#345 round-3 blocker: the tree legitimately carries non-agent state —
+    an untracked `spec/.gitignore` the harness owns (#96). Judging absolute
+    `git status` instead of the fix's DELTA called it a stray and made the
+    RED phase unpassable for every project that tracks `spec/`."""
+
+    def _bystander(self, root: Path) -> Path:
+        path = root / "spec" / ".gitignore"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(".executor-state.db\n")
+        return path
+
+    def test_a_fix_still_reaches_a_checkpoint_with_a_bystander_present(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("bystander-fix"))
+        bystander = self._bystander(root)
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=_shell_command(fix_script),
+        )
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        # The bystander survived untouched and did not enter the commit.
+        assert bystander.exists()
+        shown = subprocess.run(
+            ["git", "show", "--name-only", "--format=", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "spec/.gitignore" not in shown
+
+    def test_no_fix_ran_at_all_and_the_bystander_is_not_judged(self, tmp_path_factory, monkeypatch):
+        root = _repo(tmp_path_factory.mktemp("bystander-clean"))
+        bystander = self._bystander(root)
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command="true",
+        )
+
+        from spec_runner import tdd
+
+        def clean_red(config, prompt, **kwargs):
+            path = Path(config.project_root) / "tests/test_x.py"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("def test_y():\n    assert False\n")  # lints clean
+            return tdd.AgentCall(text="TDD_SELECTOR: tests/test_x.py::test_y")
+
+        monkeypatch.setattr(tdd, "_run_agent", clean_red)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        assert bystander.exists()
+
+
+class TestAnUncuringFixesLeftoversDoNotSurviveTheRefusal:
+    """#345 round-3 minor: a fix that ran, created a side file and did NOT
+    cure must not leave the file behind — the next attempt's `git add -A`
+    would sweep it into a fresh red commit (FR-02)."""
+
+    def test_the_leftover_is_removed_on_the_refusal_path(self, tmp_path_factory, monkeypatch):
+        root = _repo(tmp_path_factory.mktemp("uncuring"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_UNCURING_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=_shell_command(fix_script),
+        )
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "lint failed" in (result.detail or "")
+        assert not (root / "tests/leftover.bak").exists()
+        assert "BADWORD" in (root / "tests/test_x.py").read_text()
