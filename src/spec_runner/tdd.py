@@ -867,23 +867,72 @@ def _absorb_lint_fix(
     very attempt that just passed the red gate (PR #345 review). The
     candidate is amended in place — `--no-edit` keeps the subject, so the
     remainder stays adoptable by `_unregistered_red` (#261). A fix that
-    strayed outside the claim paths is rolled back to the authored commit
-    and refused: out-of-scope bytes must not ride into a checkpoint through
-    the amend (FR-02).
+    strayed outside the claim paths — files it modified AND files it
+    created — is rolled back to the authored commit and refused:
+    out-of-scope bytes must not ride into a checkpoint through the amend,
+    nor sit untracked for the GREEN pass's `git add -A` to sweep up later
+    (FR-02). Executor runtime files (`runtime_state_paths`) are the one
+    exclusion — they churn on every run and are never committed anyway
+    (#62).
+
+    Fail-closed throughout: an unreadable `git status` (or a failed
+    `git add`) is a refusal with a diagnostic, not "nothing to absorb" —
+    the same doctrine as `_staged` (#245).
     """
     from .claims import claim_paths_for
+    from .git_ops import runtime_state_paths
 
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
+        ["git", "status", "--porcelain", "-z"],
         cwd=config.project_root,
         capture_output=True,
         text=True,
     )
-    changed = [line[3:] for line in status.stdout.splitlines() if line.strip()]
-    if not changed:
+    if status.returncode != 0:
+        return sha, (
+            f"could not read `git status` after the lint fix ({_tail(status.stderr)}); "
+            "refusing rather than guessing whether the fix left bytes outside "
+            "the candidate"
+        )
+
+    runtime: set[str] = set()
+    for runtime_path in runtime_state_paths(config):
+        try:
+            runtime.add(
+                str(Path(runtime_path).resolve().relative_to(config.project_root.resolve()))
+            )
+        except ValueError:
+            runtime.add(str(runtime_path))
+
+    def _is_runtime(path: str) -> bool:
+        clean = path.rstrip("/")
+        return any(clean == r or clean.startswith(r + "/") for r in runtime)
+
+    # `-z` gives NUL-separated, unquoted paths: the plain porcelain C-quotes
+    # non-ASCII and spaced names, and the comparison against claim paths
+    # (already unquoted, `normalise_path`) would then call the claimed file
+    # itself a stray.
+    entries = [e for e in status.stdout.split("\0") if e]
+    changed: list[str] = []
+    created: list[str] = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        code, path = entry[:2], entry[3:]
+        if code[0] in ("R", "C") and i + 1 < len(entries):
+            i += 1
+            if not _is_runtime(entries[i]):
+                changed.append(entries[i])  # the origin path moved away
+        if not _is_runtime(path):
+            (created if code == "??" else changed).append(path)
+        i += 1
+    if not changed and not created:
         return sha, None
+
     allowed = set(claim_paths_for(selector))
-    strayed = sorted(path for path in changed if path not in allowed)
+    strayed = sorted(
+        {path.rstrip("/") for path in [*changed, *created] if path.rstrip("/") not in allowed}
+    )
     if strayed:
         subprocess.run(
             ["git", "checkout", "--", "."],
@@ -891,17 +940,26 @@ def _absorb_lint_fix(
             capture_output=True,
             text=True,
         )
+        if created:
+            subprocess.run(
+                ["git", "clean", "-fdq", "--", *created],
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
         return sha, (
             f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
             "the fix was rolled back and the attempt refused — out-of-scope bytes "
             "must not reach a checkpoint"
         )
-    subprocess.run(
-        ["git", "add", "--", *changed],
+    add = subprocess.run(
+        ["git", "add", "--", *changed, *created],
         cwd=config.project_root,
         capture_output=True,
         text=True,
     )
+    if add.returncode != 0:
+        return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing"
     amend = subprocess.run(
         ["git", "commit", "--amend", "--no-edit", "-q"],
         cwd=config.project_root,
@@ -916,6 +974,8 @@ def _absorb_lint_fix(
         capture_output=True,
         text=True,
     )
+    if head.returncode != 0 or not head.stdout.strip():
+        return sha, f"could not read HEAD after absorbing the lint fix ({_tail(head.stderr)})"
     return head.stdout.strip(), None
 
 

@@ -286,7 +286,10 @@ class ExecutorConfig:
     # the project asked for it (FR-05: on an Elixir tree the default would be
     # `ruff --fix` over foreign sources — #220 in write mode). The loader
     # flips this to True only on an explicit `commands.lint_fix`; a config
-    # built directly in code must opt in explicitly too.
+    # built directly in code must opt in explicitly too. Scope: this bit
+    # gates the RED pass's pre-freeze fix; the historical post-done
+    # lint→fix chain in hooks.py predates it and is deliberately not gated
+    # here (its fate is outside WS-spec-runner-341).
     lint_fix_command_declared: bool = False
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion

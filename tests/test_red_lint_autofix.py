@@ -287,3 +287,90 @@ class TestAnUndeclaredFixInvocationNeverRuns:
         # finding is still in the file (a fix would have removed BADWORD).
         red = root / "tests/test_x.py"
         assert "BADWORD" in red.read_text()
+
+
+_STRAY_FIX_SCRIPT = """
+import sys
+from pathlib import Path
+
+for p in sys.argv[1:]:
+    path = Path(p)
+    path.write_text(path.read_text().replace("BADWORD", ""))
+# ...and a side effect far outside the claim: an edit and a created file.
+Path("README.md").write_text(Path("README.md").read_text() + "strayed\\n")
+Path("tests/leftover.bak").write_text("junk\\n")
+"""
+
+
+class TestAFixThatStraysOutsideTheClaimIsRolledBack:
+    """FR-02/BEH-03: a fix touching anything beyond the claim path — edits
+    and *created* files alike — is a refusal, and the adoptable remainder is
+    the authored commit, byte-identical, with no leftovers in the tree."""
+
+    def test_the_attempt_is_refused_and_the_tree_is_restored(self, tmp_path_factory, monkeypatch):
+        root = _repo(tmp_path_factory.mktemp("stray"))
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_CHECK_SCRIPT)
+        fix_script = scripts / "fix_lint.py"
+        fix_script.write_text(_STRAY_FIX_SCRIPT)
+
+        cfg = _cfg(
+            root,
+            lint_command=_shell_command(check_script),
+            lint_fix_command=_shell_command(fix_script),
+        )
+        calls: list = []
+        _agent_writing_a_fixable_red(monkeypatch, calls)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+            claims = state.active_claims(resolve_namespace(cfg))
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "outside the claim" in (result.detail or "")
+        assert claims == []
+        # Rolled back: the authored bytes are what the branch holds, the
+        # stray edit is gone and the created file does not survive.
+        assert "strayed" not in (root / "README.md").read_text()
+        assert not (root / "tests/leftover.bak").exists()
+        assert "BADWORD" in (root / "tests/test_x.py").read_text()
+
+
+class TestAnUnreadableGitStatusFailsClosed:
+    """#245 doctrine: "we could not look" must not mean "nothing to absorb".
+    An unreadable `git status` refuses the attempt instead of re-arming the
+    byte-mismatch between the claim and the checkpoint commit."""
+
+    def test_a_failing_status_refuses_instead_of_reporting_nothing_to_absorb(
+        self, tmp_path_factory, monkeypatch
+    ):
+        import subprocess as real_subprocess
+
+        from spec_runner import tdd
+
+        root = _repo(tmp_path_factory.mktemp("nostatus"))
+        cfg = _cfg(root, lint_command="true", lint_fix_command="true")
+        cfg.project_root = root
+
+        original_run = real_subprocess.run
+
+        def broken_status(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd[:2] == ["git", "status"]:
+                return real_subprocess.CompletedProcess(
+                    cmd, 128, stdout="", stderr="fatal: index locked"
+                )
+            return original_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(tdd.subprocess, "run", broken_status)
+
+        from spec_runner.tdd import resolve_adapter
+
+        adapter = resolve_adapter(cfg)
+        selector = adapter.parse_selector("tests/test_x.py::test_y")
+        sha_before = _git(root, "rev-parse", "HEAD").stdout.strip()
+        sha, failure = tdd._absorb_lint_fix(cfg, sha_before, selector)
+
+        assert sha == sha_before
+        assert failure is not None
+        assert "could not read `git status`" in failure
