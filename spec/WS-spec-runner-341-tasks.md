@@ -154,7 +154,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-10
 **Traces to:** [FR-09], [FR-05]
 
 ### TASK-009: Два workstream'а с одинаковым task-id получают непересекающиеся пути (+4 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-12, BEH-13, BEH-20, BEH-21, BEH-22.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-12 (—BEH-22)

@@ -224,9 +224,9 @@ class TestBEH21NormalisationPreservesDistinctness:
             pytest.param("ws-Alpha", "ws-alpha", id="case"),
             pytest.param("ws-alpha", "ws.alpha", id="separator"),
             pytest.param(
-                "ws-shared-prefix-" + "a" * 40,
-                "ws-shared-prefix-" + "b" * 40,
-                id="long-tail",
+                "x" * NAMESPACE_SLUG_MAX_LEN + "-tail-aaaa",
+                "x" * NAMESPACE_SLUG_MAX_LEN + "-tail-bbbb",
+                id="identical-truncated-slug",
             ),
         ],
     )
@@ -240,6 +240,24 @@ class TestBEH21NormalisationPreservesDistinctness:
         # The distinction survives a case-fold of the whole path — the
         # guarantee a case-insensitive filesystem actually enforces.
         assert str(path_left).lower() != str(path_right).lower()
+
+    def test_the_digest_disambiguates_when_the_slug_truncates_to_the_same_value(self):
+        """The pathological case the digest exists for (per `namespace_segment`'s
+        own docstring): two namespaces sharing an identical first
+        `NAMESPACE_SLUG_MAX_LEN` characters, diverging only after the
+        truncation point. The slug half must actually collide here — otherwise
+        this test would pass even if the digest silently stopped
+        disambiguating anything."""
+        shared_prefix = "x" * NAMESPACE_SLUG_MAX_LEN
+        left = namespace_segment(shared_prefix + "-tail-aaaa")
+        right = namespace_segment(shared_prefix + "-tail-bbbb")
+
+        slug_left, _, digest_left = left.rpartition("_")
+        slug_right, _, digest_right = right.rpartition("_")
+
+        assert slug_left == slug_right == shared_prefix
+        assert digest_left != digest_right
+        assert left != right
 
 
 class TestBEH22SegmentStaysReadableAndBounded:
