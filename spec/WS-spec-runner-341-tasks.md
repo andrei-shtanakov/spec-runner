@@ -219,15 +219,17 @@ spec/.tdd-evidence/waivers/c560727b864370c7/TASK-012.json) + зелёный пи
 **Traces to:** [FR-13]
 
 ### TASK-013: Уцелевший файл соседнего workstream не блокирует первую задачу
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-18.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-18
 **Depends on:** [TASK-012]
+Закрыто tdd-waiver'ом по батч-санкции (пин — полное воспроизведение
+боевого e2e; spec/.tdd-evidence/waivers/c560727b864370c7/TASK-013.json).
 
 **Checklist:**
-- [ ] реализовать BEH-18: Уцелевший файл соседнего workstream не блокирует первую задачу
-- [ ] проверка группы: tests/test_neighbour_ws_file_does_not_block.py (kind: e2e) зелёные на BEH-18
+- [x] реализовать BEH-18: Уцелевший файл соседнего workstream не блокирует первую задачу
+- [x] проверка группы: tests/test_neighbour_ws_file_does_not_block.py (kind: e2e) зелёные на BEH-18
 
 **Traces to:** [FR-16], [FR-10]
 
