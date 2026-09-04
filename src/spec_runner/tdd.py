@@ -925,6 +925,14 @@ def _lint_claimed(
                 if before is not None:
                     _rollback_fix(config, before)
                 raise
+    elif composite:
+        # BEH-10 (#341, TASK-008): a composite `lint_command` names no single
+        # component that could take a fix flag or a path (#139's lesson —
+        # never guessed, never narrowed). Fix mode is not applied at all,
+        # declared or not, and the refusal must name this specific reason
+        # rather than fall into the generic "no fix ran" wording used for
+        # every other skip cause.
+        skip_reason = "composite lint_command, machine fix not applied"
     elif not composite and not config.lint_fix_command_declared:
         # #341 FR-05/BEH-29: `lint_fix_command` always carries a value — the
         # python-shaped default `uv run ruff check . --fix` — whether or not
