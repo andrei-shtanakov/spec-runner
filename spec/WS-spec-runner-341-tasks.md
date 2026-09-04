@@ -111,7 +111,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-06 (—BEH-
 **Traces to:** [FR-05], [FR-01]
 
 ### TASK-006: Остаток находок возвращается агенту одним заходом в той же сессии
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-07.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-07
