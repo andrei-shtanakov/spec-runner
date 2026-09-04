@@ -8,6 +8,9 @@ executor:
   claude_model: 'sonnet'
   commands:
     lint: uv run ruff check .
+    # Объявленная fix-инвокация — условие получения ценности #341 (FR-05):
+    # дефолт объявлением не является. Сужается до claim-путей заменой '.'.
+    lint_fix: uv run ruff check . --fix
     # Ровно одна команда: execution_mode: tdd отвергает композитный test_command.
     test: uv run pytest tests/ -q -m "not slow"
   execution_mode: tdd

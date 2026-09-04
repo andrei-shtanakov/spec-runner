@@ -43,14 +43,14 @@ owner_role: stream-owner
   заявленный путь (`claim_paths(selector)`).
 
 ### TASK-001: Устранимая линт-находка доводит попытку до чекпойнта
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-01.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-01
 
 **Checklist:**
-- [ ] реализовать BEH-01: Устранимая линт-находка доводит попытку до чекпойнта
-- [ ] проверка группы: tests/test_red_lint_autofix.py (kind: integration) зелёные на BEH-01
+- [x] реализовать BEH-01: Устранимая линт-находка доводит попытку до чекпойнта
+- [x] проверка группы: tests/test_red_lint_autofix.py (kind: integration) зелёные на BEH-01
 
 **Traces to:** [FR-01], [FR-03]
 

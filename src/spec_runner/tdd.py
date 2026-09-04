@@ -622,9 +622,30 @@ def run_red_phase(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
-    lint_failure = _lint_claimed(config, parsed_selector)
+    lint_failure, tree_before_fix, lint_instrument = _lint_claimed(config, parsed_selector)
     if lint_failure:
-        return RedPhaseResult(RedOutcome.UNVERIFIABLE, lint_failure)
+        if tree_before_fix is not None:
+            # A fix that ran but did not cure leaves its bytes in the tree;
+            # the adoptable remainder (#261) must stay the authored commit,
+            # leftovers included (FR-02).
+            _rollback_fix(config, tree_before_fix)
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE, lint_failure, instrument_error=lint_instrument
+        )
+
+    if tree_before_fix is not None:
+        # The fix rewrote the working tree after `_commit_red`; absorb its
+        # delta into the candidate before anything replays or byte-locks, so
+        # the checkpoint commit, the replayed bytes and the claim are the
+        # same bytes. No fix ran — nothing to absorb, and the tree's other
+        # inhabitants (untracked spec/.gitignore, #96) are none of ours.
+        sha, absorb_failure, absorb_instrument = _absorb_lint_fix(
+            config, sha, parsed_selector, tree_before_fix
+        )
+        if absorb_failure:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE, absorb_failure, instrument_error=absorb_instrument
+            )
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
     _say(f"\U0001f50d RED: replaying {selector}")
@@ -732,8 +753,22 @@ def _refuse_pre_existing_file(
     return None
 
 
-def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
-    """Lint the file about to be frozen. Returns a refusal, or None.
+def _lint_claimed(
+    config: ExecutorConfig, selector: Selector
+) -> tuple[str | None, set | None, bool]:
+    """Lint the file about to be frozen. Returns (refusal, tree_before_fix, instrument).
+
+    `instrument` is True when the refusal says "we could not look" (an
+    unreadable tree snapshot), not "we looked and the lint failed" — the
+    difference between ErrorCode.INFRASTRUCTURE with a retry and a fatal
+    verdict about the work (exit 2 versus exit 1, #245).
+
+    The second element is a `_tree_status` snapshot taken just before the
+    declared fix ran — None whenever no fix ran. The caller judges only the
+    DELTA the fix produced against it: the tree legitimately carries
+    non-agent state (an untracked `spec/.gitignore` the harness owns, #96),
+    and judging absolute status would call that state a stray (#345 review
+    round 3 blocker).
 
     Runs **only a linter the project declared** (#220). `lint_command` defaults
     to `uv run ruff check .`, a Python guess; applying it to a project that
@@ -750,39 +785,326 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     Narrowed to the claimed file when that is safe. When `lint_command` is
     composite the whole declared gate runs instead of guessing which component
     takes a path — #139's lesson, and deliberately not a second narrowing rule.
+
+    #341 FR-01: a lint failure is not an immediate refusal. When the project
+    declared a fix invocation (`lint_fix_command_declared`) and the check
+    command is not composite (same exclusion as the check itself, and FR-09:
+    a composite command's components are not ours to guess a fix flag for),
+    the declared fix command is run narrowed to the same claim paths, and the
+    check is repeated before giving up.
     """
     from .claims import claim_paths_for
     from .git_ops import is_composite_shell_command
 
     if not config.lint_command:
-        return None
+        return None, None, False
     if not config.lint_command_declared:
         logger.debug(
             "No commands.lint declared — skipping the pre-freeze lint",
             path=str(selector.path),
         )
-        return None
+        return None, None, False
     paths = claim_paths_for(selector)
     if not paths:
-        return None
+        return None, None, False
 
-    command = config.lint_command
-    if not is_composite_shell_command(command):
-        command = f"{command} {' '.join(shlex.quote(p) for p in paths)}"
+    composite = is_composite_shell_command(config.lint_command)
+    check_command = config.lint_command
+    if not composite:
+        check_command = f"{check_command} {' '.join(shlex.quote(p) for p in paths)}"
     result = subprocess.run(
-        command,
+        check_command,
         shell=True,
         cwd=config.project_root,
         capture_output=True,
         text=True,
     )
     if result.returncode == 0:
-        return None
+        return None, None, False
+
+    before: set | None = None
+    skip_reason: str | None = None
+    fix_composite = is_composite_shell_command(config.lint_fix_command)
+    if (
+        not composite
+        and not fix_composite
+        and config.lint_fix_command_declared
+        and config.lint_fix_command
+    ):
+        fix_command = _scoped_fix_command(config.lint_fix_command, paths, config.project_root)
+        if fix_command is None:
+            # FR-01/FR-09: a fix invocation that names its own paths (other
+            # than a lone `.`) cannot be narrowed by appending — running it
+            # would rewrite the tree far outside the claim, so it is not run
+            # at all, and the refusal names this instead of "strayed".
+            skip_reason = (
+                "the declared fix invocation names its own paths and could not "
+                "be narrowed to the claim; the machine fix was not run"
+            )
+        else:
+            before, status_error = _tree_status(config)
+            if status_error:
+                # Fail-closed: a fix whose footprint cannot be policed must
+                # not run — and this is an instrument refusal, not a verdict.
+                return (
+                    f"{status_error}; refusing to run the declared fix invocation "
+                    "without a tree snapshot to judge its footprint against",
+                    None,
+                    True,
+                )
+            fix_result = subprocess.run(
+                fix_command,
+                shell=True,
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+            logger.debug(
+                "Ran the declared lint-fix command on the claimed file",
+                path=str(selector.path),
+                returncode=fix_result.returncode,
+            )
+            result = subprocess.run(
+                check_command,
+                shell=True,
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return None, before, False
+
     tail = _tail(f"{result.stdout}\n{result.stderr}")
+    suffix = f" ({skip_reason})" if skip_reason else ""
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
+        f"{suffix}",
+        before,
+        False,
     )
+
+
+def _scoped_fix_command(base_command: str, paths: list[str], project_root: Path) -> str | None:
+    """Narrow a declared fix invocation to the claim paths, or refuse (None).
+
+    A declared fix command routinely names its own path argument (`uv run
+    ruff check . --fix`), and appending paths does not narrow such a command
+    — its own `.` still covers the whole tree, so the "fix" rewrites files
+    far outside the claim (the same lesson `build_scoped_test_command`
+    records for test commands). Three answers:
+
+    - a lone `.` token is replaced wholesale with the claim paths;
+    - a command whose tokens name nothing on disk gets the paths appended;
+    - a command that names its own existing paths (``ruff check src tests
+      --fix``) cannot be narrowed by either move — running it would rewrite
+      the tree far outside the claim, so the answer is None and the fix is
+      not run at all (FR-01: the refusal names why, instead of running the
+      command and reporting a stray).
+    """
+    quoted = " ".join(shlex.quote(p) for p in paths)
+    scoped, replaced = re.subn(r"(?<!\S)\.(?!\S)", lambda _m: quoted, base_command, count=1)
+    if replaced:
+        return scoped
+    try:
+        tokens = shlex.split(base_command)
+    except ValueError:
+        return None
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            continue
+        # Only a PROJECT-relative existing path is the command's own target;
+        # absolute tokens are interpreters/scripts living elsewhere.
+        if Path(token).is_absolute():
+            continue
+        if (project_root / token).exists():
+            return None
+    return f"{base_command} {quoted}"
+
+
+def _tree_status(config: ExecutorConfig) -> tuple[set | None, str | None]:
+    """Porcelain snapshot as a set of (code, path) records, fail-closed.
+
+    `-z` keeps paths unquoted (the plain porcelain C-quotes non-ASCII and
+    spaced names); rename/copy entries carry their origin path as a second
+    NUL field, folded here into an explicit ("R<", origin) record so a
+    set-difference over snapshots stays positionally honest.
+    """
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "-z"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0:
+        return None, f"could not read `git status` ({_tail(status.stderr)})"
+    tokens = [tok for tok in status.stdout.split("\0") if tok]
+    records: set = set()
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        code, path = entry[:2], entry[3:]
+        records.add((code, path))
+        if code and code[0] in ("R", "C") and i + 1 < len(tokens):
+            i += 1
+            records.add(("R<", tokens[i]))
+        i += 1
+    return records, None
+
+
+def _fix_delta(config: ExecutorConfig, before: set) -> tuple[list[str], list[str], str | None]:
+    """What the fix wrote: (changed, created, error) relative to `before`.
+
+    Only the DELTA against the pre-fix snapshot is the fix's footprint: the
+    tree legitimately carries non-agent state (untracked `spec/.gitignore`
+    the harness owns, #96, runtime churn) that predates the fix and must not
+    be judged. Executor runtime files are filtered as well — they churn
+    between the two snapshots (#62).
+    """
+    from .git_ops import runtime_state_paths
+
+    after, status_error = _tree_status(config)
+    if after is None:
+        return [], [], status_error or "could not read `git status`"
+
+    runtime: set[str] = set()
+    for runtime_path in runtime_state_paths(config):
+        try:
+            runtime.add(
+                str(Path(runtime_path).resolve().relative_to(config.project_root.resolve()))
+            )
+        except ValueError:
+            runtime.add(str(runtime_path))
+
+    def _is_runtime(path: str) -> bool:
+        clean = path.rstrip("/")
+        return any(clean == r or clean.startswith(r + "/") for r in runtime)
+
+    changed: list[str] = []
+    created: list[str] = []
+    for code, path in sorted(after - before):
+        if _is_runtime(path):
+            continue
+        (created if code == "??" else changed).append(path)
+    return changed, created, None
+
+
+def _rollback_fix(config: ExecutorConfig, before: set) -> None:
+    """Undo the fix's footprint so the adoptable remainder is the authored commit.
+
+    Symmetric to the stray branch of `_absorb_lint_fix`: tracked edits are
+    checked out, files the fix CREATED are removed — otherwise the next
+    attempt's `stage_all_except_runtime` (`git add -A`) sweeps the leftovers
+    into a fresh red commit (FR-02). Best-effort by design: this runs on a
+    path that is already refusing.
+    """
+    _, created, _ = _fix_delta(config, before)
+    subprocess.run(
+        ["git", "checkout", "--", "."],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if created:
+        subprocess.run(
+            ["git", "clean", "-fdq", "--", *created],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+
+def _absorb_lint_fix(
+    config: ExecutorConfig, sha: str, selector: Selector, before: set
+) -> tuple[str, str | None, bool]:
+    """Fold what the lint fix rewrote into the commit that may become a checkpoint.
+
+    The fix runs after `_commit_red`, so its bytes exist only in the working
+    tree: a claim recorded at this point would byte-lock bytes no commit
+    holds, and the `tdd.claims` gate of the `tests` phase would refuse the
+    very attempt that just passed the red gate (PR #345 review). The
+    candidate is amended in place — `--no-edit` keeps the subject, so the
+    remainder stays adoptable by `_unregistered_red` (#261).
+
+    Judged strictly by the DELTA against the pre-fix snapshot (`before`):
+    pre-existing tree state is not the fix's footprint. A fix that strayed
+    outside the claim paths — files it modified AND files it created — is
+    rolled back and refused: out-of-scope bytes must not ride into a
+    checkpoint through the amend, nor sit untracked for the GREEN pass's
+    `git add -A` to sweep up later (FR-02).
+
+    Fail-closed throughout: an unreadable `git status` (or a failed
+    `git add`) is a refusal with a diagnostic, not "nothing to absorb" —
+    the same doctrine as `_staged` (#245).
+    """
+    from .claims import claim_paths_for
+
+    changed, created, delta_error = _fix_delta(config, before)
+    if delta_error:
+        # Roll back what we can even blind (best-effort by design), then
+        # refuse as an INSTRUMENT failure: "we could not look" earns a retry,
+        # not a verdict about the work (#245).
+        _rollback_fix(config, before)
+        return (
+            sha,
+            (
+                f"{delta_error} after the lint fix; the fix was rolled back "
+                "best-effort and the attempt refused rather than guessing "
+                "whether it left bytes outside the candidate"
+            ),
+            True,
+        )
+    if not changed and not created:
+        return sha, None, False
+
+    allowed = set(claim_paths_for(selector))
+    strayed = sorted(
+        {path.rstrip("/") for path in [*changed, *created] if path.rstrip("/") not in allowed}
+    )
+    if strayed:
+        _rollback_fix(config, before)
+        return (
+            sha,
+            (
+                f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
+                "the fix was rolled back and the attempt refused — out-of-scope bytes "
+                "must not reach a checkpoint"
+            ),
+            False,
+        )
+    add = subprocess.run(
+        ["git", "add", "--", *changed, *created],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if add.returncode != 0:
+        return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing", True
+    amend = subprocess.run(
+        ["git", "commit", "--amend", "--no-edit", "-q"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if amend.returncode != 0:
+        return (
+            sha,
+            f"could not absorb the lint fix into the red commit: {_tail(amend.stderr)}",
+            True,
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode != 0 or not head.stdout.strip():
+        return (
+            sha,
+            f"could not read HEAD after absorbing the lint fix ({_tail(head.stderr)})",
+            True,
+        )
+    return head.stdout.strip(), None, False
 
 
 def _phase(state, config, task, phase, detail=None) -> None:

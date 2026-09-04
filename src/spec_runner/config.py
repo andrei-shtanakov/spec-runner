@@ -280,6 +280,17 @@ class ExecutorConfig:
     # a declaration.
     lint_command_declared: bool = True
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
+    # Whether the project actually declared `commands.lint_fix` (#341 Q-03).
+    # Fail-closed, unlike `lint_command_declared`: the fix invocation WRITES
+    # to the tree, so the python-shaped default above must never run unless
+    # the project asked for it (FR-05: on an Elixir tree the default would be
+    # `ruff --fix` over foreign sources — #220 in write mode). The loader
+    # flips this to True only on an explicit `commands.lint_fix`; a config
+    # built directly in code must opt in explicitly too. Scope: this bit
+    # gates the RED pass's pre-freeze fix; the historical post-done
+    # lint→fix chain in hooks.py predates it and is deliberately not gated
+    # here (its fate is outside WS-spec-runner-341).
+    lint_fix_command_declared: bool = False
     run_lint_on_done: bool = True  # Run lint on completion
     lint_blocking: bool = True  # Lint errors block task completion
     plugins_dir: Path = Path("spec/plugins")  # Plugin hooks directory
@@ -768,6 +779,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             # build_config rather than being dropped with the other Nones.
             "lint_command_declared": bool(commands.get("lint")),
             "lint_fix_command": commands.get("lint_fix"),
+            "lint_fix_command_declared": bool(commands.get("lint_fix")),
             "sync_command": commands.get("sync"),
             "project_root": Path(paths["root"]) if paths.get("root") else None,
             "logs_dir": Path(paths["logs"]) if paths.get("logs") else None,
