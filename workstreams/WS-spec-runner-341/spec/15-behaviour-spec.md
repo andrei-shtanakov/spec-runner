@@ -1,10 +1,14 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approved
 owner_role: product
-traces_to: [requirements]
+traces_to:
+- requirements
 upstream_hashes:
-  requirements: "d50b0e0a0fcc3ea8fc7b09ced57364c7f3f897af"
+  requirements: a104d62fd3755bde9c810ff83b1bb759535b4d8f
+approved_by: andrei-shtanakov
+approved_at: '2026-09-04T05:45:42Z'
+version: 2
 ---
 
 # Behaviour spec — WS-spec-runner-341: RED-пас переживает тривиальный линт и соседний workstream
