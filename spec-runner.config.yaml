@@ -1,0 +1,42 @@
+# Операторский конфиг прямого прогона WS-spec-runner-341 (self-hosted:
+# spec-runner исполняет спеку на самого себя). База — эталон disputatio
+# (spec-runner.config.example.yaml там), адаптация к этому репо.
+# Конфиг трекается (как в dispatcher) и довозится PR-ом вместе со штампом.
+executor:
+  auto_commit: true
+  claude_command: claude
+  claude_model: 'sonnet'
+  commands:
+    lint: uv run ruff check .
+    # Ровно одна команда: execution_mode: tdd отвергает композитный test_command.
+    test: uv run pytest tests/ -q -m "not slow"
+  execution_mode: tdd
+  tdd_runner: pytest
+  review_policy: required
+  harness_files:
+  - spec-runner.config.yaml
+  - spec/.tdd-evidence/claims
+  - spec/.tdd-evidence/verdicts
+  - spec/.tdd-evidence/waivers
+  - spec/.tdd-evidence/abandoned
+  - spec/.tdd-evidence/repairs
+  harness_guard: strict
+  hooks:
+    post_done:
+      auto_commit: true
+      run_lint: true
+      run_tests: true
+    pre_start:
+      create_git_branch: true
+  # master не трогаем: ветка прогона + один integration-PR (ADR-ECO-011);
+  # мерж — через ревью-контур devtools (make accept-pr).
+  integration_pr: true
+  main_branch: master
+  max_retries: 3
+  on_task_failure: stop
+  review_command: ''
+  review_model: ''
+  spec_governance: strict
+  task_timeout_minutes: 30
+  # Долларовых потолков нет намеренно: подписка; total_cost_usd — нотация
+  # листпрайса. Тормоза: max_retries, on_task_failure: stop, task_timeout.

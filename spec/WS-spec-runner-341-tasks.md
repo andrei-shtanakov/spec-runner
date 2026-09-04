@@ -1,17 +1,18 @@
 ---
-spec_stage: tasks
-status: draft
-owner_role: stream-owner
-version: 1
-generated_by: fleet-agent
-generated_at: 2026-09-04T09:47:42
-source_prompt_version: ""
-validation: ""
-approved_by: ""
 traces_to:
 - behaviour-spec
 upstream_hashes:
   behaviour-spec: df3885c01babf4f043c1ad31829bba1e4df67ac8
+spec_stage: tasks
+status: approved
+version: 2
+generated_by: fleet-agent
+generated_at: '2026-09-04T09:47:42'
+source_prompt_version: ''
+validation: pass
+approved_by: andrei-shtanakov
+approved_at: '2026-09-04T06:17:57Z'
+owner_role: stream-owner
 ---
 
 ## Milestone 1: Red-pass robustness: авто-fix тривиального линта red-файла перед заморозкой (spec-runner#341) + ws-scoped имена red-файлов между workstream'ами (spec-runner#334)
