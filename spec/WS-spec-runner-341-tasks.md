@@ -82,7 +82,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-03
 **Traces to:** [FR-02]
 
 ### TASK-004: Неустранимая находка сохраняет сегодняшний класс отказа (+2 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-04, BEH-05, BEH-11.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-04 (—BEH-11)
