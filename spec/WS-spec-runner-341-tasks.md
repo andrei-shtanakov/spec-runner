@@ -55,7 +55,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-01
 **Traces to:** [FR-01], [FR-03]
 
 ### TASK-002: Замороженные байты — ровно те, на которых выполнен реплей (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-02, BEH-25.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-02 (—BEH-25)
