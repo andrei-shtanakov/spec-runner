@@ -43,7 +43,7 @@ owner_role: stream-owner
   заявленный путь (`claim_paths(selector)`).
 
 ### TASK-001: Устранимая линт-находка доводит попытку до чекпойнта
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-01.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-01
