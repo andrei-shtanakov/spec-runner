@@ -30,6 +30,7 @@ from spec_runner.task import Task
 from spec_runner.tdd import RedOutcome, resolve_namespace, run_red_phase
 from spec_runner.tdd_runners import (
     ADAPTERS,
+    NAMESPACE_DIGEST_LEN,
     NAMESPACE_SLUG_MAX_LEN,
     PytestAdapter,
     namespace_segment,
@@ -268,7 +269,7 @@ class TestBEH22SegmentStaysReadableAndBounded:
         segment = namespace_segment("ws-alpha")
 
         assert "ws_alpha" in segment
-        assert len(segment) <= NAMESPACE_SLUG_MAX_LEN + 1 + 8  # slug + "_" + digest
+        assert len(segment) <= NAMESPACE_SLUG_MAX_LEN + 1 + NAMESPACE_DIGEST_LEN
 
     def test_an_intentionally_long_namespace_is_capped(self):
         long_namespace = "ws-" + "x" * 200
@@ -277,7 +278,7 @@ class TestBEH22SegmentStaysReadableAndBounded:
         slug, _, digest = segment.rpartition("_")
 
         assert len(slug) <= NAMESPACE_SLUG_MAX_LEN
-        assert len(digest) == 8
+        assert len(digest) == NAMESPACE_DIGEST_LEN
 
     def test_the_final_path_stays_well_under_filesystem_limits(self):
         adapter = PytestAdapter()
