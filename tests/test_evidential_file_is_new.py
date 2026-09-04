@@ -274,6 +274,76 @@ class TestTheRedPhaseEnforcesIt:
         assert good.instrument_error is False
 
 
+class TestThePromptAndHarnessAgree:
+    """BEH-16/BEH-19 pins (TASK-011, delivered under a tdd-waiver): the
+    behaviour arrived as a side effect of TASK-009 (`namespace_segment` — one
+    name source shared by prompt and harness) plus the standing #252 D
+    machinery; these greens pin the missing explicit cases."""
+
+    def test_a_declared_namespace_names_one_path_and_the_harness_accepts_it(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner.prompt import build_red_prompt
+        from spec_runner.state import ExecutorState
+
+        cfg = _repo(tmp_path)
+        cfg.tdd_namespace = "ws-alpha"
+        expected = ADAPTERS["pytest"].evidential_file("TASK-104", namespace="ws-alpha")
+
+        prompt = build_red_prompt(_task(), cfg)
+        assert str(expected) in prompt, "BEH-16: the prompt asks for the declared-slug path"
+
+        _agent_writing(monkeypatch, str(expected))
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_the_computed_namespace_path_from_the_prompt_is_what_the_harness_accepts(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner.prompt import build_red_prompt
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import resolve_namespace
+
+        cfg = _repo(tmp_path)
+        expected = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
+        prompt = build_red_prompt(_task(), cfg)
+        assert str(expected) in prompt
+
+        # The agent writes to EXACTLY the path the prompt asked for — the
+        # same source of the name on both sides is the whole invariant 8.
+        _agent_writing(monkeypatch, str(expected))
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_a_baseline_file_at_the_new_evidential_path_is_still_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """BEH-19: no exemption appears for the NEW ws-scoped path either —
+        the rule is about existence in the baseline, not about the name."""
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import resolve_namespace
+
+        cfg = _repo(tmp_path)
+        evidential = ADAPTERS["pytest"].evidential_file(
+            "TASK-104", namespace=resolve_namespace(cfg)
+        )
+        survivor = Path(cfg.project_root) / evidential
+        survivor.parent.mkdir(parents=True, exist_ok=True)
+        survivor.write_text("def test_left_behind():\n    assert True\n")
+        _git(cfg.project_root, "add", "-A")
+        _git(cfg.project_root, "commit", "-qm", "a survivor at the evidential path")
+
+        _agent_writing(monkeypatch, str(evidential))
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "already existed" in (result.detail or "")
+        assert result.checkpoint is None
+
+
 class TestTheKindReachesTheOperator:
     """Found by mutation: every test above passed while the escalation at the
     RED site was removed, so "git could not answer" would have been reported to
