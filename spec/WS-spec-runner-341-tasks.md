@@ -202,15 +202,19 @@ c560727b864370c7/TASK-011.json, санкция владельца 2026-09-04) + 
 **Traces to:** [FR-12], [FR-16]
 
 ### TASK-012: Ранее записанные чекпойнты и claim'ы работают без миграции
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-17.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-17
 **Depends on:** [TASK-011]
+Закрыто tdd-waiver'ом по батч-санкции (red-unverifiable: реплей и claims
+работают со stored selector + SHA, переименование их не достигает;
+spec/.tdd-evidence/waivers/c560727b864370c7/TASK-012.json) + зелёный пин
+по цели checklist'а.
 
 **Checklist:**
-- [ ] реализовать BEH-17: Ранее записанные чекпойнты и claim'ы работают без миграции
-- [ ] проверка группы: tests/test_ws_scoped_red_names_backcompat.py (kind: integration) зелёные на BEH-17
+- [x] реализовать BEH-17: Ранее записанные чекпойнты и claim'ы работают без миграции
+- [x] проверка группы: tests/test_ws_scoped_red_names_backcompat.py (kind: integration) зелёные на BEH-17
 
 **Traces to:** [FR-13]
 
