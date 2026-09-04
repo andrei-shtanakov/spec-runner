@@ -69,7 +69,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-02 (—BEH-
 **Traces to:** [FR-03], [FR-01], [FR-02]
 
 ### TASK-003: Починка, вышедшая за границы заявляемого файла, — отказ
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-03.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-03
