@@ -313,7 +313,9 @@ One row per agent invocation whose cost has nowhere else to live. Columns:
 `task_id`, `provenance`, `input_tokens`, `output_tokens`, `cost_usd`,
 `timestamp`.
 
-`provenance` is `red_authoring`, `review` (the single-pass reviewer) or
+`provenance` is `red_authoring`, `red_autofix_agent_round` (the one cold
+BEH-07 follow-up call of a RED phase whose machine lint fix left findings),
+`review` (the single-pass reviewer) or
 `review:<role>` (one row per parallel review role — never one aggregate, which
 could not say which role was expensive or which was never measured). The
 GREEN/exec pass keeps its cost on the attempt row, where the schema above

@@ -94,6 +94,12 @@ SELECTOR_MARKER = re.compile(r"^\s*TDD_SELECTOR:\s*(\S+)\s*$", re.MULTILINE)
 #: it; the ledger holds the calls that had nowhere else to go.
 RED_AUTHORING = "red_authoring"
 
+#: BEH-07 (#341, TASK-006): the cold follow-up call the RED phase makes when
+#: the mechanical lint fix leaves a remainder. A distinct provenance, not
+#: `RED_AUTHORING` again — the ledger and `spec-runner costs` should be able
+#: to tell "wrote the test" apart from "fixed what the linter's fix could not".
+RED_AUTOFIX_AGENT_ROUND = "red_autofix_agent_round"
+
 #: How long a replay may take before it is abandoned as unverifiable. A hung
 #: test run must not hang the executor.
 REPLAY_TIMEOUT_SECONDS = 900
@@ -622,7 +628,9 @@ def run_red_phase(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
-    lint_failure, tree_before_fix, lint_instrument = _lint_claimed(config, parsed_selector)
+    lint_failure, tree_before_fix, lint_instrument = _lint_claimed(
+        config, parsed_selector, task=task, state=state, raw_selector=selector
+    )
     if lint_failure:
         if tree_before_fix is not None:
             # A fix that ran but did not cure leaves its bytes in the tree;
@@ -754,9 +762,18 @@ def _refuse_pre_existing_file(
 
 
 def _lint_claimed(
-    config: ExecutorConfig, selector: Selector
+    config: ExecutorConfig,
+    selector: Selector,
+    *,
+    task=None,
+    state: ExecutorState | None = None,
+    raw_selector: str = "",
 ) -> tuple[str | None, set | None, bool]:
     """Lint the file about to be frozen. Returns (refusal, tree_before_fix, instrument).
+
+    ``task``/``state``/``raw_selector`` are needed only for BEH-07's agent
+    round (#341, TASK-006) below; omitted, the function behaves exactly as it
+    did before that feature existed.
 
     `instrument` is True when the refusal says "we could not look" (an
     unreadable tree snapshot), not "we looked and the lint failed" — the
@@ -824,15 +841,15 @@ def _lint_claimed(
 
     before: set | None = None
     skip_reason: str | None = None
+    agent_round_note: str | None = None
     fix_composite = is_composite_shell_command(config.lint_fix_command)
     # BEH-05 (#341, TASK-004): the machine-fix cap is exactly one attempt per
     # RED pass, declared here rather than counted — there is no loop below,
     # so "at most once" holds by construction and does not depend on what the
-    # finding says. The agent round-trip (FR-07, TASK-006) is a second,
-    # independent attempt that does not exist yet; when it lands it is
-    # gated and recorded the same way (#213), so the combined cap stays a
-    # fixed, content-independent number rather than a counter that could
-    # drift.
+    # finding says. The agent round-trip (FR-07/BEH-07, TASK-006) below is a
+    # second, independent attempt, gated and recorded the same way (#213), so
+    # the combined cap stays a fixed, content-independent number rather than a
+    # counter that could drift.
     if (
         not composite
         and not fix_composite
@@ -860,27 +877,54 @@ def _lint_claimed(
                     None,
                     True,
                 )
-            fix_result = subprocess.run(
-                fix_command,
-                shell=True,
-                cwd=config.project_root,
-                capture_output=True,
-                text=True,
-            )
-            logger.debug(
-                "Ran the declared lint-fix command on the claimed file",
-                path=str(selector.path),
-                returncode=fix_result.returncode,
-            )
-            result = subprocess.run(
-                check_command,
-                shell=True,
-                cwd=config.project_root,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                return None, before, False
+            # FR-02/NFR-08: from this point on the tree may carry repair
+            # bytes; ANY exit that is not a normal return — an agent-round
+            # timeout, an unlaunchable CLI, a failed prompt read — must
+            # still roll the tree back to the authored commit, or the next
+            # attempt's `git add -A` sweeps the leftovers into a fresh red
+            # commit (#352 review blocker).
+            try:
+                fix_result = subprocess.run(
+                    fix_command,
+                    shell=True,
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
+                logger.debug(
+                    "Ran the declared lint-fix command on the claimed file",
+                    path=str(selector.path),
+                    returncode=fix_result.returncode,
+                )
+                result = subprocess.run(
+                    check_command,
+                    shell=True,
+                    cwd=config.project_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    return None, before, False
+                # BEH-07 (#341, TASK-006): the mechanical fix ran and a
+                # finding survived it. One cold agent round — there is no
+                # session to continue, so the call must carry the remaining
+                # findings, the current red-file and the selector itself.
+                if task is not None and state is not None:
+                    result, agent_round_note = _run_lint_agent_round(
+                        config,
+                        state,
+                        task,
+                        raw_selector,
+                        paths,
+                        check_command,
+                        result,
+                    )
+                    if result.returncode == 0:
+                        return None, before, False
+            except Exception:
+                if before is not None:
+                    _rollback_fix(config, before)
+                raise
     elif not composite and not config.lint_fix_command_declared:
         # #341 FR-05/BEH-29: `lint_fix_command` always carries a value — the
         # python-shaped default `uv run ruff check . --fix` — whether or not
@@ -924,7 +968,8 @@ def _lint_claimed(
         )
         if strayed:
             stray_note = (
-                f" The fix also wrote outside the claim ({', '.join(strayed)}); "
+                " The pre-freeze repair (machine fix and/or agent round) also "
+                f"wrote outside the claim ({', '.join(strayed)}); "
                 "those bytes were rolled back."
             )
     # BEH-04/BEH-11 (#341, TASK-004): the two refusals this function can
@@ -938,14 +983,155 @@ def _lint_claimed(
         tried_clause = "a fix ran and did not clear the finding — remaining findings: "
     else:
         tried_clause = "no fix ran — "
+    agent_note = f" {agent_round_note}" if agent_round_note else ""
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): "
         f"{tried_clause}{tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
-        f"{suffix}{stray_note}",
+        f"{suffix}{stray_note}{agent_note}",
         before,
         False,
     )
+
+
+def _run_lint_agent_round(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task,
+    raw_selector: str,
+    paths: list[str],
+    check_command: str,
+    check_result: subprocess.CompletedProcess,
+) -> tuple[subprocess.CompletedProcess, str | None]:
+    """BEH-07 (#341, TASK-006): one cold agent call for what the fix could not clear.
+
+    A second, independent paid call of the RED phase — not a resumed session,
+    because spec-runner has none (see "RED-сессия" in the requirements): the
+    prompt therefore carries the remaining findings, the claimed file's
+    current bytes and the selector itself. Subject to the same budget
+    invariant as every other paid call (#213): a refused `check_before_call`
+    means the round never starts, and the caller falls through to the BEH-04
+    refusal exactly as if this function did not exist.
+
+    Returns the check result after the round (``check_result`` unchanged when
+    the round did not start) and a short note for the refusal text.
+    """
+    from .budget import check_before_call
+
+    refusal = check_before_call(config, state, task.id, RED_AUTOFIX_AGENT_ROUND)
+    if refusal is not None:
+        return check_result, f"an agent round was not started ({refusal.reason})"
+
+    from .claims import append_frozen_files
+
+    remaining = _bounded_findings(f"{check_result.stdout}\n{check_result.stderr}")
+    # #214: every agent-facing prompt carries the frozen-files block and the
+    # escape marker — this is the fourth paid prompt and must not be the one
+    # that forgets it (the block is appended after rendering for exactly
+    # that reason, claims.py).
+    prompt = append_frozen_files(
+        _lint_agent_round_prompt(config, raw_selector, paths, remaining),
+        config,
+        task,
+        state=state,
+    )
+    prompt_log = _log_prompt_as(config, task, prompt, "red_agent_round")
+    try:
+        call = _run_agent(config, prompt)
+    except subprocess.TimeoutExpired:
+        append_output(prompt_log, "", note=f"timed out after {config.task_timeout_minutes}m")
+        raise
+    except OSError as exc:
+        append_not_started(prompt_log, f"the agent did not launch: {exc}")
+        raise
+    state.record_agent_call(
+        task.id,
+        RED_AUTOFIX_AGENT_ROUND,
+        input_tokens=call.input_tokens,
+        output_tokens=call.output_tokens,
+        cost_usd=call.cost_usd,
+    )
+    append_output(
+        prompt_log,
+        call.text,
+        call.stderr,
+        returncode=call.returncode,
+        cost_usd=call.cost_usd,
+    )
+    result = subprocess.run(
+        check_command,
+        shell=True,
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result, None
+    return result, "an agent round ran and did not clear the remaining findings"
+
+
+def _bounded_findings(text: str, max_lines: int = 40, max_chars: int = 4000) -> str:
+    """The remaining findings for the agent-round prompt, marked when cut.
+
+    FR-07: the prompt must carry the findings themselves — a cold call fixes
+    only what it is shown. `_tail`'s 300-char ceiling silently swallowed all
+    but the first few findings (#352 review); this keeps whole lines up to a
+    real budget and SAYS when it truncated, the way `prompts_log.bound` does.
+    """
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()]
+    kept: list[str] = []
+    used = 0
+    for ln in lines[:max_lines]:
+        if used + len(ln) > max_chars:
+            break
+        kept.append(ln)
+        used += len(ln) + 1
+    out = "\n".join(kept)
+    dropped = len(lines) - len(kept)
+    if dropped > 0:
+        out += f"\n… (truncated: {dropped} more finding line(s) not shown)"
+    return out
+
+
+def _lint_agent_round_prompt(
+    config: ExecutorConfig, raw_selector: str, paths: list[str], remaining: str
+) -> str:
+    """The cold prompt for `_run_lint_agent_round` — everything, since there is
+    no session to continue: the remaining findings, the file's current bytes
+    and the selector that names the test.
+    """
+    sources = "\n\n".join(
+        f"### {p}\n\n```\n{(Path(config.project_root) / p).read_text()}\n```" for p in paths
+    )
+    return f"""# RED phase follow-up: remaining lint findings
+
+Your failing test — selector `{raw_selector}` — was authored, and a
+mechanical lint fix already ran against the file below. The findings listed
+have survived that fix. Fix them directly in the test file, without changing
+what the test verifies (it must still fail for the same reason) and without
+touching any other file.
+
+## Remaining findings
+
+{remaining}
+
+## Current file(s)
+
+{sources}
+
+## Rules
+
+1. Edit only the file(s) shown above.
+2. Do not change what the test asserts.
+3. Do not touch any other file in the project.
+"""
+
+
+def _log_prompt_as(config: ExecutorConfig, task, prompt: str, provenance: str) -> Path | None:
+    """Log a call's prompt under an explicit provenance (#282)."""
+    from .prompts_log import log_prompt
+
+    return log_prompt(config, task.id, provenance, prompt)
 
 
 def _scoped_fix_command(base_command: str, paths: list[str], project_root: Path) -> str | None:
@@ -1162,9 +1348,10 @@ def _absorb_lint_fix(
         return (
             sha,
             (
-                f"the lint fix modified files outside the claim ({', '.join(strayed)}); "
-                "the fix was rolled back and the attempt refused — out-of-scope bytes "
-                "must not reach a checkpoint"
+                "the pre-freeze repair (machine fix and/or agent round) modified "
+                f"files outside the claim ({', '.join(strayed)}); "
+                "the repair was rolled back and the attempt refused — out-of-scope "
+                "bytes must not reach a checkpoint"
             ),
             False,
         )
