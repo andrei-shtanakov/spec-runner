@@ -787,14 +787,25 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     if result.returncode == 0:
         return None
 
-    if not composite and config.lint_fix_command_declared and config.lint_fix_command:
+    fix_composite = is_composite_shell_command(config.lint_fix_command)
+    if (
+        not composite
+        and not fix_composite
+        and config.lint_fix_command_declared
+        and config.lint_fix_command
+    ):
         fix_command = f"{config.lint_fix_command} {' '.join(shlex.quote(p) for p in paths)}"
-        subprocess.run(
+        fix_result = subprocess.run(
             fix_command,
             shell=True,
             cwd=config.project_root,
             capture_output=True,
             text=True,
+        )
+        logger.debug(
+            "Ran the declared lint-fix command on the claimed file",
+            path=str(selector.path),
+            returncode=fix_result.returncode,
         )
         result = subprocess.run(
             check_command,
