@@ -381,3 +381,63 @@ class TestTheSharedDepsMustBeInsideTheProject:
         result = self._refusal(root, root)
         if isinstance(result, ReplayEnvironmentRefusal):
             assert "outside the project root" not in result.message
+
+
+class TestEvidentialFileIsDiscoverableByItsOwnAdapter:
+    """#341 BEH-14: the path `evidential_file` names is one `is_discoverable`
+    of the *same* adapter accepts, for every adapter in the registry — not
+    only for well-behaved task ids. A task-id carried over from an external
+    tracker (`owner/repo#N`) must not survive into the path unescaped and
+    split it into extra path segments."""
+
+    @pytest.mark.parametrize(
+        "task_id",
+        [
+            "TASK/001",
+            "owner/repo#42",
+            "a/b/c",
+            "TASK-001",
+            "task 001",
+        ],
+    )
+    def test_every_adapter_discovers_its_own_evidential_file(self, task_id):
+        for name, adapter in ADAPTERS.items():
+            path = adapter.evidential_file(task_id, namespace="ws-alpha")
+            assert adapter.is_discoverable(path), (
+                f"{name} adapter named {path!r} for task_id={task_id!r}, "
+                "which its own is_discoverable rejects"
+            )
+
+    def test_a_slash_does_not_become_an_extra_path_segment(self):
+        """The concrete defect: `/` inside the task-id used to be handed
+        straight to `PurePosixPath`, which reads it as a separator."""
+        path = ADAPTERS["pytest"].evidential_file("TASK/001", namespace="ws-alpha")
+        assert len(path.parts) == 2
+        assert path.parts[0] == "tests"
+
+
+class TestRunnerConventionsSurviveTheNamespaceSegment:
+    """#341 BEH-15: the namespace segment is present in the produced name,
+    and pytest's/ExUnit's own discovery conventions still hold with it
+    there — checked with the segment present, not on its absence."""
+
+    def test_pytest_path_is_collected_under_tests(self):
+        from spec_runner.tdd_runners import namespace_segment
+
+        segment = namespace_segment("ws-alpha")
+        path = ADAPTERS["pytest"].evidential_file("TASK-104", namespace="ws-alpha")
+        assert segment in path.name
+        assert path.parts[0] == "tests"
+        assert path.name.startswith("test_")
+        assert path.name.endswith(".py")
+        assert ADAPTERS["pytest"].is_discoverable(path)
+
+    def test_exunit_path_is_collected_under_test(self):
+        from spec_runner.tdd_runners import namespace_segment
+
+        segment = namespace_segment("ws-alpha")
+        path = ADAPTERS["exunit"].evidential_file("TASK-104", namespace="ws-alpha")
+        assert segment in path.name
+        assert path.parts[0] == "test"
+        assert path.name.endswith("_test.exs")
+        assert ADAPTERS["exunit"].is_discoverable(path)
