@@ -97,16 +97,16 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-04 (—BEH-
 **Traces to:** [FR-04], [FR-06], [FR-01], [FR-09]
 
 ### TASK-005: Проект без объявленного линтера ведёт себя ровно как сегодня (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-06, BEH-29.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-06 (—BEH-29)
 **Depends on:** [TASK-004]
 
 **Checklist:**
-- [ ] реализовать BEH-06: Проект без объявленного линтера ведёт себя ровно как сегодня
-- [ ] реализовать BEH-29: Объявленный линтер без объявленной fix-инвокации не запускает дефолтную
-- [ ] проверка группы: tests/test_red_lint_scope.py (kind: integration) зелёные на BEH-06, BEH-29
+- [x] реализовать BEH-06: Проект без объявленного линтера ведёт себя ровно как сегодня
+- [x] реализовать BEH-29: Объявленный линтер без объявленной fix-инвокации не запускает дефолтную
+- [x] проверка группы: tests/test_red_lint_scope.py (kind: integration) зелёные на BEH-06, BEH-29
 
 **Traces to:** [FR-05], [FR-01]
 

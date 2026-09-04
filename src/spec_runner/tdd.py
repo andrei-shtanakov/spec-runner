@@ -881,6 +881,20 @@ def _lint_claimed(
             )
             if result.returncode == 0:
                 return None, before, False
+    elif not composite and not config.lint_fix_command_declared:
+        # #341 FR-05/BEH-29: `lint_fix_command` always carries a value — the
+        # python-shaped default `uv run ruff check . --fix` — whether or not
+        # the project ever declared `commands.lint_fix`. Running that default
+        # against a project that never asked for it is the write-mode version
+        # of #220 (an inferred Python lint command hit an Elixir tree); the
+        # refusal must say the fix invocation was never declared, not blend
+        # into the generic "no fix ran" of every other reason a fix can be
+        # skipped.
+        skip_reason = (
+            "the project declared a linter (commands.lint) but not a fix "
+            "invocation (commands.lint_fix); the default fix invocation was "
+            "not run because it is not declared by the project"
+        )
 
     tail = _tail(f"{result.stdout}\n{result.stderr}")
     suffix = f" ({skip_reason})" if skip_reason else ""
