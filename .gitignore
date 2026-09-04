@@ -50,6 +50,10 @@ logs/
 spec/
 !docs/plans/*/spec/
 !docs/plans/*/spec/**
+# …и behaviour-бандлы конвейера devtools (workstreams/<ws>/spec/) — они
+# versioned-артефакт, не runtime workspace.
+!workstreams/*/spec/
+!workstreams/*/spec/**
 
 COWORK_CONTEXT.md
 _cowork_output/
