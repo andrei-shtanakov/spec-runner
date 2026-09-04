@@ -142,13 +142,20 @@ class TestTheAdapterNamesTheFile:
         """Naming a file for a runner nothing knows about would be exactly the
         heuristic this replaces."""
         from spec_runner.prompt import build_red_prompt
+        from spec_runner.tdd import resolve_namespace
 
         cfg = _repo(tmp_path)
         cfg.test_command = "make check"
         prompt = build_red_prompt(_task(), cfg)
 
         assert "new file that does not exist yet" in prompt
-        assert "test_task_104_red" not in prompt
+        # The exact stand-in phrase, and the absence of the path an adapter
+        # WOULD have named: the old `"test_task_104_red" not in prompt` became
+        # vacuously true once the name grew a namespace segment (#355 review)
+        # — a regression inventing a pytest path would have stayed green.
+        assert "(a new test file this project's runner collects)" in prompt
+        invented = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
+        assert str(invented) not in prompt
 
 
 @pytest.mark.slow
