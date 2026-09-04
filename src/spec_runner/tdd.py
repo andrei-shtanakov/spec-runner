@@ -1014,6 +1014,35 @@ def _rollback_fix(config: ExecutorConfig, before: set) -> None:
         )
 
 
+def _fix_diff_message(
+    config: ExecutorConfig, sha: str, changed: list[str], created: list[str]
+) -> str:
+    """The amended commit message: the authored subject plus a diff trailer.
+
+    `sha` is still the pre-fix candidate at this point — the amend has not
+    run yet — so `git diff sha --cached -- paths` compares its tree to the
+    now-staged fix, which is exactly the fix's own footprint in unified-diff
+    form (BEH-25). Read with `git log --format=%s` afterwards, the subject
+    line is unaffected: the trailer lives entirely in the body.
+    """
+    subject_result = subprocess.run(
+        ["git", "log", "-1", "--format=%s", sha],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    subject = subject_result.stdout.strip() if subject_result.returncode == 0 else sha
+
+    diff = subprocess.run(
+        ["git", "diff", sha, "--cached", "--", *changed, *created],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    trailer = diff.stdout if diff.returncode == 0 else ""
+    return f"{subject}\n\nFix-Diff: the lint fix rewrote these bytes before the freeze\n\n{trailer}"
+
+
 def _absorb_lint_fix(
     config: ExecutorConfig, sha: str, selector: Selector, before: set
 ) -> tuple[str, str | None, bool]:
@@ -1023,8 +1052,12 @@ def _absorb_lint_fix(
     tree: a claim recorded at this point would byte-lock bytes no commit
     holds, and the `tdd.claims` gate of the `tests` phase would refuse the
     very attempt that just passed the red gate (PR #345 review). The
-    candidate is amended in place — `--no-edit` keeps the subject, so the
-    remainder stays adoptable by `_unregistered_red` (#261).
+    candidate is amended in place — the subject is carried forward verbatim
+    (`_fix_diff_message`), so the remainder stays adoptable by
+    `_unregistered_red` (#261) and `git log --format=%s` reports it unchanged;
+    what the fix added rides along in the body as a diff trailer (BEH-25,
+    NFR-04), so the amend does not erase which bytes came from the agent and
+    which from the fix.
 
     Judged strictly by the DELTA against the pre-fix snapshot (`before`):
     pre-existing tree state is not the fix's footprint. A fix that strayed
@@ -1080,11 +1113,13 @@ def _absorb_lint_fix(
     )
     if add.returncode != 0:
         return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing", True
+    message = _fix_diff_message(config, sha, changed, created)
     amend = subprocess.run(
-        ["git", "commit", "--amend", "--no-edit", "-q"],
+        ["git", "commit", "--amend", "-q", "-F", "-"],
         cwd=config.project_root,
         capture_output=True,
         text=True,
+        input=message,
     )
     if amend.returncode != 0:
         return (
