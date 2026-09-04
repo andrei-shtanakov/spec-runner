@@ -141,15 +141,15 @@ TASK-001–006; spec/.tdd-evidence/waivers/c560727b864370c7/TASK-007.json,
 **Traces to:** [FR-08], [FR-03]
 
 ### TASK-008: Композитная команда линта имеет объявленное, а не выведенное поведение
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-10.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-10
 **Depends on:** [TASK-007]
 
 **Checklist:**
-- [ ] реализовать BEH-10: Композитная команда линта имеет объявленное, а не выведенное поведение
-- [ ] проверка группы: tests/test_red_lint_autofix_composite.py (kind: contract) зелёные на BEH-10
+- [x] реализовать BEH-10: Композитная команда линта имеет объявленное, а не выведенное поведение
+- [x] проверка группы: tests/test_red_lint_autofix_composite.py (kind: contract) зелёные на BEH-10
 
 **Traces to:** [FR-09], [FR-05]
 
