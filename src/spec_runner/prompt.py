@@ -534,12 +534,12 @@ def _evidential_file(task: "Task", config: "ExecutorConfig") -> str:
     path when no adapter is resolved — there the rule is stated without an
     example, because inventing one would be the heuristic this avoids.
     """
-    from .tdd import resolve_adapter
+    from .tdd import resolve_adapter, resolve_namespace
 
     adapter = resolve_adapter(config)
     if adapter is None:
         return "(a new test file this project's runner collects)"
-    return f"`{adapter.evidential_file(task.id)}`"
+    return f"`{adapter.evidential_file(task.id, namespace=resolve_namespace(config))}`"
 
 
 def _selector_instruction(config: "ExecutorConfig") -> str:

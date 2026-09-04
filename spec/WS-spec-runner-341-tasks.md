@@ -154,18 +154,18 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-10
 **Traces to:** [FR-09], [FR-05]
 
 ### TASK-009: Два workstream'а с одинаковым task-id получают непересекающиеся пути (+4 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-12, BEH-13, BEH-20, BEH-21, BEH-22.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-12 (—BEH-22)
 
 **Checklist:**
-- [ ] реализовать BEH-12: Два workstream'а с одинаковым task-id получают непересекающиеся пути
-- [ ] реализовать BEH-13: Namespace-сегмент присутствует всегда — слаг при объявленном, дайджест при вычисленном
-- [ ] реализовать BEH-20: Путь детерминирован и стабилен между попытками и машинами
-- [ ] реализовать BEH-21: Нормализация не склеивает два разных namespace
-- [ ] реализовать BEH-22: Путь остаётся читаемым и ограниченной длины
-- [ ] проверка группы: tests/test_ws_scoped_red_names.py (kind: integration), tests/test_ws_scoped_red_names.py (kind: contract) зелёные на BEH-12, BEH-13, BEH-20, BEH-21, BEH-22
+- [x] реализовать BEH-12: Два workstream'а с одинаковым task-id получают непересекающиеся пути
+- [x] реализовать BEH-13: Namespace-сегмент присутствует всегда — слаг при объявленном, дайджест при вычисленном
+- [x] реализовать BEH-20: Путь детерминирован и стабилен между попытками и машинами
+- [x] реализовать BEH-21: Нормализация не склеивает два разных namespace
+- [x] реализовать BEH-22: Путь остаётся читаемым и ограниченной длины
+- [x] проверка группы: tests/test_ws_scoped_red_names.py (kind: integration), tests/test_ws_scoped_red_names.py (kind: contract) зелёные на BEH-12, BEH-13, BEH-20, BEH-21, BEH-22
 
 **Traces to:** [FR-10], [FR-14]
 
