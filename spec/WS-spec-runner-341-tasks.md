@@ -234,7 +234,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-18
 **Traces to:** [FR-16], [FR-10]
 
 ### TASK-014: Стоимость сценария #341 измерена под pytest и сопоставлена с базовой точкой
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-23.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-23
