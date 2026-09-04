@@ -415,6 +415,15 @@ class TestEvidentialFileIsDiscoverableByItsOwnAdapter:
         assert len(path.parts) == 2
         assert path.parts[0] == "tests"
 
+    def test_a_slash_does_not_become_an_extra_path_segment_for_exunit(self):
+        """ExUnit's own `is_discoverable` checks only `parts[0] == "test"`
+        and a `_test.exs` suffix — an inserted directory segment (the old
+        defect) would still satisfy both, so only an explicit segment-count
+        assertion actually pins this adapter's regression."""
+        path = ADAPTERS["exunit"].evidential_file("TASK/001", namespace="ws-alpha")
+        assert len(path.parts) == 2
+        assert path.parts[0] == "test"
+
 
 class TestRunnerConventionsSurviveTheNamespaceSegment:
     """#341 BEH-15: the namespace segment is present in the produced name,

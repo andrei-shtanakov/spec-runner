@@ -170,7 +170,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-12 (—BEH-
 **Traces to:** [FR-10], [FR-14]
 
 ### TASK-010: Названный путь проходит discovery того же адаптера (+1 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-14, BEH-15.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-14 (—BEH-15)
