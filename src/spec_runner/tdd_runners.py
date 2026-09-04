@@ -114,6 +114,46 @@ def normalise_path(raw: str) -> PurePosixPath:
     return PurePosixPath(*parts) if parts else PurePosixPath("")
 
 
+#: The declared limit on the readable half of a namespace segment (#341,
+#: BEH-22/NFR-06) — long enough to stay recognisable, short enough that the
+#: full path never approaches filesystem limits.
+NAMESPACE_SLUG_MAX_LEN = 24
+
+#: Hex digits of the namespace segment's digest half. Short on purpose: it is
+#: a differentiator, not an identity — `NAMESPACE_SLUG_MAX_LEN` carries the
+#: readability, this carries the guarantee that two namespaces never collapse
+#: into one segment (#341 FR-14/BEH-21).
+NAMESPACE_DIGEST_LEN = 8
+
+_NAMESPACE_SEP_RE = re.compile(r"[^a-z0-9]+")
+
+
+def namespace_segment(namespace: str) -> str:
+    """The one formula every adapter's `evidential_file` builds its
+    namespace segment from (#341 Q-06) — so FR-11 (the adapter names the
+    file) and FR-12 (the prompt and the harness agree on one path) hold
+    without the rule being duplicated per adapter.
+
+    Always two parts: a lower-cased, punctuation-collapsed slug of the raw
+    namespace (readable, and recognisably derived from a *declared*
+    `tdd_namespace`; already digest-shaped when the namespace itself is
+    `resolve_namespace`'s computed fallback), and a short digest of the raw,
+    un-folded namespace string. The slug alone is not enough — two namespaces
+    differing only by case, a separator, or a truncated tail collapse to the
+    same slug (BEH-21) — so the digest is taken over the value *before*
+    case-folding or truncation, and rides along as a lower-case hex string
+    that survives a case-fold of the whole path.
+
+    Pure and deterministic: the same namespace string always yields the same
+    segment, in any process, on any machine (BEH-20/NFR-03).
+    """
+    raw = (namespace or "").strip()
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:NAMESPACE_DIGEST_LEN]
+    slug = _NAMESPACE_SEP_RE.sub("_", raw.lower()).strip("_")
+    slug = slug[:NAMESPACE_SLUG_MAX_LEN].strip("_") or "ns"
+    return f"{slug}_{digest}"
+
+
 @dataclass(frozen=True)
 class ReplayEnvironment:
     """A proven, isolated environment for one replay (#207).
@@ -204,7 +244,7 @@ class TddRunnerAdapter(Protocol):
         """The files this selector depends on, for the byte-lock."""
         ...
 
-    def evidential_file(self, task_id: str) -> PurePosixPath:
+    def evidential_file(self, task_id: str, *, namespace: str) -> PurePosixPath:
         """Where this task's RED should write its failing test (#252).
 
         The **adapter** names it, never a shared heuristic: a Python-shaped
@@ -212,6 +252,11 @@ class TddRunnerAdapter(Protocol):
         and the same class of mistake as #198 and #220. The name it returns
         must be one this runner's ordinary discovery picks up — a test nothing
         collects is a red that cannot be replayed.
+
+        `namespace` (#341) is always folded into the path via
+        `namespace_segment` — a `TASK-001` from two workstreams must not name
+        the same file. Callers pass `tdd.resolve_namespace(config)`, which
+        never returns empty, so the segment is never absent.
         """
         ...
 
@@ -353,12 +398,13 @@ class PytestAdapter:
         """
         return (selector.path,)
 
-    def evidential_file(self, task_id: str) -> PurePosixPath:
-        """`tests/test_<task>_red.py` — collected by pytest's default
-        `test_*.py`, and under `tests/`, which is where a pytest project's
-        discovery is rooted by convention."""
+    def evidential_file(self, task_id: str, *, namespace: str) -> PurePosixPath:
+        """`tests/test_<task>_<namespace>_red.py` — collected by pytest's
+        default `test_*.py`, and under `tests/`, which is where a pytest
+        project's discovery is rooted by convention."""
         slug = task_id.strip().lower().replace("-", "_") or "task"
-        return PurePosixPath("tests") / f"test_{slug}_red.py"
+        ns = namespace_segment(namespace)
+        return PurePosixPath("tests") / f"test_{slug}_{ns}_red.py"
 
     def is_discoverable(self, path: PurePosixPath) -> bool:
         """pytest's default patterns: `test_*.py` or `*_test.py`."""
@@ -638,12 +684,14 @@ class ExUnitAdapter:
         """One `path:line` names one file."""
         return (selector.path,)
 
-    def evidential_file(self, task_id: str) -> PurePosixPath:
-        """`test/<task>_red_test.exs` — under `test/`, ending in `_test.exs`,
-        which is what `mix test` collects by default. A file named any other
-        way is simply never run, and a red nothing runs cannot be replayed."""
+    def evidential_file(self, task_id: str, *, namespace: str) -> PurePosixPath:
+        """`test/<task>_<namespace>_red_test.exs` — under `test/`, ending in
+        `_test.exs`, which is what `mix test` collects by default. A file
+        named any other way is simply never run, and a red nothing runs
+        cannot be replayed."""
         slug = task_id.strip().lower().replace("-", "_") or "task"
-        return PurePosixPath("test") / f"{slug}_red_test.exs"
+        ns = namespace_segment(namespace)
+        return PurePosixPath("test") / f"{slug}_{ns}_red_test.exs"
 
     def is_discoverable(self, path: PurePosixPath) -> bool:
         """`mix test`'s default: `test/**/*_test.exs`."""

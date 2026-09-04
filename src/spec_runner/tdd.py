@@ -722,7 +722,9 @@ def _refuse_pre_existing_file(
             return RedPhaseResult(
                 RedOutcome.UNVERIFIABLE,
                 f"the red was written to {path}, which this project's runner does not "
-                f"collect — see `{adapter.evidential_file('TASK-ID')}` for the shape it does",
+                "collect — see "
+                f"`{adapter.evidential_file('TASK-ID', namespace=resolve_namespace(config))}` "
+                "for the shape it does",
             )
         # `ls-tree`, not `cat-file -e` (Copilot, PR #280). Measured: `cat-file
         # -e` answers **128 for everything** — a path absent from a valid tree,
