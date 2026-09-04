@@ -750,6 +750,13 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     Narrowed to the claimed file when that is safe. When `lint_command` is
     composite the whole declared gate runs instead of guessing which component
     takes a path — #139's lesson, and deliberately not a second narrowing rule.
+
+    #341 FR-01: a lint failure is not an immediate refusal. When the project
+    declared a fix invocation (`lint_fix_command_declared`) and the check
+    command is not composite (same exclusion as the check itself, and FR-09:
+    a composite command's components are not ours to guess a fix flag for),
+    the declared fix command is run narrowed to the same claim paths, and the
+    check is repeated before giving up.
     """
     from .claims import claim_paths_for
     from .git_ops import is_composite_shell_command
@@ -766,11 +773,12 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     if not paths:
         return None
 
-    command = config.lint_command
-    if not is_composite_shell_command(command):
-        command = f"{command} {' '.join(shlex.quote(p) for p in paths)}"
+    composite = is_composite_shell_command(config.lint_command)
+    check_command = config.lint_command
+    if not composite:
+        check_command = f"{check_command} {' '.join(shlex.quote(p) for p in paths)}"
     result = subprocess.run(
-        command,
+        check_command,
         shell=True,
         cwd=config.project_root,
         capture_output=True,
@@ -778,6 +786,37 @@ def _lint_claimed(config: ExecutorConfig, selector: Selector) -> str | None:
     )
     if result.returncode == 0:
         return None
+
+    fix_composite = is_composite_shell_command(config.lint_fix_command)
+    if (
+        not composite
+        and not fix_composite
+        and config.lint_fix_command_declared
+        and config.lint_fix_command
+    ):
+        fix_command = f"{config.lint_fix_command} {' '.join(shlex.quote(p) for p in paths)}"
+        fix_result = subprocess.run(
+            fix_command,
+            shell=True,
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        logger.debug(
+            "Ran the declared lint-fix command on the claimed file",
+            path=str(selector.path),
+            returncode=fix_result.returncode,
+        )
+        result = subprocess.run(
+            check_command,
+            shell=True,
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return None
+
     tail = _tail(f"{result.stdout}\n{result.stderr}")
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
