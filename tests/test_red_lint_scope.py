@@ -24,6 +24,7 @@ The four boundaries the owner drew (issue #220), each with a test below:
    what the code does today.
 """
 
+import os
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -200,6 +201,66 @@ class TestTheRedPhaseLint:
             result = run_red_phase(_task(), cfg, state)
 
         assert result.outcome is RedOutcome.EXPECTED_FAIL
+
+
+class TestUndeclaredFixIsNeverInferred:
+    """#341 BEH-29: `lint_fix_command` always carries the python-shaped
+    default (`uv run ruff check . --fix`), declared or not — unlike
+    `lint_command`, which is None until the loader fills it in. A project
+    that declared a linter but never `commands.lint_fix` must not have that
+    default run against it, and the refusal must name the reason rather than
+    reading identically to every other way a fix can fail to run."""
+
+    def test_a_declared_linter_without_a_declared_fix_names_the_reason(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(
+            root,
+            lint_command="false",
+            lint_command_declared=True,
+            # lint_fix_command_declared defaults to False: the project never
+            # declared commands.lint_fix.
+        )
+        _agent_writing_a_failing_test(monkeypatch)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        detail = result.detail or ""
+        assert "fix invocation" in detail
+        assert "not declared" in detail
+
+    def test_the_default_fix_is_not_run_against_a_non_python_project(self, tmp_path, monkeypatch):
+        """A non-python project (Elixir with `mix credo`) never declared
+        `commands.lint_fix`. Running the python-shaped default `uv run ruff
+        check . --fix` over such a tree in write mode would be the #220
+        incident again, this time rewriting files instead of merely
+        misreporting them — proven here by a fake `uv` on PATH that would
+        leave a marker file behind if the harness ever invoked it."""
+        root = _repo(tmp_path)
+        bin_dir = tmp_path / "fake-bin"
+        bin_dir.mkdir()
+        marker = tmp_path / "uv-was-invoked"
+        fake_uv = bin_dir / "uv"
+        fake_uv.write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n")
+        fake_uv.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+        cfg = _cfg(
+            root,
+            lint_command="mix credo --strict",
+            lint_command_declared=True,
+        )
+        _agent_writing_a_failing_test(monkeypatch)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        detail = result.detail or ""
+        assert "not declared" in detail
+        assert "no fix ran" in detail
+        assert not marker.exists(), "the python-shaped default fix must never run"
 
 
 @pytest.mark.slow
