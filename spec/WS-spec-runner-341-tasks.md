@@ -124,16 +124,19 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-07
 **Traces to:** [FR-07], [FR-06]
 
 ### TASK-007: Починка, сделавшая тест зелёным, не даёт чекпойнта (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-08, BEH-09.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-08 (—BEH-09)
 **Depends on:** [TASK-006]
+Закрыто tdd-waiver'ом (red-unverifiable: поведение — эмерджентное свойство
+TASK-001–006; spec/.tdd-evidence/waivers/c560727b864370c7/TASK-007.json,
+санкция владельца 2026-09-04) + зелёной регрессией по цели checklist'а.
 
 **Checklist:**
-- [ ] реализовать BEH-08: Починка, сделавшая тест зелёным, не даёт чекпойнта
-- [ ] реализовать BEH-09: Починка, сломавшая сборку, не даёт чекпойнта
-- [ ] проверка группы: tests/test_autofix_does_not_whiten_red.py (kind: integration) зелёные на BEH-08, BEH-09
+- [x] реализовать BEH-08: Починка, сделавшая тест зелёным, не даёт чекпойнта
+- [x] реализовать BEH-09: Починка, сломавшая сборку, не даёт чекпойнта
+- [x] проверка группы: tests/test_autofix_does_not_whiten_red.py (kind: integration) зелёные на BEH-08, BEH-09
 
 **Traces to:** [FR-08], [FR-03]
 
