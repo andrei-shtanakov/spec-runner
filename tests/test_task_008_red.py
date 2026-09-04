@@ -125,6 +125,6 @@ class TestCompositeLintCommandDeclaresFixSkipped:
         assert not (scripts / "fix_calls.count").exists()
 
         detail = result.detail or ""
-        assert (
-            "composite lint_command, machine fix not applied" in detail
-        ), f"refusal did not name the composite-command reason: {detail!r}"
+        assert "composite lint_command, machine fix not applied" in detail, (
+            f"refusal did not name the composite-command reason: {detail!r}"
+        )
