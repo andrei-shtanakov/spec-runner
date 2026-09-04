@@ -97,7 +97,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-04 (—BEH-
 **Traces to:** [FR-04], [FR-06], [FR-01], [FR-09]
 
 ### TASK-005: Проект без объявленного линтера ведёт себя ровно как сегодня (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-06, BEH-29.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-06 (—BEH-29)
