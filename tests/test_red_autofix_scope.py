@@ -167,6 +167,7 @@ class TestAStrayThatCuresStillRefusesAndNamesTheOutOfBoundsPaths:
         assert claims == []
         assert "strayed" not in (root / "README.md").read_text()
         assert not (root / "tests/leftover.bak").exists()
+        assert "BADWORD" in (root / "tests/test_x.py").read_text()
 
         detail = result.detail or ""
         assert "outside the claim" in detail

@@ -884,16 +884,27 @@ def _lint_claimed(
         # answers the second when the first is also yes, so this is the one
         # place the "fix ran, did not cure" branch names strays of its own.
         changed, created, delta_error = _fix_delta(config, before)
-        if not delta_error:
-            allowed = set(paths)
-            strayed = sorted(
-                {p.rstrip("/") for p in [*changed, *created] if p.rstrip("/") not in allowed}
+        if delta_error:
+            # Fail-closed, same doctrine as `_absorb_lint_fix`: an unreadable
+            # git status must not be read as "no strays" — the caller still
+            # rolls back best-effort, but the refusal must say we could not
+            # judge the fix's footprint, not stay silent about it.
+            return (
+                f"{delta_error} after the lint fix; refusing to judge whether "
+                "it strayed outside the claim without a tree snapshot to check "
+                "it against",
+                before,
+                True,
             )
-            if strayed:
-                stray_note = (
-                    f" The fix also wrote outside the claim ({', '.join(strayed)}); "
-                    "those bytes were rolled back."
-                )
+        allowed = set(paths)
+        strayed = sorted(
+            {p.rstrip("/") for p in [*changed, *created] if p.rstrip("/") not in allowed}
+        )
+        if strayed:
+            stray_note = (
+                f" The fix also wrote outside the claim ({', '.join(strayed)}); "
+                "those bytes were rolled back."
+            )
     return (
         f"lint failed on the file about to be frozen ({', '.join(paths)}): {tail}. "
         "After a checkpoint it is byte-immutable, so this must be fixed before the red is fixed."
