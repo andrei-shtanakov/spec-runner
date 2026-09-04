@@ -245,3 +245,39 @@ class TestOperatorDistinguishesTriedFromUntriedRefusal:
         assert "remaining findings" in tried_detail.lower()
         assert "found BADWORD" in tried_detail
         assert "found BADWORD" in untried_detail
+
+    def test_an_unnarrowable_fix_command_also_reads_as_no_fix_ran(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """A fix invocation naming its own paths is declared but never
+        invoked (`_scoped_fix_command` returns None) — this is a second,
+        distinct way to reach "no fix ran", not just the undeclared-fix
+        case covered above."""
+        scripts = tmp_path_factory.mktemp("scripts")
+        check_script = scripts / "check_lint.py"
+        check_script.write_text(_COUNTING_CHECK_SCRIPT)
+
+        root = _repo(tmp_path_factory.mktemp("nonnarrow"))
+        cfg = ExecutorConfig(
+            project_root=root,
+            state_file=root / ".state.db",
+            logs_dir=root / ".logs",
+            execution_mode="tdd",
+            test_command="python -m pytest",
+            lint_command=_shell_command(check_script),
+            lint_command_declared=True,
+            # Names its own path (`tests`) rather than a lone `.` — cannot
+            # be narrowed to the claim, so it is never run.
+            lint_fix_command="somefixer tests --fix",
+            lint_fix_command_declared=True,
+        )
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        _agent_writing_a_fixable_red(monkeypatch)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        detail = result.detail or ""
+        assert "could not be narrowed" in detail
+        assert "no fix ran" in detail
+        assert "a fix ran and did not clear the finding" not in detail
