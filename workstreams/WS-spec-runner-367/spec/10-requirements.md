@@ -1,11 +1,14 @@
 ---
 spec_stage: requirements
-status: draft
+status: approved
 owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: "44e3ed82553da0bafc86f5c952993bd394178511"
+  charter: df5708579c90d1ba4c40fe0d6f36bf953c4bc565
+approved_by: andrei-shtanakov
+approved_at: '2026-09-05T14:59:06Z'
+version: 2
 ---
 
 # Requirements — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном

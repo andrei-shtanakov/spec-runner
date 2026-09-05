@@ -1,7 +1,10 @@
 ---
 spec_stage: charter
-status: draft
+status: approved
 owner_role: product
+approved_by: andrei-shtanakov
+approved_at: '2026-09-05T14:59:06Z'
+version: 2
 ---
 
 # Charter — WS-spec-runner-367: verify-first — задача начинается с живого прогона, а не с оплаченного red-зонда
