@@ -73,8 +73,8 @@ PAID_AGENT_COMMANDS = frozenset(
 )
 
 
-def _real_agent_refusal(cmd: str) -> AssertionError:
-    return AssertionError(
+def _real_agent_refusal(cmd: str, cls: type[AssertionError] = AssertionError) -> AssertionError:
+    return cls(
         f"this test would call the real agent ({cmd!r}) and be billed for it. "
         "Stub `spec_runner.tdd._run_agent` / `spec_runner.execution._run_agent_process`, "
         "or point `claude_command` at a fake script under tmp_path."
@@ -116,7 +116,11 @@ def _no_real_agent_calls(monkeypatch):
         argv = getattr(invocation, "argv", None) or []
         cmd = argv[0] if argv else ""
         if cmd in PAID_AGENT_COMMANDS:
-            raise _real_agent_refusal(cmd)
+            # `execution.RealAgentCallRefused`, not a bare `AssertionError`:
+            # `execute_task`'s `try` block also reaches genuine internal
+            # asserts (harness/stage invariants), and only this guard's own
+            # exception may propagate as an uncaught test failure.
+            raise _real_agent_refusal(cmd, cls=execution.RealAgentCallRefused)
         return _real_run_agent_process(config, invocation, **kwargs)
 
     _real_run_agent = tdd._run_agent

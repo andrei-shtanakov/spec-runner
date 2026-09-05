@@ -215,6 +215,17 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 
+class RealAgentCallRefused(AssertionError):
+    """Raised only by the test-only guard (`conftest._no_real_agent_calls`)
+    to refuse a real, billed agent call before it happens.
+
+    A distinct type, not a bare `AssertionError`: `execute_task`'s `try` block
+    also reaches genuine internal-invariant asserts (e.g. `harness_violations`,
+    `StageReporter.enter`), and those must keep failing as an ordinary failed
+    attempt, not crash the whole run.
+    """
+
+
 def _run_agent_process(
     config: ExecutorConfig, invocation: CliInvocation
 ) -> subprocess.CompletedProcess[str]:
@@ -749,7 +760,7 @@ def execute_task(
         log_progress("Interrupted by signal", task_id)
         return False
 
-    except AssertionError:
+    except RealAgentCallRefused:
         # The test-only agent guard (`conftest._no_real_agent_calls`) raises
         # this to refuse a real, billed call before it happens. Swallowing it
         # here as a normal failed attempt — `return False`, no distinguishable
