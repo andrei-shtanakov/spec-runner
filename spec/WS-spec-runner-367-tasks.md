@@ -1,9 +1,10 @@
 ---
 spec_stage: tasks
 status: draft
+owner_role: stream-owner
 version: 1
 generated_by: fleet-agent
-generated_at: 2026-09-06T02:15:48
+generated_at: 2026-09-06T02:44:39
 source_prompt_version: ""
 validation: ""
 approved_by: ""
@@ -103,10 +104,10 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-10 (—BEH-
 
 **Traces to:** [FR-07, FR-15, FR-08, FR-09, FR-06, FR-16]
 
-### TASK-007: Evidence durable и несёт полный объявленный состав (+4 смежных BEH)
+### TASK-007: Evidence durable и несёт полный объявленный состав (+5 смежных BEH)
 P2 | TODO   Est: 0.5d
 
-Реализовать сценарии BEH-15, BEH-16, BEH-17, BEH-18, BEH-19.
+Реализовать сценарии BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-19)
 **Depends on:** [TASK-006]
 
@@ -115,8 +116,9 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-
 - [ ] реализовать BEH-16: По evidence прогон воспроизводится и сравнивается третьей стороной
 - [ ] реализовать BEH-17: Смена значения из `POLICY_KEYS` обесценивает прежнюю evidence
 - [ ] реализовать BEH-18: Смена объявленной группы обесценивает прежнюю evidence
+- [ ] реализовать BEH-18a: Evidence чужого дерева не наследуется
 - [ ] реализовать BEH-19: Green-only не притворяется красным
-- [ ] проверка группы: tests/test_verify_evidence.py (kind: contract), tests/test_verify_evidence.py (kind: integration) зелёные на BEH-15, BEH-16, BEH-17, BEH-18, BEH-19
+- [ ] проверка группы: tests/test_verify_evidence.py (kind: contract), tests/test_verify_evidence.py (kind: integration) зелёные на BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19
 
 **Traces to:** [FR-10, FR-11, FR-12, FR-21]
 
