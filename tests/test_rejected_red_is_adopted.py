@@ -459,10 +459,17 @@ class TestPreAuthoringAdoptionGuards:
         from spec_runner.tdd_runners import ADAPTERS
 
         root, _ = _repo_with_a_rejected_red(tmp_path)
-        cfg = _cfg(root, lint_command="true", lint_command_declared=True)
-        # The residue sits at THIS workstream's evidential path, so the ONLY
-        # reason to fall back to authoring is the dirty tree — otherwise the
-        # ownership gate would mask a removed dirty-tree guard (#366 r4).
+        # A declared, narrowable fix makes adoption_repairable True — without
+        # it the whole adoption block is skipped and this test would stay
+        # green with the dirty-tree guard deleted (#366 r6). The ONLY reason
+        # to fall back to authoring here is the dirty tree.
+        cfg = _cfg(
+            root,
+            lint_command="true",
+            lint_command_declared=True,
+            lint_fix_command='python3 -c "pass"',
+            lint_fix_command_declared=True,
+        )
         evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
         red = root / evidential
         red.parent.mkdir(parents=True, exist_ok=True)
@@ -510,7 +517,15 @@ class TestPreAuthoringAdoptionGuards:
 
         root, _ = _repo_with_a_rejected_red(tmp_path)
         _git(root, "commit", "-qm", "TASK-104: red for -k thing", "--amend")
-        cfg = _cfg(root, lint_command="true", lint_command_declared=True)
+        # Repairable config (#366 r6): the unparseable subject selector must
+        # be the SOLE reason adoption declines.
+        cfg = _cfg(
+            root,
+            lint_command="true",
+            lint_command_declared=True,
+            lint_fix_command='python3 -c "pass"',
+            lint_fix_command_declared=True,
+        )
 
         authored: list[str] = []
         fresh = "tests/test_fresh.py"
