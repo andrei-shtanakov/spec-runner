@@ -584,10 +584,14 @@ def run_red_phase(
                 # pre-checked: curing lint residue is exactly what the
                 # adoption exists for.
                 candidate_baseline = _parent_of(config, pending_sha) or baseline
-                if not adapter.is_discoverable(parsed_pending.path) or (
-                    _refuse_pre_existing_file(config, parsed_pending, candidate_baseline)
-                    is not None
-                ) or check_claims(config, state, resolve_namespace(config), pending_sha):
+                if (
+                    not adapter.is_discoverable(parsed_pending.path)
+                    or (
+                        _refuse_pre_existing_file(config, parsed_pending, candidate_baseline)
+                        is not None
+                    )
+                    or check_claims(config, state, resolve_namespace(config), pending_sha)
+                ):
                     parsed_pending = None
             if parsed_pending is not None:
                 _say(
@@ -1774,14 +1778,21 @@ def _pending_unregistered_red(
     # bytes no commit holds and step over the newer version (#366 review).
     if _staged(config):
         return None
-    from .git_ops import uncommitted_work_paths
+    from .git_ops import WorktreeStatusError, uncommitted_work_paths
 
     # `uncommitted_work_paths`, not an absolute `git status` judged against
     # an empty snapshot: the tree legitimately carries harness-owned
     # untracked state (spec/.gitignore, #96) that would otherwise make this
     # adoption silently inert in exactly the environment it was written for
-    # (#366 review round 2).
-    if uncommitted_work_paths(config):
+    # (#366 review round 2). The harness's OWN uncommitted status flip in
+    # tasks.md is excluded the same way hooks.py does it — counting it as
+    # "work in flight" made the adoption inert in every real run (#366
+    # round 4). Strict: an unreadable status falls back to authoring, not to
+    # "the tree was clean".
+    try:
+        if uncommitted_work_paths(config, exclude=[config.tasks_file], strict=True):
+            return None
+    except WorktreeStatusError:
         return None
     return head, selector
 

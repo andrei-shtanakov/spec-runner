@@ -455,25 +455,38 @@ class TestPreAuthoringAdoptionGuards:
         fell over with work in flight' — the authoring path commits them;
         adopting HEAD would byte-lock bytes no commit holds."""
         from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
 
         root, _ = _repo_with_a_rejected_red(tmp_path)
-        (root / "tests" / "test_thing.py").write_text(
-            "def test_thing():\n    assert False  # newer authored bytes\n"
-        )
         cfg = _cfg(root, lint_command="true", lint_command_declared=True)
+        # The residue sits at THIS workstream's evidential path, so the ONLY
+        # reason to fall back to authoring is the dirty tree — otherwise the
+        # ownership gate would mask a removed dirty-tree guard (#366 r4).
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text(FAILING)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
+        red.write_text("def test_thing():\n    assert False  # newer authored bytes\n")
 
         authored: list[str] = []
 
         def authoring(config, prompt, **kwargs):
             authored.append("author")
-            return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {evidential}::test_thing")
 
         monkeypatch.setattr(tdd, "_run_agent", authoring)
 
+        said: list[str] = []
         with ExecutorState(cfg) as state:
-            result = run_red_phase(_task(), cfg, state)
+            result = run_red_phase(_task(), cfg, state, log_progress=said.append)
 
         assert authored == ["author"], "a dirty tree must go the authoring path"
+        assert not any("adopting" in line for line in said), (
+            "adoption must not have run at all for a dirty tree"
+        )
         # Downstream this synthetic setup then honestly refuses on #252 D
         # (the file predates the task in the baseline) — the pin here is that
         # adoption did NOT happen and the hanging bytes were committed by the
@@ -482,7 +495,7 @@ class TestPreAuthoringAdoptionGuards:
         assert "already existed" in (result.detail or "")
         assert "newer authored bytes" in (
             subprocess.run(
-                ["git", "show", "HEAD:tests/test_thing.py"],
+                ["git", "show", f"HEAD:{evidential}"],
                 cwd=root,
                 capture_output=True,
                 text=True,
