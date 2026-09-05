@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: "63f3b9b280a220a0b11daa61bca7760d8ef85226"
+  charter: "44e3ed82553da0bafc86f5c952993bd394178511"
 ---
 
 # Requirements — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном

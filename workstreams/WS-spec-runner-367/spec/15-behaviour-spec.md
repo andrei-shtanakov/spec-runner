@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "9f6e7c31e613f68630ce78179cba7c6be25aa876"
+  requirements: "246c448f6d1c7dc3ce90c22a08dd9bc77affbaef"
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
