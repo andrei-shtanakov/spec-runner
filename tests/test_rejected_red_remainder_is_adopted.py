@@ -132,8 +132,9 @@ class TestRejectedRedRemainderIsAdopted:
         # Attempt 2 (the retry): nothing about the project changed, so an
         # agent asked to author the same red again would reproduce the exact
         # same rejection. The remainder already on the branch is adopted
-        # instead — no authoring call, and no repeat of the lint-fix agent
-        # round, is paid for.
+        # instead — no AUTHORING call is paid for. The BEH-07 follow-up round
+        # may still run (budget-gated, #366 review): only authoring prompts
+        # are forbidden here.
         calls: list[str] = []
 
         def _record_call(config, prompt, **kw):
@@ -144,7 +145,8 @@ class TestRejectedRedRemainderIsAdopted:
         with ExecutorState(cfg) as state:
             second = run_red_phase(_task(), cfg, state)
 
-        assert calls == [], (
+        authoring_calls = [c for c in calls if not c.startswith("# RED phase follow-up")]
+        assert authoring_calls == [], (
             "the retry paid for a new authoring call instead of adopting the unregistered "
             "remainder left by the declared linter's rejection"
         )
@@ -163,10 +165,12 @@ class TestRejectedRedRemainderIsAdopted:
 
         said: list[str] = []
 
-        def _fail_if_called(config, prompt, **kw):
-            raise AssertionError("the retry should not call the agent at all")
+        def _no_authoring(config, prompt, **kw):
+            if prompt.startswith("# RED phase follow-up"):
+                return tdd.AgentCall(text="round ran; nothing cured")
+            raise AssertionError("the retry should not pay for a new authoring call")
 
-        monkeypatch.setattr(tdd, "_run_agent", _fail_if_called)
+        monkeypatch.setattr(tdd, "_run_agent", _no_authoring)
         with ExecutorState(cfg) as state:
             run_red_phase(_task(), cfg, state, log_progress=said.append)
 

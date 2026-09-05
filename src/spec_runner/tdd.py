@@ -582,7 +582,6 @@ def run_red_phase(
                     selector=pending_selector,
                     parsed_selector=parsed_pending,
                     baseline_before=baseline,
-                    allow_lint_agent_round=True,
                     say=_say,
                 )
 
@@ -689,7 +688,6 @@ def run_red_phase(
         selector=selector,
         parsed_selector=parsed_selector,
         baseline_before=baseline,
-        allow_lint_agent_round=True,
         say=_say,
     )
 
@@ -703,7 +701,6 @@ def _judge_red_commit(
     selector: str,
     parsed_selector: Selector,
     baseline_before: str,
-    allow_lint_agent_round: bool,
     say,
 ) -> RedPhaseResult:
     """Everything from a candidate red commit to a checkpoint (or a refusal).
@@ -712,11 +709,11 @@ def _judge_red_commit(
     post-authoring `_unregistered_red` and #341 BEH-28's pre-authoring
     `_pending_unregistered_red` — since once a candidate commit and its
     selector are known, judging it is the same work regardless of how it got
-    here. `allow_lint_agent_round` is False only for BEH-28's pre-authoring
-    adoption: that candidate already went through one RED pass's lint-fix
-    round and lost, and retrying the agent round against an unchanged project
-    would just pay to relearn the same remainder (see
-    `_pending_unregistered_red`).
+    here. The BEH-07 agent round stays available on BOTH adoption routes:
+    WHY a residue was rejected is not recorded, so it may never have seen
+    lint at all (a claim violation, #261's own scenario) — denying the round
+    would deadlock such a residue on the first fix-proof finding. The round
+    is budget-gated (#213) either way.
     """
     baseline = _parent_of(config, sha) or baseline_before
 
@@ -749,8 +746,8 @@ def _judge_red_commit(
     lint_failure, tree_before_fix, lint_instrument = _lint_claimed(
         config,
         parsed_selector,
-        task=task if allow_lint_agent_round else None,
-        state=state if allow_lint_agent_round else None,
+        task=task,
+        state=state,
         raw_selector=selector,
     )
     if lint_failure:
@@ -1751,8 +1748,14 @@ def _pending_unregistered_red(
     # bytes no commit holds and step over the newer version (#366 review).
     if _staged(config):
         return None
-    changed, created, delta_error = _fix_delta(config, set())
-    if delta_error or changed or created:
+    from .git_ops import uncommitted_work_paths
+
+    # `uncommitted_work_paths`, not an absolute `git status` judged against
+    # an empty snapshot: the tree legitimately carries harness-owned
+    # untracked state (spec/.gitignore, #96) that would otherwise make this
+    # adoption silently inert in exactly the environment it was written for
+    # (#366 review round 2).
+    if uncommitted_work_paths(config):
         return None
     return head, selector
 
