@@ -141,8 +141,8 @@ class TestSecondPassDetection:
         import subprocess as _sp
 
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"],
                 returncode=1,
@@ -202,8 +202,8 @@ class TestStopReasonCapture:
         import subprocess as _sp
 
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"], returncode=1, stdout="", stderr="boom\n"
             ),

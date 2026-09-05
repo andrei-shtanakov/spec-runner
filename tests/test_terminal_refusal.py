@@ -90,7 +90,7 @@ class TestTerminalRefusalIsNotRetried:
     def test_task_blocked_spends_exactly_one_attempt(self, project, isolate, monkeypatch):
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess, "run", _agent_saying(f"TASK_BLOCKED: {REASON}\n", calls)
+            isolate, "_run_agent_process", _agent_saying(f"TASK_BLOCKED: {REASON}\n", calls)
         )
 
         cfg = _cfg(project)
@@ -107,7 +107,7 @@ class TestTerminalRefusalIsNotRetried:
     def test_reason_is_preserved_verbatim(self, project, isolate, monkeypatch):
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess, "run", _agent_saying(f"TASK_BLOCKED: {REASON}\n", calls)
+            isolate, "_run_agent_process", _agent_saying(f"TASK_BLOCKED: {REASON}\n", calls)
         )
 
         cfg = _cfg(project)
@@ -124,7 +124,7 @@ class TestTerminalRefusalIsNotRetried:
         """Guard against over-correction: a transient failure keeps its retries."""
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess, "run", _agent_saying("TASK_FAILED: flaky network\n", calls)
+            isolate, "_run_agent_process", _agent_saying("TASK_FAILED: flaky network\n", calls)
         )
 
         cfg = _cfg(project)
@@ -138,8 +138,8 @@ class TestTerminalRefusalIsNotRetried:
         stated a reason a retry cannot resolve."""
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess,
-            "run",
+            isolate,
+            "_run_agent_process",
             _agent_saying(f"TASK_FAILED: tried\nTASK_BLOCKED: {REASON}\n", calls),
         )
 
@@ -155,8 +155,8 @@ class TestTerminalRefusalIsNotRetried:
         """`TASK_COMPLETE` alongside a block must not close the task."""
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess,
-            "run",
+            isolate,
+            "_run_agent_process",
             _agent_saying(f"TASK_COMPLETE\nTASK_BLOCKED: {REASON}\n", calls),
         )
 
