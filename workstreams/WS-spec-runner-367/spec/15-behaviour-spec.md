@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "e5f6540a027a01eb500fa86aba6a6c24ec727307"
+  requirements: "33d1c3535daf77b2d51776b3da124f442363bc15"
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
@@ -192,8 +192,12 @@ upstream_hashes:
   `RunOutcome` и `SelectionProof` по отдельным селекторам.
 - **When** система выносит исход.
 - **Then** `green` записывается тогда и только тогда, когда для **каждого**
-  объявленного селектора одновременно верно `RunOutcome.TESTS_PASSED` и
-  `SelectionProof.PROVEN`.
+  объявленного селектора одновременно верны ТРИ факта:
+  `RunOutcome.TESTS_PASSED`, `SelectionProof.PROVEN` и доказанный факт
+  ИСПОЛНЕНИЯ проверки (skipped/deselected/xfail — не исполнение; класс
+  сигнала `_EXECUTED_WORDS`); пропущенный на дефолтном `-v` test_command
+  селектор (exit 0, node id в выводе) зелёным не является — исход
+  `instrument-error` (FR-09).
 - **And** агрегатного «прогон в целом прошёл» недостаточно: обязательство
   по-селекторное, потому что `prove_selected` отвечает про запрошенное, а не про
   набор.
