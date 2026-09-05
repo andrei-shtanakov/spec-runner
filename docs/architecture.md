@@ -292,9 +292,10 @@ immediately: spec-runner now attempts a bounded repair first —
    `lint_fix_command` itself always carries a Python-shaped default, but that
    default is not itself a declaration, so "declared a linter" does not imply
    "declared a fix invocation"), narrowed to the claimed file's paths;
-2. if a finding survives the mechanical fix, exactly **one cold agent round**
-   in the same session, carrying the remaining findings, the red file and the
-   selector — never a loop, and never a second agent round.
+2. if a finding survives the mechanical fix, exactly **one cold agent
+   round** — a fresh, session-less call, carrying the remaining findings, the
+   red file and the selector, since spec-runner keeps no session to resume —
+   never a loop, and never a second agent round.
 
 Both steps are skipped, with the refusal naming the specific reason, when
 `lint_command` is a **composite lint_command** (more than one command

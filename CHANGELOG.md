@@ -35,7 +35,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
   first runs the project's separately **declared** fix invocation
   (`commands.lint_fix` / `lint_fix_command_declared`) narrowed to the claimed
   file, and if a finding survives that, hands the remainder to one cold agent
-  round in the same session — never more than that one round. **Migration
+  round — a fresh, session-less call, not a resumed one, since spec-runner
+  keeps no session to resume — never more than that one round. **Migration
   note:** the machine-fix step only fires for a project that has declared a
   fix invocation via `commands.lint_fix`; a project that already declared
   `commands.lint` but never declared `commands.lint_fix` sees no behaviour
