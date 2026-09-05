@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "0d17366e2962bf1f1fa13b854a1b6d9ea6917678"
+  requirements: "a0155e918456dbea33d5c983f5812e26dc2f5a8a"
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
@@ -382,13 +382,15 @@ upstream_hashes:
 `traces: [FR-16]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_outcomes.py`
-- **Given** все комбинации `RunOutcome` × `SelectionProof`, включая
+- **Given** все комбинации `RunOutcome` × `SelectionProof` × `ExecutionProof` (третья ось FR-08: executed / skipped-deselected / undetermined), включая
   `RunOutcome.UNRECOGNIZED`, ошибку сборки/коллекции, падение и таймаут самого
   раннера, отсутствующую evidence и недостижимое окружение.
 - **When** система относит каждую комбинацию к исходу.
-- **Then** каждая комбинация ведёт ровно к одному из трёх исходов, и ни одна не
-  приводит к неопределённому поведению: всё, что не доказано как `green` и не
-  доказано как `test-failure`, есть `instrument-error`.
+- **Then** каждая комбинация ТРЁХ осей ведёт ровно к одному из трёх исходов,
+  и ни одна не приводит к неопределённому поведению: всё, что не доказано как
+  `green` и не доказано как `test-failure`, есть `instrument-error` (пара
+  TESTS_PASSED×PROVEN без доказанного исполнения — instrument-error, не
+  green).
 - **And** отображение исчерпывающе по построению: новое значение исхода не может
   появиться без явного отнесения к одной из трёх ветвей — тест проходит по всем
   комбинациям, а не по перечисленным вручную.
@@ -448,7 +450,7 @@ upstream_hashes:
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_claims.py`
 - **Given** verify-first задача, дошедшая до терминального перехода в DONE, и
-  соседняя задача другого workstream'а, которой нужен файл из той же группы.
+  соседняя соседняя задача ТОГО ЖЕ workstream'а (тот же namespace), которой нужен файл из той же группы.
 - **When** переход в DONE выполнен.
 - **Then** claim'ы показываются освобождёнными существующим механизмом
   (`release_claims`, #260).
@@ -456,6 +458,7 @@ upstream_hashes:
   облагает налогом соседние workstream'ы после своего завершения.
 - **And** до DONE тот же файл соседу по-прежнему заморожен — релиз происходит на
   терминальном переходе, а не раньше.
+- **And** отдельно и честно: claim'ы namespace-scoped (`WHERE namespace = ?`) — задача ЧУЖОГО workstream'а не блокируется этим файлом ни до, ни после DONE, и расширять видимость claim'ов на все namespace запрещено (это была бы регрессия #260 в масштабе репозитория).
 
 #### BEH-28: Waiver остаётся отдельным инструментом авторитета
 `traces: [FR-20]`
@@ -546,7 +549,7 @@ upstream_hashes:
 
 - **checked_by**: `status: planned` `kind: e2e` `owner: qa` `target: tests/test_verify_first_cost.py`
 - **Given** форма WS-341, воспроизведённая в фикстурном репозитории: класс
-  проверочных задач, за который сегодня заплачено $10.26 за пять
+  проверочных задач, за устранимый подкласс которого сегодня заплачено $5.80 за два
   непроизводительных RED-зондов.
 - **When** тот же класс проходит green-путём.
 - **Then** платных агентских вызовов RED-фазы не совершается, и стоимость
@@ -583,6 +586,7 @@ upstream_hashes:
 | BEH-16 | FR-10 |
 | BEH-17 | FR-11 |
 | BEH-18 | FR-11 |
+| BEH-18a | FR-11 |
 | BEH-19 | FR-12, FR-21 |
 | BEH-20 | FR-13, FR-05 |
 | BEH-21 | FR-14 |
