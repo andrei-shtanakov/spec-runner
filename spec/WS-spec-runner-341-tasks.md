@@ -251,7 +251,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-23
 **Traces to:** [FR-01], [FR-06]
 
 ### TASK-015: Регрессии обоих боевых сценариев не вызывают реального агента
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-24.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-24
