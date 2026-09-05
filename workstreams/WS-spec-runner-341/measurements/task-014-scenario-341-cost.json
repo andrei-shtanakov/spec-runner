@@ -1,0 +1,13 @@
+{
+  "task_id": "TASK-014",
+  "scenario": "spec-runner#341",
+  "elapsed_seconds": 0.6488880000542849,
+  "cost_usd": 0.05,
+  "paid_call_count": 1,
+  "checkpoint_reached": true,
+  "baseline": {
+    "elapsed_seconds": 330.0,
+    "cost_usd": 0.88,
+    "paid_call_count": 1
+  }
+}
