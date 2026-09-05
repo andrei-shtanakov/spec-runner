@@ -537,6 +537,46 @@ def run_red_phase(
         _say(f"\u267b\ufe0f  RED: reusing the confirmed red {reusable.checkpoint_id}")
         return RedPhaseResult(RedOutcome.EXPECTED_FAIL, "reused a confirmed red", reusable)
 
+    # #341 BEH-28: a red this task already committed and a DECLARED linter
+    # rejected \u2014 the mechanical fix ran and did not clear it, no checkpoint
+    # was recorded, the attempt failed. Retrying against an unchanged project
+    # is a foregone conclusion (same lint command, same fix command, same
+    # file), so the residue is adopted here, before a fresh authoring call is
+    # even considered \u2014 not after one runs and reproduces no diff, which is
+    # what #261's `_unregistered_red` below still does for every other
+    # rejection reason. Scoped to a declared, non-empty linter only: without
+    # one, the previous rejection could be for a reason the project HAS
+    # changed since (a released claim, #261's own scenario), and skipping
+    # authoring on that guess would be wrong.
+    if config.lint_command and config.lint_command_declared:
+        pending = _pending_unregistered_red(config, state, task)
+        if pending is not None:
+            pending_sha, pending_selector = pending
+            adapter = resolve_adapter(config)
+            if adapter is None:
+                return RedPhaseResult(
+                    RedOutcome.UNVERIFIABLE,
+                    f"no runner adapter for test_command {config.test_command!r}",
+                )
+            parsed_pending = adapter.parse_selector(pending_selector)
+            if isinstance(parsed_pending, SelectorRefusal):
+                return RedPhaseResult(RedOutcome.UNVERIFIABLE, parsed_pending.message)
+            _say(
+                f"\u267b\ufe0f  RED: adopting the unregistered red commit "
+                f"{pending_sha[:12]} without a new authoring call"
+            )
+            return _judge_red_commit(
+                config,
+                state,
+                task,
+                sha=pending_sha,
+                selector=pending_selector,
+                parsed_selector=parsed_pending,
+                baseline_before=baseline,
+                allow_lint_agent_round=False,
+                say=_say,
+            )
+
     # #213: the last point at which refusing costs nothing. A reused red got
     # this far for free, so the guard sits here and not at the top of the
     # phase — a task whose red is already confirmed must not be stopped for a
@@ -631,7 +671,45 @@ def run_red_phase(
                 "commit for this task to replay",
             )
         _say(f"♻️  RED: adopting the unregistered red commit {sha[:12]}")
-    baseline = _parent_of(config, sha) or baseline
+
+    return _judge_red_commit(
+        config,
+        state,
+        task,
+        sha=sha,
+        selector=selector,
+        parsed_selector=parsed_selector,
+        baseline_before=baseline,
+        allow_lint_agent_round=True,
+        say=_say,
+    )
+
+
+def _judge_red_commit(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task,
+    *,
+    sha: str,
+    selector: str,
+    parsed_selector: Selector,
+    baseline_before: str,
+    allow_lint_agent_round: bool,
+    say,
+) -> RedPhaseResult:
+    """Everything from a candidate red commit to a checkpoint (or a refusal).
+
+    Shared by the ordinary authoring path and both adoption routes — #261's
+    post-authoring `_unregistered_red` and #341 BEH-28's pre-authoring
+    `_pending_unregistered_red` — since once a candidate commit and its
+    selector are known, judging it is the same work regardless of how it got
+    here. `allow_lint_agent_round` is False only for BEH-28's pre-authoring
+    adoption: that candidate already went through one RED pass's lint-fix
+    round and lost, and retrying the agent round against an unchanged project
+    would just pay to relearn the same remainder (see
+    `_pending_unregistered_red`).
+    """
+    baseline = _parent_of(config, sha) or baseline_before
 
     # #252 D: the evidential test lives in a file of its own. A claim freezes
     # the whole file, so a red written into a file the project already had
@@ -660,7 +738,11 @@ def run_red_phase(
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
     lint_failure, tree_before_fix, lint_instrument = _lint_claimed(
-        config, parsed_selector, task=task, state=state, raw_selector=selector
+        config,
+        parsed_selector,
+        task=task if allow_lint_agent_round else None,
+        state=state if allow_lint_agent_round else None,
+        raw_selector=selector,
     )
     if lint_failure:
         if tree_before_fix is not None:
@@ -687,7 +769,7 @@ def run_red_phase(
             )
 
     _phase(state, config, task, TddPhase.RED_VERIFYING, selector)
-    _say(f"\U0001f50d RED: replaying {selector}")
+    say(f"\U0001f50d RED: replaying {selector}")
     verification = verify_red(config, sha=sha, selector=parsed_selector, baseline_sha=baseline)
     checkpoint = RedCheckpoint(
         task_id=task.id,
@@ -1600,17 +1682,59 @@ def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, select
     head = _head(config)
     if not head:
         return ""
-    subject = subprocess.run(
-        ["git", "log", "-1", "--format=%s", head],
-        cwd=config.project_root,
-        capture_output=True,
-        text=True,
-    )
-    if subject.returncode != 0 or subject.stdout.strip() != f"{task.id}: red for {selector}":
+    subject = _commit_subject(config, head)
+    if subject is None or subject != f"{task.id}: red for {selector}":
         return ""
     if state.checkpoint_exists_for_commit(resolve_namespace(config), head):
         return ""
     return head
+
+
+def _commit_subject(config: ExecutorConfig, sha: str) -> str | None:
+    """``sha``'s commit subject, or None when git could not read it."""
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%s", sha],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _pending_unregistered_red(
+    config: ExecutorConfig, state: ExecutorState, task
+) -> tuple[str, str] | None:
+    """A red this task already committed and never registered, found BEFORE
+    paying for a fresh authoring call (#341 BEH-28).
+
+    `_unregistered_red` (#261) adopts the same residue, but only after an
+    authoring call already ran, by matching HEAD's subject against the
+    selector the agent *just* reported. Before that call there is no reported
+    selector to match against — so it is read back out of HEAD's own subject
+    instead: `_commit_red` writes exactly ``"{task.id}: red for {selector}"``,
+    the only place that subject is ever produced, so recovering the selector
+    from it is not a guess.
+
+    Same two conditions as #261, for the same reason: the commit must carry
+    this task's own red-commit subject, and no checkpoint may already exist
+    for it in any status — adopting a registered or unrelated commit would put
+    a checkpoint on a tree nobody proposed.
+    """
+    head = _head(config)
+    if not head:
+        return None
+    subject = _commit_subject(config, head)
+    if subject is None:
+        return None
+    prefix = f"{task.id}: red for "
+    if not subject.startswith(prefix):
+        return None
+    selector = subject[len(prefix) :]
+    if not selector:
+        return None
+    if state.checkpoint_exists_for_commit(resolve_namespace(config), head):
+        return None
+    return head, selector
 
 
 def _staged(config: ExecutorConfig) -> bool:

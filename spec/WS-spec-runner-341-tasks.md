@@ -292,15 +292,15 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-27
 **Traces to:** [FR-05], [FR-08], [FR-13]
 
 ### TASK-018: Отвергнутый после починки red не голодает следующую попытку
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-28.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-28
 **Depends on:** [TASK-008]
 
 **Checklist:**
-- [ ] реализовать BEH-28: Отвергнутый после починки red не голодает следующую попытку
-- [ ] проверка группы: tests/test_rejected_red_remainder_is_adopted.py (kind: integration) зелёные на BEH-28
+- [x] реализовать BEH-28: Отвергнутый после починки red не голодает следующую попытку
+- [x] проверка группы: tests/test_rejected_red_remainder_is_adopted.py (kind: integration) зелёные на BEH-28
 
 **Traces to:** [FR-03], [FR-01]
 
