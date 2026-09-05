@@ -251,15 +251,15 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-23
 **Traces to:** [FR-01], [FR-06]
 
 ### TASK-015: Регрессии обоих боевых сценариев не вызывают реального агента
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-24.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-24
 **Depends on:** [TASK-014], [TASK-013]
 
 **Checklist:**
-- [ ] реализовать BEH-24: Регрессии обоих боевых сценариев не вызывают реального агента
-- [ ] проверка группы: tests/test_harness_guards.py (kind: contract) зелёные на BEH-24
+- [x] реализовать BEH-24: Регрессии обоих боевых сценариев не вызывают реального агента
+- [x] проверка группы: tests/test_harness_guards.py (kind: contract) зелёные на BEH-24
 
 **Traces to:** [FR-16], [FR-01]
 
