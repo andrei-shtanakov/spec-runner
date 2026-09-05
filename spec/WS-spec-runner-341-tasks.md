@@ -264,7 +264,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-24
 **Traces to:** [FR-16], [FR-01]
 
 ### TASK-016: Документация и CHANGELOG объявляют новое имя и новое поведение
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-26.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-26
