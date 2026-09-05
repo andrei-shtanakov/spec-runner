@@ -277,15 +277,17 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-26
 **Traces to:** [FR-09], [FR-10]
 
 ### TASK-017: Границы существующих гарантий не сдвигаются
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-27.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-27
 **Depends on:** [TASK-016]
+Закрыто tdd-waiver'ом по батч-санкции (guard-задача: границы держатся,
+композитные пины зелёными; spec/.tdd-evidence/waivers/c560727b864370c7/TASK-017.json).
 
 **Checklist:**
-- [ ] реализовать BEH-27: Границы существующих гарантий не сдвигаются
-- [ ] проверка группы: tests/test_red_gate.py (kind: contract) зелёные на BEH-27
+- [x] реализовать BEH-27: Границы существующих гарантий не сдвигаются
+- [x] проверка группы: tests/test_red_gate.py (kind: contract) зелёные на BEH-27
 
 **Traces to:** [FR-05], [FR-08], [FR-13]
 
