@@ -4,7 +4,7 @@ status: draft
 owner_role: stream-owner
 version: 1
 generated_by: fleet-agent
-generated_at: 2026-09-06T02:44:39
+generated_at: 2026-09-06T03:08:55
 source_prompt_version: ""
 validation: ""
 approved_by: ""
@@ -42,7 +42,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-02 (—BEH-
 - [ ] реализовать BEH-03: Группа не выводится ни из чего
 - [ ] проверка группы: tests/test_verify_first_declaration.py (kind: contract), tests/test_verify_first_declaration.py (kind: integration) зелёные на BEH-02, BEH-03
 
-**Traces to:** [FR-02, FR-03]
+**Traces to:** [FR-02], [FR-03]
 
 ### TASK-003: Неверное объявление отказывает до исполнения — в `validate` и на старте (+1 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -56,7 +56,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-04 (—BEH-
 - [ ] реализовать BEH-05: Отказ на селекторе воспроизводит формулировку адаптера и называет ожидаемую форму
 - [ ] проверка группы: tests/test_verify_first_validate.py (kind: integration) зелёные на BEH-04, BEH-05
 
-**Traces to:** [FR-03, FR-24]
+**Traces to:** [FR-03], [FR-24]
 
 ### TASK-004: Задача, не объявившая verify-first, ведёт себя в точности как сегодня
 P2 | TODO   Est: 0.5d
@@ -84,7 +84,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-07 (—BEH-
 - [ ] реализовать BEH-09: Вердикт относится к названному коммиту, а не к рабочему дереву
 - [ ] проверка группы: tests/test_verify_run_order.py (kind: integration) зелёные на BEH-07, BEH-08, BEH-09
 
-**Traces to:** [FR-05, FR-06, FR-07]
+**Traces to:** [FR-05], [FR-06], [FR-07]
 
 ### TASK-006: Неразрешимый адаптер и композитная `test_command` — отказ, а не догадка (+5 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -102,7 +102,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-10 (—BEH-
 - [ ] реализовать BEH-23: Три исхода и ни одного молчаливого четвёртого
 - [ ] проверка группы: tests/test_verify_outcomes.py (kind: integration), tests/test_verify_outcomes.py (kind: contract) зелёные на BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-23
 
-**Traces to:** [FR-07, FR-15, FR-08, FR-09, FR-06, FR-16]
+**Traces to:** [FR-07], [FR-15], [FR-08], [FR-09], [FR-06], [FR-16]
 
 ### TASK-007: Evidence durable и несёт полный объявленный состав (+5 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -120,7 +120,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-
 - [ ] реализовать BEH-19: Green-only не притворяется красным
 - [ ] проверка группы: tests/test_verify_evidence.py (kind: contract), tests/test_verify_evidence.py (kind: integration) зелёные на BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19
 
-**Traces to:** [FR-10, FR-11, FR-12, FR-21]
+**Traces to:** [FR-10], [FR-11], [FR-12], [FR-21]
 
 ### TASK-008: `green` доводит задачу до DONE без покупки красного (+2 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -135,7 +135,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-20 (—BEH-
 - [ ] реализовать BEH-22: `instrument-error` останавливает задачу fail-closed
 - [ ] проверка группы: tests/test_verify_branching.py (kind: e2e), tests/test_verify_branching.py (kind: integration) зелёные на BEH-20, BEH-21, BEH-22
 
-**Traces to:** [FR-13, FR-05, FR-14, FR-15]
+**Traces to:** [FR-13], [FR-05], [FR-14], [FR-15]
 
 ### TASK-009: Третий режим не читается как «гарантий нет» (+3 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -151,7 +151,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-24 (—BEH-
 - [ ] реализовать BEH-29: Lifecycle-переходы не ослабляются
 - [ ] проверка группы: tests/test_verify_gates.py (kind: contract), tests/test_verify_gates.py (kind: integration) зелёные на BEH-24, BEH-25, BEH-28, BEH-29
 
-**Traces to:** [FR-17, FR-18, FR-20, FR-21]
+**Traces to:** [FR-17], [FR-18], [FR-20], [FR-21]
 
 ### TASK-010: Файлы объявленной группы заморожены на время задачи (+1 смежных BEH)
 P2 | TODO   Est: 0.5d
@@ -179,7 +179,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-30 (—BEH-
 - [ ] реализовать BEH-31: Evidence и путь задачи предъявляются через CLI
 - [ ] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-30, BEH-31
 
-**Traces to:** [FR-22, FR-23, FR-12]
+**Traces to:** [FR-22], [FR-23], [FR-12]
 
 ### TASK-012: Внешние контракты меняются только аддитивно
 P2 | TODO   Est: 0.5d
@@ -205,7 +205,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-33
 - [ ] реализовать BEH-33: Документация и CHANGELOG объявляют режим и его границы
 - [ ] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-33
 
-**Traces to:** [FR-11, FR-01]
+**Traces to:** [FR-11], [FR-01]
 
 ### TASK-014: Стоимость класса измерена, и ни один тест не вызывает реального агента
 P2 | TODO   Est: 0.5d
@@ -218,5 +218,5 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-34
 - [ ] реализовать BEH-34: Стоимость класса измерена, и ни один тест не вызывает реального агента
 - [ ] проверка группы: tests/test_verify_first_cost.py (kind: e2e) зелёные на BEH-34
 
-**Traces to:** [FR-13, FR-05]
+**Traces to:** [FR-13], [FR-05]
 
