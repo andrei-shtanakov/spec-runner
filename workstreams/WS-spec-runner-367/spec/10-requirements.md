@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: "42fae17a17903a61dbfc3accd7c18c09c88703b6"
+  charter: "63f3b9b280a220a0b11daa61bca7760d8ef85226"
 ---
 
 # Requirements — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
@@ -561,10 +561,16 @@ GREEN у неё законен по verify-evidence; для `tdd`-задачи �
 Живой прогон представлен собственной стадией в `StageReporter` (`STAGES`), так
 что она видна в прогрессе и записывается как `error_stage` при отказе: оператор
 обязан отличать «упало на verify-прогоне» от «упало на тестах post-done» —
-это разные вопросы к разным деревьям.
+это разные вопросы к разным деревьям. Затрагиваются ОБА обязательных сайта:
+`stages.STAGES` (имя стадии) и парный `phases.ALLOWED_OUTCOMES` — assert на
+импорте `spec_runner.phases` требует, чтобы каждая стадия объявила свои
+допустимые исходы, иначе ломается импорт пакета целиком. Допустимые исходы
+стадии: `PASS` (green), `ERROR` (test-failure и instrument-error), `SKIPPED`
+(задача не verify-first).
 
 *Критерий приёмки*: стадия мирроризуется в прогресс и попадает в `error_stage`
-при `instrument-error`.
+при `instrument-error`; импорт `spec_runner.phases` зелёный (оба сайта
+согласованы), `check_outcome` принимает объявленные исходы стадии.
 
 #### FR-23: Evidence и путь задачи предъявляются через CLI
 **Priority**: Must
