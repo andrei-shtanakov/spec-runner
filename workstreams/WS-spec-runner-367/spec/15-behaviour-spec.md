@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "33d1c3535daf77b2d51776b3da124f442363bc15"
+  requirements: "0d17366e2962bf1f1fa13b854a1b6d9ea6917678"
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
@@ -90,7 +90,7 @@ upstream_hashes:
 - **Given** набор дефектных объявлений, каждое в отдельной задаче: неизвестное
   значение режима; verify-first без строки `**Verifies:**`; пустая объявленная
   группа; селектор, который адаптер отказывается принять (`SelectorRefusal`);
-  объявленная группа у задачи, не объявившей verify-first.
+  объявленная группа у задачи, чей резолвленный режим — не verify-first (группа без **Mode:** при проектном verify_first законна).
 - **When** выполняется `spec-runner validate` и когда выполняется старт CLI.
 - **Then** каждый случай отказывает на обеих поверхностях, называя задачу и
   конкретное нарушение.
@@ -184,7 +184,7 @@ upstream_hashes:
 - **And** правило то же, которым `verify_red` уже отказывается судить
   неизмеренный раннер, — сузить `a && b && c` до селектора нельзя, не угадывая.
 
-#### BEH-11: `green` требует двух фактов по каждому объявленному селектору
+#### BEH-11: `green` требует трёх фактов по каждому объявленному селектору
 `traces: [FR-08]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_outcomes.py`
@@ -299,6 +299,18 @@ upstream_hashes:
 - **And** правило держится при любом ответе на Q-07: какая бы форма
   переиспользования evidence ни была выбрана, переиспользуемая запись обязана
   предъявлять тот же состав вопроса.
+
+#### BEH-18a: Evidence чужого дерева не наследуется
+`traces: [FR-11]`
+
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_evidence.py`
+- **Given** зелёная verify-evidence записана на коммите X; кандидат Y от X
+  не происходит (ветка пересоздана, история переписана).
+- **When** задача продолжает исполнение на Y.
+- **Then** evidence не наследуется: выполняется новый живой прогон.
+- **And** недоказуемая ancestry (git не может ответить) даёт
+  `instrument-error` классом `AncestryUnknown` — тем же правилом, что
+  `_red_gate` для красного чекпойнта.
 
 #### BEH-19: Green-only не притворяется красным
 `traces: [FR-12, FR-21]`
@@ -602,7 +614,7 @@ upstream_hashes:
 | FR-08 | BEH-11, BEH-12 |
 | FR-09 | BEH-12, BEH-13 |
 | FR-10 | BEH-15, BEH-16 |
-| FR-11 | BEH-17, BEH-18, BEH-33 |
+| FR-11 | BEH-17, BEH-18, BEH-18a, BEH-33 |
 | FR-12 | BEH-19, BEH-31 |
 | FR-13 | BEH-20, BEH-34 |
 | FR-14 | BEH-21 |
