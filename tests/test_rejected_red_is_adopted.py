@@ -383,3 +383,202 @@ class TestTheOrdinaryPathIsUnchanged:
         assert called == [], "a reusable checkpoint must not pay for an authoring call"
         assert result.checkpoint is not None
         assert result.checkpoint.checkpoint_id == checkpoint.checkpoint_id
+
+
+@pytest.mark.slow
+class TestPreAuthoringAdoptionGuards:
+    """#366 review: the pre-authoring adoption (#341 BEH-28) must not
+    deadlock a residue that never reached lint, must not adopt over
+    un-committed work, and must fall back to authoring on an unparseable
+    selector."""
+
+    def _lint_scripts(self, tmp_path):
+        import shlex
+        import sys
+
+        scripts = tmp_path / "scripts"
+        scripts.mkdir(exist_ok=True)
+        check = scripts / "check.py"
+        check.write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "bad = any('AGENTWORD' in Path(p).read_text() for p in sys.argv[1:])\n"
+            "sys.exit(1 if bad else 0)\n"
+        )
+        fix = scripts / "fix.py"
+        fix.write_text("import sys\nsys.exit(0)\n")  # cures nothing
+        q = shlex.quote
+        return f"{q(sys.executable)} {q(str(check))}", f"{q(sys.executable)} {q(str(fix))}"
+
+    def test_the_agent_round_still_runs_for_an_adopted_residue(self, tmp_path, monkeypatch):
+        """Fix 1: a residue may have been rejected BEFORE lint ever ran; the
+        BEH-07 round must stay reachable, or the first fix-proof finding
+        deadlocks the task forever."""
+        from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root, _ = _repo_with_a_rejected_red(tmp_path)
+        check_cmd, fix_cmd = self._lint_scripts(tmp_path)
+        cfg = _cfg(
+            root,
+            lint_command=check_cmd,
+            lint_command_declared=True,
+            lint_fix_command=fix_cmd,
+            lint_fix_command_declared=True,
+        )
+        # The residue must sit at THIS workstream's evidential path — the
+        # ownership gate (#366 r3) sends anything else to the authoring path.
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text("def test_thing():  # AGENTWORD\n    assert False\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
+
+        rounds: list[str] = []
+
+        def curing_round(config, prompt, **kwargs):
+            rounds.append("round")
+            red.write_text(red.read_text().replace("AGENTWORD", ""))
+            return tdd.AgentCall(text="done")
+
+        monkeypatch.setattr(tdd, "_run_agent", curing_round)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert rounds == ["round"], "the BEH-07 round must run for the adoption"
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_a_dirty_tree_falls_back_to_authoring(self, tmp_path, monkeypatch):
+        """Fix 2: newer un-committed bytes over the residue mean 'the commit
+        fell over with work in flight' — the authoring path commits them;
+        adopting HEAD would byte-lock bytes no commit holds."""
+        from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root, _ = _repo_with_a_rejected_red(tmp_path)
+        # A declared, narrowable fix makes adoption_repairable True — without
+        # it the whole adoption block is skipped and this test would stay
+        # green with the dirty-tree guard deleted (#366 r6). The ONLY reason
+        # to fall back to authoring here is the dirty tree.
+        cfg = _cfg(
+            root,
+            lint_command="true",
+            lint_command_declared=True,
+            lint_fix_command='python3 -c "pass"',
+            lint_fix_command_declared=True,
+        )
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text(FAILING)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
+        red.write_text("def test_thing():\n    assert False  # newer authored bytes\n")
+
+        authored: list[str] = []
+
+        def authoring(config, prompt, **kwargs):
+            authored.append("author")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {evidential}::test_thing")
+
+        monkeypatch.setattr(tdd, "_run_agent", authoring)
+
+        said: list[str] = []
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state, log_progress=said.append)
+
+        assert authored == ["author"], "a dirty tree must go the authoring path"
+        assert not any("adopting" in line for line in said), (
+            "adoption must not have run at all for a dirty tree"
+        )
+        # Downstream this synthetic setup then honestly refuses on #252 D
+        # (the file predates the task in the baseline) — the pin here is that
+        # adoption did NOT happen and the hanging bytes were committed by the
+        # authoring path, not byte-locked from the working tree.
+        assert result.checkpoint is None
+        assert "already existed" in (result.detail or "")
+        assert "newer authored bytes" in (
+            subprocess.run(
+                ["git", "show", f"HEAD:{evidential}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+
+    def test_an_unparseable_residue_selector_falls_back_to_authoring(self, tmp_path, monkeypatch):
+        """Fix 3: a residue whose subject selector the current adapter
+        refuses is not adoptable — refusing outright would block the task on
+        every retry, since HEAD never changes."""
+        from spec_runner import tdd
+
+        root, _ = _repo_with_a_rejected_red(tmp_path)
+        _git(root, "commit", "-qm", "TASK-104: red for -k thing", "--amend")
+        # Repairable config (#366 r6): the unparseable subject selector must
+        # be the SOLE reason adoption declines.
+        cfg = _cfg(
+            root,
+            lint_command="true",
+            lint_command_declared=True,
+            lint_fix_command='python3 -c "pass"',
+            lint_fix_command_declared=True,
+        )
+
+        authored: list[str] = []
+        fresh = "tests/test_fresh.py"
+
+        def authoring(config, prompt, **kwargs):
+            authored.append("author")
+            (root / fresh).write_text("def test_fresh():\n    assert False\n")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {fresh}::test_fresh")
+
+        monkeypatch.setattr(tdd, "_run_agent", authoring)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert authored == ["author"], "an unparseable residue must not deadlock"
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_declared_lint_without_declared_fix_still_reauthors(self, tmp_path, monkeypatch):
+        """#366 round 5: with a declared linter but NO declared fix (BEH-29's
+        configuration) no repair path exists for an adopted residue — the
+        retry must re-author, or the identical refusal repeats forever."""
+        from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root, _ = _repo_with_a_rejected_red(tmp_path)
+        cfg = _cfg(
+            root,
+            lint_command='python3 -c "raise SystemExit(1)"',
+            lint_command_declared=True,
+            # lint_fix_command left at the undeclared default on purpose.
+        )
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text(FAILING)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
+
+        authored: list[str] = []
+
+        def authoring(config, prompt, **kwargs):
+            authored.append("author")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {evidential}::test_thing")
+
+        monkeypatch.setattr(tdd, "_run_agent", authoring)
+
+        said: list[str] = []
+        with ExecutorState(cfg) as state:
+            run_red_phase(_task(), cfg, state, log_progress=said.append)
+
+        # The authoring call is the whole point: the PRE-authoring adoption
+        # deferred. The POST-authoring #261 adoption may then legitimately
+        # pick the residue up (the stub changed nothing) — that path always
+        # existed and is not what this test guards.
+        assert authored == ["author"], "no repair path — the retry must pay for authoring"
