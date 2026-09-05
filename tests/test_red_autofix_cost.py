@@ -107,10 +107,14 @@ def _scripted_red_authoring_call(monkeypatch, *, cost: float) -> None:
     monkeypatch.setattr(tdd, "_run_agent", fake)
 
 
+@pytest.fixture
+def update_golden(request) -> bool:
+    return bool(request.config.getoption("--update-golden"))
+
+
 class TestScenario341CostMeasuredLiveUnderPytest:
-    @pytest.mark.slow
     def test_the_measurement_is_recorded_and_compares_favorably_to_the_baseline(
-        self, tmp_path_factory, monkeypatch
+        self, tmp_path_factory, monkeypatch, update_golden
     ):
         root = _repo(tmp_path_factory.mktemp("proj"))
         scripts = tmp_path_factory.mktemp("scripts")
@@ -156,39 +160,50 @@ class TestScenario341CostMeasuredLiveUnderPytest:
         # baseline (5.5 minutes / one burned attempt on TASK-004; $0.88 on
         # TASK-001).
         assert measurement.elapsed_seconds < tdd.BASELINE_341.elapsed_seconds
-        assert measurement.cost_usd is not None
-        assert measurement.cost_usd < tdd.BASELINE_341.cost_usd
+        # The cost must be what actually round-tripped the ledger — the
+        # scripted call's 0.05 — not merely "less than baseline": task_cost
+        # returns 0.0 (never None) on broken accounting, and 0.0 < 0.88 would
+        # publish a bookkeeping failure as record savings (#362 review).
+        assert measurement.cost_usd == pytest.approx(0.05)
+        assert 0 < measurement.cost_usd < tdd.BASELINE_341.cost_usd
 
         # And: the measurement — its own actual numbers, not only the
         # baseline's constants — is recorded into the workstream's tracked
-        # measurements artifact. A separate, later concern from the
-        # property-only red: a static file cannot prove a live run happened,
-        # so only this green test writes it.
-        MEASUREMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        ARTIFACT_PATH.write_text(
-            json.dumps(
-                {
-                    "task_id": "TASK-014",
-                    "scenario": "spec-runner#341",
-                    "elapsed_seconds": measurement.elapsed_seconds,
-                    "cost_usd": measurement.cost_usd,
-                    "paid_call_count": measurement.paid_call_count,
-                    "checkpoint_reached": measurement.checkpoint_reached,
-                    "baseline": {
-                        "elapsed_seconds": tdd.BASELINE_341.elapsed_seconds,
-                        "cost_usd": tdd.BASELINE_341.cost_usd,
-                        "paid_call_count": tdd.BASELINE_341.paid_call_count,
+        # measurements artifact. Writing a tracked file from a test is
+        # opt-in by repo convention (--update-golden, conftest); the normal
+        # run READS the committed artifact and checks it instead of
+        # regenerating it (a read-back of one's own write proves nothing).
+        if update_golden:
+            MEASUREMENTS_DIR.mkdir(parents=True, exist_ok=True)
+            ARTIFACT_PATH.write_text(
+                json.dumps(
+                    {
+                        "task_id": "TASK-014",
+                        "scenario": "spec-runner#341",
+                        "elapsed_seconds": measurement.elapsed_seconds,
+                        "cost_usd": measurement.cost_usd,
+                        "paid_call_count": measurement.paid_call_count,
+                        "checkpoint_reached": measurement.checkpoint_reached,
+                        "baseline": {
+                            "elapsed_seconds": tdd.BASELINE_341.elapsed_seconds,
+                            "cost_usd": tdd.BASELINE_341.cost_usd,
+                            "paid_call_count": tdd.BASELINE_341.paid_call_count,
+                        },
                     },
-                },
-                indent=2,
+                    indent=2,
+                )
+                + "\n"
             )
-            + "\n"
-        )
 
+        # The COMMITTED artifact (a past real run's numbers) is checked for
+        # schema and baseline consistency; its measured values must be real
+        # positives that beat the baseline. Live-elapsed equality is not
+        # asserted — wall-clock varies run to run by design.
         recorded = json.loads(ARTIFACT_PATH.read_text())
-        assert recorded["elapsed_seconds"] == measurement.elapsed_seconds
-        assert recorded["cost_usd"] == measurement.cost_usd
-        assert recorded["paid_call_count"] == measurement.paid_call_count
+        assert recorded["task_id"] == "TASK-014"
         assert recorded["checkpoint_reached"] is True
+        assert recorded["paid_call_count"] == 1
+        assert 0 < recorded["cost_usd"] < tdd.BASELINE_341.cost_usd
+        assert 0 < recorded["elapsed_seconds"] < tdd.BASELINE_341.elapsed_seconds
         assert recorded["baseline"]["elapsed_seconds"] == tdd.BASELINE_341.elapsed_seconds
         assert recorded["baseline"]["cost_usd"] == tdd.BASELINE_341.cost_usd

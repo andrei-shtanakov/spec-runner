@@ -33,6 +33,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ExecutorState
@@ -151,5 +153,7 @@ class TestScenario341CostMeasuredLiveUnderPytest:
         assert measurement.checkpoint_reached is True
         assert measurement.paid_call_count == 1
         assert measurement.elapsed_seconds < tdd.BASELINE_341.elapsed_seconds
-        assert measurement.cost_usd is not None
-        assert measurement.cost_usd < tdd.BASELINE_341.cost_usd
+        # Bounded from below too: task_cost returns 0.0 (never None) when
+        # accounting breaks, and a broken ledger must not read as savings.
+        assert measurement.cost_usd == pytest.approx(0.05)
+        assert 0 < measurement.cost_usd < tdd.BASELINE_341.cost_usd
