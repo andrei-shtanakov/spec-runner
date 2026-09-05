@@ -38,6 +38,7 @@ def _cfg(tmp_path: Path) -> ExecutorConfig:
         auto_commit=False,
         run_tests_on_done=False,
         run_review=False,
+        run_lint_on_done=False,
         max_retries=1,
         retry_delay_seconds=0,
     )
@@ -85,8 +86,8 @@ class TestRunSummaryDelta:
 
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"], returncode=0, stdout="TASK_COMPLETE", stderr=""
             ),
@@ -132,8 +133,8 @@ class TestRunSummaryDelta:
 
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"], returncode=0, stdout="TASK_COMPLETE", stderr=""
             ),

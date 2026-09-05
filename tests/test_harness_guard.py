@@ -22,6 +22,10 @@ def _cfg(tmp_path: Path, **overrides) -> ExecutorConfig:
         "run_tests_on_done": False,
         "auto_commit": False,
         "run_review": False,
+        # The agent seam is stubbed narrowly now; the post-done lint hook
+        # would otherwise shell a REAL `uv run ruff check .` into tmp_path
+        # (#363 review) — this suite is about the guard, not the hook.
+        "run_lint_on_done": False,
     }
     defaults.update(overrides)
     return ExecutorConfig(**defaults)
@@ -123,15 +127,15 @@ class TestExecuteTaskIntegration:
     """The agent 'succeeds' but rewrote the oracle — strict fails, warn passes."""
 
     def _run(self, cfg: ExecutorConfig, tmp_path: Path):
-        def fake_agent(argv, **kwargs):
+        def fake_agent(config, invocation, **kwargs):
             # The agent invents a pytest bridge (the kapelle move).
             (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --co\n")
             return subprocess.CompletedProcess(
-                args=argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
             )
 
         with (
-            patch("spec_runner.execution.subprocess.run", side_effect=fake_agent),
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
             patch(
                 "spec_runner.execution.build_cli_invocation",
                 return_value=CliInvocation(["fake"], "text"),

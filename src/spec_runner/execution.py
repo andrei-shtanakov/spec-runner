@@ -16,6 +16,7 @@ from .phases import Refusal
 from .prompt import build_task_prompt, extract_test_failures
 from .prompts_log import append_output, log_prompt
 from .runner import (
+    CliInvocation,
     agent_env,
     build_cli_invocation,
     check_error_patterns,
@@ -214,6 +215,36 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 
+class RealAgentCallRefused(AssertionError):
+    """Raised only by the test-only guard (`conftest._no_real_agent_calls`)
+    to refuse a real, billed agent call before it happens.
+
+    A distinct type, not a bare `AssertionError`: `execute_task`'s `try` block
+    also reaches genuine internal-invariant asserts (e.g. `harness_violations`,
+    `StageReporter.enter`), and those must keep failing as an ordinary failed
+    attempt, not crash the whole run.
+    """
+
+
+def _run_agent_process(
+    config: ExecutorConfig, invocation: CliInvocation
+) -> subprocess.CompletedProcess[str]:
+    """Run the agent's CLI invocation. Seam for tests, mirroring `tdd._run_agent`.
+
+    The standard-execution counterpart to that seam (#341/#334 BEH-24):
+    `conftest._no_real_agent_calls` guards it the same way, refusing a bare
+    paid-agent `claude_command` before this reaches `subprocess.run`.
+    """
+    return subprocess.run(
+        invocation.argv,
+        capture_output=True,
+        text=True,
+        timeout=config.task_timeout_minutes * 60,
+        cwd=config.project_root,
+        env=agent_env(),
+    )
+
+
 def execute_task(
     task: Task,
     config: ExecutorConfig,
@@ -375,14 +406,7 @@ def execute_task(
         harness_before = (harness_baseline or HarnessBaseline()).capture(config)
 
         reporter.enter("exec")
-        result = subprocess.run(
-            invocation.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.task_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=agent_env(),
-        )
+        result = _run_agent_process(config, invocation)
 
         duration = (datetime.now() - start_time).total_seconds()
         cli_result = parse_cli_result(
@@ -735,6 +759,14 @@ def execute_task(
         )
         log_progress("Interrupted by signal", task_id)
         return False
+
+    except RealAgentCallRefused:
+        # The test-only agent guard (`conftest._no_real_agent_calls`) raises
+        # this to refuse a real, billed call before it happens. Swallowing it
+        # here as a normal failed attempt — `return False`, no distinguishable
+        # signal — is exactly the gap BEH-24 closes: it must surface as the
+        # test failure it is, the same way it already does on the RED seam.
+        raise
 
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()

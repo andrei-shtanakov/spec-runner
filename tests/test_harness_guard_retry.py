@@ -120,7 +120,7 @@ class TestSnapshotSurvivesRetry:
 
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess, "run", _fake_cli(project, mutate_on={1}, calls=calls)
+            isolate, "_run_agent_process", _fake_cli(project, mutate_on={1}, calls=calls)
         )
 
         cfg = _cfg(project)
@@ -144,7 +144,7 @@ class TestSnapshotSurvivesRetry:
 
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess, "run", _fake_cli(project, mutate_on=set(), calls=calls)
+            isolate, "_run_agent_process", _fake_cli(project, mutate_on=set(), calls=calls)
         )
 
         cfg = _cfg(project)
@@ -161,8 +161,8 @@ class TestSnapshotSurvivesRetry:
 
         calls: list[int] = []
         monkeypatch.setattr(
-            isolate.subprocess,
-            "run",
+            isolate,
+            "_run_agent_process",
             _fake_cli(project, mutate_on={2}, calls=calls, fail_on={1}),
         )
 
@@ -195,7 +195,7 @@ class TestBaselineCapturedAfterPreStart:
         monkeypatch.setattr(execution, "pre_start_hook", _hook_that_syncs)
         calls: list[int] = []
         monkeypatch.setattr(
-            execution.subprocess, "run", _fake_cli(project, mutate_on=set(), calls=calls)
+            execution, "_run_agent_process", _fake_cli(project, mutate_on=set(), calls=calls)
         )
 
         cfg = _cfg(project)
