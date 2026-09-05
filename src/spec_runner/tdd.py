@@ -564,6 +564,32 @@ def run_red_phase(
             # adoptable: fall through to a fresh authoring call (#366 review).
             parsed_pending = None if isinstance(parsed, SelectorRefusal) else parsed
             if parsed_pending is not None:
+                # Ownership: the residue must be THIS task's in THIS
+                # workstream. The task id alone is not unique across
+                # workstreams sharing one branch — the ws-scoped evidential
+                # name (TASK-009) is the checkable signal; a neighbour's
+                # residue carries a different namespace segment and falls
+                # through to authoring (#366 review round 3).
+                expected_path = adapter.evidential_file(
+                    task.id, namespace=resolve_namespace(config)
+                )
+                if str(parsed_pending.path) != str(expected_path):
+                    parsed_pending = None
+            if parsed_pending is not None:
+                # Adoptability: a residue the PRE-lint gates would refuse
+                # (#252 D pre-existing file, discovery, claims) must fall
+                # back to authoring — adopting it would refuse identically
+                # on every retry, HEAD never changing, with no paid path
+                # out (#366 review round 3). The lint gate itself is NOT
+                # pre-checked: curing lint residue is exactly what the
+                # adoption exists for.
+                candidate_baseline = _parent_of(config, pending_sha) or baseline
+                if not adapter.is_discoverable(parsed_pending.path) or (
+                    _refuse_pre_existing_file(config, parsed_pending, candidate_baseline)
+                    is not None
+                ) or check_claims(config, state, resolve_namespace(config), pending_sha):
+                    parsed_pending = None
+            if parsed_pending is not None:
                 _say(
                     f"\u267b\ufe0f  RED: adopting the unregistered red commit "
                     f"{pending_sha[:12]} without a new authoring call"

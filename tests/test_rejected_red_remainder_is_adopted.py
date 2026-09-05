@@ -33,7 +33,6 @@ from spec_runner.state import ExecutorState
 from spec_runner.tdd import RedOutcome, run_red_phase
 
 FAILING = "def test_thing():\n    assert False\n"
-SELECTOR = "tests/test_thing.py::test_thing"
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
@@ -62,6 +61,16 @@ def _cfg(root: Path, **overrides) -> ExecutorConfig:
     return cfg
 
 
+def _selector_for(cfg: ExecutorConfig) -> str:
+    """The ws-scoped evidential selector adoption now demands (#366 r3):
+    ownership is proven by the namespace segment in the file name."""
+    from spec_runner.tdd import resolve_namespace
+    from spec_runner.tdd_runners import ADAPTERS
+
+    path = ADAPTERS["pytest"].evidential_file("TASK-104", namespace=resolve_namespace(cfg))
+    return f"{path}::test_thing"
+
+
 def _task():
     from spec_runner.task import Task
 
@@ -71,10 +80,11 @@ def _task():
 def _write_the_test(config, prompt, **kw):
     from spec_runner import tdd
 
-    path = Path(config.project_root) / "tests" / "test_thing.py"
+    selector = _selector_for(config)
+    path = Path(config.project_root) / selector.split("::")[0]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(FAILING)
-    return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+    return tdd.AgentCall(text=f"TDD_SELECTOR: {selector}")
 
 
 def _repo(tmp_path: Path, **overrides) -> tuple[Path, ExecutorConfig]:
@@ -103,11 +113,14 @@ def _repo_with_a_rejected_red(tmp_path: Path, **overrides) -> tuple[Path, Execut
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "base")
 
-    (root / "tests").mkdir(exist_ok=True)
-    (root / "tests" / "test_thing.py").write_text(FAILING)
+    cfg = _cfg(root, **overrides)
+    selector = _selector_for(cfg)
+    red_path = root / selector.split("::")[0]
+    red_path.parent.mkdir(parents=True, exist_ok=True)
+    red_path.write_text(FAILING)
     _git(root, "add", "-A")
-    _git(root, "commit", "-qm", f"TASK-104: red for {SELECTOR}")
-    return root, _cfg(root, **overrides)
+    _git(root, "commit", "-qm", f"TASK-104: red for {selector}")
+    return root, cfg
 
 
 @pytest.mark.slow
@@ -127,7 +140,9 @@ class TestRejectedRedRemainderIsAdopted:
         assert first.checkpoint is None
         head = _git(root, "rev-parse", "HEAD").stdout.strip()
         subject = _git(root, "log", "-1", "--format=%s", head).stdout.strip()
-        assert subject == f"TASK-104: red for {SELECTOR}", "the rejected red stayed committed"
+        assert subject == f"TASK-104: red for {_selector_for(cfg)}", (
+            "the rejected red stayed committed"
+        )
 
         # Attempt 2 (the retry): nothing about the project changed, so an
         # agent asked to author the same red again would reproduce the exact
@@ -139,7 +154,7 @@ class TestRejectedRedRemainderIsAdopted:
 
         def _record_call(config, prompt, **kw):
             calls.append(prompt)
-            return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {_selector_for(config)}")
 
         monkeypatch.setattr(tdd, "_run_agent", _record_call)
         with ExecutorState(cfg) as state:
@@ -199,7 +214,7 @@ class TestRejectedRedRemainderIsAdopted:
 
         def _record_call(config, prompt, **kw):
             calls.append(prompt)
-            return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {_selector_for(config)}")
 
         monkeypatch.setattr(tdd, "_run_agent", _record_call)
         with ExecutorState(cfg) as state:

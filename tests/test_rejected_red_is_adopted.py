@@ -385,6 +385,7 @@ class TestTheOrdinaryPathIsUnchanged:
         assert result.checkpoint.checkpoint_id == checkpoint.checkpoint_id
 
 
+@pytest.mark.slow
 class TestPreAuthoringAdoptionGuards:
     """#366 review: the pre-authoring adoption (#341 BEH-28) must not
     deadlock a residue that never reached lint, must not adopt over
@@ -413,12 +414,10 @@ class TestPreAuthoringAdoptionGuards:
         BEH-07 round must stay reachable, or the first fix-proof finding
         deadlocks the task forever."""
         from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
 
         root, _ = _repo_with_a_rejected_red(tmp_path)
-        red = root / "tests" / "test_thing.py"
-        red.write_text("def test_thing():  # AGENTWORD\n    assert False\n")
-        _git(root, "add", "-A")
-        _git(root, "commit", "-qm", f"TASK-104: red for {SELECTOR}", "--amend")
         check_cmd, fix_cmd = self._lint_scripts(tmp_path)
         cfg = _cfg(
             root,
@@ -427,6 +426,14 @@ class TestPreAuthoringAdoptionGuards:
             lint_fix_command=fix_cmd,
             lint_fix_command_declared=True,
         )
+        # The residue must sit at THIS workstream's evidential path — the
+        # ownership gate (#366 r3) sends anything else to the authoring path.
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text("def test_thing():  # AGENTWORD\n    assert False\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
 
         rounds: list[str] = []
 
