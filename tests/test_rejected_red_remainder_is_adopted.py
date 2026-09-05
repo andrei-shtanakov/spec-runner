@@ -26,6 +26,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ExecutorState
 from spec_runner.tdd import RedOutcome, run_red_phase
@@ -87,6 +89,28 @@ def _repo(tmp_path: Path, **overrides) -> tuple[Path, ExecutorConfig]:
     return root, _cfg(root, **overrides)
 
 
+def _repo_with_a_rejected_red(tmp_path: Path, **overrides) -> tuple[Path, ExecutorConfig]:
+    """The residue seeded directly, without paying for the attempt that would
+    ordinarily produce it — same shape #261's own fixture uses, so the two
+    adoption routes (pre- and post-authoring) are compared on equal footing.
+    """
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "o@e.c")
+    _git(root, "config", "user.name", "O")
+    (root / "README.md").write_text("x\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "base")
+
+    (root / "tests").mkdir(exist_ok=True)
+    (root / "tests" / "test_thing.py").write_text(FAILING)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", f"TASK-104: red for {SELECTOR}")
+    return root, _cfg(root, **overrides)
+
+
+@pytest.mark.slow
 class TestRejectedRedRemainderIsAdopted:
     def test_the_retry_does_not_pay_for_a_new_authoring_call(self, tmp_path, monkeypatch):
         from spec_runner import tdd
@@ -147,3 +171,37 @@ class TestRejectedRedRemainderIsAdopted:
             run_red_phase(_task(), cfg, state, log_progress=said.append)
 
         assert any("adopting" in line for line in said), said
+
+    def test_without_a_declared_linter_authoring_still_pays(self, tmp_path, monkeypatch):
+        """FR-05: a project that never declared a linter keeps today's (#261)
+        behavior unchanged — the same residue is still adopted eventually, but
+        only *after* an authoring call runs and reproduces it, never before.
+        This is what actually discriminates the `lint_command_declared` gate:
+        without it, a residue with no declared linter would be adopted for
+        free too, same as the declared case above.
+        """
+        from spec_runner import tdd
+
+        root, cfg = _repo_with_a_rejected_red(
+            tmp_path,
+            lint_command="",
+            lint_command_declared=False,
+            lint_fix_command="",
+            lint_fix_command_declared=False,
+        )
+        head = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+        calls: list[str] = []
+
+        def _record_call(config, prompt, **kw):
+            calls.append(prompt)
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {SELECTOR}")
+
+        monkeypatch.setattr(tdd, "_run_agent", _record_call)
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert len(calls) == 1, "an undeclared linter must not skip the authoring call"
+        assert result.outcome is RedOutcome.EXPECTED_FAIL
+        assert result.checkpoint is not None
+        assert result.checkpoint.commit_sha == head, "the commit that was already there"
