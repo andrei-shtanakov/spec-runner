@@ -226,6 +226,86 @@ flowchart LR
     class mem degraded
 ```
 
+## TDD checkpoint machinery (`execution_mode: tdd`)
+
+Under `execution_mode: tdd`, `execute_task` runs a RED authoring pass before
+the implementation call: an agent writes one failing test, spec-runner
+replays it in an isolated `git worktree`, and records the outcome as a
+`RedCheckpoint` (`tdd.py`, `tdd_runners.py`). `lifecycle.py` tracks the
+RED → GREEN phase machine, `claims.py` freezes the byte contents of the file
+the red test lives in until the task completes, and `remedy.py` gives an
+operator a narrow, audited door (`abandon`/`repair`/`resume`/`release`) to
+recover a wedged checkpoint. `tdd_status.py` reports all of this via
+`spec-runner tdd status`.
+
+### Evidential file naming carries a namespace segment (#334)
+
+The file a RED pass writes its failing test to is called the **evidential**
+file. Its path is named by the runner adapter itself (`evidential_file()` in
+`tdd_runners.py` — never a shared cross-adapter heuristic, per #198/#220/#252),
+and since #334 that path always includes a **namespace segment**
+(`namespace_segment()`), so two workstreams that both happen to run a task
+called `TASK-001` do not write the same red file and stomp on each other's
+checkpoint.
+
+The segment always has two parts, `<slug>_<digest>`:
+
+- a readable **slug** — a lower-cased, punctuation-collapsed rendering of the
+  namespace, capped in length for readability;
+- a short **digest** — a SHA-256 prefix of the *raw* namespace string, taken
+  before the slug's own case-folding/truncation, so two namespaces that would
+  slug identically (differing only by case, a separator, or a truncated tail)
+  still land on different segments.
+
+Which namespace feeds the formula is decided by `tdd.resolve_namespace()`:
+
+- **declared** — a project that sets the config key `tdd_namespace` gets a
+  segment whose slug is legibly derived from that value (an orchestrator that
+  knows its own workstream identity states it rather than have it guessed);
+- **computed fallback** — without a declared `tdd_namespace`, the namespace is
+  derived from `project_root` + `spec_prefix`, and the segment's slug is
+  already digest-shaped (there is nothing human-readable to slug).
+
+**Distinguishability boundary:** the guarantee holds only for a distinguishable
+input. Two workstreams sharing the same `spec_prefix` (including both empty)
+and neither declaring a `tdd_namespace` are, to this formula, the same input —
+they get the same namespace and the same evidential path; this is a declared
+boundary, not a silent collision, and the existing #252 D "cannot write a red
+into an existing file" refusal still fires rather than one workstream quietly
+overwriting the other's checkpoint. The remedy is to declare a distinct
+`tdd_namespace` per workstream, or give each a distinct `spec_prefix`.
+Previously-recorded checkpoints and claims (from before #334) keep working
+without any migration step: they key off the stored selector and commit SHA,
+never off the file's name.
+
+### Pre-freeze lint auto-fix (#341)
+
+Before a RED checkpoint freezes a file, `tdd._lint_claimed` lints the file
+about to be claimed — but only when the project has **declared** a linter
+(`commands.lint`, `config.lint_command_declared`; #220's boundary is
+unchanged, an inferred Python-shaped lint command is never run against a
+project that never asked for one). A lint failure there no longer refuses
+immediately: spec-runner now attempts a bounded repair first —
+
+1. a mechanical fix pass, running the project's separately **declared** fix
+   invocation (`commands.lint_fix` / `config.lint_fix_command_declared` —
+   `lint_fix_command` itself always carries a Python-shaped default, but that
+   default is not itself a declaration, so "declared a linter" does not imply
+   "declared a fix invocation"), narrowed to the claimed file's paths;
+2. if a finding survives the mechanical fix, exactly **one cold agent
+   round** — a fresh, session-less call, carrying the remaining findings, the
+   red file and the selector, since spec-runner keeps no session to resume —
+   never a loop, and never a second agent round.
+
+Both steps are skipped, with the refusal naming the specific reason, when
+`lint_command` is a **composite lint_command** (more than one command
+chained by a shell operator): spec-runner does not guess which component
+would take a path or a fix flag (the #139 lesson), so fix mode is not applied
+at all for a composite command, declared fix invocation or not. The repair
+never touches files outside the claim, and a repair that makes the test pass
+(or breaks the build) does not produce a checkpoint — a green or unbuildable
+result is not a confirmed red.
+
 ## Notes
 
 - **Entry points** in `pyproject.toml`: `spec-runner` (→ `executor:main`), `spec-task` (deprecated), `spec-runner-init`.

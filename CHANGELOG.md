@@ -12,6 +12,44 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Changed
 
+- **Evidential red-file names are renamed to carry a namespace segment**
+  (#334). Under `execution_mode: tdd`, the file a RED pass writes its failing
+  test to now always includes a namespace segment in its path, so two
+  workstreams running the same task id (e.g. two `TASK-001`s from different
+  specs sharing one repo) no longer write to the same evidential file. The
+  segment is a declared `tdd_namespace` slug when the project sets that config
+  key, or a short digest of the computed `project_root`/`spec_prefix` fallback
+  otherwise — see `docs/architecture.md` for the full slug/digest formula and
+  the distinguishability boundary (two workstreams with the same
+  `spec_prefix` and no declared `tdd_namespace` are indistinguishable and get
+  the same namespace; declare `tdd_namespace` or use distinct `spec_prefix`
+  values to tell them apart). This is an **observable change** — new
+  evidential file paths differ from before — but old paths remain valid
+  without migration: previously-recorded checkpoints and claims key off the
+  stored selector and commit SHA, never off the file name, so nothing needs
+  to be re-run or re-declared for work already in flight.
+
+- **Pre-freeze RED-file linting now attempts a bounded repair before
+  refusing** (#341). When a project has declared a linter
+  (`commands.lint`) and the red file about to be frozen fails it, spec-runner
+  first runs the project's separately **declared** fix invocation
+  (`commands.lint_fix` / `lint_fix_command_declared`) narrowed to the claimed
+  file, and if a finding survives that, hands the remainder to one cold agent
+  round — a fresh, session-less call, not a resumed one, since spec-runner
+  keeps no session to resume — never more than that one round. **Migration
+  note:** the machine-fix step only fires for a project that has declared a
+  fix invocation via `commands.lint_fix`; a project that already declared
+  `commands.lint` but never declared `commands.lint_fix` sees no behaviour
+  change at all (the python-shaped `lint_fix_command` default is not itself a
+  declaration and is never run against a project that never asked for it).
+  For a **composite lint_command** (more than one command chained by a shell
+  operator), the repair is not applied at all — spec-runner does not guess
+  which component would take a path or a fix flag — and the refusal names
+  this reason explicitly. Tests: `tests/test_red_lint_autofix.py`,
+  `tests/test_red_lint_autofix_refusal.py`, `tests/test_red_lint_scope.py`,
+  `tests/test_red_autofix_agent_round.py`,
+  `tests/test_red_lint_autofix_composite.py`.
+
 - **Every sentence about a budget ceiling names the state file it came from**
   (#330). A ceiling belongs to one state DB, and `--spec-prefix` selects a
   different one — so `budget authorize` typed without the prefix and a run
