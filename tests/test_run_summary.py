@@ -85,8 +85,8 @@ class TestRunSummaryDelta:
 
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"], returncode=0, stdout="TASK_COMPLETE", stderr=""
             ),
@@ -132,8 +132,8 @@ class TestRunSummaryDelta:
 
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: _sp.CompletedProcess(
                 args=["x"], returncode=0, stdout="TASK_COMPLETE", stderr=""
             ),

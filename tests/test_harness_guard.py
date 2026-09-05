@@ -123,15 +123,15 @@ class TestExecuteTaskIntegration:
     """The agent 'succeeds' but rewrote the oracle — strict fails, warn passes."""
 
     def _run(self, cfg: ExecutorConfig, tmp_path: Path):
-        def fake_agent(argv, **kwargs):
+        def fake_agent(config, invocation, **kwargs):
             # The agent invents a pytest bridge (the kapelle move).
             (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --co\n")
             return subprocess.CompletedProcess(
-                args=argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
             )
 
         with (
-            patch("spec_runner.execution.subprocess.run", side_effect=fake_agent),
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
             patch(
                 "spec_runner.execution.build_cli_invocation",
                 return_value=CliInvocation(["fake"], "text"),

@@ -73,6 +73,14 @@ PAID_AGENT_COMMANDS = frozenset(
 )
 
 
+def _real_agent_refusal(cmd: str, cls: type[AssertionError] = AssertionError) -> AssertionError:
+    return cls(
+        f"this test would call the real agent ({cmd!r}) and be billed for it. "
+        "Stub `spec_runner.tdd._run_agent` / `spec_runner.execution._run_agent_process`, "
+        "or point `claude_command` at a fake script under tmp_path."
+    )
+
+
 @pytest.fixture(autouse=True)
 def _no_real_agent_calls(monkeypatch):
     """Fail a test that would invoke a real agent, instead of billing for it.
@@ -83,25 +91,43 @@ def _no_real_agent_calls(monkeypatch):
     called `claude`. Nothing was wrong with the product; the test was missing
     one `monkeypatch.setattr`, and the only signal was a minute of silence.
 
-    The guard sits on the seam every paid call goes through, and it fires only
-    on a **bare known-agent name**: a fake script (an absolute path under
-    `tmp_path`) runs as before, and a test that stubs `_run_agent` itself
-    replaces this patch and never sees it.
+    The guard sits on the seams every paid call goes through — `tdd._run_agent`
+    for the TDD red/fix passes, `execution._run_agent_process` for the standard
+    execution path (#341/#334 BEH-24: the second, separate seam that used to
+    have no guard at all) — and it fires only on a **bare known-agent name**: a
+    fake script (an absolute path under `tmp_path`) runs as before, and a test
+    that stubs either seam itself replaces this patch and never sees it.
     """
-    from spec_runner import tdd
+    from spec_runner import execution, tdd
 
-    def _refuse(config, prompt, **kwargs):
+    def _refuse_tdd(config, prompt, **kwargs):
         cmd = getattr(config, "claude_command", "")
         if cmd in PAID_AGENT_COMMANDS:
-            raise AssertionError(
-                f"this test would call the real agent ({cmd!r}) and be billed for it. "
-                "Stub `spec_runner.tdd._run_agent`, or point `claude_command` at a fake "
-                "script under tmp_path."
-            )
+            raise _real_agent_refusal(cmd)
         return _real_run_agent(config, prompt, **kwargs)
 
+    def _refuse_execution(config, invocation, **kwargs):
+        # Keyed on the invocation's own argv[0], not `config.claude_command`:
+        # `build_cli_invocation` is a separate, commonly-stubbed seam, and a
+        # test that points it at a harmless real binary (`true`, `echo`) while
+        # `claude_command` stays at its default must still be allowed through —
+        # what would actually run is what decides, not the config value that
+        # produced it.
+        argv = getattr(invocation, "argv", None) or []
+        cmd = argv[0] if argv else ""
+        if cmd in PAID_AGENT_COMMANDS:
+            # `execution.RealAgentCallRefused`, not a bare `AssertionError`:
+            # `execute_task`'s `try` block also reaches genuine internal
+            # asserts (harness/stage invariants), and only this guard's own
+            # exception may propagate as an uncaught test failure.
+            raise _real_agent_refusal(cmd, cls=execution.RealAgentCallRefused)
+        return _real_run_agent_process(config, invocation, **kwargs)
+
     _real_run_agent = tdd._run_agent
-    monkeypatch.setattr(tdd, "_run_agent", _refuse)
+    monkeypatch.setattr(tdd, "_run_agent", _refuse_tdd)
+
+    _real_run_agent_process = execution._run_agent_process
+    monkeypatch.setattr(execution, "_run_agent_process", _refuse_execution)
 
 
 @pytest.fixture

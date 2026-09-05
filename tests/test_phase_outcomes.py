@@ -183,8 +183,8 @@ class TestWaiverIsAnOperatorRecord:
         import subprocess
 
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: subprocess.CompletedProcess(["x"], 0, "TASK_COMPLETE\n", ""),
         )
         task = Task(id="TASK-001", name="x", priority="p0", status="todo", estimate="1d")
@@ -245,8 +245,8 @@ class TestNoObservableChange:
         import subprocess
 
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: subprocess.CompletedProcess(["x"], 0, "TASK_COMPLETE\n", ""),
         )
         task = Task(id="TASK-001", name="x", priority="p0", status="todo", estimate="1d")
@@ -294,8 +294,8 @@ class TestRecordingNeverMovesTheCurrentStage:
         cfg = _cfg(tmp_path, harness_guard="off")
         monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: subprocess.CompletedProcess(["x"], 1, "", "boom\n"),
         )
         task = Task(id="TASK-001", name="x", priority="p0", status="todo", estimate="1d")
@@ -330,8 +330,8 @@ class TestRecordedEvidenceMatchesTheVerdict:
             execution, "post_done_hook", lambda *a, **k: (True, None, "skipped", "", False)
         )
         monkeypatch.setattr(
-            execution.subprocess,
-            "run",
+            execution,
+            "_run_agent_process",
             lambda *a, **k: subprocess.CompletedProcess(["x"], returncode, stdout, ""),
         )
         task = Task(id="TASK-001", name="x", priority="p0", status="todo", estimate="1d")
