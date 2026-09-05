@@ -523,3 +523,120 @@ class TestPreReplayFailuresAreStillDurable:
         assert result is False
         assert checkpoint is None
         assert any(r.phase == "tests" for r in history)
+
+
+class TestBEH27ComposedBoundariesHold:
+    """BEH-27 (TASK-017, delivered under a tdd-waiver): the standing
+    guarantees hold COMPOSED with everything #341/#334 added — the lint gate
+    is not advisory with the autofix engaged, ws-scoped names and claims
+    stay independent per workstream, and only EXPECTED_FAIL ever claims."""
+
+    def _scripts(self, tmp_path_factory):
+        import shlex
+        import sys
+
+        scripts = tmp_path_factory.mktemp("beh27-scripts")
+        check = scripts / "check.py"
+        check.write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "bad = any('BADWORD' in Path(p).read_text() for p in sys.argv[1:])\n"
+            "sys.exit(1 if bad else 0)\n"
+        )
+        fix = scripts / "fix.py"
+        fix.write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "for p in sys.argv[1:]:\n"
+            "    q = Path(p)\n"
+            "    q.write_text(q.read_text().replace('BADWORD', ''))\n"
+        )
+        quote = shlex.quote
+        return (
+            f"{quote(sys.executable)} {quote(str(check))}",
+            f"{quote(sys.executable)} {quote(str(fix))}",
+        )
+
+    def _agent_for(self, monkeypatch, path: str, body: str):
+        from spec_runner import tdd
+
+        def _fake(config, prompt, **kwargs):
+            target = Path(config.project_root) / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {path}::test_new_behaviour")
+
+        monkeypatch.setattr(tdd, "_run_agent", _fake)
+
+    def test_full_red_with_namespace_and_autofix_still_gates_and_claims(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """Composed happy path: declared namespace + declared lint AND fix —
+        the finding is cured, the checkpoint lands on the ws-scoped path,
+        the claim byte-locks it, and the gate still answers confirmed red."""
+        from spec_runner.task import Task
+        from spec_runner.tdd import run_red_phase
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root = _repo(tmp_path_factory.mktemp("beh27-composed"))
+        check_cmd, fix_cmd = self._scripts(tmp_path_factory)
+        cfg = _cfg(
+            root,
+            test_command="python -m pytest",
+            lint_command=check_cmd,
+            lint_command_declared=True,
+            lint_fix_command=fix_cmd,
+            lint_fix_command_declared=True,
+            tdd_namespace="ws-beh27",
+        )
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-001", namespace="ws-beh27"))
+        self._agent_for(
+            monkeypatch, evidential, "def test_new_behaviour():  # BADWORD\n    assert False\n"
+        )
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1h")
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(task, cfg, state)
+            claims = state.active_claims(resolve_namespace(cfg))
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        assert result.checkpoint is not None
+        assert [c.path for c in claims] == [evidential]
+        assert "BADWORD" not in (Path(root) / evidential).read_text()
+
+    def test_two_workstreams_share_a_task_id_with_independent_claims(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """Composed boundary: the SAME task id in two distinguishable
+        workstreams of one repo — both reach confirmed red, and the claims
+        neither collide nor freeze each other's files (BEH-12 + #252 D +
+        byte-lock semantics, all at once)."""
+        from spec_runner.task import Task
+        from spec_runner.tdd import run_red_phase
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root = _repo(tmp_path_factory.mktemp("beh27-two-ws"))
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1h")
+
+        paths = {}
+        for ns in ("ws-alpha", "ws-beta"):
+            cfg = _cfg(
+                root,
+                test_command="python -m pytest",
+                state_file=Path(root) / f".state-{ns}.db",
+                tdd_namespace=ns,
+            )
+            evidential = str(ADAPTERS["pytest"].evidential_file("TASK-001", namespace=ns))
+            paths[ns] = evidential
+            self._agent_for(
+                monkeypatch, evidential, "def test_new_behaviour():\n    assert False\n"
+            )
+            with ExecutorState(cfg) as state:
+                result = run_red_phase(task, cfg, state)
+                claims = state.active_claims(resolve_namespace(cfg))
+            assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+            assert [c.path for c in claims] == [evidential]
+            _git(root, "add", "-A")
+            _git(root, "commit", "-qm", f"{ns} red lands")
+
+        assert paths["ws-alpha"] != paths["ws-beta"]
+        assert (Path(root) / paths["ws-alpha"]).exists()
+        assert (Path(root) / paths["ws-beta"]).exists()
