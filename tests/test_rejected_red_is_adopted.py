@@ -527,3 +527,43 @@ class TestPreAuthoringAdoptionGuards:
 
         assert authored == ["author"], "an unparseable residue must not deadlock"
         assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_declared_lint_without_declared_fix_still_reauthors(self, tmp_path, monkeypatch):
+        """#366 round 5: with a declared linter but NO declared fix (BEH-29's
+        configuration) no repair path exists for an adopted residue — the
+        retry must re-author, or the identical refusal repeats forever."""
+        from spec_runner import tdd
+        from spec_runner.tdd import resolve_namespace as _rns
+        from spec_runner.tdd_runners import ADAPTERS
+
+        root, _ = _repo_with_a_rejected_red(tmp_path)
+        cfg = _cfg(
+            root,
+            lint_command='python3 -c "raise SystemExit(1)"',
+            lint_command_declared=True,
+            # lint_fix_command left at the undeclared default on purpose.
+        )
+        evidential = str(ADAPTERS["pytest"].evidential_file("TASK-104", namespace=_rns(cfg)))
+        red = root / evidential
+        red.parent.mkdir(parents=True, exist_ok=True)
+        red.write_text(FAILING)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", f"TASK-104: red for {evidential}::test_thing", "--amend")
+
+        authored: list[str] = []
+
+        def authoring(config, prompt, **kwargs):
+            authored.append("author")
+            return tdd.AgentCall(text=f"TDD_SELECTOR: {evidential}::test_thing")
+
+        monkeypatch.setattr(tdd, "_run_agent", authoring)
+
+        said: list[str] = []
+        with ExecutorState(cfg) as state:
+            run_red_phase(_task(), cfg, state, log_progress=said.append)
+
+        # The authoring call is the whole point: the PRE-authoring adoption
+        # deferred. The POST-authoring #261 adoption may then legitimately
+        # pick the residue up (the stub changed nothing) — that path always
+        # existed and is not what this test guards.
+        assert authored == ["author"], "no repair path — the retry must pay for authoring"

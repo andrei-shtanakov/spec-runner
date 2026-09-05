@@ -544,9 +544,22 @@ def run_red_phase(
     # still does for every other shape. WHY the residue was rejected is not
     # recorded, so no assumption is made about it: the lint (and, if needed,
     # the BEH-07 agent round) runs against the adopted commit exactly as it
-    # would after authoring. Scoped to a declared linter and to a clean
-    # index/tree — see `_pending_unregistered_red`'s preconditions.
-    if config.lint_command and config.lint_command_declared:
+    # would after authoring. Scoped to configurations where a REPAIR PATH
+    # actually exists — the same conditions that make the fix and the BEH-07
+    # round reachable in `_lint_claimed` (declared non-composite lint,
+    # declared non-composite fix): otherwise the adopted commit could only
+    # ever be refused identically on every retry, with authoring skipped by
+    # construction and no round to change the bytes (#366 round 5). Also
+    # scoped to a clean index/tree — see `_pending_unregistered_red`.
+    adoption_repairable = bool(
+        config.lint_command
+        and config.lint_command_declared
+        and not is_composite_shell_command(config.lint_command)
+        and config.lint_fix_command
+        and config.lint_fix_command_declared
+        and not is_composite_shell_command(config.lint_fix_command)
+    )
+    if adoption_repairable:
         pending = _pending_unregistered_red(config, state, task)
         if pending is not None:
             pending_sha, pending_selector = pending
@@ -574,6 +587,17 @@ def run_red_phase(
                     task.id, namespace=resolve_namespace(config)
                 )
                 if str(parsed_pending.path) != str(expected_path):
+                    parsed_pending = None
+                elif (
+                    _scoped_fix_command(
+                        config.lint_fix_command,
+                        [str(expected_path)],
+                        Path(config.project_root),
+                    )
+                    is None
+                ):
+                    # A fix invocation that cannot be narrowed never runs, so
+                    # no repair path exists — same fall-through as above.
                     parsed_pending = None
             if parsed_pending is not None:
                 # Adoptability: a residue the PRE-lint gates would refuse
