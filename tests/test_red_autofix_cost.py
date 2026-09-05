@@ -26,6 +26,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ExecutorState
@@ -106,6 +108,7 @@ def _scripted_red_authoring_call(monkeypatch, *, cost: float) -> None:
 
 
 class TestScenario341CostMeasuredLiveUnderPytest:
+    @pytest.mark.slow
     def test_the_measurement_is_recorded_and_compares_favorably_to_the_baseline(
         self, tmp_path_factory, monkeypatch
     ):
@@ -143,11 +146,11 @@ class TestScenario341CostMeasuredLiveUnderPytest:
             checkpoint_reached=result.checkpoint is not None,
         )
 
-        # Then: one paid RED session reaches the checkpoint, and the number
-        # of extra agent rounds stays within BEH-05's ceiling — authoring
-        # plus at most one cold fix-round, never more.
+        # Then: one paid RED session reaches the checkpoint. This scripted
+        # scenario's lint finding is mechanically fixable, so no BEH-05 fix
+        # round is needed — exactly one call, matching the frozen red.
         assert measurement.checkpoint_reached is True
-        assert measurement.paid_call_count <= 2
+        assert measurement.paid_call_count == 1
 
         # And: the live measurement compares favorably to the documented
         # baseline (5.5 minutes / one burned attempt on TASK-004; $0.88 on
