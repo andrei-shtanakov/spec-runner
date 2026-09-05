@@ -38,6 +38,7 @@ def _cfg(tmp_path: Path) -> ExecutorConfig:
         auto_commit=False,
         run_tests_on_done=False,
         run_review=False,
+        run_lint_on_done=False,
         max_retries=1,
         retry_delay_seconds=0,
     )

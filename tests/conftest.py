@@ -91,12 +91,16 @@ def _no_real_agent_calls(monkeypatch):
     called `claude`. Nothing was wrong with the product; the test was missing
     one `monkeypatch.setattr`, and the only signal was a minute of silence.
 
-    The guard sits on the seams every paid call goes through — `tdd._run_agent`
-    for the TDD red/fix passes, `execution._run_agent_process` for the standard
-    execution path (#341/#334 BEH-24: the second, separate seam that used to
-    have no guard at all) — and it fires only on a **bare known-agent name**: a
-    fake script (an absolute path under `tmp_path`) runs as before, and a test
-    that stubs either seam itself replaces this patch and never sees it.
+    The guard covers TWO of the paid seams: `tdd._run_agent` for the TDD
+    red/fix passes and `execution._run_agent_process` for the standard
+    execution path (#341/#334 BEH-24: the second seam that used to have no
+    guard at all). NOT yet covered: the review seam (`review._run_reviewer`,
+    also reached from `post_done_hook` with `run_review=True`) and the
+    plan/review-pr seams — a test driving those with a default
+    `claude_command` still reaches a real CLI. The guard fires only on a
+    **known agent name**: a fake script (an absolute path under `tmp_path`)
+    runs as before, and a test that stubs either seam itself replaces this
+    patch and never sees it.
     """
     from spec_runner import execution, tdd
 
@@ -114,8 +118,15 @@ def _no_real_agent_calls(monkeypatch):
         # what would actually run is what decides, not the config value that
         # produced it.
         argv = getattr(invocation, "argv", None) or []
+        # A wrapped template (`bash -lc '{cmd} …'`) or the llama-server
+        # branch (`curl …`) hides the agent name deeper in argv, and argv[0]
+        # alone would wave the paid call through (#363 review). Refuse when
+        # a known agent name is visible ANYWHERE in argv, by basename.
+        from pathlib import PurePath
+
         cmd = argv[0] if argv else ""
-        if cmd in PAID_AGENT_COMMANDS:
+        visible = {PurePath(str(part)).name for part in argv}
+        if cmd in PAID_AGENT_COMMANDS or visible & PAID_AGENT_COMMANDS:
             # `execution.RealAgentCallRefused`, not a bare `AssertionError`:
             # `execute_task`'s `try` block also reaches genuine internal
             # asserts (harness/stage invariants), and only this guard's own
