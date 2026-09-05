@@ -264,15 +264,15 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-24
 **Traces to:** [FR-16], [FR-01]
 
 ### TASK-016: Документация и CHANGELOG объявляют новое имя и новое поведение
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-26.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-26
 **Depends on:** [TASK-015]
 
 **Checklist:**
-- [ ] реализовать BEH-26: Документация и CHANGELOG объявляют новое имя и новое поведение
-- [ ] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-26
+- [x] реализовать BEH-26: Документация и CHANGELOG объявляют новое имя и новое поведение
+- [x] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-26
 
 **Traces to:** [FR-09], [FR-10]
 
