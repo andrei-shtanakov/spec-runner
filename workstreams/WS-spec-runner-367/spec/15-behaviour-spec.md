@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "1a580d208e671efd0f881d65f3c1f90a227cd0b0"
+  requirements: "2dd093e140df23a2126ca1dda7d50e5b92287f45"
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
@@ -382,7 +382,7 @@ upstream_hashes:
 `traces: [FR-16]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_outcomes.py`
-- **Given** все комбинации `RunOutcome` × `SelectionProof` × `ExecutionProof` (третья ось FR-08: executed / skipped-deselected / undetermined), включая
+- **Given** все комбинации `RunOutcome` × `SelectionProof` × `ExecutionProof` (третья ось FR-08: executed / not-executed(skip, deselect, xfail, xpass) / undetermined), включая
   `RunOutcome.UNRECOGNIZED`, ошибку сборки/коллекции, падение и таймаут самого
   раннера, отсутствующую evidence и недостижимое окружение.
 - **When** система относит каждую комбинацию к исходу.
@@ -656,7 +656,7 @@ BEH-34; NFR-09 — BEH-16.
 detached-worktree или на ветке задачи (Q-04); переиспользуется ли evidence при
 повторной попытке и по каким правилам (Q-07); расширяется ли словарь селекторов
 до файловых целей (Q-08); где живёт исчерпывающее отображение
-`RunOutcome` × `SelectionProof` → исход (Q-09). Численные значения — потолок
+`(RunOutcome, SelectionProof, ExecutionProof)` → исход (Q-09). Численные значения — потолок
 времени прогона — объявляются на стадии design, и BEH-14 проверяется против
 объявленного значения, а не против константы, зашитой здесь.
 
