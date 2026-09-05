@@ -69,7 +69,10 @@ class TestDocsAndChangelogAnnounceTheRenameAndNewBehaviour:
 
         # FR-09: composite `lint_command` gets one specific, named refusal —
         # fix mode is not applied at all, never a guess at which component.
-        if "composite lint_command" not in changelog and "composite lint_command" not in architecture:
+        if (
+            "composite lint_command" not in changelog
+            and "composite lint_command" not in architecture
+        ):
             missing.append("CHANGELOG.md/architecture.md: the composite lint_command behaviour")
 
         # BEH-07: the pre-freeze repair's boundary — the mechanical fix plus
