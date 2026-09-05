@@ -537,17 +537,15 @@ def run_red_phase(
         _say(f"\u267b\ufe0f  RED: reusing the confirmed red {reusable.checkpoint_id}")
         return RedPhaseResult(RedOutcome.EXPECTED_FAIL, "reused a confirmed red", reusable)
 
-    # #341 BEH-28: a red this task already committed and a DECLARED linter
-    # rejected \u2014 the mechanical fix ran and did not clear it, no checkpoint
-    # was recorded, the attempt failed. Retrying against an unchanged project
-    # is a foregone conclusion (same lint command, same fix command, same
-    # file), so the residue is adopted here, before a fresh authoring call is
-    # even considered \u2014 not after one runs and reproduces no diff, which is
-    # what #261's `_unregistered_red` below still does for every other
-    # rejection reason. Scoped to a declared, non-empty linter only: without
-    # one, the previous rejection could be for a reason the project HAS
-    # changed since (a released claim, #261's own scenario), and skipping
-    # authoring on that guess would be wrong.
+    # #341 BEH-28: a red this task already committed and never registered —
+    # no checkpoint exists, the attempt failed. The residue is adopted here,
+    # before a fresh authoring call is even considered — not after one runs
+    # and reproduces no diff, which is what #261's `_unregistered_red` below
+    # still does for every other shape. WHY the residue was rejected is not
+    # recorded, so no assumption is made about it: the lint (and, if needed,
+    # the BEH-07 agent round) runs against the adopted commit exactly as it
+    # would after authoring. Scoped to a declared linter and to a clean
+    # index/tree — see `_pending_unregistered_red`'s preconditions.
     if config.lint_command and config.lint_command_declared:
         pending = _pending_unregistered_red(config, state, task)
         if pending is not None:
@@ -558,24 +556,35 @@ def run_red_phase(
                     RedOutcome.UNVERIFIABLE,
                     f"no runner adapter for test_command {config.test_command!r}",
                 )
-            parsed_pending = adapter.parse_selector(pending_selector)
-            if isinstance(parsed_pending, SelectorRefusal):
-                return RedPhaseResult(RedOutcome.UNVERIFIABLE, parsed_pending.message)
-            _say(
-                f"\u267b\ufe0f  RED: adopting the unregistered red commit "
-                f"{pending_sha[:12]} without a new authoring call"
-            )
-            return _judge_red_commit(
-                config,
-                state,
-                task,
-                sha=pending_sha,
-                selector=pending_selector,
-                parsed_selector=parsed_pending,
-                baseline_before=baseline,
-                allow_lint_agent_round=False,
-                say=_say,
-            )
+            parsed = adapter.parse_selector(pending_selector)
+            # A SelectorRefusal means the residue's selector no longer parses
+            # under the current runner (test_command changed since the
+            # commit). Refusing here would block the task FOREVER — HEAD
+            # never changes on a refusal — so the residue is simply not
+            # adoptable: fall through to a fresh authoring call (#366 review).
+            parsed_pending = None if isinstance(parsed, SelectorRefusal) else parsed
+            if parsed_pending is not None:
+                _say(
+                    f"\u267b\ufe0f  RED: adopting the unregistered red commit "
+                    f"{pending_sha[:12]} without a new authoring call"
+                )
+                # BEH-28 saves the AUTHORING call; it does not forbid the
+                # BEH-07 agent round. A residue may have been rejected before
+                # lint ever ran (a claim violation, #261's own scenario) —
+                # denying the round would deadlock it on the first lint
+                # finding the fix cannot clear, with no paid path out (#366
+                # review). The round stays budget-gated (#213) either way.
+                return _judge_red_commit(
+                    config,
+                    state,
+                    task,
+                    sha=pending_sha,
+                    selector=pending_selector,
+                    parsed_selector=parsed_pending,
+                    baseline_before=baseline,
+                    allow_lint_agent_round=True,
+                    say=_say,
+                )
 
     # #213: the last point at which refusing costs nothing. A reused red got
     # this far for free, so the guard sits here and not at the top of the
@@ -1733,6 +1742,17 @@ def _pending_unregistered_red(
     if not selector:
         return None
     if state.checkpoint_exists_for_commit(resolve_namespace(config), head):
+        return None
+    # Same precondition `_unregistered_red`'s caller establishes: nothing
+    # staged and no un-committed (non-runtime) work in the tree. A residue
+    # with newer authored bytes hanging over it ("the commit fell over with
+    # work in flight", #261) must go the authoring path, where `_commit_red`
+    # commits that work — adopting HEAD here would byte-lock working-tree
+    # bytes no commit holds and step over the newer version (#366 review).
+    if _staged(config):
+        return None
+    changed, created, delta_error = _fix_delta(config, set())
+    if delta_error or changed or created:
         return None
     return head, selector
 
