@@ -292,7 +292,7 @@ Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-27
 **Traces to:** [FR-05], [FR-08], [FR-13]
 
 ### TASK-018: Отвергнутый после починки red не голодает следующую попытку
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-28.
 Source: workstreams/WS-spec-runner-341/spec/15-behaviour-spec.md#BEH-28
