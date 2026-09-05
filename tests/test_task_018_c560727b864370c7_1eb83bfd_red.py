@@ -114,7 +114,12 @@ class TestRejectedRedRemainderIsAdopted:
         with ExecutorState(cfg) as state:
             run_red_phase(_task(), cfg, state)
 
-        assert calls == [], (
+        # BEH-28's contract is «не платит за новое АВТОРСТВО»: the adopted
+        # residue may still receive the BEH-07 follow-up round (a different,
+        # budget-gated paid call — #366 review fix 1), so only authoring
+        # prompts are forbidden here.
+        authoring_calls = [c for c in calls if not c.startswith("# RED phase follow-up")]
+        assert authoring_calls == [], (
             "the retry paid for a new authoring call instead of adopting the unregistered "
             "remainder left by the declared linter's rejection"
         )
