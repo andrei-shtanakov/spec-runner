@@ -254,16 +254,16 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-26 (—BEH-
 **Traces to:** [FR-19]
 
 ### TASK-011: Живой прогон — собственная стадия (+1 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-30, BEH-31.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-30 (—BEH-31)
 **Depends on:** [TASK-010]
 
 **Checklist:**
-- [ ] реализовать BEH-30: Живой прогон — собственная стадия
-- [ ] реализовать BEH-31: Evidence и путь задачи предъявляются через CLI
-- [ ] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-30, BEH-31
+- [x] реализовать BEH-30: Живой прогон — собственная стадия
+- [x] реализовать BEH-31: Evidence и путь задачи предъявляются через CLI
+- [x] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-30, BEH-31
 
 **Traces to:** [FR-22], [FR-23], [FR-12]
 
