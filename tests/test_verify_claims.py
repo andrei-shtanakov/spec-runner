@@ -28,6 +28,7 @@ import pytest
 from spec_runner import tdd
 from spec_runner.claims import (
     ClaimStatus,
+    ViolationKind,
     check_claims,
     record_claims,
     record_verify_group_claims,
@@ -360,17 +361,26 @@ class TestOperatorDoorForAnUnfinishedVerifyFreeze:
                 release(config, state, "TASK-999", reason="premature")
 
 
-class TestReEntrySupersedesRatherThanStacks:
-    """#383 review, finding 2: every green attempt used to re-freeze at the
-    *current* bytes without retiring the claim the previous attempt left —
-    two ACTIVE claims on one path with different blobs, which no candidate
-    tree can ever satisfy at once (reverting breaks the newer claim, keeping
-    the new bytes breaks the older one). Re-entry now supersedes this task's
-    own prior verify-freeze before writing the new one, the same
-    reuse-before-reclaim rule the RED path already follows
-    (`tdd.py::run_red_phase`, tdd.py:533)."""
+class TestReEntryReusesRatherThanRebaselines:
+    """#383 review round 2, finding 1 (major): superseding this task's own
+    prior verify-freeze on every re-entry let a retry re-baseline the
+    byte-lock onto the agent's own rewrite — the exact laundering BEH-26
+    exists to catch. Scenario the review traced: attempt 1 freezes the group
+    green at B1; the paid pass weakens that very test (still green);
+    `wants_candidate` commits it as the candidate; a transient INSTRUMENT
+    refusal (an unrunnable re-verify, hooks.py's re-verify sites) skips the
+    claims check entirely and the attempt fails without ever judging the
+    rewrite. Attempt 2 enters green off that same, now-weakened HEAD — the
+    old (superseding) code re-baselined the lock onto the weakened bytes
+    there, so `check_claims` judged the rewrite against itself and passed.
 
-    def test_a_second_freeze_supersedes_the_first_rather_than_stacking(self, tmp_path):
+    The bytes the *first* green entry proved must stay locked for the life
+    of the task: a re-entry reuses the standing freeze, and a judged tree
+    that no longer matches it is a claims violation for `check_claims` to
+    catch — not something `record_verify_group_claims` may silently
+    re-baseline onto."""
+
+    def test_a_second_freeze_reuses_the_standing_claim_rather_than_rebaselining(self, tmp_path):
         root = _base_repo(tmp_path)
         config = _cfg(root)
         namespace = resolve_namespace(config)
@@ -386,27 +396,33 @@ class TestReEntrySupersedesRatherThanStacks:
             assert len(first_active) == 1
             first_blob = first_active[0].blob_sha
 
-            # Attempt 2: the paid pass rewrote the group file and
-            # `wants_candidate` committed it, so HEAD and the bytes both
-            # moved before the next entry run re-freezes.
+            # Attempt 2: a paid pass weakened the group file and
+            # `wants_candidate` committed it before a transient, unrelated
+            # refusal skipped the claims check — HEAD moved, but the group's
+            # evidential bytes were never actually judged against a lock.
             (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
-            sha1 = _commit(root, "candidate from attempt 1")
+            sha1 = _commit(root, "candidate from attempt 1 (weakened)")
 
             record_verify_group_claims(config, state, task, sha1, selectors)
             second_active = state.active_claims(namespace)
 
-        assert len(second_active) == 1, (
-            "a re-entry must retire its own prior freeze, not stack a second, "
-            "mutually unsatisfiable claim on the same path"
+        assert len(second_active) == 1, "a re-entry must not stack a second claim either"
+        assert second_active[0].blob_sha == first_blob, (
+            "the bytes the first green entry proved must stay locked for the life of "
+            "the task — a re-entry must reuse the standing freeze, never re-baseline "
+            "it onto a later attempt's rewrite"
         )
-        assert second_active[0].checkpoint_sha == sha1
-        assert second_active[0].blob_sha != first_blob
+        assert second_active[0].checkpoint_sha == sha0, (
+            "the standing claim's own commit identity must not move either"
+        )
         with ExecutorState(config) as state:
-            # The candidate this attempt actually produced must satisfy the gate.
+            # This is where the rewrite must be refused: a claims check
+            # against the candidate the weakened test actually landed in.
             violations = check_claims(config, state, namespace, sha1)
-        assert violations == []
+        assert [v.path for v in violations] == ["tests/test_group.py"]
+        assert violations[0].kind is ViolationKind.MODIFIED
 
-    def test_the_first_freezes_claim_is_marked_superseded_not_left_active(self, tmp_path):
+    def test_the_first_freezes_claim_is_left_active_not_touched(self, tmp_path):
         root = _base_repo(tmp_path)
         config = _cfg(root)
         namespace = resolve_namespace(config)
@@ -424,8 +440,129 @@ class TestReEntrySupersedesRatherThanStacks:
 
             rows = state.claims_for(namespace, task.id)
 
-        statuses = sorted(row[3] for row in rows)
-        assert statuses == sorted([ClaimStatus.SUPERSEDED.value, ClaimStatus.ACTIVE.value])
+        assert [row[3] for row in rows] == [ClaimStatus.ACTIVE.value], (
+            "a re-entry must not touch the standing freeze at all — supersession is "
+            "for release/DONE, not for re-baselining a lock"
+        )
+
+
+class TestBEH26SurvivesAnInstrumentRefusalBetweenAttempts:
+    """#383 review round 2, finding 1: the exact two-attempt shape the review
+    traced end to end (evidence: `tests/test_verify_branching.py:306`'s own
+    `TestBEH21ClaimsReleaseAcrossRetries`, reused here for the green-freeze
+    path). Attempt 1 freezes the group green, its paid pass weakens the
+    evidential test, `wants_candidate` commits that as the candidate, and a
+    transient INSTRUMENT refusal (an unrunnable re-verify) ends the attempt
+    before the claims check ever runs. Attempt 2 enters green off that same,
+    already-weakened HEAD. The standing freeze from attempt 1 must still
+    name attempt 1's original bytes — a rewrite the review would have caught
+    must not slip through just because a later attempt's *own* entry run
+    happened to read green on it.
+    """
+
+    def _post_done_hook_stub(self, root):
+        from spec_runner.hooks import post_done_hook as _real_post_done_hook
+
+        calls: list[int] = []
+
+        def _stub(task, config, success, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                # Mirrors `wants_candidate` committing the paid pass's work
+                # before a later gate/reverify/plugin refuses it
+                # (hooks.py:1011 region) — the weakened test is real and in
+                # HEAD by the time this attempt is recorded as failed.
+                (root / "tests" / "test_group.py").write_text(
+                    "def test_it():\n    assert True  # weakened by attempt 1\n"
+                )
+                _commit(root, "attempt 1: weakened, committed before refusing")
+                return (
+                    False,
+                    "reverify could not be confirmed (infrastructure): transient worktree failure",
+                    "skipped",
+                    "",
+                    False,
+                )
+            # Attempt 2 goes through the REAL hook — including the real
+            # pre-terminal claims gate — so this test proves the standing
+            # freeze actually stops the laundering at the gate, not merely
+            # that the recorded claim data looks right in isolation.
+            return _real_post_done_hook(task, config, success, *args, **kwargs)
+
+        return _stub, calls
+
+    def test_the_weakened_candidate_is_not_laundered_through_on_attempt_two(
+        self, tmp_path, monkeypatch
+    ):
+        root = _base_repo(tmp_path)
+        monkeypatch.setattr(
+            tdd, "_run_agent", MagicMock(side_effect=AssertionError("no red authoring"))
+        )
+        stub, hook_calls = self._post_done_hook_stub(root)
+        task = _verify_first_task()
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+
+        with (
+            patch("spec_runner.execution.update_task_status"),
+            patch("spec_runner.execution.log_progress"),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["echo", "hi"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="test prompt"),
+            patch("spec_runner.execution.post_done_hook", side_effect=stub),
+            patch("spec_runner.execution.pre_start_hook", return_value=True),
+            patch("spec_runner.execution._run_agent_process") as mock_run,
+            ExecutorState(config) as state,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="output TASK_COMPLETE", stderr="", returncode=0
+            )
+
+            attempt_1 = execute_task(task, config, state)
+            assert attempt_1 is False, "attempt 1 must be the one that refuses"
+            claim_after_1 = state.active_claims(namespace)
+            assert len(claim_after_1) == 1, "attempt 1 must have frozen the group"
+            locked_blob = claim_after_1[0].blob_sha
+
+            head_after_1 = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            committed_blob_after_1 = subprocess.run(
+                ["git", "rev-parse", f"{head_after_1}:tests/test_group.py"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            assert locked_blob != committed_blob_after_1, (
+                "the weakened bytes must really have landed in HEAD before attempt 1 "
+                "refused — otherwise this is not the shape the review traced"
+            )
+
+            attempt_2 = execute_task(task, config, state)
+            claim_after_2 = state.active_claims(namespace)
+
+        assert len(hook_calls) == 2, "the fixture must actually walk both attempts"
+        assert attempt_2 is not True, (
+            "the real pre-terminal claims gate must refuse attempt 2 — the weakened "
+            "test must not reach DONE just because attempt 2's own entry run read "
+            "green on it"
+        )
+        assert claim_after_2 and claim_after_2[0].blob_sha == locked_blob, (
+            "the standing freeze must still name attempt 1's original bytes, not the "
+            "weakened candidate attempt 1 committed before refusing"
+        )
+        with ExecutorState(config) as state:
+            head_after_2 = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            violations = check_claims(config, state, namespace, head_after_2)
+        assert violations, (
+            "the weakened test must still read as a claims violation against the "
+            "standing (attempt-1) freeze — attempt 2 must not have laundered it through"
+        )
 
 
 class TestFreezeBytesAreReadFromTheJudgedCommit:
