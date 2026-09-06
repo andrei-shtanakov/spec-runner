@@ -104,7 +104,7 @@ owner_role: stream-owner
   его не трогают.
 
 ### TASK-001: `**Mode:** verify_first` резолвится пер-задачно при любом дефолте проекта
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-01.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-01
