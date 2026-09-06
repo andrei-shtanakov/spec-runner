@@ -353,15 +353,36 @@ def record_verify_group_claims(
     own docstring), so nothing here is written to `red_checkpoints`. A
     checkpoint identity is synthesised only long enough to give each path's
     `Claim` the same `(task, lineage, path, bytes)` shape `record_claims`
-    already produces for a confirmed red.
+    already produces for a confirmed red — and, precisely because nothing is
+    written to `red_checkpoints`, to give `remedy.release` a way to tell a
+    verify-freeze claim apart from one a confirmed red still depends on: a
+    `checkpoint_id` that resolves to no row there is exactly such a claim
+    (#383 review, finding 1).
 
-    The synthesised checkpoint carries no `timestamp`: `checkpoint_id` hashes
-    it in, and `record_claims`'s own dedup keys on
-    `(task_id, checkpoint_id, path, blob_sha)`. A retried attempt that freezes
-    the same commit and selectors again must land on the same id, or the dedup
-    never fires and every retry stacks another `ACTIVE` row for the same file
-    — the invariant `record_claims` documents for itself ("a re-run must not
-    stack duplicate rows").
+    Two properties a plain `record_claims` call cannot give this site, both
+    from #383 review, finding 2:
+
+    - **Bytes from the judged commit, never the working tree.** The live
+      entry run judges `sha` in a disposable worktree (BEH-09); the project's
+      real working tree can differ from it — most sharply when a prior,
+      interrupted attempt left it dirty without committing. Hashing the
+      working tree would freeze bytes nobody replayed, which is exactly the
+      thing this module's own docstring says the byte-lock must never do.
+    - **Re-entry supersedes, it does not stack.** `commit_sha` moves every
+      attempt the paid pass commits a candidate (`wants_candidate`), so a
+      dedup keyed on `checkpoint_id` — which folds `commit_sha` in — can never
+      fire across attempts: every retry added a *second* ACTIVE claim on the
+      same path at different bytes, and no candidate tree could ever satisfy
+      both at once. This task's own prior verify-freeze lineages — and only
+      those — are retired before the new one is written, the same
+      reuse-before-reclaim rule the RED path already follows
+      (`tdd.py::run_red_phase` reusing a confirmed checkpoint, tdd.py:533).
+      Scoped to lineages *this function itself synthesised* (a
+      `checkpoint_id` with no row in `red_checkpoints`): BEH-21 walks a task
+      through the ordinary RED-authoring cycle on one attempt and back to a
+      green entry on a later one, and the genuine confirmed-red claim that
+      earlier attempt took must stand until DONE releases it — this call must
+      not launder it away as a stale freeze it never made.
     """
     from .tdd import RedCheckpoint, RedOutcome, resolve_adapter, resolve_namespace
     from .tdd_runners import Selector
@@ -373,7 +394,17 @@ def record_verify_group_claims(
             "the declared group cannot be claimed"
         )
     namespace = resolve_namespace(config)
-    recorded: list[Claim] = []
+    root = Path(config.project_root)
+    tree = _tree_blobs(root, sha)
+    if tree is None:
+        raise ClaimRefused(
+            f"cannot read the judged commit {sha[:12]}; the declared group cannot be claimed"
+        )
+
+    # Validate every selector and resolve every path's blob before writing
+    # anything: a refusal partway through must not leave this task's prior
+    # freeze already superseded with nothing standing in its place.
+    to_claim: list[tuple[RedCheckpoint, str, str]] = []
     for raw_selector in selectors:
         parsed = adapter.parse_selector(raw_selector)
         if not isinstance(parsed, Selector):
@@ -393,8 +424,41 @@ def record_verify_group_claims(
             outcome=RedOutcome.EXPECTED_FAIL,
             timestamp="",
         )
-        ensure_claimable(config, parsed)
-        recorded.extend(record_claims(config, state, checkpoint, parsed))
+        for path in ensure_claimable(config, parsed):
+            blob = tree.get(path)
+            if blob is None:
+                raise ClaimRefused(
+                    f"cannot claim {path}: not present in the judged commit {sha[:12]}"
+                )
+            to_claim.append((checkpoint, path, blob))
+
+    # This task's own prior verify-freeze lineages are superseded — never
+    # stacked next to the new one — but only the ones with no backing row in
+    # `red_checkpoints`: those are the ones this function itself synthesised.
+    # A confirmed-red claim from the ordinary RED-authoring path (BEH-21's
+    # red-on-entry retried into green) is a different lineage this call must
+    # leave standing; only `abandon`/`repair`/`resume`/DONE retire that kind.
+    prior_freeze_lineages = {
+        c.checkpoint_id
+        for c in state.active_claims(namespace)
+        if c.task_id == task.id and state.checkpoint_by_id(namespace, c.checkpoint_id) is None
+    }
+    for lineage_id in prior_freeze_lineages:
+        state.supersede_claims(namespace, task.id, ClaimStatus.SUPERSEDED, checkpoint_id=lineage_id)
+
+    recorded: list[Claim] = []
+    for checkpoint, path, blob in to_claim:
+        claim = Claim(
+            namespace=checkpoint.namespace,
+            task_id=checkpoint.task_id,
+            checkpoint_id=checkpoint.checkpoint_id,
+            checkpoint_sha=checkpoint.commit_sha,
+            path=path,
+            blob_sha=blob,
+            created_at=datetime.now().isoformat(),
+        )
+        state.record_claim(claim)
+        recorded.append(claim)
     return recorded
 
 
