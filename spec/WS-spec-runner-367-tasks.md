@@ -144,7 +144,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-04 (—BEH-
 **Traces to:** [FR-03], [FR-24]
 
 ### TASK-004: Задача, не объявившая verify-first, ведёт себя в точности как сегодня
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-06.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-06
