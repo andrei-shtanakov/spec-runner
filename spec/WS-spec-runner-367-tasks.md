@@ -294,7 +294,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-33
 **Traces to:** [FR-11], [FR-01]
 
 ### TASK-014: Стоимость класса измерена, и ни один тест не вызывает реального агента
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-34.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-34
