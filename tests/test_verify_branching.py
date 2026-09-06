@@ -25,6 +25,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from spec_runner import tdd
+from spec_runner.claims import ClaimStatus, check_claims
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
 from spec_runner.runner import CliInvocation
@@ -220,6 +221,86 @@ class TestBEH21TestFailureEntersTheOrdinaryTddCycle:
             assert checkpoint is not None, (
                 "BEH-21: the red-authoring pass must leave a confirmed red checkpoint"
             )
+
+
+class TestBEH21ClaimsReleaseAtCompletion:
+    """#381 review, major finding: a `verify_first` task that walks BEH-21's
+    red-authoring cycle records byte-lock claims the same way `tdd` does
+    (`tdd.py::_judge_red_commit`), but until this fix the DONE bookkeeping
+    block (`execution.py`) released claims and recorded a terminal lifecycle
+    row only for `mode == "tdd"` — so the claim stayed `ACTIVE` forever and
+    the `tdd release` operator door stayed unreachable (no DONE row to check).
+
+    The same measurement `tests/test_claims_released_at_completion.py` makes
+    for `tdd`, built for this mode's own red cycle."""
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.execution.post_done_hook",
+        return_value=(True, None, "skipped", "", False),
+    )
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution._run_agent_process")
+    def test_a_red_cycle_task_releases_its_claim_and_reaches_done(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+        monkeypatch,
+    ):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+
+        mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+        with ExecutorState(config) as state:
+            result = execute_task(task, config, state)
+
+            namespace = resolve_namespace(config)
+            history = [h["phase"] for h in state.tdd_phase_history(task.id, namespace)]
+            claims = state.claims_for(namespace, task.id)
+
+            assert claims, "the red-authoring pass must have claimed a file"
+            assert "done" in history, (
+                "a verify_first task that walked the red cycle must leave a "
+                "terminal lifecycle row, or `tdd release` has nothing to check"
+            )
+            assert [row[3] for row in claims] == [ClaimStatus.RELEASED.value] * len(claims), (
+                "the claim on the authored red file must be released at "
+                "completion, the same way a tdd task's is released (#260)"
+            )
+
+            # The measured consequence (#260/#381): a later, legitimate commit
+            # touching the claimed file must not be refused by a claim that
+            # outlived the task it was protecting.
+            (root / "tests" / "test_red_authored.py").write_text(
+                "def test_red_authored():\n    assert True  # fixed legitimately\n"
+            )
+            candidate = _commit(root, "a later legitimate edit")
+            violations = check_claims(config, state, namespace, candidate)
+
+        assert result is True
+        assert violations == [], (
+            "a completed verify_first task's stale claim must not block a "
+            f"later legitimate edit to the same file, got {violations}"
+        )
 
 
 class TestBEH22InstrumentErrorStopsFailClosed:
