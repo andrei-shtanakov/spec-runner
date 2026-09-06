@@ -142,6 +142,13 @@ def print_status(config: ExecutorConfig) -> None:
         attempted = [ts for ts in state.tasks.values() if ts.attempts]
         second_pass = state.get_second_pass_fails()
         if attempted:
+            # #367 BEH-31: the fact and outcome of a task's live verify-first
+            # run, alongside its attempt history — text only for now, same
+            # posture as `_ceiling_in_force` above (a new `--json` key is a
+            # separate, scheduled contract round).
+            from .tdd import resolve_namespace
+
+            namespace = resolve_namespace(config)
             print("\n📝 Task History:")
             for ts in attempted:
                 icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
@@ -165,6 +172,9 @@ def print_status(config: ExecutorConfig) -> None:
                     last_attempt = ts.attempts[-1]
                     if last_attempt.review_status and last_attempt.review_status != "skipped":
                         print(f"      Review: {last_attempt.review_status}")
+                evidence = state.verify_evidence(namespace, ts.task_id)
+                if evidence is not None:
+                    print(f"      Verify: {evidence.outcome} ({evidence.commit_sha[:12]})")
                 # Kind tag on the error line
                 if ts.status == "failed" and ts.last_error:
                     kind = ts.attempts[-1].error_kind if ts.attempts else None

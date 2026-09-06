@@ -1034,6 +1034,51 @@ class ExecutorState:
             actor=row[11],
         )
 
+    def verify_evidence_for_namespace(
+        self, namespace: str, task_id: str | None = None
+    ) -> list["VerifyEvidenceT"]:
+        """Every task's latest verify-evidence row in this workstream (#367 BEH-31).
+
+        `verify_evidence` answers one named task; `tdd status` without a task
+        id needs the whole workspace's most recent verdict per task — the
+        newest row per `task_id`, not the full append-only trail (still
+        reachable per-task through `verify_evidence`).
+        """
+        from .live_verify import VerifyEvidence
+
+        assert self._conn is not None
+        sql = (
+            "SELECT v.task_id, v.namespace, v.commit_sha, v.group_declared, "
+            "v.group_executed, v.config_hash, v.environment_id, v.adapter, "
+            "v.outcome, v.detail, v.timestamp, v.actor FROM verify_evidence v "
+            "INNER JOIN (SELECT task_id, MAX(id) AS max_id FROM verify_evidence "
+            "WHERE namespace = ? GROUP BY task_id) latest "
+            "ON v.task_id = latest.task_id AND v.id = latest.max_id "
+            "WHERE v.namespace = ?"
+        )
+        params: list[object] = [namespace, namespace]
+        if task_id:
+            sql += " AND v.task_id = ?"
+            params.append(task_id)
+        rows = self._conn.execute(sql + " ORDER BY latest.max_id DESC", params).fetchall()
+        return [
+            VerifyEvidence(
+                task_id=r[0],
+                namespace=r[1],
+                commit_sha=r[2],
+                group_declared=tuple(json.loads(r[3])),
+                group_executed=tuple(json.loads(r[4])),
+                config_hash=r[5],
+                environment_id=r[6],
+                adapter=r[7],
+                outcome=r[8],
+                detail=r[9],
+                timestamp=r[10],
+                actor=r[11],
+            )
+            for r in rows
+        ]
+
     def record_claim(self, claim: "ClaimT") -> None:
         """Persist one file claim (#141 slice 2). **Raises** on failure.
 

@@ -699,7 +699,7 @@ def _reverify_before_review(
     from .state import ExecutorState
 
     if reporter:
-        reporter.enter("tests")
+        reporter.enter("verify")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
         recorded = state.record_verify_evidence(task=task, config=config, result=result)
@@ -803,7 +803,7 @@ def _reverify_live_evidence_for_candidate(
         return None
 
     if reporter:
-        reporter.enter("tests")
+        reporter.enter("verify")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
         recorded = state.record_verify_evidence(task=task, config=config, result=result)
