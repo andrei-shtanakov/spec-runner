@@ -12,9 +12,10 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from spec_runner import live_verify as live_verify_module
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
-from spec_runner.live_verify import run_live_verify
+from spec_runner.live_verify import VERIFY_GROUP_TIMEOUT_SECONDS, run_live_verify
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ErrorCode, ExecutorState, PhaseOutcome
 from spec_runner.task import Task
@@ -580,3 +581,106 @@ class TestLiveRunScopingWorksForAnyTestDirectory:
             "a check outside the declared group executed: scoping did not "
             "narrow a non-default test directory"
         )
+
+
+class TestGroupTimeoutBudget:
+    """kind: integration — #375 review round 3, finding 3: the declared
+    ceiling is counted on the GROUP (FR-06: "на ГРУППУ (сумма прогонов)"),
+    not reset per selector — the tasks-spec resolution names an independent
+    `VERIFY_GROUP_TIMEOUT_SECONDS`, a per-selector timeout of
+    `min(REPLAY_TIMEOUT_SECONDS, remaining budget)`, budget exhaustion as an
+    instrument-error, and the budget logged before the first run."""
+
+    def test_the_group_budget_is_logged_before_the_first_run(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        lines: list[str] = []
+        result = run_live_verify(task, config, log_progress=lines.append)
+
+        assert result.passed, result.detail
+        assert lines, "nothing was logged"
+        assert str(VERIFY_GROUP_TIMEOUT_SECONDS) in lines[0] and "budget" in lines[0], (
+            f"the group budget was not the first thing logged: {lines!r}"
+        )
+
+    def test_the_per_selector_timeout_shrinks_with_the_group_budget(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n"
+        )
+        _commit(root, "base")
+
+        task = _task(
+            verifies=[
+                "tests/test_group.py::test_a",
+                "tests/test_group.py::test_b",
+            ]
+        )
+        config = _cfg(root)
+
+        # Five `time.monotonic()` calls for a two-selector group: the group
+        # deadline, then a top-of-loop budget check plus a pre-run timeout
+        # calculation for each selector. Jumping 1000s "between" the two
+        # selectors simulates the first one having spent most of the group's
+        # budget, well past what a fresh REPLAY_TIMEOUT_SECONDS (900s) would
+        # allow.
+        clock = iter([0.0, 0.0, 0.0, 1000.0, 1000.0])
+        monkeypatch.setattr(live_verify_module.time, "monotonic", lambda: next(clock, 1000.0))
+
+        real_run = live_verify_module.subprocess.run
+        timeouts: list[float] = []
+
+        def _tracked_run(argv, **kwargs):
+            if "timeout" in kwargs:  # only the per-selector test run passes one
+                timeouts.append(kwargs["timeout"])
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(live_verify_module.subprocess, "run", _tracked_run)
+
+        result = run_live_verify(task, config)
+
+        assert result.passed, result.detail
+        assert len(timeouts) == 2, f"expected one timeout per selector, got {timeouts!r}"
+        assert timeouts[0] == 900, f"the first selector should get the full ceiling: {timeouts!r}"
+        assert timeouts[1] == 800, (
+            f"the second selector's timeout did not shrink with the spent budget: {timeouts!r}"
+        )
+
+    def test_an_exhausted_budget_refuses_before_running_the_next_selector(
+        self, tmp_path, monkeypatch
+    ):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        # The group deadline is set, then the very first budget check finds
+        # the clock already 5000s past it.
+        clock = iter([0.0, 5000.0])
+        monkeypatch.setattr(live_verify_module.time, "monotonic", lambda: next(clock, 5000.0))
+
+        real_run = live_verify_module.subprocess.run
+        ran_the_selector = False
+
+        def _tracked_run(argv, **kwargs):
+            nonlocal ran_the_selector
+            if "timeout" in kwargs:
+                ran_the_selector = True
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(live_verify_module.subprocess, "run", _tracked_run)
+
+        result = run_live_verify(task, config)
+
+        assert not ran_the_selector, "the selector ran despite an exhausted group budget"
+        assert not result.ran
+        assert not result.passed
+        assert "budget" in result.detail
+        assert str(VERIFY_GROUP_TIMEOUT_SECONDS) in result.detail

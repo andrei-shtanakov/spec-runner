@@ -43,6 +43,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,17 @@ from .git_ops import is_composite_shell_command
 from .task import Task
 from .tdd import REPLAY_TIMEOUT_SECONDS, resolve_adapter
 from .tdd_runners import ReplayEnvironmentRefusal, RunOutcome, SelectionProof, SelectorRefusal
+
+#: The GROUP's timeout ceiling (#375 review round 3, finding 3 / #367 FR-06,
+#: NFR-02, tasks-spec resolutions): FR-06 counts the declared ceiling "на
+#: ГРУППУ (сумма прогонов)", not per selector — a hung fixture in a five-
+#: selector group must not cost `5 * REPLAY_TIMEOUT_SECONDS` before the task
+#: even reaches its first paid call. An independent named constant, not a
+#: multiple of `REPLAY_TIMEOUT_SECONDS`: each selector's own timeout still
+#: shrinks to whatever is left of the group's budget (`min(
+#: REPLAY_TIMEOUT_SECONDS, remaining)`), so the two ceilings compose rather
+#: than one silently absorbing the other.
+VERIFY_GROUP_TIMEOUT_SECONDS = 1800
 
 
 @dataclass(frozen=True)
@@ -143,8 +155,27 @@ def run_live_verify(
         )
 
     cleanup_paths: list[Path] = []
+    # The group's budget is logged before the first run, not discovered
+    # after the fact (tasks-spec resolution) — an operator watching the log
+    # sees the ceiling this group is held to before any selector executes.
+    group_deadline = time.monotonic() + VERIFY_GROUP_TIMEOUT_SECONDS
+    if log_progress is not None:
+        log_progress(
+            f"⏳ verify: group budget {VERIFY_GROUP_TIMEOUT_SECONDS}s for "
+            f"{len(task.verifies)} selector(s)"
+        )
     try:
         for raw_selector in task.verifies:
+            remaining = group_deadline - time.monotonic()
+            if remaining <= 0:
+                return VerifyRunResult(
+                    sha,
+                    False,
+                    False,
+                    f"verify group budget ({VERIFY_GROUP_TIMEOUT_SECONDS}s) exhausted "
+                    f"before {raw_selector} could run",
+                )
+
             parsed = adapter.parse_selector(raw_selector)
             if isinstance(parsed, SelectorRefusal):
                 # Validated already (`validate._validate_verify_first_declarations`)
@@ -164,12 +195,18 @@ def run_live_verify(
             argv = adapter.build_scoped_command(config.test_command, parsed)
             if log_progress is not None:
                 log_progress(f"⏳ verify: {raw_selector}")
+            # #375 review round 3, finding 3: the per-selector timeout
+            # shrinks with the group's remaining budget instead of always
+            # being the full `REPLAY_TIMEOUT_SECONDS` — a later selector in
+            # the group gets whatever is left, not a fresh allowance.
+            remaining = group_deadline - time.monotonic()
+            selector_timeout = min(float(REPLAY_TIMEOUT_SECONDS), max(remaining, 0.0))
             result = subprocess.run(
                 argv,
                 cwd=worktree,
                 capture_output=True,
                 text=True,
-                timeout=REPLAY_TIMEOUT_SECONDS,
+                timeout=selector_timeout,
                 env={**os.environ, **prepared.env},
             )
 
