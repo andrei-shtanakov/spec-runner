@@ -174,7 +174,12 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
             checkpoint_sha=head.stdout.strip() if head.returncode == 0 else "",
             config=config,
             state=state,
-            facts={"execution_mode": "tdd"},
+            # #367 BEH-24/FR-17 audit: the task's own resolved value, not a
+            # literal — this call site is reached only under `tdd` today, but
+            # the gate is entitled to see what actually ran, the same reason
+            # `_judge_red_commit` no longer writes a literal into the
+            # checkpoint it records (tdd.py, TASK-015).
+            facts={"execution_mode": config.resolve_execution_mode(task)},
         ),
     )
     if outcome.status is GateStatus.SATISFIED:
@@ -221,18 +226,33 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
     action of the task, before any paid call — including before `tdd`'s RED
     authoring pass, which is otherwise the earliest thing execution does.
 
-    Deliberately does not go through `gates.py`: the green-only / TDD /
-    instrument-error branching this outcome eventually drives is later work
-    (#367 FR-08+/FR-14, TASK-006/008). Only an INSTRUMENT-classified run
-    refuses here — the run itself could not establish a verdict, which is the
-    one case this phase is entitled to stop over before that branching
-    exists. A genuine, attributable test failure (#375 review) is recorded as
-    an observation and the task proceeds exactly as it would under `standard`
-    today: FR-14 sends `test-failure` into the ordinary cycle rather than
-    treating a red group as a reason to refuse, and until the dedicated
-    branch exists, "proceed unchanged" is the only reading of FR-14 that does
-    not invert the mode's main path.
+    `ensure_red_gate()` is called first (#367 BEH-24/FR-17): a task that
+    opted into `verify_first` on its own, in a project whose default is
+    `standard`, is otherwise the one configuration with no per-task
+    registration site at all — the RED phase's own `_run_red_phase_gate`
+    calls it too, but that path never runs for this mode, and
+    `register_builtin_gates` only attaches it for a *project-wide* `tdd`/
+    `verify_first` default. Without this call `has_gates()` stays false for
+    such a task and the pre-terminal block and pre-review claims check
+    (hooks.py) never run at all — fail-open, not merely lenient. Registering
+    here, before the run, does not itself decide anything: this phase still
+    does not call `evaluate_gates` — the green-only / TDD / instrument-error
+    branching the outcome eventually drives is later work (#367 FR-13-15,
+    TASK-008) — it only ensures the gate exists for whoever evaluates it
+    later (`_red_gate`'s `verify_first` branch, `gates.py`).
+
+    Only an INSTRUMENT-classified run refuses here — the run itself could not
+    establish a verdict, which is the one case this phase is entitled to stop
+    over before that branching exists. A genuine, attributable test failure
+    (#375 review) is recorded as an observation and the task proceeds exactly
+    as it would under `standard` today: FR-14 sends `test-failure` into the
+    ordinary cycle rather than treating a red group as a reason to refuse,
+    and until the dedicated branch exists, "proceed unchanged" is the only
+    reading of FR-14 that does not invert the mode's main path.
     """
+    from .gates import ensure_red_gate
+
+    ensure_red_gate()
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
@@ -418,6 +438,12 @@ def execute_task(
         _fail_for_budget(task, config, state, green_refusal.reason, reporter.current)
         return False
 
+    # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. This is the
+    # `tdd`-lifecycle machine (READY/RED_AUTHORING/GREEN_IMPLEMENTING/...);
+    # giving `verify_first` its own lifecycle transitions ("lifecycle
+    # transitions are not weakened", BEH-29) is FR-21/TASK-009's scope, not
+    # this one's — recording a phase this machine was never designed to carry
+    # would be inventing that behaviour ahead of its own task.
     if config.resolve_execution_mode(task) == "tdd":
         _record_phase(state, config, task, TddPhase.GREEN_IMPLEMENTING)
 
@@ -642,6 +668,14 @@ def execute_task(
                 # has several successful exits (merged, already on main, merge
                 # skipped) and the lifecycle should not have to know which one
                 # happened — only that the task finished.
+                #
+                # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. A
+                # `verify_first` task never has claims to release here — its
+                # declared group is not frozen yet; freezing it, and
+                # extending this exact site to release that freeze on DONE,
+                # is FR-19/TASK-010's job. Recording a DONE lifecycle phase
+                # here has the same `tdd`-only reason as the
+                # GREEN_IMPLEMENTING site above (FR-21/TASK-009).
                 if config.resolve_execution_mode(task) == "tdd":
                     _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)

@@ -838,7 +838,7 @@ def _judge_red_commit(
         baseline_sha=baseline,
         selector=selector,
         environment_id=verification.environment_id,
-        execution_mode="tdd",
+        execution_mode=config.resolve_execution_mode(task),
         config_hash=_config_hash(config),
         outcome=verification.outcome,
         timestamp=datetime.now().isoformat(),

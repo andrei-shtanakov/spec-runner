@@ -201,10 +201,14 @@ def append_frozen_files(
     from the prompt while the gate went on enforcing it. A template variable
     may exist for placement; this append is what makes it arrive.
 
-    Dormant outside TDD, and dormant before reading anything: the claims gate
-    is evaluated per task and skips a task whose mode is not `tdd`, so telling
-    such a task about a lock nothing will check would be noise bought with a
-    state-DB open on every prompt of every ordinary run.
+    Dormant outside TDD, and dormant before reading anything: `active_claim_paths`
+    only ever has rows for a task whose red was authored and frozen through
+    `tdd._judge_red_commit`, which is `tdd`-only work. #367 BEH-24/FR-17
+    audit: `verify_first` stays out of this site on purpose, not by the same
+    "third mode reads as no guarantees" mistake the gates themselves had —
+    a verify-first task freezes nothing yet (FR-19/TASK-010's job), so there
+    is truthfully no lock to tell it about; extending this site is that
+    task's to do once one exists.
     """
     if config.resolve_execution_mode(task) != "tdd":
         return prompt
