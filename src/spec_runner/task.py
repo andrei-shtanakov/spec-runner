@@ -57,6 +57,20 @@ BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
 # would hide exactly the typo the resolver exists to catch.
 MODE = re.compile(r"\*\*Mode:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
+# #367 FR-02: the declared verify-first check group — a machine-readable
+# metadata line in the same row as `**Mode:**`/`**Traces to:**`, never
+# inferred from `Traces to`, filenames, the diff, or checklist prose (BEH-03).
+# Two forms: a comma-separated list on the same line, or a multi-line block
+# (`- <selector>` per line) when the line after the marker has no trailing
+# content — the only form that can carry a pytest node id containing a comma
+# in its own parametrize suffix. Selectors are stored verbatim and in the
+# declared order; an unparseable one is refused later (BEH-04/BEH-05), not
+# mapped to something plausible here.
+VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
+# A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
+# block immediately followed by a checklist without a separating field never
+# swallows the checklist's first line as a selector.
+VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
 
 # "review" (🔍, #66): gates passed, code review/commit still running — an
 # interrupted run leaves this honest intermediate instead of a bare
@@ -87,6 +101,10 @@ class Task:
     #: project default. Resolved — and validated — by
     #: `ExecutorConfig.resolve_execution_mode`.
     execution_mode: str | None = None
+    #: Declared verify-first check group (#367 FR-02), verbatim and in the
+    #: exact declared order — never sorted, deduplicated, or inferred from
+    #: anything else. Empty when no `**Verifies:**` line is present.
+    verifies: list[str] = field(default_factory=list)
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -121,6 +139,9 @@ def parse_tasks(filepath: Path) -> list[Task]:
     current_milestone = ""
     in_checklist = False
     in_tests = False
+    # #367 BEH-02: True right after a bare `**Verifies:**` line (no trailing
+    # content) until a line that isn't `- <selector>` ends the block.
+    in_verifies = False
 
     for i, line in enumerate(lines):
         # Determine milestone
@@ -150,10 +171,21 @@ def parse_tasks(filepath: Path) -> list[Task]:
             )
             in_checklist = False
             in_tests = False
+            in_verifies = False
             continue
 
         if not current_task:
             continue
+
+        # `**Verifies:**` multi-line block continuation (#367 BEH-02): must be
+        # checked before description capture below, or a selector line would
+        # leak into the description and the declared group would stay empty.
+        if in_verifies:
+            verifies_item_match = VERIFIES_ITEM.match(line)
+            if verifies_item_match:
+                current_task.verifies.append(verifies_item_match.group(1).strip())
+                continue
+            in_verifies = False
 
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
@@ -231,6 +263,18 @@ def parse_tasks(filepath: Path) -> list[Task]:
         mode_match = MODE.search(line)
         if mode_match:
             current_task.execution_mode = mode_match.group(1).strip().lower()
+            continue
+
+        verifies_match = VERIFIES.search(line)
+        if verifies_match:
+            trailing = verifies_match.group(1).strip()
+            if trailing:
+                current_task.verifies = [s.strip() for s in trailing.split(",") if s.strip()]
+                in_verifies = False
+            else:
+                current_task.verifies = []
+                in_verifies = True
+            continue
 
     if current_task:
         tasks.append(current_task)
