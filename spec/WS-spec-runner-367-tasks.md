@@ -223,7 +223,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-20 (—BEH-
 **Traces to:** [FR-13], [FR-05], [FR-14], [FR-15]
 
 ### TASK-009: Пред-терминальная оценка, waiver и lifecycle (+2 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ⏸️ BLOCKED   Est: 0.5d
 
 Реализовать сценарии BEH-25, BEH-28, BEH-29 (Given всех трёх — уже
 пройденный green-only путь, поэтому строго ПОСЛЕ TASK-008; BEH-24
