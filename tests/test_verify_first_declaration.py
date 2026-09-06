@@ -95,6 +95,31 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_c.py::test_z" not in tasks[0].description
 
+    def test_indented_bulleted_list_is_accepted_verbatim(self, tmp_path):
+        """A block item is recognized POSITIONALLY (any bullet), never by
+        content, and that includes tolerating indentation — the same
+        allowance `TASK_META` already gives its own bullet prefix
+        (`[ \\t]*[-*]\\s+`, #123: agents editing tasks.md mid-run introduce
+        it). Round 5: an indented block list previously matched nothing,
+        so the whole declared group silently vanished (`verifies == []`,
+        indistinguishable from a deliberately empty group)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "  - tests/test_a.py::test_x\n"
+            "  - tests/test_b.py::test_y\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == [
+            "tests/test_a.py::test_x",
+            "tests/test_b.py::test_y",
+        ]
+
     def test_prose_bullet_after_a_blank_line_is_consumed_verbatim_declared_by_position(
         self, tmp_path
     ):

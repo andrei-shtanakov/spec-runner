@@ -76,28 +76,46 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # along with `validate`), and `validate_task_fields` turns the per-task
 # marker into a named, quoted error.
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
-# A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
-# block immediately followed by a checklist without a separating field never
-# swallows the checklist's first line as a selector. Every OTHER bullet is a
-# declared selector, stored VERBATIM, with no judgment of its shape (#372
-# round 4 — after two wrong turns): round 2 required no whitespace and
-# rejected a legal pytest node id whose parametrize suffix has a comma AND
-# a space (`test_y[a, b]`); round 3 then required `::` and made every
-# ExUnit selector (`path:LINE`, no `::` — see `ExUnitAdapter.parse_selector`)
-# undeclarable in the block form, while still silently dropping any pytest
-# target the adapter itself would refuse instead of storing it for that
-# later refusal to quote (BEH-04/BEH-05). A selector's shape is the
-# ADAPTER's judgment (FR-02), never the parser's — the single-line comma
-# form already stores everything verbatim with no shape check, and the
-# block form must agree with it on identical input. A bullet that reads as
-# prose (`- перепроверить после мержа WS-341`) is therefore not filtered
-# here either: it is stored like any other item and refused later with a
-# quote, the same contract `**Mode:**` already holds for an unrecognized
-# value. What closes the block is purely structural, never a bullet's
-# content — see the `in_verifies` handling below, which round 5 also
-# corrects: blank lines between items ("loose list" markdown) are fully
-# transparent, not just leading ones.
-VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
+# The block form's final design (#372, five review rounds — documented here
+# in full so a sixth round doesn't rediscover the same dead ends):
+#
+# - A block item is recognized POSITIONALLY, never by content. It is ANY
+#   bulleted line (optionally indented, `[ \t]*[-*]\s+` — the same tolerance
+#   TASK_META already gives its own bullet prefix, #123) except a checklist
+#   checkbox (`- [ ] ...`/`- [x] ...`, excluded below so a `**Verifies:**`
+#   block immediately followed by a checklist never swallows its first
+#   line). Everything captured is stored VERBATIM, unjudged: round 2 tried
+#   "no embedded whitespace" and rejected a legal pytest node id whose
+#   parametrize suffix has a comma AND a space (`test_y[a, b]`); round 3
+#   then tried "looks like `path::name`" and made every ExUnit selector
+#   (`path:LINE`, which `ExUnitAdapter.parse_selector` requires and refuses
+#   `::` for) undeclarable in the block form, while still silently dropping
+#   any pytest target the adapter itself would refuse instead of storing it
+#   for that later refusal to quote (BEH-04/BEH-05); round 5 then found
+#   that even an indented list (no leading whitespace tolerance at all)
+#   silently emptied the whole group. A selector's shape is the ADAPTER's
+#   judgment (FR-02), never the parser's — the single-line comma form
+#   already stores everything verbatim with no shape check, and the block
+#   form must agree with it on identical input. A bullet that reads as
+#   prose (`- перепроверить после мержа WS-341`) is therefore not filtered
+#   either: declared by position, judged by the adapter later, quoting it
+#   back — the same contract `**Mode:**` already holds for an unrecognized
+#   value.
+# - The block CLOSES purely structurally, never by guessing at content: it
+#   runs from the marker to the nearest of — a checklist item, a `**...**`
+#   field, the priority/status (`Est:`/TASK_META) line, a new task header
+#   (handled above, before this point), or a non-blank line that is not
+#   itself a bullet (an ordinary prose PARAGRAPH). Blank lines inside the
+#   block are fully transparent — both leading (before the first item) and
+#   between items (a "loose list" in markdown terms, legal and common) —
+#   round 5 found round 4's "a blank line after an item closes the block"
+#   rule silently truncated a loose-list declaration to its first item,
+#   the same silent-loss class this whole design exists to close. Once the
+#   block closes, it never reopens (round 4): a bullet appearing after the
+#   closing paragraph lands in `description` like any other text,
+#   deliberately — the boundary is structural, not a search for more
+#   selectors further down.
+VERIFIES_ITEM = re.compile(r"^[ \t]*[-*]\s+(?!\[[ x]\])(.+)$")
 
 
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
@@ -239,22 +257,13 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # `**Verifies:**` multi-line block continuation (#367 BEH-02): must be
         # checked before description capture below, or a selector line would
         # leak into the description and the declared group would stay empty.
-        # The block is closed PURELY structurally (#372 round 4) — never by
-        # guessing at a selector's shape. It is the first CONTIGUOUS run of
-        # non-checkbox bullets under the marker, and blank lines inside it
-        # are fully transparent regardless of position (#372 round 5): both
-        # leading (round 1's idiomatic-markdown case) and between two items
-        # — a "loose list" in markdown terms, legal and common — since round
-        # 4's "a blank line after an item closes the block" rule silently
-        # truncated a loose-list declaration to its first item, the same
-        # silent-loss class this whole feature exists to close. A checklist
-        # item, a `**...**` field, the priority/status line (`Est:`/
-        # TASK_META), or an ordinary non-bulleted prose line close it, by
-        # simply not matching `VERIFIES_ITEM` and falling through to be
-        # handled by their own branch below in this same iteration (a new
-        # task header is handled above, before this point is ever reached);
-        # once closed, the block never reopens — a bullet appearing after
-        # such a closing line lands in `description` like any other text.
+        # See `VERIFIES_ITEM` above for the full, five-rounds-settled design:
+        # blank lines are fully transparent regardless of position (a loose
+        # markdown list is legal), any bulleted line — indented or not — is
+        # a verbatim item, and anything else closes the block by simply not
+        # matching `VERIFIES_ITEM` and falling through to be handled by its
+        # own branch below in this same iteration (a new task header is
+        # handled above, before this point is ever reached).
         if in_verifies:
             if not line.strip():
                 continue
