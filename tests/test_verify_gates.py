@@ -494,3 +494,94 @@ class TestInstrumentErrorWithNoStateToRead:
         result = evaluate_claims(_ctx(None, cfg, _head(root), mode="verify_first"))
 
         assert result.status is GateStatus.INSTRUMENT_ERROR
+
+
+class TestCandidateEvidenceRefreshesBeforeTheGate:
+    """#380 review finding 1 — kind: integration, through the real
+    `execute_task` -> `post_done_hook` path (`post_done_hook` unmocked, unlike
+    every other `execute_task` scenario in this module and in
+    `test_verify_run_order.py`): a group red on entry, the today-working
+    FR-14 path, must still be able to reach DONE once the implementation
+    pass fixes it — `_verify_first_gate` must judge the candidate, not the
+    pre-implementation snapshot `_run_verify_first_phase` recorded before the
+    paid call."""
+
+    def test_a_group_red_on_entry_that_the_fix_makes_green_reaches_done(self, tmp_path):
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented yet'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "red group")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            # The agent implements the behaviour the declared group checks.
+            (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is True, (
+            "a group red on entry that the implementation pass fixed should reach "
+            "DONE — the pre-terminal gate must judge the candidate's own evidence, "
+            "not the pre-implementation snapshot"
+        )
+
+    def test_a_group_still_red_after_the_attempt_stays_blocked(self, tmp_path):
+        """The other half of the same fix: re-verifying must not turn into a
+        second, weaker gate that lets an unfixed group through."""
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented yet'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "red group")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            # The agent touches something else and never fixes the group.
+            (root / "README.md").write_text("notes\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is False

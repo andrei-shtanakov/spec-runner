@@ -639,6 +639,49 @@ def _commit_blocked_status(
     return _with_note(blocked, problem)
 
 
+def _reverify_live_evidence_for_candidate(
+    task: Task, config: ExecutorConfig, reporter: StageReporter | None
+) -> None:
+    """Re-run the declared verify group against the merge candidate (#380 review).
+
+    `_run_verify_first_phase` (execution.py) records the only evidence a
+    `verify_first` task has *before* the implementation call — the sole
+    guarantee available at that point in the attempt. `_verify_first_gate`
+    (gates.py) reads the *latest* evidence row for the task, so a group that
+    was red on entry (FR-14's "ordinary cycle", left unbranched until #367
+    TASK-008) had no way to ever produce a green row inside the same attempt:
+    the implementation pass could fix the group entirely and the gate would
+    still be judging the pre-implementation failure, refusing a candidate
+    whose declared tests now pass — the guaranteed-refusal case #380's review
+    found (with `auto_commit: false`, permanently; with it on, only after
+    burning a full extra paid attempt).
+
+    Re-running here, against the already-committed candidate, gives the gate
+    evidence about what it is actually being asked to merge. That is the
+    reading BEH-19/BEH-20 already commit to — "the red-gate is satisfied by a
+    reference to evidence about this tree", not to a specific run number.
+    Nothing about FR-13/FR-14's own branching (still TASK-008's scope)
+    changes: a group still red after the fix is recorded as red again, and
+    the gate stays exactly as unsatisfied as it does today.
+
+    A no-op for every other mode, and for a `verify_first` task whose gate is
+    not even registered: `run_live_verify` replays the declared group in its
+    own worktree, and nothing should pay for a run whose answer nothing will
+    read (#164 criterion 8 — dormant unless a consumer registers).
+    """
+    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
+        return
+    from .live_verify import run_live_verify
+    from .runner import log_progress
+    from .state import ExecutorState
+
+    if reporter:
+        reporter.enter("tests")
+    result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    with ExecutorState(config) as state:
+        state.record_verify_evidence(task=task, config=config, result=result)
+
+
 def post_done_hook(
     task: Task,
     config: ExecutorConfig,
@@ -1052,6 +1095,11 @@ def post_done_hook(
     # "verifying the green" means; the phase is recorded here, once, after they
     # have all run and before anything decides on them.
     _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
+
+    # #380 review finding 1: the candidate the gate below is about to judge
+    # gets fresh evidence, not the pre-implementation snapshot
+    # `_run_verify_first_phase` recorded before the paid call.
+    _reverify_live_evidence_for_candidate(task, config, reporter)
 
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
     if has_gates():
