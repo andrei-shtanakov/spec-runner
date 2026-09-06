@@ -190,7 +190,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-10 (—BEH-
 **Traces to:** [FR-07], [FR-15], [FR-08], [FR-09], [FR-06], [FR-16]
 
 ### TASK-007: Evidence durable и несёт полный объявленный состав (+5 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-19)
