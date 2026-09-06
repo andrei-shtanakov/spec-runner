@@ -29,7 +29,7 @@ from spec_runner.gates import (
 )
 from spec_runner.live_verify import VerifyRunResult, run_live_verify
 from spec_runner.runner import CliInvocation
-from spec_runner.state import ErrorCode, ExecutorState
+from spec_runner.state import ErrorCode, ExecutorState, ReviewVerdict
 from spec_runner.task import Task
 
 
@@ -758,3 +758,116 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
 
         assert result is False
         mock_review.assert_not_called()
+
+    def test_review_passed_without_fixes_does_not_replay_the_group_again(self, tmp_path):
+        """#380 review round 3 finding 2: `_reverify_before_review` already
+        replayed the group at the candidate commit and recorded GREEN;
+        review PASSED without committing anything (review.py only commits
+        when it actually fixed something), so HEAD has not moved. The
+        authoritative, late re-verify must not pay for an identical replay
+        of the identical commit."""
+        root = _repo(tmp_path)  # the declared group is green from the start
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_review=True,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        calls: list[int] = []
+        real_run_live_verify = run_live_verify
+
+        def _counted(*args, **kwargs):
+            calls.append(1)
+            return real_run_live_verify(*args, **kwargs)
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            patch(
+                "spec_runner.hooks.run_code_review",
+                return_value=(ReviewVerdict.PASSED, None, "looks good"),
+            ),
+            patch("spec_runner.live_verify.run_live_verify", side_effect=_counted),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is True
+        assert len(calls) == 1, (
+            f"expected exactly one live-verify replay (the pre-review check "
+            f"already confirmed GREEN and HEAD never moved), got {len(calls)}"
+        )
+
+    def test_a_failed_evidence_write_refuses_rather_than_trusting_stale_evidence(self, tmp_path):
+        """#380 review round 3 finding 3: `record_verify_evidence` is
+        deliberately best-effort (bookkeeping must not fail a run) — but a
+        swallowed write for the *re-verify* must not read as "nothing to
+        report" and let the gate fall back to an older, stale GREEN row.
+        The entry evidence (green) writes for real; the late re-verify's own
+        write is forced to fail, simulating exactly that swallowed
+        exception."""
+        root = _repo(tmp_path)  # the declared group starts green
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_review=False,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            # Breaks the declared group.
+            (root / "tests" / "test_group.py").write_text(
+                "def test_it():\n    assert False, 'broken by the fix'\n"
+            )
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        original_record = ExecutorState.record_verify_evidence
+        calls = {"n": 0}
+
+        def flaky_record(self, *, task, config, result):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # The entry evidence (green, pre-implementation) — real.
+                return original_record(self, task=task, config=config, result=result)
+            # The late re-verify's write — simulate a swallowed exception.
+            return False
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            patch.object(ExecutorState, "record_verify_evidence", flaky_record),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+            ts = state.get_task_state(task.id)
+
+        assert result is False, (
+            "a candidate the re-verify found red must not merge just because "
+            "the fresh evidence write was swallowed and an older GREEN row "
+            "still stands"
+        )
+        last = ts.attempts[-1]
+        assert last.error_code is ErrorCode.INFRASTRUCTURE
+        assert "could not be recorded" in (last.error or "")

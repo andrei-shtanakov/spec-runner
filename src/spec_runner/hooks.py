@@ -723,7 +723,18 @@ def _reverify_before_review(
         reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
-        state.record_verify_evidence(task=task, config=config, result=result)
+        recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    if not recorded:
+        # #380 review round 3 finding 3: a swallowed write must not read as
+        # "nothing to report" — the pre-terminal gate's next read would find
+        # whatever evidence predates this run (possibly a stale GREEN row
+        # for an ancestor commit) and merge a candidate this very replay
+        # never confirmed. Fail loud instead of trusting bookkeeping to
+        # carry a verdict.
+        return Refusal(
+            f"verify-first re-check before review could not be recorded: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
     if result.outcome is VerifyOutcome.GREEN:
         return None
     kind = (
@@ -735,9 +746,13 @@ def _reverify_before_review(
 
 
 def _reverify_live_evidence_for_candidate(
-    task: Task, config: ExecutorConfig, reporter: StageReporter | None
-) -> None:
-    """Re-run the declared verify group against the merge candidate (#380 review).
+    task: Task,
+    config: ExecutorConfig,
+    reporter: StageReporter | None,
+    review_checkpoint_sha: str,
+) -> Refusal | None:
+    """Re-run the declared verify group against the merge candidate (#380
+    review). Returns a refusal, or None to proceed.
 
     `_run_verify_first_phase` (execution.py) records the only evidence a
     `verify_first` task has *before* the implementation call — the sole
@@ -759,7 +774,15 @@ def _reverify_live_evidence_for_candidate(
 
     This is the *authoritative* re-verify — it runs last, right before the
     pre-terminal gate, so it also catches anything a review fix
-    (`ReviewVerdict.FIXED`) changed after `_reverify_before_review` ran.
+    (`ReviewVerdict.FIXED`) changed after `_reverify_before_review` ran. As of
+    #380 review round 3 finding 3, it also *decides*, the same way
+    `_reverify_before_review` does, rather than only writing evidence for
+    `_verify_first_gate`'s next read to interpret: `record_verify_evidence`
+    is deliberately best-effort (bookkeeping must not fail the run that
+    produced it), so a swallowed write used to leave the gate reading
+    whatever evidence predated this run — possibly a stale GREEN row for an
+    ancestor commit — and merge a candidate this very replay found red.
+    `result` (and whether the write actually landed) decides here, directly.
 
     `auto_commit: false` skips the run here too, but for a different reason
     than the refusal `_reverify_before_review` already issues for a
@@ -768,6 +791,16 @@ def _reverify_live_evidence_for_candidate(
     would replay the identical commit for the identical, already-recorded
     answer — never new information, only a second, avoidable subprocess
     replay of the whole group.
+
+    `config.run_review` with HEAD unchanged since `_reverify_before_review`
+    ran (#380 review round 3 finding 2) skips for the same reason: that
+    check already replayed this exact commit and, because it returned None,
+    already durably recorded GREEN for it (a failed write there returns a
+    refusal instead of None — see above — so reaching this branch is proof
+    the earlier row exists). A review verdict that commits nothing (PASSED,
+    FAILED, NOT_RUN) leaves HEAD exactly where that check found it; only
+    `ReviewVerdict.FIXED` moves it, which is what this function still exists
+    to catch.
 
     A no-op for every other mode, and for a `verify_first` task whose gate is
     not even registered: `run_live_verify` replays the declared group in its
@@ -779,16 +812,33 @@ def _reverify_live_evidence_for_candidate(
         or not has_gates()
         or not config.auto_commit
     ):
-        return
-    from .live_verify import run_live_verify
+        return None
+
+    from .live_verify import VerifyOutcome, run_live_verify
     from .runner import log_progress
     from .state import ExecutorState
+
+    if config.run_review and review_checkpoint_sha and _head_sha(config) == review_checkpoint_sha:
+        return None
 
     if reporter:
         reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
-        state.record_verify_evidence(task=task, config=config, result=result)
+        recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    if not recorded:
+        return Refusal(
+            f"verify-first re-check could not be recorded: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
+    if result.outcome is VerifyOutcome.GREEN:
+        return None
+    kind = (
+        RefusalKind.INSTRUMENT
+        if result.outcome is VerifyOutcome.INSTRUMENT_ERROR
+        else RefusalKind.POLICY
+    )
+    return Refusal(f"verify-first re-check: {result.detail}", kind)
 
 
 def post_done_hook(
@@ -1218,12 +1268,21 @@ def post_done_hook(
     # have all run and before anything decides on them.
     _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
 
-    # #380 review finding 1: the candidate the gate below is about to judge
-    # gets fresh evidence, not the pre-implementation snapshot
-    # `_run_verify_first_phase` recorded before the paid call.
-    _reverify_live_evidence_for_candidate(task, config, reporter)
-
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
+
+    # #380 review finding 1 (round 1) / round 3 finding 3: the candidate the
+    # gate below is about to judge gets fresh evidence, not the
+    # pre-implementation snapshot `_run_verify_first_phase` recorded before
+    # the paid call — and this function's own verdict decides when the
+    # candidate is not green, rather than a best-effort write the gate might
+    # never see.
+    reverify_blocked = _reverify_live_evidence_for_candidate(
+        task, config, reporter, review_checkpoint_sha
+    )
+    if reverify_blocked is not None:
+        reverify_blocked = _commit_blocked_status(task, config, reverify_blocked, gated_sha)
+        return (False, reverify_blocked, review_verdict.value, (review_output or "")[:2048], False)
+
     if has_gates():
         blocked = _run_pre_terminal_gates(
             task,
