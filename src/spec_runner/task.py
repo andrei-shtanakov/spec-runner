@@ -327,7 +327,14 @@ def parse_tasks(filepath: Path) -> list[Task]:
         if verifies_match:
             current_task.verifies_raw = line
             trailing = verifies_match.group(1).strip()
-            if trailing:
+            if trailing == "—":
+                # Same "— = nothing" convention as the neighboring
+                # `**Depends on:**`/`**Blocks:**` fields (#372 round 3):
+                # a single literal selector named '—' is never what an
+                # operator writing this line meant.
+                current_task.verifies = []
+                in_verifies = False
+            elif trailing:
                 if _verifies_comma_split_is_ambiguous(trailing):
                     current_task.verifies = None
                     current_task.verifies_error = (

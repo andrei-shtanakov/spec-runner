@@ -165,6 +165,24 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "перепроверить после мержа WS-341" in task.description
         assert "tests/test_b.py::test_y" in task.description
 
+    def test_em_dash_means_no_group_like_depends_on_and_blocks(self, tmp_path):
+        """`**Verifies:** —` follows the same "— = nothing" convention as
+        the neighboring `**Depends on:**`/`**Blocks:**` fields in the same
+        metadata row (and the generator template itself emits
+        `**Blocks:** —`) — it must not be read as a single selector
+        literally named `—` (#372 round 3, minor)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** —\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == []
+
     def test_a_selector_the_adapter_would_refuse_is_stored_verbatim(self, tmp_path):
         """An unparseable value is kept exactly as written, not mapped to
         something plausible — the same rule `**Mode:**` already holds."""
