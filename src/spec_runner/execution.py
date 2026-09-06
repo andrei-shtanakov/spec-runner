@@ -11,8 +11,9 @@ from .errors import classify
 from .harness import HarnessBaseline
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
+from .live_verify import run_live_verify
 from .logging import get_logger
-from .phases import Refusal
+from .phases import Refusal, RefusalKind
 from .prompt import build_task_prompt, extract_test_failures
 from .prompts_log import append_output, log_prompt
 from .runner import (
@@ -215,6 +216,31 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 
+def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
+    """Live verify run (#367 BEH-07/08/09): under `verify_first`, the first
+    action of the task, before any paid call — including before `tdd`'s RED
+    authoring pass, which is otherwise the earliest thing execution does.
+
+    Deliberately does not go through `gates.py`: the green-only / TDD /
+    instrument-error branching this outcome eventually drives is later work
+    (#367 FR-08+); today a failed or unrunnable live run simply refuses the
+    attempt rather than spending a paid call over it.
+    """
+    reporter.enter("tests")
+    result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    if result.passed:
+        reporter.record(PhaseOutcome.PASS, result.detail)
+        return None
+    if result.ran:
+        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, result.detail)
+        return Refusal(f"verify-first group did not pass: {result.detail}", RefusalKind.POLICY)
+    reporter.record(PhaseOutcome.ERROR, result.detail)
+    return Refusal(
+        f"verify-first live run could not be confirmed: {result.detail}",
+        RefusalKind.INSTRUMENT,
+    )
+
+
 class RealAgentCallRefused(AssertionError):
     """Raised only by the test-only guard (`conftest._no_real_agent_calls`)
     to refuse a real, billed agent call before it happens.
@@ -295,6 +321,24 @@ def execute_task(
     state.mark_running(task_id)
     update_task_status(config.tasks_file, task_id, "in_progress")
     send_callback(config.callback_url, task_id, "started")
+
+    # Live verify run (#367 FR-05). Under `verify_first` this is the task's
+    # first action, before any paid call whatsoever — including before `tdd`'s
+    # RED authoring pass below, which is otherwise the earliest paid call.
+    if config.resolve_execution_mode(task) == "verify_first":
+        refusal = _run_verify_first_phase(task, config, state, reporter)
+        if refusal is not None:
+            log_progress(f"⛔ {refusal}", task_id)
+            state.record_attempt(
+                task_id,
+                False,
+                0.0,
+                error=refusal,
+                error_code=_refusal_error_code(refusal),
+                error_kind=_refusal_error_kind(refusal),
+                error_stage=reporter.current,
+            )
+            return False
 
     # RED phase (#141). Under `tdd` the implementation pass does not run until
     # a red has been *demonstrated* — authored, committed, and replayed against
