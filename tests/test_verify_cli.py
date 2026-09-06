@@ -290,6 +290,137 @@ class TestBEH31EvidenceAndPathThroughTheCli:
         assert "Verify: instrument_error" in out
 
 
+class TestBEH31GreenOnlyExcludesAConfirmedRed:
+    """kind: unit/integration — review finding on TASK-011 (WS-367): a
+    verify_first task only ever reaches `done` off a *green* re-verify row,
+    even when it walked the red-authoring cycle and confirmed a red on
+    entry (BEH-21). `lifecycle_of` must not call that task "green-only" —
+    the confirmed checkpoint is the very account of the red it authored —
+    and plain `status` must not hide that fact either."""
+
+    def test_done_with_latest_green_evidence_and_a_confirmed_red_is_not_green_only(self):
+        data = {
+            "active_checkpoints": [
+                {
+                    "checkpoint_id": "cp-redpath-1",
+                    "task_id": "TASK-REDPATH",
+                    "commit_sha": "a" * 40,
+                    "baseline_sha": "b" * 40,
+                    "selector": "tests/test_redgroup.py::test_it",
+                    "outcome": RedOutcome.EXPECTED_FAIL.value,
+                    "environment_id": "unpinned",
+                    "timestamp": "2026-09-06T00:00:00",
+                }
+            ],
+            "retired_checkpoints": [],
+            "verify_evidence": [
+                {
+                    "task_id": "TASK-REDPATH",
+                    "commit_sha": "c" * 40,
+                    "outcome": "green",
+                }
+            ],
+            "phases": {"TASK-REDPATH": [{"phase": "done", "detail": ""}]},
+        }
+
+        result = tdd_status.lifecycle_of(data, "TASK-REDPATH")
+
+        assert "green-only" not in result, (
+            "a task that reached done off a confirmed red must not read as one "
+            f"that never authored a red — got: {result!r}"
+        )
+        assert "done" in result
+
+    def test_done_with_latest_green_evidence_and_a_retired_confirmed_red_is_not_green_only(self):
+        # The checkpoint that authored the red may since have been retired
+        # (a remedy, or a later run) — the account of the red still stands.
+        data = {
+            "active_checkpoints": [],
+            "retired_checkpoints": [
+                {
+                    "task_id": "TASK-REDPATH",
+                    "status": "repaired",
+                    "outcome": RedOutcome.EXPECTED_FAIL.value,
+                    "selector": "tests/test_redgroup.py::test_it",
+                    "timestamp": "2026-09-06T00:00:00",
+                }
+            ],
+            "verify_evidence": [
+                {
+                    "task_id": "TASK-REDPATH",
+                    "commit_sha": "c" * 40,
+                    "outcome": "green",
+                }
+            ],
+            "phases": {"TASK-REDPATH": [{"phase": "done", "detail": ""}]},
+        }
+
+        result = tdd_status.lifecycle_of(data, "TASK-REDPATH")
+
+        assert "green-only" not in result
+        assert "done" in result
+
+    def test_done_with_latest_green_evidence_and_no_red_checkpoint_stays_green_only(self):
+        # Control: a genuinely green-only task (BEH-20) must keep the label.
+        data = {
+            "active_checkpoints": [],
+            "retired_checkpoints": [],
+            "verify_evidence": [
+                {
+                    "task_id": "TASK-GREEN",
+                    "commit_sha": "c" * 40,
+                    "outcome": "green",
+                }
+            ],
+            "phases": {"TASK-GREEN": [{"phase": "done", "detail": ""}]},
+        }
+
+        result = tdd_status.lifecycle_of(data, "TASK-GREEN")
+
+        assert "green-only" in result
+
+    def test_plain_status_marks_a_confirmed_red_behind_a_green_reverify(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        config = _cfg(root, tdd_namespace="ws-redconfirmed")
+        namespace = resolve_namespace(config)
+        task = _task("TASK-REDCONFIRMED", verifies=["tests/test_redgroup.py::test_it"])
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        with ExecutorState(config) as state:
+            state.record_attempt(task.id, True, 0.0)
+            state.record_verify_evidence(
+                task=task,
+                config=config,
+                result=VerifyRunResult(
+                    sha=head, ran=True, passed=True, detail="", adapter="pytest"
+                ),
+            )
+            state.record_red_checkpoint(
+                RedCheckpoint(
+                    task_id=task.id,
+                    namespace=namespace,
+                    commit_sha=head,
+                    baseline_sha=head,
+                    selector="tests/test_redgroup.py::test_it",
+                    environment_id="unpinned",
+                    execution_mode="verify_first",
+                    config_hash=_config_hash(config),
+                    outcome=RedOutcome.EXPECTED_FAIL,
+                    timestamp="2026-09-06T00:00:00",
+                )
+            )
+
+        print_status(config)
+        out = capsys.readouterr().out
+
+        assert "Verify: green" in out
+        assert "red confirmed" in out, (
+            f"a green re-verify behind a confirmed red must say so in plain status — got: {out!r}"
+        )
+
+
 class TestVerifyEvidenceForNamespaceQuery:
     """kind: unit — `verify_evidence_for_namespace` (state.py) is a new
     query, not exercised by the integration fixtures above beyond one row

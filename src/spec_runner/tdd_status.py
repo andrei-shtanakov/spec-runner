@@ -142,6 +142,23 @@ def _all_remedies(state: ExecutorState, namespace: str, active, retired) -> list
     return out
 
 
+def _has_confirmed_red(data: dict, task_id: str) -> bool:
+    """Whether this task ever confirmed a red, active or retired.
+
+    A `verify_first` task can only reach `done` off a *green* re-verify row
+    (a still-red group refuses), so the latest verify-evidence row alone
+    cannot tell a task that never authored a red from one that did and then
+    fixed it — that account lives in the checkpoint, not the evidence row.
+    """
+    for cp in data["active_checkpoints"]:
+        if cp["task_id"] == task_id and cp["outcome"] == RedOutcome.EXPECTED_FAIL.value:
+            return True
+    for r in data["retired_checkpoints"]:
+        if r["task_id"] == task_id and r["outcome"] == RedOutcome.EXPECTED_FAIL.value:
+            return True
+    return False
+
+
 def lifecycle_of(data: dict, task_id: str) -> str:
     """One line for where a task stands — the thing plain `status` gets wrong.
 
@@ -157,9 +174,19 @@ def lifecycle_of(data: dict, task_id: str) -> str:
             # #367 BEH-31: DONE alone does not say *how* — a green-only task
             # never authors a red, so its own evidence is the only record of
             # the path it took, and must read differently from a task that
-            # reached done off a confirmed red.
-            if verify is not None and verify["outcome"] == "green":
+            # reached done off a confirmed red. Green evidence alone is not
+            # enough to call it green-only: a verify_first task that
+            # confirmed a red only ever reaches done through a later green
+            # re-verify row too, so the label is conditional on there being
+            # no confirmed red checkpoint (active or retired) for the task.
+            if (
+                verify is not None
+                and verify["outcome"] == "green"
+                and not _has_confirmed_red(data, task_id)
+            ):
                 return f"done (green-only via verify-evidence {verify['commit_sha'][:12]})"
+            if verify is not None and verify["outcome"] == "green":
+                return f"done (red confirmed, verify-evidence {verify['commit_sha'][:12]})"
             return "done"
         if not last.startswith("refused:"):
             return f"in {last.replace('_', ' ')}"
