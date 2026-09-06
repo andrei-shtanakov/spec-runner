@@ -16,13 +16,18 @@ green outcome, and the live-measured numbers package into a
 class — 2 unproductive probes, $5.80 — the same way `tdd.BASELINE_341`
 anchors the single-scenario measurement (NFR-01, `tdd.py:163`).
 
-Today `spec_runner.tdd` has no such baseline for the class: only
+Today `spec_runner.tdd` has no such baseline for the subclass: only
 `BASELINE_341`, which anchors the *single fixed scenario* TASK-014 measured
 under WS-spec-runner-341, exists. There is no shared, importable place to
 hold "what the two-probe eliminable subclass used to cost" next to "what it
-costs now" — so this test fails on `tdd.BASELINE_367_CLASS`, not on the
-green-path mechanics themselves (already delivered by TASK-001..013/015 of
-this workstream).
+costs now" — so this test fails on `tdd.BASELINE_367_ELIMINABLE_SUBCLASS`, not
+on the green-path mechanics themselves (already delivered by TASK-001..013/015
+of this workstream).
+
+Note (#387 review, finding 4): this constant names the eliminable *subclass*
+(2 probes / $5.80, charter AC-11) that a live run is checked against — not the
+full class the charter measured (5 probes / $10.26), which is kept only as
+the class measurement, never as a comparison base.
 
 Red-design frame (owner decision, 2026-09-05, carried over from the sibling
 WS-341 red): a red asserting a *measurement artifact file* exists is invalid
@@ -171,11 +176,12 @@ class TestScenario367ClassCostMeasuredLiveUnderPytest:
         # class — not merely for one task.
         assert red_authoring_calls == []
 
-        # And (NFR-01): the live-measured class packages into the shared
-        # `ScenarioMeasurement` precedent and beats the class's own
-        # documented baseline point — 2 unproductive probes, $5.80 (charter,
-        # WS-spec-runner-367, AC-1) — not the unrelated single-scenario
-        # `BASELINE_341`.
+        # And (NFR-01): the live-measured subclass packages into the shared
+        # `ScenarioMeasurement` precedent and beats the eliminable subclass's
+        # own documented baseline point — 2 unproductive probes, $5.80
+        # (charter, WS-spec-runner-367, AC-11) — not the unrelated
+        # single-scenario `BASELINE_341` nor the full class figure (5 probes /
+        # $10.26).
         measurement = tdd.ScenarioMeasurement(
             elapsed_seconds=elapsed,
             cost_usd=cost,
@@ -184,8 +190,8 @@ class TestScenario367ClassCostMeasuredLiveUnderPytest:
         )
 
         assert measurement.paid_call_count == 0
-        assert measurement.paid_call_count < tdd.BASELINE_367_CLASS.paid_call_count
+        assert measurement.paid_call_count < tdd.BASELINE_367_ELIMINABLE_SUBCLASS.paid_call_count
         assert measurement.cost_usd is not None
-        assert measurement.cost_usd < tdd.BASELINE_367_CLASS.cost_usd
-        assert tdd.BASELINE_367_CLASS.cost_usd == 5.80
-        assert tdd.BASELINE_367_CLASS.paid_call_count == 2
+        assert measurement.cost_usd < tdd.BASELINE_367_ELIMINABLE_SUBCLASS.cost_usd
+        assert tdd.BASELINE_367_ELIMINABLE_SUBCLASS.cost_usd == 5.80
+        assert tdd.BASELINE_367_ELIMINABLE_SUBCLASS.paid_call_count == 2
