@@ -450,3 +450,78 @@ class TestRunnerConventionsSurviveTheNamespaceSegment:
         assert path.parts[0] == "test"
         assert path.name.endswith("_test.exs")
         assert ADAPTERS["exunit"].is_discoverable(path)
+
+
+class TestBuildScopedCommand:
+    """#375 review, findings 4 and 5: verify-first's scoped command is built
+    by the adapter itself, replacing the command's own positional test-path
+    argument — whatever it is called — instead of a hardcoded literal
+    (`{"tests"}`) outside any adapter, and without eating the value of a
+    preceding flag."""
+
+    def test_pytest_replaces_a_default_tests_directory(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest tests/", selector)
+        assert argv == ["python", "-m", "pytest", "tests/test_x.py::test_y"]
+
+    def test_pytest_replaces_a_non_default_directory_name(self):
+        """The old hardcoded `{"tests"}` set only recognised the literal
+        word "tests" — a suite living under any other name was never
+        stripped."""
+        selector = ADAPTER.parse_selector("suite/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest suite/", selector)
+        assert argv == ["python", "-m", "pytest", "suite/test_x.py::test_y"]
+
+    def test_pytest_does_not_eat_an_options_value(self):
+        """`--ignore tests/legacy -q`: `tests/legacy` is a flag's VALUE, not a
+        stray positional path, and `-q` must survive right after it."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest --ignore tests/legacy -q", selector)
+        assert argv == [
+            "python",
+            "-m",
+            "pytest",
+            "--ignore",
+            "tests/legacy",
+            "-q",
+            "tests/test_x.py::test_y",
+        ]
+
+    def test_exunit_replaces_a_default_test_directory(self):
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("mix test test/", selector)
+        assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
+
+
+class TestExecutionProven:
+    """#375 review, finding 2: verify-first's own strict class of proven-
+    execution words (`passed`/`failed`/`error`) — not `_EXECUTED_WORDS`,
+    which is frozen for the red-replay path and counts `xfailed`/`xpassed`
+    as executed (FR-08 explicitly excludes them here)."""
+
+    def test_a_passing_run_proves_execution(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="1 passed in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is True
+
+    def test_a_skipped_run_does_not_prove_execution(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="tests/test_x.py::test_y SKIPPED\n1 skipped in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is False
+
+    def test_an_xfailed_run_does_not_prove_execution(self):
+        """The frozen red-path constant counts `xfailed` as executed;
+        verify-first's own class deliberately does not (FR-08)."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="tests/test_x.py::test_y XFAIL\n1 xfailed in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is False

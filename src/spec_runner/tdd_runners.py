@@ -294,11 +294,38 @@ class TddRunnerAdapter(Protocol):
         """argv — never a shell string, since the selector is agent output."""
         ...
 
+    def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
+        """argv narrowed to ``selector`` alone (#367 FR-06, #375 review).
+
+        Unlike `build_command`, which only *appends* the selector and is
+        frozen for the red-replay path (FR-04/AC-9), this REPLACES the
+        command's own positional test-path argument — a default
+        `test_command` naming a directory (`pytest tests/…`, `mix test
+        test/…`) must not also run that directory's whole contents. A
+        separate method, not a parameter on `build_command`, precisely so the
+        red-replay path never picks up this behaviour by accident.
+        """
+        ...
+
     def classify(self, result: subprocess.CompletedProcess) -> RunOutcome: ...
 
     def prove_selected(
         self, selector: Selector, result: subprocess.CompletedProcess
     ) -> SelectionProof: ...
+
+    def execution_proven(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        """Whether ``selector`` was PROVEN to actually execute (#367 FR-08).
+
+        Distinct from `prove_selected`: on pytest, a `SKIPPED`/`XFAIL` line
+        still carries the requested node id verbatim, so `prove_selected` —
+        frozen for the red-replay path, FR-04/AC-9 — reads it as `PROVEN`. The
+        identity claim is true; the test simply never ran. verify-first's
+        green path needs the narrower claim, in its OWN strict word class
+        (`passed`/`failed`/`error`, never `xfailed`/`xpassed` — those count as
+        executed in the frozen `_EXECUTED_WORDS` and must not here, per FR-08's
+        explicit exclusion).
+        """
+        ...
 
 
 # === pytest ===
@@ -332,6 +359,49 @@ def command_tokens(test_command: str) -> list[str]:
         return []
 
 
+def strip_positional_paths(
+    tokens: list[str],
+    *,
+    keep: frozenset[str],
+    value_flags: frozenset[str],
+) -> list[str]:
+    """Drop bare positional path arguments from a tokenised command (#375).
+
+    Shared by every adapter's `build_scoped_command`: verify-first replaces a
+    default `test_command`'s path argument with the declared selector rather
+    than appending to it (FR-06's "replace, not append" — the same lesson
+    `git_ops.build_scoped_test_command` already applies), and the previous
+    approach hardcoded a single literal directory name (`{"tests"}`) outside
+    any adapter, so a project naming its suite `test/` or `suite/` ran the
+    whole thing plus the selector. This is runner-agnostic: it keeps the
+    interpreter/wrapper/runner tokens named in ``keep`` and every flag, and
+    drops everything else positional — whatever that directory is called.
+
+    ``value_flags`` is what makes this safe against #375's other review
+    finding: a flag in that set consumes the token *after* it, so
+    ``--ignore tests/legacy`` keeps its value rather than stripping it and
+    leaving ``--ignore`` to swallow the next real argument instead.
+    """
+    kept: list[str] = []
+    take_next = False
+    for token in tokens:
+        if take_next:
+            kept.append(token)
+            take_next = False
+            continue
+        if token.startswith("-"):
+            kept.append(token)
+            take_next = token in value_flags
+            continue
+        if token in keep or _PYTHONS.match(PurePosixPath(token).name):
+            kept.append(token)
+            continue
+        # A bare positional argument that is none of the above is the
+        # command's own test-path argument — dropped, not kept, so the
+        # adapter's append lands on the declared selector alone.
+    return kept
+
+
 def executable_of(test_command: str) -> str | None:
     """The program a command actually runs, past any wrappers."""
     for token in command_tokens(test_command):
@@ -344,18 +414,31 @@ def executable_of(test_command: str) -> str | None:
     return None
 
 
-def _exactly_one_test_executed(output: str) -> bool:
-    """True when pytest's summary accounts for exactly one executed test.
+def pytest_summary_counts(output: str) -> list[tuple[str, str]]:
+    """`(count, word)` pairs from pytest's LAST summary line, or [].
 
     The whole summary is read, not its first count: `1 failed, 97 passed` is a
     98-test run whose first number is 1, and reading that as proof would let a
-    full-suite run stand in for the named test. The single count must also be an
-    *executed* outcome — one skipped test is one test that did not run.
+    full-suite run stand in for the named test (#201). Shared by every reader
+    that needs the summary's full word class — `_exactly_one_test_executed`
+    below (frozen `_EXECUTED_WORDS`, red-path, FR-04/AC-9) and verify-first's
+    own, stricter execution proof (`live_verify.py`, #367 FR-08), which reads
+    the same line against a different word set rather than duplicating the
+    regex.
     """
     matches = _PYTEST_SUMMARY.findall(output)
     if not matches:
-        return False
-    counts = _PYTEST_COUNT.findall(matches[-1])
+        return []
+    return _PYTEST_COUNT.findall(matches[-1])
+
+
+def _exactly_one_test_executed(output: str) -> bool:
+    """True when pytest's summary accounts for exactly one executed test.
+
+    The single count must also be an *executed* outcome — one skipped test is
+    one test that did not run.
+    """
+    counts = pytest_summary_counts(output)
     if len(counts) != 1:
         return False
     number, word = counts[0]
@@ -446,6 +529,36 @@ class PytestAdapter:
         assert isinstance(selector.locator, PytestNodeId)
         return [*command_tokens(test_command), selector.locator.value]
 
+    #: pytest flags whose next token is the flag's VALUE, not a stray path
+    #: argument — `--ignore tests/legacy -q` must keep `-q`, not have it eaten
+    #: as `--ignore`'s argument once `tests/legacy` is stripped (#375 review).
+    _VALUE_FLAGS = frozenset(
+        {
+            "-k",
+            "-m",
+            "-n",
+            "-o",
+            "-c",
+            "-p",
+            "--ignore",
+            "--ignore-glob",
+            "--deselect",
+            "--rootdir",
+            "--confcutdir",
+            "--maxfail",
+            "--dist",
+        }
+    )
+
+    def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
+        assert isinstance(selector.locator, PytestNodeId)
+        kept = strip_positional_paths(
+            command_tokens(test_command),
+            keep=_RUNNER_WRAPPERS | {"pytest"},
+            value_flags=self._VALUE_FLAGS,
+        )
+        return [*kept, selector.locator.value]
+
     def classify(self, result: subprocess.CompletedProcess) -> RunOutcome:
         # Measured on pytest 8: an unresolvable node id and a test file with a
         # syntax error both exit 4, not the 5 ("no tests collected") one would
@@ -472,6 +585,21 @@ class PytestAdapter:
             # one — a node id that resolves to nothing exits 4.
             return SelectionProof.PROVEN
         return SelectionProof.UNKNOWN
+
+    #: verify-first's OWN class of proven-execution words (#367 FR-08) —
+    #: narrower than `_EXECUTED_WORDS` on purpose: `xfailed`/`xpassed` count as
+    #: executed there (frozen for the red-replay path, FR-04/AC-9) and must
+    #: NOT here, and `skipped`/`deselected` never counted as executed either
+    #: way.
+    _PROVEN_EXECUTION_WORDS = frozenset({"passed", "failed", "error", "errors"})
+
+    def execution_proven(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        counts = pytest_summary_counts(output)
+        if len(counts) != 1:
+            return False
+        number, word = counts[0]
+        return number == "1" and word in self._PROVEN_EXECUTION_WORDS
 
 
 # === ExUnit ===
@@ -821,6 +949,31 @@ class ExUnitAdapter:
             tokens.append(TRACE_FLAG)
         return [*tokens, f"{selector.path}:{selector.locator.line}"]
 
+    #: `mix test` flags whose next token is the flag's value, not a stray path
+    #: (#375 review, same reasoning as `PytestAdapter._VALUE_FLAGS`).
+    _VALUE_FLAGS = frozenset(
+        {
+            "--seed",
+            "--max-failures",
+            "--formatter",
+            "--cover",
+            "--exclude",
+            "--include",
+            "--only",
+        }
+    )
+
+    def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
+        assert isinstance(selector.locator, ExUnitDefinitionLine)
+        kept = strip_positional_paths(
+            command_tokens(test_command),
+            keep=_RUNNER_WRAPPERS | {"mix", "test"},
+            value_flags=self._VALUE_FLAGS,
+        )
+        if TRACE_FLAG not in kept:
+            kept.append(TRACE_FLAG)
+        return [*kept, f"{selector.path}:{selector.locator.line}"]
+
     def classify(self, result: subprocess.CompletedProcess) -> RunOutcome:
         output = f"{result.stdout or ''}\n{result.stderr or ''}"
         summary = _EXUNIT_SUMMARY.search(output)
@@ -871,6 +1024,15 @@ class ExUnitAdapter:
                 else SelectionProof.REFUTED
             )
         return SelectionProof.UNKNOWN
+
+    def execution_proven(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        """ExUnit has no separate gap here: `prove_selected`'s `PROVEN` is
+        already "the requested line's timed trace entry matched" — an
+        excluded or skipped test never produces a timing (#375 review,
+        `TestTheProofIsTheTrace`), so there is nothing pytest's node-id
+        shortcut would leak through that this needs to catch separately.
+        """
+        return self.prove_selected(selector, result) is SelectionProof.PROVEN
 
 
 _PREFLIGHT_MESSAGES = {
@@ -931,5 +1093,7 @@ __all__ = [
     "infer_adapter",
     "normalise_path",
     "namespace_segment",
+    "pytest_summary_counts",
+    "strip_positional_paths",
     "task_slug",
 ]
