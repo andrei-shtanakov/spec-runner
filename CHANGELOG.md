@@ -12,6 +12,43 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **New `verify_first` execution mode: verify already-delivered behaviour
+  with a live run instead of a RED authoring pass** (#367). A task declares
+  `**Mode:** verify_first` and a `**Verifies:** <selector>[, <selector>…]`
+  group (or a multi-line `- ` block); the harness then runs that group for
+  real, one subprocess per selector, in a disposable detached worktree
+  against the named commit, as the task's very first action — before any
+  paid agent call. The run resolves to exactly one of three outcomes:
+  `green` (every selector proven to run and pass) opens a **green-only**
+  path that skips RED authoring entirely and satisfies the red gate with a
+  reference to the recorded verify-evidence instead of a purchased red;
+  `test-failure` (at least one selector proven to fail) falls through to
+  the unmodified TDD cycle, starting with RED authoring, with no gate
+  relaxed; `instrument-error` (an unresolvable adapter, a composite
+  `test_command`, an unreachable commit, an undeclared/unparseable group,
+  an empty or fully-skipped selection, or unprovable evidence ancestry)
+  stops the task fail-closed with an infrastructure exit class. Every run
+  — whichever outcome it reaches — is recorded as durable verify-evidence
+  (commit SHA, declared and executed group, policy config hash,
+  environment identity, judging adapter, outcome, and detail), independent
+  of `tdd.RedCheckpoint` so a reader of red checkpoints never mistakes one
+  for the other; `tdd status` (and its `--json`) shows which of the three
+  paths a task took. **Consequence for existing tasks:** because
+  `execution_mode` is itself part of the policy hash a checkpoint is
+  compared against, a task whose `**Mode:**` line changes — including one
+  that newly declares `verify_first` — invalidates that task's previously
+  recorded checkpoint, the same way any other `POLICY_KEYS` change already
+  does (BEH-17); this is a consequence of the existing rule, not a new
+  relaxation. Declared boundaries: a live run happens exactly once, with no
+  averaging/retry policy on a flaky group; a green-only task's declared
+  group is frozen by the usual claim/byte-lock machinery for the duration
+  of the task and released on DONE like any other claim; the live run and
+  `post_done_hook`'s own test run remain intentionally un-deduplicated (they
+  judge different trees at different times); and the selector dictionary is
+  unchanged — node ids only, a bare file target is not declarable. See
+  `docs/architecture.md#verify-first-execution-mode-execution_mode-verify_first-367`
+  for the full contract.
+
 - **`--json-result` gains an additive `verify_outcome` field** (#367
   BEH-32). A task that recorded live verify-first evidence
   (`execution_mode: verify_first`) now surfaces that run's outcome —

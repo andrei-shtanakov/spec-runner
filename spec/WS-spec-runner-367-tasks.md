@@ -281,15 +281,15 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-32
 **Traces to:** [FR-04]
 
 ### TASK-013: Документация и CHANGELOG объявляют режим и его границы
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-33.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-33
 **Depends on:** [TASK-012]
 
 **Checklist:**
-- [ ] реализовать BEH-33: Документация и CHANGELOG объявляют режим и его границы
-- [ ] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-33
+- [x] реализовать BEH-33: Документация и CHANGELOG объявляют режим и его границы
+- [x] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-33
 
 **Traces to:** [FR-11], [FR-01]
 
