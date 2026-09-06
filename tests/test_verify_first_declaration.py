@@ -84,6 +84,30 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
 
+    def test_blank_line_then_prose_bullet_closes_the_block_instead_of_swallowing_it(self, tmp_path):
+        """A blank line surviving inside the block (above) must not also let
+        a following prose bullet — one with spaces, like this repo's own
+        `- **Q-04 — ...**` body style — be mistaken for a selector. Only a
+        real selector (no whitespace) continues the block; anything else
+        closes it and falls through to description, same as before the
+        blank-line fix (#372 round 2 minor #2)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_a.py::test_x\n"
+            "\n"
+            "- перепроверить после мержа WS-341\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+        task = tasks[0]
+
+        assert task.verifies == ["tests/test_a.py::test_x"]
+        assert "перепроверить после мержа WS-341" in task.description
+
     def test_a_selector_the_adapter_would_refuse_is_stored_verbatim(self, tmp_path):
         """An unparseable value is kept exactly as written, not mapped to
         something plausible — the same rule `**Mode:**` already holds."""

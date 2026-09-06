@@ -78,8 +78,13 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
 # block immediately followed by a checklist without a separating field never
-# swallows the checklist's first line as a selector.
-VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
+# swallows the checklist's first line as a selector. The captured selector
+# itself must not contain whitespace (#372 round 2): a pytest node id never
+# does, but this repo's own tasks.md body style uses bulleted prose like
+# `- перепроверить после мержа WS-341`, and surviving a blank line (below)
+# is not the same as being a selector — a prose bullet with spaces closes
+# the block and falls through to description, just like before that fix.
+VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(\S+)$")
 
 
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
