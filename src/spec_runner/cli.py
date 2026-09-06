@@ -1471,7 +1471,11 @@ def cmd_retry(args, config: ExecutorConfig):
             # Execute single attempt (not run_with_retries which has max_retries limit)
             success = execute_task(task, config, state)
 
-            if success:
+            # `is True`, not truthy: `execute_task` can also return "HOOK_ERROR"
+            # or "TERMINAL_REFUSAL" (#380 review round 3 finding 1), and a
+            # non-empty string is truthy in Python — a bare `if success:`
+            # would mark a hook failure or an unretryable refusal "done".
+            if success is True:
                 update_task_status(config.tasks_file, task.id, "done")
                 mark_all_checklist_done(config.tasks_file, task.id)
             else:

@@ -693,12 +693,24 @@ def _reverify_before_review(
             evidence = state.verify_evidence(resolve_namespace(config), task.id)
         if evidence is not None and evidence.outcome == VerifyOutcome.GREEN.value:
             return None
+        # #380 review round 3 finding 1: `terminal=True` — this is not "the
+        # instrument broke this time" (worth a retry), it is "this
+        # configuration cannot ever supply the instrument" (a fact about
+        # `auto_commit`, which no retry changes). `RefusalKind.INSTRUMENT`
+        # is kept — the exit code and the persisted `error_code`/`error_kind`
+        # stay exactly INFRASTRUCTURE/"instrument", the correct classification
+        # of what happened — `terminal` only tells `execute_task` to stop
+        # retrying a verdict that provably cannot change, without
+        # reclassifying every instrument error (most of which — a flaky
+        # worktree, a transient git read — genuinely are worth retrying) as
+        # fatal.
         return Refusal(
             "verify-first gate has nothing to judge: work is not committed "
             "(auto_commit: false) — no candidate distinct from the "
             "pre-implementation snapshot can ever exist, so this cannot "
             "become satisfiable on a retry",
             RefusalKind.INSTRUMENT,
+            terminal=True,
         )
 
     if not config.run_review:

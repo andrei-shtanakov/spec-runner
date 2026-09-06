@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.executor import execute_task
+from spec_runner.executor import execute_task, run_with_retries
 from spec_runner.gates import (
     GateContext,
     GateRegistry,
@@ -620,15 +620,20 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
         assert result is False
 
     def test_auto_commit_false_with_a_red_on_entry_group_fails_loud_not_forever(self, tmp_path):
-        """#380 review round 2 finding 1: `auto_commit: false` — reachable
-        without an explicit operator choice (the subdir-repo auto-detect) —
-        means nothing this attempt does ever gets committed, so the
-        candidate the gate could judge is always the exact pre-implementation
-        commit `_run_verify_first_phase` already evidenced. A group red on
-        entry can then never become judgeable, whatever the agent does: the
-        attempt must fail loud (INFRASTRUCTURE, exit 2) instead of a silent
-        POLICY refusal a caller would retry forever for a verdict that can
-        never change."""
+        """#380 review round 2 finding 1 / round 3 finding 1: `auto_commit:
+        false` — reachable without an explicit operator choice (the
+        subdir-repo auto-detect) — means nothing this attempt does ever gets
+        committed, so the candidate the gate could judge is always the exact
+        pre-implementation commit `_run_verify_first_phase` already
+        evidenced. A group red on entry can then never become judgeable,
+        whatever the agent does: the attempt must fail loud (INFRASTRUCTURE,
+        exit 2) AND terminally — through `run_with_retries` (not
+        `execute_task` directly, which cannot observe whether a caller would
+        have retried), with `max_retries > 1`, exactly one attempt must run:
+        a POLICY-classified version of this refusal would already stop
+        `run_with_retries` (HOOK_FAILURE is fatal), so a naive INSTRUMENT
+        refusal here would be strictly worse than that — retried
+        `max_retries` times for a verdict that provably cannot change."""
         root = _repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "def test_it():\n    assert False, 'not implemented yet'\n"
@@ -641,6 +646,7 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             execution_mode="verify_first",
             auto_commit=False,
             run_lint_on_done=False,
+            max_retries=3,
         )
         task = _task()
 
@@ -661,10 +667,15 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             patch("spec_runner.execution.update_task_status"),
             ExecutorState(cfg) as state,
         ):
-            result = execute_task(task, cfg, state)
+            result = run_with_retries(task, cfg, state)
             ts = state.get_task_state(task.id)
 
         assert result is False
+        assert len(ts.attempts) == 1, (
+            f"expected exactly one attempt for a structurally unsatisfiable "
+            f"refusal, got {len(ts.attempts)} — retrying it burns a full "
+            f"paid attempt per retry for a verdict that cannot change"
+        )
         last = ts.attempts[-1]
         assert last.error_code is ErrorCode.INFRASTRUCTURE, (
             f"expected an infrastructure refusal (nothing to judge under "

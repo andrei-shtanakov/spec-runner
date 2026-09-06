@@ -326,7 +326,11 @@ def execute_task(
 
     Returns:
         True if successful, False if failed (including rate limits),
-        or "HOOK_ERROR" if pre-start hook failed (fail fast, no retries).
+        "HOOK_ERROR" if pre-start hook failed (fail fast, no retries), or
+        "TERMINAL_REFUSAL" if post_done_hook's refusal is `Refusal.terminal`
+        (#380 review round 3 finding 1) — also fail fast, no retries, but
+        (unlike "HOOK_ERROR") the attempt IS recorded, with its ordinary
+        error_code/error_kind.
     """
 
     task_id = task.id
@@ -759,6 +763,25 @@ def execute_task(
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
                 )
+                # #380 review round 3 finding 1: the attempt is recorded
+                # exactly as any other hook failure above \u2014 same error_code
+                # (INFRASTRUCTURE), same error_kind ("instrument"), same exit
+                # 2 \u2014 `terminal` changes nothing about what this attempt was.
+                # It changes whether `run_with_retries` tries again: a
+                # refusal that documents itself as structurally unsatisfiable
+                # (e.g. `_reverify_before_review`'s `auto_commit: false`
+                # case) must not be retried `max_retries` times for a verdict
+                # that provably cannot change \u2014 that is strictly worse than
+                # stopping after one. `"TERMINAL_REFUSAL"` is read the same
+                # way `"HOOK_ERROR"` already is: an unconditional stop
+                # `run_with_retries` checks before any error-code-based
+                # classification, not a new `ErrorCode`/`_FATAL_ERRORS`
+                # entry \u2014 those are keyed by kind (INSTRUMENT/INFRASTRUCTURE
+                # is deliberately retryable in general: a flaky worktree, a
+                # transient git read), and widening that would un-retry every
+                # instrument error, not just this one.
+                if isinstance(hook_error, Refusal) and hook_error.terminal:
+                    return "TERMINAL_REFUSAL"
                 return False
         else:
             # Claude reported failure
@@ -1084,6 +1107,14 @@ def run_with_retries(
 
         # Hook error -- always fatal, stop immediately (no error_code recorded)
         if result == "HOOK_ERROR":
+            return False
+
+        # #380 review round 3 finding 1: also always fatal, stop immediately
+        # -- unlike "HOOK_ERROR" the attempt WAS recorded (error_code stays
+        # INFRASTRUCTURE, exit 2), but retrying would only repeat the exact
+        # same paid attempt against a verdict `execute_task` already
+        # determined cannot change on any retry.
+        if result == "TERMINAL_REFUSAL":
             return False
 
         # #219: a successful attempt stays successful. This check used to run
