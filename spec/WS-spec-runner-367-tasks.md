@@ -208,7 +208,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-
 **Traces to:** [FR-10], [FR-11], [FR-12], [FR-21]
 
 ### TASK-008: `green` доводит задачу до DONE без покупки красного (+2 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-20, BEH-21, BEH-22.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-20 (—BEH-22)
