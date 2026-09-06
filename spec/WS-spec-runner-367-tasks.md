@@ -307,7 +307,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-34
 **Traces to:** [FR-13], [FR-05]
 
 ### TASK-015: Регистрация гейтов и аудит чтений режима (BEH-24, до green-only)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарий BEH-24 (регистрация tdd.red/tdd.claims для
 verify-first в обеих конфигурациях + аудит каждого сайта чтения И ЗАПИСИ
