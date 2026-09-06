@@ -101,12 +101,21 @@ def _freeze_verify_group(state, config, task, result: VerifyRunResult) -> Refusa
     always an instrument error (an unclaimable file, or no adapter for
     `test_command`) — the same kind an unconfirmable red is, never a verdict
     on the work.
+
+    Catches broadly, not just `ClaimRefused`: the sibling call
+    (`tdd.py::_judge_red_commit`) wraps the same `record_claims` in
+    `except Exception`, because `state.record_claim` documents itself as
+    fail-closed — a transient DB write failure raises, it does not return a
+    typed refusal. This call sits outside `execute_task`'s own try/except, so
+    an uncaught exception here would crash the whole run instead of failing
+    one task the way every other claim-recording failure in this codebase
+    does.
     """
-    from .claims import ClaimRefused, record_verify_group_claims
+    from .claims import record_verify_group_claims
 
     try:
         record_verify_group_claims(config, state, task, result.sha, list(result.group_executed))
-    except ClaimRefused as exc:
+    except Exception as exc:
         return Refusal(
             f"verify-first group could not be claimed: {exc}",
             RefusalKind.INSTRUMENT,

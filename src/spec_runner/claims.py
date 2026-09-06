@@ -354,6 +354,14 @@ def record_verify_group_claims(
     checkpoint identity is synthesised only long enough to give each path's
     `Claim` the same `(task, lineage, path, bytes)` shape `record_claims`
     already produces for a confirmed red.
+
+    The synthesised checkpoint carries no `timestamp`: `checkpoint_id` hashes
+    it in, and `record_claims`'s own dedup keys on
+    `(task_id, checkpoint_id, path, blob_sha)`. A retried attempt that freezes
+    the same commit and selectors again must land on the same id, or the dedup
+    never fires and every retry stacks another `ACTIVE` row for the same file
+    — the invariant `record_claims` documents for itself ("a re-run must not
+    stack duplicate rows").
     """
     from .tdd import RedCheckpoint, RedOutcome, resolve_adapter, resolve_namespace
     from .tdd_runners import Selector
@@ -365,7 +373,6 @@ def record_verify_group_claims(
             "the declared group cannot be claimed"
         )
     namespace = resolve_namespace(config)
-    timestamp = datetime.now().isoformat()
     recorded: list[Claim] = []
     for raw_selector in selectors:
         parsed = adapter.parse_selector(raw_selector)
@@ -384,7 +391,7 @@ def record_verify_group_claims(
             execution_mode="verify_first",
             config_hash="",
             outcome=RedOutcome.EXPECTED_FAIL,
-            timestamp=timestamp,
+            timestamp="",
         )
         ensure_claimable(config, parsed)
         recorded.extend(record_claims(config, state, checkpoint, parsed))

@@ -240,7 +240,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-25 (—BEH-
 **Traces to:** [FR-18], [FR-20], [FR-21]
 
 ### TASK-010: Файлы объявленной группы заморожены на время задачи (+1 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-26, BEH-27.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-26 (—BEH-27)
