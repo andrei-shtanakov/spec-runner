@@ -45,7 +45,8 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 from .config import ExecutorConfig
@@ -66,6 +67,63 @@ from .tdd_runners import ReplayEnvironmentRefusal, RunOutcome, SelectionProof, S
 VERIFY_GROUP_TIMEOUT_SECONDS = 1800
 
 
+class VerifyOutcome(str, Enum):
+    """The three, and only three, verdicts a live verify run may reach
+    (#367 BEH-10/BEH-23). Named so a caller can branch on the outcome
+    itself instead of reconstructing it from `ran`/`passed` — a shape a
+    genuine `TESTS_FAILED` replay and a refused-before-running instrument
+    error used to share.
+    """
+
+    GREEN = "green"
+    TEST_FAILURE = "test_failure"
+    INSTRUMENT_ERROR = "instrument_error"
+
+
+class ExecutionProof(str, Enum):
+    """The third axis of FR-08 (#367 BEH-11/BEH-23): whether the requested
+    check was proven to have actually run, as opposed to matched-but-skipped
+    (a SKIPPED/XFAIL line still carries the requested node id, so
+    `SelectionProof` alone reads it as `PROVEN`) or simply not established.
+
+    Adapters report only the first two values today — `execution_proven`
+    answers a plain bool — but the classifier below stays total over all
+    three so a future adapter that cannot tell either way still lands on a
+    named outcome rather than an implicit fourth one.
+    """
+
+    EXECUTED = "executed"
+    NOT_EXECUTED = "not_executed"
+    UNDETERMINED = "undetermined"
+
+
+def classify_verify_outcome(
+    run_outcome: RunOutcome, proof: SelectionProof, execution: ExecutionProof
+) -> VerifyOutcome:
+    """The one place FR-08's three axes become one of the three named
+    outcomes (#367 BEH-23). Exhaustive by construction: the only two
+    combinations that are not `instrument_error` are named explicitly here,
+    and every other combination — including `RunOutcome.UNRECOGNIZED`, a
+    build/collection error, a refuted or unproven selection, and a
+    proven-but-not-executed pass — falls through to `instrument_error`
+    rather than an unenumerated fourth value.
+    """
+    if run_outcome is RunOutcome.TESTS_FAILED and proof is SelectionProof.PROVEN:
+        # Attributable to the requested selector — a genuine failure, never
+        # read as an instrument that could not tell (FR-14 is later work).
+        return VerifyOutcome.TEST_FAILURE
+    if (
+        run_outcome is RunOutcome.TESTS_PASSED
+        and proof is SelectionProof.PROVEN
+        and execution is ExecutionProof.EXECUTED
+    ):
+        # All three facts BEH-11 requires: the run passed, the requested
+        # selector (not some other test) is what ran, and it was proven to
+        # actually execute rather than merely match while skipped/xfailed.
+        return VerifyOutcome.GREEN
+    return VerifyOutcome.INSTRUMENT_ERROR
+
+
 @dataclass(frozen=True)
 class VerifyRunResult:
     """What the live run observed, for the caller to act on.
@@ -81,6 +139,20 @@ class VerifyRunResult:
     ran: bool
     passed: bool
     detail: str
+    #: Named outcome (#367 BEH-10/BEH-23), derived from `ran`/`passed` so
+    #: every construction site below gets it without repeating the mapping:
+    #: this module only ever produces (True, True)=green,
+    #: (True, False)=test_failure, or (False, False)=instrument_error.
+    outcome: VerifyOutcome = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.ran and self.passed:
+            outcome = VerifyOutcome.GREEN
+        elif self.ran:
+            outcome = VerifyOutcome.TEST_FAILURE
+        else:
+            outcome = VerifyOutcome.INSTRUMENT_ERROR
+        object.__setattr__(self, "outcome", outcome)
 
 
 def _tail(text: str, limit: int = 500) -> str:
@@ -255,9 +327,20 @@ def run_live_verify(
             # selector from an executed one (FR-08's third fact).
             outcome = adapter.classify(result)
             proof = adapter.prove_selected(parsed, result)
+            execution = (
+                ExecutionProof.EXECUTED
+                if adapter.execution_proven(parsed, result)
+                else ExecutionProof.NOT_EXECUTED
+            )
             tail = _tail(f"{result.stdout}\n{result.stderr}")
 
-            if outcome is RunOutcome.TESTS_FAILED and proof is SelectionProof.PROVEN:
+            # #367 BEH-11/BEH-23: the decision goes through the one
+            # exhaustive classifier, per selector — an aggregate "the run
+            # overall passed" is never enough (`prove_selected` answers about
+            # the requested selector, not the set).
+            verify_outcome = classify_verify_outcome(outcome, proof, execution)
+
+            if verify_outcome is VerifyOutcome.TEST_FAILURE:
                 # A real, attributable test failure. Reported as an
                 # observation for the caller to record — never a refusal this
                 # module issues itself (FR-14: the branching this eventually
@@ -270,11 +353,7 @@ def run_live_verify(
                     f"{raw_selector} failed on replay (exit {result.returncode}): {tail}",
                 )
 
-            if (
-                outcome is RunOutcome.TESTS_PASSED
-                and proof is SelectionProof.PROVEN
-                and adapter.execution_proven(parsed, result)
-            ):
+            if verify_outcome is VerifyOutcome.GREEN:
                 continue  # this selector is green; judge the next one
 
             # Everything else is an instrument-error: the run could not
