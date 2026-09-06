@@ -537,6 +537,42 @@ class TestBuildScopedCommand:
         argv = adapter.build_scoped_command("./bin/mix test test/", selector)
         assert argv == ["./bin/mix", "test", "--trace", "test/probe_test.exs:12"]
 
+    @pytest.mark.parametrize(
+        "test_command",
+        [
+            "pytest -ra tests/",
+            "pytest --tb=short tests/",
+            "pytest --maxfail=1 tests/",
+            "uv run pytest --color=yes tests/",
+        ],
+    )
+    def test_pytest_strips_the_path_after_an_attached_value_flag(self, test_command):
+        """#375 review round 3, finding 1: a flag whose value is glued on
+        (`-ra`, `--tb=short`, `--maxfail=1`, `--color=yes`) consumes no
+        following token — the old rule protected EVERY unenumerated flag's
+        next token unconditionally, so the positional `tests/` right after
+        it survived alongside the selector and the whole suite ran."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command(test_command, selector)
+        assert "tests/" not in argv, (
+            f"{test_command!r} scoped to {argv!r} still carries the suite directory"
+        )
+        assert argv[-1] == "tests/test_x.py::test_y"
+
+    def test_exunit_strips_a_slashless_positional_test_directory(self):
+        """#375 review round 3, finding 2: `mix test test` (no trailing
+        slash) is equivalent to `mix test test/`, but matching the `test`
+        subcommand literal on every occurrence also spared this spelling's
+        positional directory — the same literal word, one token later."""
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("mix test test", selector)
+        assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
+
 
 class TestExecutionProven:
     """#375 review, finding 2: verify-first's own strict class of proven-

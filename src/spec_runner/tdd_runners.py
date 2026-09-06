@@ -359,12 +359,40 @@ def command_tokens(test_command: str) -> list[str]:
         return []
 
 
+def _flag_takes_separate_value(token: str, boolean_flags: frozenset[str]) -> bool:
+    """Whether ``token`` (already known to start with ``-``) needs the NEXT
+    token as its value (#375 review round 3, finding 1).
+
+    Three shapes are self-contained and consume nothing that follows:
+
+    - a flag in ``boolean_flags`` — positively known to take no argument;
+    - a long form carrying its value attached (``--tb=short``,
+      ``--maxfail=1``, ``--color=yes``);
+    - a short-flag cluster with the value glued on (``-ra``, ``-n4``) —
+      recognised as any single-dash token longer than a bare `-x`, since a
+      short option that accepts an argument always accepts it either
+      attached or as a separate token, so a token already longer than
+      `-x` has necessarily received it attached.
+
+    Only a genuinely bare flag outside those three shapes (`--ignore`,
+    `--cov`, `-k`, `-n`) is assumed, conservatively, to take a separate
+    argument — the previous round's default, kept for exactly the flags this
+    round's shapes do not already resolve.
+    """
+    if token in boolean_flags:
+        return False
+    if "=" in token:
+        return False
+    return token.startswith("--") or len(token) <= 2
+
+
 def strip_positional_paths(
     tokens: list[str],
     *,
     keep_exact: frozenset[str],
     executable_names: frozenset[str],
     boolean_flags: frozenset[str] = frozenset(),
+    keep_once: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Drop bare positional path arguments from a tokenised command (#375).
 
@@ -379,7 +407,7 @@ def strip_positional_paths(
     literals in ``keep_exact`` or the runner's own executable — whatever the
     test directory is called.
 
-    Two different questions, on purpose, after round 2 of review:
+    Several different questions, on purpose, after rounds 2 and 3 of review:
 
     - **Is this token the runner executable?** Answered by *basename*
       (``executable_names``), the same rule `executable_of` already uses —
@@ -387,24 +415,29 @@ def strip_positional_paths(
       (`infer_adapter`/`validate_command` both accept it), and a token match
       that requires the literal string `"pytest"` drops the executable itself
       as a stray positional, leaving argv with the node id in position 0.
-    - **Is this token a wrapper/subcommand literal** (`uv`, `run`, `-m`, or
-      ExUnit's `test` in `mix test`)? Those never appear path-prefixed in
-      practice, so an *exact* match is enough and does not risk colliding
-      with a same-named runner executable found by basename.
+    - **Is this token a wrapper literal** (`uv`, `run`, `-m`)? Those never
+      appear path-prefixed in practice, so an *exact*, repeatable match in
+      ``keep_exact`` is enough.
+    - **Is this token a subcommand literal that appears exactly ONCE**
+      (ExUnit's `test` in `mix test`)? ``keep_once`` matches it only the
+      first time it is seen — round 3's finding: matching it every time also
+      spared a positional suite directory spelled with the SAME word and no
+      trailing slash (`mix test test`), which a trailing-slash spelling
+      (`mix test test/`) never collided with, so the bug was invisible to a
+      test suite that only tried the slashed form.
 
-    ``boolean_flags`` is the safe direction to guess a flag's arity in
-    (#375 review round 2, finding 3): a flag is assumed to consume the token
-    after it — protecting it from being read as a stray path — UNLESS this
-    adapter positively knows the flag takes no argument. `--ignore
-    tests/legacy`, `--cov src`, `-W error`, `uv run`'s own `--python 3.12` —
-    none of pytest's/`uv`'s value-taking flags need to be enumerated for this
-    to be safe; only the flags known to take nothing (`-v`, `-q`, …) need
-    naming, and getting that enumeration wrong only *under*-narrows (some
-    extra flag value survives in the command), never mangles it into
-    swallowing the declared selector.
+    ``boolean_flags`` (with the self-contained shapes `_flag_takes_separate_value`
+    recognises on its own) is the safe direction to guess a flag's arity in
+    (#375 review round 2, finding 3 / round 3, finding 1): a flag is assumed
+    to consume the token after it — protecting it from being read as a stray
+    path — UNLESS it is positively known to take no argument, or its value is
+    visibly already attached. Getting an enumeration wrong only
+    *under*-narrows (some extra flag value survives in the command), never
+    mangles it into swallowing the declared selector.
     """
     kept: list[str] = []
     protect_next = False
+    once_remaining = set(keep_once)
     for token in tokens:
         if protect_next:
             kept.append(token)
@@ -412,13 +445,17 @@ def strip_positional_paths(
             continue
         if token.startswith("-"):
             kept.append(token)
-            protect_next = token not in boolean_flags
+            protect_next = _flag_takes_separate_value(token, boolean_flags)
             continue
         if (
             token in keep_exact
             or PurePosixPath(token).name in executable_names
             or _PYTHONS.match(PurePosixPath(token).name)
         ):
+            kept.append(token)
+            continue
+        if token in once_remaining:
+            once_remaining.discard(token)
             kept.append(token)
             continue
         # A bare positional argument that is none of the above is the
@@ -1009,14 +1046,18 @@ class ExUnitAdapter:
         assert isinstance(selector.locator, ExUnitDefinitionLine)
         kept = strip_positional_paths(
             command_tokens(test_command),
-            # `test` is kept by EXACT match, not by executable name: it is
-            # `mix test`'s subcommand literal, never path-prefixed, and
-            # keeping it by basename would also spare a positional directory
-            # literally named `test/` — the very thing this strips (#375
-            # review round 2, finding 2's lesson applied here too).
-            keep_exact=_RUNNER_WRAPPERS | {"test"},
+            keep_exact=_RUNNER_WRAPPERS,
             executable_names=frozenset({"mix"}),
             boolean_flags=self._BOOLEAN_FLAGS,
+            # `test` is `mix test`'s subcommand literal, kept only the FIRST
+            # time it is seen — never path-prefixed, so an exact match is
+            # enough, but matching it on every occurrence also spared a
+            # positional suite directory spelled the same way with no
+            # trailing slash (`mix test test`, #375 review round 3, finding
+            # 2): the trailing-slash spelling (`mix test test/`) never
+            # collided because `test/` and `test` are different tokens, so
+            # the bug was invisible until this spelling was tried.
+            keep_once=frozenset({"test"}),
         )
         if TRACE_FLAG not in kept:
             kept.append(TRACE_FLAG)
