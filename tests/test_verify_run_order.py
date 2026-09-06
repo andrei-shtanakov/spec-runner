@@ -13,12 +13,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from spec_runner import live_verify as live_verify_module
+from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
 from spec_runner.live_verify import VERIFY_GROUP_TIMEOUT_SECONDS, run_live_verify
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ErrorCode, ExecutorState, PhaseOutcome
 from spec_runner.task import Task
+from spec_runner.tdd import AgentCall, resolve_namespace
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -290,7 +292,7 @@ class TestLiveRunFailurePath:
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
     @patch("spec_runner.execution._run_agent_process")
-    def test_a_genuine_test_failure_is_observed_not_blocked(
+    def test_a_genuine_test_failure_is_observed_and_sent_to_red_authoring(
         self,
         mock_run,
         mock_pre,
@@ -300,13 +302,15 @@ class TestLiveRunFailurePath:
         mock_log,
         mock_status,
         tmp_path,
+        monkeypatch,
     ):
-        """#375 review, finding 3 / FR-14: a real red group is an
-        observation, not a refusal — until the green/test-failure/
-        instrument-error branching exists (#367 TASK-006/008), a genuine
-        failure must not block the task; it proceeds exactly as `standard`
-        would, and the failure is still recorded, named to the judged
-        commit."""
+        """#375 review, finding 3 / FR-14, retired by #367 TASK-008/BEH-21: a
+        real red group is an observation, not a refusal that stops the task
+        — but it is no longer a silent pass-through to the paid
+        implementation call either. It now walks the ordinary red-authoring
+        cycle (BEH-21), and only a confirmed red satisfies the gate that
+        lets the implementation call happen. The failure is still recorded
+        as an entry-run observation, named to the judged commit."""
         root = _init_repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "def test_it():\n    assert False, 'deliberate failure'\n"
@@ -315,18 +319,33 @@ class TestLiveRunFailurePath:
 
         mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
 
+        def _fake_red_agent(config, prompt, **kwargs):
+            red_test = Path(config.project_root) / "tests" / "test_red_task101.py"
+            red_test.write_text("def test_red_task101():\n    assert False, 'red'\n")
+            return AgentCall(
+                text="TDD_SELECTOR: tests/test_red_task101.py::test_red_task101\nTASK_COMPLETE"
+            )
+
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
+
         task = _task(verifies=["tests/test_group.py::test_it"])
         config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
 
         execute_task(task, config, state)
 
-        assert mock_run.called, "a genuine test failure must not block the paid call"
+        assert mock_run.called, (
+            "a genuine test failure that reaches a confirmed red must not block the paid call"
+        )
         phases = [p for p in state.phase_history(task.id) if p.phase == "tests"]
         assert phases, "no verify-first phase outcome was recorded"
-        assert phases[-1].outcome is PhaseOutcome.UNEXPECTED_FAIL
-        assert sha[:12] in (phases[-1].detail or ""), (
+        assert phases[0].outcome is PhaseOutcome.UNEXPECTED_FAIL
+        assert sha[:12] in (phases[0].detail or ""), (
             "the phase record does not name the commit the live run judged (finding 6)"
+        )
+        checkpoint = state.red_checkpoint(task.id, resolve_namespace(config))
+        assert checkpoint is not None, (
+            "BEH-21: the red-declared group must produce a confirmed red checkpoint"
         )
         attempts = state.get_task_state(task.id).attempts
         assert not any(a.error_code == ErrorCode.HOOK_FAILURE for a in attempts), (
