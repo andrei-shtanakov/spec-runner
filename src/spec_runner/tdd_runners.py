@@ -359,31 +359,46 @@ def command_tokens(test_command: str) -> list[str]:
         return []
 
 
-def _flag_takes_separate_value(token: str, boolean_flags: frozenset[str]) -> bool:
+def _flag_takes_separate_value(token: str, value_flags: frozenset[str]) -> bool:
     """Whether ``token`` (already known to start with ``-``) needs the NEXT
-    token as its value (#375 review round 3, finding 1).
+    token as its value.
 
-    Three shapes are self-contained and consume nothing that follows:
+    TERMINAL policy (#375 review rounds 2-4 — three rounds of guessing a
+    flag's arity from its bare shape is enough; this is the final rule, not
+    another interim one):
 
-    - a flag in ``boolean_flags`` — positively known to take no argument;
-    - a long form carrying its value attached (``--tb=short``,
-      ``--maxfail=1``, ``--color=yes``);
-    - a short-flag cluster with the value glued on (``-ra``, ``-n4``) —
-      recognised as any single-dash token longer than a bare `-x`, since a
-      short option that accepts an argument always accepts it either
-      attached or as a separate token, so a token already longer than
-      `-x` has necessarily received it attached.
-
-    Only a genuinely bare flag outside those three shapes (`--ignore`,
-    `--cov`, `-k`, `-n`) is assumed, conservatively, to take a separate
-    argument — the previous round's default, kept for exactly the flags this
-    round's shapes do not already resolve.
+    1. **Attached value, unambiguous either way.** A long form carrying its
+       value glued on (``--tb=short``, ``--maxfail=1``, ``--color=yes``) or a
+       short-flag cluster longer than a bare `-x` (``-ra``, ``-n4`` — a short
+       option that accepts an argument always accepts it either attached or
+       separate, so a token already longer than one letter received it
+       attached) is self-contained: it consumes nothing that follows,
+       regardless of ``value_flags``.
+    2. **Everything else is BOOLEAN BY DEFAULT.** Round 3's policy defaulted
+       the other way (assume value-taking unless positively known boolean)
+       on the theory that mis-guessing would only under-narrow. It does not:
+       round 4 found an ordinary bare long boolean (`--verbose`, `--quiet`,
+       `--cover`) protecting the suite directory right after it, running the
+       WHOLE suite silently — the one outcome this module exists to prevent.
+       Flipping the default makes the *opposite* mistake instead: an
+       unenumerated value-taking flag (some plugin's `--custom-report PATH`)
+       has its value mis-stripped as a stray path. That mistake is caught
+       downstream, not silent — `prove_selected`/`execution_proven` cannot
+       attribute a run whose command lost an argument to the declared
+       selector, and the group is refused as an instrument-error rather than
+       silently running (or mis-scoping) anything. Between "loud instrument-
+       error on a rare unenumerated value flag" and "silent full-suite run on
+       an ordinary bare boolean", the former is the acceptable trade-off —
+       hence ``value_flags`` is now a curated ALLOWLIST of flags positively
+       known to take a separate argument, per adapter, sourced from that
+       runner's own `--help` (`PytestAdapter._VALUE_FLAGS`,
+       `ExUnitAdapter._VALUE_FLAGS`) — not the inverse.
     """
-    if token in boolean_flags:
-        return False
     if "=" in token:
         return False
-    return token.startswith("--") or len(token) <= 2
+    if not token.startswith("--") and len(token) > 2:
+        return False
+    return token in value_flags
 
 
 def strip_positional_paths(
@@ -391,7 +406,7 @@ def strip_positional_paths(
     *,
     keep_exact: frozenset[str],
     executable_names: frozenset[str],
-    boolean_flags: frozenset[str] = frozenset(),
+    value_flags: frozenset[str] = frozenset(),
     keep_once: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Drop bare positional path arguments from a tokenised command (#375).
@@ -407,7 +422,7 @@ def strip_positional_paths(
     literals in ``keep_exact`` or the runner's own executable — whatever the
     test directory is called.
 
-    Several different questions, on purpose, after rounds 2 and 3 of review:
+    Several different questions, on purpose, across rounds 2-4 of review:
 
     - **Is this token the runner executable?** Answered by *basename*
       (``executable_names``), the same rule `executable_of` already uses —
@@ -425,15 +440,12 @@ def strip_positional_paths(
       trailing slash (`mix test test`), which a trailing-slash spelling
       (`mix test test/`) never collided with, so the bug was invisible to a
       test suite that only tried the slashed form.
-
-    ``boolean_flags`` (with the self-contained shapes `_flag_takes_separate_value`
-    recognises on its own) is the safe direction to guess a flag's arity in
-    (#375 review round 2, finding 3 / round 3, finding 1): a flag is assumed
-    to consume the token after it — protecting it from being read as a stray
-    path — UNLESS it is positively known to take no argument, or its value is
-    visibly already attached. Getting an enumeration wrong only
-    *under*-narrows (some extra flag value survives in the command), never
-    mangles it into swallowing the declared selector.
+    - **Does this flag consume the next token as its value?** Answered by
+      `_flag_takes_separate_value` — see its docstring for the TERMINAL
+      policy (rounds 2-4): a flag is BOOLEAN BY DEFAULT (its next token is
+      free to be read as a stray path and dropped) unless it is in the
+      curated ``value_flags`` allowlist for this adapter, or its value is
+      visibly attached already.
     """
     kept: list[str] = []
     protect_next = False
@@ -445,7 +457,7 @@ def strip_positional_paths(
             continue
         if token.startswith("-"):
             kept.append(token)
-            protect_next = _flag_takes_separate_value(token, boolean_flags)
+            protect_next = _flag_takes_separate_value(token, value_flags)
             continue
         if (
             token in keep_exact
@@ -591,34 +603,46 @@ class PytestAdapter:
         assert isinstance(selector.locator, PytestNodeId)
         return [*command_tokens(test_command), selector.locator.value]
 
-    #: pytest flags KNOWN to take no argument — the only ones whose next
-    #: token `strip_positional_paths` is allowed to treat as a stray
-    #: positional path rather than the flag's value (#375 review round 2,
-    #: finding 3: default to protecting a flag's argument, since guessing an
-    #: unenumerated value-flag wrong can eat the declared selector, while
-    #: guessing a boolean flag wrong only leaves an extra token in the
-    #: command).
-    _BOOLEAN_FLAGS = frozenset(
+    #: pytest flags KNOWN to take a separate argument — TERMINAL allowlist
+    #: (#375 review round 4): the default flipped from round 3's "assume
+    #: value-taking" to "assume boolean" (see `_flag_takes_separate_value`'s
+    #: docstring for why), so this is now an affirmative list of value-taking
+    #: flags, sourced from `pytest --help`, not the flags known to take
+    #: nothing. Bare booleans (`-v`/`--verbose`, `-q`/`--quiet`, `-x`/
+    #: `--exitfirst`, `-s`, `-l`, `--lf`, `--ff`, `--nf`, `--cache-clear`,
+    #: `--full-trace`, `--strict[-markers]`, …) need no entry here at all —
+    #: they are boolean by the default itself.
+    _VALUE_FLAGS = frozenset(
         {
-            "-v",
-            "-vv",
-            "-vvv",
-            "-q",
-            "-qq",
-            "-s",
-            "-x",
-            "-l",
-            "--collect-only",
-            "--co",
-            "--lf",
-            "--ff",
-            "--nf",
-            "--strict",
-            "--strict-markers",
-            "--disable-warnings",
-            "--no-header",
-            "--no-summary",
-            "--continue-on-collection-errors",
+            "-k",
+            "-m",
+            "-p",
+            "-o",
+            "-W",
+            "-c",
+            "-n",
+            "--cov",
+            "--cov-report",
+            "--cov-config",
+            "--rootdir",
+            "--confcutdir",
+            "--junitxml",
+            "--junit-xml",
+            "--ignore",
+            "--ignore-glob",
+            "--deselect",
+            "--basetemp",
+            "--last-failed-no-failures",
+            "--maxfail",
+            "--tb",
+            "--durations",
+            "--durations-min",
+            "--dist",
+            "--capture",
+            "--pdbcls",
+            "--assert",
+            "--doctest-glob",
+            "--override-ini",
         }
     )
 
@@ -628,7 +652,7 @@ class PytestAdapter:
             command_tokens(test_command),
             keep_exact=_RUNNER_WRAPPERS,
             executable_names=frozenset({"pytest"}),
-            boolean_flags=self._BOOLEAN_FLAGS,
+            value_flags=self._VALUE_FLAGS,
         )
         return [*kept, selector.locator.value]
 
@@ -1035,12 +1059,14 @@ class ExUnitAdapter:
             tokens.append(TRACE_FLAG)
         return [*tokens, f"{selector.path}:{selector.locator.line}"]
 
-    #: `mix test` flags KNOWN to take no argument — same conservative-default
-    #: reasoning as `PytestAdapter._BOOLEAN_FLAGS` (#375 review round 2,
-    #: finding 3): anything not named here is assumed to consume its next
-    #: token, so an unenumerated value flag under-narrows at worst rather
-    #: than swallowing the declared selector.
-    _BOOLEAN_FLAGS = frozenset({"--trace", "--force", "--no-start"})
+    #: `mix test` flags KNOWN to take a separate argument — TERMINAL
+    #: allowlist, same policy flip as `PytestAdapter._VALUE_FLAGS` (#375
+    #: review round 4): bare booleans (`--trace`, `--cover`, `--force`,
+    #: `--no-start`, `--stale`, `--listen-on-stdin`, `--slowest`) need no
+    #: entry — boolean is the default.
+    _VALUE_FLAGS = frozenset(
+        {"--only", "--exclude", "--include", "--seed", "--max-failures", "--timeout"}
+    )
 
     def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, ExUnitDefinitionLine)
@@ -1048,7 +1074,7 @@ class ExUnitAdapter:
             command_tokens(test_command),
             keep_exact=_RUNNER_WRAPPERS,
             executable_names=frozenset({"mix"}),
-            boolean_flags=self._BOOLEAN_FLAGS,
+            value_flags=self._VALUE_FLAGS,
             # `test` is `mix test`'s subcommand literal, kept only the FIRST
             # time it is seen — never path-prefixed, so an exact match is
             # enough, but matching it on every occurrence also spared a

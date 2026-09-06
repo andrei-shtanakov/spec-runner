@@ -510,13 +510,11 @@ class TestBuildScopedCommand:
         argv = ADAPTER.build_scoped_command("./venv/bin/pytest tests/", selector)
         assert argv == ["./venv/bin/pytest", "tests/test_x.py::test_y"]
 
-    def test_pytest_does_not_eat_an_unenumerated_value_flags_argument(self):
-        """#375 review round 2, finding 3: `--cov` is not in any enumerated
-        value-flag list, and the old blacklist approach treated its value as
-        a stray path, dropped it, and left `--cov` free to swallow the
-        selector instead — widening the run past the declared group. The
-        conservative default (protect unless positively known boolean) must
-        keep `src` right after `--cov`."""
+    def test_pytest_keeps_a_curated_value_flags_argument(self):
+        """`--cov` is on the TERMINAL curated allowlist (#375 review round 4)
+        of pytest flags known to take a separate argument, so its value
+        (`src`) must survive right after it — while the bare boolean `-v`
+        right before it needs no entry at all."""
         selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
         assert isinstance(selector, Selector)
         argv = ADAPTER.build_scoped_command("pytest tests/ -v --cov src", selector)
@@ -572,6 +570,48 @@ class TestBuildScopedCommand:
         assert isinstance(selector, Selector)
         argv = adapter.build_scoped_command("mix test test", selector)
         assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
+
+
+class TestTerminalFlagArityPolicy:
+    """#375 review round 4, finding 1: the TERMINAL flag-arity policy, both
+    directions, on the exact shapes round 3's default got backwards — a bare
+    long boolean (`--verbose`) must still free the positional path next to
+    it, and a curated value flag (`--cov`, `-k`) must still keep its value."""
+
+    @pytest.mark.parametrize(
+        "test_command",
+        [
+            "pytest --verbose tests/",
+            "pytest --quiet tests/",
+            "mix test --cover test/",
+        ],
+    )
+    def test_a_bare_unenumerated_long_boolean_still_strips_the_directory(self, test_command):
+        """The concrete round 4 defect: round 3's default treated ANY
+        unenumerated flag as value-taking, so `--verbose`/`--quiet`/`--cover`
+        protected the suite directory right after them and the whole suite
+        ran alongside the declared selector."""
+        if test_command.startswith("mix"):
+            from spec_runner.tdd_runners import ExUnitAdapter
+
+            adapter = ExUnitAdapter()
+            selector = adapter.parse_selector("test/probe_test.exs:12")
+            assert isinstance(selector, Selector)
+            argv = adapter.build_scoped_command(test_command, selector)
+            assert "test/" not in argv, f"{test_command!r} scoped to {argv!r} kept the directory"
+        else:
+            selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+            assert isinstance(selector, Selector)
+            argv = ADAPTER.build_scoped_command(test_command, selector)
+            assert "tests/" not in argv, f"{test_command!r} scoped to {argv!r} kept the directory"
+
+    def test_a_curated_short_value_flag_keeps_its_expression(self):
+        """`-k EXPR` is on the curated allowlist — `EXPR` must not be read as
+        a stray positional and dropped alongside `tests/`."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("pytest tests/ -k expr", selector)
+        assert argv == ["pytest", "-k", "expr", "tests/test_x.py::test_y"]
 
 
 class TestExecutionProven:
