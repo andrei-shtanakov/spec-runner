@@ -185,6 +185,37 @@ class TestBEH26DeclaredGroupIsFrozenForTheDuration:
             "gate before the terminal transition"
         )
 
+    def test_the_claims_refusal_is_recorded_under_the_gate_stage_not_verify(
+        self, tmp_path, monkeypatch
+    ):
+        """PR #384 review finding (minor): `_reverify_live_evidence_for_candidate`
+        enters the "verify" stage and never leaves it — a claims-gate refusal
+        right after it (this scenario) is recorded with `error_stage: "verify"`
+        even though the live verify run itself passed. The gate that actually
+        refused must be named, the same way the red path names "tests" before
+        `evaluate_gates` (execution.py:194)."""
+        root = _base_repo(tmp_path)
+        monkeypatch.setattr(
+            tdd, "_run_agent", MagicMock(side_effect=AssertionError("no red authoring"))
+        )
+
+        def _rewrite_the_group(config, invocation):
+            path = Path(config.project_root) / "tests" / "test_group.py"
+            path.write_text("def test_it():\n    assert True\n")
+            return _completes(config, invocation)
+
+        task = _verify_first_task()
+        config = _cfg(root)
+        with ExecutorState(config) as state:
+            result = _run(task, config, state, agent_side_effect=_rewrite_the_group)
+            error_stage = state.get_task_state(task.id).attempts[-1].error_stage
+
+        assert result is not True
+        assert error_stage != "verify", (
+            "the live verify run passed — only the claims gate after it "
+            f"refused; got error_stage={error_stage!r}"
+        )
+
     def test_deleting_a_group_file_is_also_caught(self, tmp_path, monkeypatch):
         root = _base_repo(tmp_path)
         monkeypatch.setattr(

@@ -142,6 +142,13 @@ def print_status(config: ExecutorConfig) -> None:
         attempted = [ts for ts in state.tasks.values() if ts.attempts]
         second_pass = state.get_second_pass_fails()
         if attempted:
+            # #367 BEH-31: the fact and outcome of a task's live verify-first
+            # run, alongside its attempt history — text only for now, same
+            # posture as `_ceiling_in_force` above (a new `--json` key is a
+            # separate, scheduled contract round).
+            from .tdd import RedOutcome, resolve_namespace
+
+            namespace = resolve_namespace(config)
             print("\n📝 Task History:")
             for ts in attempted:
                 icon = "✅" if ts.status == "success" else "❌" if ts.status == "failed" else "🔄"
@@ -165,6 +172,22 @@ def print_status(config: ExecutorConfig) -> None:
                     last_attempt = ts.attempts[-1]
                     if last_attempt.review_status and last_attempt.review_status != "skipped":
                         print(f"      Review: {last_attempt.review_status}")
+                evidence = state.verify_evidence(namespace, ts.task_id)
+                if evidence is not None:
+                    # #367 BEH-31 review finding: a verify_first task only
+                    # ever reaches `done` off a *green* re-verify row, even
+                    # one that walked the red-authoring cycle and confirmed
+                    # a red on entry — the latest row alone must not read as
+                    # if the task never authored a red.
+                    red_confirmed = any(
+                        cp.outcome is RedOutcome.EXPECTED_FAIL
+                        for cp in state.active_checkpoints(namespace, ts.task_id)
+                    ) or any(
+                        row[2] == RedOutcome.EXPECTED_FAIL.value
+                        for row in state.retired_checkpoints(namespace, ts.task_id)
+                    )
+                    suffix = " — red confirmed" if red_confirmed else ""
+                    print(f"      Verify: {evidence.outcome} ({evidence.commit_sha[:12]}){suffix}")
                 # Kind tag on the error line
                 if ts.status == "failed" and ts.last_error:
                     kind = ts.attempts[-1].error_kind if ts.attempts else None

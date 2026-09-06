@@ -337,7 +337,9 @@ class TestLiveRunFailurePath:
         assert mock_run.called, (
             "a genuine test failure that reaches a confirmed red must not block the paid call"
         )
-        phases = [p for p in state.phase_history(task.id) if p.phase == "tests"]
+        # #367 BEH-30/TASK-011: the live verify-first run now records under
+        # its own "verify" stage, not "tests" (the post-done stage).
+        phases = [p for p in state.phase_history(task.id) if p.phase == "verify"]
         assert phases, "no verify-first phase outcome was recorded"
         assert phases[0].outcome is PhaseOutcome.UNEXPECTED_FAIL
         assert sha[:12] in (phases[0].detail or ""), (

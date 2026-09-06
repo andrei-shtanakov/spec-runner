@@ -313,7 +313,7 @@ def _run_verify_first_phase(
 
     ensure_red_gate()
     if not config.auto_commit:
-        reporter.enter("tests")
+        reporter.enter("verify")
         detail = (
             "verify-first requires a candidate commit to judge (FR-07); "
             "auto_commit: false (including the subdir-repo auto-detect) is "
@@ -321,7 +321,7 @@ def _run_verify_first_phase(
         )
         reporter.record(PhaseOutcome.ERROR, detail)
         return Refusal(detail, RefusalKind.INSTRUMENT, terminal=True), None
-    reporter.enter("tests")
+    reporter.enter("verify")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
     # consequence of the run itself, on all three outcomes — not something

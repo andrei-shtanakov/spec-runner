@@ -699,7 +699,7 @@ def _reverify_before_review(
     from .state import ExecutorState
 
     if reporter:
-        reporter.enter("tests")
+        reporter.enter("verify")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
         recorded = state.record_verify_evidence(task=task, config=config, result=result)
@@ -803,7 +803,7 @@ def _reverify_live_evidence_for_candidate(
         return None
 
     if reporter:
-        reporter.enter("tests")
+        reporter.enter("verify")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     with ExecutorState(config) as state:
         recorded = state.record_verify_evidence(task=task, config=config, result=result)
@@ -1266,6 +1266,13 @@ def post_done_hook(
         return (False, reverify_blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     if has_gates():
+        # #367 BEH-30 review finding (PR #384, minor): the re-verify above
+        # entered "verify" and never left it — a refusal from the gate below
+        # would otherwise still read `error_stage: "verify"` even though the
+        # live verify run itself passed. Name the gate, same as the red
+        # path's `reporter.enter("tests")` before `evaluate_gates` (#164).
+        if reporter:
+            reporter.enter("tests")
         blocked = _run_pre_terminal_gates(
             task,
             config,

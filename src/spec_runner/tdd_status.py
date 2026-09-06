@@ -36,9 +36,11 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
         active = state.active_checkpoints(namespace, task_id)
         retired = state.retired_checkpoints(namespace, task_id)
         claims = state.claims_for(namespace, task_id)
+        verify_rows = state.verify_evidence_for_namespace(namespace, task_id)
         phase_tasks = sorted(
             {cp.task_id for cp in active}
             | {row[0] for row in retired}
+            | {v.task_id for v in verify_rows}
             | ({task_id} if task_id else set())
         )
         phases = state.tdd_phase_histories(namespace, phase_tasks)
@@ -99,6 +101,25 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
             tid: [{"phase": h["phase"], "detail": h["detail"]} for h in history]
             for tid, history in phases.items()
         },
+        # #367 BEH-31: each live verify-first run's durable evidence — outcome,
+        # judged commit, declared/executed group, config hash — so an operator
+        # can tell which of the three paths (green/test-failure/
+        # instrument-error) a task took, distinct from a red checkpoint.
+        "verify_evidence": [
+            {
+                "task_id": v.task_id,
+                "commit_sha": v.commit_sha,
+                "group_declared": list(v.group_declared),
+                "group_executed": list(v.group_executed),
+                "config_hash": v.config_hash,
+                "environment_id": v.environment_id,
+                "adapter": v.adapter,
+                "outcome": v.outcome,
+                "detail": v.detail,
+                "timestamp": v.timestamp,
+            }
+            for v in verify_rows
+        ],
     }
 
 
@@ -121,6 +142,23 @@ def _all_remedies(state: ExecutorState, namespace: str, active, retired) -> list
     return out
 
 
+def _has_confirmed_red(data: dict, task_id: str) -> bool:
+    """Whether this task ever confirmed a red, active or retired.
+
+    A `verify_first` task can only reach `done` off a *green* re-verify row
+    (a still-red group refuses), so the latest verify-evidence row alone
+    cannot tell a task that never authored a red from one that did and then
+    fixed it — that account lives in the checkpoint, not the evidence row.
+    """
+    for cp in data["active_checkpoints"]:
+        if cp["task_id"] == task_id and cp["outcome"] == RedOutcome.EXPECTED_FAIL.value:
+            return True
+    for r in data["retired_checkpoints"]:
+        if r["task_id"] == task_id and r["outcome"] == RedOutcome.EXPECTED_FAIL.value:
+            return True
+    return False
+
+
 def lifecycle_of(data: dict, task_id: str) -> str:
     """One line for where a task stands — the thing plain `status` gets wrong.
 
@@ -129,9 +167,26 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     has no confirmed red and cannot proceed.
     """
     history = data.get("phases", {}).get(task_id) or []
+    verify = next((v for v in data.get("verify_evidence", []) if v["task_id"] == task_id), None)
     if history:
         last = history[-1]["phase"]
         if last == "done":
+            # #367 BEH-31: DONE alone does not say *how* — a green-only task
+            # never authors a red, so its own evidence is the only record of
+            # the path it took, and must read differently from a task that
+            # reached done off a confirmed red. Green evidence alone is not
+            # enough to call it green-only: a verify_first task that
+            # confirmed a red only ever reaches done through a later green
+            # re-verify row too, so the label is conditional on there being
+            # no confirmed red checkpoint (active or retired) for the task.
+            if (
+                verify is not None
+                and verify["outcome"] == "green"
+                and not _has_confirmed_red(data, task_id)
+            ):
+                return f"done (green-only via verify-evidence {verify['commit_sha'][:12]})"
+            if verify is not None and verify["outcome"] == "green":
+                return f"done (red confirmed, verify-evidence {verify['commit_sha'][:12]})"
             return "done"
         if not last.startswith("refused:"):
             return f"in {last.replace('_', ' ')}"
@@ -146,6 +201,16 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     retired = [r for r in data["retired_checkpoints"] if r["task_id"] == task_id]
     if retired:
         return f"no active red — last checkpoint {retired[-1]['status']}; needs RED authoring"
+    if verify is not None:
+        # #367 BEH-31: no red checkpoint exists at all — the verify-first
+        # entry evidence is the only account of what happened, and which of
+        # the three outcomes it was still needs to be visible.
+        commit = verify["commit_sha"][:12]
+        if verify["outcome"] == "green":
+            return f"green verify-evidence, no red authored ({commit})"
+        if verify["outcome"] == "test_failure":
+            return f"verify-first entry read red ({commit}); awaiting red authoring"
+        return f"verify-first entry could not be judged: instrument-error ({commit})"
     return "no red checkpoint yet"
 
 
@@ -157,6 +222,7 @@ def render(data: dict, task_id: str | None) -> str:
         {c["task_id"] for c in data["active_checkpoints"]}
         | {r["task_id"] for r in data["retired_checkpoints"]}
         | {c["task_id"] for c in data["claims"]}
+        | {v["task_id"] for v in data.get("verify_evidence", [])}
     )
     if task_id:
         tasks = [task_id]
@@ -173,6 +239,12 @@ def render(data: dict, task_id: str | None) -> str:
                 f"{cp['outcome']}  {cp['selector']}"
             )
             lines.append(f"      env {cp['environment_id']}  baseline {cp['baseline_sha'][:12]}")
+        for v in [x for x in data.get("verify_evidence", []) if x["task_id"] == tid]:
+            lines.append(
+                f"   verify-evidence {v['commit_sha'][:12]}  {v['outcome']}  "
+                f"{', '.join(v['group_declared'])}"
+            )
+            lines.append(f"      config_hash {v['config_hash']}  env {v['environment_id']}")
         active_claims = [
             c for c in data["claims"] if c["task_id"] == tid and c["status"] == ClaimStatus.ACTIVE
         ]

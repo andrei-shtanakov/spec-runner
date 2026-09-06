@@ -30,10 +30,16 @@ from pathlib import Path
 import pytest
 
 from spec_runner.errors import ERROR_KINDS
+from spec_runner.stages import STAGES
 from tests.test_infrastructure_classification import _run_cli, _tdd_project
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas" / "executor-state.schema.json"
 EXECUTION_PY = Path(__file__).resolve().parents[1] / "src" / "spec_runner" / "execution.py"
+STATE_SCHEMA_DOC = Path(__file__).resolve().parents[1] / "docs" / "state-schema.md"
+
+# "codex" is the one stage no longer in STAGES (renamed to "exec" in v2.13,
+# #74) that the schema must keep for rows written by <=2.12.
+_LEGACY_ERROR_STAGES = {"codex"}
 
 
 def _attempts(root: Path) -> list[dict]:
@@ -154,6 +160,35 @@ class TestTheDeclaredVocabularyIsTheOneOnDisk:
                     written.add(node.value.value)
         assert written, "no literal kinds found — the walk stopped working"
         assert written <= set(ERROR_KINDS), f"undeclared: {written - set(ERROR_KINDS)}"
+
+
+class TestErrorStageVocabularyMatchesTheSchema:
+    """PR #384 review finding: `execution.py` records `error_stage=reporter.
+    current`, whose values are every name in `stages.STAGES` — but the
+    closed enum here (and the vocabulary documented in
+    `docs/state-schema.md`) drifted from that source when "verify" (#367
+    BEH-30) was added as a stage. A consumer validating `attempts` rows
+    against this schema rejects a stage spec-runner itself writes — the
+    same defect class `TestTheDeclaredVocabularyIsTheOneOnDisk` above pins
+    for `error_kind`."""
+
+    def test_schema_enum_matches_the_declared_stages(self):
+        schema = json.loads(SCHEMA.read_text())
+        enum = schema["definitions"]["TaskAttempt"]["properties"]["error_stage"]["enum"]
+        assert set(enum) == set(STAGES) | _LEGACY_ERROR_STAGES | {None}
+
+    def test_docs_list_every_declared_stage(self):
+        """Catches a stage that reaches the schema but not the doc's prose
+        value list — an operator reading `error_stage` by hand has only
+        the doc, not the schema, to check it against. Scoped to the
+        `attempts.error_stage` table row specifically: `verify` already
+        appears elsewhere in this doc (`pr_agent_calls.kind`), so a bare
+        substring check over the whole file would not have caught the
+        drift this test exists to catch."""
+        doc_lines = STATE_SCHEMA_DOC.read_text().splitlines()
+        row = next(line for line in doc_lines if line.startswith("| `error_stage` |"))
+        for stage in STAGES:
+            assert f"`{stage}`" in row, f"{stage!r} is not documented in the error_stage row"
 
 
 class TestTheRunSaysWhyItFailed:
