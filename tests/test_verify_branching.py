@@ -303,6 +303,140 @@ class TestBEH21ClaimsReleaseAtCompletion:
         )
 
 
+class TestBEH21ClaimsReleaseAcrossRetries:
+    """#381 review round 2, major finding: the round-1 fix keyed release on
+    `verify_first_red` — the CURRENT attempt's own entry-run outcome. That
+    leaks the same claim whenever the attempt that authored and claimed the
+    red is not the attempt that reaches DONE.
+
+    Scenario (reviewer's, reproduced with two manual `execute_task` calls
+    standing in for two attempts of the same task/workstream — `run_with_
+    retries`'s own retry-worthiness classification is not what this test
+    measures): attempt 1 enters red, walks BEH-21's cycle (authors and
+    claims `tests/test_red_authored.py`), its `post_done_hook` commits the
+    implementation fix as the candidate and *then* refuses (the shape
+    `_reverify_live_evidence_for_candidate`/a blocking plugin/a drifted
+    candidate all take — committed first, refused after). Attempt 2 starts
+    from that same HEAD, so its own entry run now reads green (BEH-20) and
+    reaches DONE without ever re-entering the red cycle itself. The claim
+    attempt 1 took must still be released, and a DONE row must still exist,
+    because release has to be state-derived (did this task ever claim a red
+    in this workstream), not attempt-local."""
+
+    def _post_done_hook_stub(self, root):
+        calls: list[int] = []
+
+        def _stub(task, config, success, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                # Mirrors `wants_candidate` committing the implementation
+                # work before a later gate/reverify/plugin refuses it
+                # (hooks.py:1011 region) — the fix is real and in HEAD by
+                # the time this attempt is recorded as failed.
+                (root / "tests" / "test_group.py").write_text(
+                    "def test_it():\n    assert True  # fixed by attempt 1\n"
+                )
+                _commit(root, "attempt 1: implementation fix, committed before refusing")
+                return (
+                    False,
+                    "reverify could not be confirmed (infrastructure): transient worktree failure",
+                    "skipped",
+                    "",
+                    False,
+                )
+            return (True, None, "skipped", "", False)
+
+        return _stub, calls
+
+    def test_a_claim_from_an_earlier_attempt_is_released_when_a_later_one_finishes_green(
+        self, tmp_path, monkeypatch
+    ):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+
+        red_calls: list[str] = []
+
+        def _fake_red_agent_recording(config, prompt, **kwargs):
+            red_calls.append("red_authoring")
+            return _fake_red_agent(config, prompt, **kwargs)
+
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent_recording)
+
+        stub, hook_calls = self._post_done_hook_stub(root)
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        with (
+            patch("spec_runner.execution.update_task_status"),
+            patch("spec_runner.execution.log_progress"),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["echo", "hi"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="test prompt"),
+            patch("spec_runner.execution.post_done_hook", side_effect=stub),
+            patch("spec_runner.execution.pre_start_hook", return_value=True),
+            patch("spec_runner.execution._run_agent_process") as mock_run,
+            ExecutorState(config) as state,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="output TASK_COMPLETE", stderr="", returncode=0
+            )
+
+            attempt_1 = execute_task(task, config, state)
+            assert attempt_1 is False, "attempt 1 must be the one that refuses"
+            assert red_calls == ["red_authoring"], (
+                "attempt 1 must walk the red-authoring cycle exactly once"
+            )
+
+            namespace = resolve_namespace(config)
+            assert state.red_checkpoint(task.id, namespace) is not None, (
+                "attempt 1 must leave a confirmed red checkpoint behind"
+            )
+            claims_after_1 = state.claims_for(namespace, task.id)
+            assert claims_after_1, "attempt 1 must have claimed the authored red file"
+            assert [row[3] for row in claims_after_1] == [ClaimStatus.ACTIVE.value] * len(
+                claims_after_1
+            ), "the claim is still live going into attempt 2 — nothing has released it yet"
+
+            attempt_2 = execute_task(task, config, state)
+            assert attempt_2 is True, "attempt 2 must enter green off attempt 1's committed fix"
+            assert len(hook_calls) == 2
+
+            history = [h["phase"] for h in state.tdd_phase_history(task.id, namespace)]
+            claims_after_2 = state.claims_for(namespace, task.id)
+
+            assert "done" in history, (
+                "a DONE row must exist once the task finishes, whichever attempt's "
+                "entry run happened to read green"
+            )
+            assert claims_after_2, "the claim taken by attempt 1 must still be on record"
+            assert [row[3] for row in claims_after_2] == [ClaimStatus.RELEASED.value] * len(
+                claims_after_2
+            ), (
+                "the claim attempt 1 took must be released once the task finishes — "
+                "release must be state-derived, not keyed on attempt 2's own green entry"
+            )
+
+            # The measured consequence (#260/#381): a later, legitimate commit to
+            # the file attempt 1 claimed must not be blocked by a claim that
+            # outlived the task.
+            (root / "tests" / "test_red_authored.py").write_text(
+                "def test_red_authored():\n    assert True  # fixed legitimately\n"
+            )
+            candidate = _commit(root, "a later legitimate edit")
+            violations = check_claims(config, state, namespace, candidate)
+
+        assert violations == [], (
+            "a completed verify_first task's stale claim (from an earlier attempt) "
+            f"must not block a later legitimate edit to the same file, got {violations}"
+        )
+
+
 class TestBEH22InstrumentErrorStopsFailClosed:
     """kind: integration — each instrument-classified entry, on its own,
     must stop the task before either the green-only or the red-authoring
