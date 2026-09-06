@@ -59,8 +59,10 @@ upstream_hashes:
   трёх исходов; новое значение любой оси без строки в таблице — красный
   тест, не молчаливый четвёртый исход. Таблица классифицирует
   ПОСТ-прогонную тройку; пред-прогонная ветка `instrument-error` — РОВНО
-  пять случаев: отсутствующая evidence, недостижимое окружение,
-  недостижимый SHA, композитная test_command, неразрешимый адаптер-судья
+  шесть случаев: отсутствующая evidence, недостижимое окружение,
+  недостижимый SHA, композитная test_command, необъявленная или
+  неразбираемая группа (BEH-22 — вход виден до прогона, minor круга 8),
+  неразрешимый адаптер-судья
   (FR-15/BEH-10 — пред-прогонный вход, «недостижимое окружение» его не
   покрывает: environment_id и имя адаптера — разные оси, BEH-15; minor
   круга 7) (minor круга 6: НЕ «весь
@@ -312,8 +314,8 @@ verify-first в обеих конфигурациях + аудит каждог�
 записи литералом не хоронят переиспользование). Выделен из TASK-009 и
 поставлен ПЕРЕД TASK-008: red-гейт обязан спрашиваться по evidence, что
 невозможно до регистрации (major кругов 5–6). Записи — major круга 7:
-`RedCheckpoint(..., execution_mode="tdd")` литералом в `run_red_phase`
-(tdd.py:841) делал бы `_reusable_checkpoint` слепым для verify-first
+`RedCheckpoint(..., execution_mode="tdd")` литералом в `_judge_red_commit` (tdd.py:841,
+вызывается из run_red_phase) делал бы `_reusable_checkpoint` слепым для verify-first
 (cp.execution_mode != resolve_execution_mode(task)) — каждый ретрай
 ветви test-failure заново покупал бы платный RED-авторинг (AC FR-14).
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-24
@@ -321,7 +323,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-24
 
 **Checklist:**
 - [ ] реализовать BEH-24: Третий режим не читается как «гарантий нет»
-- [ ] записи режима — фактическая величина, не литерал: `RedCheckpoint(..., execution_mode=resolve_execution_mode(task))` в `run_red_phase` (tdd.py:841); тест краснеет на литерале — на ретрае verify-first задачи чекпойнт переиспользуется, второй RED-авторинг не покупается (AC FR-14)
+- [ ] записи режима — фактическая величина, не литерал: `RedCheckpoint(..., execution_mode=resolve_execution_mode(task))` в `_judge_red_commit` (tdd.py:841, вызывается из run_red_phase — minor круга 8: сайт назван точно); тест краснеет на литерале — на ретрае verify-first задачи чекпойнт переиспользуется, второй RED-авторинг не покупается (AC FR-14)
 - [ ] проверка группы: tests/test_verify_gates.py (kind: contract) зелёные на BEH-24
 
 **Traces to:** [FR-17], [FR-14]
