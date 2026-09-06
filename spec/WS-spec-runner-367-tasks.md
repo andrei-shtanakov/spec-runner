@@ -1,17 +1,18 @@
 ---
-spec_stage: tasks
-status: draft
-owner_role: stream-owner
-version: 1
-generated_by: fleet-agent
-generated_at: "2026-09-06T03:26:49"
-source_prompt_version: ""
-validation: ""
-approved_by: ""
 traces_to:
 - behaviour-spec
 upstream_hashes:
   behaviour-spec: 8e8ddd2118718dc72e0778e2c7b5c5875d98d979
+spec_stage: tasks
+status: approved
+version: 2
+generated_by: fleet-agent
+generated_at: '2026-09-06T03:26:49'
+source_prompt_version: ''
+validation: pass
+approved_by: andrei-shtanakov
+approved_at: '2026-09-06T00:57:00Z'
+owner_role: stream-owner
 ---
 
 ## Milestone 1: verify-first: режим исполнения задачи «сначала живой прогон checked_by-группы» с durable evidence (SHA, селектор, config hash, исход green|test-failure|instrument-error) и ветвлением green→green-only / test-failure→TDD / instrument→стоп (spec-runner#367)
