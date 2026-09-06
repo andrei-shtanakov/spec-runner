@@ -450,3 +450,216 @@ class TestRunnerConventionsSurviveTheNamespaceSegment:
         assert path.parts[0] == "test"
         assert path.name.endswith("_test.exs")
         assert ADAPTERS["exunit"].is_discoverable(path)
+
+
+class TestBuildScopedCommand:
+    """#375 review, findings 4 and 5: verify-first's scoped command is built
+    by the adapter itself, replacing the command's own positional test-path
+    argument — whatever it is called — instead of a hardcoded literal
+    (`{"tests"}`) outside any adapter, and without eating the value of a
+    preceding flag."""
+
+    def test_pytest_replaces_a_default_tests_directory(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest tests/", selector)
+        assert argv == ["python", "-m", "pytest", "tests/test_x.py::test_y"]
+
+    def test_pytest_replaces_a_non_default_directory_name(self):
+        """The old hardcoded `{"tests"}` set only recognised the literal
+        word "tests" — a suite living under any other name was never
+        stripped."""
+        selector = ADAPTER.parse_selector("suite/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest suite/", selector)
+        assert argv == ["python", "-m", "pytest", "suite/test_x.py::test_y"]
+
+    def test_pytest_does_not_eat_an_options_value(self):
+        """`--ignore tests/legacy -q`: `tests/legacy` is a flag's VALUE, not a
+        stray positional path, and `-q` must survive right after it."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("python -m pytest --ignore tests/legacy -q", selector)
+        assert argv == [
+            "python",
+            "-m",
+            "pytest",
+            "--ignore",
+            "tests/legacy",
+            "-q",
+            "tests/test_x.py::test_y",
+        ]
+
+    def test_exunit_replaces_a_default_test_directory(self):
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("mix test test/", selector)
+        assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
+
+    def test_pytest_keeps_a_path_shaped_executable(self):
+        """#375 review round 2, finding 2: `./venv/bin/pytest tests/` is a
+        supported `test_command` (`infer_adapter`/`validate_command` both
+        accept it by basename), and stripping the executable itself left
+        argv starting with the node id — `subprocess.run` then raised
+        `FileNotFoundError`."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("./venv/bin/pytest tests/", selector)
+        assert argv == ["./venv/bin/pytest", "tests/test_x.py::test_y"]
+
+    def test_pytest_keeps_a_curated_value_flags_argument(self):
+        """`--cov` is on the TERMINAL curated allowlist (#375 review round 4)
+        of pytest flags known to take a separate argument, so its value
+        (`src`) must survive right after it — while the bare boolean `-v`
+        right before it needs no entry at all."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("pytest tests/ -v --cov src", selector)
+        assert argv == [
+            "pytest",
+            "-v",
+            "--cov",
+            "src",
+            "tests/test_x.py::test_y",
+        ]
+
+    def test_exunit_keeps_a_path_shaped_executable(self):
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("./bin/mix test test/", selector)
+        assert argv == ["./bin/mix", "test", "--trace", "test/probe_test.exs:12"]
+
+    @pytest.mark.parametrize(
+        "test_command",
+        [
+            "pytest -ra tests/",
+            "pytest --tb=short tests/",
+            "pytest --maxfail=1 tests/",
+            "uv run pytest --color=yes tests/",
+        ],
+    )
+    def test_pytest_strips_the_path_after_an_attached_value_flag(self, test_command):
+        """#375 review round 3, finding 1: a flag whose value is glued on
+        (`-ra`, `--tb=short`, `--maxfail=1`, `--color=yes`) consumes no
+        following token — the old rule protected EVERY unenumerated flag's
+        next token unconditionally, so the positional `tests/` right after
+        it survived alongside the selector and the whole suite ran."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command(test_command, selector)
+        assert "tests/" not in argv, (
+            f"{test_command!r} scoped to {argv!r} still carries the suite directory"
+        )
+        assert argv[-1] == "tests/test_x.py::test_y"
+
+    def test_exunit_strips_a_slashless_positional_test_directory(self):
+        """#375 review round 3, finding 2: `mix test test` (no trailing
+        slash) is equivalent to `mix test test/`, but matching the `test`
+        subcommand literal on every occurrence also spared this spelling's
+        positional directory — the same literal word, one token later."""
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("mix test test", selector)
+        assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
+
+
+class TestTerminalFlagArityPolicy:
+    """#375 review round 4, finding 1: the TERMINAL flag-arity policy, both
+    directions, on the exact shapes round 3's default got backwards — a bare
+    long boolean (`--verbose`) must still free the positional path next to
+    it, and a curated value flag (`--cov`, `-k`) must still keep its value."""
+
+    @pytest.mark.parametrize(
+        "test_command",
+        [
+            "pytest --verbose tests/",
+            "pytest --quiet tests/",
+            "mix test --cover test/",
+        ],
+    )
+    def test_a_bare_unenumerated_long_boolean_still_strips_the_directory(self, test_command):
+        """The concrete round 4 defect: round 3's default treated ANY
+        unenumerated flag as value-taking, so `--verbose`/`--quiet`/`--cover`
+        protected the suite directory right after them and the whole suite
+        ran alongside the declared selector."""
+        if test_command.startswith("mix"):
+            from spec_runner.tdd_runners import ExUnitAdapter
+
+            adapter = ExUnitAdapter()
+            selector = adapter.parse_selector("test/probe_test.exs:12")
+            assert isinstance(selector, Selector)
+            argv = adapter.build_scoped_command(test_command, selector)
+            assert "test/" not in argv, f"{test_command!r} scoped to {argv!r} kept the directory"
+        else:
+            selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+            assert isinstance(selector, Selector)
+            argv = ADAPTER.build_scoped_command(test_command, selector)
+            assert "tests/" not in argv, f"{test_command!r} scoped to {argv!r} kept the directory"
+
+    def test_a_curated_short_value_flag_keeps_its_expression(self):
+        """`-k EXPR` is on the curated allowlist — `EXPR` must not be read as
+        a stray positional and dropped alongside `tests/`."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("pytest tests/ -k expr", selector)
+        assert argv == ["pytest", "-k", "expr", "tests/test_x.py::test_y"]
+
+
+class TestExecutionProven:
+    """#375 review, finding 2: verify-first's own strict class of proven-
+    execution words (`passed`/`failed`/`error`) — not `_EXECUTED_WORDS`,
+    which is frozen for the red-replay path and counts `xfailed`/`xpassed`
+    as executed (FR-08 explicitly excludes them here)."""
+
+    def test_a_passing_run_proves_execution(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="1 passed in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is True
+
+    def test_a_skipped_run_does_not_prove_execution(self):
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="tests/test_x.py::test_y SKIPPED\n1 skipped in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is False
+
+    def test_an_xfailed_run_does_not_prove_execution(self):
+        """The frozen red-path constant counts `xfailed` as executed;
+        verify-first's own class deliberately does not (FR-08)."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="tests/test_x.py::test_y XFAIL\n1 xfailed in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is False
+
+    def test_a_passing_run_with_a_warning_still_proves_execution(self):
+        """#375 review round 2, finding 1: `1 passed, 1 warning in 0.05s` is
+        an ordinary green run whose dependency emits a warning. Requiring
+        exactly one category of ANY kind rejected this as inconclusive and
+        reported the passing selector as "not executed" — refusing every
+        project whose declared tests emit a warning from using verify_first
+        at all."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="===== 1 passed, 1 warning in 0.05s =====")
+        assert ADAPTER.execution_proven(selector, result) is True
+
+    def test_a_skipped_run_with_a_warning_still_does_not_prove_execution(self):
+        """The neutral-category filter must not turn into "ignore everything
+        except the count of 1" — a genuinely skipped run stays unproven even
+        with a warning alongside it."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(
+            0,
+            stdout=("tests/test_x.py::test_y SKIPPED\n===== 1 skipped, 1 warning in 0.05s ====="),
+        )
+        assert ADAPTER.execution_proven(selector, result) is False
