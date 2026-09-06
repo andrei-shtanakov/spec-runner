@@ -21,10 +21,13 @@ if TYPE_CHECKING:
     from .spec import StageProfile
     from .task import Task
 
-#: Execution contracts a task can run under (#141). `standard` is the default
-#: and its guarantee is precise: execution, terminal state and external
-#: contracts do not change for a project that does not opt in.
-EXECUTION_MODES = ("standard", "tdd")
+#: Execution contracts a task can run under (#141, #367). `standard` is the
+#: default and its guarantee is precise: execution, terminal state and
+#: external contracts do not change for a project that does not opt in.
+#: `verify_first` (#367 BEH-01) resolves per-task exactly like `tdd` does —
+#: it is a recognised mode, not yet a driven one; branching on it is later
+#: work (BEH-02+).
+EXECUTION_MODES = ("standard", "tdd", "verify_first")
 
 # === Errors ===
 

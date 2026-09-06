@@ -104,14 +104,14 @@ owner_role: stream-owner
   его не трогают.
 
 ### TASK-001: `**Mode:** verify_first` резолвится пер-задачно при любом дефолте проекта
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-01.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-01
 
 **Checklist:**
-- [ ] реализовать BEH-01: `**Mode:** verify_first` резолвится пер-задачно при любом дефолте проекта
-- [ ] проверка группы: tests/test_verify_first_mode.py (kind: contract) зелёные на BEH-01
+- [x] реализовать BEH-01: `**Mode:** verify_first` резолвится пер-задачно при любом дефолте проекта
+- [x] проверка группы: tests/test_verify_first_mode.py (kind: contract) зелёные на BEH-01
 
 **Traces to:** [FR-01]
 
