@@ -307,7 +307,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-34
 **Traces to:** [FR-13], [FR-05]
 
 ### TASK-015: Регистрация гейтов и аудит чтений режима (BEH-24, до green-only)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарий BEH-24 (регистрация tdd.red/tdd.claims для
 verify-first в обеих конфигурациях + аудит каждого сайта чтения И ЗАПИСИ
@@ -323,8 +323,8 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-24
 **Depends on:** [TASK-007]
 
 **Checklist:**
-- [ ] реализовать BEH-24: Третий режим не читается как «гарантий нет»
-- [ ] записи режима — фактическая величина, не литерал: `RedCheckpoint(..., execution_mode=resolve_execution_mode(task))` в `_judge_red_commit` (tdd.py:841, вызывается из run_red_phase — minor круга 8: сайт назван точно); тест краснеет на литерале — на ретрае verify-first задачи чекпойнт переиспользуется, второй RED-авторинг не покупается (AC FR-14)
-- [ ] проверка группы: tests/test_verify_gates.py (kind: contract) зелёные на BEH-24
+- [x] реализовать BEH-24: Третий режим не читается как «гарантий нет»
+- [x] записи режима — фактическая величина, не литерал: `RedCheckpoint(..., execution_mode=resolve_execution_mode(task))` в `_judge_red_commit` (tdd.py:841, вызывается из run_red_phase — minor круга 8: сайт назван точно); тест краснеет на литерале — на ретрае verify-first задачи чекпойнт переиспользуется, второй RED-авторинг не покупается (AC FR-14)
+- [x] проверка группы: tests/test_verify_gates.py (kind: contract) зелёные на BEH-24
 
 **Traces to:** [FR-17], [FR-14]
