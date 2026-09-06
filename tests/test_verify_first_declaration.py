@@ -58,11 +58,13 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
 
-    def test_blank_line_inside_multiline_block_does_not_close_it(self, tmp_path):
+    def test_leading_blank_lines_before_the_first_item_do_not_close_the_block(self, tmp_path):
         """Symmetric with `**Checklist:**` (task.py's `in_checklist` survives
-        a blank line): a blank line between the marker and its selectors, or
-        between two selector lines, must not end the block — otherwise the
-        remaining selectors leak into the description (#372 minor #2)."""
+        a blank line): idiomatic markdown puts a blank line between the
+        marker and its list. Only LEADING blank lines — before the first
+        item is read — are tolerated this way (#372 round 1); a blank line
+        AFTER an item is a different, closing signal (see the next test;
+        round 4 narrowed round 1's fix to leading blanks specifically)."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -70,7 +72,6 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
             "**Verifies:**\n"
             "\n"
             "- tests/test_b.py::test_y\n"
-            "\n"
             "- tests/test_a.py::test_x\n"
             "Est: 1d\n"
         )
@@ -84,14 +85,13 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
 
-    def test_blank_line_then_prose_bullet_closes_the_block_instead_of_swallowing_it(self, tmp_path):
-        """A blank line surviving inside the block (above) must not also let
-        a following prose bullet be mistaken for a selector. A block item is
-        recognized by looking like a pytest target (contains `::`, #372
-        round 3) — not by absence of whitespace (round 2's `\\S+`, which
-        round 3 found rejected legal node ids with a space in their
-        parametrize suffix); a bullet with no `::` closes the block and
-        falls through to description, same as before."""
+    def test_blank_line_after_an_item_closes_the_block_structurally(self, tmp_path):
+        """The block closes PURELY structurally (#372 round 4): a blank line
+        once at least one item has been read ends the contiguous run,
+        regardless of what the next line looks like. Rounds 2 and 3 tried to
+        tell "prose" from "selector" by shape (no whitespace, then requiring
+        `::`) and both silently dropped legal selectors as a result (see
+        the block-form tests below); the actual rule never inspects shape."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -115,10 +115,10 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         TestCommaFormRefusesOnUnclosedBracketBeforeComma) — but pytest can
         also produce a parametrize suffix with a comma AND a space
         (`test_y[a, b]`), which round 2's whitespace-free `\\S+` rejected
-        too, silently truncating the group (#372 round 3, major). The block
-        form must accept any selector shaped like a pytest target regardless
-        of embedded whitespace, and every selector after it in the same
-        contiguous block must survive too."""
+        too, silently truncating the group (#372 round 3). The block form
+        accepts any bullet in the contiguous run verbatim (round 4), so
+        embedded whitespace is irrelevant, and every selector after it in
+        the same block survives too."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -140,13 +140,19 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y[a, b]" not in tasks[0].description
         assert "tests/test_c.py::test_z" not in tasks[0].description
 
-    def test_selector_shaped_bullet_after_the_block_closes_is_not_reopened_into_it(self, tmp_path):
-        """Deliberate choice (#372 round 3): once a non-selector bullet
-        closes the block, a LATER bullet that happens to look like a pytest
-        target is not folded back into the group — BEH-03 forbids inferring
-        the declared group from anything outside the one contiguous block
-        under the marker. It stays ordinary description text, exactly like
-        the prose bullet that closed the block ahead of it."""
+    def test_prose_bullet_inside_a_contiguous_run_is_stored_verbatim_not_filtered(self, tmp_path):
+        """#372 round 4: rounds 2 and 3 each tried to detect "this bullet is
+        prose, not a selector" by shape (no whitespace, then requiring
+        `::`), and each silently dropped a legal selector from some other
+        input as a result. The settled design: ANY bullet in the contiguous
+        run under the marker is a declared selector, stored verbatim, in
+        order — including one that reads as prose. This is deliberate, not
+        a defect: BEH-02 stores the value exactly as written, and
+        BEH-04/BEH-05 refuse it later, quoting it back to the operator —
+        the same contract `**Mode:**` already holds for an unrecognized
+        value. Only a blank line, a checklist item, a `**...**` field, or
+        the `Est:`/priority-status line closes the block — never a
+        bullet's shape."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -159,11 +165,82 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         )
 
         tasks = parse_tasks(path)
-        task = tasks[0]
 
-        assert task.verifies == ["tests/test_a.py::test_x"]
-        assert "перепроверить после мержа WS-341" in task.description
-        assert "tests/test_b.py::test_y" in task.description
+        assert tasks[0].verifies == [
+            "tests/test_a.py::test_x",
+            "перепроверить после мержа WS-341",
+            "tests/test_b.py::test_y",
+        ]
+
+    def test_exunit_style_selector_is_stored_verbatim_in_the_block_form(self, tmp_path):
+        """FR-02: a selector lives 'in the vocabulary the project's adapter
+        accepts' — ExUnitAdapter.parse_selector wants `path:LINE` and
+        refuses anything containing `::`. Round 3's `::`-shaped heuristic
+        made every legal ExUnit selector undeclarable in the block form
+        (#372 round 4). The block form must accept any registered adapter's
+        vocabulary, unjudged, same as the single-line form already does."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- test/foo_test.exs:12\n"
+            "- test/bar_test.exs:20\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == [
+            "test/foo_test.exs:12",
+            "test/bar_test.exs:20",
+        ]
+
+    def test_adapter_refusable_selector_is_stored_verbatim_in_the_block_form_too(self, tmp_path):
+        """Symmetry with `test_a_selector_the_adapter_would_refuse_is_stored_verbatim`
+        (single-line form, below): the exact same file-target-without-`::`
+        value must be kept verbatim when declared via the block form
+        instead — round 3's `::` requirement rejected precisely this value
+        in the block form only, so the two declared forms disagreed on
+        identical input (#372 round 4)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_x.py\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == ["tests/test_x.py"]
+
+    def test_block_form_and_single_line_form_agree_on_the_same_declared_group(self, tmp_path):
+        """#372 round 4: the two declared forms must not disagree on what
+        counts as a selector — the block form accepts exactly what the
+        single-line comma form already accepts verbatim (when the comma
+        form itself isn't the ambiguous bracket-comma case, see
+        TestCommaFormRefusesOnUnclosedBracketBeforeComma)."""
+        single_line = tmp_path / "single_line.md"
+        single_line.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_x, tests/test_x.py, test/foo_test.exs:12\n"
+            "Est: 1d\n"
+        )
+        block = tmp_path / "block.md"
+        block.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_a.py::test_x\n"
+            "- tests/test_x.py\n"
+            "- test/foo_test.exs:12\n"
+            "Est: 1d\n"
+        )
+
+        assert parse_tasks(single_line)[0].verifies == parse_tasks(block)[0].verifies
 
     def test_em_dash_means_no_group_like_depends_on_and_blocks(self, tmp_path):
         """`**Verifies:** —` follows the same "— = nothing" convention as

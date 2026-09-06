@@ -78,19 +78,24 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
 # block immediately followed by a checklist without a separating field never
-# swallows the checklist's first line as a selector. The captured selector
-# is recognized by CONTENT, not by absence of whitespace (#372 round 3):
-# round 2's whitespace-free `\S+` rejected a legal pytest node id whose
-# parametrize suffix has a comma AND a space (`test_y[a, b]`) — exactly the
-# shape the block form exists to carry (FR-02's escape hatch from the
-# comma-form's own refusal on it) — and silently truncated the group when
-# it hit one. A block item is recognized by looking like a pytest target
-# (contains `::`, the same signal `PytestAdapter.parse_selector` uses) —
-# this repo's own tasks.md body style uses bulleted prose without `::`
-# (`- перепроверить после мержа WS-341`), and surviving a blank line
-# (below) is not the same as being a selector — such a bullet closes the
-# block and falls through to description, just like before that fix.
-VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+::.+)$")
+# swallows the checklist's first line as a selector. Every OTHER bullet is a
+# declared selector, stored VERBATIM, with no judgment of its shape (#372
+# round 4 — the final design, after two wrong turns): round 2 required no
+# whitespace and rejected a legal pytest node id whose parametrize suffix
+# has a comma AND a space (`test_y[a, b]`); round 3 then required `::` and
+# made every ExUnit selector (`path:LINE`, no `::` — see
+# `ExUnitAdapter.parse_selector`) undeclarable in the block form, while
+# still silently dropping any pytest target the adapter itself would refuse
+# instead of storing it for that later refusal to quote (BEH-04/BEH-05). A
+# selector's shape is the ADAPTER's judgment (FR-02), never the parser's —
+# the single-line comma form already stores everything verbatim with no
+# shape check, and the block form must agree with it on identical input. A
+# bullet that reads as prose (`- перепроверить после мержа WS-341`) is
+# therefore not filtered here either: it is stored like any other item and
+# refused later with a quote, the same contract `**Mode:**` already holds
+# for an unrecognized value. What closes the block is purely structural,
+# never a bullet's content — see the `in_verifies` handling below.
+VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
 
 
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
@@ -232,18 +237,32 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # `**Verifies:**` multi-line block continuation (#367 BEH-02): must be
         # checked before description capture below, or a selector line would
         # leak into the description and the declared group would stay empty.
-        # A blank line does not close the block (#372) — symmetric with
-        # `**Checklist:**`, whose `in_checklist` likewise survives one.
+        # The block is closed PURELY structurally (#372 round 4) — never by
+        # guessing at a selector's shape. It is the first CONTIGUOUS run of
+        # non-checkbox bullets under the marker: leading blank lines between
+        # the marker and the first item are skipped (round 1's idiomatic
+        # markdown case), but a blank line AFTER at least one item has been
+        # read closes the block (round 2's case — prose separated from the
+        # group by a blank line stays description, whatever it looks like).
+        # A checklist item, a `**...**` field, or the priority/status line
+        # (`Est:`/TASK_META) close it the same way, by simply not matching
+        # `VERIFIES_ITEM` and falling through to be handled by their own
+        # branch below in this same iteration (a new task header is handled
+        # above, before this point is ever reached).
         if in_verifies:
             if not line.strip():
-                continue
-            verifies_item_match = VERIFIES_ITEM.match(line)
-            if verifies_item_match:
-                if current_task.verifies is None:
-                    current_task.verifies = []
-                current_task.verifies.append(verifies_item_match.group(1).strip())
-                continue
-            in_verifies = False
+                if current_task.verifies:
+                    in_verifies = False
+                else:
+                    continue
+            else:
+                verifies_item_match = VERIFIES_ITEM.match(line)
+                if verifies_item_match:
+                    if current_task.verifies is None:
+                        current_task.verifies = []
+                    current_task.verifies.append(verifies_item_match.group(1).strip())
+                    continue
+                in_verifies = False
 
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
