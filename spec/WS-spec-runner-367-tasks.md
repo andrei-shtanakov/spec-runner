@@ -281,7 +281,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-32
 **Traces to:** [FR-04]
 
 ### TASK-013: Документация и CHANGELOG объявляют режим и его границы
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-33.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-33
