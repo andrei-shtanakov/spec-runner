@@ -1,11 +1,14 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approved
 owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: "246c448f6d1c7dc3ce90c22a08dd9bc77affbaef"
+  requirements: 728ce0ca0562a9d3be5e80697fc0d382bd395332
+approved_by: andrei-shtanakov
+approved_at: '2026-09-05T14:59:06Z'
+version: 2
 ---
 
 # Behaviour spec — WS-spec-runner-367: verify-first — исполнение начинается живым прогоном
