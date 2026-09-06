@@ -15,7 +15,6 @@ a `**Verifies:**` line, so the declared group is silently dropped on the
 floor instead of reaching parsing.
 """
 
-
 from spec_runner.task import parse_tasks
 
 
