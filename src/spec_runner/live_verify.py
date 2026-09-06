@@ -230,7 +230,15 @@ def run_live_verify(
                     f"({outcome.value}, selection {proof.value})"
                 )
             return VerifyRunResult(sha, False, False, f"{reason}: {tail}")
-        return VerifyRunResult(sha, True, True, "declared group passed")
+        # BEH-08's evidence clause: name the group AS EXECUTED, not just that
+        # something passed (#375 review round 2, finding 4). Every selector
+        # in `task.verifies` was presented to the adapter in order — the loop
+        # above returns early on the first refusal or non-pass verdict — so
+        # by the time this line is reached "as executed" and "as declared"
+        # are the same list, and naming it here is what lets a reader
+        # confirm that rather than take it on faith.
+        executed = ", ".join(task.verifies)
+        return VerifyRunResult(sha, True, True, f"declared group passed: {executed}")
     except subprocess.TimeoutExpired as exc:
         return VerifyRunResult(sha, False, False, f"verify run timed out: {exc}")
     except Exception as exc:  # a broken replay is unverifiable, never a pass

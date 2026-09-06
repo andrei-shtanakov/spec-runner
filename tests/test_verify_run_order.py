@@ -182,6 +182,31 @@ class TestLiveRunIsScopedToTheDeclaredGroup:
             "restricted to the declared group, not the whole test_command scope"
         )
 
+    def test_the_evidence_names_the_group_as_executed(self, tmp_path):
+        """#375 review round 2, finding 4: BEH-08's evidence clause requires
+        the group AS EXECUTED to be named, not just "something passed" — an
+        operator reading the phase record must be able to tell which
+        selectors were actually presented to the adapter."""
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n"
+        )
+        _commit(root, "base")
+
+        task = _task(
+            verifies=[
+                "tests/test_group.py::test_a",
+                "tests/test_group.py::test_b",
+            ]
+        )
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+
+        assert result.passed, result.detail
+        assert "tests/test_group.py::test_a" in result.detail
+        assert "tests/test_group.py::test_b" in result.detail
+
 
 class TestLiveRunJudgesTheNamedCommit:
     """kind: integration — BEH-09: the verdict is about the commit named by
@@ -482,6 +507,33 @@ class TestLiveRunVerdictGoesThroughTheAdapter:
         assert not result.ran, (
             "a selector matching nothing must be an instrument error, not "
             "a test failure that would send the task down the TDD path"
+        )
+
+    def test_a_passing_selector_that_also_warns_is_still_green(self, tmp_path):
+        """#375 review round 2, finding 1: a passing selector whose run also
+        emits a warning (`1 passed, 1 warning in ...s`) must still be
+        green — requiring the summary to carry exactly one category of ANY
+        kind refused every project whose declared tests warn from using
+        verify_first at all, with a message falsely claiming the test was
+        skipped."""
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "import warnings\n"
+            "\n"
+            "\n"
+            "def test_it():\n"
+            "    warnings.warn('deprecated', DeprecationWarning)\n"
+            "    assert True\n"
+        )
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+
+        assert result.passed, (
+            f"a passing selector that also warns must still be green: {result.detail}"
         )
 
 
