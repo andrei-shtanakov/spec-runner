@@ -190,20 +190,20 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-10 (—BEH-
 **Traces to:** [FR-07], [FR-15], [FR-08], [FR-09], [FR-06], [FR-16]
 
 ### TASK-007: Evidence durable и несёт полный объявленный состав (+5 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-19)
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-15: Evidence durable и несёт полный объявленный состав
-- [ ] реализовать BEH-16: По evidence прогон воспроизводится и сравнивается третьей стороной
-- [ ] реализовать BEH-17: Смена значения из `POLICY_KEYS` обесценивает прежнюю evidence
-- [ ] реализовать BEH-18: Смена объявленной группы обесценивает прежнюю evidence
-- [ ] реализовать BEH-18a: Evidence чужого дерева не наследуется
-- [ ] реализовать BEH-19: Green-only не притворяется красным
-- [ ] проверка группы: tests/test_verify_evidence.py (kind: contract), tests/test_verify_evidence.py (kind: integration) зелёные на BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19
+- [x] реализовать BEH-15: Evidence durable и несёт полный объявленный состав
+- [x] реализовать BEH-16: По evidence прогон воспроизводится и сравнивается третьей стороной
+- [x] реализовать BEH-17: Смена значения из `POLICY_KEYS` обесценивает прежнюю evidence
+- [x] реализовать BEH-18: Смена объявленной группы обесценивает прежнюю evidence
+- [x] реализовать BEH-18a: Evidence чужого дерева не наследуется
+- [x] реализовать BEH-19: Green-only не притворяется красным
+- [x] проверка группы: tests/test_verify_evidence.py (kind: contract), tests/test_verify_evidence.py (kind: integration) зелёные на BEH-15, BEH-16, BEH-17, BEH-18, BEH-18a, BEH-19
 
 **Traces to:** [FR-10], [FR-11], [FR-12], [FR-21]
 
