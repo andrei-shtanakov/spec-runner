@@ -23,19 +23,23 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from spec_runner import tdd
 from spec_runner.claims import (
     ClaimStatus,
     check_claims,
+    record_claims,
     record_verify_group_claims,
     release_claims,
 )
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
+from spec_runner.remedy import RemedyError, release
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
-from spec_runner.tdd import resolve_namespace
+from spec_runner.tdd import RedCheckpoint, RedOutcome, _config_hash, resolve_namespace
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -291,3 +295,175 @@ class TestBEH27FreezeLiftsOnDoneAndDoesNotTaxNeighbours:
             )
             remaining = state.active_claims("workstream-b")[0]
             assert remaining.status == ClaimStatus.ACTIVE
+
+
+class TestOperatorDoorForAnUnfinishedVerifyFreeze:
+    """#383 review, finding 1: a green-on-entry `verify_first` task whose
+    attempt never reaches DONE (budget cap, fatal `TASK_FAILED`, exhausted
+    retries, a claims-gate refusal on a later attempt) leaves its declared
+    group frozen with no operator door — `abandon`/`repair`/`resume` all
+    require a `red_checkpoints` row that `record_verify_group_claims` never
+    writes (its own docstring: a green entry is not "a red recorded under
+    another name"), and `release` used to demand DONE unconditionally, so the
+    only way out was hand-editing SQLite. `release` now admits a task whose
+    active claims are all such verify-freeze claims — a `checkpoint_id` that
+    resolves to nothing in `red_checkpoints` — whatever the lifecycle
+    reached.
+    """
+
+    def test_release_unlocks_an_unfinished_verify_first_freeze(self, tmp_path):
+        root = _base_repo(tmp_path)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        config = _cfg(root)
+        task = _verify_first_task()
+        namespace = resolve_namespace(config)
+
+        with ExecutorState(config) as state:
+            record_verify_group_claims(config, state, task, head, ["tests/test_group.py::test_it"])
+            assert state.active_claims(namespace), "the freeze must have claimed something"
+
+            result = release(config, state, task.id, reason="attempt never reached DONE")
+
+        assert result.released == 1
+        with ExecutorState(config) as state:
+            assert state.active_claims(namespace) == []
+
+    def test_release_still_refuses_a_genuine_unfinished_red(self, tmp_path):
+        """The door must not widen past what it targets: a `tdd`-mode claim
+        backed by a real confirmed red still demands DONE."""
+        root = _base_repo(tmp_path)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        checkpoint = RedCheckpoint(
+            task_id="TASK-999",
+            namespace=namespace,
+            commit_sha=head,
+            baseline_sha=head,
+            selector="tests/test_group.py::test_it",
+            environment_id="unpinned",
+            execution_mode="tdd",
+            config_hash=_config_hash(config),
+            outcome=RedOutcome.EXPECTED_FAIL,
+            timestamp="2026-09-06T00:00:00",
+        )
+
+        with ExecutorState(config) as state:
+            state.record_red_checkpoint(checkpoint)
+            record_claims(config, state, checkpoint)
+
+            with pytest.raises(RemedyError, match="has not reached DONE"):
+                release(config, state, "TASK-999", reason="premature")
+
+
+class TestReEntrySupersedesRatherThanStacks:
+    """#383 review, finding 2: every green attempt used to re-freeze at the
+    *current* bytes without retiring the claim the previous attempt left —
+    two ACTIVE claims on one path with different blobs, which no candidate
+    tree can ever satisfy at once (reverting breaks the newer claim, keeping
+    the new bytes breaks the older one). Re-entry now supersedes this task's
+    own prior verify-freeze before writing the new one, the same
+    reuse-before-reclaim rule the RED path already follows
+    (`tdd.py::run_red_phase`, tdd.py:533)."""
+
+    def test_a_second_freeze_supersedes_the_first_rather_than_stacking(self, tmp_path):
+        root = _base_repo(tmp_path)
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        task = _verify_first_task()
+        selectors = ["tests/test_group.py::test_it"]
+        sha0 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        with ExecutorState(config) as state:
+            record_verify_group_claims(config, state, task, sha0, selectors)
+            first_active = state.active_claims(namespace)
+            assert len(first_active) == 1
+            first_blob = first_active[0].blob_sha
+
+            # Attempt 2: the paid pass rewrote the group file and
+            # `wants_candidate` committed it, so HEAD and the bytes both
+            # moved before the next entry run re-freezes.
+            (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+            sha1 = _commit(root, "candidate from attempt 1")
+
+            record_verify_group_claims(config, state, task, sha1, selectors)
+            second_active = state.active_claims(namespace)
+
+        assert len(second_active) == 1, (
+            "a re-entry must retire its own prior freeze, not stack a second, "
+            "mutually unsatisfiable claim on the same path"
+        )
+        assert second_active[0].checkpoint_sha == sha1
+        assert second_active[0].blob_sha != first_blob
+        with ExecutorState(config) as state:
+            # The candidate this attempt actually produced must satisfy the gate.
+            violations = check_claims(config, state, namespace, sha1)
+        assert violations == []
+
+    def test_the_first_freezes_claim_is_marked_superseded_not_left_active(self, tmp_path):
+        root = _base_repo(tmp_path)
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        task = _verify_first_task()
+        selectors = ["tests/test_group.py::test_it"]
+        sha0 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        with ExecutorState(config) as state:
+            record_verify_group_claims(config, state, task, sha0, selectors)
+            (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+            sha1 = _commit(root, "candidate from attempt 1")
+            record_verify_group_claims(config, state, task, sha1, selectors)
+
+            rows = state.claims_for(namespace, task.id)
+
+        statuses = sorted(row[3] for row in rows)
+        assert statuses == sorted([ClaimStatus.SUPERSEDED.value, ClaimStatus.ACTIVE.value])
+
+
+class TestFreezeBytesAreReadFromTheJudgedCommit:
+    """#383 review, finding 2 (part b): the frozen bytes must be the ones the
+    live entry run actually judged (`sha`'s tree) — the module's own stated
+    rule, "authoritative against the candidate commit, never the working
+    tree" (claims.py:11-14) — never whatever happens to be on disk when the
+    freeze runs. Reproduces the gap directly: a stray, uncommitted edit left
+    in the working tree (e.g. by an interrupted prior attempt) must not leak
+    into the frozen blob."""
+
+    def test_a_dirty_working_tree_does_not_leak_into_the_frozen_blob(self, tmp_path):
+        root = _base_repo(tmp_path)
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        task = _verify_first_task()
+        selectors = ["tests/test_group.py::test_it"]
+        sha0 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        committed_blob = subprocess.run(
+            ["git", "rev-parse", f"{sha0}:tests/test_group.py"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        # Residue from an interrupted paid call: the working tree is dirty
+        # relative to HEAD, uncommitted.
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert 2 + 2 == 4  # stray edit\n"
+        )
+
+        with ExecutorState(config) as state:
+            record_verify_group_claims(config, state, task, sha0, selectors)
+            claim = state.active_claims(namespace)[0]
+
+        assert claim.blob_sha == committed_blob, (
+            "the frozen bytes must come from the judged commit, not the dirty working tree"
+        )
