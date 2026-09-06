@@ -46,14 +46,19 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import ExecutorConfig
 from .git_ops import is_composite_shell_command
 from .task import Task
 from .tdd import REPLAY_TIMEOUT_SECONDS, resolve_adapter
 from .tdd_runners import ReplayEnvironmentRefusal, RunOutcome, SelectionProof, SelectorRefusal
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .state import ExecutorState
 
 #: The GROUP's timeout ceiling (#375 review round 3, finding 3 / #367 FR-06,
 #: NFR-02, tasks-spec resolutions): FR-06 counts the declared ceiling "на
@@ -139,6 +144,14 @@ class VerifyRunResult:
     ran: bool
     passed: bool
     detail: str
+    #: The selectors actually presented to the adapter to run, in order —
+    #: not merely `task.verifies` again (#367 BEH-15/FR-10): a group that
+    #: stops on its second selector's failure has an executed group of
+    #: length 1, and a refusal before the loop starts has none at all.
+    group_executed: tuple[str, ...] = ()
+    #: The adapter that judged the run, by name (e.g. "pytest") — empty when
+    #: no adapter was ever resolved (a refusal before that point).
+    adapter: str = ""
     #: Named outcome (#367 BEH-10/BEH-23), derived from `ran`/`passed` so
     #: every construction site below gets it without repeating the mapping:
     #: this module only ever produces (True, True)=green,
@@ -211,6 +224,7 @@ def run_live_verify(
             False,
             f"no adapter can confirm test_command {config.test_command!r}",
         )
+    adapter_name = adapter.name
 
     parent = tempfile.mkdtemp(prefix="spec-runner-verify-")
     worktree = Path(parent) / "tree"
@@ -223,10 +237,18 @@ def run_live_verify(
     if added.returncode != 0:
         shutil.rmtree(parent, ignore_errors=True)
         return VerifyRunResult(
-            sha, False, False, f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}"
+            sha,
+            False,
+            False,
+            f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}",
+            adapter=adapter_name,
         )
 
     cleanup_paths: list[Path] = []
+    #: Selectors actually presented to the adapter to run, in order — grows
+    #: as the loop below runs each one, so a return mid-group carries exactly
+    #: what was executed rather than the full declared list (#367 BEH-15).
+    presented: list[str] = []
     # The group's budget is logged before the first run, not discovered
     # after the fact (tasks-spec resolution) — an operator watching the log
     # sees the ceiling this group is held to before any selector executes.
@@ -249,11 +271,11 @@ def run_live_verify(
         first_raw = task.verifies[0]
         first_parsed = adapter.parse_selector(first_raw)
         if isinstance(first_parsed, SelectorRefusal):
-            return VerifyRunResult(sha, False, False, first_parsed.message)
+            return VerifyRunResult(sha, False, False, first_parsed.message, adapter=adapter_name)
 
         early_refusal = adapter.preflight(worktree, first_parsed)
         if early_refusal is not None:
-            return VerifyRunResult(sha, False, False, early_refusal.message)
+            return VerifyRunResult(sha, False, False, early_refusal.message, adapter=adapter_name)
 
         remaining = group_deadline - time.monotonic()
         if remaining <= 0:
@@ -263,12 +285,13 @@ def run_live_verify(
                 False,
                 f"verify group budget ({VERIFY_GROUP_TIMEOUT_SECONDS}s) exhausted "
                 "before the replay environment could be prepared",
+                adapter=adapter_name,
             )
         if log_progress is not None:
             log_progress("⏳ verify: preparing the replay environment (once for the group)")
         prepared = adapter.prepare_replay(root, worktree, first_parsed)
         if isinstance(prepared, ReplayEnvironmentRefusal):
-            return VerifyRunResult(sha, False, False, prepared.message)
+            return VerifyRunResult(sha, False, False, prepared.message, adapter=adapter_name)
         cleanup_paths.extend(prepared.cleanup_paths)
 
         for raw_selector in task.verifies:
@@ -280,6 +303,8 @@ def run_live_verify(
                     False,
                     f"verify group budget ({VERIFY_GROUP_TIMEOUT_SECONDS}s) exhausted "
                     f"before {raw_selector} could run",
+                    group_executed=tuple(presented),
+                    adapter=adapter_name,
                 )
 
             parsed = adapter.parse_selector(raw_selector)
@@ -287,7 +312,14 @@ def run_live_verify(
                 # Validated already (`validate._validate_verify_first_declarations`)
                 # before a verify_first run can start; reachable only if the
                 # tasks file changed between validate and this attempt.
-                return VerifyRunResult(sha, False, False, parsed.message)
+                return VerifyRunResult(
+                    sha,
+                    False,
+                    False,
+                    parsed.message,
+                    group_executed=tuple(presented),
+                    adapter=adapter_name,
+                )
 
             # Re-checked per selector even though `first_parsed` already
             # passed it above: preflight is a per-selector claim (a specific
@@ -297,9 +329,17 @@ def run_live_verify(
             # not this.
             refusal = adapter.preflight(worktree, parsed)
             if refusal is not None:
-                return VerifyRunResult(sha, False, False, refusal.message)
+                return VerifyRunResult(
+                    sha,
+                    False,
+                    False,
+                    refusal.message,
+                    group_executed=tuple(presented),
+                    adapter=adapter_name,
+                )
 
             argv = adapter.build_scoped_command(config.test_command, parsed)
+            presented.append(raw_selector)
             if log_progress is not None:
                 log_progress(f"⏳ verify: {raw_selector}")
             # #375 review round 3, finding 3: the per-selector timeout
@@ -351,6 +391,8 @@ def run_live_verify(
                     True,
                     False,
                     f"{raw_selector} failed on replay (exit {result.returncode}): {tail}",
+                    group_executed=tuple(presented),
+                    adapter=adapter_name,
                 )
 
             if verify_outcome is VerifyOutcome.GREEN:
@@ -380,7 +422,14 @@ def run_live_verify(
                     f"{raw_selector}: unrecognized run outcome "
                     f"({outcome.value}, selection {proof.value})"
                 )
-            return VerifyRunResult(sha, False, False, f"{reason}: {tail}")
+            return VerifyRunResult(
+                sha,
+                False,
+                False,
+                f"{reason}: {tail}",
+                group_executed=tuple(presented),
+                adapter=adapter_name,
+            )
         # BEH-08's evidence clause: name the group AS EXECUTED, not just that
         # something passed (#375 review round 2, finding 4). Every selector
         # in `task.verifies` was presented to the adapter in order — the loop
@@ -389,11 +438,32 @@ def run_live_verify(
         # are the same list, and naming it here is what lets a reader
         # confirm that rather than take it on faith.
         executed = ", ".join(task.verifies)
-        return VerifyRunResult(sha, True, True, f"declared group passed: {executed}")
+        return VerifyRunResult(
+            sha,
+            True,
+            True,
+            f"declared group passed: {executed}",
+            group_executed=tuple(presented),
+            adapter=adapter_name,
+        )
     except subprocess.TimeoutExpired as exc:
-        return VerifyRunResult(sha, False, False, f"verify run timed out: {exc}")
+        return VerifyRunResult(
+            sha,
+            False,
+            False,
+            f"verify run timed out: {exc}",
+            group_executed=tuple(presented),
+            adapter=adapter_name,
+        )
     except Exception as exc:  # a broken replay is unverifiable, never a pass
-        return VerifyRunResult(sha, False, False, f"verify run failed: {exc}")
+        return VerifyRunResult(
+            sha,
+            False,
+            False,
+            f"verify run failed: {exc}",
+            group_executed=tuple(presented),
+            adapter=adapter_name,
+        )
     finally:
         for path in cleanup_paths:
             shutil.rmtree(path, ignore_errors=True)
@@ -406,3 +476,133 @@ def run_live_verify(
         shutil.rmtree(parent, ignore_errors=True)
         if removed.returncode != 0:
             subprocess.run(["git", "worktree", "prune"], cwd=root, capture_output=True, text=True)
+
+
+@dataclass(frozen=True)
+class VerifyEvidence:
+    """A durable record of one live verify-first run (#367 FR-10/BEH-15).
+
+    Distinct from `tdd.RedCheckpoint` on purpose (#367 FR-12/BEH-19): a
+    green-only run never wrote a red, and a reader of red checkpoints that
+    does not know this record exists must keep answering "no red" for it —
+    which a shared table or a shared shape could not guarantee.
+
+    The composition is FR-10's own list: task/workstream identity, the
+    judged commit, the group as declared and as executed, the policy config
+    hash, the environment identity, the judging adapter, the outcome, the
+    failure detail (in the refusal's own words), when, and the harness as
+    the record's author — enough for a third party to reproduce the run
+    without the original log (BEH-16).
+    """
+
+    task_id: str
+    namespace: str
+    commit_sha: str
+    group_declared: tuple[str, ...]
+    group_executed: tuple[str, ...]
+    config_hash: str
+    environment_id: str
+    adapter: str
+    outcome: str
+    detail: str
+    timestamp: str
+    actor: str = "harness"
+
+
+def _evidence_config_hash(config: ExecutorConfig, task_id: str, commit_sha: str) -> str:
+    """The same `POLICY_KEYS` hash the gates use, for the same reason (#367
+    FR-11): an evidence row is a statement about a tree under a policy, and
+    the hash is what lets a later attempt tell whether the policy moved.
+    """
+    from .gates import GateContext
+
+    return GateContext(task_id=task_id, checkpoint_sha=commit_sha, config=config).config_hash
+
+
+def build_verify_evidence(
+    task: Task, config: ExecutorConfig, result: VerifyRunResult
+) -> VerifyEvidence:
+    """Assemble the durable record for one `VerifyRunResult` (#367 BEH-15).
+
+    Pure — no I/O, no state. `ExecutorState.record_verify_evidence` calls
+    this and persists the result; kept separate so the composition can be
+    inspected or reproduced without a database.
+    """
+    from .tdd import environment_id, resolve_namespace
+
+    return VerifyEvidence(
+        task_id=task.id,
+        namespace=resolve_namespace(config),
+        commit_sha=result.sha,
+        group_declared=tuple(task.verifies or ()),
+        group_executed=result.group_executed,
+        config_hash=_evidence_config_hash(config, task.id, result.sha),
+        environment_id=environment_id(Path(config.project_root)),
+        adapter=result.adapter,
+        outcome=result.outcome.value,
+        detail=result.detail,
+        timestamp=datetime.now().isoformat(),
+    )
+
+
+def reusable_verify_evidence(
+    config: ExecutorConfig, state: ExecutorState, task: Task
+) -> VerifyEvidence | None:
+    """A prior verify-evidence row that still answers this task's question,
+    or `None` if a fresh live run is required (#367 FR-11, Q-07(a)).
+
+    Four axes, all of which must hold — the same rule `_reusable_checkpoint`
+    already applies to a red, extended by the tree-hash axis a *pre-run*
+    reuse decision needs and a pre-merge gate acceptance does not (Q-07):
+
+    - the policy config hash matches (BEH-17: a `POLICY_KEYS` value,
+      including `execution_mode`/`tdd_runner`, changed the question);
+    - the declared group matches **as a sequence** — reordering
+      `**Verifies:**` is a different question too (BEH-18);
+    - the candidate descends from the evidence's commit, by the same
+      `_descends_from` rule (and the same `AncestryUnknown` on unprovable
+      ancestry) the red gate uses (BEH-18a) — propagated to the caller
+      rather than swallowed, since "could not tell" and "no" are different
+      facts with different owners;
+    - the candidate's tree is byte-identical to the evidence commit's tree:
+      descent alone would accept a candidate with new commits on top, which
+      a *pre-run* skip must not do — the code under test could have moved.
+    """
+    from .tdd import resolve_namespace
+
+    namespace = resolve_namespace(config)
+    evidence = state.verify_evidence(namespace, task.id)
+    if evidence is None:
+        return None
+
+    if evidence.config_hash != _evidence_config_hash(config, task.id, evidence.commit_sha):
+        return None
+    if list(evidence.group_declared) != list(task.verifies or ()):
+        return None
+
+    from .gates import _descends_from
+
+    if not _descends_from(config, evidence.commit_sha, "HEAD"):
+        return None
+    old_tree = _tree_hash(config, evidence.commit_sha)
+    new_tree = _tree_hash(config, "HEAD")
+    # An unreadable tree on either side is "could not tell", not "same tree"
+    # (`None != None` is `False`) — silently allowing reuse there would let
+    # a git-level failure masquerade as a byte-identical match, defeating
+    # the exact guarantee this axis exists for (#367 BEH-18a).
+    if old_tree is None or new_tree is None or old_tree != new_tree:
+        return None
+    return evidence
+
+
+def _tree_hash(config: ExecutorConfig, commit_sha: str) -> str | None:
+    """The git tree object a commit points at, or `None` if it cannot be read."""
+    result = subprocess.run(
+        ["git", "rev-parse", f"{commit_sha}^{{tree}}"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()

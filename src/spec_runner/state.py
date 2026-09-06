@@ -16,7 +16,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .claims import Claim as ClaimT
     from .claims import ClaimStatus as ClaimStatusT
     from .gates import GateStatus as GateStatusT
+    from .live_verify import VerifyEvidence as VerifyEvidenceT
+    from .live_verify import VerifyRunResult as VerifyRunResultT
     from .remedy import RemedyRecord as RemedyRecordT
+    from .task import Task
     from .tdd import RedCheckpoint as RedCheckpointT
 
 from .config import ExecutorConfig
@@ -497,6 +500,33 @@ class ExecutorState:
                 timestamp TEXT NOT NULL
             )
         """)
+        # #367 FR-10/BEH-15: a live verify-first run's evidence, durable and
+        # separate from `red_checkpoints` on purpose (FR-12/BEH-19) — a
+        # reader of red checkpoints that does not know this table exists
+        # must keep answering "no red" for a green-only task. Append-only,
+        # same posture as `red_checkpoints`: a retry's evidence is a new
+        # row, not an overwrite, so a superseded verdict stays readable.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS verify_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                group_declared TEXT NOT NULL,
+                group_executed TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                environment_id TEXT NOT NULL,
+                adapter TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                detail TEXT,
+                actor TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_verify_evidence_lookup "
+            "ON verify_evidence (task_id, namespace, id DESC)"
+        )
         self._conn.commit()
 
     def _migrate_from_json(self, json_path: Path) -> None:
@@ -912,6 +942,84 @@ class ExecutorState:
             config_hash=row[7],
             outcome=RedOutcome(row[8]),
             timestamp=row[9],
+        )
+
+    def record_verify_evidence(
+        self, *, task: "Task", config: "ExecutorConfig", result: "VerifyRunResultT"
+    ) -> None:
+        """Persist one live verify-first run's evidence (#367 FR-10/BEH-15).
+
+        Takes the run's own inputs/outputs, not a pre-built record: the
+        composition (`build_verify_evidence`) is `live_verify`'s to own, and
+        every call site already has exactly these three objects in hand.
+
+        Append-only, same posture as `record_red_checkpoint`: bookkeeping
+        must not be able to fail the run that produced it, so a storage
+        failure is logged and swallowed, never raised.
+        """
+        from .live_verify import build_verify_evidence
+
+        evidence = build_verify_evidence(task, config, result)
+        try:
+            self._insert_phase_row(
+                "INSERT INTO verify_evidence (task_id, namespace, commit_sha, "
+                "group_declared, group_executed, config_hash, environment_id, "
+                "adapter, outcome, detail, actor, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    evidence.task_id,
+                    evidence.namespace,
+                    evidence.commit_sha,
+                    json.dumps(list(evidence.group_declared)),
+                    json.dumps(list(evidence.group_executed)),
+                    evidence.config_hash,
+                    evidence.environment_id,
+                    evidence.adapter,
+                    evidence.outcome,
+                    evidence.detail,
+                    evidence.actor,
+                    evidence.timestamp or datetime.now().isoformat(),
+                ),
+            )
+        except Exception as exc:  # bookkeeping must not fail a run
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record verify evidence", task_id=evidence.task_id, error=str(exc)
+            )
+
+    def verify_evidence(self, namespace: str, task_id: str) -> "VerifyEvidenceT | None":
+        """The latest verify-evidence row for this task in this workstream.
+
+        Durable by construction: reopening the state and calling this is how
+        BEH-15's own durability clause is proven — the row must survive the
+        process, not merely live in the object that recorded it.
+        """
+        from .live_verify import VerifyEvidence
+
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT task_id, namespace, commit_sha, group_declared, group_executed, "
+            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor "
+            "FROM verify_evidence WHERE task_id = ? AND namespace = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (task_id, namespace),
+        ).fetchone()
+        if row is None:
+            return None
+        return VerifyEvidence(
+            task_id=row[0],
+            namespace=row[1],
+            commit_sha=row[2],
+            group_declared=tuple(json.loads(row[3])),
+            group_executed=tuple(json.loads(row[4])),
+            config_hash=row[5],
+            environment_id=row[6],
+            adapter=row[7],
+            outcome=row[8],
+            detail=row[9],
+            timestamp=row[10],
+            actor=row[11],
         )
 
     def record_claim(self, claim: "ClaimT") -> None:
