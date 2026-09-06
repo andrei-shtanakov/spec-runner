@@ -335,16 +335,30 @@ def _red_gate(ctx: GateContext) -> GateResult:
 
     Evaluated at two moments and answering the same question at both: before
     implementing (do not write code without a demonstrated red) and before
-    merging (do not merge a task that never had one).
+    merging (do not merge a task that never had one) — *for `tdd`*.
+    `verify_first` asks a different question at each moment, because it
+    carries a guarantee `tdd` does not: the declared group must actually be
+    green to reach DONE (FR-13), not merely "a red was demonstrated at some
+    point".
 
-    `verify_first` is gated too (#367 BEH-24/FR-17) — it just proves its
-    guarantee a different way (`_verify_first_gate`, from durable verify
-    evidence rather than a `RedCheckpoint`). Only `standard` — a mode that
-    made no promise to keep — reads as "no guarantee, nothing to check";
-    a third mode is not that, and treating it as one would let it merge with
-    neither a confirmed red nor a confirmed green behind it.
+    `verify_first` is gated too (#367 BEH-24/FR-17) — before merging, it
+    proves its guarantee from durable verify evidence (`_verify_first_gate`)
+    rather than a `RedCheckpoint`, checkpoint or no checkpoint: a confirmed
+    red earlier in the attempt does not excuse the candidate from actually
+    passing its own declared group. *Before implementing*, though — the
+    `ctx.facts["pre_implementation"]` moment, reached only from
+    `_run_red_phase_gate` for a `verify_first` task whose entry run came back
+    `test_failure` (#367 BEH-21/FR-14) — asking "is the group green yet"
+    would refuse by construction (the whole reason this cycle started); the
+    question there is `tdd`'s own: was a red demonstrated, authored,
+    committed and replayed, "с сегодняшним классом и текстом отказа" — the
+    very same `RedCheckpoint` verdict `tdd` gets, not a second, differently
+    worded one. Only `standard` — a mode that made no promise to keep — reads
+    as "no guarantee, nothing to check"; a third mode is not that, and
+    treating it as one would let it merge with neither a confirmed red nor a
+    confirmed green behind it.
     """
-    from .tdd import RedOutcome, resolve_namespace
+    from .tdd import resolve_namespace
 
     mode = ctx.facts.get("execution_mode")
     if mode is None:
@@ -356,6 +370,21 @@ def _red_gate(ctx: GateContext) -> GateResult:
             "the run reported no execution_mode to the gate",
         )
     if mode == "verify_first":
+        if ctx.facts.get("pre_implementation"):
+            if ctx.state is None:
+                return GateResult(
+                    GateStatus.INSTRUMENT_ERROR,
+                    PhaseOutcome.ERROR,
+                    "no state to read a checkpoint from",
+                )
+            checkpoint = ctx.state.red_checkpoint(ctx.task_id, resolve_namespace(ctx.config))
+            if checkpoint is None:
+                return GateResult(
+                    GateStatus.UNSATISFIED,
+                    PhaseOutcome.NOT_RUN,
+                    "no confirmed red for this task in this workstream",
+                )
+            return _judge_red_checkpoint(ctx, checkpoint)
         return _verify_first_gate(ctx)
     if mode != "tdd":
         # The per-task opt-out has to reach here, or it is not an opt-out.
@@ -372,6 +401,16 @@ def _red_gate(ctx: GateContext) -> GateResult:
             PhaseOutcome.NOT_RUN,
             "no confirmed red for this task in this workstream",
         )
+    return _judge_red_checkpoint(ctx, checkpoint)
+
+
+def _judge_red_checkpoint(ctx: GateContext, checkpoint) -> GateResult:
+    """The one verdict a confirmed (or not) `RedCheckpoint` gets, `tdd` or
+    `verify_first` alike (#367 BEH-21): same classes, same wording, no
+    second and quieter red gate for the mode that also promises a green.
+    """
+    from .tdd import RedOutcome
+
     if checkpoint.outcome is RedOutcome.UNVERIFIABLE:
         return GateResult(
             GateStatus.INSTRUMENT_ERROR,
@@ -410,17 +449,20 @@ def _red_gate(ctx: GateContext) -> GateResult:
 
 
 def _verify_first_gate(ctx: GateContext) -> GateResult:
-    """`_red_gate`'s question, asked of a `verify_first` task (#367 BEH-24).
+    """`_red_gate`'s question at every *non*-pre-implementation moment for a
+    `verify_first` task (#367 BEH-24, BEH-20) — chiefly before merge, whether
+    or not the attempt ever authored a `RedCheckpoint` on its way there
+    (#367 BEH-21): a demonstrated red earlier in the attempt justified the
+    paid implementation call, but the merge question is verify-first's own
+    (FR-13) — is the *declared group* actually green now — not whether some
+    red once existed.
 
-    A `verify_first` task never authors a `RedCheckpoint` for its declared
-    group — `run_live_verify` writes durable `VerifyEvidence` instead (#367
-    BEH-15/FR-10). Missing or unsatisfied evidence does not pass: a task with
-    no recorded run, a run that was not green, or a green run for a tree this
-    candidate does not descend from all read as "no guarantee behind this
-    commit yet", the same verdict a `tdd` task gets for no confirmed red.
-    Reaching test-failure/instrument-error branching (#367 FR-13-15) is later
-    work; today that leaves this gate correctly unsatisfied until the task's
-    ordinary implementation pass makes it green, exactly as ended without one.
+    `run_live_verify` writes durable `VerifyEvidence` for this (#367
+    BEH-15/FR-10), never a `RedCheckpoint`. Missing or unsatisfied evidence
+    does not pass: a task with no recorded run, a run that was not green, or
+    a green run for a tree this candidate does not descend from all read as
+    "no guarantee behind this commit yet", the same verdict a `tdd` task gets
+    for no confirmed red.
     """
     from .live_verify import VerifyOutcome
     from .tdd import resolve_namespace
