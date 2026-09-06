@@ -20,6 +20,7 @@ from spec_runner.claims import record_claims
 from spec_runner.cli_info import print_status
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
+from spec_runner.live_verify import VerifyRunResult
 from spec_runner.runner import CliInvocation
 from spec_runner.stages import STAGES
 from spec_runner.state import ExecutorState
@@ -283,5 +284,66 @@ class TestBEH31EvidenceAndPathThroughTheCli:
 
         assert "TASK-GREEN" in out
         assert "Verify: green" in out
+        assert "TASK-REDPATH" in out
+        assert "Verify: test_failure" in out
         assert "TASK-INSTRUMENT" in out
         assert "Verify: instrument_error" in out
+
+
+class TestVerifyEvidenceForNamespaceQuery:
+    """kind: unit — `verify_evidence_for_namespace` (state.py) is a new
+    query, not exercised by the integration fixtures above beyond one row
+    per task: it must pick the *latest* row per task, stay scoped to its own
+    namespace, and honour an explicit `task_id` filter."""
+
+    def _result(self, sha: str, passed: bool) -> VerifyRunResult:
+        return VerifyRunResult(sha=sha, ran=True, passed=passed, detail="", adapter="pytest")
+
+    def test_latest_row_wins_when_a_task_has_several(self, tmp_path):
+        config = _cfg(tmp_path, tdd_namespace="ws-latest")
+        task = _task("TASK-A")
+        with ExecutorState(config) as state:
+            assert state.record_verify_evidence(
+                task=task, config=config, result=self._result("a" * 40, passed=False)
+            )
+            assert state.record_verify_evidence(
+                task=task, config=config, result=self._result("b" * 40, passed=True)
+            )
+            rows = state.verify_evidence_for_namespace("ws-latest")
+
+        assert len(rows) == 1, "only the latest row per task_id must be returned"
+        assert rows[0].commit_sha == "b" * 40
+        assert rows[0].outcome == "green"
+
+    def test_namespace_is_isolated(self, tmp_path):
+        config = _cfg(tmp_path, tdd_namespace="ws-a")
+        other_config = _cfg(tmp_path, tdd_namespace="ws-b")
+        with ExecutorState(config) as state:
+            assert state.record_verify_evidence(
+                task=_task("TASK-A"), config=config, result=self._result("a" * 40, passed=True)
+            )
+            assert state.record_verify_evidence(
+                task=_task("TASK-B"),
+                config=other_config,
+                result=self._result("b" * 40, passed=True),
+            )
+            ws_a_rows = state.verify_evidence_for_namespace("ws-a")
+            ws_b_rows = state.verify_evidence_for_namespace("ws-b")
+
+        assert {r.task_id for r in ws_a_rows} == {"TASK-A"}
+        assert {r.task_id for r in ws_b_rows} == {"TASK-B"}
+
+    def test_task_id_filter_narrows_to_one_task(self, tmp_path):
+        config = _cfg(tmp_path, tdd_namespace="ws-filter")
+        with ExecutorState(config) as state:
+            assert state.record_verify_evidence(
+                task=_task("TASK-A"), config=config, result=self._result("a" * 40, passed=True)
+            )
+            assert state.record_verify_evidence(
+                task=_task("TASK-B"), config=config, result=self._result("b" * 40, passed=False)
+            )
+            all_rows = state.verify_evidence_for_namespace("ws-filter")
+            filtered = state.verify_evidence_for_namespace("ws-filter", "TASK-B")
+
+        assert {r.task_id for r in all_rows} == {"TASK-A", "TASK-B"}
+        assert [r.task_id for r in filtered] == ["TASK-B"]
