@@ -584,7 +584,13 @@ def reusable_verify_evidence(
 
     if not _descends_from(config, evidence.commit_sha, "HEAD"):
         return None
-    if _tree_hash(config, evidence.commit_sha) != _tree_hash(config, "HEAD"):
+    old_tree = _tree_hash(config, evidence.commit_sha)
+    new_tree = _tree_hash(config, "HEAD")
+    # An unreadable tree on either side is "could not tell", not "same tree"
+    # (`None != None` is `False`) — silently allowing reuse there would let
+    # a git-level failure masquerade as a byte-identical match, defeating
+    # the exact guarantee this axis exists for (#367 BEH-18a).
+    if old_tree is None or new_tree is None or old_tree != new_tree:
         return None
     return evidence
 
