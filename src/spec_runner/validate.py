@@ -231,6 +231,14 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
             if dep not in task_ids:
                 result.errors.append(f"{task.id}: dependency '{dep}' not found in task list")
 
+        # #372 round 2: a **Verifies:** declaration `parse_tasks` could not
+        # make sense of (e.g. a comma inside an unclosed `[...]`) is marked
+        # on the task rather than raised, so this is the one surface that
+        # turns it into a named, quoted error — before `run`, per FR-03, and
+        # without a traceback, per NFR-03.
+        if task.verifies_error:
+            result.errors.append(f"{task.id}: {task.verifies_error}")
+
         # --- Warnings ---
         if not task.estimate:
             result.warnings.append(f"{task.id}: missing estimate")

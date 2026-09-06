@@ -16,8 +16,6 @@ which BEH-02's "without interpretation" rules out — it is not deferred to
 TASK-003 like an adapter-level rejection is.
 """
 
-import pytest
-
 from spec_runner.task import parse_tasks
 
 
@@ -188,12 +186,17 @@ class TestGroupIsNeverInferred:
 class TestCommaFormRefusesOnUnclosedBracketBeforeComma:
     """kind: contract — FR-02: a pytest node id with a comma in its own
     parametrize suffix (`test_y[a,b]`) can only be declared with the
-    multi-line block form. The comma-form parse must refuse such a line
-    instead of splitting it into fragments the operator never wrote — this
-    is FR-02's own contract, not an adapter-level rejection deferred to
-    TASK-003 (see module docstring)."""
+    multi-line block form. The comma-form parse marks the declaration
+    unparseable instead of splitting it into fragments the operator never
+    wrote — this is FR-02's own contract, not an adapter-level rejection
+    deferred to TASK-003 (see module docstring). The refusal is localized
+    to the task (NFR-03/BEH-04: no traceback, the rest of the file still
+    parses) — round 2 of #372's review found the first cut (a bare
+    `raise ValueError` out of `parse_tasks`) crashed every command that
+    reads tasks.md over one bad line in one task; `validate_tasks`
+    surfaces the named, quoted error instead (see test_validate.py)."""
 
-    def test_refuses_instead_of_splitting_inside_the_brackets(self, tmp_path):
+    def test_marks_the_task_unparseable_without_raising(self, tmp_path):
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -202,15 +205,38 @@ class TestCommaFormRefusesOnUnclosedBracketBeforeComma:
             "Est: 1d\n"
         )
 
-        with pytest.raises(ValueError) as exc_info:
-            parse_tasks(path)
+        tasks = parse_tasks(path)  # must not raise
 
-        message = str(exc_info.value)
-        assert "TASK-001" in message
-        # The refusal quotes the original declared line whole — never a
+        task = tasks[0]
+        assert task.verifies is None
+        assert task.verifies_error is not None
+        # The message quotes the original declared line whole — never a
         # fragment the operator did not write (BEH-05's rule, held early).
-        assert "tests/test_a.py::test_y[a,b]" in message
-        assert "test_y[a" not in message.replace("test_y[a,b]", "")
+        assert "tests/test_a.py::test_y[a,b]" in task.verifies_error
+        assert "test_y[a" not in task.verifies_error.replace("test_y[a,b]", "")
+
+    def test_other_tasks_in_the_same_file_still_parse(self, tmp_path):
+        """One malformed **Verifies:** line must not take the whole file
+        down — every command that reads tasks.md (status/run/plan/tui)
+        needs the rest of the tasks readable."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: broken\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_y[a,b]\n"
+            "Est: 1d\n"
+            "### TASK-002: fine\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_b.py::test_z\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert len(tasks) == 2
+        assert tasks[0].verifies_error is not None
+        assert tasks[1].verifies == ["tests/test_b.py::test_z"]
+        assert tasks[1].verifies_error is None
 
     def test_balanced_brackets_per_item_still_split_normally(self, tmp_path):
         """A comma that separates two *already-closed* bracketed selectors

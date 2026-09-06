@@ -69,8 +69,12 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # plausible here. A comma that lands inside an unclosed `[...]` in the
 # comma form (`test_y[a,b]`) is a different, own-contract case (FR-02, #372):
 # splitting on it would manufacture selectors ("test_y[a", "b]") the operator
-# never wrote, so `parse_tasks` refuses immediately instead — see
-# `_verifies_comma_split_is_ambiguous`.
+# never wrote, so it is marked unparseable — `Task.verifies_error` — instead
+# of split; see `_verifies_comma_split_is_ambiguous`. This is deliberately
+# NOT a raise: `parse_tasks` reads every other task in the file regardless
+# (NFR-03/BEH-04 forbid one bad line taking down `status`/`run`/`plan`/`tui`
+# along with `validate`), and `validate_task_fields` turns the per-task
+# marker into a named, quoted error.
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
 # block immediately followed by a checklist without a separating field never
@@ -134,6 +138,14 @@ class Task:
     #: BEH-05) can quote the operator's declaration verbatim without
     #: re-reading the file (#372).
     verifies_raw: str | None = None
+    #: Named refusal message when the declared `**Verifies:**` line could
+    #: not be parsed at all (e.g. a comma inside an unclosed `[...]`, #372
+    #: round 2) — `verifies` stays `None` in this case too, but this field
+    #: is what tells "unparseable" apart from "no line at all" or "empty
+    #: group". `parse_tasks` does not raise on this: the task is marked and
+    #: the rest of the file still parses; `validate_task_fields` turns it
+    #: into a named, quoted validate error (FR-03, NFR-03: no traceback).
+    verifies_error: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -306,16 +318,18 @@ def parse_tasks(filepath: Path) -> list[Task]:
             trailing = verifies_match.group(1).strip()
             if trailing:
                 if _verifies_comma_split_is_ambiguous(trailing):
-                    raise ValueError(
-                        f"{current_task.id}: **Verifies:** line has a comma "
-                        "inside an unclosed '[...]' — splitting it on commas "
-                        "would produce selectors the operator never wrote. "
-                        "A pytest node id with a comma in its own "
-                        "parametrize suffix (e.g. test_y[a,b]) must be "
-                        "declared with the multi-line block form (one "
-                        "selector per '- ' line under the marker) instead. "
-                        f"Declared line: {line!r}"
+                    current_task.verifies = None
+                    current_task.verifies_error = (
+                        "**Verifies:** line has a comma inside an unclosed "
+                        "'[...]' — splitting it on commas would produce "
+                        "selectors the operator never wrote. A pytest node "
+                        "id with a comma in its own parametrize suffix "
+                        "(e.g. test_y[a,b]) must be declared with the "
+                        "multi-line block form (one selector per '- ' line "
+                        f"under the marker) instead. Declared line: {line!r}"
                     )
+                    in_verifies = False
+                    continue
                 current_task.verifies = [s.strip() for s in trailing.split(",") if s.strip()]
                 in_verifies = False
             else:
