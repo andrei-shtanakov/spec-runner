@@ -58,40 +58,56 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
 
-    def test_leading_blank_lines_before_the_first_item_do_not_close_the_block(self, tmp_path):
-        """Symmetric with `**Checklist:**` (task.py's `in_checklist` survives
-        a blank line): idiomatic markdown puts a blank line between the
-        marker and its list. Only LEADING blank lines — before the first
-        item is read — are tolerated this way (#372 round 1); a blank line
-        AFTER an item is a different, closing signal (see the next test;
-        round 4 narrowed round 1's fix to leading blanks specifically)."""
+    def test_loose_list_with_blank_lines_between_items_keeps_every_selector_in_order(
+        self, tmp_path
+    ):
+        """A blank line between two list items — a "loose list" in markdown
+        terms — is legal markdown and renders identically to a tight list in
+        every renderer. Blank lines inside the block are fully transparent
+        REGARDLESS of position (#372 round 5, correcting round 4): leading
+        (round 1's idiomatic-markdown case) and between items alike. Round
+        4 closed the block on a blank line once an item had been read,
+        which silently truncated exactly this loose-list shape to its first
+        selector — the same silent-loss class this whole feature exists to
+        close."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
             "**Mode:** verify_first\n"
             "**Verifies:**\n"
             "\n"
-            "- tests/test_b.py::test_y\n"
             "- tests/test_a.py::test_x\n"
+            "\n"
+            "- tests/test_b.py::test_y\n"
+            "\n"
+            "- tests/test_c.py::test_z\n"
             "Est: 1d\n"
         )
 
         tasks = parse_tasks(path)
 
         assert tasks[0].verifies == [
-            "tests/test_b.py::test_y",
             "tests/test_a.py::test_x",
+            "tests/test_b.py::test_y",
+            "tests/test_c.py::test_z",
         ]
-        assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
+        assert "tests/test_b.py::test_y" not in tasks[0].description
+        assert "tests/test_c.py::test_z" not in tasks[0].description
 
-    def test_blank_line_after_an_item_closes_the_block_structurally(self, tmp_path):
-        """The block closes PURELY structurally (#372 round 4): a blank line
-        once at least one item has been read ends the contiguous run,
-        regardless of what the next line looks like. Rounds 2 and 3 tried to
-        tell "prose" from "selector" by shape (no whitespace, then requiring
-        `::`) and both silently dropped legal selectors as a result (see
-        the block-form tests below); the actual rule never inspects shape."""
+    def test_prose_bullet_after_a_blank_line_is_consumed_verbatim_declared_by_position(
+        self, tmp_path
+    ):
+        """A block item is declared by POSITION (any bullet between the
+        marker and the nearest structural boundary), and judged later by
+        the adapter — not filtered here by content (#372 round 5 corrects
+        round 4's assumption that a blank line closes the block: it
+        doesn't, blank lines are fully transparent, see the loose-list test
+        above). A bulleted line that reads as prose is therefore captured
+        the same as any other declared selector, to be refused later with
+        a verbatim quote (BEH-02/BEH-05) — round 4 already sanctioned this
+        for a prose bullet with no blank line in front of it; round 5
+        extends it to one that does."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -106,8 +122,39 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         tasks = parse_tasks(path)
         task = tasks[0]
 
+        assert task.verifies == [
+            "tests/test_a.py::test_x",
+            "перепроверить после мержа WS-341",
+        ]
+
+    def test_prose_paragraph_closes_the_block_and_the_bullet_after_it_is_not_reopened(
+        self, tmp_path
+    ):
+        """Unlike a bulleted line (previous test), an ordinary prose
+        PARAGRAPH — a non-blank line with no leading bullet — is the actual
+        structural boundary: it closes the block and stays in `description`
+        like any other body text. Once closed, the block does not reopen
+        (round 4's rule, still true here): a bullet appearing after the
+        closing paragraph lands in `description` too, deliberately — the
+        boundary is structural, not a search for more selectors further
+        down (#372 round 5)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_a.py::test_x\n"
+            "Some prose paragraph, not a bullet at all.\n"
+            "- tests/test_b.py::test_y\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+        task = tasks[0]
+
         assert task.verifies == ["tests/test_a.py::test_x"]
-        assert "перепроверить после мержа WS-341" in task.description
+        assert "Some prose paragraph, not a bullet at all." in task.description
+        assert "tests/test_b.py::test_y" in task.description
 
     def test_legal_node_id_with_comma_and_space_in_parametrize_suffix_is_kept(self, tmp_path):
         """FR-02's escape hatch for a node id with a comma (`test_y[a,b]`) is

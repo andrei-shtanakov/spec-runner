@@ -80,21 +80,23 @@ VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # block immediately followed by a checklist without a separating field never
 # swallows the checklist's first line as a selector. Every OTHER bullet is a
 # declared selector, stored VERBATIM, with no judgment of its shape (#372
-# round 4 — the final design, after two wrong turns): round 2 required no
-# whitespace and rejected a legal pytest node id whose parametrize suffix
-# has a comma AND a space (`test_y[a, b]`); round 3 then required `::` and
-# made every ExUnit selector (`path:LINE`, no `::` — see
-# `ExUnitAdapter.parse_selector`) undeclarable in the block form, while
-# still silently dropping any pytest target the adapter itself would refuse
-# instead of storing it for that later refusal to quote (BEH-04/BEH-05). A
-# selector's shape is the ADAPTER's judgment (FR-02), never the parser's —
-# the single-line comma form already stores everything verbatim with no
-# shape check, and the block form must agree with it on identical input. A
-# bullet that reads as prose (`- перепроверить после мержа WS-341`) is
-# therefore not filtered here either: it is stored like any other item and
-# refused later with a quote, the same contract `**Mode:**` already holds
-# for an unrecognized value. What closes the block is purely structural,
-# never a bullet's content — see the `in_verifies` handling below.
+# round 4 — after two wrong turns): round 2 required no whitespace and
+# rejected a legal pytest node id whose parametrize suffix has a comma AND
+# a space (`test_y[a, b]`); round 3 then required `::` and made every
+# ExUnit selector (`path:LINE`, no `::` — see `ExUnitAdapter.parse_selector`)
+# undeclarable in the block form, while still silently dropping any pytest
+# target the adapter itself would refuse instead of storing it for that
+# later refusal to quote (BEH-04/BEH-05). A selector's shape is the
+# ADAPTER's judgment (FR-02), never the parser's — the single-line comma
+# form already stores everything verbatim with no shape check, and the
+# block form must agree with it on identical input. A bullet that reads as
+# prose (`- перепроверить после мержа WS-341`) is therefore not filtered
+# here either: it is stored like any other item and refused later with a
+# quote, the same contract `**Mode:**` already holds for an unrecognized
+# value. What closes the block is purely structural, never a bullet's
+# content — see the `in_verifies` handling below, which round 5 also
+# corrects: blank lines between items ("loose list" markdown) are fully
+# transparent, not just leading ones.
 VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
 
 
@@ -239,30 +241,30 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # leak into the description and the declared group would stay empty.
         # The block is closed PURELY structurally (#372 round 4) — never by
         # guessing at a selector's shape. It is the first CONTIGUOUS run of
-        # non-checkbox bullets under the marker: leading blank lines between
-        # the marker and the first item are skipped (round 1's idiomatic
-        # markdown case), but a blank line AFTER at least one item has been
-        # read closes the block (round 2's case — prose separated from the
-        # group by a blank line stays description, whatever it looks like).
-        # A checklist item, a `**...**` field, or the priority/status line
-        # (`Est:`/TASK_META) close it the same way, by simply not matching
-        # `VERIFIES_ITEM` and falling through to be handled by their own
-        # branch below in this same iteration (a new task header is handled
-        # above, before this point is ever reached).
+        # non-checkbox bullets under the marker, and blank lines inside it
+        # are fully transparent regardless of position (#372 round 5): both
+        # leading (round 1's idiomatic-markdown case) and between two items
+        # — a "loose list" in markdown terms, legal and common — since round
+        # 4's "a blank line after an item closes the block" rule silently
+        # truncated a loose-list declaration to its first item, the same
+        # silent-loss class this whole feature exists to close. A checklist
+        # item, a `**...**` field, the priority/status line (`Est:`/
+        # TASK_META), or an ordinary non-bulleted prose line close it, by
+        # simply not matching `VERIFIES_ITEM` and falling through to be
+        # handled by their own branch below in this same iteration (a new
+        # task header is handled above, before this point is ever reached);
+        # once closed, the block never reopens — a bullet appearing after
+        # such a closing line lands in `description` like any other text.
         if in_verifies:
             if not line.strip():
-                if current_task.verifies:
-                    in_verifies = False
-                else:
-                    continue
-            else:
-                verifies_item_match = VERIFIES_ITEM.match(line)
-                if verifies_item_match:
-                    if current_task.verifies is None:
-                        current_task.verifies = []
-                    current_task.verifies.append(verifies_item_match.group(1).strip())
-                    continue
-                in_verifies = False
+                continue
+            verifies_item_match = VERIFIES_ITEM.match(line)
+            if verifies_item_match:
+                if current_task.verifies is None:
+                    current_task.verifies = []
+                current_task.verifies.append(verifies_item_match.group(1).strip())
+                continue
+            in_verifies = False
 
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
