@@ -223,7 +223,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-20 (—BEH-
 **Traces to:** [FR-13], [FR-05], [FR-14], [FR-15]
 
 ### TASK-009: Пред-терминальная оценка, waiver и lifecycle (+2 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-25, BEH-28, BEH-29 (Given всех трёх — уже
 пройденный green-only путь, поэтому строго ПОСЛЕ TASK-008; BEH-24
@@ -232,10 +232,10 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-25 (—BEH-
 **Depends on:** [TASK-008]
 
 **Checklist:**
-- [ ] реализовать BEH-25: Пред-терминальная оценка выполняется ровно как для `tdd`
-- [ ] реализовать BEH-28: Waiver остаётся отдельным инструментом авторитета
-- [ ] реализовать BEH-29: Lifecycle-переходы не ослабляются
-- [ ] проверка группы: tests/test_verify_gates.py (kind: integration), tests/test_verify_gates.py (kind: contract) зелёные на BEH-25, BEH-28, BEH-29
+- [x] реализовать BEH-25: Пред-терминальная оценка выполняется ровно как для `tdd`
+- [x] реализовать BEH-28: Waiver остаётся отдельным инструментом авторитета
+- [x] реализовать BEH-29: Lifecycle-переходы не ослабляются — `lifecycle.has_verify_evidence` даёт green-only задаче отдельное основание для перехода в GREEN (не подделку красного); `execution.py` теперь пишет свои lifecycle-переходы (`GREEN_IMPLEMENTING`, `DONE`) для `verify_first` так же, как для `tdd`
+- [x] проверка группы: tests/test_verify_gates.py (kind: integration), tests/test_verify_gates.py (kind: contract) зелёные на BEH-25, BEH-28, BEH-29
 
 **Traces to:** [FR-18], [FR-20], [FR-21]
 

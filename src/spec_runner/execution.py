@@ -535,13 +535,14 @@ def execute_task(
         _fail_for_budget(task, config, state, green_refusal.reason, reporter.current)
         return False
 
-    # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. This is the
-    # `tdd`-lifecycle machine (READY/RED_AUTHORING/GREEN_IMPLEMENTING/...);
-    # giving `verify_first` its own lifecycle transitions ("lifecycle
-    # transitions are not weakened", BEH-29) is FR-21/TASK-009's scope, not
-    # this one's — recording a phase this machine was never designed to carry
-    # would be inventing that behaviour ahead of its own task.
-    if config.resolve_execution_mode(task) == "tdd":
+    # #367 BEH-29/FR-21 (TASK-009): `verify_first` gets its own lifecycle
+    # transitions now, not just `tdd`'s. `advance()` accepts this move on
+    # either of two grounds — `has_confirmed_red` (the red-authoring path,
+    # BEH-21) or `has_verify_evidence` (the green-only path, BEH-20) — a
+    # separate, evidenced basis, never a red recorded under another name; the
+    # `ILLEGAL` set itself is unchanged, so a `tdd` task without a confirmed
+    # red is refused exactly as before.
+    if config.resolve_execution_mode(task) in ("tdd", "verify_first"):
         _record_phase(state, config, task, TddPhase.GREEN_IMPLEMENTING)
 
     # Build prompt with RetryContext
@@ -766,33 +767,35 @@ def execute_task(
                 # skipped) and the lifecycle should not have to know which one
                 # happened — only that the task finished.
                 #
-                # #367 BEH-24/FR-17 audit: `tdd` always qualifies; a
-                # `verify_first` task qualifies too exactly when it has ever
-                # walked BEH-21's red-authoring cycle *in this workstream* —
-                # that is the one path where `_judge_red_commit` (tdd.py)
-                # froze a file with `record_claims`, so it is the one path
-                # with a claim to release and a lock the `tdd release` door
-                # needs a DONE row to open. State-derived
-                # (`_verify_first_has_confirmed_red`), not `verify_first_red`
-                # (this *attempt's* own entry-run outcome, used above to gate
-                # entering the cycle): a retried attempt whose own entry read
-                # green off a fix an *earlier* attempt's red cycle already
-                # committed as the candidate — refused after for an
-                # unrelated reason — still holds that earlier attempt's
-                # claim, and `verify_first_red` alone would miss it (#381
-                # review round 2). A green-on-entry `verify_first` task
-                # (BEH-20) that never once entered the cycle never claims
-                # anything and stays outside this block — recording its own
-                # lifecycle transitions is FR-21/TASK-009's job, same as the
-                # GREEN_IMPLEMENTING site above. `advance()` accepts DONE
-                # directly from `red_authoring`/`red_verifying` (only
-                # reaching GREEN without a confirmed red is illegal), so no
-                # intermediate phase needs recording for this path either.
+                # #367 BEH-29/FR-21 (TASK-009): `verify_first` now records its
+                # own DONE row unconditionally, same as `tdd` — green-only
+                # (BEH-20) included, since `advance()` accepts DONE on either
+                # `has_confirmed_red` or `has_verify_evidence` as its ground
+                # (and DONE from `READY`/`red_authoring`/`red_verifying` was
+                # never in `ILLEGAL` to begin with).
+                #
+                # Claims release stays narrower on purpose: it is the one
+                # path where `_judge_red_commit` (tdd.py) froze a file with
+                # `record_claims`, so it is the one path with a claim to
+                # release and a lock the `tdd release` door needs a DONE row
+                # to open. State-derived (`_verify_first_has_confirmed_red`),
+                # not `verify_first_red` (this *attempt's* own entry-run
+                # outcome, used above to gate entering the cycle): a retried
+                # attempt whose own entry read green off a fix an *earlier*
+                # attempt's red cycle already committed as the candidate —
+                # refused after for an unrelated reason — still holds that
+                # earlier attempt's claim, and `verify_first_red` alone would
+                # miss it (#381 review round 2). A green-on-entry
+                # `verify_first` task that never once entered the cycle never
+                # claimed anything, so releasing here would be a no-op — left
+                # out rather than made one, so this block stays legible as
+                # "only ever runs where a claim could exist" (FR-19/TASK-010).
+                if config.resolve_execution_mode(task) in ("tdd", "verify_first"):
+                    _record_phase(state, config, task, TddPhase.DONE)
                 if config.resolve_execution_mode(task) == "tdd" or (
                     config.resolve_execution_mode(task) == "verify_first"
                     and _verify_first_has_confirmed_red(state, config, task)
                 ):
-                    _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)
                 state.record_attempt(
                     task_id,
