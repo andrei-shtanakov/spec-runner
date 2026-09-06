@@ -16,6 +16,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 STAGES: tuple[str, ...] = (
     "sync_deps",
     "branch",
+    # The live verify-first run (#367 BEH-30/FR-22): a fresh commit judged
+    # before any paid call, distinct from "tests" — the post-done stage that
+    # judges the candidate tree after the implementation pass. Recording both
+    # under "tests" made "failed on the live verify run" indistinguishable
+    # from "failed on post-done tests" in `error_stage`, even though they are
+    # two different questions about two different trees.
+    "verify",
     # CLI-agnostic name for the agent-execution stage. Was "codex" (≤2.11),
     # which read as the codex CLI even on claude runs (#74); historical
     # error_stage rows may still carry the old value.

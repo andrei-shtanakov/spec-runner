@@ -1,0 +1,287 @@
+"""BEH-30/BEH-31 (#367 TASK-011): the live verify-first run gets its own
+stage, and its durable evidence — plus which of the three outcome paths a
+task took — is presented through the CLI (`tdd status`, `status`).
+
+Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-30 (-BEH-31)
+Traces: FR-22, FR-23, FR-12
+
+kind: integration — real `git`/`pytest` subprocesses against a fixture
+repository; only the paid agent call is stood in for.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from spec_runner import tdd_status
+from spec_runner.claims import record_claims
+from spec_runner.cli_info import print_status
+from spec_runner.config import ExecutorConfig
+from spec_runner.executor import execute_task
+from spec_runner.runner import CliInvocation
+from spec_runner.stages import STAGES
+from spec_runner.state import ExecutorState
+from spec_runner.task import Task
+from spec_runner.tdd import AgentCall, RedCheckpoint, RedOutcome, _config_hash, resolve_namespace
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", message)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _base_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_green.py").write_text("def test_it():\n    assert 2 + 2 == 4\n")
+    (root / "tests" / "test_redgroup.py").write_text(
+        "def test_it():\n    assert False, 'deliberate failure'\n"
+    )
+    _commit(root, "base")
+    return root
+
+
+def _cfg(root: Path, **overrides) -> ExecutorConfig:
+    defaults: dict = {
+        "project_root": root,
+        "state_file": root / ".state.db",
+        "logs_dir": root / ".logs",
+        "test_command": "python -m pytest",
+        "max_retries": 1,
+        "retry_delay_seconds": 0,
+        "create_git_branch": False,
+        "run_tests_on_done": False,
+        "auto_commit": True,
+        "run_review": False,
+        "callback_url": "",
+        "lint_command": "",
+        "tdd_namespace": "ws-beh30-31",
+    }
+    defaults.update(overrides)
+    cfg = ExecutorConfig(**defaults)
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    return cfg
+
+
+def _task(task_id: str, **overrides) -> Task:
+    defaults: dict = {
+        "id": task_id,
+        "name": "verify-first task",
+        "priority": "p1",
+        "status": "todo",
+        "estimate": "1h",
+        "execution_mode": "verify_first",
+        "verifies": ["tests/test_green.py::test_it"],
+    }
+    defaults.update(overrides)
+    return Task(**defaults)
+
+
+def _completes(config, invocation):
+    return MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+
+
+def _run(task: Task, config: ExecutorConfig, state: ExecutorState, *, agent_side_effect=_completes):
+    """`execute_task` with the paid CLI call replaced, no red authoring
+    expected (same seam `test_verify_claims.py` uses)."""
+    no_red = MagicMock(side_effect=AssertionError("no red authoring expected here"))
+    with (
+        patch("spec_runner.execution.update_task_status"),
+        patch("spec_runner.execution.log_progress"),
+        patch(
+            "spec_runner.execution.build_cli_invocation",
+            return_value=CliInvocation(["echo", "hi"], "text"),
+        ),
+        patch("spec_runner.execution.build_task_prompt", return_value="test prompt"),
+        patch("spec_runner.execution.pre_start_hook", return_value=True),
+        patch("spec_runner.execution._run_agent_process", side_effect=agent_side_effect),
+        patch("spec_runner.tdd._run_agent", no_red),
+    ):
+        return execute_task(task, config, state)
+
+
+class TestBEH30LiveVerifyStageIsFirstClass:
+    """kind: integration — BEH-30: the live verify-first run has its own
+    named stage, mirrored to progress, and used to record `error_stage`."""
+
+    def test_verify_is_a_named_stage(self):
+        assert "verify" in STAGES
+
+    def test_progress_mirrors_the_verify_stage_not_tests(self, tmp_path):
+        root = _base_repo(tmp_path)
+        config = _cfg(root, tdd_namespace="ws-beh30-mirror")
+        task = _task("TASK-MIRROR")
+        mirrored: list[str] = []
+        no_red = MagicMock(side_effect=AssertionError("no red authoring expected here"))
+
+        with (
+            ExecutorState(config) as state,
+            patch("spec_runner.execution.update_task_status"),
+            patch(
+                "spec_runner.execution.log_progress",
+                side_effect=lambda line, *_a, **_k: mirrored.append(line),
+            ),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["echo", "hi"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="test prompt"),
+            patch("spec_runner.execution.pre_start_hook", return_value=True),
+            patch("spec_runner.execution._run_agent_process", side_effect=_completes),
+            patch("spec_runner.tdd._run_agent", no_red),
+        ):
+            result = execute_task(task, config, state)
+
+        assert result is True
+        assert any("stage: verify" in line for line in mirrored), (
+            "BEH-30: the live verify-first run must mirror its own 'verify' stage, "
+            f"not 'tests' — saw: {mirrored}"
+        )
+
+
+class TestBEH31EvidenceAndPathThroughTheCli:
+    """kind: integration — BEH-31: `tdd status` (human + `--json`, one
+    `collect()`) shows each task's verify-evidence — outcome, SHA, declared
+    group, config hash — so an operator can tell which of the three paths a
+    verify-first task took, and a green-only DONE from a confirmed-red DONE.
+    Plain `status` reflects the fact and outcome too."""
+
+    def _populate(self, tmp_path):
+        root = _base_repo(tmp_path)
+
+        # Green: the declared group is already green on entry.
+        green_task = _task("TASK-GREEN")
+        green_config = _cfg(root)
+        with ExecutorState(green_config) as state:
+            assert _run(green_task, green_config, state) is True
+
+        # Test-failure: the declared group is red; the entry run observes it
+        # and hands off to ordinary red authoring (BEH-21) rather than
+        # refusing outright.
+        redpath_task = _task("TASK-REDPATH", verifies=["tests/test_redgroup.py::test_it"])
+        redpath_config = _cfg(root)
+
+        def _fake_red_agent(config, prompt, **kwargs):
+            red_test = Path(config.project_root) / "tests" / "test_red_task_redpath.py"
+            red_test.write_text("def test_red():\n    assert False, 'red'\n")
+            return AgentCall(
+                text="TDD_SELECTOR: tests/test_red_task_redpath.py::test_red\nTASK_COMPLETE"
+            )
+
+        with (
+            ExecutorState(redpath_config) as state,
+            patch("spec_runner.execution.update_task_status"),
+            patch("spec_runner.execution.log_progress"),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["echo", "hi"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="test prompt"),
+            patch("spec_runner.execution.pre_start_hook", return_value=True),
+            patch("spec_runner.execution._run_agent_process", side_effect=_completes),
+            patch("spec_runner.tdd._run_agent", side_effect=_fake_red_agent),
+        ):
+            execute_task(redpath_task, redpath_config, state)
+
+        # Instrument-error: a composite `test_command` refuses before any
+        # selector runs — same shape as the frozen BEH-30 red test.
+        instrument_task = _task("TASK-INSTRUMENT")
+        instrument_config = _cfg(root, test_command="pytest tests/ && echo done")
+        with ExecutorState(instrument_config) as state:
+            result = _run(instrument_task, instrument_config, state)
+        assert result is False
+
+        # An ordinary `tdd` task with a confirmed red — no verify-evidence at
+        # all, the baseline this CLI must stay distinguishable from.
+        tdd_config = _cfg(root)
+        namespace = resolve_namespace(tdd_config)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        checkpoint = RedCheckpoint(
+            task_id="TASK-TDD",
+            namespace=namespace,
+            commit_sha=head,
+            baseline_sha=head,
+            selector="tests/test_green.py::test_it",
+            environment_id="unpinned",
+            execution_mode="tdd",
+            config_hash=_config_hash(tdd_config),
+            outcome=RedOutcome.EXPECTED_FAIL,
+            timestamp="2026-09-06T00:00:00",
+        )
+        with ExecutorState(tdd_config) as state:
+            state.record_red_checkpoint(checkpoint)
+            record_claims(tdd_config, state, checkpoint)
+
+        return root, tdd_config
+
+    def test_tdd_status_shows_outcome_sha_group_and_config_hash_per_evidence(self, tmp_path):
+        root, config = self._populate(tmp_path)
+        data = tdd_status.collect(config)
+        by_task = {v["task_id"]: v for v in data["verify_evidence"]}
+
+        assert set(by_task) == {"TASK-GREEN", "TASK-REDPATH", "TASK-INSTRUMENT"}
+        assert by_task["TASK-GREEN"]["outcome"] == "green"
+        assert by_task["TASK-REDPATH"]["outcome"] == "test_failure"
+        assert by_task["TASK-INSTRUMENT"]["outcome"] == "instrument_error"
+        for tid, evidence in by_task.items():
+            assert evidence["commit_sha"], f"{tid}: no judged commit recorded"
+            assert evidence["config_hash"], f"{tid}: no config hash recorded"
+            assert evidence["group_declared"], f"{tid}: no declared group recorded"
+
+    def test_green_only_reads_differently_from_a_confirmed_red(self, tmp_path):
+        """BEH-31 Then clause: the green-only checkpoint-equivalent must be
+        distinguishable from a genuinely confirmed red — both reach a
+        terminal `done`-shaped state, but for different, evidenced reasons."""
+        root, config = self._populate(tmp_path)
+        data = tdd_status.collect(config)
+
+        green = tdd_status.lifecycle_of(data, "TASK-GREEN")
+        instrument = tdd_status.lifecycle_of(data, "TASK-INSTRUMENT")
+        confirmed_red = tdd_status.lifecycle_of(data, "TASK-TDD")
+
+        assert "green" in green
+        assert "done" in green
+        assert "red confirmed" in confirmed_red
+        assert green != confirmed_red, (
+            "a green-only checkpoint-equivalent must not read the same as a genuinely confirmed red"
+        )
+        assert "instrument" in instrument
+
+    def test_human_and_json_views_are_fed_by_the_same_collect(self, tmp_path):
+        root, config = self._populate(tmp_path)
+        data = tdd_status.collect(config)
+        text = tdd_status.render(data, None)
+
+        for tid in ("TASK-GREEN", "TASK-REDPATH", "TASK-INSTRUMENT", "TASK-TDD"):
+            assert tid in text
+        assert "verify-evidence" in text
+        assert "config_hash" in text
+        # No second, independent read: `render` only ever consumes the dict
+        # `collect()` already produced (and `--json` would print verbatim).
+        assert tdd_status.render(data, None) == text
+
+    def test_plain_status_reports_the_verify_run_fact_and_outcome(self, tmp_path, capsys):
+        root, config = self._populate(tmp_path)
+
+        print_status(config)
+        out = capsys.readouterr().out
+
+        assert "TASK-GREEN" in out
+        assert "Verify: green" in out
+        assert "TASK-INSTRUMENT" in out
+        assert "Verify: instrument_error" in out
