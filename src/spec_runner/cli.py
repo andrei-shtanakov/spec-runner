@@ -80,13 +80,21 @@ logger = get_logger("cli")
 # === CLI Commands ===
 
 
-def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
+def build_task_json_result(
+    task_id: str, state: ExecutorState, config: ExecutorConfig | None = None
+) -> dict:
     """Build a single task's `--json-result` entry.
 
     Stable contract: see docs/state-schema.md and schemas/json-result.schema.json.
     Golden-fixed by tests/test_json_result_contract.py. Changes here follow the
     breaking-change policy in docs/state-schema.md: removing/renaming/retyping a
     key requires a major version bump; adding an optional key is non-breaking.
+
+    `config` is optional (older/direct callers, incl. the pinned contract
+    tests, pass none) but when given it scopes the verify-evidence lookup to
+    this run's own namespace (#367 BEH-32 follow-up) — without it, two
+    workstreams sharing one state DB under an explicit `tdd_namespace` and
+    the same `task_id` could otherwise leak each other's `verify_outcome`.
     """
     ts = state.get_task_state(task_id)
     entry: dict = {"task_id": task_id, "status": "unknown", "attempts": 0}
@@ -109,6 +117,17 @@ def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
         # and golden fixtures are unaffected.
         if last.no_op and ts.status == "success":
             entry["no_op"] = True
+    # BEH-32 (#367): additive only — absent whenever the task never recorded
+    # verify-first evidence, so every consumer/fixture that predates this
+    # field sees byte-identical output.
+    if config is not None:
+        from .tdd import resolve_namespace
+
+        evidence = state.verify_evidence(resolve_namespace(config), task_id)
+    else:
+        evidence = state.latest_verify_evidence(task_id)
+    if evidence is not None:
+        entry["verify_outcome"] = evidence.outcome
     entry["exit_code"] = 0 if ts.status == "success" else 1
     return entry
 
@@ -1406,7 +1425,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
         # --json-result: structured JSON result per task (for Maestro interop)
         if getattr(args, "json_result", False):
-            results = [build_task_json_result(t.id, state) for t in tasks_to_run]
+            results = [build_task_json_result(t.id, state, config) for t in tasks_to_run]
             print(json.dumps(results if len(results) > 1 else results[0], indent=2))
 
     # #136: apply the run's exit code last, outside the state context manager,

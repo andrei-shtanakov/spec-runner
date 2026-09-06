@@ -268,15 +268,15 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-30 (—BEH-
 **Traces to:** [FR-22], [FR-23], [FR-12]
 
 ### TASK-012: Внешние контракты меняются только аддитивно
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-32.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-32
 **Depends on:** [TASK-011]
 
 **Checklist:**
-- [ ] реализовать BEH-32: Внешние контракты меняются только аддитивно
-- [ ] проверка группы: tests/test_json_result_contract.py (kind: contract) зелёные на BEH-32
+- [x] реализовать BEH-32: Внешние контракты меняются только аддитивно
+- [x] проверка группы: tests/test_json_result_contract.py (kind: contract) зелёные на BEH-32
 
 **Traces to:** [FR-04]
 

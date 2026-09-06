@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`--json-result` gains an additive `verify_outcome` field** (#367
+  BEH-32). A task that recorded live verify-first evidence
+  (`execution_mode: verify_first`) now surfaces that run's outcome —
+  `"green"`, `"test_failure"`, or `"instrument_error"` — alongside its
+  usual `status`/`review`/etc. fields. Absent for every standard/tdd task
+  and for a verify-first task that never recorded evidence, so existing
+  consumers and the golden Maestro-interop fixtures are unaffected. See
+  `docs/state-schema.md` and `schemas/json-result.schema.json`.
+
 ### Changed
 
 - **Evidential red-file names are renamed to carry a namespace segment**

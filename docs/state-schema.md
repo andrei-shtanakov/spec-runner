@@ -514,6 +514,7 @@ Single task (one element list) → JSON object. Multiple tasks → JSON array.
 | `review` | string | stable | Last attempt's review verdict, or `skipped` |
 | `error` | string | stable | Present only on failure; truncated to 200 chars |
 | `no_op` | bool | stable | Added v2.16.0 (#97). Present **only when true**: the task completed successfully without any committable changes (work already absorbed by earlier tasks). Absent on every other task — consumers that don't know the key see unchanged output |
+| `verify_outcome` | string | stable | Added #367. Present only for a task that recorded live verify-first evidence (`execution_mode: verify_first`): `"green"`, `"test_failure"`, or `"instrument_error"`. Absent for every standard/tdd task and for a verify-first task that never recorded evidence — additive, so existing consumers/fixtures are unaffected |
 | `exit_code` | int | stable | 0 on success, 1 on failure |
 
 ### Empty-tasks edge case
