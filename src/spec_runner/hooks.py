@@ -382,6 +382,10 @@ def _record_tdd_phase(config: ExecutorConfig, task: Task, phase, detail=None) ->
     Opens its own short-lived state handle: `post_done_hook` does not hold one,
     and a phase record must not become a reason to restructure the hook.
     Bookkeeping only — the gates decide, this remembers.
+
+    #367 BEH-24/FR-17 audit: stays `tdd`-only. Giving `verify_first` its own
+    place in this lifecycle machine (BEH-29 "lifecycle transitions are not
+    weakened") is FR-21/TASK-009's job, not this one's.
     """
     if config.resolve_execution_mode(task) != "tdd":
         return
@@ -862,12 +866,21 @@ def post_done_hook(
     #
     # HEAD is resolved only when a claim could exist to check — an ordinary run
     # must not gain a git call per task from a feature it did not enable.
+    #
+    # `verify_first` asks too (#367 BEH-24/FR-17): the claims gate is now
+    # registered for it just as it is for `tdd` (`register_builtin_gates`,
+    # `ensure_red_gate`), so `is_registered` alone would already let a
+    # verify-first run reach this check. `evaluate_claims` answers trivially
+    # until FR-19/TASK-010 gives verify-first tasks claims to break, but a
+    # mode-keyed skip here — instead of letting the (correct) trivial answer
+    # through — is exactly the "third mode reads as no guarantees" bug BEH-24
+    # exists to close.
     candidate_before_review = ""
     claims_blocked: str | None = None
     if (
         config.run_review
         and is_registered("tdd.claims", "tests")
-        and config.resolve_execution_mode(task) == "tdd"
+        and config.resolve_execution_mode(task) in ("tdd", "verify_first")
     ):
         candidate_before_review = _head_sha(config)
         claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
