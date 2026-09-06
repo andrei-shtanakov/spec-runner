@@ -64,13 +64,34 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # (`- <selector>` per line) when the line after the marker has no trailing
 # content — the only form that can carry a pytest node id containing a comma
 # in its own parametrize suffix. Selectors are stored verbatim and in the
-# declared order; an unparseable one is refused later (BEH-04/BEH-05), not
-# mapped to something plausible here.
+# declared order; an unparseable-but-unambiguous one (rejected by the
+# adapter) is refused later (BEH-04/BEH-05), not mapped to something
+# plausible here. A comma that lands inside an unclosed `[...]` in the
+# comma form (`test_y[a,b]`) is a different, own-contract case (FR-02, #372):
+# splitting on it would manufacture selectors ("test_y[a", "b]") the operator
+# never wrote, so `parse_tasks` refuses immediately instead — see
+# `_verifies_comma_split_is_ambiguous`.
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # A checklist item (`- [ ] ...`/`- [x] ...`) is excluded so a `**Verifies:**`
 # block immediately followed by a checklist without a separating field never
 # swallows the checklist's first line as a selector.
 VERIFIES_ITEM = re.compile(r"^- (?!\[[ x]\])(.+)$")
+
+
+def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
+    """True when splitting ``trailing`` on commas would break a pytest
+    parametrize suffix, e.g. ``test_y[a,b]``, into fragments the operator
+    never wrote (#372) — a comma reached while a ``[`` is still unclosed."""
+    depth = 0
+    for ch in trailing:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth > 0:
+            return True
+    return False
+
 
 # "review" (🔍, #66): gates passed, code review/commit still running — an
 # interrupted run leaves this honest intermediate instead of a bare
@@ -105,6 +126,11 @@ class Task:
     #: exact declared order — never sorted, deduplicated, or inferred from
     #: anything else. Empty when no `**Verifies:**` line is present.
     verifies: list[str] = field(default_factory=list)
+    #: Raw text of the line that carried `**Verifies:**` (single-line form),
+    #: or `None` when no such line was read. Kept so a later refusal (FR-02,
+    #: BEH-05) can quote the operator's declaration verbatim without
+    #: re-reading the file (#372).
+    verifies_raw: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -267,8 +293,20 @@ def parse_tasks(filepath: Path) -> list[Task]:
 
         verifies_match = VERIFIES.search(line)
         if verifies_match:
+            current_task.verifies_raw = line
             trailing = verifies_match.group(1).strip()
             if trailing:
+                if _verifies_comma_split_is_ambiguous(trailing):
+                    raise ValueError(
+                        f"{current_task.id}: **Verifies:** line has a comma "
+                        "inside an unclosed '[...]' — splitting it on commas "
+                        "would produce selectors the operator never wrote. "
+                        "A pytest node id with a comma in its own "
+                        "parametrize suffix (e.g. test_y[a,b]) must be "
+                        "declared with the multi-line block form (one "
+                        "selector per '- ' line under the marker) instead. "
+                        f"Declared line: {line!r}"
+                    )
                 current_task.verifies = [s.strip() for s in trailing.split(",") if s.strip()]
                 in_verifies = False
             else:
