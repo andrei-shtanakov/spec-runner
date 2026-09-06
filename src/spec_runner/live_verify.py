@@ -14,25 +14,32 @@ must hold, independent of whatever later work does with the outcome:
   moved on cannot change what was judged, and the same commit replayed again
   gives the same answer.
 
-Deliberately narrow: this module runs the group and reports what happened. It
-does not decide the green-only / TDD / instrument-error branching (#367
-FR-08+) or persist durable evidence (#367 FR-07/FR-10, later work) — both are
-separate concerns layered on top of this one.
+Deliberately narrow in one respect, and no longer in another (#375 review):
+this module runs the group and classifies each selector through its
+adapter's own `classify`/`prove_selected`/`execution_proven` dictionary — the
+same primitives `tdd.py`'s red replay uses — rather than reading a raw exit
+code, because an exit code alone cannot tell a genuine failure from a broken
+instrument (#198's lesson) or a skipped/xfailed selector from an executed one
+(#367 FR-08). It still does not decide the green-only / TDD branching that a
+genuine pass or failure eventually drives (#367 FR-08+, later work), nor does
+it persist durable evidence (#367 FR-07/FR-10, later work) — both stay
+layered on top of this one; a real `TESTS_FAILED` verdict is only ever an
+*observation* this module reports, never a refusal it issues.
 
 `test_command` is not handed to `adapter.build_command` unmodified: that
 method only *appends* the selector (`tdd.py`'s red replay relies on exactly
 that shape, frozen by #141/#198), and a default `test_command` that already
-names `tests/` would then run the whole suite plus the one selector — the
-opposite of "restricted to the declared group" (FR-06). `_strip_test_path_args`
-below removes the bare test-path argument first, mirroring the
+names a test directory would then run the whole suite plus the one selector —
+the opposite of "restricted to the declared group" (FR-06).
+`adapter.build_scoped_command` — a separate method the red-replay path never
+calls — replaces the command's own path argument instead, mirroring the
 replace-not-append rule `git_ops.build_scoped_test_command` already applies
-for the post-done hook, without touching the shared adapter method.
+for the post-done hook.
 """
 
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -44,11 +51,7 @@ from .config import ExecutorConfig
 from .git_ops import is_composite_shell_command
 from .task import Task
 from .tdd import REPLAY_TIMEOUT_SECONDS, resolve_adapter
-from .tdd_runners import ReplayEnvironmentRefusal, SelectorRefusal, command_tokens
-
-#: Same shape as `git_ops._TEST_PATH_ARG`: a whitespace-delimited argument
-#: that is the test directory, matched whole so `contests/x` is untouched.
-_TEST_PATH_TOKENS = {"tests"}
+from .tdd_runners import ReplayEnvironmentRefusal, RunOutcome, SelectionProof, SelectorRefusal
 
 
 @dataclass(frozen=True)
@@ -68,22 +71,8 @@ class VerifyRunResult:
     detail: str
 
 
-def _strip_test_path_args(test_command: str) -> str:
-    """`test_command` with any bare test-path argument removed.
-
-    The adapter's own `build_command` still decides how to *append* the
-    selector (each runner's locator has a different shape — a pytest node id,
-    an ExUnit `path:line`); this only clears the directory argument a default
-    `test_command` names first, so that append lands on the declared group
-    alone rather than on the group plus the whole suite (FR-06).
-    """
-    tokens = command_tokens(test_command)
-    kept = [
-        token
-        for token in tokens
-        if token not in _TEST_PATH_TOKENS and not token.startswith("tests/")
-    ]
-    return shlex.join(kept) if kept else test_command
+def _tail(text: str, limit: int = 500) -> str:
+    return "\n".join(line for line in text.strip().splitlines() if line.strip())[-limit:]
 
 
 def run_live_verify(
@@ -104,6 +93,22 @@ def run_live_verify(
     if head.returncode != 0:
         return VerifyRunResult("", False, False, f"could not resolve HEAD: {head.stderr.strip()}")
     sha = head.stdout.strip()
+
+    if not task.verifies:
+        # #375 review: an empty (or undeclared) group is not a vacuous pass —
+        # "0 passed and exit 0 prove nothing" is FR-09's rule for a selection
+        # that ran and matched nothing, and it applies just as much to a
+        # selection that never started. `validate._validate_verify_first_declarations`
+        # already refuses this before a run can be scheduled; reaching this
+        # branch means the tasks file changed between validate and this
+        # attempt.
+        return VerifyRunResult(
+            sha,
+            False,
+            False,
+            "verify_first declared no group to run (an empty or missing "
+            "**Verifies:**); 0 selectors executing proves nothing",
+        )
 
     if is_composite_shell_command(config.test_command):
         return VerifyRunResult(
@@ -137,10 +142,9 @@ def run_live_verify(
             sha, False, False, f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}"
         )
 
-    scoped_command = _strip_test_path_args(config.test_command)
     cleanup_paths: list[Path] = []
     try:
-        for raw_selector in task.verifies or []:
+        for raw_selector in task.verifies:
             parsed = adapter.parse_selector(raw_selector)
             if isinstance(parsed, SelectorRefusal):
                 # Validated already (`validate._validate_verify_first_declarations`)
@@ -157,7 +161,7 @@ def run_live_verify(
                 return VerifyRunResult(sha, False, False, prepared.message)
             cleanup_paths.extend(prepared.cleanup_paths)
 
-            argv = adapter.build_command(scoped_command, parsed)
+            argv = adapter.build_scoped_command(config.test_command, parsed)
             if log_progress is not None:
                 log_progress(f"⏳ verify: {raw_selector}")
             result = subprocess.run(
@@ -168,18 +172,64 @@ def run_live_verify(
                 timeout=REPLAY_TIMEOUT_SECONDS,
                 env={**os.environ, **prepared.env},
             )
-            if result.returncode != 0:
-                tail = "\n".join(
-                    line
-                    for line in (result.stdout + "\n" + result.stderr).strip().splitlines()
-                    if line.strip()
-                )[-500:]
+
+            # #375 review: the verdict is read from the adapter's own
+            # classify/prove_selected dictionary — the same one `tdd._classify`
+            # uses for the red replay — never from a raw exit code. A code
+            # alone cannot separate a genuine failure from a broken instrument
+            # (`SELECTION_FAILED`/`COLLECTION_OR_COMPILE_ERROR`/`RUNNER_ERROR`
+            # all exit non-zero on pytest, and ExUnit's codes are inverted
+            # relative to pytest's entirely, #198) or a skipped/xfailed
+            # selector from an executed one (FR-08's third fact).
+            outcome = adapter.classify(result)
+            proof = adapter.prove_selected(parsed, result)
+            tail = _tail(f"{result.stdout}\n{result.stderr}")
+
+            if outcome is RunOutcome.TESTS_FAILED and proof is SelectionProof.PROVEN:
+                # A real, attributable test failure. Reported as an
+                # observation for the caller to record — never a refusal this
+                # module issues itself (FR-14: the branching this eventually
+                # drives is later work, and until it exists a genuine failure
+                # must not be read as an instrument that could not tell).
                 return VerifyRunResult(
                     sha,
                     True,
                     False,
-                    f"{raw_selector} did not pass (exit {result.returncode}): {tail}",
+                    f"{raw_selector} failed on replay (exit {result.returncode}): {tail}",
                 )
+
+            if (
+                outcome is RunOutcome.TESTS_PASSED
+                and proof is SelectionProof.PROVEN
+                and adapter.execution_proven(parsed, result)
+            ):
+                continue  # this selector is green; judge the next one
+
+            # Everything else is an instrument-error: the run could not
+            # establish a verdict about the requested selector, so it must
+            # not read as either a pass or a genuine failure (#367 FR-08/09).
+            if outcome is RunOutcome.SELECTION_FAILED:
+                reason = f"{raw_selector} selected nothing (exit {result.returncode})"
+            elif outcome is RunOutcome.COLLECTION_OR_COMPILE_ERROR:
+                reason = f"{raw_selector} could not be collected (exit {result.returncode})"
+            elif outcome is RunOutcome.RUNNER_ERROR:
+                reason = f"the runner itself failed on {raw_selector} (exit {result.returncode})"
+            elif proof is SelectionProof.REFUTED:
+                reason = f"{raw_selector}: a different test executed than the one requested"
+            elif proof is SelectionProof.UNKNOWN:
+                reason = f"{raw_selector}: the run did not prove which test executed"
+            elif outcome is RunOutcome.TESTS_PASSED and proof is SelectionProof.PROVEN:
+                # Reached only when `execution_proven` was False: the selector
+                # matched (e.g. a SKIPPED/XFAIL line still carries its node
+                # id) but was never actually executed — 0 proven executions
+                # is not green (FR-09).
+                reason = f"{raw_selector} was not executed (skipped, xfail, or deselected)"
+            else:
+                reason = (
+                    f"{raw_selector}: unrecognized run outcome "
+                    f"({outcome.value}, selection {proof.value})"
+                )
+            return VerifyRunResult(sha, False, False, f"{reason}: {tail}")
         return VerifyRunResult(sha, True, True, "declared group passed")
     except subprocess.TimeoutExpired as exc:
         return VerifyRunResult(sha, False, False, f"verify run timed out: {exc}")

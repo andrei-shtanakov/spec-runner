@@ -223,20 +223,33 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
 
     Deliberately does not go through `gates.py`: the green-only / TDD /
     instrument-error branching this outcome eventually drives is later work
-    (#367 FR-08+); today a failed or unrunnable live run simply refuses the
-    attempt rather than spending a paid call over it.
+    (#367 FR-08+/FR-14, TASK-006/008). Only an INSTRUMENT-classified run
+    refuses here — the run itself could not establish a verdict, which is the
+    one case this phase is entitled to stop over before that branching
+    exists. A genuine, attributable test failure (#375 review) is recorded as
+    an observation and the task proceeds exactly as it would under `standard`
+    today: FR-14 sends `test-failure` into the ordinary cycle rather than
+    treating a red group as a reason to refuse, and until the dedicated
+    branch exists, "proceed unchanged" is the only reading of FR-14 that does
+    not invert the mode's main path.
     """
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    # #375 review: every message names the judged commit, not just the
+    # returned object's `sha` field — an operator reading the refusal or the
+    # phase record could not otherwise tell which commit was on trial.
+    commit = result.sha[:12] if result.sha else "unknown"
+    detail = f"[{commit}] {result.detail}"
     if result.passed:
-        reporter.record(PhaseOutcome.PASS, result.detail)
+        reporter.record(PhaseOutcome.PASS, detail)
         return None
     if result.ran:
-        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, result.detail)
-        return Refusal(f"verify-first group did not pass: {result.detail}", RefusalKind.POLICY)
-    reporter.record(PhaseOutcome.ERROR, result.detail)
+        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, detail)
+        log_progress(f"\U0001f7e5 verify-first: {detail}", task.id)
+        return None
+    reporter.record(PhaseOutcome.ERROR, detail)
     return Refusal(
-        f"verify-first live run could not be confirmed: {result.detail}",
+        f"verify-first live run could not be confirmed at {commit}: {result.detail}",
         RefusalKind.INSTRUMENT,
     )
 
