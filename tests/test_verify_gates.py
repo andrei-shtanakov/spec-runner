@@ -122,6 +122,23 @@ class TestRegistrationCoversBothConfigurations:
         assert not is_registered("tdd.claims", "tests", registry)
         assert not has_gates(registry)
 
+    def test_reverting_the_project_default_to_standard_unregisters_the_gate(self, tmp_path):
+        """The registration side of the same coin: a project that turns
+        `verify_first` back off must lose the gate, or a stale registration
+        from an earlier call would keep judging tasks the config no longer
+        asks anything of."""
+        root = _repo(tmp_path)
+        registry = GateRegistry()
+        register_builtin_gates(_cfg(root, execution_mode="verify_first"), registry=registry)
+        assert is_registered("tdd.red", "tests", registry)
+        assert is_registered("tdd.claims", "tests", registry)
+
+        register_builtin_gates(_cfg(root, execution_mode="standard"), registry=registry)
+
+        assert not is_registered("tdd.red", "tests", registry)
+        assert not is_registered("tdd.claims", "tests", registry)
+        assert not has_gates(registry)
+
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")
     @patch(
@@ -289,6 +306,46 @@ class TestRedGateSeesVerifyFirstAsGated:
             "an unresolvable candidate SHA cannot be judged either way"
         )
 
+    def test_a_resolvable_unrelated_tree_is_not_accepted(self, tmp_path):
+        """Unlike the unresolvable-SHA case above, this candidate exists in
+        the repo — git can answer, and the answer is "no". A sibling of the
+        evidence commit must read as UNSATISFIED (a fact about the work), not
+        INSTRUMENT_ERROR (a fact about the tooling) — the same distinction
+        `_red_gate`'s own `test_an_unrelated_tree_is_not_accepted` pins for
+        `tdd`."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="verify_first")
+        task = _task()
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+        base = _head(root)
+
+        _git(root, "checkout", "-q", "--detach")
+        (root / "other.py").write_text("y = 2\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "unrelated")
+        evidence_result = run_live_verify(task, cfg)
+        assert evidence_result.passed, evidence_result.detail
+        with ExecutorState(cfg) as state:
+            state.record_verify_evidence(task=task, config=cfg, result=evidence_result)
+
+        # A sibling of the evidence commit — same parent, no ancestor
+        # relationship between the two.
+        _git(root, "checkout", "-q", base)
+        (root / "sibling.py").write_text("z = 3\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "sibling")
+        sibling = _head(root)
+
+        with ExecutorState(cfg) as state:
+            outcome = evaluate_gates(
+                "tests", _ctx(state, cfg, sibling, mode="verify_first"), registry=registry
+            )
+
+        assert outcome.status is GateStatus.UNSATISFIED
+        detail = "; ".join(r.detail or "" for r in outcome.results)
+        assert "different tree" in detail.lower()
+
 
 class TestClaimsGateSeesVerifyFirstToo:
     """kind: contract — BEH-24 Then: the pred-терминальный claims check
@@ -399,3 +456,41 @@ class TestStandardIsTheOnlyModeWithNoGuarantee:
         assert outcome.status is GateStatus.SATISFIED
         detail = "; ".join(r.detail or "" for r in outcome.results)
         assert "execution_mode is standard" in detail
+
+
+class TestInstrumentErrorWithNoStateToRead:
+    """kind: contract — every gate that needs `ctx.state` to answer must say
+    so as `INSTRUMENT_ERROR`, not crash or silently pass, when it is absent
+    — the same posture #245 established for a missing `execution_mode`."""
+
+    def test_the_tdd_red_gate_without_state_is_an_instrument_error(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="tdd")
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+
+        outcome = evaluate_gates(
+            "tests", _ctx(None, cfg, _head(root), mode="tdd"), registry=registry
+        )
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+
+    def test_the_verify_first_gate_without_state_is_an_instrument_error(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="verify_first")
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+
+        outcome = evaluate_gates(
+            "tests", _ctx(None, cfg, _head(root), mode="verify_first"), registry=registry
+        )
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+
+    def test_the_claims_gate_without_state_is_an_instrument_error(self, tmp_path):
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="verify_first")
+
+        result = evaluate_claims(_ctx(None, cfg, _head(root), mode="verify_first"))
+
+        assert result.status is GateStatus.INSTRUMENT_ERROR
