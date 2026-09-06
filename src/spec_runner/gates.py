@@ -565,11 +565,12 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
     keeps the third site from drifting from the two that decide.
 
     `verify_first` is asked too, not skipped (#367 BEH-24/FR-17) — the same
-    "gated, not exempt" rule `_red_gate` follows. It answers trivially today
-    (`check_claims` finds nothing, since freezing a verify-first group's files
-    is FR-19/TASK-010, not yet wired) rather than falsely, which is what a
-    mode-keyed skip here would have committed to as those claims start
-    existing.
+    "gated, not exempt" rule `_red_gate` follows. Since TASK-010 (#367
+    BEH-26/FR-19) `check_claims` has verify-first claims to judge too: a
+    green-on-entry task's declared group is frozen by
+    `record_verify_group_claims` before the paid implementation call, so this
+    is no longer a trivial answer over an always-empty set — a mode-keyed skip
+    here would still have been the wrong fix for the gap this closed.
     """
     from .claims import check_claims, describe_violations
     from .tdd import resolve_namespace

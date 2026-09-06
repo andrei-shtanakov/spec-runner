@@ -154,6 +154,31 @@ def abandon(
     return RemedyResult(RemedyOperation.ABANDON, checkpoint_id)
 
 
+def _claims_lack_confirmed_red(state: ExecutorState, namespace: str, task_id: str) -> bool:
+    """Whether every active claim ``task_id`` holds in ``namespace`` has no
+    confirmed red behind it (#383 review, finding 1).
+
+    A claim `_judge_red_commit` records always shares its `checkpoint_id`
+    with a row `record_red_checkpoint` writes in the same call, in that
+    order — "claims first, checkpoint second" only ever risks leaving a
+    confirmed red with *no* lock, never a lock with no confirmed red behind
+    it. The one deliberate exception is `record_verify_group_claims`
+    (BEH-26/FR-19): a green-on-entry `verify_first` task never authors a red
+    at all, so it synthesises a `checkpoint_id` for its claims' shape and
+    never writes the row. A claim whose `checkpoint_id` resolves to nothing
+    in `red_checkpoints` is exactly such a claim — nothing it could protect
+    ever existed, so reaching DONE is not the only fact that can retire it.
+
+    Vacuously false with no active claims at all: that case is not what this
+    check exists to widen, so it falls through to the ordinary DONE
+    requirement below, unchanged from before this existed.
+    """
+    claims = [c for c in state.active_claims(namespace) if c.task_id == task_id]
+    if not claims:
+        return False
+    return all(state.checkpoint_by_id(namespace, c.checkpoint_id) is None for c in claims)
+
+
 def release(
     config: ExecutorConfig,
     state: ExecutorState,
@@ -171,11 +196,16 @@ def release(
     — is a lie about a task that finished.
 
     Admissibility is **evidence, not a flag**: the lifecycle must have reached
-    DONE. Releasing a claim before that is precisely the laundering the lock
-    prevents — a confirmed red whose bytes may then change silently, with the
-    gate none the wiser. An operator who genuinely wants out mid-flight has
-    `abandon`, which retires the red *and* the lock together, keeping the two
-    in step.
+    DONE, *or* every active claim the task holds must already be one no
+    confirmed red depends on (`_claims_lack_confirmed_red` — #383 review,
+    finding 1: a green-on-entry `verify_first` freeze whose attempt never
+    reaches DONE has no other door at all, since `abandon`/`repair`/`resume`
+    all require a `red_checkpoints` row this kind of claim never gets).
+    Releasing a claim that *does* guard a confirmed red before DONE is
+    precisely the laundering the lock prevents — bytes that may then change
+    silently, with the gate none the wiser. An operator who genuinely wants
+    out mid-flight of a real red has `abandon`, which retires the red *and*
+    the lock together, keeping the two in step.
 
     No checkpoint id and so no compare-and-swap: a completed task's claims are
     released as a set, whatever lineage they came from, because the thing that
@@ -184,7 +214,9 @@ def release(
     from .lifecycle import TddPhase, has_reached
 
     namespace = _guard(config, reason)
-    if not has_reached(state, namespace, task_id, TddPhase.DONE):
+    if not has_reached(state, namespace, task_id, TddPhase.DONE) and not _claims_lack_confirmed_red(
+        state, namespace, task_id
+    ):
         raise RemedyError(
             f"{task_id} has not reached DONE in this workstream: its claims still protect a "
             "red that has not been through the terminal gate. Use `spec-runner tdd abandon` "
