@@ -254,7 +254,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-26 (—BEH-
 **Traces to:** [FR-19]
 
 ### TASK-011: Живой прогон — собственная стадия (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-30, BEH-31.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-30 (—BEH-31)
