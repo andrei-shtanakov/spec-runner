@@ -130,7 +130,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-02 (—BEH-
 **Traces to:** [FR-02], [FR-03]
 
 ### TASK-003: Неверное объявление отказывает до исполнения — в `validate` и на старте (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-04, BEH-05.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-04 (—BEH-05)
