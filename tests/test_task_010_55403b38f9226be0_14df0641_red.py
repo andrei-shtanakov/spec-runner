@@ -120,7 +120,8 @@ class TestBEH26DeclaredGroupIsFrozenForTheDurationOfTheTask:
             patch(
                 "spec_runner.execution._run_agent_process",
                 side_effect=_rewrite_the_group,
-            ),ExecutorState(config) as state
+            ),
+            ExecutorState(config) as state,
         ):
             result = execute_task(task, config, state)
 
