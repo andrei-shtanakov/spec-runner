@@ -15,6 +15,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task, run_with_retries
@@ -888,3 +890,297 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
         last = ts.attempts[-1]
         assert last.error_code is ErrorCode.INFRASTRUCTURE
         assert "could not be recorded" in (last.error or "")
+
+
+class TestPreTerminalEvaluationMatchesTdd:
+    """kind: integration — TASK-009, BEH-25 Given a verify-first task that
+    went green-only, in two variants: a deliberately violated claims
+    condition, and `review_policy: required` with a negative verdict. When
+    `evaluate_pre_terminal` runs at the same site as for `tdd`. Then each
+    variant on its own keeps the task from merging — over the same gate set,
+    including the claims gate and the review-policy gate: a green
+    verify-first run is not grounds to skip the pre-terminal evaluation."""
+
+    def test_a_violated_claim_blocks_a_green_only_task_at_merge(self, tmp_path, monkeypatch):
+        import spec_runner.gates as gates_mod
+        from spec_runner.claims import record_claims
+        from spec_runner.tdd import RedCheckpoint, RedOutcome, resolve_namespace
+
+        root = _repo(tmp_path)
+        (root / "other.py").write_text("x = 1\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "unrelated file")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_lint_on_done=False,
+            run_review=False,
+        )
+        task = _task()
+
+        fresh = GateRegistry()
+        monkeypatch.setattr(gates_mod, "REGISTRY", fresh)
+
+        head = _head(root)
+        checkpoint = RedCheckpoint(
+            task_id="TASK-OTHER",
+            namespace=resolve_namespace(cfg),
+            commit_sha=head,
+            baseline_sha=head,
+            selector="other.py::test_x",
+            environment_id="unpinned",
+            execution_mode="tdd",
+            config_hash="h",
+            outcome=RedOutcome.EXPECTED_FAIL,
+            timestamp="2026-08-11T00:00:00",
+        )
+        with ExecutorState(cfg) as state:
+            record_claims(cfg, state, checkpoint)
+
+        def fake_agent(config, invocation, **kwargs):
+            # The implementation pass edits a file an active claim protects —
+            # nothing to do with the declared group, which stays green
+            # throughout (#367 BEH-24's own scoping: the claims gate is asked
+            # about every active claim in the namespace, whoever holds it).
+            (root / "other.py").write_text("x = 2\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+            ts = state.get_task_state(task.id)
+
+        assert result is False, (
+            "a green verify-first run must not exempt the task from the claims gate at merge time"
+        )
+        last = ts.attempts[-1]
+        assert "claim violated" in (last.error or "").lower()
+
+    def test_required_review_with_a_negative_verdict_blocks_a_green_only_task(
+        self, tmp_path, monkeypatch
+    ):
+        import spec_runner.gates as gates_mod
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_lint_on_done=False,
+            run_review=True,
+            review_policy="required",
+        )
+        task = _task()
+
+        fresh = GateRegistry()
+        monkeypatch.setattr(gates_mod, "REGISTRY", fresh)
+        register_builtin_gates(cfg)
+        monkeypatch.setattr(
+            hooks,
+            "run_code_review",
+            lambda *a, **k: (ReviewVerdict.FAILED, "two findings", "output"),
+        )
+
+        def fake_agent(config, invocation, **kwargs):
+            (root / "README.md").write_text("notes\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+            ts = state.get_task_state(task.id)
+
+        assert result is False, (
+            "a green verify-first run must not exempt the task from "
+            "review_policy: required at merge time"
+        )
+        last = ts.attempts[-1]
+        assert "unsatisfied" in (last.error or "").lower()
+        assert last.review_status == ReviewVerdict.FAILED.value
+
+
+class TestWaiverStaysASeparateAuthorityTool:
+    """kind: contract — TASK-009, BEH-28 Given any verify-first execution
+    path — green-only, a red-on-entry group the fix makes green, an
+    instrument-error refusal. When the task runs the path to completion (or
+    to its terminal refusal). Then `record_waiver` is never called by the
+    harness and `phase_waivers` records nothing: verify-evidence is a
+    demonstrated fact from a real run, never a stand-in for an operator's
+    signed override, and the hand-rolled `spec/.tdd-evidence/waivers/`
+    convention is not a working path through this mode either — nothing here
+    reads it."""
+
+    def test_a_green_only_path_writes_no_waiver(self, tmp_path, monkeypatch):
+        from spec_runner.state import ExecutorState as StateClass
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(StateClass, "record_waiver", lambda self, *a, **k: calls.append((a, k)))
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="verify_first", auto_commit=True, run_lint_on_done=False)
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is True
+        assert calls == []
+        with ExecutorState(cfg) as state:
+            assert state.phase_waivers(task.id) == []
+
+    def test_a_red_on_entry_group_that_the_fix_makes_green_writes_no_waiver(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner.state import ExecutorState as StateClass
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(StateClass, "record_waiver", lambda self, *a, **k: calls.append((a, k)))
+
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented yet'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "red group")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_lint_on_done=False,
+        )
+        task = _task()
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
+
+        def fake_agent(config, invocation, **kwargs):
+            (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is True
+        assert calls == []
+        with ExecutorState(cfg) as state:
+            assert state.phase_waivers(task.id) == []
+
+    def test_an_instrument_error_refusal_writes_no_waiver(self, tmp_path, monkeypatch):
+        from spec_runner.state import ExecutorState as StateClass
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(StateClass, "record_waiver", lambda self, *a, **k: calls.append((a, k)))
+
+        root = _repo(tmp_path)  # the declared group starts green
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=False,  # structurally incompatible -> instrument error
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        with (
+            patch("spec_runner.execution._run_agent_process") as mock_agent,
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = run_with_retries(task, cfg, state)
+            ts = state.get_task_state(task.id)
+
+        assert result is False
+        mock_agent.assert_not_called()
+        last = ts.attempts[-1]
+        assert last.error_code is ErrorCode.INFRASTRUCTURE
+        assert calls == []
+        with ExecutorState(cfg) as state:
+            assert state.phase_waivers(task.id) == []
+
+
+class TestLifecycleTransitionsAreNotWeakened:
+    """kind: contract — TASK-009, BEH-29 Given a verify-first task that went
+    green-only, and a `tdd` task with no confirmed red. When each approaches
+    the transition into GREEN. Then the green-only task's `has_confirmed_red`
+    is false and its transition is legal on verify-evidence — a separate
+    ground, not a forged red. And the `tdd` task without a confirmed red is
+    still refused, and the set of `ILLEGAL` transitions for today's modes
+    does not change.
+
+    (The core scenario — a green-only task's own `advance()` call — is
+    pinned by the frozen
+    ``TestGreenOnlyReachesImplementingOnVerifyEvidence`` in
+    ``tests/test_task_009_55403b38f9226be0_14df0641_red.py``; this class
+    covers the rest of BEH-29's Given/Then.)"""
+
+    def test_a_tdd_task_without_a_confirmed_red_is_still_refused(self, tmp_path):
+        from spec_runner.lifecycle import IllegalTransition, TddPhase, advance
+        from spec_runner.tdd import resolve_namespace
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="tdd")
+        namespace = resolve_namespace(cfg)
+
+        with ExecutorState(cfg) as state, pytest.raises(IllegalTransition):
+            advance(state, namespace, "TASK-101", TddPhase.GREEN_IMPLEMENTING)
+
+    def test_the_illegal_set_for_todays_modes_is_unchanged(self):
+        from spec_runner.lifecycle import ILLEGAL, TddPhase
+
+        assert (
+            frozenset(
+                {
+                    (TddPhase.READY, TddPhase.GREEN_IMPLEMENTING),
+                    (TddPhase.READY, TddPhase.GREEN_VERIFYING),
+                    (TddPhase.RED_AUTHORING, TddPhase.GREEN_IMPLEMENTING),
+                    (TddPhase.RED_AUTHORING, TddPhase.GREEN_VERIFYING),
+                }
+            )
+            == ILLEGAL
+        )
