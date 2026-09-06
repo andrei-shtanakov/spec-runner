@@ -1079,6 +1079,42 @@ class ExecutorState:
             for r in rows
         ]
 
+    def latest_verify_evidence(self, task_id: str) -> "VerifyEvidenceT | None":
+        """The newest verify-evidence row for this task, any namespace (#367 BEH-32).
+
+        `verify_evidence`/`verify_evidence_for_namespace` both need a
+        `namespace`, which callers derive from `ExecutorConfig`
+        (`resolve_namespace`). `build_task_json_result` has no config in
+        hand — it is handed a bare `task_id` and the state — so this reads
+        across namespaces and takes the single newest row by insertion
+        order, the same "latest wins" rule the namespaced lookups use.
+        """
+        from .live_verify import VerifyEvidence
+
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT task_id, namespace, commit_sha, group_declared, group_executed, "
+            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor "
+            "FROM verify_evidence WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return VerifyEvidence(
+            task_id=row[0],
+            namespace=row[1],
+            commit_sha=row[2],
+            group_declared=tuple(json.loads(row[3])),
+            group_executed=tuple(json.loads(row[4])),
+            config_hash=row[5],
+            environment_id=row[6],
+            adapter=row[7],
+            outcome=row[8],
+            detail=row[9],
+            timestamp=row[10],
+            actor=row[11],
+        )
+
     def record_claim(self, claim: "ClaimT") -> None:
         """Persist one file claim (#141 slice 2). **Raises** on failure.
 

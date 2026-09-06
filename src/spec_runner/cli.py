@@ -109,6 +109,12 @@ def build_task_json_result(task_id: str, state: ExecutorState) -> dict:
         # and golden fixtures are unaffected.
         if last.no_op and ts.status == "success":
             entry["no_op"] = True
+    # BEH-32 (#367): additive only — absent whenever the task never recorded
+    # verify-first evidence, so every consumer/fixture that predates this
+    # field sees byte-identical output.
+    evidence = state.latest_verify_evidence(task_id)
+    if evidence is not None:
+        entry["verify_outcome"] = evidence.outcome
     entry["exit_code"] = 0 if ts.status == "success" else 1
     return entry
 
