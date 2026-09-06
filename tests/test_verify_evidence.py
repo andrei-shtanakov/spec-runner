@@ -391,3 +391,42 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
         )
         assert evidence.outcome == "instrument_error"
         state.close()
+
+
+class TestOnlyGreenEvidenceIsReusable:
+    """kind: contract — a recorded verify-evidence row only answers a later
+    task's question when its own outcome is green; a `test_failure` or
+    `instrument_error` row must never be handed back by
+    `reusable_verify_evidence` as "already answered, skip the live run"
+    (#375 review, finding 2) — mirroring `_reusable_checkpoint`'s
+    `RedOutcome.EXPECTED_FAIL`-only rule."""
+
+    def test_a_test_failure_record_is_not_reusable(self, tmp_path):
+        root = _repo(tmp_path)
+        task = _task()
+        config = _cfg(root)
+        sha = _head(root)
+
+        failed = VerifyRunResult(sha, True, False, "tests/test_group.py::test_it failed")
+        state = ExecutorState(config)
+        state.record_verify_evidence(task=task, config=config, result=failed)
+
+        assert reusable_verify_evidence(config, state, task) is None, (
+            "a test-failure evidence row was handed back as reusable"
+        )
+        state.close()
+
+    def test_an_instrument_error_record_is_not_reusable(self, tmp_path):
+        root = _repo(tmp_path)
+        task = _task()
+        config = _cfg(root)
+        sha = _head(root)
+
+        errored = VerifyRunResult(sha, False, False, "composite test_command")
+        state = ExecutorState(config)
+        state.record_verify_evidence(task=task, config=config, result=errored)
+
+        assert reusable_verify_evidence(config, state, task) is None, (
+            "an instrument-error evidence row was handed back as reusable"
+        )
+        state.close()

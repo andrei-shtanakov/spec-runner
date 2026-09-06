@@ -21,10 +21,13 @@ same primitives `tdd.py`'s red replay uses — rather than reading a raw exit
 code, because an exit code alone cannot tell a genuine failure from a broken
 instrument (#198's lesson) or a skipped/xfailed selector from an executed one
 (#367 FR-08). It still does not decide the green-only / TDD branching that a
-genuine pass or failure eventually drives (#367 FR-08+, later work), nor does
-it persist durable evidence (#367 FR-07/FR-10, later work) — both stay
-layered on top of this one; a real `TESTS_FAILED` verdict is only ever an
-*observation* this module reports, never a refusal it issues.
+genuine pass or failure eventually drives (#367 FR-08+, later work) — that
+stays layered on top of this one. It does, however, compose and judge the
+reusability of durable evidence (#367 FR-10/FR-11): `build_verify_evidence`
+and `reusable_verify_evidence` live here; only the actual write into `state`
+(`ExecutorState.record_verify_evidence`) stays outside this module. A real
+`TESTS_FAILED` verdict is only ever an *observation* this module reports,
+never a refusal it issues.
 
 `test_command` is not handed to `adapter.build_command` unmodified: that
 method only *appends* the selector (`tdd.py`'s red replay relies on exactly
@@ -551,10 +554,14 @@ def reusable_verify_evidence(
     """A prior verify-evidence row that still answers this task's question,
     or `None` if a fresh live run is required (#367 FR-11, Q-07(a)).
 
-    Four axes, all of which must hold — the same rule `_reusable_checkpoint`
+    Five axes, all of which must hold — the same rule `_reusable_checkpoint`
     already applies to a red, extended by the tree-hash axis a *pre-run*
     reuse decision needs and a pre-merge gate acceptance does not (Q-07):
 
+    - the recorded outcome is green (#375 review, finding 2): the same rule
+      `_reusable_checkpoint` applies via `RedOutcome.EXPECTED_FAIL` — a
+      `test_failure` or `instrument_error` row answered its question with
+      "no" or "could not tell", never "yes, skip the live run";
     - the policy config hash matches (BEH-17: a `POLICY_KEYS` value,
       including `execution_mode`/`tdd_runner`, changed the question);
     - the declared group matches **as a sequence** — reordering
@@ -575,6 +582,8 @@ def reusable_verify_evidence(
     if evidence is None:
         return None
 
+    if evidence.outcome != VerifyOutcome.GREEN.value:
+        return None
     if evidence.config_hash != _evidence_config_hash(config, task.id, evidence.commit_sha):
         return None
     if list(evidence.group_declared) != list(task.verifies or ()):
