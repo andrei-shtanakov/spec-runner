@@ -174,7 +174,12 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
             checkpoint_sha=head.stdout.strip() if head.returncode == 0 else "",
             config=config,
             state=state,
-            facts={"execution_mode": "tdd"},
+            # #367 BEH-24/FR-17 audit: the task's own resolved value, not a
+            # literal — this call site is reached only under `tdd` today, but
+            # the gate is entitled to see what actually ran, the same reason
+            # `_judge_red_commit` no longer writes a literal into the
+            # checkpoint it records (tdd.py, TASK-015).
+            facts={"execution_mode": config.resolve_execution_mode(task)},
         ),
     )
     if outcome.status is GateStatus.SATISFIED:
@@ -221,30 +226,83 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
     action of the task, before any paid call — including before `tdd`'s RED
     authoring pass, which is otherwise the earliest thing execution does.
 
-    Deliberately does not go through `gates.py`: the green-only / TDD /
-    instrument-error branching this outcome eventually drives is later work
-    (#367 FR-08+/FR-14, TASK-006/008). Only an INSTRUMENT-classified run
-    refuses here — the run itself could not establish a verdict, which is the
-    one case this phase is entitled to stop over before that branching
-    exists. A genuine, attributable test failure (#375 review) is recorded as
-    an observation and the task proceeds exactly as it would under `standard`
-    today: FR-14 sends `test-failure` into the ordinary cycle rather than
-    treating a red group as a reason to refuse, and until the dedicated
-    branch exists, "proceed unchanged" is the only reading of FR-14 that does
-    not invert the mode's main path.
+    `ensure_red_gate()` is called first (#367 BEH-24/FR-17): a task that
+    opted into `verify_first` on its own, in a project whose default is
+    `standard`, is otherwise the one configuration with no per-task
+    registration site at all — the RED phase's own `_run_red_phase_gate`
+    calls it too, but that path never runs for this mode, and
+    `register_builtin_gates` only attaches it for a *project-wide* `tdd`/
+    `verify_first` default. Without this call `has_gates()` stays false for
+    such a task and the pre-terminal block and pre-review claims check
+    (hooks.py) never run at all — fail-open, not merely lenient. Registering
+    here, before the run, does not itself decide anything: this phase still
+    does not call `evaluate_gates` — the green-only / TDD / instrument-error
+    branching the outcome eventually drives is later work (#367 FR-13-15,
+    TASK-008) — it only ensures the gate exists for whoever evaluates it
+    later (`_red_gate`'s `verify_first` branch, `gates.py`).
+
+    Only an INSTRUMENT-classified run refuses here — the run itself could not
+    establish a verdict, which is the one case this phase is entitled to stop
+    over before that branching exists. A genuine, attributable test failure
+    (#375 review) is recorded as an observation and the task proceeds exactly
+    as it would under `standard` today: FR-14 sends `test-failure` into the
+    ordinary cycle rather than treating a red group as a reason to refuse,
+    and until the dedicated branch exists, "proceed unchanged" is the only
+    reading of FR-14 that does not invert the mode's main path.
+
+    `auto_commit: false` (#380 review round 4) refuses before any of that,
+    including before this unpaid live run — a config incompatibility, not an
+    attempt outcome. Verify-first's own contract (FR-07/BEH-09) is a verdict
+    about a *named candidate commit*, never the working tree; `wants_candidate`
+    (hooks.py) requires `auto_commit`, so under this config no candidate ever
+    exists for any attempt to judge, no matter what the implementation pass
+    does. Round 3 already read this correctly for a red-on-entry group — a
+    terminal INSTRUMENT refusal, "this cannot become satisfiable on a retry"
+    — but placed it after the live run and the paid implementation call, and
+    left a green-on-entry group to merge on that same pre-implementation
+    snapshot with nothing re-checked (round 4's two findings, one asymmetry:
+    fail-open on green, a burned paid attempt every run on red). Both
+    disappear by asking the one question that actually decides them — can
+    this config ever produce a candidate — before spending anything on an
+    answer no candidate will exist to receive.
     """
+    from .gates import ensure_red_gate
+
+    ensure_red_gate()
+    if not config.auto_commit:
+        reporter.enter("tests")
+        detail = (
+            "verify-first requires a candidate commit to judge (FR-07); "
+            "auto_commit: false (including the subdir-repo auto-detect) is "
+            "incompatible with it — enable auto_commit, or use mode: tdd"
+        )
+        reporter.record(PhaseOutcome.ERROR, detail)
+        return Refusal(detail, RefusalKind.INSTRUMENT, terminal=True)
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
     # consequence of the run itself, on all three outcomes — not something
     # only a test can produce by calling this directly. Recorded before the
     # branches below so an instrument-error refusal still leaves a row.
-    state.record_verify_evidence(task=task, config=config, result=result)
+    recorded = state.record_verify_evidence(task=task, config=config, result=result)
     # #375 review: every message names the judged commit, not just the
     # returned object's `sha` field — an operator reading the refusal or the
     # phase record could not otherwise tell which commit was on trial.
     commit = result.sha[:12] if result.sha else "unknown"
     detail = f"[{commit}] {result.detail}"
+    if not recorded:
+        # #380 review round 4 (side finding): a swallowed write here is the
+        # same class round 3 finding 3 closed at the two re-verify sites — a
+        # future reader of "no evidence yet" for this task cannot tell that
+        # apart from "we never even asked", so this run's own verdict (green
+        # or red) must not stand in for one that was never durably recorded.
+        # Not `terminal`: unlike the config-level incompatibility above, a
+        # storage hiccup is plausibly transient and may not recur on retry.
+        reporter.record(PhaseOutcome.ERROR, detail)
+        return Refusal(
+            f"verify-first entry evidence could not be recorded at {commit}: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
     if result.passed:
         reporter.record(PhaseOutcome.PASS, detail)
         return None
@@ -306,7 +364,11 @@ def execute_task(
 
     Returns:
         True if successful, False if failed (including rate limits),
-        or "HOOK_ERROR" if pre-start hook failed (fail fast, no retries).
+        "HOOK_ERROR" if pre-start hook failed (fail fast, no retries), or
+        "TERMINAL_REFUSAL" if post_done_hook's refusal is `Refusal.terminal`
+        (#380 review round 3 finding 1) — also fail fast, no retries, but
+        (unlike "HOOK_ERROR") the attempt IS recorded, with its ordinary
+        error_code/error_kind.
     """
 
     task_id = task.id
@@ -356,6 +418,14 @@ def execute_task(
                 error_kind=_refusal_error_kind(refusal),
                 error_stage=reporter.current,
             )
+            # #380 review round 4: the `auto_commit: false` refusal above is
+            # `Refusal.terminal` — the same sentinel the post-done hook
+            # failure branch already returns for a terminal refusal there
+            # (see below), read here too so `run_with_retries` stops after
+            # this one attempt instead of retrying a config incompatibility
+            # `max_retries` times.
+            if isinstance(refusal, Refusal) and refusal.terminal:
+                return "TERMINAL_REFUSAL"
             return False
 
     # RED phase (#141). Under `tdd` the implementation pass does not run until
@@ -418,6 +488,12 @@ def execute_task(
         _fail_for_budget(task, config, state, green_refusal.reason, reporter.current)
         return False
 
+    # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. This is the
+    # `tdd`-lifecycle machine (READY/RED_AUTHORING/GREEN_IMPLEMENTING/...);
+    # giving `verify_first` its own lifecycle transitions ("lifecycle
+    # transitions are not weakened", BEH-29) is FR-21/TASK-009's scope, not
+    # this one's — recording a phase this machine was never designed to carry
+    # would be inventing that behaviour ahead of its own task.
     if config.resolve_execution_mode(task) == "tdd":
         _record_phase(state, config, task, TddPhase.GREEN_IMPLEMENTING)
 
@@ -642,6 +718,14 @@ def execute_task(
                 # has several successful exits (merged, already on main, merge
                 # skipped) and the lifecycle should not have to know which one
                 # happened — only that the task finished.
+                #
+                # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. A
+                # `verify_first` task never has claims to release here — its
+                # declared group is not frozen yet; freezing it, and
+                # extending this exact site to release that freeze on DONE,
+                # is FR-19/TASK-010's job. Recording a DONE lifecycle phase
+                # here has the same `tdd`-only reason as the
+                # GREEN_IMPLEMENTING site above (FR-21/TASK-009).
                 if config.resolve_execution_mode(task) == "tdd":
                     _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)
@@ -725,6 +809,25 @@ def execute_task(
                     output_tokens=output_tokens,
                     cost_usd=cost_usd,
                 )
+                # #380 review round 3 finding 1: the attempt is recorded
+                # exactly as any other hook failure above \u2014 same error_code
+                # (INFRASTRUCTURE), same error_kind ("instrument"), same exit
+                # 2 \u2014 `terminal` changes nothing about what this attempt was.
+                # It changes whether `run_with_retries` tries again: a
+                # refusal that documents itself as structurally unsatisfiable
+                # (e.g. `_reverify_before_review`'s `auto_commit: false`
+                # case) must not be retried `max_retries` times for a verdict
+                # that provably cannot change \u2014 that is strictly worse than
+                # stopping after one. `"TERMINAL_REFUSAL"` is read the same
+                # way `"HOOK_ERROR"` already is: an unconditional stop
+                # `run_with_retries` checks before any error-code-based
+                # classification, not a new `ErrorCode`/`_FATAL_ERRORS`
+                # entry \u2014 those are keyed by kind (INSTRUMENT/INFRASTRUCTURE
+                # is deliberately retryable in general: a flaky worktree, a
+                # transient git read), and widening that would un-retry every
+                # instrument error, not just this one.
+                if isinstance(hook_error, Refusal) and hook_error.terminal:
+                    return "TERMINAL_REFUSAL"
                 return False
         else:
             # Claude reported failure
@@ -1050,6 +1153,14 @@ def run_with_retries(
 
         # Hook error -- always fatal, stop immediately (no error_code recorded)
         if result == "HOOK_ERROR":
+            return False
+
+        # #380 review round 3 finding 1: also always fatal, stop immediately
+        # -- unlike "HOOK_ERROR" the attempt WAS recorded (error_code stays
+        # INFRASTRUCTURE, exit 2), but retrying would only repeat the exact
+        # same paid attempt against a verdict `execute_task` already
+        # determined cannot change on any retry.
+        if result == "TERMINAL_REFUSAL":
             return False
 
         # #219: a successful attempt stays successful. This check used to run

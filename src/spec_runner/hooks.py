@@ -382,6 +382,10 @@ def _record_tdd_phase(config: ExecutorConfig, task: Task, phase, detail=None) ->
     Opens its own short-lived state handle: `post_done_hook` does not hold one,
     and a phase record must not become a reason to restructure the hook.
     Bookkeeping only — the gates decide, this remembers.
+
+    #367 BEH-24/FR-17 audit: stays `tdd`-only. Giving `verify_first` its own
+    place in this lifecycle machine (BEH-29 "lifecycle transitions are not
+    weakened") is FR-21/TASK-009's job, not this one's.
     """
     if config.resolve_execution_mode(task) != "tdd":
         return
@@ -635,6 +639,189 @@ def _commit_blocked_status(
     return _with_note(blocked, problem)
 
 
+def _reverify_before_review(
+    task: Task, config: ExecutorConfig, reporter: StageReporter | None
+) -> Refusal | None:
+    """Ask the verify-first re-check before paying for review (#380 review
+    round 2, findings 1 and 3). Returns a refusal, or None to proceed.
+
+    Symmetric to `_claims_intact_before_review` (#214) — a reviewer's verdict
+    on a candidate the pre-terminal gate is already certain to refuse buys
+    nothing actionable, so whatever can predict that refusal cheaply runs
+    before the paid call, not after it.
+
+    One thing settles here now: **`auto_commit: true`, `run_review: true`**
+    — the candidate is already committed (`wants_candidate`, above this
+    call), so a real re-verify against it is possible and far cheaper than a
+    review call. A result that is not green here dooms the merge exactly as
+    a broken claim does, so review is skipped for the same reason #214 skips
+    it for claims — an `instrument_error` result skips it as INSTRUMENT, a
+    genuine `test_failure` as POLICY, mirroring `_verify_first_gate`'s own
+    split (#380 review round 2 finding 2).
+
+    `auto_commit: false` used to be settled here too — round 2's finding 1
+    read it correctly for a not-green group (`terminal=True`, "this cannot
+    become satisfiable on a retry") but left a green-on-entry group merging
+    on a pre-implementation snapshot nothing re-checked, and burned a full
+    paid attempt on the not-green half before refusing (round 4's two
+    findings). #380 review round 4 moved the whole config-incompatibility
+    question to `_run_verify_first_phase` (execution.py), before the live
+    entry run and before any paid call — so a verify_first task cannot
+    reach `post_done_hook`, and therefore this function, with `auto_commit`
+    still False; see the assertion below.
+
+    Returns None otherwise — including `auto_commit: true`, `run_review:
+    false`, where there is no review spend to protect and this candidate's
+    evidence is left to the later, authoritative re-verify right before the
+    pre-terminal gate (`_reverify_live_evidence_for_candidate`), which also
+    catches anything a review *fix* changes after this check runs.
+    """
+    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
+        return None
+
+    # #380 review round 4: `_run_verify_first_phase` refuses a verify_first
+    # task with `auto_commit: false` before its paid call ever runs, so
+    # nothing reaches here (post_done_hook only runs after a successful
+    # implementation call) with it still False. Loud, not a silent `if`, so
+    # a future change that reintroduces a path around that phase-level
+    # check is caught here rather than silently reviving round 4's
+    # fail-open/burned-attempt asymmetry.
+    assert config.auto_commit, (
+        "unreachable: a verify_first task with auto_commit: false is refused "
+        "by _run_verify_first_phase before post_done_hook is ever reached"
+    )
+
+    if not config.run_review:
+        return None
+
+    from .live_verify import VerifyOutcome, run_live_verify
+    from .runner import log_progress
+    from .state import ExecutorState
+
+    if reporter:
+        reporter.enter("tests")
+    result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    with ExecutorState(config) as state:
+        recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    if not recorded:
+        # #380 review round 3 finding 3: a swallowed write must not read as
+        # "nothing to report" — the pre-terminal gate's next read would find
+        # whatever evidence predates this run (possibly a stale GREEN row
+        # for an ancestor commit) and merge a candidate this very replay
+        # never confirmed. Fail loud instead of trusting bookkeeping to
+        # carry a verdict.
+        return Refusal(
+            f"verify-first re-check before review could not be recorded: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
+    if result.outcome is VerifyOutcome.GREEN:
+        return None
+    kind = (
+        RefusalKind.INSTRUMENT
+        if result.outcome is VerifyOutcome.INSTRUMENT_ERROR
+        else RefusalKind.POLICY
+    )
+    return Refusal(f"verify-first re-check before review: {result.detail}", kind)
+
+
+def _reverify_live_evidence_for_candidate(
+    task: Task,
+    config: ExecutorConfig,
+    reporter: StageReporter | None,
+    review_checkpoint_sha: str,
+) -> Refusal | None:
+    """Re-run the declared verify group against the merge candidate (#380
+    review). Returns a refusal, or None to proceed.
+
+    `_run_verify_first_phase` (execution.py) records the only evidence a
+    `verify_first` task has *before* the implementation call — the sole
+    guarantee available at that point in the attempt. `_verify_first_gate`
+    (gates.py) reads the *latest* evidence row for the task, so a group that
+    was red on entry (FR-14's "ordinary cycle", left unbranched until #367
+    TASK-008) had no way to ever produce a green row inside the same attempt:
+    the implementation pass could fix the group entirely and the gate would
+    still be judging the pre-implementation failure, refusing a candidate
+    whose declared tests now pass.
+
+    Re-running here, against the already-committed candidate, gives the gate
+    evidence about what it is actually being asked to merge. That is the
+    reading BEH-19/BEH-20 already commit to — "the red-gate is satisfied by a
+    reference to evidence about this tree", not to a specific run number.
+    Nothing about FR-13/FR-14's own branching (still TASK-008's scope)
+    changes: a group still red after the fix is recorded as red again, and
+    the gate stays exactly as unsatisfied as it does today.
+
+    This is the *authoritative* re-verify — it runs last, right before the
+    pre-terminal gate, so it also catches anything a review fix
+    (`ReviewVerdict.FIXED`) changed after `_reverify_before_review` ran. As of
+    #380 review round 3 finding 3, it also *decides*, the same way
+    `_reverify_before_review` does, rather than only writing evidence for
+    `_verify_first_gate`'s next read to interpret: `record_verify_evidence`
+    is deliberately best-effort (bookkeeping must not fail the run that
+    produced it), so a swallowed write used to leave the gate reading
+    whatever evidence predated this run — possibly a stale GREEN row for an
+    ancestor commit — and merge a candidate this very replay found red.
+    `result` (and whether the write actually landed) decides here, directly.
+
+    `auto_commit: false` is not handled here any more (#380 review round 4):
+    `_run_verify_first_phase` (execution.py) now refuses that configuration
+    for a verify_first task before its paid call ever runs, so nothing
+    reaches `post_done_hook` — and therefore this function — with it still
+    False. See the assertion below.
+
+    `config.run_review` with HEAD unchanged since `_reverify_before_review`
+    ran (#380 review round 3 finding 2) skips for the same reason: that
+    check already replayed this exact commit and, because it returned None,
+    already durably recorded GREEN for it (a failed write there returns a
+    refusal instead of None — see above — so reaching this branch is proof
+    the earlier row exists). A review verdict that commits nothing (PASSED,
+    FAILED, NOT_RUN) leaves HEAD exactly where that check found it; only
+    `ReviewVerdict.FIXED` moves it, which is what this function still exists
+    to catch.
+
+    A no-op for every other mode, and for a `verify_first` task whose gate is
+    not even registered: `run_live_verify` replays the declared group in its
+    own worktree, and nothing should pay for a run whose answer nothing will
+    read (#164 criterion 8 — dormant unless a consumer registers).
+    """
+    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
+        return None
+
+    # #380 review round 4: same unreachability as `_reverify_before_review`
+    # — `_run_verify_first_phase` refuses a verify_first task with
+    # `auto_commit: false` before its paid call ever runs.
+    assert config.auto_commit, (
+        "unreachable: a verify_first task with auto_commit: false is refused "
+        "by _run_verify_first_phase before post_done_hook is ever reached"
+    )
+
+    from .live_verify import VerifyOutcome, run_live_verify
+    from .runner import log_progress
+    from .state import ExecutorState
+
+    if config.run_review and review_checkpoint_sha and _head_sha(config) == review_checkpoint_sha:
+        return None
+
+    if reporter:
+        reporter.enter("tests")
+    result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    with ExecutorState(config) as state:
+        recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    if not recorded:
+        return Refusal(
+            f"verify-first re-check could not be recorded: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
+    if result.outcome is VerifyOutcome.GREEN:
+        return None
+    kind = (
+        RefusalKind.INSTRUMENT
+        if result.outcome is VerifyOutcome.INSTRUMENT_ERROR
+        else RefusalKind.POLICY
+    )
+    return Refusal(f"verify-first re-check: {result.detail}", kind)
+
+
 def post_done_hook(
     task: Task,
     config: ExecutorConfig,
@@ -831,6 +1018,19 @@ def post_done_hook(
         if has_gates() and config.run_review:
             review_checkpoint_sha = _head_sha(config)
 
+    # #380 review round 2 findings 1 & 3: settle what a verify-first
+    # re-check can predict before the paid review call — mirrors the claims
+    # check immediately below, and is the only place `auto_commit: false`'s
+    # structural "nothing to judge" case is caught before it burns a retry
+    # (unconditional on `run_review`, unlike claims: that failure mode costs
+    # a full paid attempt every retry, not merely a review call).
+    reverify_blocked = _reverify_before_review(task, config, reporter)
+    if reverify_blocked is not None:
+        reverify_blocked = _commit_blocked_status(
+            task, config, reverify_blocked, review_checkpoint_sha
+        )
+        return (False, reverify_blocked, ReviewVerdict.SKIPPED.value, "", False)
+
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
 
@@ -862,12 +1062,21 @@ def post_done_hook(
     #
     # HEAD is resolved only when a claim could exist to check — an ordinary run
     # must not gain a git call per task from a feature it did not enable.
+    #
+    # `verify_first` asks too (#367 BEH-24/FR-17): the claims gate is now
+    # registered for it just as it is for `tdd` (`register_builtin_gates`,
+    # `ensure_red_gate`), so `is_registered` alone would already let a
+    # verify-first run reach this check. `evaluate_claims` answers trivially
+    # until FR-19/TASK-010 gives verify-first tasks claims to break, but a
+    # mode-keyed skip here — instead of letting the (correct) trivial answer
+    # through — is exactly the "third mode reads as no guarantees" bug BEH-24
+    # exists to close.
     candidate_before_review = ""
     claims_blocked: str | None = None
     if (
         config.run_review
         and is_registered("tdd.claims", "tests")
-        and config.resolve_execution_mode(task) == "tdd"
+        and config.resolve_execution_mode(task) in ("tdd", "verify_first")
     ):
         candidate_before_review = _head_sha(config)
         claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
@@ -1041,6 +1250,20 @@ def post_done_hook(
     _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
 
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
+
+    # #380 review finding 1 (round 1) / round 3 finding 3: the candidate the
+    # gate below is about to judge gets fresh evidence, not the
+    # pre-implementation snapshot `_run_verify_first_phase` recorded before
+    # the paid call — and this function's own verdict decides when the
+    # candidate is not green, rather than a best-effort write the gate might
+    # never see.
+    reverify_blocked = _reverify_live_evidence_for_candidate(
+        task, config, reporter, review_checkpoint_sha
+    )
+    if reverify_blocked is not None:
+        reverify_blocked = _commit_blocked_status(task, config, reverify_blocked, gated_sha)
+        return (False, reverify_blocked, review_verdict.value, (review_output or "")[:2048], False)
+
     if has_gates():
         blocked = _run_pre_terminal_gates(
             task,

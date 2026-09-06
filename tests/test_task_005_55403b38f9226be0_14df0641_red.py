@@ -132,7 +132,7 @@ class TestLiveVerifyRunIsTheFirstAction:
             execution_mode="verify_first",
             verifies=["tests/test_group.py::test_marks_that_it_ran"],
         )
-        config = _cfg(root)
+        config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
 
         execute_task(task, config, state)

@@ -336,6 +336,13 @@ def _red_gate(ctx: GateContext) -> GateResult:
     Evaluated at two moments and answering the same question at both: before
     implementing (do not write code without a demonstrated red) and before
     merging (do not merge a task that never had one).
+
+    `verify_first` is gated too (#367 BEH-24/FR-17) — it just proves its
+    guarantee a different way (`_verify_first_gate`, from durable verify
+    evidence rather than a `RedCheckpoint`). Only `standard` — a mode that
+    made no promise to keep — reads as "no guarantee, nothing to check";
+    a third mode is not that, and treating it as one would let it merge with
+    neither a confirmed red nor a confirmed green behind it.
     """
     from .tdd import RedOutcome, resolve_namespace
 
@@ -348,6 +355,8 @@ def _red_gate(ctx: GateContext) -> GateResult:
             PhaseOutcome.ERROR,
             "the run reported no execution_mode to the gate",
         )
+    if mode == "verify_first":
+        return _verify_first_gate(ctx)
     if mode != "tdd":
         # The per-task opt-out has to reach here, or it is not an opt-out.
         return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
@@ -400,6 +409,70 @@ def _red_gate(ctx: GateContext) -> GateResult:
     )
 
 
+def _verify_first_gate(ctx: GateContext) -> GateResult:
+    """`_red_gate`'s question, asked of a `verify_first` task (#367 BEH-24).
+
+    A `verify_first` task never authors a `RedCheckpoint` for its declared
+    group — `run_live_verify` writes durable `VerifyEvidence` instead (#367
+    BEH-15/FR-10). Missing or unsatisfied evidence does not pass: a task with
+    no recorded run, a run that was not green, or a green run for a tree this
+    candidate does not descend from all read as "no guarantee behind this
+    commit yet", the same verdict a `tdd` task gets for no confirmed red.
+    Reaching test-failure/instrument-error branching (#367 FR-13-15) is later
+    work; today that leaves this gate correctly unsatisfied until the task's
+    ordinary implementation pass makes it green, exactly as ended without one.
+    """
+    from .live_verify import VerifyOutcome
+    from .tdd import resolve_namespace
+
+    if ctx.state is None:
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, "no state to read verify evidence from"
+        )
+    evidence = ctx.state.verify_evidence(resolve_namespace(ctx.config), ctx.task_id)
+    if evidence is None:
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.NOT_RUN,
+            "no verify evidence for this task in this workstream",
+        )
+    if evidence.outcome == VerifyOutcome.INSTRUMENT_ERROR.value:
+        # #380 review round 2 finding 2: an instrument error is "the run
+        # could not tell", not "the run looked and disliked it" — the same
+        # distinction `_red_gate` draws for `RedOutcome.UNVERIFIABLE` above.
+        # Reading it as UNSATISFIED would classify a broken instrument as a
+        # bad-work refusal (POLICY, exit 1) instead of an infrastructure one
+        # (INSTRUMENT, exit 2), and skip the bounded gate-recovery retry that
+        # only INSTRUMENT_ERROR gets.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            f"the verify run could not be confirmed: {evidence.detail}",
+        )
+    if evidence.outcome != VerifyOutcome.GREEN.value:
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.NOT_RUN,
+            f"the recorded verify run was not green: {evidence.outcome}",
+        )
+    try:
+        descends = _descends_from(ctx.config, evidence.commit_sha, ctx.checkpoint_sha)
+    except AncestryUnknown as exc:
+        return GateResult(GateStatus.INSTRUMENT_ERROR, PhaseOutcome.ERROR, str(exc))
+    if not descends:
+        return GateResult(
+            GateStatus.UNSATISFIED,
+            PhaseOutcome.NOT_RUN,
+            f"the verify evidence is on a different tree ({evidence.commit_sha[:12]})",
+        )
+    return GateResult(
+        GateStatus.SATISFIED,
+        PhaseOutcome.PASS,
+        f"verify-first confirmed green: {', '.join(evidence.group_declared)} "
+        f"at {evidence.commit_sha[:12]} in {evidence.environment_id}",
+    )
+
+
 class AncestryUnknown(RuntimeError):
     """git could not answer whether one commit descends from another (#245).
 
@@ -448,6 +521,13 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
     candidate that already violates the lock cannot be merged whatever a
     reviewer says. Calling this function rather than re-deriving the check
     keeps the third site from drifting from the two that decide.
+
+    `verify_first` is asked too, not skipped (#367 BEH-24/FR-17) — the same
+    "gated, not exempt" rule `_red_gate` follows. It answers trivially today
+    (`check_claims` finds nothing, since freezing a verify-first group's files
+    is FR-19/TASK-010, not yet wired) rather than falsely, which is what a
+    mode-keyed skip here would have committed to as those claims start
+    existing.
     """
     from .claims import check_claims, describe_violations
     from .tdd import resolve_namespace
@@ -459,7 +539,7 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
             PhaseOutcome.ERROR,
             "the run reported no execution_mode to the claims gate",
         )
-    if mode != "tdd":
+    if mode not in ("tdd", "verify_first"):
         return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
     if ctx.state is None:
         return GateResult(
@@ -500,11 +580,15 @@ def register_builtin_gates(
         reg.register("review", "review", _review_gate)
     else:
         reg.unregister("review", "review")
-    # #141: registered when the *project* runs under tdd. A task can also opt
-    # in on its own, which registration cannot know at startup — `execute_task`
-    # calls `ensure_red_gate` when it resolves such a task. Either way the gate
-    # re-checks the effective mode from `facts`, since it is per task.
-    if getattr(config, "execution_mode", "standard") == "tdd":
+    # #141: registered when the *project* runs under tdd — and, since #367
+    # BEH-24, under verify_first too: both promise a guarantee `_red_gate`/
+    # `evaluate_claims` must actually check, not skip as a third unrecognised
+    # mode. A task can also opt into either on its own, which registration
+    # cannot know at startup — `execute_task` calls `ensure_red_gate` when it
+    # resolves such a task (the tdd RED phase and `_run_verify_first_phase`
+    # each call it on their own path). Either way the gate re-checks the
+    # effective mode from `facts`, since it is per task.
+    if getattr(config, "execution_mode", "standard") in ("tdd", "verify_first"):
         ensure_red_gate(reg)
     else:
         reg.unregister("tdd.red", "tests")

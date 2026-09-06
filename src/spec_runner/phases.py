@@ -143,13 +143,28 @@ class Refusal(str):
     exit code by phrasing its sentence differently (#230).
     """
 
-    __slots__ = ("kind",)
+    __slots__ = ("kind", "terminal")
 
     kind: RefusalKind
+    #: True when no retry of this task could ever change this verdict — a
+    #: fact about the *configuration*, not about this one attempt (#380
+    #: review round 3 finding 1). Deliberately not folded into `kind`/
+    #: `error_code`: `INSTRUMENT`/`INFRASTRUCTURE` (exit 2) stays the right
+    #: classification for what happened — an instrument that could not
+    #: answer, not a verdict on the work — and most instrument failures
+    #: (a flaky worktree, a transient git read) *are* worth retrying, so
+    #: reclassifying the whole kind as fatal would be a wide, wrong-radius
+    #: fix for a narrow problem. This flag exists precisely to let one call
+    #: site say "and also, do not retry" without changing what kind of
+    #: refusal this is. Read directly off the in-memory object by
+    #: `execute_task`, not persisted — the attempt's own `error_code`/
+    #: `error_kind` are unaffected by it.
+    terminal: bool
 
-    def __new__(cls, message: str, kind: RefusalKind) -> "Refusal":
+    def __new__(cls, message: str, kind: RefusalKind, *, terminal: bool = False) -> "Refusal":
         obj = super().__new__(cls, message)
         obj.kind = kind
+        obj.terminal = terminal
         return obj
 
     @property
@@ -158,14 +173,15 @@ class Refusal(str):
         return _REFUSAL_CODES[self.kind]
 
     def with_note(self, note: str) -> "Refusal":
-        """Append context and keep the kind.
+        """Append context and keep the kind (and `terminal`).
 
         Refusals collect notes on the way out — the bookkeeping commit that
         failed, the work an agent stranded in the tree. Plain concatenation
         would return an ordinary `str` and the classification would silently
-        fall back to reading words again.
+        fall back to reading words again — the same loss `terminal` would
+        suffer if this dropped it, exactly the #230 class of bug.
         """
-        return Refusal(f"{self} — {note}", self.kind)
+        return Refusal(f"{self} — {note}", self.kind, terminal=self.terminal)
 
 
 __all__ = [

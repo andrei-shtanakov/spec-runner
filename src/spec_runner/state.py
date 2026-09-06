@@ -946,7 +946,7 @@ class ExecutorState:
 
     def record_verify_evidence(
         self, *, task: "Task", config: "ExecutorConfig", result: "VerifyRunResultT"
-    ) -> None:
+    ) -> bool:
         """Persist one live verify-first run's evidence (#367 FR-10/BEH-15).
 
         Takes the run's own inputs/outputs, not a pre-built record: the
@@ -956,6 +956,16 @@ class ExecutorState:
         Append-only, same posture as `record_red_checkpoint`: bookkeeping
         must not be able to fail the run that produced it, so a storage
         failure is logged and swallowed, never raised.
+
+        Returns whether the row was actually written. Still never raises —
+        this is not a change to the "bookkeeping cannot fail a run" posture
+        — but a caller whose *decision* depends on this exact row being the
+        one the gate reads next (#380 review round 3 finding 3:
+        `_reverify_before_review`/`_reverify_live_evidence_for_candidate`
+        judge a re-verified candidate, and a swallowed write here would
+        otherwise leave the gate reading a stale, possibly green, ancestor
+        row) needs to know a "true" from a merely-attempted write, or it is
+        trusting bookkeeping to carry a verdict it was never meant to carry.
         """
         from .live_verify import build_verify_evidence
 
@@ -987,6 +997,8 @@ class ExecutorState:
             get_logger("state").warning(
                 "Could not record verify evidence", task_id=evidence.task_id, error=str(exc)
             )
+            return False
+        return True
 
     def verify_evidence(self, namespace: str, task_id: str) -> "VerifyEvidenceT | None":
         """The latest verify-evidence row for this task in this workstream.

@@ -201,12 +201,22 @@ def append_frozen_files(
     from the prompt while the gate went on enforcing it. A template variable
     may exist for placement; this append is what makes it arrive.
 
-    Dormant outside TDD, and dormant before reading anything: the claims gate
-    is evaluated per task and skips a task whose mode is not `tdd`, so telling
-    such a task about a lock nothing will check would be noise bought with a
-    state-DB open on every prompt of every ordinary run.
+    Dormant outside `tdd`/`verify_first`, but not because `active_claim_paths`
+    is scoped to either: it "has rows for a task whose red was authored and
+    frozen through `tdd._judge_red_commit`" is the wrong premise to reason
+    from — `active_claim_paths` (and the `check_claims` the gate calls) reads
+    every active claim in the *namespace*, whoever froze it, not the current
+    task's own. A `verify_first` task can sit in a namespace another
+    workstream's `tdd` task already froze a file in, and #380 review
+    confirmed `evaluate_claims`/the pre-review claims check now judge that
+    task too (BEH-24/FR-17, `gates.py`/`hooks.py`) — so this site staying
+    `tdd`-only was #214 itself reopened: enforcement covered `verify_first`
+    while the prompt telling the agent what is frozen did not, and the money
+    burned proving that is exactly what #214 was written to stop. `standard`
+    is the one mode still excluded on purpose — its claims gate is never
+    registered, so there is truthfully nothing this site could tell it about.
     """
-    if config.resolve_execution_mode(task) != "tdd":
+    if config.resolve_execution_mode(task) not in ("tdd", "verify_first"):
         return prompt
     block = frozen_files_block(active_claim_paths(config, state), escape)
     if not block:
