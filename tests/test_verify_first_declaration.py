@@ -86,11 +86,12 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
 
     def test_blank_line_then_prose_bullet_closes_the_block_instead_of_swallowing_it(self, tmp_path):
         """A blank line surviving inside the block (above) must not also let
-        a following prose bullet — one with spaces, like this repo's own
-        `- **Q-04 — ...**` body style — be mistaken for a selector. Only a
-        real selector (no whitespace) continues the block; anything else
-        closes it and falls through to description, same as before the
-        blank-line fix (#372 round 2 minor #2)."""
+        a following prose bullet be mistaken for a selector. A block item is
+        recognized by looking like a pytest target (contains `::`, #372
+        round 3) — not by absence of whitespace (round 2's `\\S+`, which
+        round 3 found rejected legal node ids with a space in their
+        parametrize suffix); a bullet with no `::` closes the block and
+        falls through to description, same as before."""
         path = tmp_path / "tasks.md"
         path.write_text(
             "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
@@ -107,6 +108,62 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
 
         assert task.verifies == ["tests/test_a.py::test_x"]
         assert "перепроверить после мержа WS-341" in task.description
+
+    def test_legal_node_id_with_comma_and_space_in_parametrize_suffix_is_kept(self, tmp_path):
+        """FR-02's escape hatch for a node id with a comma (`test_y[a,b]`) is
+        the block form (the comma-form refuses it, see
+        TestCommaFormRefusesOnUnclosedBracketBeforeComma) — but pytest can
+        also produce a parametrize suffix with a comma AND a space
+        (`test_y[a, b]`), which round 2's whitespace-free `\\S+` rejected
+        too, silently truncating the group (#372 round 3, major). The block
+        form must accept any selector shaped like a pytest target regardless
+        of embedded whitespace, and every selector after it in the same
+        contiguous block must survive too."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_a.py::test_x\n"
+            "- tests/test_b.py::test_y[a, b]\n"
+            "- tests/test_c.py::test_z\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == [
+            "tests/test_a.py::test_x",
+            "tests/test_b.py::test_y[a, b]",
+            "tests/test_c.py::test_z",
+        ]
+        assert "tests/test_b.py::test_y[a, b]" not in tasks[0].description
+        assert "tests/test_c.py::test_z" not in tasks[0].description
+
+    def test_selector_shaped_bullet_after_the_block_closes_is_not_reopened_into_it(self, tmp_path):
+        """Deliberate choice (#372 round 3): once a non-selector bullet
+        closes the block, a LATER bullet that happens to look like a pytest
+        target is not folded back into the group — BEH-03 forbids inferring
+        the declared group from anything outside the one contiguous block
+        under the marker. It stays ordinary description text, exactly like
+        the prose bullet that closed the block ahead of it."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "- tests/test_a.py::test_x\n"
+            "- перепроверить после мержа WS-341\n"
+            "- tests/test_b.py::test_y\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+        task = tasks[0]
+
+        assert task.verifies == ["tests/test_a.py::test_x"]
+        assert "перепроверить после мержа WS-341" in task.description
+        assert "tests/test_b.py::test_y" in task.description
 
     def test_a_selector_the_adapter_would_refuse_is_stored_verbatim(self, tmp_path):
         """An unparseable value is kept exactly as written, not mapped to
