@@ -331,6 +331,73 @@ def record_claims(
     return recorded
 
 
+def record_verify_group_claims(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task: TaskT,
+    sha: str,
+    selectors: list[str],
+) -> list[Claim]:
+    """Freeze a green-on-entry `verify_first` task's declared group (#367
+    BEH-26/FR-19, TASK-010).
+
+    BEH-20's green-only path never authors a red, so `record_claims` (called
+    from `tdd.py::_judge_red_commit`) never runs for it — the group's
+    evidential files stay open for the paid implementation pass that follows,
+    which can rewrite what the live entry run proved while keeping it green.
+    Only a byte-lock catches that; a second live re-verify would find nothing
+    wrong with the rewrite either.
+
+    Not a `RedCheckpoint`: BEH-20 reaches GREEN on verify evidence, never "a
+    red recorded under another name" (see `lifecycle.has_verify_evidence`'s
+    own docstring), so nothing here is written to `red_checkpoints`. A
+    checkpoint identity is synthesised only long enough to give each path's
+    `Claim` the same `(task, lineage, path, bytes)` shape `record_claims`
+    already produces for a confirmed red.
+
+    The synthesised checkpoint carries no `timestamp`: `checkpoint_id` hashes
+    it in, and `record_claims`'s own dedup keys on
+    `(task_id, checkpoint_id, path, blob_sha)`. A retried attempt that freezes
+    the same commit and selectors again must land on the same id, or the dedup
+    never fires and every retry stacks another `ACTIVE` row for the same file
+    — the invariant `record_claims` documents for itself ("a re-run must not
+    stack duplicate rows").
+    """
+    from .tdd import RedCheckpoint, RedOutcome, resolve_adapter, resolve_namespace
+    from .tdd_runners import Selector
+
+    adapter = resolve_adapter(config)
+    if adapter is None:
+        raise ClaimRefused(
+            f"no adapter can confirm test_command {config.test_command!r}; "
+            "the declared group cannot be claimed"
+        )
+    namespace = resolve_namespace(config)
+    recorded: list[Claim] = []
+    for raw_selector in selectors:
+        parsed = adapter.parse_selector(raw_selector)
+        if not isinstance(parsed, Selector):
+            raise ClaimRefused(
+                f"{raw_selector!r} cannot be parsed by this project's runner adapter, "
+                "so nothing can be claimed"
+            )
+        checkpoint = RedCheckpoint(
+            task_id=task.id,
+            namespace=namespace,
+            commit_sha=sha,
+            baseline_sha=sha,
+            selector=raw_selector,
+            environment_id="verify_first",
+            execution_mode="verify_first",
+            config_hash="",
+            outcome=RedOutcome.EXPECTED_FAIL,
+            timestamp="",
+        )
+        ensure_claimable(config, parsed)
+        recorded.extend(record_claims(config, state, checkpoint, parsed))
+    return recorded
+
+
 def release_claims(state: ExecutorState, namespace: str, task_id: str) -> int:
     """Retire ``task_id``'s claims because the task finished (#260).
 
@@ -495,6 +562,7 @@ __all__ = [
     "describe_violations",
     "ensure_claimable",
     "record_claims",
+    "record_verify_group_claims",
     "release_claims",
     "validate_claim_path",
 ]

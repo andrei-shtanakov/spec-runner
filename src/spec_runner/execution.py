@@ -90,23 +90,37 @@ def _release_claims(state, config, task) -> None:
         logger.info("Claims released", task_id=task.id, count=freed)
 
 
-def _verify_first_has_confirmed_red(state, config, task) -> bool:
-    """Did this `verify_first` task ever author and confirm a red in this
-    workstream — in this attempt or an earlier one (#381 review round 2)?
+def _freeze_verify_group(state, config, task, result: VerifyRunResult) -> Refusal | None:
+    """Claim a green-on-entry `verify_first` task's declared group (#367
+    BEH-26/FR-19, TASK-010).
 
-    State-derived, not the current attempt's own entry-run outcome:
-    `verify_first_red` (above) answers "did *this* attempt's live-verify
-    read `test_failure`", which is False whenever a retried attempt's own
-    entry run has since gone green — including off a fix an *earlier*
-    attempt's red cycle committed as the candidate before that attempt was
-    refused for an unrelated reason. That earlier attempt already claimed a
-    file (`tdd.py::_judge_red_commit`'s `record_claims`), and the claim does
-    not go away just because this attempt never re-entered the cycle.
+    Called right after the live entry run recorded its evidence and before
+    anything is spent: `record_verify_group_claims` (claims.py) is the one
+    call site for the green path, mirroring `record_claims` from
+    `tdd.py::_judge_red_commit` on the red-authoring path. A refusal here is
+    always an instrument error (an unclaimable file, or no adapter for
+    `test_command`) — the same kind an unconfirmable red is, never a verdict
+    on the work.
+
+    Catches broadly, not just `ClaimRefused`: the sibling call
+    (`tdd.py::_judge_red_commit`) wraps the same `record_claims` in
+    `except Exception`, because `state.record_claim` documents itself as
+    fail-closed — a transient DB write failure raises, it does not return a
+    typed refusal. This call sits outside `execute_task`'s own try/except, so
+    an uncaught exception here would crash the whole run instead of failing
+    one task the way every other claim-recording failure in this codebase
+    does.
     """
-    from .lifecycle import has_confirmed_red
-    from .tdd import resolve_namespace
+    from .claims import record_verify_group_claims
 
-    return has_confirmed_red(state, resolve_namespace(config), task.id)
+    try:
+        record_verify_group_claims(config, state, task, result.sha, list(result.group_executed))
+    except Exception as exc:
+        return Refusal(
+            f"verify-first group could not be claimed: {exc}",
+            RefusalKind.INSTRUMENT,
+        )
+    return None
 
 
 def _refusal_error_code(refusal: str) -> ErrorCode:
@@ -463,6 +477,24 @@ def execute_task(
             if isinstance(refusal, Refusal) and refusal.terminal:
                 return "TERMINAL_REFUSAL"
             return False
+        # BEH-26 (#367 FR-19, TASK-010): a green entry run (BEH-20) never
+        # authors a red, so nothing else in this attempt would ever claim the
+        # declared group — freeze it now, before the paid implementation call
+        # that follows can rewrite what this run just proved.
+        if verify_first_result is not None and verify_first_result.passed:
+            freeze_refusal = _freeze_verify_group(state, config, task, verify_first_result)
+            if freeze_refusal is not None:
+                log_progress(f"⛔ {freeze_refusal}", task_id)
+                state.record_attempt(
+                    task_id,
+                    False,
+                    0.0,
+                    error=freeze_refusal,
+                    error_code=_refusal_error_code(freeze_refusal),
+                    error_kind=_refusal_error_kind(freeze_refusal),
+                    error_stage=reporter.current,
+                )
+                return False
 
     # RED phase (#141). Under `tdd` the implementation pass does not run until
     # a red has been *demonstrated* — authored, committed, and replayed against
@@ -774,28 +806,19 @@ def execute_task(
                 # (and DONE from `READY`/`red_authoring`/`red_verifying` was
                 # never in `ILLEGAL` to begin with).
                 #
-                # Claims release stays narrower on purpose: it is the one
-                # path where `_judge_red_commit` (tdd.py) froze a file with
-                # `record_claims`, so it is the one path with a claim to
-                # release and a lock the `tdd release` door needs a DONE row
-                # to open. State-derived (`_verify_first_has_confirmed_red`),
-                # not `verify_first_red` (this *attempt's* own entry-run
-                # outcome, used above to gate entering the cycle): a retried
-                # attempt whose own entry read green off a fix an *earlier*
-                # attempt's red cycle already committed as the candidate —
-                # refused after for an unrelated reason — still holds that
-                # earlier attempt's claim, and `verify_first_red` alone would
-                # miss it (#381 review round 2). A green-on-entry
-                # `verify_first` task that never once entered the cycle never
-                # claimed anything, so releasing here would be a no-op — left
-                # out rather than made one, so this block stays legible as
-                # "only ever runs where a claim could exist" (FR-19/TASK-010).
+                # Claims release now runs unconditionally for both modes
+                # (#367 BEH-27/FR-19, TASK-010): a `verify_first` task holds a
+                # claim from one of two places — `_freeze_verify_group` on the
+                # green-on-entry path (BEH-20/BEH-26) or `_judge_red_commit`
+                # (tdd.py) on the red-authoring path (BEH-21) — and both must
+                # reach DONE only through this same successful hook, so
+                # whichever one happened, the claim is here to release.
+                # `release_claims` is a no-op, not an error, when a task holds
+                # none (the terminal INSTRUMENT/TERMINAL_REFUSAL paths never
+                # reach this line at all), so widening the condition costs
+                # nothing on a run that never claimed anything.
                 if config.resolve_execution_mode(task) in ("tdd", "verify_first"):
                     _record_phase(state, config, task, TddPhase.DONE)
-                if config.resolve_execution_mode(task) == "tdd" or (
-                    config.resolve_execution_mode(task) == "verify_first"
-                    and _verify_first_has_confirmed_red(state, config, task)
-                ):
                     _release_claims(state, config, task)
                 state.record_attempt(
                     task_id,
