@@ -359,30 +359,43 @@ def record_verify_group_claims(
     `checkpoint_id` that resolves to no row there is exactly such a claim
     (#383 review, finding 1).
 
-    Two properties a plain `record_claims` call cannot give this site, both
-    from #383 review, finding 2:
+    Two properties a plain `record_claims` call cannot give this site.
 
-    - **Bytes from the judged commit, never the working tree.** The live
-      entry run judges `sha` in a disposable worktree (BEH-09); the project's
-      real working tree can differ from it — most sharply when a prior,
-      interrupted attempt left it dirty without committing. Hashing the
-      working tree would freeze bytes nobody replayed, which is exactly the
-      thing this module's own docstring says the byte-lock must never do.
-    - **Re-entry supersedes, it does not stack.** `commit_sha` moves every
-      attempt the paid pass commits a candidate (`wants_candidate`), so a
-      dedup keyed on `checkpoint_id` — which folds `commit_sha` in — can never
-      fire across attempts: every retry added a *second* ACTIVE claim on the
-      same path at different bytes, and no candidate tree could ever satisfy
-      both at once. This task's own prior verify-freeze lineages — and only
-      those — are retired before the new one is written, the same
-      reuse-before-reclaim rule the RED path already follows
-      (`tdd.py::run_red_phase` reusing a confirmed checkpoint, tdd.py:533).
-      Scoped to lineages *this function itself synthesised* (a
-      `checkpoint_id` with no row in `red_checkpoints`): BEH-21 walks a task
-      through the ordinary RED-authoring cycle on one attempt and back to a
-      green entry on a later one, and the genuine confirmed-red claim that
-      earlier attempt took must stand until DONE releases it — this call must
-      not launder it away as a stale freeze it never made.
+    From #383 review round 2, finding 1 — **re-entry reuses the standing
+    freeze, it never re-baselines it.** A retry re-freezing at whatever the
+    *current* judged commit happens to contain is how a paid pass's own
+    rewrite gets laundered through: attempt 1 freezes the group green at B1;
+    a paid pass weakens that very test (still green) and `wants_candidate`
+    commits it; a transient, unrelated refusal (an unrunnable re-verify) ends
+    the attempt *before* any claims check ever runs, so the rewrite is never
+    judged. If attempt 2's entry run then reads green off that same
+    (weakened) HEAD and this function re-baselined onto it, the lock would
+    now agree with the very bytes it exists to catch — `check_claims` would
+    find nothing wrong, because the standing evidence would just be the
+    rewrite. So a path this task already holds a verify-freeze claim on is
+    **reused as-is**: the existing claim is left untouched, and no second
+    claim is written for it. A judged tree that disagrees with a standing
+    freeze is a claims violation for `check_claims`/`evaluate_claims` to
+    catch wherever the RED gate already runs — not something this call may
+    quietly resolve by moving the lock. Supersession is reserved for
+    retirement (`release`/DONE — `_release_claims`, `remedy.release`), never
+    for re-baselining a lock that is still standing. Reuse is scoped to
+    lineages *this function itself synthesised* (a `checkpoint_id` with no
+    row in `red_checkpoints`): BEH-21 walks a task through the ordinary
+    RED-authoring cycle on one attempt and back to a green entry on a later
+    one, and the genuine confirmed-red claim that earlier attempt took is a
+    different lineage this call must not touch at all.
+
+    From #383 review round 2, finding 2 — **claimability is judged against
+    the same commit the bytes come from.** The live entry run judges `sha` in
+    a disposable worktree (BEH-09); the project's real working tree can
+    differ from it — most sharply when a prior, interrupted attempt left a
+    file deleted or replaced there without committing. Checking claimability
+    against `project_root` on disk (as `ensure_claimable` does for the
+    RED-authoring path, where the working tree and the just-authored commit
+    are the same thing) would refuse a file that is present and intact in
+    `sha`, over a tree gap this module's own docstring already says must not
+    matter.
     """
     from .tdd import RedCheckpoint, RedOutcome, resolve_adapter, resolve_namespace
     from .tdd_runners import Selector
@@ -395,15 +408,22 @@ def record_verify_group_claims(
         )
     namespace = resolve_namespace(config)
     root = Path(config.project_root)
-    tree = _tree_blobs(root, sha)
+    tree = _tree_entries(root, sha)
     if tree is None:
         raise ClaimRefused(
             f"cannot read the judged commit {sha[:12]}; the declared group cannot be claimed"
         )
 
-    # Validate every selector and resolve every path's blob before writing
-    # anything: a refusal partway through must not leave this task's prior
-    # freeze already superseded with nothing standing in its place.
+    # This task's own standing verify-freeze claims — unbacked checkpoint_id,
+    # the ones this function itself made — are read once, up front, so the
+    # loop below can reuse rather than duplicate them. A genuine confirmed-red
+    # claim (BEH-21) is excluded by the same check and is never touched here.
+    standing_by_path = {
+        c.path: c
+        for c in state.active_claims(namespace)
+        if c.task_id == task.id and state.checkpoint_by_id(namespace, c.checkpoint_id) is None
+    }
+
     to_claim: list[tuple[RedCheckpoint, str, str]] = []
     for raw_selector in selectors:
         parsed = adapter.parse_selector(raw_selector)
@@ -424,27 +444,11 @@ def record_verify_group_claims(
             outcome=RedOutcome.EXPECTED_FAIL,
             timestamp="",
         )
-        for path in ensure_claimable(config, parsed):
-            blob = tree.get(path)
-            if blob is None:
-                raise ClaimRefused(
-                    f"cannot claim {path}: not present in the judged commit {sha[:12]}"
-                )
+        for path in _ensure_claimable_at_commit(tree, parsed):
+            if path in standing_by_path:
+                continue
+            _mode, blob = tree[path]
             to_claim.append((checkpoint, path, blob))
-
-    # This task's own prior verify-freeze lineages are superseded — never
-    # stacked next to the new one — but only the ones with no backing row in
-    # `red_checkpoints`: those are the ones this function itself synthesised.
-    # A confirmed-red claim from the ordinary RED-authoring path (BEH-21's
-    # red-on-entry retried into green) is a different lineage this call must
-    # leave standing; only `abandon`/`repair`/`resume`/DONE retire that kind.
-    prior_freeze_lineages = {
-        c.checkpoint_id
-        for c in state.active_claims(namespace)
-        if c.task_id == task.id and state.checkpoint_by_id(namespace, c.checkpoint_id) is None
-    }
-    for lineage_id in prior_freeze_lineages:
-        state.supersede_claims(namespace, task.id, ClaimStatus.SUPERSEDED, checkpoint_id=lineage_id)
 
     recorded: list[Claim] = []
     for checkpoint, path, blob in to_claim:
@@ -531,6 +535,19 @@ def check_claims(
         present = tree.get(claim.path)
         if present == claim.blob_sha:
             continue
+        # A claim with no backing `red_checkpoints` row is a verify-first
+        # freeze (`record_verify_group_claims`), never a genuine confirmed
+        # red — the one door that can retire it without DONE is `tdd
+        # release`, not `abandon`/`repair` (#383 review round 2, finding 3:
+        # a neighbour blocked by a stale one had no way to tell which kind it
+        # was hitting, or that a door for it exists at all).
+        door = (
+            f"; a verify-first freeze with no confirmed red behind it — if "
+            f"{claim.task_id} never reached DONE, an operator can retire it via "
+            f"`spec-runner tdd release {claim.task_id}`"
+            if state.checkpoint_by_id(namespace, claim.checkpoint_id) is None
+            else ""
+        )
         if present is not None:
             violations.append(
                 ClaimViolation(
@@ -538,7 +555,7 @@ def check_claims(
                     claim.path,
                     claim.task_id,
                     claim.checkpoint_id,
-                    f"claimed {claim.blob_sha[:12]}, found {present[:12]}",
+                    f"claimed {claim.blob_sha[:12]}, found {present[:12]}{door}",
                 )
             )
             continue
@@ -550,7 +567,7 @@ def check_claims(
                     claim.path,
                     claim.task_id,
                     claim.checkpoint_id,
-                    f"the claimed bytes are now at {', '.join(sorted(elsewhere))}",
+                    f"the claimed bytes are now at {', '.join(sorted(elsewhere))}{door}",
                 )
             )
         else:
@@ -560,17 +577,22 @@ def check_claims(
                     claim.path,
                     claim.task_id,
                     claim.checkpoint_id,
-                    "the path is gone and its bytes are nowhere in the tree",
+                    f"the path is gone and its bytes are nowhere in the tree{door}",
                 )
             )
     return violations
 
 
-def _tree_blobs(root: Path, sha: str) -> dict[str, str] | None:
-    """``{path: blob sha}`` for every file in ``sha``, or None if unreadable.
+def _tree_entries(root: Path, sha: str) -> dict[str, tuple[str, str]] | None:
+    """``{path: (mode, blob sha)}`` for every blob in ``sha``, or None if
+    unreadable.
 
     Read straight from the object database — `git ls-tree` of a commit cannot
-    be influenced by the working tree, which is the point.
+    be influenced by the working tree, which is the point. The mode is kept
+    alongside the blob so a caller can tell a symlink (`120000`) from a
+    regular file without a second look at the working tree — see
+    `_ensure_claimable_at_commit`, which judges claimability from this alone
+    (#383 review round 2, finding 2).
     """
     result = subprocess.run(
         ["git", "ls-tree", "-r", "--full-tree", "-z", sha],
@@ -580,15 +602,70 @@ def _tree_blobs(root: Path, sha: str) -> dict[str, str] | None:
     )
     if result.returncode != 0:
         return None
-    blobs: dict[str, str] = {}
+    entries: dict[str, tuple[str, str]] = {}
     for entry in result.stdout.split("\0"):
         if not entry:
             continue
         meta, _, path = entry.partition("\t")
         parts = meta.split()
         if len(parts) >= 3 and parts[1] == "blob":
-            blobs[path] = parts[2]
-    return blobs
+            entries[path] = (parts[0], parts[2])
+    return entries
+
+
+def _tree_blobs(root: Path, sha: str) -> dict[str, str] | None:
+    """``{path: blob sha}`` for every file in ``sha``, or None if unreadable.
+
+    `_tree_entries` with the mode dropped — kept as its own function because
+    most callers (`check_claims`) only ever needed the blob.
+    """
+    entries = _tree_entries(root, sha)
+    if entries is None:
+        return None
+    return {path: blob for path, (_mode, blob) in entries.items()}
+
+
+def _ensure_claimable_at_commit(tree: dict[str, tuple[str, str]], selector: Selector) -> list[str]:
+    """Like `ensure_claimable`, but judged against a commit's tree — never
+    the working tree (#383 review round 2, finding 2).
+
+    `ensure_claimable` checks `project_root` on disk, which the RED-authoring
+    path can rely on because the working tree and the commit it just authored
+    are the same thing at that moment. A verify-first freeze has no such
+    guarantee: the live entry run judges `sha` in a disposable worktree
+    (BEH-09), and the project's real working tree can differ from it — a
+    prior, interrupted attempt leaving a file deleted or replaced there is
+    exactly the gap this function must not mistake for the file being gone.
+    """
+    paths = claim_paths_for(selector)
+    if not paths:
+        raise ClaimRefused(
+            f"selector {selector!r} names no file to claim; a freeze with nothing locked "
+            "would pass the gate over an open file"
+        )
+    for path in paths:
+        refusal = _validate_claim_path_in_tree(path, tree)
+        if refusal:
+            raise ClaimRefused(f"cannot claim {path}: {refusal}")
+    return paths
+
+
+def _validate_claim_path_in_tree(path: str, tree: dict[str, tuple[str, str]]) -> str | None:
+    """Return a refusal reason, or None when ``path`` may be claimed —
+    the same shape checks `validate_claim_path` makes, judged against a
+    commit's tree instead of the working tree.
+    """
+    if Path(path).is_absolute():
+        return f"{path!r} is absolute; a claim path must be project-relative"
+    if path != posixpath.normpath(path) or path.startswith("../"):
+        return f"{path!r} is not canonical; a claim path must be normalised and inside the tree"
+    entry = tree.get(path)
+    if entry is None:
+        return f"{path!r} is not present in the judged commit"
+    mode, _blob = entry
+    if mode == "120000":
+        return f"{path!r} is a symlink; a claim must name the bytes it freezes"
+    return None
 
 
 def describe_violations(violations: list[ClaimViolation]) -> str:
