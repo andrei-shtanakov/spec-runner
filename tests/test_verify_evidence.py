@@ -309,7 +309,7 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
     ):
         root = _repo(tmp_path)
         task = _task()
-        config = _cfg(root)
+        config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
         mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
 
@@ -355,7 +355,7 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
         _git(root, "add", "-A")
         _git(root, "commit", "-qm", "make it fail")
         task = _task()
-        config = _cfg(root)
+        config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
         mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
 
@@ -377,7 +377,7 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
     ):
         root = _repo(tmp_path)
         task = _task()
-        config = _cfg(root, test_command="python -m pytest tests/ && echo done")
+        config = _cfg(root, test_command="python -m pytest tests/ && echo done", auto_commit=True)
         state = ExecutorState(config)
 
         outcome = execute_task(task, config, state)

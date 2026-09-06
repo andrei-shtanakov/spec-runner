@@ -130,7 +130,7 @@ class TestLiveRunIsTheFirstAction:
         monkeypatch.setattr("spec_runner.execution.run_live_verify", _tracked)
 
         task = _task(verifies=["tests/test_group.py::test_marks_that_it_ran"])
-        config = _cfg(root)
+        config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
 
         execute_task(task, config, state)
@@ -316,7 +316,7 @@ class TestLiveRunFailurePath:
         mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
 
         task = _task(verifies=["tests/test_group.py::test_it"])
-        config = _cfg(root)
+        config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
 
         execute_task(task, config, state)
@@ -364,7 +364,7 @@ class TestLiveRunRefusalBeforeRunning:
         sha = _commit(root, "base")
 
         task = _task(verifies=["tests/test_group.py::test_it"])
-        config = _cfg(root, test_command="pytest tests/ && echo done")
+        config = _cfg(root, test_command="pytest tests/ && echo done", auto_commit=True)
         state = ExecutorState(config)
 
         outcome = execute_task(task, config, state)
