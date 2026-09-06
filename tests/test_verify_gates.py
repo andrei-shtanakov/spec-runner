@@ -27,7 +27,7 @@ from spec_runner.gates import (
     is_registered,
     register_builtin_gates,
 )
-from spec_runner.live_verify import run_live_verify
+from spec_runner.live_verify import VerifyRunResult, run_live_verify
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
@@ -284,6 +284,39 @@ class TestRedGateSeesVerifyFirstAsGated:
             )
 
         assert outcome.status is GateStatus.UNSATISFIED
+
+    def test_an_instrument_error_verify_run_is_an_instrument_error_not_unsatisfied(self, tmp_path):
+        """#380 review round 2 finding 2: `ran=False` (no verdict reached —
+        selection failed, collection/compile error, the runner itself broke)
+        must read as GateStatus.INSTRUMENT_ERROR, the same distinction
+        `_red_gate` draws for `RedOutcome.UNVERIFIABLE`. Reading it as
+        UNSATISFIED would classify a broken instrument as a bad-work refusal
+        (POLICY, exit 1) instead of an infrastructure one (INSTRUMENT, exit
+        2), and skip bounded gate-recovery, which only retries
+        INSTRUMENT_ERROR."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root, execution_mode="verify_first")
+        task = _task()
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+
+        broken = VerifyRunResult(
+            sha=_head(root),
+            ran=False,
+            passed=False,
+            detail="tests/test_group.py::test_it selected nothing (exit 4)",
+            adapter="pytest",
+        )
+
+        with ExecutorState(cfg) as state:
+            state.record_verify_evidence(task=task, config=cfg, result=broken)
+            outcome = evaluate_gates(
+                "tests", _ctx(state, cfg, broken.sha, mode="verify_first"), registry=registry
+            )
+
+        assert outcome.status is GateStatus.INSTRUMENT_ERROR
+        detail = "; ".join(r.detail or "" for r in outcome.results)
+        assert "selected nothing" in detail
 
     def test_evidence_on_an_unrelated_tree_does_not_count(self, tmp_path):
         root = _repo(tmp_path)

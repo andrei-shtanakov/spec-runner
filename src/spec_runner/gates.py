@@ -436,6 +436,19 @@ def _verify_first_gate(ctx: GateContext) -> GateResult:
             PhaseOutcome.NOT_RUN,
             "no verify evidence for this task in this workstream",
         )
+    if evidence.outcome == VerifyOutcome.INSTRUMENT_ERROR.value:
+        # #380 review round 2 finding 2: an instrument error is "the run
+        # could not tell", not "the run looked and disliked it" — the same
+        # distinction `_red_gate` draws for `RedOutcome.UNVERIFIABLE` above.
+        # Reading it as UNSATISFIED would classify a broken instrument as a
+        # bad-work refusal (POLICY, exit 1) instead of an infrastructure one
+        # (INSTRUMENT, exit 2), and skip the bounded gate-recovery retry that
+        # only INSTRUMENT_ERROR gets.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            f"the verify run could not be confirmed: {evidence.detail}",
+        )
     if evidence.outcome != VerifyOutcome.GREEN.value:
         return GateResult(
             GateStatus.UNSATISFIED,
