@@ -144,15 +144,15 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-04 (—BEH-
 **Traces to:** [FR-03], [FR-24]
 
 ### TASK-004: Задача, не объявившая verify-first, ведёт себя в точности как сегодня
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-06.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-06
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-06: Задача, не объявившая verify-first, ведёт себя в точности как сегодня
-- [ ] проверка группы: tests/test_execution_mode.py (kind: contract) зелёные на BEH-06
+- [x] реализовать BEH-06: Задача, не объявившая verify-first, ведёт себя в точности как сегодня
+- [x] проверка группы: tests/test_execution_mode.py (kind: contract) зелёные на BEH-06
 
 **Traces to:** [FR-04]
 
