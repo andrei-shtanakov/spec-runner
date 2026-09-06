@@ -130,16 +130,16 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-02 (—BEH-
 **Traces to:** [FR-02], [FR-03]
 
 ### TASK-003: Неверное объявление отказывает до исполнения — в `validate` и на старте (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-04, BEH-05.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-04 (—BEH-05)
 **Depends on:** [TASK-002]
 
 **Checklist:**
-- [ ] реализовать BEH-04: Неверное объявление отказывает до исполнения — в `validate` и на старте
-- [ ] реализовать BEH-05: Отказ на селекторе воспроизводит формулировку адаптера и называет ожидаемую форму
-- [ ] проверка группы: tests/test_verify_first_validate.py (kind: integration) зелёные на BEH-04, BEH-05
+- [x] реализовать BEH-04: Неверное объявление отказывает до исполнения — в `validate` и на старте
+- [x] реализовать BEH-05: Отказ на селекторе воспроизводит формулировку адаптера и называет ожидаемую форму
+- [x] проверка группы: tests/test_verify_first_validate.py (kind: integration) зелёные на BEH-04, BEH-05
 
 **Traces to:** [FR-03], [FR-24]
 
