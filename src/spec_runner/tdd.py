@@ -190,6 +190,19 @@ BASELINE_341 = ScenarioMeasurement(
 )
 
 
+#: The eliminable subclass named by the spec-runner#367 charter (BEH-34,
+#: TASK-014): two `verify_first` waiver probes whose declared groups were
+#: already green, yet each still paid for an unproductive RED-phase call —
+#: TASK-011 ($1.51) and TASK-017 ($4.29) of WS-spec-runner-341, summing to
+#: $5.80 across 2 paid calls (charter, WS-spec-runner-367, AC-1).
+BASELINE_367_CLASS = ScenarioMeasurement(
+    elapsed_seconds=0.0,
+    cost_usd=5.80,
+    paid_call_count=2,
+    checkpoint_reached=False,
+)
+
+
 def environment_id(project_root: Path) -> str:
     """Identify the environment a replay would run in, by lockfile content.
 

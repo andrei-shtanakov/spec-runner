@@ -294,15 +294,15 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-33
 **Traces to:** [FR-11], [FR-01]
 
 ### TASK-014: Стоимость класса измерена, и ни один тест не вызывает реального агента
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-34.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-34
 **Depends on:** [TASK-013]
 
 **Checklist:**
-- [ ] реализовать BEH-34: Стоимость класса измерена, и ни один тест не вызывает реального агента
-- [ ] проверка группы: tests/test_verify_first_cost.py (kind: e2e) зелёные на BEH-34
+- [x] реализовать BEH-34: Стоимость класса измерена, и ни один тест не вызывает реального агента
+- [x] проверка группы: tests/test_verify_first_cost.py (kind: e2e) зелёные на BEH-34
 
 **Traces to:** [FR-13], [FR-05]
 
