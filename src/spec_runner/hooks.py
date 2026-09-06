@@ -650,30 +650,25 @@ def _reverify_before_review(
     nothing actionable, so whatever can predict that refusal cheaply runs
     before the paid call, not after it.
 
-    Two independent things settle here:
+    One thing settles here now: **`auto_commit: true`, `run_review: true`**
+    — the candidate is already committed (`wants_candidate`, above this
+    call), so a real re-verify against it is possible and far cheaper than a
+    review call. A result that is not green here dooms the merge exactly as
+    a broken claim does, so review is skipped for the same reason #214 skips
+    it for claims — an `instrument_error` result skips it as INSTRUMENT, a
+    genuine `test_failure` as POLICY, mirroring `_verify_first_gate`'s own
+    split (#380 review round 2 finding 2).
 
-    - **`auto_commit: false`** (reachable without an explicit operator
-      choice — the subdir-repo auto-detect in `config.py` flips it).
-      `wants_candidate` requires `auto_commit`, so under this config nothing
-      this attempt does is ever committed: the candidate the pre-terminal
-      gate will judge is always the exact commit `_run_verify_first_phase`
-      already evidenced, whatever the implementation pass did to the tree.
-      A group already green needs nothing more — that untouched candidate
-      satisfies the gate by reference to the same evidence, same as today.
-      A group that was not green can *never* become judgeable under this
-      config: no retry changes that fact, so leaving it to the ordinary
-      pre-terminal POLICY refusal would burn a full paid attempt every retry
-      for a verdict that cannot change. Refused here, once, as what it is —
-      an instrument this configuration cannot supply — rather than let it
-      exhaust `max_retries` disguised as "the work is bad".
-    - **`auto_commit: true`, `run_review: true`**: the candidate is already
-      committed (`wants_candidate`, above this call), so a real re-verify
-      against it is possible and far cheaper than a review call. A result
-      that is not green here dooms the merge exactly as a broken claim
-      does, so review is skipped for the same reason #214 skips it for
-      claims — an `instrument_error` result skips it as INSTRUMENT, a
-      genuine `test_failure` as POLICY, mirroring `_verify_first_gate`'s own
-      split (#380 review round 2 finding 2).
+    `auto_commit: false` used to be settled here too — round 2's finding 1
+    read it correctly for a not-green group (`terminal=True`, "this cannot
+    become satisfiable on a retry") but left a green-on-entry group merging
+    on a pre-implementation snapshot nothing re-checked, and burned a full
+    paid attempt on the not-green half before refusing (round 4's two
+    findings). #380 review round 4 moved the whole config-incompatibility
+    question to `_run_verify_first_phase` (execution.py), before the live
+    entry run and before any paid call — so a verify_first task cannot
+    reach `post_done_hook`, and therefore this function, with `auto_commit`
+    still False; see the assertion below.
 
     Returns None otherwise — including `auto_commit: true`, `run_review:
     false`, where there is no review spend to protect and this candidate's
@@ -684,40 +679,24 @@ def _reverify_before_review(
     if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
         return None
 
-    from .live_verify import VerifyOutcome
-    from .state import ExecutorState
-    from .tdd import resolve_namespace
-
-    if not config.auto_commit:
-        with ExecutorState(config) as state:
-            evidence = state.verify_evidence(resolve_namespace(config), task.id)
-        if evidence is not None and evidence.outcome == VerifyOutcome.GREEN.value:
-            return None
-        # #380 review round 3 finding 1: `terminal=True` — this is not "the
-        # instrument broke this time" (worth a retry), it is "this
-        # configuration cannot ever supply the instrument" (a fact about
-        # `auto_commit`, which no retry changes). `RefusalKind.INSTRUMENT`
-        # is kept — the exit code and the persisted `error_code`/`error_kind`
-        # stay exactly INFRASTRUCTURE/"instrument", the correct classification
-        # of what happened — `terminal` only tells `execute_task` to stop
-        # retrying a verdict that provably cannot change, without
-        # reclassifying every instrument error (most of which — a flaky
-        # worktree, a transient git read — genuinely are worth retrying) as
-        # fatal.
-        return Refusal(
-            "verify-first gate has nothing to judge: work is not committed "
-            "(auto_commit: false) — no candidate distinct from the "
-            "pre-implementation snapshot can ever exist, so this cannot "
-            "become satisfiable on a retry",
-            RefusalKind.INSTRUMENT,
-            terminal=True,
-        )
+    # #380 review round 4: `_run_verify_first_phase` refuses a verify_first
+    # task with `auto_commit: false` before its paid call ever runs, so
+    # nothing reaches here (post_done_hook only runs after a successful
+    # implementation call) with it still False. Loud, not a silent `if`, so
+    # a future change that reintroduces a path around that phase-level
+    # check is caught here rather than silently reviving round 4's
+    # fail-open/burned-attempt asymmetry.
+    assert config.auto_commit, (
+        "unreachable: a verify_first task with auto_commit: false is refused "
+        "by _run_verify_first_phase before post_done_hook is ever reached"
+    )
 
     if not config.run_review:
         return None
 
-    from .live_verify import run_live_verify
+    from .live_verify import VerifyOutcome, run_live_verify
     from .runner import log_progress
+    from .state import ExecutorState
 
     if reporter:
         reporter.enter("tests")
@@ -784,13 +763,11 @@ def _reverify_live_evidence_for_candidate(
     ancestor commit — and merge a candidate this very replay found red.
     `result` (and whether the write actually landed) decides here, directly.
 
-    `auto_commit: false` skips the run here too, but for a different reason
-    than the refusal `_reverify_before_review` already issues for a
-    not-green group under that config: with nothing ever committed, HEAD
-    cannot have moved since that earlier check, so a second live run here
-    would replay the identical commit for the identical, already-recorded
-    answer — never new information, only a second, avoidable subprocess
-    replay of the whole group.
+    `auto_commit: false` is not handled here any more (#380 review round 4):
+    `_run_verify_first_phase` (execution.py) now refuses that configuration
+    for a verify_first task before its paid call ever runs, so nothing
+    reaches `post_done_hook` — and therefore this function — with it still
+    False. See the assertion below.
 
     `config.run_review` with HEAD unchanged since `_reverify_before_review`
     ran (#380 review round 3 finding 2) skips for the same reason: that
@@ -807,12 +784,16 @@ def _reverify_live_evidence_for_candidate(
     own worktree, and nothing should pay for a run whose answer nothing will
     read (#164 criterion 8 — dormant unless a consumer registers).
     """
-    if (
-        config.resolve_execution_mode(task) != "verify_first"
-        or not has_gates()
-        or not config.auto_commit
-    ):
+    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
         return None
+
+    # #380 review round 4: same unreachability as `_reverify_before_review`
+    # — `_run_verify_first_phase` refuses a verify_first task with
+    # `auto_commit: false` before its paid call ever runs.
+    assert config.auto_commit, (
+        "unreachable: a verify_first task with auto_commit: false is refused "
+        "by _run_verify_first_phase before post_done_hook is ever reached"
+    )
 
     from .live_verify import VerifyOutcome, run_live_verify
     from .runner import log_progress

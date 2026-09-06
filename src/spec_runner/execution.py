@@ -249,22 +249,60 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
     ordinary cycle rather than treating a red group as a reason to refuse,
     and until the dedicated branch exists, "proceed unchanged" is the only
     reading of FR-14 that does not invert the mode's main path.
+
+    `auto_commit: false` (#380 review round 4) refuses before any of that,
+    including before this unpaid live run — a config incompatibility, not an
+    attempt outcome. Verify-first's own contract (FR-07/BEH-09) is a verdict
+    about a *named candidate commit*, never the working tree; `wants_candidate`
+    (hooks.py) requires `auto_commit`, so under this config no candidate ever
+    exists for any attempt to judge, no matter what the implementation pass
+    does. Round 3 already read this correctly for a red-on-entry group — a
+    terminal INSTRUMENT refusal, "this cannot become satisfiable on a retry"
+    — but placed it after the live run and the paid implementation call, and
+    left a green-on-entry group to merge on that same pre-implementation
+    snapshot with nothing re-checked (round 4's two findings, one asymmetry:
+    fail-open on green, a burned paid attempt every run on red). Both
+    disappear by asking the one question that actually decides them — can
+    this config ever produce a candidate — before spending anything on an
+    answer no candidate will exist to receive.
     """
     from .gates import ensure_red_gate
 
     ensure_red_gate()
+    if not config.auto_commit:
+        reporter.enter("tests")
+        detail = (
+            "verify-first requires a candidate commit to judge (FR-07); "
+            "auto_commit: false (including the subdir-repo auto-detect) is "
+            "incompatible with it — enable auto_commit, or use mode: tdd"
+        )
+        reporter.record(PhaseOutcome.ERROR, detail)
+        return Refusal(detail, RefusalKind.INSTRUMENT, terminal=True)
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
     # consequence of the run itself, on all three outcomes — not something
     # only a test can produce by calling this directly. Recorded before the
     # branches below so an instrument-error refusal still leaves a row.
-    state.record_verify_evidence(task=task, config=config, result=result)
+    recorded = state.record_verify_evidence(task=task, config=config, result=result)
     # #375 review: every message names the judged commit, not just the
     # returned object's `sha` field — an operator reading the refusal or the
     # phase record could not otherwise tell which commit was on trial.
     commit = result.sha[:12] if result.sha else "unknown"
     detail = f"[{commit}] {result.detail}"
+    if not recorded:
+        # #380 review round 4 (side finding): a swallowed write here is the
+        # same class round 3 finding 3 closed at the two re-verify sites — a
+        # future reader of "no evidence yet" for this task cannot tell that
+        # apart from "we never even asked", so this run's own verdict (green
+        # or red) must not stand in for one that was never durably recorded.
+        # Not `terminal`: unlike the config-level incompatibility above, a
+        # storage hiccup is plausibly transient and may not recur on retry.
+        reporter.record(PhaseOutcome.ERROR, detail)
+        return Refusal(
+            f"verify-first entry evidence could not be recorded at {commit}: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        )
     if result.passed:
         reporter.record(PhaseOutcome.PASS, detail)
         return None
@@ -380,6 +418,14 @@ def execute_task(
                 error_kind=_refusal_error_kind(refusal),
                 error_stage=reporter.current,
             )
+            # #380 review round 4: the `auto_commit: false` refusal above is
+            # `Refusal.terminal` — the same sentinel the post-done hook
+            # failure branch already returns for a terminal refusal there
+            # (see below), read here too so `run_with_retries` stops after
+            # this one attempt instead of retrying a config incompatibility
+            # `max_retries` times.
+            if isinstance(refusal, Refusal) and refusal.terminal:
+                return "TERMINAL_REFUSAL"
             return False
 
     # RED phase (#141). Under `tdd` the implementation pass does not run until
