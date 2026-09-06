@@ -157,7 +157,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-06
 **Traces to:** [FR-04]
 
 ### TASK-005: Прогон — первое действие задачи, до любого платного вызова (+2 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-07, BEH-08, BEH-09.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-07 (—BEH-09)
