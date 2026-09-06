@@ -165,6 +165,40 @@ def run_live_verify(
             f"{len(task.verifies)} selector(s)"
         )
     try:
+        # #375 review round 4, finding 2: prepared ONCE for the whole group,
+        # not once per selector. Every selector replays the SAME worktree —
+        # the same commit and the same environment — so `mix deps` plus a
+        # cold compile (ExUnit's `prepare_replay`) has nothing selector-
+        # specific to redo; repeating it per selector paid for N cold
+        # compiles out of the one group budget instead of one. The `selector`
+        # parameter that `prepare_replay` takes is unused by both adapters
+        # today (pytest's is a passthrough; ExUnit's only proves the shared
+        # deps/build state) — the first selector stands in for the group.
+        first_raw = task.verifies[0]
+        first_parsed = adapter.parse_selector(first_raw)
+        if isinstance(first_parsed, SelectorRefusal):
+            return VerifyRunResult(sha, False, False, first_parsed.message)
+
+        early_refusal = adapter.preflight(worktree, first_parsed)
+        if early_refusal is not None:
+            return VerifyRunResult(sha, False, False, early_refusal.message)
+
+        remaining = group_deadline - time.monotonic()
+        if remaining <= 0:
+            return VerifyRunResult(
+                sha,
+                False,
+                False,
+                f"verify group budget ({VERIFY_GROUP_TIMEOUT_SECONDS}s) exhausted "
+                "before the replay environment could be prepared",
+            )
+        if log_progress is not None:
+            log_progress("⏳ verify: preparing the replay environment (once for the group)")
+        prepared = adapter.prepare_replay(root, worktree, first_parsed)
+        if isinstance(prepared, ReplayEnvironmentRefusal):
+            return VerifyRunResult(sha, False, False, prepared.message)
+        cleanup_paths.extend(prepared.cleanup_paths)
+
         for raw_selector in task.verifies:
             remaining = group_deadline - time.monotonic()
             if remaining <= 0:
@@ -183,14 +217,15 @@ def run_live_verify(
                 # tasks file changed between validate and this attempt.
                 return VerifyRunResult(sha, False, False, parsed.message)
 
+            # Re-checked per selector even though `first_parsed` already
+            # passed it above: preflight is a per-selector claim (a specific
+            # file/line is a valid test), not a group-wide one, and running
+            # it again for the first selector is a cheap, pure re-parse — the
+            # cost `prepare_replay` above avoids repeating is the compile,
+            # not this.
             refusal = adapter.preflight(worktree, parsed)
             if refusal is not None:
                 return VerifyRunResult(sha, False, False, refusal.message)
-
-            prepared = adapter.prepare_replay(root, worktree, parsed)
-            if isinstance(prepared, ReplayEnvironmentRefusal):
-                return VerifyRunResult(sha, False, False, prepared.message)
-            cleanup_paths.extend(prepared.cleanup_paths)
 
             argv = adapter.build_scoped_command(config.test_command, parsed)
             if log_progress is not None:

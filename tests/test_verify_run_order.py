@@ -623,13 +623,13 @@ class TestGroupTimeoutBudget:
         )
         config = _cfg(root)
 
-        # Five `time.monotonic()` calls for a two-selector group: the group
-        # deadline, then a top-of-loop budget check plus a pre-run timeout
-        # calculation for each selector. Jumping 1000s "between" the two
-        # selectors simulates the first one having spent most of the group's
-        # budget, well past what a fresh REPLAY_TIMEOUT_SECONDS (900s) would
-        # allow.
-        clock = iter([0.0, 0.0, 0.0, 1000.0, 1000.0])
+        # Six `time.monotonic()` calls for a two-selector group: the group
+        # deadline, the one-time pre-preparation budget check, then a
+        # top-of-loop budget check plus a pre-run timeout calculation for
+        # each selector. Jumping 1000s "between" the two selectors simulates
+        # the first one having spent most of the group's budget, well past
+        # what a fresh REPLAY_TIMEOUT_SECONDS (900s) would allow.
+        clock = iter([0.0, 0.0, 0.0, 0.0, 1000.0, 1000.0])
         monkeypatch.setattr(live_verify_module.time, "monotonic", lambda: next(clock, 1000.0))
 
         real_run = live_verify_module.subprocess.run
@@ -684,3 +684,50 @@ class TestGroupTimeoutBudget:
         assert not result.passed
         assert "budget" in result.detail
         assert str(VERIFY_GROUP_TIMEOUT_SECONDS) in result.detail
+
+
+class TestReplayEnvironmentPreparedOnceForTheGroup:
+    """kind: integration — #375 review round 4, finding 2: every selector in
+    a declared group replays the SAME worktree, so the environment (ExUnit's
+    `mix deps` + cold compile in real life; a no-op passthrough for pytest)
+    must be prepared ONCE and shared, not once per selector out of the one
+    group budget. Exercised against `PytestAdapter` — whose `prepare_replay`
+    is a pure passthrough — because the defect lives in `run_live_verify`'s
+    loop structure, not in any one runner's environment setup."""
+
+    def test_prepare_replay_is_called_once_for_a_multi_selector_group(self, tmp_path, monkeypatch):
+        from spec_runner.tdd_runners import PytestAdapter
+
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\n"
+            "def test_b():\n    assert True\n\n\n"
+            "def test_c():\n    assert True\n"
+        )
+        _commit(root, "base")
+
+        task = _task(
+            verifies=[
+                "tests/test_group.py::test_a",
+                "tests/test_group.py::test_b",
+                "tests/test_group.py::test_c",
+            ]
+        )
+        config = _cfg(root)
+
+        real_prepare_replay = PytestAdapter.prepare_replay
+        calls: list[object] = []
+
+        def _counted_prepare_replay(self, canonical_root, replay_root, selector):
+            calls.append(selector)
+            return real_prepare_replay(self, canonical_root, replay_root, selector)
+
+        monkeypatch.setattr(PytestAdapter, "prepare_replay", _counted_prepare_replay)
+
+        result = run_live_verify(task, config)
+
+        assert result.passed, result.detail
+        assert len(calls) == 1, (
+            f"prepare_replay ran once per selector ({len(calls)} times) instead of "
+            "once for the whole group"
+        )
