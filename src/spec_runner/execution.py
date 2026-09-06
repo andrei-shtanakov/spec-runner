@@ -11,7 +11,7 @@ from .errors import classify
 from .harness import HarnessBaseline
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
-from .live_verify import run_live_verify
+from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
 from .prompt import build_task_prompt, extract_test_failures
@@ -175,11 +175,19 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
             config=config,
             state=state,
             # #367 BEH-24/FR-17 audit: the task's own resolved value, not a
-            # literal — this call site is reached only under `tdd` today, but
-            # the gate is entitled to see what actually ran, the same reason
-            # `_judge_red_commit` no longer writes a literal into the
-            # checkpoint it records (tdd.py, TASK-015).
-            facts={"execution_mode": config.resolve_execution_mode(task)},
+            # literal — the gate is entitled to see what actually ran, the
+            # same reason `_judge_red_commit` no longer writes a literal into
+            # the checkpoint it records (tdd.py, TASK-015).
+            #
+            # `pre_implementation=True` (#367 BEH-21): this is the moment
+            # before the paid implementation call. For `verify_first`, that
+            # is `tdd`'s own question — was a red demonstrated — never
+            # "is the declared group green", which would refuse by
+            # construction (that is the whole reason this cycle started).
+            facts={
+                "execution_mode": config.resolve_execution_mode(task),
+                "pre_implementation": True,
+            },
         ),
     )
     if outcome.status is GateStatus.SATISFIED:
@@ -221,7 +229,9 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
     return refusal_for(outcome.status, f"RED not confirmed, refusing to implement: {detail}")
 
 
-def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
+def _run_verify_first_phase(
+    task, config, state, reporter
+) -> tuple[Refusal | None, VerifyRunResult | None]:
     """Live verify run (#367 BEH-07/08/09): under `verify_first`, the first
     action of the task, before any paid call — including before `tdd`'s RED
     authoring pass, which is otherwise the earliest thing execution does.
@@ -237,18 +247,18 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
     (hooks.py) never run at all — fail-open, not merely lenient. Registering
     here, before the run, does not itself decide anything: this phase still
     does not call `evaluate_gates` — the green-only / TDD / instrument-error
-    branching the outcome eventually drives is later work (#367 FR-13-15,
-    TASK-008) — it only ensures the gate exists for whoever evaluates it
-    later (`_red_gate`'s `verify_first` branch, `gates.py`).
+    branching is the caller's job (#367 FR-13-15, TASK-008), driven off the
+    returned `VerifyRunResult.outcome` — this only ensures the gate exists
+    for whoever evaluates it later (`_red_gate`'s `verify_first` branch,
+    `gates.py`).
 
     Only an INSTRUMENT-classified run refuses here — the run itself could not
     establish a verdict, which is the one case this phase is entitled to stop
-    over before that branching exists. A genuine, attributable test failure
-    (#375 review) is recorded as an observation and the task proceeds exactly
-    as it would under `standard` today: FR-14 sends `test-failure` into the
-    ordinary cycle rather than treating a red group as a reason to refuse,
-    and until the dedicated branch exists, "proceed unchanged" is the only
-    reading of FR-14 that does not invert the mode's main path.
+    over. A genuine, attributable test failure (#375 review) is recorded as
+    an observation, not a refusal: it is returned to the caller (alongside
+    the result) so a `test_failure` outcome can be routed into the ordinary
+    RED-authoring cycle (BEH-21) rather than treated as a reason to stop the
+    task outright.
 
     `auto_commit: false` (#380 review round 4) refuses before any of that,
     including before this unpaid live run — a config incompatibility, not an
@@ -277,7 +287,7 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
             "incompatible with it — enable auto_commit, or use mode: tdd"
         )
         reporter.record(PhaseOutcome.ERROR, detail)
-        return Refusal(detail, RefusalKind.INSTRUMENT, terminal=True)
+        return Refusal(detail, RefusalKind.INSTRUMENT, terminal=True), None
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
     # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
@@ -299,21 +309,27 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
         # Not `terminal`: unlike the config-level incompatibility above, a
         # storage hiccup is plausibly transient and may not recur on retry.
         reporter.record(PhaseOutcome.ERROR, detail)
-        return Refusal(
-            f"verify-first entry evidence could not be recorded at {commit}: {result.detail}",
-            RefusalKind.INSTRUMENT,
+        return (
+            Refusal(
+                f"verify-first entry evidence could not be recorded at {commit}: {result.detail}",
+                RefusalKind.INSTRUMENT,
+            ),
+            None,
         )
     if result.passed:
         reporter.record(PhaseOutcome.PASS, detail)
-        return None
+        return None, result
     if result.ran:
         reporter.record(PhaseOutcome.UNEXPECTED_FAIL, detail)
         log_progress(f"\U0001f7e5 verify-first: {detail}", task.id)
-        return None
+        return None, result
     reporter.record(PhaseOutcome.ERROR, detail)
-    return Refusal(
-        f"verify-first live run could not be confirmed at {commit}: {result.detail}",
-        RefusalKind.INSTRUMENT,
+    return (
+        Refusal(
+            f"verify-first live run could not be confirmed at {commit}: {result.detail}",
+            RefusalKind.INSTRUMENT,
+        ),
+        result,
     )
 
 
@@ -405,8 +421,9 @@ def execute_task(
     # Live verify run (#367 FR-05). Under `verify_first` this is the task's
     # first action, before any paid call whatsoever — including before `tdd`'s
     # RED authoring pass below, which is otherwise the earliest paid call.
+    verify_first_result: VerifyRunResult | None = None
     if config.resolve_execution_mode(task) == "verify_first":
-        refusal = _run_verify_first_phase(task, config, state, reporter)
+        refusal, verify_first_result = _run_verify_first_phase(task, config, state, reporter)
         if refusal is not None:
             log_progress(f"⛔ {refusal}", task_id)
             state.record_attempt(
@@ -432,7 +449,18 @@ def execute_task(
     # a red has been *demonstrated* — authored, committed, and replayed against
     # that commit. The gate is what refuses, not this code: TDD is a consumer
     # of #164's mechanism, so that the review policy and this one cannot drift.
-    if config.resolve_execution_mode(task) == "tdd":
+    #
+    # A `verify_first` task whose live entry run came back `test_failure`
+    # (#367 BEH-21/FR-14) walks the same cycle: the mode made a promise
+    # (FR-13) it has not kept, and the only honest response to an observed
+    # red is the ordinary red-authoring pass — not a silent pass-through to
+    # the paid implementation call with nothing recorded. `green` (BEH-20)
+    # and `instrument_error` (BEH-22, already refused above) never reach here.
+    verify_first_red = (
+        verify_first_result is not None
+        and verify_first_result.outcome is VerifyOutcome.TEST_FAILURE
+    )
+    if config.resolve_execution_mode(task) == "tdd" or verify_first_red:
         try:
             refusal = _run_red_phase_gate(task, config, state, reporter)
         except BudgetRefused as stop:

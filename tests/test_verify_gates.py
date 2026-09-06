@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task, run_with_retries
 from spec_runner.gates import (
@@ -31,6 +32,18 @@ from spec_runner.live_verify import VerifyRunResult, run_live_verify
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ErrorCode, ExecutorState, ReviewVerdict
 from spec_runner.task import Task
+from spec_runner.tdd import AgentCall
+
+
+def _fake_red_agent(config, prompt, **kwargs):
+    """A stand-in RED-authoring pass (#367 BEH-21): writes a fresh failing
+    test, distinct from the task's own declared group, and reports its
+    selector — mirroring `test_task_008_..._red.py`'s own helper."""
+    red_test = Path(config.project_root) / "tests" / "test_red_authored.py"
+    red_test.write_text("def test_red_authored():\n    assert False, 'red'\n")
+    return AgentCall(
+        text="TDD_SELECTOR: tests/test_red_authored.py::test_red_authored\nTASK_COMPLETE"
+    )
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
@@ -530,16 +543,20 @@ class TestInstrumentErrorWithNoStateToRead:
 
 
 class TestCandidateEvidenceRefreshesBeforeTheGate:
-    """#380 review finding 1 — kind: integration, through the real
-    `execute_task` -> `post_done_hook` path (`post_done_hook` unmocked, unlike
-    every other `execute_task` scenario in this module and in
-    `test_verify_run_order.py`): a group red on entry, the today-working
-    FR-14 path, must still be able to reach DONE once the implementation
-    pass fixes it — `_verify_first_gate` must judge the candidate, not the
-    pre-implementation snapshot `_run_verify_first_phase` recorded before the
-    paid call."""
+    """#380 review finding 1, updated for #367 TASK-008/BEH-21 — kind:
+    integration, through the real `execute_task` -> `post_done_hook` path
+    (`post_done_hook` unmocked, unlike every other `execute_task` scenario in
+    this module and in `test_verify_run_order.py`): a group red on entry now
+    walks the ordinary red-authoring cycle first (BEH-21, `tdd._run_agent`
+    mocked below like the frozen BEH-21 test) — but the merge question stays
+    verify-first's own (FR-13): `_verify_first_gate` judges the candidate's
+    *declared group*, not merely whether some red was once confirmed, and
+    not the pre-implementation snapshot `_run_verify_first_phase` recorded
+    before the paid call."""
 
-    def test_a_group_red_on_entry_that_the_fix_makes_green_reaches_done(self, tmp_path):
+    def test_a_group_red_on_entry_that_the_fix_makes_green_reaches_done(
+        self, tmp_path, monkeypatch
+    ):
         root = _repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "def test_it():\n    assert False, 'not implemented yet'\n"
@@ -554,6 +571,7 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             run_lint_on_done=False,
         )
         task = _task()
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
 
         def fake_agent(config, invocation, **kwargs):
             # The agent implements the behaviour the declared group checks.
@@ -580,9 +598,12 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             "not the pre-implementation snapshot"
         )
 
-    def test_a_group_still_red_after_the_attempt_stays_blocked(self, tmp_path):
+    def test_a_group_still_red_after_the_attempt_stays_blocked(self, tmp_path, monkeypatch):
         """The other half of the same fix: re-verifying must not turn into a
-        second, weaker gate that lets an unfixed group through."""
+        second, weaker gate that lets an unfixed group through — even though
+        the attempt did author and confirm a red on its way here (BEH-21),
+        that discipline does not excuse the candidate from the group itself
+        still being red at merge time."""
         root = _repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "def test_it():\n    assert False, 'not implemented yet'\n"
@@ -597,6 +618,7 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             run_lint_on_done=False,
         )
         task = _task()
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
 
         def fake_agent(config, invocation, **kwargs):
             # The agent touches something else and never fixes the group.
@@ -708,7 +730,9 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
         assert len(ts.attempts) == 1
         assert ts.attempts[-1].error_code is ErrorCode.INFRASTRUCTURE
 
-    def test_review_is_not_bought_for_a_candidate_the_reverify_already_dooms(self, tmp_path):
+    def test_review_is_not_bought_for_a_candidate_the_reverify_already_dooms(
+        self, tmp_path, monkeypatch
+    ):
         """#380 review round 2 finding 3: symmetric to `_claims_intact_before_
         review` (#214) — a re-verify that already knows the merge will be
         refused must run, and refuse, before the paid reviewer is called."""
@@ -727,6 +751,7 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             run_lint_on_done=False,
         )
         task = _task()
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
 
         def fake_agent(config, invocation, **kwargs):
             # Never fixes the declared group.

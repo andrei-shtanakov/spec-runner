@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
 from spec_runner.gates import AncestryUnknown, GateContext
@@ -29,7 +30,7 @@ from spec_runner.live_verify import VerifyRunResult, reusable_verify_evidence, r
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
-from spec_runner.tdd import environment_id, resolve_namespace
+from spec_runner.tdd import AgentCall, environment_id, resolve_namespace
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -347,6 +348,7 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
         mock_log,
         mock_status,
         tmp_path,
+        monkeypatch,
     ):
         root = _repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
@@ -358,6 +360,15 @@ class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
         config = _cfg(root, auto_commit=True)
         state = ExecutorState(config)
         mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+
+        def _fake_red_agent(config, prompt, **kwargs):
+            red_test = Path(config.project_root) / "tests" / "test_red_task101.py"
+            red_test.write_text("def test_red_task101():\n    assert False, 'red'\n")
+            return AgentCall(
+                text="TDD_SELECTOR: tests/test_red_task101.py::test_red_task101\nTASK_COMPLETE"
+            )
+
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent)
 
         execute_task(task, config, state)
 

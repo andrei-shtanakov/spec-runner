@@ -208,17 +208,17 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-15 (—BEH-
 **Traces to:** [FR-10], [FR-11], [FR-12], [FR-21]
 
 ### TASK-008: `green` доводит задачу до DONE без покупки красного (+2 смежных BEH)
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-20, BEH-21, BEH-22.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-20 (—BEH-22)
 **Depends on:** [TASK-015]
 
 **Checklist:**
-- [ ] реализовать BEH-20: `green` доводит задачу до DONE без покупки красного
-- [ ] реализовать BEH-21: `test-failure` отправляет задачу в неизменённый TDD-цикл
-- [ ] реализовать BEH-22: `instrument-error` останавливает задачу fail-closed
-- [ ] проверка группы: tests/test_verify_branching.py (kind: e2e), tests/test_verify_branching.py (kind: integration) зелёные на BEH-20, BEH-21, BEH-22
+- [x] реализовать BEH-20: `green` доводит задачу до DONE без покупки красного
+- [x] реализовать BEH-21: `test-failure` отправляет задачу в неизменённый TDD-цикл
+- [x] реализовать BEH-22: `instrument-error` останавливает задачу fail-closed
+- [x] проверка группы: tests/test_verify_branching.py (kind: e2e), tests/test_verify_branching.py (kind: integration) зелёные на BEH-20, BEH-21, BEH-22
 
 **Traces to:** [FR-13], [FR-05], [FR-14], [FR-15]
 
