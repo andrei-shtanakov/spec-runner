@@ -29,7 +29,7 @@ from spec_runner.gates import (
 )
 from spec_runner.live_verify import VerifyRunResult, run_live_verify
 from spec_runner.runner import CliInvocation
-from spec_runner.state import ExecutorState
+from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
 
@@ -618,3 +618,132 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             result = execute_task(task, cfg, state)
 
         assert result is False
+
+    def test_auto_commit_false_with_a_red_on_entry_group_fails_loud_not_forever(self, tmp_path):
+        """#380 review round 2 finding 1: `auto_commit: false` — reachable
+        without an explicit operator choice (the subdir-repo auto-detect) —
+        means nothing this attempt does ever gets committed, so the
+        candidate the gate could judge is always the exact pre-implementation
+        commit `_run_verify_first_phase` already evidenced. A group red on
+        entry can then never become judgeable, whatever the agent does: the
+        attempt must fail loud (INFRASTRUCTURE, exit 2) instead of a silent
+        POLICY refusal a caller would retry forever for a verdict that can
+        never change."""
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented yet'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "red group")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=False,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            # Even a genuine fix does not matter: nothing gets committed.
+            (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+            ts = state.get_task_state(task.id)
+
+        assert result is False
+        last = ts.attempts[-1]
+        assert last.error_code is ErrorCode.INFRASTRUCTURE, (
+            f"expected an infrastructure refusal (nothing to judge under "
+            f"auto_commit: false), got {last.error_code} — {last.error}"
+        )
+        assert "auto_commit" in (last.error or "")
+
+    def test_auto_commit_false_with_an_already_green_group_still_reaches_done(self, tmp_path):
+        """Regression guard: the `auto_commit: false` short-circuit must not
+        touch the case that already worked — a group green on entry, whose
+        untouched candidate satisfies the gate by reference to that same
+        evidence."""
+        root = _repo(tmp_path)
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=False,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is True
+
+    def test_review_is_not_bought_for_a_candidate_the_reverify_already_dooms(self, tmp_path):
+        """#380 review round 2 finding 3: symmetric to `_claims_intact_before_
+        review` (#214) — a re-verify that already knows the merge will be
+        refused must run, and refuse, before the paid reviewer is called."""
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'not implemented yet'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "red group")
+
+        cfg = _cfg(
+            root,
+            execution_mode="verify_first",
+            auto_commit=True,
+            run_review=True,
+            run_lint_on_done=False,
+        )
+        task = _task()
+
+        def fake_agent(config, invocation, **kwargs):
+            # Never fixes the declared group.
+            (root / "README.md").write_text("notes\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            patch("spec_runner.hooks.run_code_review") as mock_review,
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(task, cfg, state)
+
+        assert result is False
+        mock_review.assert_not_called()

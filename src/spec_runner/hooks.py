@@ -639,6 +639,89 @@ def _commit_blocked_status(
     return _with_note(blocked, problem)
 
 
+def _reverify_before_review(
+    task: Task, config: ExecutorConfig, reporter: StageReporter | None
+) -> Refusal | None:
+    """Ask the verify-first re-check before paying for review (#380 review
+    round 2, findings 1 and 3). Returns a refusal, or None to proceed.
+
+    Symmetric to `_claims_intact_before_review` (#214) — a reviewer's verdict
+    on a candidate the pre-terminal gate is already certain to refuse buys
+    nothing actionable, so whatever can predict that refusal cheaply runs
+    before the paid call, not after it.
+
+    Two independent things settle here:
+
+    - **`auto_commit: false`** (reachable without an explicit operator
+      choice — the subdir-repo auto-detect in `config.py` flips it).
+      `wants_candidate` requires `auto_commit`, so under this config nothing
+      this attempt does is ever committed: the candidate the pre-terminal
+      gate will judge is always the exact commit `_run_verify_first_phase`
+      already evidenced, whatever the implementation pass did to the tree.
+      A group already green needs nothing more — that untouched candidate
+      satisfies the gate by reference to the same evidence, same as today.
+      A group that was not green can *never* become judgeable under this
+      config: no retry changes that fact, so leaving it to the ordinary
+      pre-terminal POLICY refusal would burn a full paid attempt every retry
+      for a verdict that cannot change. Refused here, once, as what it is —
+      an instrument this configuration cannot supply — rather than let it
+      exhaust `max_retries` disguised as "the work is bad".
+    - **`auto_commit: true`, `run_review: true`**: the candidate is already
+      committed (`wants_candidate`, above this call), so a real re-verify
+      against it is possible and far cheaper than a review call. A result
+      that is not green here dooms the merge exactly as a broken claim
+      does, so review is skipped for the same reason #214 skips it for
+      claims — an `instrument_error` result skips it as INSTRUMENT, a
+      genuine `test_failure` as POLICY, mirroring `_verify_first_gate`'s own
+      split (#380 review round 2 finding 2).
+
+    Returns None otherwise — including `auto_commit: true`, `run_review:
+    false`, where there is no review spend to protect and this candidate's
+    evidence is left to the later, authoritative re-verify right before the
+    pre-terminal gate (`_reverify_live_evidence_for_candidate`), which also
+    catches anything a review *fix* changes after this check runs.
+    """
+    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
+        return None
+
+    from .live_verify import VerifyOutcome
+    from .state import ExecutorState
+    from .tdd import resolve_namespace
+
+    if not config.auto_commit:
+        with ExecutorState(config) as state:
+            evidence = state.verify_evidence(resolve_namespace(config), task.id)
+        if evidence is not None and evidence.outcome == VerifyOutcome.GREEN.value:
+            return None
+        return Refusal(
+            "verify-first gate has nothing to judge: work is not committed "
+            "(auto_commit: false) — no candidate distinct from the "
+            "pre-implementation snapshot can ever exist, so this cannot "
+            "become satisfiable on a retry",
+            RefusalKind.INSTRUMENT,
+        )
+
+    if not config.run_review:
+        return None
+
+    from .live_verify import run_live_verify
+    from .runner import log_progress
+
+    if reporter:
+        reporter.enter("tests")
+    result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    with ExecutorState(config) as state:
+        state.record_verify_evidence(task=task, config=config, result=result)
+    if result.outcome is VerifyOutcome.GREEN:
+        return None
+    kind = (
+        RefusalKind.INSTRUMENT
+        if result.outcome is VerifyOutcome.INSTRUMENT_ERROR
+        else RefusalKind.POLICY
+    )
+    return Refusal(f"verify-first re-check before review: {result.detail}", kind)
+
+
 def _reverify_live_evidence_for_candidate(
     task: Task, config: ExecutorConfig, reporter: StageReporter | None
 ) -> None:
@@ -652,9 +735,7 @@ def _reverify_live_evidence_for_candidate(
     TASK-008) had no way to ever produce a green row inside the same attempt:
     the implementation pass could fix the group entirely and the gate would
     still be judging the pre-implementation failure, refusing a candidate
-    whose declared tests now pass — the guaranteed-refusal case #380's review
-    found (with `auto_commit: false`, permanently; with it on, only after
-    burning a full extra paid attempt).
+    whose declared tests now pass.
 
     Re-running here, against the already-committed candidate, gives the gate
     evidence about what it is actually being asked to merge. That is the
@@ -664,12 +745,28 @@ def _reverify_live_evidence_for_candidate(
     changes: a group still red after the fix is recorded as red again, and
     the gate stays exactly as unsatisfied as it does today.
 
+    This is the *authoritative* re-verify — it runs last, right before the
+    pre-terminal gate, so it also catches anything a review fix
+    (`ReviewVerdict.FIXED`) changed after `_reverify_before_review` ran.
+
+    `auto_commit: false` skips the run here too, but for a different reason
+    than the refusal `_reverify_before_review` already issues for a
+    not-green group under that config: with nothing ever committed, HEAD
+    cannot have moved since that earlier check, so a second live run here
+    would replay the identical commit for the identical, already-recorded
+    answer — never new information, only a second, avoidable subprocess
+    replay of the whole group.
+
     A no-op for every other mode, and for a `verify_first` task whose gate is
     not even registered: `run_live_verify` replays the declared group in its
     own worktree, and nothing should pay for a run whose answer nothing will
     read (#164 criterion 8 — dormant unless a consumer registers).
     """
-    if config.resolve_execution_mode(task) != "verify_first" or not has_gates():
+    if (
+        config.resolve_execution_mode(task) != "verify_first"
+        or not has_gates()
+        or not config.auto_commit
+    ):
         return
     from .live_verify import run_live_verify
     from .runner import log_progress
@@ -877,6 +974,19 @@ def post_done_hook(
         # gate will actually use it — the dormant path stays free of git calls.
         if has_gates() and config.run_review:
             review_checkpoint_sha = _head_sha(config)
+
+    # #380 review round 2 findings 1 & 3: settle what a verify-first
+    # re-check can predict before the paid review call — mirrors the claims
+    # check immediately below, and is the only place `auto_commit: false`'s
+    # structural "nothing to judge" case is caught before it burns a retry
+    # (unconditional on `run_review`, unlike claims: that failure mode costs
+    # a full paid attempt every retry, not merely a review call).
+    reverify_blocked = _reverify_before_review(task, config, reporter)
+    if reverify_blocked is not None:
+        reverify_blocked = _commit_blocked_status(
+            task, config, reverify_blocked, review_checkpoint_sha
+        )
+        return (False, reverify_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
