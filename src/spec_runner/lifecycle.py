@@ -20,8 +20,12 @@ stage could otherwise arrive without anyone choosing it.
 
 **Backwards is legal.** A remedy sends a task back to authoring and a retry
 re-enters implementation; a machine that only moved forward would make both of
-those errors. What is *not* legal is reaching GREEN without a red — the one
-transition that carries the contract, and the only thing this module refuses.
+those errors. What is *not* legal is reaching GREEN without a red *or* — the
+one other basis this machine recognises (#367 FR-21) — green verify-evidence
+from a `verify_first` task's live entry run (`has_verify_evidence`): a
+separate, evidenced ground for the same transition, never a red recorded
+under another name. That is the one transition that carries the contract, and
+the only thing this module refuses.
 
 Contract: ``docs/superpowers/specs/2026-08-11-claim-and-remedy-contracts.md`` §3a
 """
@@ -158,6 +162,29 @@ def has_confirmed_red(state: ExecutorState, namespace: str, task_id: str) -> boo
     return checkpoint is not None and checkpoint.outcome is RedOutcome.EXPECTED_FAIL
 
 
+def has_verify_evidence(state: ExecutorState, namespace: str, task_id: str) -> bool:
+    """Does this task have a standing green live-verify run? (#367 BEH-29/FR-21)
+
+    `verify_first`'s own basis for reaching GREEN without a red: a durable
+    `VerifyEvidence` row (`live_verify.run_live_verify` /
+    `ExecutorState.record_verify_evidence`) whose outcome is green is a
+    demonstrated fact about the declared group — a *separate* ground from
+    `has_confirmed_red`, not a substitute red recorded under another name.
+    `tdd`'s own question is unchanged: a task with no green verify-evidence
+    row (every `tdd` task, and a `verify_first` task that never went
+    green-only) answers False here exactly as it did before this existed.
+
+    Existence and outcome only, the same restraint `has_confirmed_red`
+    documents: whether that evidence covers *this* candidate tree is the
+    gate's question (`_verify_first_gate`, `gates.py`), asked with the
+    candidate SHA this module is never handed.
+    """
+    from .live_verify import VerifyOutcome
+
+    evidence = state.verify_evidence(namespace, task_id)
+    return evidence is not None and evidence.outcome == VerifyOutcome.GREEN.value
+
+
 def advance(
     state: ExecutorState,
     namespace: str,
@@ -172,7 +199,10 @@ def advance(
     history of successes only is a poor record of a lifecycle.
     """
     now = current_phase(state, namespace, task_id)
-    if (now, target) in ILLEGAL and not has_confirmed_red(state, namespace, task_id):
+    legal_basis = has_confirmed_red(state, namespace, task_id) or has_verify_evidence(
+        state, namespace, task_id
+    )
+    if (now, target) in ILLEGAL and not legal_basis:
         state.record_tdd_phase(task_id, namespace, f"refused:{target.value}", f"from {now.value}")
         # Logged **here and only here** (Copilot, PR #259). The call sites used
         # to log it too, so one event produced two lines at two severities —
@@ -180,9 +210,10 @@ def advance(
         #
         # An error, not a warning: after #253 this fires only when the record
         # and the gate disagree — the gate refuses to implement without a
-        # confirmed red, so reaching here means one of them is wrong about the
-        # same task. It stays non-fatal because bookkeeping must never fail a
-        # task (`_record_phase`: the gates decide, this remembers), but it must
+        # confirmed red or (#367 FR-21) green verify-evidence, so reaching
+        # here means one of them is wrong about the same task. It stays
+        # non-fatal because bookkeeping must never fail a task
+        # (`_record_phase`: the gates decide, this remembers), but it must
         # not read as routine either.
         logger.error(
             "Lifecycle transition refused",
@@ -193,7 +224,7 @@ def advance(
         )
         raise IllegalTransition(
             f"{task_id} cannot move from {now.value} to {target.value}: "
-            "GREEN requires a confirmed red"
+            "GREEN requires a confirmed red or green verify-evidence"
         )
     if target is TddPhase.REFACTORING and detail is None:
         # Never executed, and the record says so rather than leaving a reader
@@ -211,6 +242,7 @@ __all__ = [
     "advance",
     "current_phase",
     "has_confirmed_red",
+    "has_verify_evidence",
     "is_terminal",
     "next_phase",
 ]
