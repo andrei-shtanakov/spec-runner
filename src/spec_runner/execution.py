@@ -747,14 +747,21 @@ def execute_task(
                 # skipped) and the lifecycle should not have to know which one
                 # happened — only that the task finished.
                 #
-                # #367 BEH-24/FR-17 audit: stays `tdd`-only on purpose. A
-                # `verify_first` task never has claims to release here — its
-                # declared group is not frozen yet; freezing it, and
-                # extending this exact site to release that freeze on DONE,
-                # is FR-19/TASK-010's job. Recording a DONE lifecycle phase
-                # here has the same `tdd`-only reason as the
-                # GREEN_IMPLEMENTING site above (FR-21/TASK-009).
-                if config.resolve_execution_mode(task) == "tdd":
+                # #367 BEH-24/FR-17 audit: `tdd` always qualifies; a
+                # `verify_first` task qualifies too exactly when it walked
+                # BEH-21's red-authoring cycle (`verify_first_red`, set
+                # above) — that is the one path where `_judge_red_commit`
+                # (tdd.py) froze a file with `record_claims`, so it is the
+                # one path with a claim to release and a lock the `tdd
+                # release` door needs a DONE row to open. A green-on-entry
+                # `verify_first` task (BEH-20) never authors a red, never
+                # claims anything, and stays outside this block — recording
+                # its own lifecycle transitions is FR-21/TASK-009's job, same
+                # as the GREEN_IMPLEMENTING site above. `advance()` accepts
+                # DONE directly from `red_authoring`/`red_verifying` (only
+                # reaching GREEN without a confirmed red is illegal), so no
+                # intermediate phase needs recording for this path either.
+                if config.resolve_execution_mode(task) == "tdd" or verify_first_red:
                     _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)
                 state.record_attempt(
