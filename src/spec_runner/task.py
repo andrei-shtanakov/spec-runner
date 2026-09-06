@@ -124,8 +124,11 @@ class Task:
     execution_mode: str | None = None
     #: Declared verify-first check group (#367 FR-02), verbatim and in the
     #: exact declared order — never sorted, deduplicated, or inferred from
-    #: anything else. Empty when no `**Verifies:**` line is present.
-    verifies: list[str] = field(default_factory=list)
+    #: anything else. `None` when no `**Verifies:**` line is present at all;
+    #: `[]` when the marker is present but declares zero selectors — BEH-04
+    #: (TASK-003) must name these as two distinct defects, which requires
+    #: telling them apart here first (#372).
+    verifies: list[str] | None = None
     #: Raw text of the line that carried `**Verifies:**` (single-line form),
     #: or `None` when no such line was read. Kept so a later refusal (FR-02,
     #: BEH-05) can quote the operator's declaration verbatim without
@@ -213,6 +216,8 @@ def parse_tasks(filepath: Path) -> list[Task]:
                 continue
             verifies_item_match = VERIFIES_ITEM.match(line)
             if verifies_item_match:
+                if current_task.verifies is None:
+                    current_task.verifies = []
                 current_task.verifies.append(verifies_item_match.group(1).strip())
                 continue
             in_verifies = False

@@ -163,7 +163,26 @@ class TestGroupIsNeverInferred:
 
         tasks = parse_tasks(path)
 
-        assert tasks[0].verifies == []
+        assert tasks[0].verifies is None
+
+    def test_bare_marker_with_no_selectors_is_distinguishable_from_no_line_at_all(self, tmp_path):
+        """BEH-04 (TASK-003) must name "verify-first without a `**Verifies:**`
+        line" and "empty declared group" as separate defects (#372 minor #3);
+        that requires the model to keep them apart in the first place."""
+        bare_marker = tmp_path / "bare_marker.md"
+        bare_marker.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "Est: 1d\n"
+        )
+        no_line = tmp_path / "no_line.md"
+        no_line.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n**Mode:** verify_first\nEst: 1d\n"
+        )
+
+        assert parse_tasks(bare_marker)[0].verifies == []
+        assert parse_tasks(no_line)[0].verifies is None
 
 
 class TestCommaFormRefusesOnUnclosedBracketBeforeComma:
