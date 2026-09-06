@@ -235,6 +235,11 @@ def _run_verify_first_phase(task, config, state, reporter) -> Refusal | None:
     """
     reporter.enter("tests")
     result = run_live_verify(task, config, log_progress=lambda line: log_progress(line, task.id))
+    # #375 review round N, finding 1 (BEH-15/FR-10): the durable record is a
+    # consequence of the run itself, on all three outcomes — not something
+    # only a test can produce by calling this directly. Recorded before the
+    # branches below so an instrument-error refusal still leaves a row.
+    state.record_verify_evidence(task=task, config=config, result=result)
     # #375 review: every message names the judged commit, not just the
     # returned object's `sha` field — an operator reading the refusal or the
     # phase record could not otherwise tell which commit was on trial.
