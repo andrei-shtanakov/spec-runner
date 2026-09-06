@@ -157,17 +157,17 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-06
 **Traces to:** [FR-04]
 
 ### TASK-005: Прогон — первое действие задачи, до любого платного вызова (+2 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-07, BEH-08, BEH-09.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-07 (—BEH-09)
 **Depends on:** [TASK-004]
 
 **Checklist:**
-- [ ] реализовать BEH-07: Прогон — первое действие задачи, до любого платного вызова
-- [ ] реализовать BEH-08: Прогон ограничен объявленной группой
-- [ ] реализовать BEH-09: Вердикт относится к названному коммиту, а не к рабочему дереву
-- [ ] проверка группы: tests/test_verify_run_order.py (kind: integration) зелёные на BEH-07, BEH-08, BEH-09
+- [x] реализовать BEH-07: Прогон — первое действие задачи, до любого платного вызова
+- [x] реализовать BEH-08: Прогон ограничен объявленной группой
+- [x] реализовать BEH-09: Вердикт относится к названному коммиту, а не к рабочему дереву
+- [x] проверка группы: tests/test_verify_run_order.py (kind: integration) зелёные на BEH-07, BEH-08, BEH-09
 
 **Traces to:** [FR-05], [FR-06], [FR-07]
 
