@@ -43,7 +43,7 @@ from pathlib import Path
 from .config import ExecutorConfig
 from .git_ops import is_composite_shell_command
 from .task import Task
-from .tdd import resolve_adapter
+from .tdd import REPLAY_TIMEOUT_SECONDS, resolve_adapter
 from .tdd_runners import ReplayEnvironmentRefusal, SelectorRefusal, command_tokens
 
 #: Same shape as `git_ops._TEST_PATH_ARG`: a whitespace-delimited argument
@@ -165,6 +165,7 @@ def run_live_verify(
                 cwd=worktree,
                 capture_output=True,
                 text=True,
+                timeout=REPLAY_TIMEOUT_SECONDS,
                 env={**os.environ, **prepared.env},
             )
             if result.returncode != 0:
@@ -180,6 +181,10 @@ def run_live_verify(
                     f"{raw_selector} did not pass (exit {result.returncode}): {tail}",
                 )
         return VerifyRunResult(sha, True, True, "declared group passed")
+    except subprocess.TimeoutExpired as exc:
+        return VerifyRunResult(sha, False, False, f"verify run timed out: {exc}")
+    except Exception as exc:  # a broken replay is unverifiable, never a pass
+        return VerifyRunResult(sha, False, False, f"verify run failed: {exc}")
     finally:
         for path in cleanup_paths:
             shutil.rmtree(path, ignore_errors=True)

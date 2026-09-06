@@ -16,7 +16,7 @@ from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
 from spec_runner.live_verify import run_live_verify
 from spec_runner.runner import CliInvocation
-from spec_runner.state import ExecutorState
+from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
 
@@ -220,3 +220,154 @@ class TestLiveRunJudgesTheNamedCommit:
         result_again = run_live_verify(task, config)
         assert result_again.sha == sha
         assert result_again.passed == result.passed
+
+
+class TestLiveRunFailurePath:
+    """kind: integration — a real failure in the declared group is a refusal,
+    not a pass, and the failure names the selector that broke."""
+
+    def test_a_failing_selector_is_reported_and_never_cleaned_up_as_a_pass(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'deliberate failure'\n"
+        )
+        sha = _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+
+        assert result.sha == sha
+        assert result.ran, "the selector was never actually executed"
+        assert not result.passed
+        assert "tests/test_group.py::test_it" in result.detail
+        assert "deliberate failure" in result.detail
+
+        worktrees = subprocess.run(
+            ["git", "worktree", "list"], cwd=root, capture_output=True, text=True, check=True
+        )
+        assert worktrees.stdout.strip().count("\n") == 0, (
+            f"a replay worktree was left behind after a failing run: {worktrees.stdout!r}"
+        )
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution._run_agent_process")
+    def test_execute_task_refuses_before_any_paid_call(
+        self, mock_run, mock_log, mock_status, tmp_path
+    ):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert False\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+        state = ExecutorState(config)
+
+        outcome = execute_task(task, config, state)
+
+        assert outcome is False
+        mock_run.assert_not_called()
+        attempts = state.get_task_state(task.id).attempts
+        assert attempts, "no attempt was recorded for the refused run"
+        assert attempts[-1].error_code == ErrorCode.HOOK_FAILURE
+
+
+class TestLiveRunRefusalBeforeRunning:
+    """kind: integration — a run that cannot even start (a composite
+    `test_command`) is an instrument error, not a pass and not a test
+    failure, and still refuses before any paid call."""
+
+    def test_a_composite_test_command_refuses_without_running_anything(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root, test_command="pytest tests/ && echo done")
+
+        result = run_live_verify(task, config)
+
+        assert not result.ran, "a composite command should refuse before running"
+        assert not result.passed
+        assert "composite" in result.detail
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution._run_agent_process")
+    def test_execute_task_reports_it_as_infrastructure_not_a_task_failure(
+        self, mock_run, mock_log, mock_status, tmp_path
+    ):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root, test_command="pytest tests/ && echo done")
+        state = ExecutorState(config)
+
+        outcome = execute_task(task, config, state)
+
+        assert outcome is False
+        mock_run.assert_not_called()
+        attempts = state.get_task_state(task.id).attempts
+        assert attempts[-1].error_code == ErrorCode.INFRASTRUCTURE
+
+
+class TestLiveRunMultipleSelectors:
+    """kind: integration — the declared group is a single verdict: the first
+    selector that fails stops the run, and later selectors never execute."""
+
+    def test_the_first_failure_stops_the_group(self, tmp_path):
+        root = _init_repo(tmp_path)
+        second_marker = tmp_path / "second_ran.txt"
+        (root / "tests" / "test_group.py").write_text(
+            "def test_first():\n    assert False, 'first breaks'\n"
+        )
+        (root / "tests" / "test_second.py").write_text(
+            "from pathlib import Path\n"
+            "\n"
+            "\n"
+            "def test_second():\n"
+            f"    Path({str(second_marker)!r}).write_text('ran')\n"
+            "    assert True\n"
+        )
+        _commit(root, "base")
+
+        task = _task(
+            verifies=[
+                "tests/test_group.py::test_first",
+                "tests/test_second.py::test_second",
+            ]
+        )
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+
+        assert not result.passed
+        assert "tests/test_group.py::test_first" in result.detail
+        assert not second_marker.exists(), (
+            "the second selector ran even though the first one already failed"
+        )
+
+
+class TestLiveRunCleansUpOnEveryPath:
+    """kind: integration — the replay worktree and temp directory are removed
+    whether the group passes or fails."""
+
+    def test_no_worktree_survives_a_passing_run(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+
+        task = _task(verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+
+        assert result.passed
+        worktrees = subprocess.run(
+            ["git", "worktree", "list"], cwd=root, capture_output=True, text=True, check=True
+        )
+        assert worktrees.stdout.strip().count("\n") == 0
