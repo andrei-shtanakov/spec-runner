@@ -1082,12 +1082,13 @@ class ExecutorState:
     def latest_verify_evidence(self, task_id: str) -> "VerifyEvidenceT | None":
         """The newest verify-evidence row for this task, any namespace (#367 BEH-32).
 
-        `verify_evidence`/`verify_evidence_for_namespace` both need a
-        `namespace`, which callers derive from `ExecutorConfig`
-        (`resolve_namespace`). `build_task_json_result` has no config in
-        hand — it is handed a bare `task_id` and the state — so this reads
-        across namespaces and takes the single newest row by insertion
-        order, the same "latest wins" rule the namespaced lookups use.
+        Fallback for a caller with no `ExecutorConfig` in hand — prefer
+        `verify_evidence(namespace, task_id)` (via `tdd.resolve_namespace`)
+        whenever a config is available, since this reads across every
+        namespace sharing the state DB and would surface another
+        workstream's row for the same `task_id` under an explicit
+        `tdd_namespace`. Picks the single newest row by insertion order,
+        the same "latest wins" rule the namespaced lookups use.
         """
         from .live_verify import VerifyEvidence
 
