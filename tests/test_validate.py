@@ -149,6 +149,48 @@ class TestValidateStatusAndPriority:
         assert len(result.errors) >= 2
 
 
+class TestVerifiesDeclarationErrorSurfacesInValidate:
+    """#372 round 2, major: a malformed `**Verifies:**` declaration (a comma
+    inside an unclosed `[...]`) must become a named, task-scoped `validate`
+    error — not an uncaught traceback (NFR-03), and not a file-wide parse
+    failure that hides every other task's problems (the first cut of this
+    fix raised a bare ValueError out of `parse_tasks`, which crashed
+    `validate`/`status`/`run`/`plan`/`tui` alike over one bad line)."""
+
+    def test_named_error_quotes_the_declared_line(self, tmp_path: Path) -> None:
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text(
+            "### TASK-001: t\n🟠 P1 | ⬜ todo | Est: 1d\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_y[a,b]\n"
+        )
+
+        result = validate_tasks(tasks_file)
+
+        assert not result.ok
+        assert any("TASK-001" in e and "tests/test_a.py::test_y[a,b]" in e for e in result.errors)
+
+    def test_other_tasks_and_checks_still_run(self, tmp_path: Path) -> None:
+        """The malformed declaration in TASK-001 must not stop TASK-002's
+        own (unrelated) field error from being reported too."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text(
+            "### TASK-001: broken\n🟠 P1 | ⬜ todo | Est: 1d\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_y[a,b]\n"
+            "### TASK-002: bad priority\n🟠 P9 | ⬜ todo | Est: 1d\n"
+        )
+
+        result = validate_tasks(tasks_file)
+
+        assert any("TASK-001" in e for e in result.errors)
+        assert any("TASK-002" in e and "priority" in e.lower() for e in result.errors)
+
+
 class TestCircularDepFile:
     """Cycle detection via file-based validation."""
 

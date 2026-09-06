@@ -116,16 +116,16 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-01
 **Traces to:** [FR-01]
 
 ### TASK-002: Объявленная группа доходит до исполнения в объявленном порядке и без интерпретации (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-02, BEH-03.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-02 (—BEH-03)
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] реализовать BEH-02: Объявленная группа доходит до исполнения в объявленном порядке и без интерпретации
-- [ ] реализовать BEH-03: Группа не выводится ни из чего
-- [ ] проверка группы: tests/test_verify_first_declaration.py (kind: contract), tests/test_verify_first_declaration.py (kind: integration) зелёные на BEH-02, BEH-03
+- [x] реализовать BEH-02: Объявленная группа доходит до исполнения в объявленном порядке и без интерпретации
+- [x] реализовать BEH-03: Группа не выводится ни из чего
+- [x] проверка группы: tests/test_verify_first_declaration.py (kind: contract), tests/test_verify_first_declaration.py (kind: integration) зелёные на BEH-02, BEH-03
 
 **Traces to:** [FR-02], [FR-03]
 

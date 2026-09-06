@@ -57,6 +57,81 @@ BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
 # would hide exactly the typo the resolver exists to catch.
 MODE = re.compile(r"\*\*Mode:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
+# #367 FR-02: the declared verify-first check group — a machine-readable
+# metadata line in the same row as `**Mode:**`/`**Traces to:**`, never
+# inferred from `Traces to`, filenames, the diff, or checklist prose (BEH-03).
+# Two forms: a comma-separated list on the same line, or a multi-line block
+# (`- <selector>` per line) when the line after the marker has no trailing
+# content — the only form that can carry a pytest node id containing a comma
+# in its own parametrize suffix. Selectors are stored verbatim and in the
+# declared order; an unparseable-but-unambiguous one (rejected by the
+# adapter) is refused later (BEH-04/BEH-05), not mapped to something
+# plausible here. A comma that lands inside an unclosed `[...]` in the
+# comma form (`test_y[a,b]`) is a different, own-contract case (FR-02, #372):
+# splitting on it would manufacture selectors ("test_y[a", "b]") the operator
+# never wrote, so it is marked unparseable — `Task.verifies_error` — instead
+# of split; see `_verifies_comma_split_is_ambiguous`. This is deliberately
+# NOT a raise: `parse_tasks` reads every other task in the file regardless
+# (NFR-03/BEH-04 forbid one bad line taking down `status`/`run`/`plan`/`tui`
+# along with `validate`), and `validate_task_fields` turns the per-task
+# marker into a named, quoted error.
+VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
+# The block form's final design (#372, five review rounds — documented here
+# in full so a sixth round doesn't rediscover the same dead ends):
+#
+# - A block item is recognized POSITIONALLY, never by content. It is ANY
+#   bulleted line (optionally indented, `[ \t]*[-*]\s+` — the same tolerance
+#   TASK_META already gives its own bullet prefix, #123) except a checklist
+#   checkbox (`- [ ] ...`/`- [x] ...`, excluded below so a `**Verifies:**`
+#   block immediately followed by a checklist never swallows its first
+#   line). Everything captured is stored VERBATIM, unjudged: round 2 tried
+#   "no embedded whitespace" and rejected a legal pytest node id whose
+#   parametrize suffix has a comma AND a space (`test_y[a, b]`); round 3
+#   then tried "looks like `path::name`" and made every ExUnit selector
+#   (`path:LINE`, which `ExUnitAdapter.parse_selector` requires and refuses
+#   `::` for) undeclarable in the block form, while still silently dropping
+#   any pytest target the adapter itself would refuse instead of storing it
+#   for that later refusal to quote (BEH-04/BEH-05); round 5 then found
+#   that even an indented list (no leading whitespace tolerance at all)
+#   silently emptied the whole group. A selector's shape is the ADAPTER's
+#   judgment (FR-02), never the parser's — the single-line comma form
+#   already stores everything verbatim with no shape check, and the block
+#   form must agree with it on identical input. A bullet that reads as
+#   prose (`- перепроверить после мержа WS-341`) is therefore not filtered
+#   either: declared by position, judged by the adapter later, quoting it
+#   back — the same contract `**Mode:**` already holds for an unrecognized
+#   value.
+# - The block CLOSES purely structurally, never by guessing at content: it
+#   runs from the marker to the nearest of — a checklist item, a `**...**`
+#   field, the priority/status (`Est:`/TASK_META) line, a new task header
+#   (handled above, before this point), or a non-blank line that is not
+#   itself a bullet (an ordinary prose PARAGRAPH). Blank lines inside the
+#   block are fully transparent — both leading (before the first item) and
+#   between items (a "loose list" in markdown terms, legal and common) —
+#   round 5 found round 4's "a blank line after an item closes the block"
+#   rule silently truncated a loose-list declaration to its first item,
+#   the same silent-loss class this whole design exists to close. Once the
+#   block closes, it never reopens (round 4): a bullet appearing after the
+#   closing paragraph lands in `description` like any other text,
+#   deliberately — the boundary is structural, not a search for more
+#   selectors further down.
+VERIFIES_ITEM = re.compile(r"^[ \t]*[-*]\s+(?!\[[ x]\])(.+)$")
+
+
+def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
+    """True when splitting ``trailing`` on commas would break a pytest
+    parametrize suffix, e.g. ``test_y[a,b]``, into fragments the operator
+    never wrote (#372) — a comma reached while a ``[`` is still unclosed."""
+    depth = 0
+    for ch in trailing:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth > 0:
+            return True
+    return False
+
 
 # "review" (🔍, #66): gates passed, code review/commit still running — an
 # interrupted run leaves this honest intermediate instead of a bare
@@ -87,6 +162,26 @@ class Task:
     #: project default. Resolved — and validated — by
     #: `ExecutorConfig.resolve_execution_mode`.
     execution_mode: str | None = None
+    #: Declared verify-first check group (#367 FR-02), verbatim and in the
+    #: exact declared order — never sorted, deduplicated, or inferred from
+    #: anything else. `None` when no `**Verifies:**` line is present at all;
+    #: `[]` when the marker is present but declares zero selectors — BEH-04
+    #: (TASK-003) must name these as two distinct defects, which requires
+    #: telling them apart here first (#372).
+    verifies: list[str] | None = None
+    #: Raw text of the line that carried `**Verifies:**` (single-line form),
+    #: or `None` when no such line was read. Kept so a later refusal (FR-02,
+    #: BEH-05) can quote the operator's declaration verbatim without
+    #: re-reading the file (#372).
+    verifies_raw: str | None = None
+    #: Named refusal message when the declared `**Verifies:**` line could
+    #: not be parsed at all (e.g. a comma inside an unclosed `[...]`, #372
+    #: round 2) — `verifies` stays `None` in this case too, but this field
+    #: is what tells "unparseable" apart from "no line at all" or "empty
+    #: group". `parse_tasks` does not raise on this: the task is marked and
+    #: the rest of the file still parses; `validate_task_fields` turns it
+    #: into a named, quoted validate error (FR-03, NFR-03: no traceback).
+    verifies_error: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -121,6 +216,9 @@ def parse_tasks(filepath: Path) -> list[Task]:
     current_milestone = ""
     in_checklist = False
     in_tests = False
+    # #367 BEH-02: True right after a bare `**Verifies:**` line (no trailing
+    # content) until a line that isn't `- <selector>` ends the block.
+    in_verifies = False
 
     for i, line in enumerate(lines):
         # Determine milestone
@@ -150,10 +248,32 @@ def parse_tasks(filepath: Path) -> list[Task]:
             )
             in_checklist = False
             in_tests = False
+            in_verifies = False
             continue
 
         if not current_task:
             continue
+
+        # `**Verifies:**` multi-line block continuation (#367 BEH-02): must be
+        # checked before description capture below, or a selector line would
+        # leak into the description and the declared group would stay empty.
+        # See `VERIFIES_ITEM` above for the full, five-rounds-settled design:
+        # blank lines are fully transparent regardless of position (a loose
+        # markdown list is legal), any bulleted line — indented or not — is
+        # a verbatim item, and anything else closes the block by simply not
+        # matching `VERIFIES_ITEM` and falling through to be handled by its
+        # own branch below in this same iteration (a new task header is
+        # handled above, before this point is ever reached).
+        if in_verifies:
+            if not line.strip():
+                continue
+            verifies_item_match = VERIFIES_ITEM.match(line)
+            if verifies_item_match:
+                if current_task.verifies is None:
+                    current_task.verifies = []
+                current_task.verifies.append(verifies_item_match.group(1).strip())
+                continue
+            in_verifies = False
 
         # Metadata (priority, status)
         meta_match = TASK_META.match(line)
@@ -231,6 +351,39 @@ def parse_tasks(filepath: Path) -> list[Task]:
         mode_match = MODE.search(line)
         if mode_match:
             current_task.execution_mode = mode_match.group(1).strip().lower()
+            continue
+
+        verifies_match = VERIFIES.search(line)
+        if verifies_match:
+            current_task.verifies_raw = line
+            trailing = verifies_match.group(1).strip()
+            if trailing == "—":
+                # Same "— = nothing" convention as the neighboring
+                # `**Depends on:**`/`**Blocks:**` fields (#372 round 3):
+                # a single literal selector named '—' is never what an
+                # operator writing this line meant.
+                current_task.verifies = []
+                in_verifies = False
+            elif trailing:
+                if _verifies_comma_split_is_ambiguous(trailing):
+                    current_task.verifies = None
+                    current_task.verifies_error = (
+                        "**Verifies:** line has a comma inside an unclosed "
+                        "'[...]' — splitting it on commas would produce "
+                        "selectors the operator never wrote. A pytest node "
+                        "id with a comma in its own parametrize suffix "
+                        "(e.g. test_y[a,b]) must be declared with the "
+                        "multi-line block form (one selector per '- ' line "
+                        f"under the marker) instead. Declared line: {line!r}"
+                    )
+                    in_verifies = False
+                    continue
+                current_task.verifies = [s.strip() for s in trailing.split(",") if s.strip()]
+                in_verifies = False
+            else:
+                current_task.verifies = []
+                in_verifies = True
+            continue
 
     if current_task:
         tasks.append(current_task)
