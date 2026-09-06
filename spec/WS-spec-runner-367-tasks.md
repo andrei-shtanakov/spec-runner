@@ -116,7 +116,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-01
 **Traces to:** [FR-01]
 
 ### TASK-002: Объявленная группа доходит до исполнения в объявленном порядке и без интерпретации (+1 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-02, BEH-03.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-02 (—BEH-03)
