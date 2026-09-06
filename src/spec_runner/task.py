@@ -206,7 +206,11 @@ def parse_tasks(filepath: Path) -> list[Task]:
         # `**Verifies:**` multi-line block continuation (#367 BEH-02): must be
         # checked before description capture below, or a selector line would
         # leak into the description and the declared group would stay empty.
+        # A blank line does not close the block (#372) — symmetric with
+        # `**Checklist:**`, whose `in_checklist` likewise survives one.
         if in_verifies:
+            if not line.strip():
+                continue
             verifies_item_match = VERIFIES_ITEM.match(line)
             if verifies_item_match:
                 current_task.verifies.append(verifies_item_match.group(1).strip())

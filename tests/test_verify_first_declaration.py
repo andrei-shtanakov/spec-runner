@@ -60,6 +60,32 @@ class TestDeclaredGroupReachesParsingInDeclaredOrder:
         assert "tests/test_b.py::test_y" not in tasks[0].description
         assert "tests/test_a.py::test_x" not in tasks[0].description
 
+    def test_blank_line_inside_multiline_block_does_not_close_it(self, tmp_path):
+        """Symmetric with `**Checklist:**` (task.py's `in_checklist` survives
+        a blank line): a blank line between the marker and its selectors, or
+        between two selector lines, must not end the block — otherwise the
+        remaining selectors leak into the description (#372 minor #2)."""
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:**\n"
+            "\n"
+            "- tests/test_b.py::test_y\n"
+            "\n"
+            "- tests/test_a.py::test_x\n"
+            "Est: 1d\n"
+        )
+
+        tasks = parse_tasks(path)
+
+        assert tasks[0].verifies == [
+            "tests/test_b.py::test_y",
+            "tests/test_a.py::test_x",
+        ]
+        assert "tests/test_b.py::test_y" not in tasks[0].description
+        assert "tests/test_a.py::test_x" not in tasks[0].description
+
     def test_a_selector_the_adapter_would_refuse_is_stored_verbatim(self, tmp_path):
         """An unparseable value is kept exactly as written, not mapped to
         something plausible — the same rule `**Mode:**` already holds."""
