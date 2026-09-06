@@ -333,8 +333,14 @@ unclosed `[...]` parameter cannot be told apart from a second selector in
 the comma form, so that shape is refused (quoting the declared line
 verbatim) rather than guessed, with a pointer to the multi-line form. A
 missing or empty group under `verify_first` is refused before anything
-runs, at config/tasks load time and in `spec-runner validate` — never at
-task-execution time.
+runs, at config/tasks load time and in `spec-runner validate` — this is the
+normal path, catching the mistake before a single subprocess spends any
+time. It is also, separately, one of the enumerated `instrument-error`
+inputs at task-execution time (below): `spec-runner watch` validates once
+before its loop and does not re-validate on every iteration, so a task
+added or edited with a missing/empty `**Verifies:**` line after that
+validation still reaches the live run, which refuses it there as a
+fail-closed backstop rather than a silent guess.
 
 **The live run.** For a `verify_first` task, the live run is the task's
 **first** action — after the branch stage has put the tree in a known
@@ -365,9 +371,13 @@ positively proven `green` or `test-failure` falls through to
   `xfail`/`xpass` line is not execution, even though it still carries the
   requested node id and would otherwise read as a pass). Green opens the
   **green-only path**: no RED authoring pass runs, no red is purchased, and
-  the red gate is satisfied by a reference to this run's verify-evidence
-  instead of a confirmed red checkpoint. The task then continues its normal
-  paid pass and reaches DONE exactly like any other task.
+  the red gate is satisfied by a reference to verify-evidence instead of a
+  confirmed red checkpoint — concretely, the *latest* recorded evidence row
+  for the task (`_verify_first_gate` reads `state.verify_evidence(...)`),
+  which by the time the gate is actually asked is normally one of the later
+  re-verifies against the merge candidate (see "Declared boundaries" below),
+  not necessarily this entry run. The task then continues its normal paid
+  pass and reaches DONE exactly like any other task.
 - **`test-failure`** — at least one declared selector is proven to have
   actually failed (proven selection, proven execution, but the run failed),
   even if the rest of the group passed — a mixed group is a real failure,
@@ -399,21 +409,37 @@ refusal's own words, a timestamp, and the harness itself as the recording
 actor (never an operator — `record_waiver` remains the only
 operator-authored override and is never called by this path). Evidence is
 tied to the question it answered: it stops being reusable the moment any
-`POLICY_KEYS` value changes (including `execution_mode` itself), the
-moment the declared group changes, or when the candidate no longer
-descends from the evidence's commit — reusing it across any of those
-changes would answer a different question with an old row's yes.
+`POLICY_KEYS` value changes (including the *project-level* `execution_mode`
+default — the config attribute the hash is computed from, not a task's own
+`**Mode:**` override; `VerifyEvidence` records no per-task-mode axis
+separately), the moment the declared group changes, or when the candidate
+no longer descends from the evidence's commit — reusing it across any of
+those changes would answer a different question with an old row's yes.
 
 **Declared boundaries.** Two limits are intentional, not gaps to be closed
 later:
 
-- **One run, no retry policy (Q-05).** A recorded outcome is what was
-  *observed*, once — never an average over repeated attempts. A flaky
-  declared group is not resolved by averaging; it is resolved by making
-  the run re-checkable (the evidence names the exact SHA and group so
-  anyone can replay it) and by asking the pre-terminal gate again before
-  merge. If a consumer arrives with a measurably flaky group, this
-  boundary is revisited then — it is not solved implicitly here.
+- **One run per decision point, no retry policy (Q-05).** The declared
+  group is judged live at up to three decision points in an attempt, each
+  asking a different question about a different commit: the task's entry
+  action, before any paid call (`_run_verify_first_phase`, above); again
+  immediately before the paid review call, whenever `run_review` is
+  enabled (`hooks._reverify_before_review`), so a review is not bought
+  against a candidate no run has actually judged; and again, the
+  authoritative read, right before the pre-terminal merge gate, against
+  the tree that will actually merge (`hooks._reverify_live_evidence_for_candidate`)
+  — skipped only when that candidate's tree already matches what the
+  immediately preceding review-time replay just confirmed. That floor of
+  two replays and ceiling of three is deliberate, not an oversight: what
+  Q-05 actually bounds is *within* each of those points — a recorded
+  outcome at a given commit is what was *observed*, once, never an average
+  over repeated attempts at judging that same commit. A flaky declared
+  group is not resolved by averaging at any one point; it is resolved by
+  making each run re-checkable (the evidence names the exact SHA and group
+  so anyone can replay it) and by asking the gate again, against a fresh
+  commit, at the next decision point. If a consumer arrives with a
+  measurably flaky group, this boundary is revisited then — it is not
+  solved implicitly here.
 - **The group is frozen, and released on DONE (Q-06).** After a `green`
   outcome, the task still runs its normal paid agent pass, which is
   physically capable of editing the very files the evidence is a
@@ -427,14 +453,19 @@ later:
   its own declared group; any new pins or new checks it produces on the
   green path go into a separate, unclaimed file.
 
-**The double test run is intentional (NFR-02).** The live verify run and
-`post_done_hook`'s own test run are **not** deduplicated, even though both
-run tests for the same task. They ask different questions of different
-trees: the live run judges one named commit, scoped to the declared group,
-before any paid work happens; `post_done_hook` judges the tree the paid
-pass actually produced, against the project's full test command, after
-the work happens. Collapsing them would answer one question with the
-other's evidence.
+**The repeated test runs are intentional (NFR-02).** None of the live
+verify replays enumerated under Q-05 above are deduplicated against each
+other, and none of them are deduplicated against `post_done_hook`'s own
+test run, even though all of them run tests for the same task. Each asks a
+different question of a different tree: the entry run judges the commit
+the task starts from, scoped to the declared group, before any paid work
+happens; the pre-review and pre-terminal re-verifies judge the *candidate*
+commit the task has produced so far, at two different moments the
+candidate can still change (a review fix moving HEAD between them); and
+`post_done_hook` judges the tree the paid pass actually produced, against
+the project's full test command, after the work happens — always run,
+independent of `verify_first`. Collapsing any of these would answer one
+question with another's evidence.
 
 **Selector dictionary boundary.** The declared group's selectors are drawn
 from whatever dictionary the project's resolved runner adapter already

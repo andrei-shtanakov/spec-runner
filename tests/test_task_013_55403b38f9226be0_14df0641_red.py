@@ -26,7 +26,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
     def test_beh33_facts_are_documented(self):
         architecture = (REPO_ROOT / "docs" / "architecture.md").read_text().lower()
-        changelog = (REPO_ROOT / "CHANGELOG.md").read_text().lower()
+        changelog_full = (REPO_ROOT / "CHANGELOG.md").read_text().lower()
+
+        # Scope the CHANGELOG checks to the `[Unreleased]` section: this task
+        # only ever writes there, and several phrases used below (e.g.
+        # "invalidat...") already exist verbatim in older, released entries
+        # (#141's `POLICY_KEYS` note). Checking the whole file would let a
+        # reverted/never-written entry hide behind that unrelated history.
+        unreleased_start = changelog_full.index("## [unreleased]")
+        next_heading = changelog_full.index("\n## [", unreleased_start + 1)
+        changelog = changelog_full[unreleased_start:next_heading]
 
         missing: list[str] = []
 
@@ -34,16 +43,12 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
         if "verify_first" not in architecture and "verify-first" not in architecture:
             missing.append("architecture.md: the `verify_first` execution mode")
         if "third" not in architecture:
-            missing.append(
-                "architecture.md: verify_first named as the third execution mode"
-            )
+            missing.append("architecture.md: verify_first named as the third execution mode")
 
         # FR-02: the group-declaration form — a dedicated, non-inferred
         # metadata line.
         if "**verifies:**" not in architecture and "verifies:" not in architecture:
-            missing.append(
-                "architecture.md: the `**Verifies:**` group-declaration line"
-            )
+            missing.append("architecture.md: the `**Verifies:**` group-declaration line")
 
         # FR-10: verify-evidence composition and meaning.
         if "verify-evidence" not in architecture and "verify_evidence" not in architecture:
@@ -52,8 +57,7 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
             term in architecture for term in ("environment_id", "config hash", "config_hash")
         ):
             missing.append(
-                "architecture.md: verify-evidence identity fields "
-                "(environment_id / config hash)"
+                "architecture.md: verify-evidence identity fields (environment_id / config hash)"
             )
 
         # FR-16: the three outcomes and the exhaustive branching rule.
@@ -62,7 +66,9 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
             and ("test-failure" in architecture or "test_failure" in architecture)
             and ("instrument-error" in architecture or "instrument_error" in architecture)
         ):
-            missing.append("architecture.md: the three outcomes green/test-failure/instrument-error")
+            missing.append(
+                "architecture.md: the three outcomes green/test-failure/instrument-error"
+            )
         if not any(
             phrase in architecture
             for phrase in ("no silent fourth", "not a silent fourth", "exhaustive by construction")
@@ -72,7 +78,12 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
         # Q-05: declared boundary — one run, no retry policy.
         if not any(
             phrase in architecture
-            for phrase in ("one run", "single run", "no retry policy", "retry policy is not introduced")
+            for phrase in (
+                "one run",
+                "single run",
+                "no retry policy",
+                "retry policy is not introduced",
+            )
         ):
             missing.append("architecture.md: Q-05 — one run, no retry policy on a flaky group")
 
@@ -106,15 +117,31 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
         # CHANGELOG: names the change and its observable consequences,
         # including BEH-17 checkpoint devaluation for a task whose mode
         # line changed.
+        # A bare `verify_first` mention is not enough on its own: the
+        # pre-existing BEH-32 entry (`--json-result`'s `verify_outcome`
+        # field) already names the mode in passing without describing it.
+        # Require, in addition, a phrase from this task's own entry that
+        # actually describes what the mode does.
         if "verify_first" not in changelog and "verify-first" not in changelog:
             missing.append("CHANGELOG.md: the verify_first mode itself")
+        if not any(
+            phrase in changelog
+            for phrase in (
+                "instead of a red authoring pass",
+                "already-delivered behaviour",
+                "already-delivered behavior",
+            )
+        ):
+            missing.append(
+                "CHANGELOG.md: the verify_first mode described (not just "
+                "mentioned in passing, as BEH-32's entry does)"
+            )
         if not any(
             phrase in changelog
             for phrase in ("checkpoints for a task whose", "obsolete", "invalidat")
         ):
             missing.append(
-                "CHANGELOG.md: checkpoints obsoleted for tasks whose mode line "
-                "changed (BEH-17)"
+                "CHANGELOG.md: checkpoints obsoleted for tasks whose mode line changed (BEH-17)"
             )
 
         assert not missing, "BEH-33 facts not yet documented:\n" + "\n".join(

@@ -33,19 +33,34 @@ is a **breaking change** and requires a major version bump plus an entry here.
   environment identity, judging adapter, outcome, and detail), independent
   of `tdd.RedCheckpoint` so a reader of red checkpoints never mistakes one
   for the other; `tdd status` (and its `--json`) shows which of the three
-  paths a task took. **Consequence for existing tasks:** because
-  `execution_mode` is itself part of the policy hash a checkpoint is
-  compared against, a task whose `**Mode:**` line changes — including one
-  that newly declares `verify_first` — invalidates that task's previously
-  recorded checkpoint, the same way any other `POLICY_KEYS` change already
-  does (BEH-17); this is a consequence of the existing rule, not a new
-  relaxation. Declared boundaries: a live run happens exactly once, with no
-  averaging/retry policy on a flaky group; a green-only task's declared
-  group is frozen by the usual claim/byte-lock machinery for the duration
-  of the task and released on DONE like any other claim; the live run and
-  `post_done_hook`'s own test run remain intentionally un-deduplicated (they
-  judge different trees at different times); and the selector dictionary is
-  unchanged — node ids only, a bare file target is not declarable. See
+  paths a task took. **Consequence for existing tasks:** a recorded
+  checkpoint is only reused when its stored `execution_mode` matches the
+  task's *currently resolved* mode (`resolve_execution_mode(task)`), so a
+  task whose own `**Mode:**` line changes — including one that newly
+  declares `verify_first` — stops matching its previously recorded
+  checkpoint and must earn a new one; separately, because the
+  *project-level* `execution_mode` default is itself part of the
+  `POLICY_KEYS` policy hash, changing that project default invalidates
+  every task's checkpoint the same way any other `POLICY_KEYS` change
+  already does (BEH-17) — two distinct axes, not one hash covering both.
+  Declared boundaries: the declared group is not judged by a single live
+  run per attempt — it replays as the task's first, unpaid action before
+  any paid call (this entry's live run); it replays again immediately
+  before the paid review call whenever `run_review` is enabled; and it
+  replays once more, authoritatively, against the actual committed
+  candidate right before the pre-terminal merge gate, skipped only when
+  that candidate's tree already matches what the immediately preceding
+  replay just confirmed — so two live replays is the floor per attempt and
+  three the ceiling (a review verdict that moves HEAD forces the last one).
+  Each replay is a single pass/fail verdict about its own commit, with no
+  averaging/retry policy applied within or across them for a flaky group
+  (Q-05); a green-only task's declared group is frozen by the usual
+  claim/byte-lock machinery for the duration of the task and released on
+  DONE like any other claim; these live verify replays and
+  `post_done_hook`'s own full-suite test run remain intentionally
+  un-deduplicated (they judge different trees, scoped differently, at
+  different times); and the selector dictionary is unchanged — node ids
+  only, a bare file target is not declarable. See
   `docs/architecture.md#verify-first-execution-mode-execution_mode-verify_first-367`
   for the full contract.
 
