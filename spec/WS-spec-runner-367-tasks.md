@@ -172,7 +172,7 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-07 (—BEH-
 **Traces to:** [FR-05], [FR-06], [FR-07]
 
 ### TASK-006: Неразрешимый адаптер и композитная `test_command` — отказ, а не догадка (+5 смежных BEH)
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-23.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-10 (—BEH-23)
