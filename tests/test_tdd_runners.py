@@ -499,6 +499,44 @@ class TestBuildScopedCommand:
         argv = adapter.build_scoped_command("mix test test/", selector)
         assert argv == ["mix", "test", "--trace", "test/probe_test.exs:12"]
 
+    def test_pytest_keeps_a_path_shaped_executable(self):
+        """#375 review round 2, finding 2: `./venv/bin/pytest tests/` is a
+        supported `test_command` (`infer_adapter`/`validate_command` both
+        accept it by basename), and stripping the executable itself left
+        argv starting with the node id — `subprocess.run` then raised
+        `FileNotFoundError`."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("./venv/bin/pytest tests/", selector)
+        assert argv == ["./venv/bin/pytest", "tests/test_x.py::test_y"]
+
+    def test_pytest_does_not_eat_an_unenumerated_value_flags_argument(self):
+        """#375 review round 2, finding 3: `--cov` is not in any enumerated
+        value-flag list, and the old blacklist approach treated its value as
+        a stray path, dropped it, and left `--cov` free to swallow the
+        selector instead — widening the run past the declared group. The
+        conservative default (protect unless positively known boolean) must
+        keep `src` right after `--cov`."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        argv = ADAPTER.build_scoped_command("pytest tests/ -v --cov src", selector)
+        assert argv == [
+            "pytest",
+            "-v",
+            "--cov",
+            "src",
+            "tests/test_x.py::test_y",
+        ]
+
+    def test_exunit_keeps_a_path_shaped_executable(self):
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        adapter = ExUnitAdapter()
+        selector = adapter.parse_selector("test/probe_test.exs:12")
+        assert isinstance(selector, Selector)
+        argv = adapter.build_scoped_command("./bin/mix test test/", selector)
+        assert argv == ["./bin/mix", "test", "--trace", "test/probe_test.exs:12"]
+
 
 class TestExecutionProven:
     """#375 review, finding 2: verify-first's own strict class of proven-
@@ -524,4 +562,28 @@ class TestExecutionProven:
         selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
         assert isinstance(selector, Selector)
         result = _result(0, stdout="tests/test_x.py::test_y XFAIL\n1 xfailed in 0.01s")
+        assert ADAPTER.execution_proven(selector, result) is False
+
+    def test_a_passing_run_with_a_warning_still_proves_execution(self):
+        """#375 review round 2, finding 1: `1 passed, 1 warning in 0.05s` is
+        an ordinary green run whose dependency emits a warning. Requiring
+        exactly one category of ANY kind rejected this as inconclusive and
+        reported the passing selector as "not executed" — refusing every
+        project whose declared tests emit a warning from using verify_first
+        at all."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(0, stdout="===== 1 passed, 1 warning in 0.05s =====")
+        assert ADAPTER.execution_proven(selector, result) is True
+
+    def test_a_skipped_run_with_a_warning_still_does_not_prove_execution(self):
+        """The neutral-category filter must not turn into "ignore everything
+        except the count of 1" — a genuinely skipped run stays unproven even
+        with a warning alongside it."""
+        selector = ADAPTER.parse_selector("tests/test_x.py::test_y")
+        assert isinstance(selector, Selector)
+        result = _result(
+            0,
+            stdout=("tests/test_x.py::test_y SKIPPED\n===== 1 skipped, 1 warning in 0.05s ====="),
+        )
         assert ADAPTER.execution_proven(selector, result) is False

@@ -362,8 +362,9 @@ def command_tokens(test_command: str) -> list[str]:
 def strip_positional_paths(
     tokens: list[str],
     *,
-    keep: frozenset[str],
-    value_flags: frozenset[str],
+    keep_exact: frozenset[str],
+    executable_names: frozenset[str],
+    boolean_flags: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Drop bare positional path arguments from a tokenised command (#375).
 
@@ -373,27 +374,51 @@ def strip_positional_paths(
     `git_ops.build_scoped_test_command` already applies), and the previous
     approach hardcoded a single literal directory name (`{"tests"}`) outside
     any adapter, so a project naming its suite `test/` or `suite/` ran the
-    whole thing plus the selector. This is runner-agnostic: it keeps the
-    interpreter/wrapper/runner tokens named in ``keep`` and every flag, and
-    drops everything else positional — whatever that directory is called.
+    whole thing plus the selector. This is runner-agnostic: it drops every
+    positional token that is not one of the interpreter/wrapper/subcommand
+    literals in ``keep_exact`` or the runner's own executable — whatever the
+    test directory is called.
 
-    ``value_flags`` is what makes this safe against #375's other review
-    finding: a flag in that set consumes the token *after* it, so
-    ``--ignore tests/legacy`` keeps its value rather than stripping it and
-    leaving ``--ignore`` to swallow the next real argument instead.
+    Two different questions, on purpose, after round 2 of review:
+
+    - **Is this token the runner executable?** Answered by *basename*
+      (``executable_names``), the same rule `executable_of` already uses —
+      `./venv/bin/pytest tests/` is a supported `test_command` shape
+      (`infer_adapter`/`validate_command` both accept it), and a token match
+      that requires the literal string `"pytest"` drops the executable itself
+      as a stray positional, leaving argv with the node id in position 0.
+    - **Is this token a wrapper/subcommand literal** (`uv`, `run`, `-m`, or
+      ExUnit's `test` in `mix test`)? Those never appear path-prefixed in
+      practice, so an *exact* match is enough and does not risk colliding
+      with a same-named runner executable found by basename.
+
+    ``boolean_flags`` is the safe direction to guess a flag's arity in
+    (#375 review round 2, finding 3): a flag is assumed to consume the token
+    after it — protecting it from being read as a stray path — UNLESS this
+    adapter positively knows the flag takes no argument. `--ignore
+    tests/legacy`, `--cov src`, `-W error`, `uv run`'s own `--python 3.12` —
+    none of pytest's/`uv`'s value-taking flags need to be enumerated for this
+    to be safe; only the flags known to take nothing (`-v`, `-q`, …) need
+    naming, and getting that enumeration wrong only *under*-narrows (some
+    extra flag value survives in the command), never mangles it into
+    swallowing the declared selector.
     """
     kept: list[str] = []
-    take_next = False
+    protect_next = False
     for token in tokens:
-        if take_next:
+        if protect_next:
             kept.append(token)
-            take_next = False
+            protect_next = False
             continue
         if token.startswith("-"):
             kept.append(token)
-            take_next = token in value_flags
+            protect_next = token not in boolean_flags
             continue
-        if token in keep or _PYTHONS.match(PurePosixPath(token).name):
+        if (
+            token in keep_exact
+            or PurePosixPath(token).name in executable_names
+            or _PYTHONS.match(PurePosixPath(token).name)
+        ):
             kept.append(token)
             continue
         # A bare positional argument that is none of the above is the
@@ -529,24 +554,34 @@ class PytestAdapter:
         assert isinstance(selector.locator, PytestNodeId)
         return [*command_tokens(test_command), selector.locator.value]
 
-    #: pytest flags whose next token is the flag's VALUE, not a stray path
-    #: argument — `--ignore tests/legacy -q` must keep `-q`, not have it eaten
-    #: as `--ignore`'s argument once `tests/legacy` is stripped (#375 review).
-    _VALUE_FLAGS = frozenset(
+    #: pytest flags KNOWN to take no argument — the only ones whose next
+    #: token `strip_positional_paths` is allowed to treat as a stray
+    #: positional path rather than the flag's value (#375 review round 2,
+    #: finding 3: default to protecting a flag's argument, since guessing an
+    #: unenumerated value-flag wrong can eat the declared selector, while
+    #: guessing a boolean flag wrong only leaves an extra token in the
+    #: command).
+    _BOOLEAN_FLAGS = frozenset(
         {
-            "-k",
-            "-m",
-            "-n",
-            "-o",
-            "-c",
-            "-p",
-            "--ignore",
-            "--ignore-glob",
-            "--deselect",
-            "--rootdir",
-            "--confcutdir",
-            "--maxfail",
-            "--dist",
+            "-v",
+            "-vv",
+            "-vvv",
+            "-q",
+            "-qq",
+            "-s",
+            "-x",
+            "-l",
+            "--collect-only",
+            "--co",
+            "--lf",
+            "--ff",
+            "--nf",
+            "--strict",
+            "--strict-markers",
+            "--disable-warnings",
+            "--no-header",
+            "--no-summary",
+            "--continue-on-collection-errors",
         }
     )
 
@@ -554,8 +589,9 @@ class PytestAdapter:
         assert isinstance(selector.locator, PytestNodeId)
         kept = strip_positional_paths(
             command_tokens(test_command),
-            keep=_RUNNER_WRAPPERS | {"pytest"},
-            value_flags=self._VALUE_FLAGS,
+            keep_exact=_RUNNER_WRAPPERS,
+            executable_names=frozenset({"pytest"}),
+            boolean_flags=self._BOOLEAN_FLAGS,
         )
         return [*kept, selector.locator.value]
 
@@ -593,9 +629,22 @@ class PytestAdapter:
     #: way.
     _PROVEN_EXECUTION_WORDS = frozenset({"passed", "failed", "error", "errors"})
 
+    #: Summary categories that say nothing about whether the requested test
+    #: executed, filtered out before judging the rest (#375 review round 2,
+    #: finding 1): `1 passed, 1 warning in 0.05s` is an ordinary passing run
+    #: whose dependency happens to emit a `DeprecationWarning`, and reading
+    #: "more than one category" as "inconclusive" refused every such project
+    #: from using verify_first at all — with a message that falsely claimed
+    #: the selector was skipped.
+    _NEUTRAL_CATEGORIES = frozenset({"warning", "warnings"})
+
     def execution_proven(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
         output = f"{result.stdout or ''}\n{result.stderr or ''}"
-        counts = pytest_summary_counts(output)
+        counts = [
+            (number, word)
+            for number, word in pytest_summary_counts(output)
+            if word not in self._NEUTRAL_CATEGORIES
+        ]
         if len(counts) != 1:
             return False
         number, word = counts[0]
@@ -949,26 +998,25 @@ class ExUnitAdapter:
             tokens.append(TRACE_FLAG)
         return [*tokens, f"{selector.path}:{selector.locator.line}"]
 
-    #: `mix test` flags whose next token is the flag's value, not a stray path
-    #: (#375 review, same reasoning as `PytestAdapter._VALUE_FLAGS`).
-    _VALUE_FLAGS = frozenset(
-        {
-            "--seed",
-            "--max-failures",
-            "--formatter",
-            "--cover",
-            "--exclude",
-            "--include",
-            "--only",
-        }
-    )
+    #: `mix test` flags KNOWN to take no argument — same conservative-default
+    #: reasoning as `PytestAdapter._BOOLEAN_FLAGS` (#375 review round 2,
+    #: finding 3): anything not named here is assumed to consume its next
+    #: token, so an unenumerated value flag under-narrows at worst rather
+    #: than swallowing the declared selector.
+    _BOOLEAN_FLAGS = frozenset({"--trace", "--force", "--no-start"})
 
     def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, ExUnitDefinitionLine)
         kept = strip_positional_paths(
             command_tokens(test_command),
-            keep=_RUNNER_WRAPPERS | {"mix", "test"},
-            value_flags=self._VALUE_FLAGS,
+            # `test` is kept by EXACT match, not by executable name: it is
+            # `mix test`'s subcommand literal, never path-prefixed, and
+            # keeping it by basename would also spare a positional directory
+            # literally named `test/` — the very thing this strips (#375
+            # review round 2, finding 2's lesson applied here too).
+            keep_exact=_RUNNER_WRAPPERS | {"test"},
+            executable_names=frozenset({"mix"}),
+            boolean_flags=self._BOOLEAN_FLAGS,
         )
         if TRACE_FLAG not in kept:
             kept.append(TRACE_FLAG)
