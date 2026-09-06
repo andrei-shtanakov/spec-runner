@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from spec_runner.config import ExecutorConfig
+from spec_runner.executor import execute_task
 from spec_runner.gates import AncestryUnknown, GateContext
 from spec_runner.lifecycle import has_confirmed_red
 from spec_runner.live_verify import VerifyRunResult, reusable_verify_evidence, run_live_verify
+from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
 from spec_runner.tdd import environment_id, resolve_namespace
@@ -271,4 +274,120 @@ class TestGreenOnlyDoesNotMasqueradeAsRed:
         # ...but nothing that reads the red-checkpoints table sees it.
         assert state.red_checkpoint(task.id, namespace) is None
         assert has_confirmed_red(state, namespace, task.id) is False
+        state.close()
+
+
+class TestEvidenceIsWrittenByRealExecutionNotOnlyByTests:
+    """kind: integration — BEH-15: the evidence row must be a consequence of
+    running a verify-first task through `execute_task`, not merely
+    something a test can produce by calling `record_verify_evidence`
+    directly. Covers all three outcomes (#375 review round N, finding 1)."""
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.execution.post_done_hook",
+        return_value=(True, None, "skipped", "", False),
+    )
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution._run_agent_process")
+    def test_a_green_execute_task_run_leaves_durable_evidence(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        root = _repo(tmp_path)
+        task = _task()
+        config = _cfg(root)
+        state = ExecutorState(config)
+        mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+
+        execute_task(task, config, state)
+
+        namespace = resolve_namespace(config)
+        evidence = state.verify_evidence(namespace, task.id)
+        assert evidence is not None, (
+            "execute_task's real verify-first path wrote no evidence row (BEH-15): "
+            "record_verify_evidence is reachable only from tests today"
+        )
+        assert evidence.outcome == "green"
+        state.close()
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.execution.post_done_hook",
+        return_value=(True, None, "skipped", "", False),
+    )
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution._run_agent_process")
+    def test_a_genuine_test_failure_run_leaves_durable_evidence(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+    ):
+        root = _repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_it():\n    assert False, 'deliberate failure'\n"
+        )
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "make it fail")
+        task = _task()
+        config = _cfg(root)
+        state = ExecutorState(config)
+        mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+
+        execute_task(task, config, state)
+
+        namespace = resolve_namespace(config)
+        evidence = state.verify_evidence(namespace, task.id)
+        assert evidence is not None, (
+            "a genuine test-failure verify-first run left no evidence (BEH-15)"
+        )
+        assert evidence.outcome == "test_failure"
+        state.close()
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch("spec_runner.execution._run_agent_process")
+    def test_an_instrument_error_run_leaves_durable_evidence(
+        self, mock_run, mock_log, mock_status, tmp_path
+    ):
+        root = _repo(tmp_path)
+        task = _task()
+        config = _cfg(root, test_command="python -m pytest tests/ && echo done")
+        state = ExecutorState(config)
+
+        outcome = execute_task(task, config, state)
+
+        assert outcome is False
+        mock_run.assert_not_called()
+        namespace = resolve_namespace(config)
+        evidence = state.verify_evidence(namespace, task.id)
+        assert evidence is not None, (
+            "an instrument-error verify-first run left no evidence (BEH-15)"
+        )
+        assert evidence.outcome == "instrument_error"
         state.close()
