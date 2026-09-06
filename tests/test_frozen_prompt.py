@@ -240,6 +240,23 @@ class TestDormancy:
 
         assert FROZEN_HEADER in build_task_prompt(task, cfg)
 
+    def test_a_verify_first_task_gets_the_block_too(self, tmp_path):
+        """#380 review finding 2: the claims gate (`evaluate_claims`) and the
+        pre-review claims check now judge a `verify_first` task exactly as
+        they judge a `tdd` one (BEH-24/FR-17) — a namespace-wide claim from
+        another workstream's `tdd` task can refuse it, so the prompt that can
+        break that claim has to name it. Enforcement without this half was
+        #214 reopened for a third mode."""
+        cfg = _cfg(_repo(tmp_path), execution_mode="standard")
+        _freeze(cfg)
+        task = _task()
+        task.execution_mode = "verify_first"  # what `**Mode:** verify_first` parses to
+
+        prompt = build_task_prompt(task, cfg)
+
+        assert FROZEN_HEADER in prompt
+        assert f"- {CLAIMED}" in prompt
+
 
 class TestTheBlockItself:
     def test_it_is_appended_after_the_body_never_woven_into_it(self, tmp_path):
