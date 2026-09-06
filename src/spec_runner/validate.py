@@ -7,7 +7,12 @@ from pathlib import Path
 
 import yaml
 
-from spec_runner.config import KNOWN_EXECUTOR_KEYS, ExecutorConfig, mixed_shape_error
+from spec_runner.config import (
+    KNOWN_EXECUTOR_KEYS,
+    ConfigError,
+    ExecutorConfig,
+    mixed_shape_error,
+)
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
 from spec_runner.spec import LITE, StageProfile, load_profile, stage_path, strip_frontmatter
@@ -589,6 +594,111 @@ VALIDATORS: dict[str, Callable[[Path], ValidationResult]] = {
 }
 
 
+def _config_for_validation(config_file: Path | None) -> ExecutorConfig:
+    """The config a verify-first declaration is judged against (#367 FR-03).
+
+    Built from YAML alone, no CLI args: neither `execution_mode` nor
+    `tdd_runner` is ever overridden by a CLI flag (see `build_config`), so
+    this agrees with what `run`/`watch` actually resolve those two to.
+    `None` (no config file given) mirrors `validate_config`'s own behaviour
+    of doing nothing rather than guessing a project's config path.
+    """
+    if config_file is None:
+        return ExecutorConfig()
+    from spec_runner.config import load_config_from_yaml
+
+    try:
+        yaml_config = load_config_from_yaml(config_file)
+    except ConfigError:
+        # Already reported by validate_config (mixed flat/executor: shape) —
+        # fall back to defaults so this check still runs against something.
+        return ExecutorConfig()
+    kwargs = {k: v for k, v in yaml_config.items() if v is not None}
+    return ExecutorConfig(**kwargs)
+
+
+def _validate_verify_first_declarations(
+    tasks: list[Task], config: ExecutorConfig
+) -> ValidationResult:
+    """An invalid verify-first declaration refuses before any execution
+    (#367 FR-03/BEH-04/BEH-05): an unresolvable `**Mode:**`, a verify-first
+    task with no declared `**Verifies:**` group, an empty declared group, a
+    selector the project's adapter refuses, or a declared group on a task
+    whose *resolved* mode is not verify_first (that group would never run —
+    a plain `**Mode:**`-less task under a project-wide verify_first default
+    is not this case, since it resolves to verify_first itself).
+
+    Args:
+        tasks: Parsed task list.
+        config: The config to resolve each task's mode and adapter against —
+            see `_config_for_validation`.
+
+    Returns:
+        ValidationResult with one error per defective declaration.
+    """
+    from spec_runner.tdd_runners import SelectorRefusal, adapter_for
+
+    result = ValidationResult()
+
+    adapter_error: str | None = None
+    try:
+        adapter_name = config.resolve_tdd_runner()
+    except ConfigError as exc:
+        adapter_name = None
+        adapter_error = str(exc)
+    adapter = adapter_for(adapter_name) if adapter_name else None
+
+    for task in tasks:
+        if task.verifies_error:
+            # Already reported by validate_task_fields — a different defect
+            # (unparseable declaration) from the ones checked here.
+            continue
+
+        try:
+            mode = config.resolve_execution_mode(task)
+        except ConfigError as exc:
+            result.errors.append(f"{task.id}: {exc}")
+            continue
+
+        if mode != "verify_first":
+            if task.verifies is not None:
+                result.errors.append(
+                    f"{task.id}: **Verifies:** {task.verifies!r} is declared "
+                    f"but the resolved execution mode is {mode!r}, not "
+                    "verify_first — this group would never run"
+                )
+            continue
+
+        if task.verifies is None:
+            result.errors.append(
+                f"{task.id}: mode is verify_first but no **Verifies:** group is declared"
+            )
+            continue
+        if not task.verifies:
+            result.errors.append(
+                f"{task.id}: mode is verify_first but the declared **Verifies:** group is empty"
+            )
+            continue
+
+        if adapter is None:
+            result.errors.append(
+                f"{task.id}: mode is verify_first but the project's test "
+                "adapter cannot be resolved" + (f": {adapter_error}" if adapter_error else "")
+            )
+            continue
+
+        for raw in task.verifies:
+            parsed = adapter.parse_selector(raw)
+            if isinstance(parsed, SelectorRefusal):
+                result.errors.append(
+                    f"{task.id}: mode is verify_first, declared group "
+                    f"{task.verifies!r} — selector {raw!r} refused by the "
+                    f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
+                )
+
+    return result
+
+
 def validate_all(
     tasks_file: Path | None = None,
     config_file: Path | None = None,
@@ -603,10 +713,17 @@ def validate_all(
         Merged ValidationResult from all checks.
     """
     result = ValidationResult()
+    tasks: list[Task] = []
     if tasks_file:
         result.merge(validate_tasks(tasks_file))
+        if tasks_file.exists():
+            tasks = parse_tasks(tasks_file)
     if config_file:
         result.merge(validate_config(config_file))
+    if tasks:
+        result.merge(
+            _validate_verify_first_declarations(tasks, _config_for_validation(config_file))
+        )
     return result
 
 
