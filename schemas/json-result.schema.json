@@ -65,6 +65,11 @@
           "type": "boolean",
           "enum": [true]
         },
+        "verify_outcome": {
+          "description": "Present only when the task recorded live verify-first evidence (execution_mode: verify_first, #367). The outcome of that run, independent of the task's TDD/standard completion path",
+          "type": "string",
+          "enum": ["green", "test_failure", "instrument_error"]
+        },
         "exit_code": {
           "type": "integer",
           "enum": [0, 1]

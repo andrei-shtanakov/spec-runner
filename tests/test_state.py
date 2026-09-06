@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from spec_runner.config import ExecutorConfig
+from spec_runner.live_verify import VerifyRunResult
 from spec_runner.state import (
     ErrorCode,
     ExecutorState,
@@ -15,6 +16,7 @@ from spec_runner.state import (
     check_stop_requested,
     clear_stop_file,
 )
+from spec_runner.task import Task
 
 
 def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
@@ -1254,4 +1256,87 @@ class TestStopCause:
         assert state.should_stop() is False
         state.record_attempt("T1", success=True, duration=1.0, cost_usd=0.74)
         assert state.should_stop() is True
+        state.close()
+
+
+# --- latest_verify_evidence (#367 BEH-32) ---
+
+
+def _verify_first_task(task_id: str) -> Task:
+    return Task(
+        id=task_id,
+        name="verify-first task",
+        priority="p1",
+        status="todo",
+        estimate="1h",
+        execution_mode="verify_first",
+        verifies=["tests/test_group.py::test_it"],
+    )
+
+
+def _record_evidence(
+    state: ExecutorState,
+    config: ExecutorConfig,
+    task: Task,
+    *,
+    sha: str = "deadbeef",
+    ran: bool = True,
+    passed: bool = True,
+) -> None:
+    result = VerifyRunResult(
+        sha=sha,
+        ran=ran,
+        passed=passed,
+        detail="stub",
+        group_executed=tuple(task.verifies or ()),
+        adapter="pytest",
+    )
+    recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    assert recorded, "setup: verify evidence must be recorded for this test to mean anything"
+
+
+class TestLatestVerifyEvidence:
+    """`ExecutorState.latest_verify_evidence` — the cross-namespace fallback
+    `build_task_json_result` uses when it has no `ExecutorConfig` in hand."""
+
+    def test_none_when_no_rows(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        assert state.latest_verify_evidence("TASK-101") is None
+        state.close()
+
+    def test_newest_row_wins_for_repeated_evidence(self, tmp_path):
+        config = _make_config(tmp_path)
+        state = ExecutorState(config)
+        task = _verify_first_task("TASK-101")
+        _record_evidence(state, config, task, sha="sha-1", ran=True, passed=False)
+        _record_evidence(state, config, task, sha="sha-2", ran=True, passed=True)
+
+        evidence = state.latest_verify_evidence(task.id)
+        assert evidence is not None
+        assert evidence.commit_sha == "sha-2"
+        assert evidence.outcome == "green"
+        state.close()
+
+    def test_reads_across_namespaces(self, tmp_path):
+        """Documented behaviour: unlike `verify_evidence`/
+        `verify_evidence_for_namespace`, this method ignores namespace and
+        answers the newest row for the task_id from any workstream sharing
+        the DB file — callers with a config should prefer the namespaced
+        `verify_evidence` lookup instead (see `build_task_json_result`)."""
+        config_a = _make_config(tmp_path, tdd_namespace="workstream-a")
+        state = ExecutorState(config_a)
+        task = _verify_first_task("TASK-101")
+        _record_evidence(state, config_a, task, ran=True, passed=True)
+
+        evidence = state.latest_verify_evidence(task.id)
+        assert evidence is not None
+        assert evidence.namespace == "workstream-a"
+        assert evidence.outcome == "green"
+
+        assert state.verify_evidence("workstream-b", task.id) is None
+        assert state.latest_verify_evidence(task.id) is not None, (
+            "cross-namespace read still finds workstream-a's row even "
+            "though workstream-b never recorded any evidence of its own"
+        )
         state.close()

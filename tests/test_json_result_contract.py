@@ -23,12 +23,14 @@ from jsonschema import Draft7Validator
 
 from spec_runner.cli import build_task_json_result
 from spec_runner.config import ExecutorConfig
+from spec_runner.live_verify import VerifyRunResult
 from spec_runner.state import (
     ErrorCode,
     ExecutorState,
     ReviewVerdict,
     TaskAttempt,
 )
+from spec_runner.task import Task
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "maestro-interop"
@@ -123,6 +125,7 @@ OPTIONAL_TASK_RESULT_FIELDS = {
     "error",
     "no_op",  # v2.16.0 (#97): emitted only when true
     "exit_code",
+    "verify_outcome",  # #367 BEH-32: emitted only for a verify_first task
 }
 ALLOWED_TASK_RESULT_FIELDS = REQUIRED_TASK_RESULT_FIELDS | OPTIONAL_TASK_RESULT_FIELDS
 
@@ -260,6 +263,168 @@ class TestJsonResultGolden:
         result = {"tasks": [], "message": "No tasks ready to execute"}
         _validate_against_schema(result, "json-result.schema.json")
         _assert_matches_golden(result, "json-result-empty.json", update_golden)
+
+
+# --- verify_outcome field (#367 BEH-32) ----------------------------------
+
+
+def _verify_first_task(task_id: str) -> Task:
+    return Task(
+        id=task_id,
+        name="verify-first task",
+        priority="p1",
+        status="todo",
+        estimate="1h",
+        execution_mode="verify_first",
+        verifies=["tests/test_group.py::test_it"],
+    )
+
+
+def _record_evidence(
+    state: ExecutorState, config: ExecutorConfig, task: Task, *, ran: bool, passed: bool
+) -> None:
+    result = VerifyRunResult(
+        sha="deadbeef",
+        ran=ran,
+        passed=passed,
+        detail="stub",
+        group_executed=tuple(task.verifies or ()),
+        adapter="pytest",
+    )
+    recorded = state.record_verify_evidence(task=task, config=config, result=result)
+    assert recorded, "setup: verify evidence must be recorded for this test to mean anything"
+
+
+class TestVerifyOutcomeField:
+    """#367 BEH-32: `verify_outcome` is additive — present only for a task
+    that recorded live verify-first evidence, absent everywhere else."""
+
+    @pytest.mark.parametrize(
+        ("ran", "passed", "expected"),
+        [
+            (True, True, "green"),
+            (True, False, "test_failure"),
+            (False, False, "instrument_error"),
+        ],
+    )
+    def test_each_outcome_value_surfaces(
+        self, tmp_path: Path, ran: bool, passed: bool, expected: str
+    ) -> None:
+        config = ExecutorConfig(state_file=tmp_path / ".state.db", project_root=tmp_path)
+        state = ExecutorState(config)
+        task = _verify_first_task("TASK-101")
+        _seed_task(
+            state,
+            task.id,
+            success=(expected == "green"),
+            duration=1.0,
+            input_tokens=10,
+            output_tokens=10,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        _record_evidence(state, config, task, ran=ran, passed=passed)
+
+        result = build_task_json_result(task.id, state, config)
+        _assert_field_set(result)
+        _validate_against_schema(result, "json-result.schema.json")
+        assert result["verify_outcome"] == expected
+
+    def test_standard_task_never_gets_the_field(self, tmp_path: Path) -> None:
+        state = _make_state(tmp_path)
+        _seed_task(
+            state,
+            "TASK-001",
+            success=True,
+            duration=10.0,
+            input_tokens=100,
+            output_tokens=50,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        assert "verify_outcome" not in build_task_json_result("TASK-001", state)
+
+    def test_verify_first_task_without_recorded_evidence_has_no_field(self, tmp_path: Path) -> None:
+        config = ExecutorConfig(state_file=tmp_path / ".state.db", project_root=tmp_path)
+        state = ExecutorState(config)
+        task = _verify_first_task("TASK-102")
+        _seed_task(
+            state,
+            task.id,
+            success=True,
+            duration=1.0,
+            input_tokens=10,
+            output_tokens=10,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        result = build_task_json_result(task.id, state, config)
+        assert "verify_outcome" not in result
+
+    def test_multi_task_array_mixes_verify_first_and_standard(self, tmp_path: Path) -> None:
+        config = ExecutorConfig(state_file=tmp_path / ".state.db", project_root=tmp_path)
+        state = ExecutorState(config)
+        _seed_task(
+            state,
+            "TASK-001",
+            success=True,
+            duration=1.0,
+            input_tokens=10,
+            output_tokens=10,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        verify_task = _verify_first_task("TASK-101")
+        _seed_task(
+            state,
+            verify_task.id,
+            success=True,
+            duration=1.0,
+            input_tokens=10,
+            output_tokens=10,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        _record_evidence(state, config, verify_task, ran=True, passed=True)
+
+        result = [
+            build_task_json_result(tid, state, config) for tid in ("TASK-001", verify_task.id)
+        ]
+        for entry in result:
+            _assert_field_set(entry)
+        _validate_against_schema(result, "json-result.schema.json")
+        assert "verify_outcome" not in result[0]
+        assert result[1]["verify_outcome"] == "green"
+
+    def test_namespace_scoping_prevents_cross_workstream_leak(self, tmp_path: Path) -> None:
+        """Two workstreams sharing one state DB via an explicit
+        `tdd_namespace` must not see each other's `verify_outcome`, even
+        when they happen to reuse the same `task_id`."""
+        state_file = tmp_path / ".state.db"
+        config_a = ExecutorConfig(
+            state_file=state_file, project_root=tmp_path, tdd_namespace="workstream-a"
+        )
+        config_b = ExecutorConfig(
+            state_file=state_file, project_root=tmp_path, tdd_namespace="workstream-b"
+        )
+        state = ExecutorState(config_a)
+        task = _verify_first_task("TASK-101")
+        _seed_task(
+            state,
+            task.id,
+            success=True,
+            duration=1.0,
+            input_tokens=10,
+            output_tokens=10,
+            cost=0.01,
+            review=ReviewVerdict.PASSED,
+        )
+        _record_evidence(state, config_a, task, ran=True, passed=True)
+
+        result_a = build_task_json_result(task.id, state, config_a)
+        result_b = build_task_json_result(task.id, state, config_b)
+        assert result_a["verify_outcome"] == "green"
+        assert "verify_outcome" not in result_b
 
 
 # --- Error truncation (documented contract: 200 chars) ------------------
