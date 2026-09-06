@@ -240,16 +240,16 @@ Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-25 (—BEH-
 **Traces to:** [FR-18], [FR-20], [FR-21]
 
 ### TASK-010: Файлы объявленной группы заморожены на время задачи (+1 смежных BEH)
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-26, BEH-27.
 Source: workstreams/WS-spec-runner-367/spec/15-behaviour-spec.md#BEH-26 (—BEH-27)
 **Depends on:** [TASK-009]
 
 **Checklist:**
-- [ ] реализовать BEH-26: Файлы объявленной группы заморожены на время задачи
-- [ ] реализовать BEH-27: Заморозка снимается на DONE и не облагает соседей
-- [ ] проверка группы: tests/test_verify_claims.py (kind: integration) зелёные на BEH-26, BEH-27
+- [x] реализовать BEH-26: Файлы объявленной группы заморожены на время задачи
+- [x] реализовать BEH-27: Заморозка снимается на DONE и не облагает соседей
+- [x] проверка группы: tests/test_verify_claims.py (kind: integration) зелёные на BEH-26, BEH-27
 
 **Traces to:** [FR-19]
 
