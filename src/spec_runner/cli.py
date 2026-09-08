@@ -128,6 +128,24 @@ def build_task_json_result(
         evidence = state.latest_verify_evidence(task_id)
     if evidence is not None:
         entry["verify_outcome"] = evidence.outcome
+        # FR-21/FR-22 (#367 file-scope group targets, TASK-007): additive
+        # only — absent whenever the evidence carries no composition (a
+        # group of node ids only, or a row written before BEH-20 existed),
+        # so every consumer/fixture that predates this key sees the same
+        # bytes (BEH-30). `executed` is BEH-29's own distinction: a member
+        # not in ("passed", "failed", "error") was accounted but never ran
+        # (skipped/xfail/deselected) — "green with skips" is `executed <
+        # size`, never silent inside a bare `verify_outcome: green`.
+        if evidence.composition:
+            size = len(evidence.composition)
+            executed = sum(
+                1 for m in evidence.composition if m.outcome in ("passed", "failed", "error")
+            )
+            entry["verify_composition"] = {
+                "size": size,
+                "executed": executed,
+                "skipped": size - executed,
+            }
     entry["exit_code"] = 0 if ts.status == "success" else 1
     return entry
 
