@@ -1,7 +1,6 @@
 ---
 traces_to:
 - decomposition
-- design
 upstream_hashes:
   decomposition: 928f4e7eb86f7bee8d0542e25f9fca85ee9af360
 spec_stage: tasks
