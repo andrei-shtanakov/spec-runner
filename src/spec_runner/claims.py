@@ -21,7 +21,11 @@ Contract: ``docs/superpowers/specs/2026-08-11-claim-and-remedy-contracts.md`` §
 from __future__ import annotations
 
 import posixpath
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -425,30 +429,31 @@ def record_verify_group_claims(
     }
 
     to_claim: list[tuple[RedCheckpoint, str, str]] = []
-    for raw_selector in selectors:
-        parsed = parse_group_element(adapter, raw_selector, root)
-        if not isinstance(parsed, Selector):
-            raise ClaimRefused(
-                f"{raw_selector!r} cannot be parsed by this project's runner adapter, "
-                "so nothing can be claimed"
+    with _judged_worktree(root, sha) as worktree:
+        for raw_selector in selectors:
+            parsed = parse_group_element(adapter, raw_selector, worktree)
+            if not isinstance(parsed, Selector):
+                raise ClaimRefused(
+                    f"{raw_selector!r} cannot be parsed by this project's runner adapter, "
+                    "so nothing can be claimed"
+                )
+            checkpoint = RedCheckpoint(
+                task_id=task.id,
+                namespace=namespace,
+                commit_sha=sha,
+                baseline_sha=sha,
+                selector=raw_selector,
+                environment_id="verify_first",
+                execution_mode="verify_first",
+                config_hash="",
+                outcome=RedOutcome.EXPECTED_FAIL,
+                timestamp="",
             )
-        checkpoint = RedCheckpoint(
-            task_id=task.id,
-            namespace=namespace,
-            commit_sha=sha,
-            baseline_sha=sha,
-            selector=raw_selector,
-            environment_id="verify_first",
-            execution_mode="verify_first",
-            config_hash="",
-            outcome=RedOutcome.EXPECTED_FAIL,
-            timestamp="",
-        )
-        for path in _ensure_claimable_at_commit(tree, parsed):
-            if path in standing_by_path:
-                continue
-            _mode, blob = tree[path]
-            to_claim.append((checkpoint, path, blob))
+            for path in _ensure_claimable_at_commit(tree, parsed):
+                if path in standing_by_path:
+                    continue
+                _mode, blob = tree[path]
+                to_claim.append((checkpoint, path, blob))
 
     recorded: list[Claim] = []
     for checkpoint, path, blob in to_claim:
@@ -581,6 +586,48 @@ def check_claims(
                 )
             )
     return violations
+
+
+@contextmanager
+def _judged_worktree(root: Path, sha: str) -> Iterator[Path]:
+    """A disposable `git worktree` checked out at ``sha``, removed on exit.
+
+    `parse_group_element`'s file-target branch resolves existence, symlink-
+    ness and discoverability against whatever path it is handed — the same
+    machinery `live_verify.py` points at a worktree like this one for the
+    live entry run (BEH-09). Handing it `project_root` instead would judge a
+    file target against the *working* tree, exactly the gap `record_claims`'s
+    module docstring and `_ensure_claimable_at_commit` (#383 review round 2,
+    finding 2) exist to rule out for node ids — a file present and intact in
+    `sha` but deleted or replaced on disk by a prior, interrupted attempt
+    would be refused for no reason the judged commit itself supports.
+    """
+    parent = tempfile.mkdtemp(prefix="spec-runner-claim-")
+    worktree = Path(parent) / "tree"
+    added = subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree), sha],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if added.returncode != 0:
+        shutil.rmtree(parent, ignore_errors=True)
+        raise ClaimRefused(
+            f"could not check out {sha[:12]} to judge the declared group: "
+            f"{added.stderr.strip()[:200]}"
+        )
+    try:
+        yield worktree
+    finally:
+        removed = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if removed.returncode != 0:
+            subprocess.run(["git", "worktree", "prune"], cwd=root, capture_output=True, text=True)
+        shutil.rmtree(parent, ignore_errors=True)
 
 
 def _tree_entries(root: Path, sha: str) -> dict[str, tuple[str, str]] | None:
