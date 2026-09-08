@@ -36,7 +36,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -576,15 +576,42 @@ def pytest_deselected(items):
         pass
 
 
+def _skip_reason(report):
+    # BEH-16: a member the project itself declared not-applicable-here must
+    # carry that reason into the manifest, not just the outcome word — an
+    # xfail mark's reason lives on `wasxfail`; a `pytest.mark.skip(reason=...)`
+    # lives in the "setup" report's `longrepr`, a `(path, lineno, message)`
+    # tuple whose message is prefixed "Skipped: ".
+    wasxfail = getattr(report, "wasxfail", None)
+    if wasxfail:
+        return str(wasxfail)
+    longrepr = getattr(report, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        text = str(longrepr[2])
+        prefix = "Skipped: "
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+        return text
+    return None
+
+
 def pytest_runtest_logreport(report):
     try:
         if report.when == "call":
             outcome = report.outcome
             if outcome == "passed" and hasattr(report, "wasxfail"):
                 outcome = "xpassed"
-            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": outcome}})
+            record = {{"phase": "outcome", "nodeid": report.nodeid, "outcome": outcome}}
+            reason = _skip_reason(report)
+            if reason:
+                record["reason"] = reason
+            _append(record)
         elif report.when in ("setup", "teardown") and report.outcome != "passed":
-            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": report.outcome}})
+            record = {{"phase": "outcome", "nodeid": report.nodeid, "outcome": report.outcome}}
+            reason = _skip_reason(report)
+            if reason:
+                record["reason"] = reason
+            _append(record)
     except Exception:
         pass
 
@@ -601,6 +628,10 @@ class FileComposition:
     `members` is the collection phase, in collection order — the composition
     resolved against whatever tree the replay actually ran in (BEH-07).
     `outcomes` maps each reported member's node id to its outcome word.
+    `reasons` maps a member's node id to the project's own stated reason
+    (BEH-16) when its outcome carried one (a `skip`/`xfail` mark's `reason=`)
+    — absent for members with no stated reason, including every passed/
+    failed/error/deselected member.
     `complete` is whether the closing "done" record was seen; its absence
     means the run broke before finishing and the manifest must not be read
     as a final answer.
@@ -609,6 +640,7 @@ class FileComposition:
     members: tuple[str, ...]
     outcomes: Mapping[str, str]
     complete: bool
+    reasons: Mapping[str, str] = field(default_factory=dict)
 
 
 def read_file_composition(path: Path) -> FileComposition | None:
@@ -637,6 +669,7 @@ def read_file_composition(path: Path) -> FileComposition | None:
     members: list[str] = []
     seen_members: set[str] = set()
     outcomes: dict[str, str] = {}
+    reasons: dict[str, str] = {}
     complete = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -657,9 +690,16 @@ def read_file_composition(path: Path) -> FileComposition | None:
             nodeid = record.get("nodeid")
             if isinstance(nodeid, str):
                 outcomes[nodeid] = str(record.get("outcome", ""))
+                reason = record.get("reason")
+                if isinstance(reason, str) and reason:
+                    reasons[nodeid] = reason
+                else:
+                    reasons.pop(nodeid, None)
         elif phase == "done":
             complete = True
-    return FileComposition(members=tuple(members), outcomes=outcomes, complete=complete)
+    return FileComposition(
+        members=tuple(members), outcomes=outcomes, complete=complete, reasons=reasons
+    )
 
 
 def parse_group_element(

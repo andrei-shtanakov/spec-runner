@@ -308,6 +308,11 @@ def run_live_verify(
     #: as the loop below runs each one, so a return mid-group carries exactly
     #: what was executed rather than the full declared list (#367 BEH-15).
     presented: list[str] = []
+    #: A file target's accounted-but-not-executed members carried into the
+    #: green evidence by name and by their own stated reason (BEH-16) — the
+    #: asymmetry with the node-id path (BEH-06) is paid for with visibility,
+    #: not silence.
+    skip_notes: list[str] = []
     # The group's budget is logged before the first run, not discovered
     # after the fact (tasks-spec resolution) — an operator watching the log
     # sees the ceiling this group is held to before any selector executes.
@@ -431,6 +436,7 @@ def run_live_verify(
             selector_timeout = min(float(REPLAY_TIMEOUT_SECONDS), max(remaining, 0.0))
             run_env = {**os.environ, **prepared.env}
             manifest_path: Path | None = None
+            composition: FileComposition | None = None
             is_file_target = isinstance(parsed.locator, FileTarget)
             if is_file_target and member_report_dir is not None:
                 # Its own manifest per declared element (design: "манифест
@@ -495,6 +501,20 @@ def run_live_verify(
                 )
 
             if verify_outcome is VerifyOutcome.GREEN:
+                if is_file_target and composition is not None:
+                    # BEH-16: name every accounted-but-not-executed member
+                    # (skipped/xfail/deselected) and its own reason, so a
+                    # partial skip is visible rather than folded silently
+                    # into "declared group passed".
+                    for member in composition.members:
+                        member_outcome = composition.outcomes.get(member)
+                        if member_outcome in ("passed", "failed", "error"):
+                            continue
+                        reason = composition.reasons.get(member)
+                        if reason:
+                            skip_notes.append(f"{member} ({reason})")
+                        else:
+                            skip_notes.append(f"{member} ({member_outcome})")
                 continue  # this selector is green; judge the next one
 
             # Everything else is an instrument-error: the run could not
@@ -550,11 +570,16 @@ def run_live_verify(
         # are the same list, and naming it here is what lets a reader
         # confirm that rather than take it on faith.
         executed = ", ".join(task.verifies)
+        detail = f"declared group passed: {executed}"
+        if skip_notes:
+            # BEH-16: named, not folded into silence — a reader must not
+            # need the log to know which member was skipped or why.
+            detail += f"; skipped: {', '.join(skip_notes)}"
         return VerifyRunResult(
             sha,
             True,
             True,
-            f"declared group passed: {executed}",
+            detail,
             group_executed=tuple(presented),
             adapter=adapter_name,
         )
