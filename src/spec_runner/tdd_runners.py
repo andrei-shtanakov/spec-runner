@@ -88,6 +88,16 @@ class ExUnitDefinitionLine:
 
 
 @dataclass(frozen=True)
+class FileTarget:
+    """A declared-group element that names a whole test file, not one test
+    (DT-01). Carries no pointer to a single test — the file itself is
+    already `Selector.path` — so this locator is deliberately empty; it only
+    marks that the selector is a file target rather than a node id or an
+    ExUnit definition line.
+    """
+
+
+@dataclass(frozen=True)
 class Selector:
     """A parsed, runner-specific pointer at exactly one test."""
 
@@ -95,7 +105,7 @@ class Selector:
     #: Project-relative and normalised, so `./test/x.exs` and `test/x.exs` are
     #: one selector and comparisons against runner output never turn on a `./`.
     path: PurePosixPath
-    locator: PytestNodeId | ExUnitDefinitionLine
+    locator: PytestNodeId | ExUnitDefinitionLine | FileTarget
 
 
 @dataclass(frozen=True)
@@ -350,6 +360,10 @@ _PYTEST_COUNT = re.compile(r"(\d+) (\w+)")
 #: that was skipped must not be retired as `not_red`.
 _EXECUTED_WORDS = frozenset({"passed", "failed", "xfailed", "xpassed", "error", "errors"})
 
+#: Characters that make a declared-group element a glob/pattern rather than
+#: one literal path (BEH-03/FR-02).
+_GROUP_ELEMENT_GLOB_CHARS = frozenset("*?[]")
+
 
 def command_tokens(test_command: str) -> list[str]:
     """`test_command` split for inspection, or [] when it will not split."""
@@ -523,6 +537,10 @@ class PytestAdapter:
     """pytest, whose exit codes were measured on pytest 8."""
 
     name = "pytest"
+    #: Declared capability (Q-05): pytest accepts file targets in a declared
+    #: group; ExUnit does not, and refuses by name rather than accepting one
+    #: silently and judging it by a return code (FR-03).
+    supports_file_targets = True
     selector_instruction = (
         "TDD_SELECTOR: path/to/test_file.py::TestClass::test_name\n"
         "\n"
@@ -544,6 +562,64 @@ class PytestAdapter:
         if not path.parts:
             return SelectorRefusal("not_a_node_id", f"selector {raw!r} names no file")
         return Selector(runner=self.name, path=path, locator=PytestNodeId(value))
+
+    def parse_group_element(self, raw: str, root: Path) -> Selector | SelectorRefusal:
+        """The declared-group-element vocabulary (BEH-03, DT-01): parses one
+        element of a declared verify-first group, which may be either a node
+        id or a file target. This is a second, wider entry point — not an
+        extension of `parse_selector`, which stays a RED-checkpoint
+        vocabulary about exactly one test (the charter forbids widening it).
+
+        Every defective form refuses with its own stable
+        `SelectorRefusal.code` (FR-02): a dictionary that collapses two
+        different defects onto the same code, or onto a shared catch-all,
+        fails BEH-03 even if every input is correctly refused.
+        """
+        value = (raw or "").strip()
+        if not value:
+            return SelectorRefusal("empty_element", "declared group element is empty")
+        if "::" in value:
+            return self.parse_selector(value)
+        if value.startswith("-k"):
+            return SelectorRefusal(
+                "dash_k_expression", f"{raw!r} is a `-k` expression, not a file target"
+            )
+        if value.startswith("-m"):
+            return SelectorRefusal(
+                "marker_expression", f"{raw!r} is a marker expression, not a file target"
+            )
+        if any(ch in value for ch in _GROUP_ELEMENT_GLOB_CHARS):
+            return SelectorRefusal("glob_pattern", f"{raw!r} is a glob pattern, not one file")
+
+        root_resolved = root.resolve()
+        raw_path = Path(value)
+        joined = raw_path if raw_path.is_absolute() else root_resolved / raw_path
+        # `os.path.normpath` collapses `..` lexically without touching the
+        # filesystem — used only for the symlink check below, which must see
+        # the path as written (a resolved path never looks like a symlink).
+        unresolved = Path(os.path.normpath(str(joined)))
+        # Containment must be checked against the *fully* resolved path: an
+        # intermediate symlinked directory is invisible to `normpath` (unlike
+        # a `..` segment), so a lexical-only check can be walked outside the
+        # repository by a symlink one directory up from the named file.
+        candidate = joined.resolve()
+        try:
+            rel = candidate.relative_to(root_resolved)
+        except ValueError:
+            return SelectorRefusal("outside_repository", f"{raw!r} resolves outside the repository")
+        if unresolved.is_symlink():
+            return SelectorRefusal("symlink", f"{raw!r} is a symlink, not a regular file")
+        if candidate.is_dir():
+            return SelectorRefusal("directory", f"{raw!r} is a directory, not one file")
+        if not candidate.is_file():
+            return SelectorRefusal("not_a_regular_file", f"{raw!r} is not a regular file")
+        rel_posix = PurePosixPath(rel.as_posix())
+        if not self.is_discoverable(rel_posix):
+            return SelectorRefusal(
+                "not_discoverable",
+                f"{raw!r} is not a file this adapter's own discovery would collect as tests",
+            )
+        return Selector(runner=self.name, path=rel_posix, locator=FileTarget())
 
     def validate_command(self, test_command: str) -> str | None:
         if executable_of(test_command) != "pytest":
@@ -868,6 +944,11 @@ class ExUnitAdapter:
     """
 
     name = "exunit"
+    #: Declared capability (Q-05): ExUnit's exit codes are inverted relative
+    #: to pytest's, and per-member accounting would need its own measured
+    #: matrix (#198) that this workstream does not build. ExUnit refuses a
+    #: file target by name (FR-03) rather than accepting one silently.
+    supports_file_targets = False
     selector_instruction = (
         "TDD_SELECTOR: test/path/to/file_test.exs:LINE\n"
         "\n"
@@ -1190,6 +1271,7 @@ __all__ = [
     "ADAPTERS",
     "ExUnitAdapter",
     "ExUnitDefinitionLine",
+    "FileTarget",
     "PytestAdapter",
     "PytestNodeId",
     "ReplayEnvironment",
