@@ -515,6 +515,7 @@ Single task (one element list) → JSON object. Multiple tasks → JSON array.
 | `error` | string | stable | Present only on failure; truncated to 200 chars |
 | `no_op` | bool | stable | Added v2.16.0 (#97). Present **only when true**: the task completed successfully without any committable changes (work already absorbed by earlier tasks). Absent on every other task — consumers that don't know the key see unchanged output |
 | `verify_outcome` | string | stable | Added #367. Present only for a task that recorded live verify-first evidence (`execution_mode: verify_first`): `"green"`, `"test_failure"`, or `"instrument_error"`. Absent for every standard/tdd task and for a verify-first task that never recorded evidence — additive, so existing consumers/fixtures are unaffected |
+| `verify_composition.size` / `.executed` / `.skipped` | int | stable | Added by the verify-first-file-scope-group-targets workstream (FR-21/FR-22). Present only when the recorded verify-first evidence has a file-target composition (`size` members, `executed` of which actually ran, `skipped` accounted-but-not-executed). Lets a consumer tell a fully-executed green from one with skips (`skipped > 0`) without comparing compositions by hand. Absent for a group of node ids only, or a row recorded before this field existed — additive |
 | `exit_code` | int | stable | 0 on success, 1 on failure |
 
 ### Empty-tasks edge case

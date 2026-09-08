@@ -187,7 +187,30 @@ def print_status(config: ExecutorConfig) -> None:
                         for row in state.retired_checkpoints(namespace, ts.task_id)
                     )
                     suffix = " — red confirmed" if red_confirmed else ""
-                    print(f"      Verify: {evidence.outcome} ({evidence.commit_sha[:12]}){suffix}")
+                    # BEH-29 (FR-22, verify-first-file-scope-group-targets):
+                    # a green run whose composition has skipped members must
+                    # not read the same as one where every member executed —
+                    # named counts, not a bare "green", or the asymmetry
+                    # Q-A accepted would be invisible to whoever reads this.
+                    comp_note = ""
+                    if evidence.composition:
+                        size = len(evidence.composition)
+                        executed = sum(
+                            1
+                            for m in evidence.composition
+                            if m.outcome in ("passed", "failed", "error")
+                        )
+                        if executed < size:
+                            comp_note = (
+                                f" — {executed}/{size} member(s) executed, "
+                                f"{size - executed} skipped"
+                            )
+                        else:
+                            comp_note = f" — {size}/{size} member(s) executed"
+                    print(
+                        f"      Verify: {evidence.outcome} ({evidence.commit_sha[:12]})"
+                        f"{suffix}{comp_note}"
+                    )
                 # Kind tag on the error line
                 if ts.status == "failed" and ts.last_error:
                     kind = ts.attempts[-1].error_kind if ts.attempts else None

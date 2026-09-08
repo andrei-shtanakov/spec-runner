@@ -17,15 +17,17 @@ from unittest.mock import MagicMock, patch
 
 from spec_runner import tdd_status
 from spec_runner.claims import record_claims
+from spec_runner.cli import build_task_json_result
 from spec_runner.cli_info import print_status
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
-from spec_runner.live_verify import VerifyRunResult
+from spec_runner.live_verify import VerifyRunResult, run_live_verify
 from spec_runner.runner import CliInvocation
 from spec_runner.stages import STAGES
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
 from spec_runner.tdd import AgentCall, RedCheckpoint, RedOutcome, _config_hash, resolve_namespace
+from spec_runner.validate import validate_all
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -478,3 +480,301 @@ class TestVerifyEvidenceForNamespaceQuery:
 
         assert {r.task_id for r in all_rows} == {"TASK-A", "TASK-B"}
         assert [r.task_id for r in filtered] == ["TASK-B"]
+
+
+class TestBEH27EveryRefusalNamesFileAndReason:
+    """kind: integration — BEH-27 (FR-20, group state-and-surfaces, TASK-007):
+    each of the five refusal classes a file target introduces names a
+    concrete file and a concrete reason — never only a return code — and is
+    readable at the surface a verify-first refusal is read at today
+    (`status`'s `Last error` line, `error_stage`), without reading the run's
+    own logs. The rejected value is quoted verbatim (design, врезка 1)."""
+
+    def test_no_test_collected_names_the_file(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        (root / "tests" / "test_empty.py").write_text("# no tests in this file\n")
+        _commit(root, "add a test file collecting nothing")
+        config = _cfg(root, tdd_namespace="ws-beh27-empty")
+        task = _task("TASK-BEH27-EMPTY", verifies=["tests/test_empty.py"])
+
+        with ExecutorState(config) as state:
+            result = _run(task, config, state)
+            assert result is False
+            ts = state.get_task_state(task.id)
+            assert ts is not None and ts.status == "failed"
+            last_error = ts.last_error or ""
+            assert "tests/test_empty.py" in last_error, (
+                f"BEH-27: no tests collected must name the file — got: {last_error!r}"
+            )
+            assert ts.attempts[-1].error_stage == "verify"
+
+        print_status(config)
+        out = capsys.readouterr().out
+        assert "tests/test_empty.py" in out, (
+            "BEH-27: the reason must be readable at the same surface (plain "
+            f"`status`), without reading the run's logs — got: {out!r}"
+        )
+
+    def test_zero_executed_member_names_the_file(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        (root / "tests" / "test_all_skipped.py").write_text(
+            "import pytest\n\n"
+            "@pytest.mark.skip(reason='not ready')\n"
+            "def test_a():\n    assert True\n"
+        )
+        _commit(root, "add a file whose only member is skipped")
+        config = _cfg(root, tdd_namespace="ws-beh27-skip")
+        task = _task("TASK-BEH27-SKIP", verifies=["tests/test_all_skipped.py"])
+
+        with ExecutorState(config) as state:
+            result = _run(task, config, state)
+            assert result is False
+            ts = state.get_task_state(task.id)
+            last_error = ts.last_error or ""
+            assert "tests/test_all_skipped.py" in last_error, (
+                f"BEH-27: zero members executed must name the file — got: {last_error!r}"
+            )
+
+        print_status(config)
+        out = capsys.readouterr().out
+        assert "tests/test_all_skipped.py" in out
+
+    def test_unaccounted_member_names_the_member(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        (root / "tests" / "test_early_stop.py").write_text(
+            "def test_a():\n    assert False, 'genuine failure'\n\n\n"
+            "def test_b():\n    assert True\n"
+        )
+        _commit(root, "test_a fails, -x stops before test_b ever runs")
+        config = _cfg(
+            root, tdd_namespace="ws-beh27-unaccounted", test_command="python -m pytest -x"
+        )
+        task = _task("TASK-BEH27-UNACCOUNTED", verifies=["tests/test_early_stop.py"])
+
+        with ExecutorState(config) as state:
+            result = _run(task, config, state)
+            assert result is False
+            ts = state.get_task_state(task.id)
+            last_error = ts.last_error or ""
+            assert "test_b" in last_error, (
+                f"BEH-27/BEH-15: the unaccounted member must be named by name — got: {last_error!r}"
+            )
+
+        print_status(config)
+        out = capsys.readouterr().out
+        assert "test_b" in out
+
+    def test_form_that_is_not_a_file_target_quotes_the_rejected_value(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        config = _cfg(root, tdd_namespace="ws-beh27-form")
+        task = _task("TASK-BEH27-FORM", verifies=["-k something"])
+
+        with ExecutorState(config) as state:
+            result = _run(task, config, state)
+            assert result is False
+            ts = state.get_task_state(task.id)
+            last_error = ts.last_error or ""
+            assert "-k something" in last_error, (
+                f"BEH-27: the rejected value must be quoted verbatim — got: {last_error!r}"
+            )
+
+        print_status(config)
+        out = capsys.readouterr().out
+        assert "-k something" in out
+
+    def test_adapter_without_file_target_support_refuses_by_name(self, tmp_path):
+        """The fifth class (`адаптер не поддерживает файловые цели`) refuses
+        on `validate`, before any execution (design Q-05): an adapter that
+        never declared `supports_file_targets` has nothing to add over its
+        existing node-id-only vocabulary, and refuses a bare file path under
+        its own stable code, naming the file — never a synthetic mock."""
+        tasks_path = tmp_path / "tasks.md"
+        tasks_path.write_text(
+            "### TASK-927: t\n"
+            "\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/some_test.exs\n"
+            "Est: 1d\n"
+        )
+        config_path = tmp_path / "spec-runner.config.yaml"
+        config_path.write_text("tdd_runner: exunit\ncommands:\n  test: mix test\n")
+
+        result = validate_all(tasks_file=tasks_path, config_file=config_path, project_root=tmp_path)
+
+        assert not result.ok
+        joined = "\n".join(result.errors)
+        assert "tests/some_test.exs" in joined, (
+            f"BEH-27: the adapter's own refusal must name the file — got: {joined!r}"
+        )
+        assert "exunit" in joined
+
+
+class TestBEH28ComposedSizeMatchesEvidenceAndAddsNoRunnerInvocation:
+    """kind: integration — BEH-28 (FR-21, TASK-007) in this test file (the
+    frozen red for this scenario lives in
+    tests/test_task_007_73c7da4131bf7975_fb8ef9f9_red.py): the announced
+    count and the count recorded into evidence are the SAME number, the
+    pre-run budget line names the DECLARED group's length (distinct from
+    the resolved composition), and announcing the size adds no runner
+    invocation."""
+
+    def test_announced_composition_size_matches_the_recorded_evidence(self, tmp_path):
+        root = _base_repo(tmp_path)
+        (root / "tests" / "test_multi.py").write_text(
+            "import pytest\n\n"
+            "def test_a():\n    assert True\n\n"
+            "def test_b():\n    assert True\n\n"
+            "@pytest.mark.skip(reason='wip')\n"
+            "def test_c():\n    assert True\n"
+        )
+        _commit(root, "a three-member file target")
+        config = _cfg(root, tdd_namespace="ws-beh28-match")
+        task = _task("TASK-BEH28-MATCH", verifies=["tests/test_multi.py"])
+
+        lines: list[str] = []
+        result = run_live_verify(task, config, log_progress=lines.append)
+
+        assert result.passed
+        assert len(result.composition) == 3
+
+        announced = [
+            line
+            for line in lines
+            if "3" in line
+            and any(kw in line.lower() for kw in ("composition", "collected", "member"))
+        ]
+        assert announced, f"composition size must be announced: {lines!r}"
+
+        # The pre-run budget line names the DECLARED group's length (one
+        # `**Verifies:**` element) — distinct from the resolved composition
+        # size, which the same run's collection phase alone can produce.
+        budget_lines = [line for line in lines if "budget" in line.lower()]
+        assert budget_lines and "1 selector" in budget_lines[0], (
+            f"the pre-run budget line must still name the declared length, "
+            f"not the resolved composition: {budget_lines!r}"
+        )
+
+    def test_no_extra_runner_invocation_is_added(self, tmp_path):
+        root = _base_repo(tmp_path)
+        (root / "tests" / "test_multi2.py").write_text(
+            "def test_a():\n    assert True\n\ndef test_b():\n    assert True\n"
+        )
+        _commit(root, "a two-member file target")
+        config = _cfg(root, tdd_namespace="ws-beh28-count")
+        task = _task("TASK-BEH28-COUNT", verifies=["tests/test_multi2.py"])
+
+        calls: list[list[str]] = []
+        real_run = subprocess.run
+
+        def _counting_run(argv, *args, **kwargs):
+            calls.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        with patch("spec_runner.live_verify.subprocess.run", side_effect=_counting_run):
+            result = run_live_verify(task, config, log_progress=lambda _line: None)
+
+        assert result.passed
+        pytest_invocations = [c for c in calls if any("pytest" in part for part in c)]
+        assert len(pytest_invocations) == 1, (
+            f"announcing the composition size must add no runner invocation of its own — {calls!r}"
+        )
+
+
+class TestBEH29GreenWithSkipsIsDistinguishableFromFullyExecuted:
+    """kind: integration — BEH-29 (FR-22, TASK-007): two green runs of a
+    file target — one where every member executed, one where part was
+    skipped — are distinguishable in `status`, in `tdd status` (human +
+    `--json`), and in `build_task_json_result` (`--json-result`), without
+    comparing compositions by hand (the Q-A asymmetry stays visible)."""
+
+    def _run_file_target(self, root, task_id, filename, body, *, namespace):
+        (root / "tests" / filename).write_text(body)
+        _commit(root, f"add {filename}")
+        config = _cfg(root, tdd_namespace=namespace)
+        task = _task(task_id, verifies=[f"tests/{filename}"])
+        with ExecutorState(config) as state:
+            assert _run(task, config, state) is True
+        return config
+
+    def test_json_result_distinguishes_the_two_greens(self, tmp_path):
+        root = _base_repo(tmp_path)
+        full_config = self._run_file_target(
+            root,
+            "TASK-BEH29-FULL",
+            "test_full.py",
+            "def test_a():\n    assert True\n\ndef test_b():\n    assert True\n",
+            namespace="ws-beh29-full",
+        )
+        partial_config = self._run_file_target(
+            root,
+            "TASK-BEH29-PARTIAL",
+            "test_partial.py",
+            "import pytest\n\ndef test_a():\n    assert True\n\n"
+            "@pytest.mark.skip(reason='wip')\ndef test_b():\n    assert True\n",
+            namespace="ws-beh29-partial",
+        )
+
+        with ExecutorState(full_config) as state:
+            full_entry = build_task_json_result("TASK-BEH29-FULL", state, full_config)
+        with ExecutorState(partial_config) as state:
+            partial_entry = build_task_json_result("TASK-BEH29-PARTIAL", state, partial_config)
+
+        assert full_entry["verify_outcome"] == "green"
+        assert partial_entry["verify_outcome"] == "green"
+        assert full_entry["verify_composition"] == {"size": 2, "executed": 2, "skipped": 0}
+        assert partial_entry["verify_composition"] == {"size": 2, "executed": 1, "skipped": 1}
+        assert full_entry["verify_composition"] != partial_entry["verify_composition"], (
+            "BEH-29: a fully-executed green must not read the same as a "
+            "green with skips in --json-result"
+        )
+
+    def test_plain_status_names_the_asymmetry(self, tmp_path, capsys):
+        root = _base_repo(tmp_path)
+        self._run_file_target(
+            root,
+            "TASK-BEH29-STATUS-FULL",
+            "test_status_full.py",
+            "def test_a():\n    assert True\n",
+            namespace="ws-beh29-status",
+        )
+        config = self._run_file_target(
+            root,
+            "TASK-BEH29-STATUS-PARTIAL",
+            "test_status_partial.py",
+            "import pytest\n\ndef test_a():\n    assert True\n\n"
+            "@pytest.mark.skip(reason='wip')\ndef test_b():\n    assert True\n",
+            namespace="ws-beh29-status",
+        )
+
+        print_status(config)
+        out = capsys.readouterr().out
+
+        assert "1/1 member(s) executed" in out, (
+            f"BEH-29: a fully-executed green must be named as such — got: {out!r}"
+        )
+        assert "member(s) executed, 1 skipped" in out, (
+            f"BEH-29: a green with skips must name the skip count — got: {out!r}"
+        )
+
+    def test_tdd_status_json_carries_the_named_composition(self, tmp_path):
+        root = _base_repo(tmp_path)
+        config = self._run_file_target(
+            root,
+            "TASK-BEH29-TDD",
+            "test_tdd_partial.py",
+            "import pytest\n\ndef test_a():\n    assert True\n\n"
+            "@pytest.mark.skip(reason='wip')\ndef test_b():\n    assert True\n",
+            namespace="ws-beh29-tdd",
+        )
+
+        data = tdd_status.collect(config)
+        row = next(v for v in data["verify_evidence"] if v["task_id"] == "TASK-BEH29-TDD")
+
+        assert len(row["composition"]) == 2
+        skipped = [
+            m for m in row["composition"] if m["outcome"] not in ("passed", "failed", "error")
+        ]
+        assert skipped, f"the skipped member must be named: {row['composition']!r}"
+
+        text = tdd_status.render(data, None)
+        assert "skipped" in text
