@@ -628,15 +628,26 @@ def _validate_verify_first_declarations(
     a plain `**Mode:**`-less task under a project-wide verify_first default
     is not this case, since it resolves to verify_first itself).
 
+    Each declared group element is read through `parse_group_element`
+    (DT-01's declared-group-element vocabulary), not `parse_selector` (a
+    RED-checkpoint vocabulary about exactly one test) — a bare file target is
+    a legal group member here. Only what `validate` can decide without a run
+    is an error: a `parse_group_element` refusal is an error, except a file
+    missing from the *working tree*, which is a warning — `validate` judges
+    the tree in hand, not a commit a live run will later replay, so that
+    file's existence there is a fact for the run to establish, not one this
+    static check can assume fixed (#367 follow-up, BEH-09).
+
     Args:
         tasks: Parsed task list.
         config: The config to resolve each task's mode and adapter against —
             see `_config_for_validation`.
 
     Returns:
-        ValidationResult with one error per defective declaration.
+        ValidationResult with one error per defective declaration and one
+        warning per file target absent from the working tree.
     """
-    from spec_runner.tdd_runners import SelectorRefusal, adapter_for
+    from spec_runner.tdd_runners import SelectorRefusal, adapter_for, parse_group_element
 
     result = ValidationResult()
 
@@ -688,13 +699,29 @@ def _validate_verify_first_declarations(
             continue
 
         for raw in task.verifies:
-            parsed = adapter.parse_selector(raw)
-            if isinstance(parsed, SelectorRefusal):
-                result.errors.append(
+            # `parse_group_element` (DT-01's declared-group vocabulary), not
+            # `parse_selector` (a RED-checkpoint vocabulary about exactly one
+            # test): a bare file-path element is a legal group member here,
+            # and `parse_selector` alone would keep refusing it as "not a
+            # node id" (the retired boundary BEH-09 lifts).
+            parsed = parse_group_element(adapter, raw, config.project_root)
+            if not isinstance(parsed, SelectorRefusal):
+                continue
+            if parsed.code == "not_a_regular_file":
+                # `validate` judges the working tree, not the commit a live
+                # run will replay — existence there is a fact for that run to
+                # establish, not one static validation can assume is fixed.
+                result.warnings.append(
                     f"{task.id}: mode is verify_first, declared group "
-                    f"{task.verifies!r} — selector {raw!r} refused by the "
-                    f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
+                    f"{task.verifies!r} — file {raw!r} does not exist in the "
+                    f"working tree yet ({adapter.name} adapter): {parsed.message}"
                 )
+                continue
+            result.errors.append(
+                f"{task.id}: mode is verify_first, declared group "
+                f"{task.verifies!r} — selector {raw!r} refused by the "
+                f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
+            )
 
     return result
 
