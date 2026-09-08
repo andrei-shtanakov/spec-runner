@@ -36,7 +36,10 @@ class TestFileTargetMissingFromWorkingTreeIsAWarningNotAnError:
             "Est: 1d\n",
         )
 
-        result = validate_all(tasks_file=tasks_path, config_file=None)
+        # Hermetic (sr397 review): judged against tmp_path, not whatever cwd
+        # pytest happens to run from — "missing" must be a property of the
+        # fixture, not of the repository's current contents.
+        result = validate_all(tasks_file=tasks_path, config_file=None, project_root=tmp_path)
 
         # The new contract: an unresolved-but-well-formed file target does
         # not fail validation at all — it is deferred to the live run.

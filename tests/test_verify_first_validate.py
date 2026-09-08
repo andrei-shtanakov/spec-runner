@@ -98,7 +98,10 @@ class TestAdapterRefusedSelectorRefuses:
             "Est: 1d\n",
         )
 
-        result = validate_all(tasks_file=tasks_path, config_file=None)
+        # Hermetic (sr397 review): judged against tmp_path, not whatever cwd
+        # pytest happens to run from — "missing" must be a property of the
+        # fixture, not of the repository's current contents.
+        result = validate_all(tasks_file=tasks_path, config_file=None, project_root=tmp_path)
 
         assert result.ok, f"unexpected errors: {result.errors}"
         joined = "\n".join(result.warnings)
@@ -116,6 +119,37 @@ class TestAdapterRefusedSelectorRefuses:
         # specifically, not the whole group.
         bad_selector_warnings = [w for w in result.warnings if "tests/test_b.py" in w]
         assert len(bad_selector_warnings) == 1
+
+    def test_a_still_defective_form_in_a_mixed_group_gives_exactly_one_named_error(self, tmp_path):
+        """sr397 review, major finding: rewriting the sibling test above (to
+        cover the retired "missing file" boundary) dropped the last live
+        coverage of validate.py's adapter-refusal branch for a MIXED group —
+        "one error per defective element, the valid neighbour untouched" and
+        "the message names the mode" were no longer asserted anywhere. A
+        glob pattern stays a genuine BEH-03 form defect under the new
+        vocabulary (unlike a bare missing file target), so it exercises the
+        exact same error branch (`validate.py`'s `for raw in
+        task.verifies` loop) without reintroducing the retired contract."""
+        tasks_path = _write(
+            tmp_path,
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_x, tests/test_*.py\n"
+            "Est: 1d\n",
+        )
+
+        result = validate_all(tasks_file=tasks_path, config_file=None)
+
+        assert not result.ok
+        joined = "\n".join(result.errors)
+        # The refusal names the resolved mode (BEH-05's guarantee).
+        assert "verify_first" in joined
+        # Exactly one error — per defective ELEMENT, not per group — and it
+        # names only the glob, never the valid node-id neighbour.
+        bad_selector_errors = [e for e in result.errors if "refused by the" in e]
+        assert len(bad_selector_errors) == 1
+        assert "selector 'tests/test_*.py'" in bad_selector_errors[0]
+        assert "glob_pattern" in bad_selector_errors[0]
 
     def test_a_selector_naming_no_file_is_refused_too(self, tmp_path):
         """A different `SelectorRefusal` code (`not_a_node_id` for an empty
@@ -246,3 +280,41 @@ class TestRefusalNeverEndsInATraceback:
         joined = "\n".join(result.errors)
         assert "TASK-001" in joined
         assert "TASK-002" not in joined
+
+
+class TestFileTargetExistenceIsJudgedAgainstProjectRootNotCwd:
+    """sr397 review, minor finding: the new file-existence check
+    (`_validate_verify_first_declarations` via `parse_group_element`) must
+    resolve declared paths against `project_root` — the same tree `run`/
+    `watch` operate on (CLI `--project-root`-aware) — not against whatever
+    directory the calling process happens to have as cwd. Proven directly:
+    the SAME declaration gets a different verdict depending on which root
+    `validate_all` is told to judge it against."""
+
+    def test_a_file_present_under_project_root_gets_no_warning(self, tmp_path):
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_present.py").write_text("def test_it():\n    assert True\n")
+        tasks_path = _write(
+            tmp_path,
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_present.py\n"
+            "Est: 1d\n",
+        )
+
+        # Judged against tmp_path, where the file genuinely exists: no
+        # file-existence warning (unrelated task-field warnings, e.g. a
+        # missing traceability reference, are not this test's concern).
+        present = validate_all(tasks_file=tasks_path, config_file=None, project_root=tmp_path)
+        assert present.ok
+        assert not any("tests/test_present.py" in w for w in present.warnings), present.warnings
+
+        # The exact same declaration, judged with no project_root override —
+        # falls back to cwd (the repo root under pytest), where this file
+        # does not exist — must still warn: proof the first call's silence
+        # came from actually resolving against tmp_path, not from the check
+        # being a no-op.
+        without_root = validate_all(tasks_file=tasks_path, config_file=None)
+        assert without_root.ok
+        joined = "\n".join(without_root.warnings)
+        assert "tests/test_present.py" in joined

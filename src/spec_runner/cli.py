@@ -873,6 +873,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         pre_result = validate_all(
             tasks_file=config.tasks_file,
             config_file=_resolve_config_path(),
+            project_root=config.project_root,
         )
         if not pre_result.ok:
             # H-1 (governed-run finding): a silent `return` here exited 0 and
@@ -1528,6 +1529,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     pre_result = validate_all(
         tasks_file=config.tasks_file,
         config_file=_resolve_config_path(),
+        project_root=config.project_root,
     )
     if not pre_result.ok:
         logger.error("Validation failed before watch")

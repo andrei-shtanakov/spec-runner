@@ -40,7 +40,10 @@ class TestFileTargetDeclarationWarnsInsteadOfRefusingOnValidate:
             "Est: 1d\n"
         )
 
-        result = validate_all(tasks_file=tasks_path, config_file=None)
+        # Hermetic (sr397 review): judged against tmp_path, not whatever cwd
+        # pytest happens to run from — "missing" must be a property of the
+        # fixture, not of the repository's current contents.
+        result = validate_all(tasks_file=tasks_path, config_file=None, project_root=tmp_path)
 
         # BEH-09: a bare file-path declaration missing from the working tree
         # no longer fails `validate` — existence there is a live-run concern.
