@@ -1,17 +1,19 @@
 ---
-spec_stage: tasks
-status: draft
-owner_role: stream-owner
-version: 1
-generated_by: fleet-agent
-generated_at: "2026-09-08T08:26:30+04:00"
-source_prompt_version: ""
-validation: ""
-approved_by: ""
 traces_to:
 - decomposition
+- design
 upstream_hashes:
   decomposition: 928f4e7eb86f7bee8d0542e25f9fca85ee9af360
+spec_stage: tasks
+status: approved
+version: 2
+generated_by: fleet-agent
+generated_at: '2026-09-08T08:26:30+04:00'
+source_prompt_version: ''
+validation: pass
+approved_by: andrei-shtanakov
+approved_at: '2026-09-08T04:28:52Z'
+owner_role: stream-owner
 ---
 
 ## Milestone 1: Verify-first file-scope group targets
