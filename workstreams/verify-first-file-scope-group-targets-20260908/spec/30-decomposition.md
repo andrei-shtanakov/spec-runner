@@ -1,13 +1,16 @@
 ---
 spec_stage: decomposition
-status: draft
+status: approved
 owner_role: tech-lead
 traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: "77b24bedc7bb48a410fb14da6fcde061913db011"
-  acceptance: "3c9ed7c5af0fe4b46c6f39c550480c9e3f89d824"
+  design: d89b2b67b71fca28b0acccadae3f2355eac901b8
+  acceptance: e5ef069f30f1984be03754c6ced202ef2081fcc9
+approved_by: andrei-shtanakov
+approved_at: '2026-09-08T04:25:58Z'
+version: 2
 ---
 
 # Decomposition — verify-first: объявленная группа принимает файловую цель
