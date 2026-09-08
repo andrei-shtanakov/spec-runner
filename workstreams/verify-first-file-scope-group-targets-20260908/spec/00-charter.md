@@ -1,7 +1,10 @@
 ---
 spec_stage: charter
-status: draft
+status: approved
 owner_role: product
+approved_by: andrei-shtanakov
+approved_at: '2026-09-08T04:25:58Z'
+version: 2
 ---
 
 # Charter — verify-first: объявленная группа принимает файловую цель

@@ -1,11 +1,14 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approved
 owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: e8b7328b6df52e4bf2969651e07346e5bdfe19db
+  requirements: 09689ccf1406dde8f88cc0d2665b9254a19e85f0
+approved_by: andrei-shtanakov
+approved_at: '2026-09-08T04:25:58Z'
+version: 2
 ---
 
 # Behaviour spec — verify-first: объявленная группа принимает файловую цель
