@@ -46,6 +46,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -249,6 +250,45 @@ class VerifyRunResult:
 
 def _tail(text: str, limit: int = 500) -> str:
     return "\n".join(line for line in text.strip().splitlines() if line.strip())[-limit:]
+
+
+def _announce_composition_when_collected(
+    manifest_path: Path,
+    raw_selector: str,
+    log_progress: Callable[[str], None],
+    stop_event: threading.Event,
+    poll_interval: float = 0.05,
+) -> None:
+    """BEH-28 (FR-21): announce the resolved composition's size in this
+    run's own progress as soon as the collection phase's manifest record
+    appears — before any per-member outcome or the run's result, and
+    without a second runner invocation or a working-tree read.
+
+    The composition is born by the same subprocess this function watches
+    (design "Точка врезки 3"): a background poller of the manifest file the
+    reporter plugin is already writing to, never touching `subprocess.run`
+    itself — so the group/per-selector timeout composition #375 bought
+    stays exactly as it was. Stops as soon as it has announced once, or
+    when `stop_event` is set (the selector's subprocess finished without a
+    "collected" record ever landing — an instrument error the caller
+    reports through its own path).
+    """
+    while True:
+        # The manifest is read BEFORE the stop check, not after: the caller
+        # sets `stop_event` only once the selector's subprocess has already
+        # exited — by then the whole manifest (collection through "done")
+        # is flushed to disk, and this thread must still get to read it
+        # rather than exit on a stop it observed one iteration too early.
+        composition = read_file_composition(manifest_path)
+        if composition is not None and composition.members:
+            log_progress(
+                f"⏳ verify: collected composition for {raw_selector} — "
+                f"{len(composition.members)} member(s)"
+            )
+            return
+        if stop_event.is_set():
+            return
+        stop_event.wait(poll_interval)
 
 
 def run_live_verify(
@@ -468,14 +508,32 @@ def run_live_verify(
                 # not have one element's reporter overwrite another's.
                 manifest_path = member_report_dir / f"composition-{idx}.jsonl"
                 run_env[FILE_TARGET_MANIFEST_ENV] = str(manifest_path)
-            result = subprocess.run(
-                argv,
-                cwd=worktree,
-                capture_output=True,
-                text=True,
-                timeout=selector_timeout,
-                env=run_env,
-            )
+
+            # BEH-28: a manifest observer runs alongside the subprocess,
+            # never inside it — `subprocess.run` below is unchanged, so the
+            # group/per-selector timeout composition (#375) is not touched.
+            watcher_stop = threading.Event()
+            watcher_thread: threading.Thread | None = None
+            if manifest_path is not None and log_progress is not None:
+                watcher_thread = threading.Thread(
+                    target=_announce_composition_when_collected,
+                    args=(manifest_path, raw_selector, log_progress, watcher_stop),
+                    daemon=True,
+                )
+                watcher_thread.start()
+            try:
+                result = subprocess.run(
+                    argv,
+                    cwd=worktree,
+                    capture_output=True,
+                    text=True,
+                    timeout=selector_timeout,
+                    env=run_env,
+                )
+            finally:
+                watcher_stop.set()
+                if watcher_thread is not None:
+                    watcher_thread.join(timeout=1.0)
 
             if is_file_target:
                 # BEH-07: composition and per-member facts come from the

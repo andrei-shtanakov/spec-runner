@@ -70,6 +70,28 @@
           "type": "string",
           "enum": ["green", "test_failure", "instrument_error"]
         },
+        "verify_composition": {
+          "description": "Present only when the recorded verify-first evidence carries a file-target composition (verify-first-file-scope-group-targets workstream, FR-21/FR-22). A green run whose composition has skipped >= 1 is distinguishable from one where every member executed without comparing compositions by hand.",
+          "type": "object",
+          "properties": {
+            "size": {
+              "description": "Total number of composition members the collection phase reported.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "executed": {
+              "description": "Members whose outcome was passed/failed/error (actually ran).",
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped": {
+              "description": "Members accounted for but never executed (skipped/xfail/deselected).",
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["size", "executed", "skipped"]
+        },
         "exit_code": {
           "type": "integer",
           "enum": [0, 1]

@@ -117,6 +117,16 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
                 "outcome": v.outcome,
                 "detail": v.detail,
                 "timestamp": v.timestamp,
+                # FR-21/FR-22 (verify-first-file-scope-group-targets,
+                # TASK-007): named member/outcome/reason, so `--json` can
+                # tell a fully-executed green from one with skips without
+                # re-deriving it from `detail`'s free text. Empty for a
+                # group of node ids only, or evidence recorded before this
+                # field existed.
+                "composition": [
+                    {"member": m.member, "outcome": m.outcome, "reason": m.reason}
+                    for m in v.composition
+                ],
             }
             for v in verify_rows
         ],
@@ -245,6 +255,26 @@ def render(data: dict, task_id: str | None) -> str:
                 f"{', '.join(v['group_declared'])}"
             )
             lines.append(f"      config_hash {v['config_hash']}  env {v['environment_id']}")
+            composition = v.get("composition") or []
+            if composition:
+                # BEH-29: fully-executed vs green-with-skips, distinguishable
+                # here the same way `status` shows it — named counts, not a
+                # bare outcome word.
+                size = len(composition)
+                executed = sum(
+                    1 for m in composition if m["outcome"] in ("passed", "failed", "error")
+                )
+                if executed < size:
+                    skipped = ", ".join(
+                        f"{m['member']} ({m['reason'] or m['outcome']})"
+                        for m in composition
+                        if m["outcome"] not in ("passed", "failed", "error")
+                    )
+                    lines.append(
+                        f"      composition {executed}/{size} executed — skipped: {skipped}"
+                    )
+                else:
+                    lines.append(f"      composition {executed}/{size} executed (fully executed)")
         active_claims = [
             c for c in data["claims"] if c["task_id"] == tid and c["status"] == ClaimStatus.ACTIVE
         ]
