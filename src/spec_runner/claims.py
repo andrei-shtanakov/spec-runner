@@ -398,7 +398,7 @@ def record_verify_group_claims(
     matter.
     """
     from .tdd import RedCheckpoint, RedOutcome, resolve_adapter, resolve_namespace
-    from .tdd_runners import Selector
+    from .tdd_runners import Selector, parse_group_element
 
     adapter = resolve_adapter(config)
     if adapter is None:
@@ -426,7 +426,7 @@ def record_verify_group_claims(
 
     to_claim: list[tuple[RedCheckpoint, str, str]] = []
     for raw_selector in selectors:
-        parsed = adapter.parse_selector(raw_selector)
+        parsed = parse_group_element(adapter, raw_selector, root)
         if not isinstance(parsed, Selector):
             raise ClaimRefused(
                 f"{raw_selector!r} cannot be parsed by this project's runner adapter, "
