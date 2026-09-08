@@ -15,7 +15,10 @@ reds (BEH-19).
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -439,5 +442,142 @@ class TestOnlyGreenEvidenceIsReusable:
 
         assert reusable_verify_evidence(config, state, task) is None, (
             "an instrument-error evidence row was handed back as reusable"
+        )
+        state.close()
+
+
+class TestDeclaredGroupIsStoredVerbatim:
+    """kind: contract — BEH-21 (TASK-006/DT-06): the recorded
+    `group_declared` is the declaration itself — a file target stays a file
+    target, never replaced by its resolved composition — and a mixed group
+    keeps the file target and node ids in their declared order."""
+
+    def test_a_file_target_is_recorded_as_the_path_not_its_resolved_members(self, tmp_path):
+        root = _repo(tmp_path)
+        task = _task(verifies=["tests/test_group.py"])
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+        assert result.passed, result.detail
+
+        state = ExecutorState(config)
+        state.record_verify_evidence(task=task, config=config, result=result)
+        namespace = resolve_namespace(config)
+        evidence = state.verify_evidence(namespace, task.id)
+        state.close()
+        assert evidence is not None
+
+        assert evidence.group_declared == ("tests/test_group.py",), (
+            "BEH-21: group_declared must hold the file target as written, "
+            f"not its resolved members, got {evidence.group_declared!r}"
+        )
+
+    def test_a_mixed_group_keeps_its_declared_order(self, tmp_path):
+        root = _repo(tmp_path)
+        (root / "tests" / "test_other.py").write_text("def test_other():\n    assert True\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "add second file")
+        declared = ["tests/test_other.py::test_other", "tests/test_group.py"]
+        task = _task(verifies=declared)
+        config = _cfg(root)
+
+        result = run_live_verify(task, config)
+        assert result.passed, result.detail
+
+        state = ExecutorState(config)
+        state.record_verify_evidence(task=task, config=config, result=result)
+        namespace = resolve_namespace(config)
+        evidence = state.verify_evidence(namespace, task.id)
+        state.close()
+        assert evidence is not None
+
+        assert evidence.group_declared == tuple(declared), (
+            "BEH-21: a mixed group's declared order must survive round-trip, "
+            f"got {evidence.group_declared!r}"
+        )
+
+
+class TestExistingEvidenceStaysReadable:
+    """kind: contract — BEH-23 (TASK-006/DT-06): a verify-evidence row
+    written by the delivered #367 version — before `composition` existed —
+    is still read by the new version, and its old fields keep their old
+    meaning; the migration that adds `composition` is additive only."""
+
+    def test_a_pre_composition_row_reads_with_an_empty_composition(self, tmp_path):
+        root = _repo(tmp_path)
+        task = _task(id="TASK-901", verifies=["tests/test_group.py::test_it"])
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        sha = _head(root)
+        config_hash = GateContext(task_id=task.id, checkpoint_sha=sha, config=config).config_hash
+        env_id = environment_id(Path(config.project_root))
+        declared = tuple(task.verifies or ())
+
+        # The exact pre-#TASK-006 shape: `verify_evidence` with no
+        # `composition` column at all, carrying a genuinely reusable row
+        # (real HEAD, real config hash, real environment id) so the gate
+        # check below exercises the real reuse path, not a stand-in.
+        with sqlite3.connect(config.state_file) as conn:
+            conn.execute(
+                """
+                CREATE TABLE verify_evidence (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    commit_sha TEXT NOT NULL,
+                    group_declared TEXT NOT NULL,
+                    group_executed TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    environment_id TEXT NOT NULL,
+                    adapter TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    detail TEXT,
+                    actor TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO verify_evidence (task_id, namespace, commit_sha, "
+                "group_declared, group_executed, config_hash, environment_id, "
+                "adapter, outcome, detail, actor, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task.id,
+                    namespace,
+                    sha,
+                    json.dumps(list(declared)),
+                    json.dumps(list(declared)),
+                    config_hash,
+                    env_id,
+                    "pytest",
+                    "green",
+                    "declared group passed: tests/test_group.py::test_it",
+                    "harness",
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+
+        # Opening with the new version must migrate additively — a table
+        # that predates `composition` is not an error — and the old row
+        # must still read back with its old fields intact.
+        state = ExecutorState(config)
+        evidence = state.verify_evidence(namespace, task.id)
+
+        assert evidence is not None
+        assert evidence.outcome == "green"
+        assert evidence.group_declared == declared
+        assert evidence.group_executed == declared
+        assert getattr(evidence, "composition", None) == (), (
+            "BEH-23: a pre-migration row's missing composition must read as empty, not as a defect"
+        )
+
+        # The pre-terminal gate answers the old row the same way it did
+        # before composition existed — reuse is unaffected by the migration.
+        reusable = reusable_verify_evidence(config, state, task)
+        assert reusable is not None, (
+            "BEH-23: the pre-terminal gate must still accept a pre-migration "
+            "green row exactly as it did before composition existed"
         )
         state.close()

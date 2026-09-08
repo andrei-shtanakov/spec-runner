@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .claims import Claim as ClaimT
     from .claims import ClaimStatus as ClaimStatusT
     from .gates import GateStatus as GateStatusT
+    from .live_verify import CompositionMember as CompositionMemberT
     from .live_verify import VerifyEvidence as VerifyEvidenceT
     from .live_verify import VerifyRunResult as VerifyRunResultT
     from .remedy import RemedyRecord as RemedyRecordT
@@ -212,6 +213,34 @@ def _is_disk_full_error(exc: sqlite3.OperationalError) -> bool:
     """
     message = str(exc).lower()
     return any(marker in message for marker in _DISK_FULL_MARKERS)
+
+
+def _encode_composition(composition: "tuple[CompositionMemberT, ...]") -> str | None:
+    """Serialize a `VerifyEvidence.composition` for the additive column
+    (#367 BEH-20/DT-06). `None` for an empty composition rather than an
+    empty-list literal — the same "nothing recorded" shape a pre-migration
+    row's missing column already reads as (BEH-23).
+    """
+    if not composition:
+        return None
+    return json.dumps(
+        [{"member": m.member, "outcome": m.outcome, "reason": m.reason} for m in composition]
+    )
+
+
+def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
+    """The inverse of `_encode_composition` — `()` for `NULL`/absent, which
+    covers both a node-id-only group's row and every row written before
+    `composition` existed (BEH-23).
+    """
+    from .live_verify import CompositionMember
+
+    if not raw:
+        return ()
+    return tuple(
+        CompositionMember(member=e["member"], outcome=e["outcome"], reason=e.get("reason"))
+        for e in json.loads(raw)
+    )
 
 
 class ExecutorState:
@@ -523,6 +552,16 @@ class ExecutorState:
                 timestamp TEXT NOT NULL
             )
         """)
+        # #367 TASK-006/DT-06: additive column — a file target's per-member
+        # composition (BEH-20), alongside the pre-existing `group_executed`,
+        # never replacing it. A DB from before this field existed has no
+        # `composition`; add it rather than rebuild, and a row written
+        # before now reads back with an empty composition (BEH-23), not a
+        # defect.
+        if "composition" not in {
+            row[1] for row in self._conn.execute("PRAGMA table_info(verify_evidence)")
+        }:
+            self._conn.execute("ALTER TABLE verify_evidence ADD COLUMN composition TEXT")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_verify_evidence_lookup "
             "ON verify_evidence (task_id, namespace, id DESC)"
@@ -974,8 +1013,8 @@ class ExecutorState:
             self._insert_phase_row(
                 "INSERT INTO verify_evidence (task_id, namespace, commit_sha, "
                 "group_declared, group_executed, config_hash, environment_id, "
-                "adapter, outcome, detail, actor, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "adapter, outcome, detail, actor, timestamp, composition) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     evidence.task_id,
                     evidence.namespace,
@@ -989,6 +1028,7 @@ class ExecutorState:
                     evidence.detail,
                     evidence.actor,
                     evidence.timestamp or datetime.now().isoformat(),
+                    _encode_composition(evidence.composition),
                 ),
             )
         except Exception as exc:  # bookkeeping must not fail a run
@@ -1012,7 +1052,8 @@ class ExecutorState:
         assert self._conn is not None
         row = self._conn.execute(
             "SELECT task_id, namespace, commit_sha, group_declared, group_executed, "
-            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor "
+            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor, "
+            "composition "
             "FROM verify_evidence WHERE task_id = ? AND namespace = ? "
             "ORDER BY id DESC LIMIT 1",
             (task_id, namespace),
@@ -1032,6 +1073,7 @@ class ExecutorState:
             detail=row[9],
             timestamp=row[10],
             actor=row[11],
+            composition=_decode_composition(row[12]),
         )
 
     def verify_evidence_for_namespace(
@@ -1050,7 +1092,8 @@ class ExecutorState:
         sql = (
             "SELECT v.task_id, v.namespace, v.commit_sha, v.group_declared, "
             "v.group_executed, v.config_hash, v.environment_id, v.adapter, "
-            "v.outcome, v.detail, v.timestamp, v.actor FROM verify_evidence v "
+            "v.outcome, v.detail, v.timestamp, v.actor, v.composition "
+            "FROM verify_evidence v "
             "INNER JOIN (SELECT task_id, MAX(id) AS max_id FROM verify_evidence "
             "WHERE namespace = ? GROUP BY task_id) latest "
             "ON v.task_id = latest.task_id AND v.id = latest.max_id "
@@ -1075,6 +1118,7 @@ class ExecutorState:
                 detail=r[9],
                 timestamp=r[10],
                 actor=r[11],
+                composition=_decode_composition(r[12]),
             )
             for r in rows
         ]
@@ -1095,7 +1139,8 @@ class ExecutorState:
         assert self._conn is not None
         row = self._conn.execute(
             "SELECT task_id, namespace, commit_sha, group_declared, group_executed, "
-            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor "
+            "config_hash, environment_id, adapter, outcome, detail, timestamp, actor, "
+            "composition "
             "FROM verify_evidence WHERE task_id = ? ORDER BY id DESC LIMIT 1",
             (task_id,),
         ).fetchone()
@@ -1114,6 +1159,7 @@ class ExecutorState:
             detail=row[9],
             timestamp=row[10],
             actor=row[11],
+            composition=_decode_composition(row[12]),
         )
 
     def record_claim(self, claim: "ClaimT") -> None:
