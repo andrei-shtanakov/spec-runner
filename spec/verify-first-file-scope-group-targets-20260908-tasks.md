@@ -311,17 +311,17 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-13], [FR-14], [FR-16]
 
 ### TASK-007: Поверхности оператора: размер состава, «зелено с пропусками», сводка в `--json-result`
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-27, BEH-28, BEH-29 (DT-07, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-07
 **Depends on:** [TASK-003], [TASK-004], [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-27: Каждый отказ называет файл и причину и читается без логов
-- [ ] реализовать BEH-28: Размер разрешённого состава предъявляется по ходу прогона и записывается
-- [ ] реализовать BEH-29: Зелёное с пропусками отличимо от полностью исполненного
-- [ ] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-27, BEH-28, BEH-29
+- [x] реализовать BEH-27: Каждый отказ называет файл и причину и читается без логов
+- [x] реализовать BEH-28: Размер разрешённого состава предъявляется по ходу прогона и записывается
+- [x] реализовать BEH-29: Зелёное с пропусками отличимо от полностью исполненного
+- [x] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-27, BEH-28, BEH-29
 
 **Traces to:** [FR-20], [FR-21], [FR-22]
 
