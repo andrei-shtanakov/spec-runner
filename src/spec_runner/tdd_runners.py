@@ -837,7 +837,18 @@ class PytestAdapter:
         if not isinstance(selector.locator, FileTarget):
             return ReplayEnvironment(env={}, environment_id=lockfile_identity(canonical_root))
         plugin_dir = Path(tempfile.mkdtemp(prefix="spec-runner-verify-reporter-"))
-        (plugin_dir / f"{_REPORTER_PLUGIN_MODULE}.py").write_text(_VERIFY_REPORTER_PLUGIN)
+        try:
+            (plugin_dir / f"{_REPORTER_PLUGIN_MODULE}.py").write_text(_VERIFY_REPORTER_PLUGIN)
+        except OSError as exc:
+            # Review finding: an unguarded write left `plugin_dir` orphaned
+            # on disk whenever it failed — nothing had registered it for
+            # cleanup yet, and this is the only place that can still remove
+            # it before the caller ever sees a `ReplayEnvironment`.
+            shutil.rmtree(plugin_dir, ignore_errors=True)
+            return ReplayEnvironmentRefusal(
+                "reporter_plugin_unwritable",
+                f"could not write the verify reporter plugin: {exc}",
+            )
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
         pythonpath = (
             f"{plugin_dir}{os.pathsep}{existing_pythonpath}"

@@ -335,7 +335,24 @@ def run_live_verify(
             )
         if log_progress is not None:
             log_progress("⏳ verify: preparing the replay environment (once for the group)")
-        prepared = adapter.prepare_replay(root, worktree, first_parsed)
+        # Review finding (mixed groups): `first_parsed` stands in for the
+        # group's environment needs, but a file target's reporter plugin is
+        # only deployed when the selector passed to `prepare_replay` IS a
+        # `FileTarget` (PytestAdapter). A node-id-first group with a later
+        # file target must still get that plugin, or the file target's own
+        # `-p` flag (`build_scoped_command`) fails to import it — so the
+        # representative selector is the first FileTarget anywhere in the
+        # group, falling back to the group's actual first element.
+        prepare_target = first_parsed
+        if not isinstance(first_parsed.locator, FileTarget):
+            for raw_selector in task.verifies[1:]:
+                candidate = parse_group_element(adapter, raw_selector, worktree)
+                if isinstance(candidate, SelectorRefusal):
+                    continue  # surfaced properly once the loop reaches it
+                if isinstance(candidate.locator, FileTarget):
+                    prepare_target = candidate
+                    break
+        prepared = adapter.prepare_replay(root, worktree, prepare_target)
         if isinstance(prepared, ReplayEnvironmentRefusal):
             return VerifyRunResult(sha, False, False, prepared.message, adapter=adapter_name)
         cleanup_paths.extend(prepared.cleanup_paths)
