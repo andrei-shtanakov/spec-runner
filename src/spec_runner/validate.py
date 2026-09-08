@@ -594,7 +594,9 @@ VALIDATORS: dict[str, Callable[[Path], ValidationResult]] = {
 }
 
 
-def _config_for_validation(config_file: Path | None) -> ExecutorConfig:
+def _config_for_validation(
+    config_file: Path | None, *, project_root: Path | None = None
+) -> ExecutorConfig:
     """The config a verify-first declaration is judged against (#367 FR-03).
 
     Built from YAML alone, no CLI args: neither `execution_mode` nor
@@ -602,18 +604,36 @@ def _config_for_validation(config_file: Path | None) -> ExecutorConfig:
     this agrees with what `run`/`watch` actually resolve those two to.
     `None` (no config file given) mirrors `validate_config`'s own behaviour
     of doing nothing rather than guessing a project's config path.
+
+    `project_root` is the one exception to "YAML alone" (sr397 review): it is
+    NOT covered by the rationale above — that rationale is scoped to
+    `execution_mode`/`tdd_runner` agreeing with what `run`/`watch` resolve,
+    and says nothing about which tree a file-existence check runs against.
+    Left unset, `ExecutorConfig()`'s own default resolves to cwd — correct
+    for a bare `spec-runner validate` invoked from the project root, but
+    wrong under `--project-root` (or `validate_all` called from a directory
+    other than the project root): every declared path would then be checked
+    against the wrong tree, giving false warnings and false
+    `outside_repository` errors alike. Callers pass the already-built
+    config's `project_root` (itself CLI-`--project-root`-aware,
+    `config.py`'s `build_config`) so this file-existence check judges the
+    same tree the run itself will.
     """
     if config_file is None:
-        return ExecutorConfig()
-    from spec_runner.config import load_config_from_yaml
+        kwargs: dict = {}
+    else:
+        from spec_runner.config import load_config_from_yaml
 
-    try:
-        yaml_config = load_config_from_yaml(config_file)
-    except ConfigError:
-        # Already reported by validate_config (mixed flat/executor: shape) —
-        # fall back to defaults so this check still runs against something.
-        return ExecutorConfig()
-    kwargs = {k: v for k, v in yaml_config.items() if v is not None}
+        try:
+            yaml_config = load_config_from_yaml(config_file)
+            kwargs = {k: v for k, v in yaml_config.items() if v is not None}
+        except ConfigError:
+            # Already reported by validate_config (mixed flat/executor:
+            # shape) — fall back to defaults so this check still runs
+            # against something.
+            kwargs = {}
+    if project_root is not None:
+        kwargs["project_root"] = project_root
     return ExecutorConfig(**kwargs)
 
 
@@ -628,15 +648,26 @@ def _validate_verify_first_declarations(
     a plain `**Mode:**`-less task under a project-wide verify_first default
     is not this case, since it resolves to verify_first itself).
 
+    Each declared group element is read through `parse_group_element`
+    (DT-01's declared-group-element vocabulary), not `parse_selector` (a
+    RED-checkpoint vocabulary about exactly one test) — a bare file target is
+    a legal group member here. Only what `validate` can decide without a run
+    is an error: a `parse_group_element` refusal is an error, except a file
+    missing from the *working tree*, which is a warning — `validate` judges
+    the tree in hand, not a commit a live run will later replay, so that
+    file's existence there is a fact for the run to establish, not one this
+    static check can assume fixed (#367 follow-up, BEH-09).
+
     Args:
         tasks: Parsed task list.
         config: The config to resolve each task's mode and adapter against —
             see `_config_for_validation`.
 
     Returns:
-        ValidationResult with one error per defective declaration.
+        ValidationResult with one error per defective declaration and one
+        warning per file target absent from the working tree.
     """
-    from spec_runner.tdd_runners import SelectorRefusal, adapter_for
+    from spec_runner.tdd_runners import SelectorRefusal, adapter_for, parse_group_element
 
     result = ValidationResult()
 
@@ -688,13 +719,29 @@ def _validate_verify_first_declarations(
             continue
 
         for raw in task.verifies:
-            parsed = adapter.parse_selector(raw)
-            if isinstance(parsed, SelectorRefusal):
-                result.errors.append(
+            # `parse_group_element` (DT-01's declared-group vocabulary), not
+            # `parse_selector` (a RED-checkpoint vocabulary about exactly one
+            # test): a bare file-path element is a legal group member here,
+            # and `parse_selector` alone would keep refusing it as "not a
+            # node id" (the retired boundary BEH-09 lifts).
+            parsed = parse_group_element(adapter, raw, config.project_root)
+            if not isinstance(parsed, SelectorRefusal):
+                continue
+            if parsed.code == "not_a_regular_file":
+                # `validate` judges the working tree, not the commit a live
+                # run will replay — existence there is a fact for that run to
+                # establish, not one static validation can assume is fixed.
+                result.warnings.append(
                     f"{task.id}: mode is verify_first, declared group "
-                    f"{task.verifies!r} — selector {raw!r} refused by the "
-                    f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
+                    f"{task.verifies!r} — file {raw!r} does not exist in the "
+                    f"working tree yet ({adapter.name} adapter): {parsed.message}"
                 )
+                continue
+            result.errors.append(
+                f"{task.id}: mode is verify_first, declared group "
+                f"{task.verifies!r} — selector {raw!r} refused by the "
+                f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
+            )
 
     return result
 
@@ -702,12 +749,21 @@ def _validate_verify_first_declarations(
 def validate_all(
     tasks_file: Path | None = None,
     config_file: Path | None = None,
+    *,
+    project_root: Path | None = None,
 ) -> ValidationResult:
     """Run all validation checks.
 
     Args:
         tasks_file: Path to tasks.md (optional).
         config_file: Path to executor config YAML (optional).
+        project_root: The tree a declared file target's existence is judged
+            against (sr397 review) — pass the caller's already-built
+            `ExecutorConfig.project_root` (CLI `--project-root`-aware) so
+            this agrees with the tree `run`/`watch` actually operate on.
+            Unset falls back to `_config_for_validation`'s own default
+            (cwd) — correct only when the caller's cwd already is the
+            project root.
 
     Returns:
         Merged ValidationResult from all checks.
@@ -722,7 +778,9 @@ def validate_all(
         result.merge(validate_config(config_file))
     if tasks:
         result.merge(
-            _validate_verify_first_declarations(tasks, _config_for_validation(config_file))
+            _validate_verify_first_declarations(
+                tasks, _config_for_validation(config_file, project_root=project_root)
+            )
         )
     return result
 

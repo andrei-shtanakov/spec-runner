@@ -563,6 +563,7 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
     result = validate_all(
         tasks_file=config.tasks_file,
         config_file=_resolve_config_path(),
+        project_root=config.project_root,
     )
     # Fail-fast delta check (M3): under --change, a delta spec is validated
     # against the flat requirements now, not first at archive time.
