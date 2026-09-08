@@ -296,17 +296,17 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-18]
 
 ### TASK-006: Эвиденция состава: аддитивная колонка, запись и чтение старых строк
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-20, BEH-21, BEH-23 (DT-06, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-06
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-20: Эвиденция называет состав поимённо и с пер-членным итогом
-- [ ] реализовать BEH-21: Объявленное хранится вербатим
-- [ ] реализовать BEH-23: Существующая эвиденция остаётся читаемой
-- [ ] проверка группы: tests/test_verify_evidence.py (kind: contract) зелёные на BEH-20, BEH-21, BEH-23
+- [x] реализовать BEH-20: Эвиденция называет состав поимённо и с пер-членным итогом
+- [x] реализовать BEH-21: Объявленное хранится вербатим
+- [x] реализовать BEH-23: Существующая эвиденция остаётся читаемой
+- [x] проверка группы: tests/test_verify_evidence.py (kind: contract) зелёные на BEH-20, BEH-21, BEH-23
 
 **Traces to:** [FR-13], [FR-14], [FR-16]
 
