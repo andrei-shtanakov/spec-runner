@@ -226,14 +226,14 @@ BEH-08, BEH-32) стоит на pytest; принимать ExUnit «заодно
 - **AC-29** (manual): Принятая форма объявлена владельцу конвейера без правки его репозитория
 
 ### TASK-001: Вокабуляра объявленной группы и локатор файловой цели
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-03 (DT-01, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-01
 
 **Checklist:**
-- [ ] реализовать BEH-03: Словарь остаётся конечным: всё, что матчит «что-нибудь», отказывает по имени
-- [ ] проверка группы: tests/test_verify_file_target_dictionary.py (kind: contract) зелёные на BEH-03
+- [x] реализовать BEH-03: Словарь остаётся конечным: всё, что матчит «что-нибудь», отказывает по имени
+- [x] проверка группы: tests/test_verify_file_target_dictionary.py (kind: contract) зелёные на BEH-03
 
 **Traces to:** [FR-02]
 
