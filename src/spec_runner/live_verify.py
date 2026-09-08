@@ -189,6 +189,21 @@ def _resolve_file_target_triplet(
 
 
 @dataclass(frozen=True)
+class CompositionMember:
+    """One named, per-member fact from a file target's composition (#367
+    BEH-20/DT-06): the member's own outcome word (`passed`/`failed`/`error`
+    or its own not-executed word such as `skipped`/`xfail`/`deselected`) and,
+    when the project stated one, its own reason — so a reader of the
+    evidence alone, without the run's log, can answer which named tests ran
+    and which were accounted-but-skipped, and why.
+    """
+
+    member: str
+    outcome: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class VerifyRunResult:
     """What the live run observed, for the caller to act on.
 
@@ -211,6 +226,11 @@ class VerifyRunResult:
     #: The adapter that judged the run, by name (e.g. "pytest") — empty when
     #: no adapter was ever resolved (a refusal before that point).
     adapter: str = ""
+    #: A file target's composition, named member by member with its own
+    #: outcome and (when stated) reason (#367 BEH-20/DT-06) — empty for a
+    #: group of node ids only, and for any run that never reached a green
+    #: file-target selector.
+    composition: tuple[CompositionMember, ...] = ()
     #: Named outcome (#367 BEH-10/BEH-23), derived from `ran`/`passed` so
     #: every construction site below gets it without repeating the mapping:
     #: this module only ever produces (True, True)=green,
@@ -313,6 +333,10 @@ def run_live_verify(
     #: asymmetry with the node-id path (BEH-06) is paid for with visibility,
     #: not silence.
     skip_notes: list[str] = []
+    #: Every accounted file-target member across the group, named with its
+    #: own outcome and reason (#367 BEH-20/DT-06) — the evidence's own
+    #: composition, not folded into `detail`'s free-text summary.
+    composition_entries: list[CompositionMember] = []
     # The group's budget is logged before the first run, not discovered
     # after the fact (tasks-spec resolution) — an operator watching the log
     # sees the ceiling this group is held to before any selector executes.
@@ -507,14 +531,18 @@ def run_live_verify(
                     # partial skip is visible rather than folded silently
                     # into "declared group passed".
                     for member in composition.members:
-                        member_outcome = composition.outcomes.get(member)
+                        member_outcome = composition.outcomes.get(member, "unknown")
                         if member_outcome in ("passed", "failed", "error"):
+                            composition_entries.append(CompositionMember(member, member_outcome))
                             continue
                         reason = composition.reasons.get(member)
                         if reason:
                             skip_notes.append(f"{member} ({reason})")
                         else:
                             skip_notes.append(f"{member} ({member_outcome})")
+                        composition_entries.append(
+                            CompositionMember(member, member_outcome, reason)
+                        )
                 continue  # this selector is green; judge the next one
 
             # Everything else is an instrument-error: the run could not
@@ -582,6 +610,7 @@ def run_live_verify(
             detail,
             group_executed=tuple(presented),
             adapter=adapter_name,
+            composition=tuple(composition_entries),
         )
     except subprocess.TimeoutExpired as exc:
         return VerifyRunResult(
@@ -630,6 +659,11 @@ class VerifyEvidence:
     failure detail (in the refusal's own words), when, and the harness as
     the record's author — enough for a third party to reproduce the run
     without the original log (BEH-16).
+
+    `composition` (#367 BEH-20/DT-06) is additive: a file target's members
+    named with their own outcome and reason, alongside the pre-existing
+    `group_executed` — never replacing it. Empty for a group of node ids
+    only, and for a row written before this field existed (BEH-23).
     """
 
     task_id: str
@@ -644,6 +678,7 @@ class VerifyEvidence:
     detail: str
     timestamp: str
     actor: str = "harness"
+    composition: tuple[CompositionMember, ...] = ()
 
 
 def _evidence_config_hash(config: ExecutorConfig, task_id: str, commit_sha: str) -> str:
@@ -679,6 +714,7 @@ def build_verify_evidence(
         outcome=result.outcome.value,
         detail=result.detail,
         timestamp=datetime.now().isoformat(),
+        composition=result.composition,
     )
 
 
