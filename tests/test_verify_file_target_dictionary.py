@@ -35,6 +35,30 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+class TestSymlinkEscapeViaIntermediateDirectory:
+    """A symlinked *directory* one level above the named file must not let a
+    declared element escape the repository — `os.path.normpath` is lexical
+    and never sees an intermediate symlink, so the containment check must be
+    done against the fully resolved path, not a merely normalised one."""
+
+    def test_file_under_a_symlinked_directory_is_refused(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.py").write_text("def test_secret():\n    pass\n")
+
+        project = tmp_path / "project"
+        (project / "tests").mkdir(parents=True)
+        (project / "tests" / "escape").symlink_to(outside, target_is_directory=True)
+
+        result = ADAPTER.parse_group_element("tests/escape/secret.py", project)
+
+        assert isinstance(result, SelectorRefusal), (
+            f"a file reached only through a symlinked directory must not resolve "
+            f"inside the repository, got {result!r}"
+        )
+        assert result.code == "outside_repository"
+
+
 class TestEveryDefectiveFormRefusesByItsOwnName:
     """BEH-03: each defective form refuses, naming both form and reason via
     its own stable code — never a shared catch-all."""

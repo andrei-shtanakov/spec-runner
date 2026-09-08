@@ -594,15 +594,20 @@ class PytestAdapter:
         root_resolved = root.resolve()
         raw_path = Path(value)
         joined = raw_path if raw_path.is_absolute() else root_resolved / raw_path
-        # `os.path.normpath` collapses `..` lexically, without touching the
-        # filesystem or following symlinks — the outside-repository check
-        # must hold even for a path that does not exist (`../outside.py`).
-        candidate = Path(os.path.normpath(str(joined)))
+        # `os.path.normpath` collapses `..` lexically without touching the
+        # filesystem — used only for the symlink check below, which must see
+        # the path as written (a resolved path never looks like a symlink).
+        unresolved = Path(os.path.normpath(str(joined)))
+        # Containment must be checked against the *fully* resolved path: an
+        # intermediate symlinked directory is invisible to `normpath` (unlike
+        # a `..` segment), so a lexical-only check can be walked outside the
+        # repository by a symlink one directory up from the named file.
+        candidate = joined.resolve()
         try:
             rel = candidate.relative_to(root_resolved)
         except ValueError:
             return SelectorRefusal("outside_repository", f"{raw!r} resolves outside the repository")
-        if candidate.is_symlink():
+        if unresolved.is_symlink():
             return SelectorRefusal("symlink", f"{raw!r} is a symlink, not a regular file")
         if candidate.is_dir():
             return SelectorRefusal("directory", f"{raw!r} is a directory, not one file")

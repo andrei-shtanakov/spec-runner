@@ -226,7 +226,7 @@ BEH-08, BEH-32) стоит на pytest; принимать ExUnit «заодно
 - **AC-29** (manual): Принятая форма объявлена владельцу конвейера без правки его репозитория
 
 ### TASK-001: Вокабуляра объявленной группы и локатор файловой цели
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-03 (DT-01, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-01
