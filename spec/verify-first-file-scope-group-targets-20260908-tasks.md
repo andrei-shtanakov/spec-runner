@@ -311,7 +311,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-13], [FR-14], [FR-16]
 
 ### TASK-007: Поверхности оператора: размер состава, «зелено с пропусками», сводка в `--json-result`
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-27, BEH-28, BEH-29 (DT-07, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-07
