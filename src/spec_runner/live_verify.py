@@ -155,36 +155,33 @@ def _resolve_file_target_triplet(
     - an unreadable or incomplete manifest (the reporter never installed, or
       the run broke before its closing record) cannot say anything;
     - an empty collected composition names nothing to have run;
-    - any accounted failure/error is a genuine, attributable test failure —
-      checked BEFORE completeness, see below;
-    - a member the outcome phase never mentions (and that isn't already an
-      accounted failure) is silence — accounted for, not credited;
+    - a member the outcome phase never mentions is silence — checked
+      BEFORE any accounted failure, see below;
+    - any accounted failure/error is a genuine, attributable test failure;
     - otherwise: green only once at least one accounted member actually
       executed (passed).
 
-    Review finding (sr395, early stop): a genuine failure is checked
-    BEFORE the "every member accounted for" check, not after. FR-11 gives
-    "падение или ошибка любого члена состава" `test_failure` with no
-    completeness caveat, and an early-stop flag (`-x`/`--maxfail`) is the
-    concrete case that caveat would otherwise swallow: the run stops
-    *because* an accounted member already failed, leaving later members
-    silent for a known, deterministic reason — not because the instrument
-    broke and left the outcome ambiguous. A real, accounted failure is
-    real regardless of what happened to the rest of the file; silence
-    with NO accounted failure is still read as `instrument_error`, so
-    FR-10's "molчание — отказ" still holds for the ambiguous case this
-    ordering does not touch.
+    Priority is fixed by design (Q-03, `20-design.md`): **unaccounted-
+    ness is checked before failure**. A report where one member failed
+    and another was never mentioned at all is `instrument_error`, not
+    `test_failure` — the instrument did not prove it spoke about the
+    whole composition, so FR-11's "genuine failure" is about a composition
+    the run spoke about IN FULL, not a partial one. This is deliberately
+    the more expensive reading for an early-stop flag (`-x`/`--maxfail`):
+    it costs a refusal BEFORE the paid RED-authoring call (BEH-10) rather
+    than risking a false `test_failure` on an incomplete account — and the
+    fix for that cost lives in the run configuration (drop `-x`), not in
+    loosening this fold. sr395 review round 1 inverted this order; round 2
+    reversed that inversion back to the approved design.
     """
     if composition is None or not composition.complete:
         return RunOutcome.UNRECOGNIZED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
     if not composition.members:
         return RunOutcome.SELECTION_FAILED, SelectionProof.UNKNOWN, ExecutionProof.NOT_EXECUTED
-    if any(
-        composition.outcomes.get(member) in ("failed", "error") for member in composition.members
-    ):
-        return RunOutcome.TESTS_FAILED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
     if any(member not in composition.outcomes for member in composition.members):
         return RunOutcome.TESTS_PASSED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
+    if any(composition.outcomes[member] in ("failed", "error") for member in composition.members):
+        return RunOutcome.TESTS_FAILED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
     executed = sum(1 for member in composition.members if composition.outcomes[member] == "passed")
     if executed == 0:
         return RunOutcome.TESTS_PASSED, SelectionProof.PROVEN, ExecutionProof.NOT_EXECUTED
@@ -512,7 +509,20 @@ def run_live_verify(
             elif proof is SelectionProof.REFUTED:
                 reason = f"{raw_selector}: a different test executed than the one requested"
             elif proof is SelectionProof.UNKNOWN:
-                reason = f"{raw_selector}: the run did not prove which test executed"
+                # BEH-15 (minimal, DT-03 owns the full table later): a file
+                # target's own composition names the unaccounted member(s)
+                # by node id, not just the file — a "did not prove which
+                # test executed" line is a node-id-shaped message and says
+                # nothing about WHICH of a multi-member file went silent.
+                unaccounted = (
+                    [m for m in composition.members if m not in composition.outcomes]
+                    if is_file_target and composition is not None
+                    else []
+                )
+                if unaccounted:
+                    reason = f"{raw_selector}: the run did not account for {', '.join(unaccounted)}"
+                else:
+                    reason = f"{raw_selector}: the run did not prove which test executed"
             elif outcome is RunOutcome.TESTS_PASSED and proof is SelectionProof.PROVEN:
                 # Reached only when `execution_proven` was False: the selector
                 # matched (e.g. a SKIPPED/XFAIL line still carries its node

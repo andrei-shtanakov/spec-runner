@@ -130,14 +130,21 @@ class TestFileTargetCompositionIsResolvedAgainstTheJudgedCommit:
         )
 
 
-class TestFileTargetEarlyStopStillReportsAGenuineFailure:
-    """Review sr395, major finding 1 (`live_verify.py:168`): `-x`/`--maxfail`
-    stops the run after the first accounted failure, leaving later members
-    of the file silent for a known reason — a real, accounted failure must
-    still classify as `test_failure`, never as `instrument_error` (FR-11's
-    unconditional "падение любого члена даёт test_failure")."""
+class TestFileTargetEarlyStopWithUnaccountedMemberIsInstrumentError:
+    """Review sr395 round 2, major finding (`live_verify.py:182`): the
+    approved design (Q-03, `20-design.md:139`, and DT-03,
+    `30-decomposition.md:96`) fixes the priority explicitly — unaccounted-
+    ness is checked BEFORE failure, with this exact `-x` scenario as the
+    worked example. A report where `test_a` failed and `test_b` was never
+    mentioned at all (early-stopped by `-x`/`--maxfail`) must be
+    `instrument_error`: the instrument did not prove it spoke about the
+    whole composition, so the accounted failure does not get credited as
+    an attributable `test_failure`. This is the deliberately more
+    expensive reading (a refusal BEFORE the paid RED-authoring call,
+    BEH-10) — round 1's fix inverted this order silently; this test
+    cements the approved order instead."""
 
-    def test_minus_x_failure_is_test_failure_not_instrument_error(self, tmp_path):
+    def test_minus_x_with_unaccounted_member_is_instrument_error(self, tmp_path):
         root = _init_repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "def test_a():\n    assert False, 'genuine failure'\n\n\n"
@@ -149,9 +156,13 @@ class TestFileTargetEarlyStopStillReportsAGenuineFailure:
         config.test_command = "python -m pytest -x"
         result = run_live_verify(_task(), config)
 
-        assert result.ran and not result.passed, (
-            "test_a's accounted failure must be a real test_failure even "
-            f"though -x stopped before test_b ran: {result.detail}"
+        assert not result.ran and not result.passed, (
+            "test_b was never accounted for (-x stopped the run after "
+            f"test_a's failure) — this must refuse as instrument_error, "
+            f"not be credited as a genuine test_failure: {result.detail}"
+        )
+        assert "test_b" in result.detail, (
+            f"the refusal must name the unaccounted member (BEH-15): {result.detail}"
         )
 
 
