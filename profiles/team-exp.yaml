@@ -1,5 +1,6 @@
 # team-exp для behaviour-конвейера devtools.
-# Источник формы — devtools profiles/team-exp.yaml (канон конвейера:
+# Источник формы — devtools profiles/team-exp.yaml @ 625ae94 (канон
+# конвейера; drift-проверкой файл не покрыт — пин источника здесь:
 # 6 авторимых узлов + delegate-узел tasks; acceptance доставлен
 # devtools#155). Узлы: charter → requirements → behaviour-spec → design →
 # acceptance → decomposition → tasks (delegate). До этой правки здесь
@@ -8,6 +9,9 @@
 # Бандлы WS-spec-runner-341 и WS-spec-runner-367 авторены под старой
 # формой и ЗАКРЫТЫ (их tasks-спеки approved и отработаны): переоценке
 # под новым профилем не подлежат; легаси-доставка — --legacy-bundle=3.
+# НЕ подавать их пути в gate-check/runner под этим профилем: три новых
+# узла required ⇒ required_absent/GC-STALE-KEY у их tasks-спек — это
+# ожидаемо для закрытой формы, а не сигнал к правке бандлов.
 profile: team-exp
 solo_auto_approve: true
 artifacts:
