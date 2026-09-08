@@ -270,7 +270,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-07], [FR-09], [FR-08], [FR-10]
 
 ### TASK-004: `validate`: разбор объявления вокабулярой группы и граница ошибки и предупреждения
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-09 (DT-04, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-04
