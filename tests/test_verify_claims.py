@@ -635,3 +635,42 @@ class TestFreezeBytesAreReadFromTheJudgedCommit:
         assert claim.blob_sha == committed_blob, (
             "the frozen bytes must come from the judged commit, not the dirty working tree"
         )
+
+    def test_a_file_target_deleted_on_disk_is_still_claimable_from_the_judged_commit(
+        self, tmp_path
+    ):
+        """BEH-25 (TASK-005) + finding 2: a file-target group element (no
+        `::`) must be judged against `sha`'s tree, not `project_root` on
+        disk — the same rule the node-id case above already enforces. A
+        prior, interrupted attempt that deleted the file from the working
+        tree without committing must not turn a legitimate byte-lock into a
+        `ClaimRefused`."""
+        root = _base_repo(tmp_path)
+        config = _cfg(root)
+        namespace = resolve_namespace(config)
+        task = _verify_first_task(verifies=["tests/test_group.py"])
+        selectors = ["tests/test_group.py"]
+        sha0 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        committed_blob = subprocess.run(
+            ["git", "rev-parse", f"{sha0}:tests/test_group.py"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        # Residue from an interrupted paid call: the file is gone from the
+        # working tree, uncommitted — it is still present and intact in sha0.
+        (root / "tests" / "test_group.py").unlink()
+
+        with ExecutorState(config) as state:
+            claims = record_verify_group_claims(config, state, task, sha0, selectors)
+            assert [c.path for c in claims] == ["tests/test_group.py"]
+            claim = state.active_claims(namespace)[0]
+
+        assert claim.blob_sha == committed_blob, (
+            "a file target present and intact in the judged commit must be claimable "
+            "even when it has since been deleted from the working tree on disk"
+        )
