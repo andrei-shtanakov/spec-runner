@@ -238,15 +238,15 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-02]
 
 ### TASK-002: Инвокация файловой цели: preflight по судимому дереву, репортёр адаптера, манифест состава
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-07 (DT-02, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-02
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] реализовать BEH-07: Состав разрешается против судимого коммита, а не против рабочего дерева
-- [ ] проверка группы: tests/test_verify_file_composition.py (kind: integration) зелёные на BEH-07
+- [x] реализовать BEH-07: Состав разрешается против судимого коммита, а не против рабочего дерева
+- [x] проверка группы: tests/test_verify_file_composition.py (kind: integration) зелёные на BEH-07
 
 **Traces to:** [FR-05]
 

@@ -58,7 +58,17 @@ from .config import ExecutorConfig
 from .git_ops import is_composite_shell_command
 from .task import Task
 from .tdd import REPLAY_TIMEOUT_SECONDS, resolve_adapter
-from .tdd_runners import ReplayEnvironmentRefusal, RunOutcome, SelectionProof, SelectorRefusal
+from .tdd_runners import (
+    FILE_TARGET_MANIFEST_ENV,
+    FileComposition,
+    FileTarget,
+    ReplayEnvironmentRefusal,
+    RunOutcome,
+    SelectionProof,
+    SelectorRefusal,
+    parse_group_element,
+    read_file_composition,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .state import ExecutorState
@@ -130,6 +140,52 @@ def classify_verify_outcome(
         # actually execute rather than merely match while skipped/xfailed.
         return VerifyOutcome.GREEN
     return VerifyOutcome.INSTRUMENT_ERROR
+
+
+def _resolve_file_target_triplet(
+    composition: FileComposition | None,
+) -> tuple[RunOutcome, SelectionProof, ExecutionProof]:
+    """A file target's per-member manifest (DT-02), folded into the same
+    triplet `classify_verify_outcome` already judges a node id by (design
+    Q-03): composition and accounting decide the verdict, never a raw exit
+    code or the terminal summary — the node-id path's own classify/
+    prove_selected/execution_proven stays untouched and does not go through
+    this fold at all.
+
+    - an unreadable or incomplete manifest (the reporter never installed, or
+      the run broke before its closing record) cannot say anything;
+    - an empty collected composition names nothing to have run;
+    - a member the outcome phase never mentions is silence — checked
+      BEFORE any accounted failure, see below;
+    - any accounted failure/error is a genuine, attributable test failure;
+    - otherwise: green only once at least one accounted member actually
+      executed (passed).
+
+    Priority is fixed by design (Q-03, `20-design.md`): **unaccounted-
+    ness is checked before failure**. A report where one member failed
+    and another was never mentioned at all is `instrument_error`, not
+    `test_failure` — the instrument did not prove it spoke about the
+    whole composition, so FR-11's "genuine failure" is about a composition
+    the run spoke about IN FULL, not a partial one. This is deliberately
+    the more expensive reading for an early-stop flag (`-x`/`--maxfail`):
+    it costs a refusal BEFORE the paid RED-authoring call (BEH-10) rather
+    than risking a false `test_failure` on an incomplete account — and the
+    fix for that cost lives in the run configuration (drop `-x`), not in
+    loosening this fold. sr395 review round 1 inverted this order; round 2
+    reversed that inversion back to the approved design.
+    """
+    if composition is None or not composition.complete:
+        return RunOutcome.UNRECOGNIZED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
+    if not composition.members:
+        return RunOutcome.SELECTION_FAILED, SelectionProof.UNKNOWN, ExecutionProof.NOT_EXECUTED
+    if any(member not in composition.outcomes for member in composition.members):
+        return RunOutcome.TESTS_PASSED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
+    if any(composition.outcomes[member] in ("failed", "error") for member in composition.members):
+        return RunOutcome.TESTS_FAILED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
+    executed = sum(1 for member in composition.members if composition.outcomes[member] == "passed")
+    if executed == 0:
+        return RunOutcome.TESTS_PASSED, SelectionProof.PROVEN, ExecutionProof.NOT_EXECUTED
+    return RunOutcome.TESTS_PASSED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
 
 
 @dataclass(frozen=True)
@@ -272,7 +328,7 @@ def run_live_verify(
         # today (pytest's is a passthrough; ExUnit's only proves the shared
         # deps/build state) — the first selector stands in for the group.
         first_raw = task.verifies[0]
-        first_parsed = adapter.parse_selector(first_raw)
+        first_parsed = parse_group_element(adapter, first_raw, worktree)
         if isinstance(first_parsed, SelectorRefusal):
             return VerifyRunResult(sha, False, False, first_parsed.message, adapter=adapter_name)
 
@@ -292,12 +348,34 @@ def run_live_verify(
             )
         if log_progress is not None:
             log_progress("⏳ verify: preparing the replay environment (once for the group)")
-        prepared = adapter.prepare_replay(root, worktree, first_parsed)
+        # Review finding (mixed groups): `first_parsed` stands in for the
+        # group's environment needs, but a file target's reporter plugin is
+        # only deployed when the selector passed to `prepare_replay` IS a
+        # `FileTarget` (PytestAdapter). A node-id-first group with a later
+        # file target must still get that plugin, or the file target's own
+        # `-p` flag (`build_scoped_command`) fails to import it — so the
+        # representative selector is the first FileTarget anywhere in the
+        # group, falling back to the group's actual first element.
+        prepare_target = first_parsed
+        if not isinstance(first_parsed.locator, FileTarget):
+            for raw_selector in task.verifies[1:]:
+                candidate = parse_group_element(adapter, raw_selector, worktree)
+                if isinstance(candidate, SelectorRefusal):
+                    continue  # surfaced properly once the loop reaches it
+                if isinstance(candidate.locator, FileTarget):
+                    prepare_target = candidate
+                    break
+        prepared = adapter.prepare_replay(root, worktree, prepare_target)
         if isinstance(prepared, ReplayEnvironmentRefusal):
             return VerifyRunResult(sha, False, False, prepared.message, adapter=adapter_name)
         cleanup_paths.extend(prepared.cleanup_paths)
+        # Where a file target's reporter writes its manifest (DT-02, design:
+        # "Директория манифеста берётся из ReplayEnvironment.cleanup_paths") —
+        # None for a group `prepare_replay` never deployed a reporter for
+        # (a node-id-only group never needs one).
+        member_report_dir = prepared.cleanup_paths[0] if prepared.cleanup_paths else None
 
-        for raw_selector in task.verifies:
+        for idx, raw_selector in enumerate(task.verifies):
             remaining = group_deadline - time.monotonic()
             if remaining <= 0:
                 return VerifyRunResult(
@@ -310,7 +388,7 @@ def run_live_verify(
                     adapter=adapter_name,
                 )
 
-            parsed = adapter.parse_selector(raw_selector)
+            parsed = parse_group_element(adapter, raw_selector, worktree)
             if isinstance(parsed, SelectorRefusal):
                 # Validated already (`validate._validate_verify_first_declarations`)
                 # before a verify_first run can start; reachable only if the
@@ -351,30 +429,48 @@ def run_live_verify(
             # the group gets whatever is left, not a fresh allowance.
             remaining = group_deadline - time.monotonic()
             selector_timeout = min(float(REPLAY_TIMEOUT_SECONDS), max(remaining, 0.0))
+            run_env = {**os.environ, **prepared.env}
+            manifest_path: Path | None = None
+            is_file_target = isinstance(parsed.locator, FileTarget)
+            if is_file_target and member_report_dir is not None:
+                # Its own manifest per declared element (design: "манифест
+                # свой на каждый элемент объявления") — a mixed group must
+                # not have one element's reporter overwrite another's.
+                manifest_path = member_report_dir / f"composition-{idx}.jsonl"
+                run_env[FILE_TARGET_MANIFEST_ENV] = str(manifest_path)
             result = subprocess.run(
                 argv,
                 cwd=worktree,
                 capture_output=True,
                 text=True,
                 timeout=selector_timeout,
-                env={**os.environ, **prepared.env},
+                env=run_env,
             )
 
-            # #375 review: the verdict is read from the adapter's own
-            # classify/prove_selected dictionary — the same one `tdd._classify`
-            # uses for the red replay — never from a raw exit code. A code
-            # alone cannot separate a genuine failure from a broken instrument
-            # (`SELECTION_FAILED`/`COLLECTION_OR_COMPILE_ERROR`/`RUNNER_ERROR`
-            # all exit non-zero on pytest, and ExUnit's codes are inverted
-            # relative to pytest's entirely, #198) or a skipped/xfailed
-            # selector from an executed one (FR-08's third fact).
-            outcome = adapter.classify(result)
-            proof = adapter.prove_selected(parsed, result)
-            execution = (
-                ExecutionProof.EXECUTED
-                if adapter.execution_proven(parsed, result)
-                else ExecutionProof.NOT_EXECUTED
-            )
+            if is_file_target:
+                # BEH-07: composition and per-member facts come from the
+                # reporter's OWN manifest of this run — never the terminal
+                # summary and never a second pass — folded into the same
+                # triplet the classifier below already judges (Q-03).
+                composition = read_file_composition(manifest_path) if manifest_path else None
+                outcome, proof, execution = _resolve_file_target_triplet(composition)
+            else:
+                # #375 review: the verdict is read from the adapter's own
+                # classify/prove_selected dictionary — the same one
+                # `tdd._classify` uses for the red replay — never from a raw
+                # exit code. A code alone cannot separate a genuine failure
+                # from a broken instrument
+                # (`SELECTION_FAILED`/`COLLECTION_OR_COMPILE_ERROR`/`RUNNER_ERROR`
+                # all exit non-zero on pytest, and ExUnit's codes are inverted
+                # relative to pytest's entirely, #198) or a skipped/xfailed
+                # selector from an executed one (FR-08's third fact).
+                outcome = adapter.classify(result)
+                proof = adapter.prove_selected(parsed, result)
+                execution = (
+                    ExecutionProof.EXECUTED
+                    if adapter.execution_proven(parsed, result)
+                    else ExecutionProof.NOT_EXECUTED
+                )
             tail = _tail(f"{result.stdout}\n{result.stderr}")
 
             # #367 BEH-11/BEH-23: the decision goes through the one
@@ -413,7 +509,20 @@ def run_live_verify(
             elif proof is SelectionProof.REFUTED:
                 reason = f"{raw_selector}: a different test executed than the one requested"
             elif proof is SelectionProof.UNKNOWN:
-                reason = f"{raw_selector}: the run did not prove which test executed"
+                # BEH-15 (minimal, DT-03 owns the full table later): a file
+                # target's own composition names the unaccounted member(s)
+                # by node id, not just the file — a "did not prove which
+                # test executed" line is a node-id-shaped message and says
+                # nothing about WHICH of a multi-member file went silent.
+                unaccounted = (
+                    [m for m in composition.members if m not in composition.outcomes]
+                    if is_file_target and composition is not None
+                    else []
+                )
+                if unaccounted:
+                    reason = f"{raw_selector}: the run did not account for {', '.join(unaccounted)}"
+                else:
+                    reason = f"{raw_selector}: the run did not prove which test executed"
             elif outcome is RunOutcome.TESTS_PASSED and proof is SelectionProof.PROVEN:
                 # Reached only when `execution_proven` was False: the selector
                 # matched (e.g. a SKIPPED/XFAIL line still carries its node

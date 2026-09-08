@@ -28,11 +28,13 @@ Design: ``docs/superpowers/specs/2026-08-12-tdd-runner-adapter-design.md``
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -502,6 +504,182 @@ def executable_of(test_command: str) -> str | None:
     return None
 
 
+#: The env var a file-target replay's reporter plugin reads to learn where to
+#: write its manifest (DT-02, design "Точка врезки 2"). Set per selector by
+#: `live_verify` — the manifest is its own per declared element, never
+#: shared across a group, or a mixed group would overwrite itself.
+FILE_TARGET_MANIFEST_ENV = "SPEC_RUNNER_VERIFY_MANIFEST"
+
+#: The module name the reporter plugin is loaded under (`-p <name>`).
+#: Deliberately not `conftest.py`: connected by the invocation's own flag, so
+#: it is never picked up by a project's own collection (design: "не мешает
+#: conftest.py проекта и не попадает в его коллекцию").
+_REPORTER_PLUGIN_MODULE = "_spec_runner_verify_reporter"
+
+#: The reporter sidecar itself (Q-01): a pytest plugin, written to its own
+#: temp file per replay so a project under verification need not depend on
+#: spec_runner being importable in its own environment. Two phases, written
+#: as they happen rather than reconstructed afterwards: a "collected" record
+#: names every member the collection phase gathered, BEFORE any of them
+#: runs; an "outcome" record is appended per member as its call phase (or a
+#: failing setup/teardown) finishes. The closing "done" record is what tells
+#: a reader the run finished rather than crashing mid-way — its absence means
+#: an incomplete manifest, read as `instrument_error`, never as a pass.
+#: A failure inside the plugin itself is swallowed: it must only ever leave
+#: the manifest unreadable or incomplete, never turn a green run red.
+#:
+#: Two review findings (sr395) shaped this further:
+#: - `pytest_deselected` is its own hookspec, called by the mark/keyword
+#:   plugins' OWN `pytest_collection_modifyitems` from *within* the same
+#:   collection phase — after our `pytest_collection_modifyitems` above has
+#:   already recorded the pre-filter member list (we register via `-p`,
+#:   loaded after pytest's builtins, so pluggy calls us first). A
+#:   deselected member is therefore a NAMED skip (FR-10), not silence: it
+#:   gets its own "outcome" record here rather than being left absent.
+#: - `report.outcome == "passed"` alone does not distinguish an ordinary
+#:   pass from a non-strict xpass (pytest sets `report.wasxfail` on both
+#:   xfail and xpass, but only the outcome word differs the way a strict
+#:   xfail run already does) — `_PROVEN_EXECUTION_WORDS` deliberately
+#:   excludes xpassed for the node-id path (FR-08's "same standard"), so
+#:   the manifest must say "xpassed", not "passed", or the fold in
+#:   `live_verify._resolve_file_target_triplet` cannot tell them apart.
+_VERIFY_REPORTER_PLUGIN = f"""
+import json
+import os
+
+_MANIFEST_PATH = os.environ.get({FILE_TARGET_MANIFEST_ENV!r})
+
+
+def _append(record):
+    if not _MANIFEST_PATH:
+        return
+    try:
+        with open(_MANIFEST_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\\n")
+    except OSError:
+        pass
+
+
+def pytest_collection_modifyitems(items):
+    try:
+        members = [item.nodeid for item in items]
+    except Exception:
+        return
+    _append({{"phase": "collected", "members": members}})
+
+
+def pytest_deselected(items):
+    try:
+        for item in items:
+            _append({{"phase": "outcome", "nodeid": item.nodeid, "outcome": "deselected"}})
+    except Exception:
+        pass
+
+
+def pytest_runtest_logreport(report):
+    try:
+        if report.when == "call":
+            outcome = report.outcome
+            if outcome == "passed" and hasattr(report, "wasxfail"):
+                outcome = "xpassed"
+            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": outcome}})
+        elif report.when in ("setup", "teardown") and report.outcome != "passed":
+            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": report.outcome}})
+    except Exception:
+        pass
+
+
+def pytest_sessionfinish():
+    _append({{"phase": "done"}})
+"""
+
+
+@dataclass(frozen=True)
+class FileComposition:
+    """What a file target's reporter manifest said about one run (DT-02).
+
+    `members` is the collection phase, in collection order — the composition
+    resolved against whatever tree the replay actually ran in (BEH-07).
+    `outcomes` maps each reported member's node id to its outcome word.
+    `complete` is whether the closing "done" record was seen; its absence
+    means the run broke before finishing and the manifest must not be read
+    as a final answer.
+    """
+
+    members: tuple[str, ...]
+    outcomes: Mapping[str, str]
+    complete: bool
+
+
+def read_file_composition(path: Path) -> FileComposition | None:
+    """Parse a file target's reporter manifest, or None if it is missing or
+    malformed — a broken reporter gives an unreadable manifest, never a
+    false verdict either way (design: "не превращает зелёное в красное").
+
+    Review finding (sr395, "collected" overwriting under a parallel run):
+    a single manifest can carry more than one "collected" record when
+    `-n`/`--dist` (pytest-xdist) is part of the command — each worker
+    reports the chunk it collected, exactly as each worker's own outcomes
+    already accumulate rather than replace. Members are therefore UNIONED
+    across every "collected" record, in first-seen order, not replaced by
+    the latest one: last-write-wins here would let a worker's partial
+    chunk silently stand in for the whole file, and a genuine failure
+    collected by an earlier worker would fall outside `members` and never
+    be judged (`live_verify._resolve_file_target_triplet` only iterates
+    `composition.members`). A single-process run still writes exactly one
+    "collected" record, so this is a strict generalisation, not a
+    behaviour change for the common case.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    members: list[str] = []
+    seen_members: set[str] = set()
+    outcomes: dict[str, str] = {}
+    complete = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            return None
+        phase = record.get("phase")
+        if phase == "collected":
+            for member in record.get("members", []):
+                member = str(member)
+                if member not in seen_members:
+                    seen_members.add(member)
+                    members.append(member)
+        elif phase == "outcome":
+            nodeid = record.get("nodeid")
+            if isinstance(nodeid, str):
+                outcomes[nodeid] = str(record.get("outcome", ""))
+        elif phase == "done":
+            complete = True
+    return FileComposition(members=tuple(members), outcomes=outcomes, complete=complete)
+
+
+def parse_group_element(
+    adapter: TddRunnerAdapter, raw: str, root: Path
+) -> Selector | SelectorRefusal:
+    """Dispatch to `adapter`'s own declared-group-element vocabulary if it
+    has one (pytest). An adapter that never declared one (ExUnit,
+    `supports_file_targets = False`) has nothing new to add — its existing
+    `parse_selector` already refuses every non-node-id form, including a
+    file target, under its own stable code. Not a second dictionary: only
+    where a caller that accepts both node ids and file targets (`live_verify`)
+    reaches whichever vocabulary applies.
+    """
+    method = getattr(adapter, "parse_group_element", None)
+    if method is None:
+        return adapter.parse_selector(raw)
+    result: Selector | SelectorRefusal = method(raw, root)
+    return result
+
+
 def pytest_summary_counts(output: str) -> list[tuple[str, str]]:
     """`(count, word)` pairs from pytest's LAST summary line, or [].
 
@@ -630,12 +808,31 @@ class PytestAdapter:
         return None
 
     def preflight(self, root: Path, selector: Selector) -> SelectorRefusal | None:
-        """None, and the absence is the point.
+        """None for a node id, and the absence is the point.
 
         A pytest node id that names nothing **cannot** be mistaken for a red: it
         exits 4, never 1. That is the property ExUnit lacks and the reason
         ExUnit needs its definition line proven before the runner is invoked.
+
+        A file target is different (DT-02, design "Точка врезки 3"): it names
+        no test, only a path, so a missing or non-test file must be refused
+        BY NAME here — against ``root`` (the judged commit's worktree when
+        called from `live_verify`, BEH-07), never the live working tree —
+        rather than surfacing later as an uninformative exit code.
         """
+        if isinstance(selector.locator, FileTarget):
+            target = Path(root) / str(selector.path)
+            if not target.is_file():
+                return SelectorRefusal(
+                    "missing_test_file",
+                    f"{selector.path} does not exist in the tree being replayed",
+                )
+            if not self.is_discoverable(selector.path):
+                return SelectorRefusal(
+                    "not_discoverable",
+                    f"{selector.path} is not a file this adapter's own discovery "
+                    "would collect as tests",
+                )
         return None
 
     def claim_paths(self, selector: Selector) -> tuple[PurePosixPath, ...]:
@@ -668,12 +865,47 @@ class PytestAdapter:
     def prepare_replay(
         self, canonical_root: Path, replay_root: Path, selector: Selector
     ) -> ReplayEnvironment | ReplayEnvironmentRefusal:
-        """Passthrough: a Python environment lives outside the checkout.
+        """Passthrough for a node id: a Python environment lives outside the
+        checkout. That is exactly why pytest never met #207 — a bare
+        worktree can run tests because site-packages is somewhere else
+        entirely.
 
-        That is exactly why pytest never met #207 — a bare worktree can run
-        tests because site-packages is somewhere else entirely.
+        For a file target (DT-02), the reporter sidecar's own module is
+        deployed here — once for the whole group, like everything else this
+        method prepares — into its own temp directory, added to
+        `PYTHONPATH` so `build_scoped_command`'s `-p` flag can import it
+        without the target project depending on spec_runner. That directory
+        is also where each selector's manifest is written (design: "Директория
+        манифеста берётся из ReplayEnvironment.cleanup_paths"), so it is
+        returned in `cleanup_paths` for teardown like any other replay
+        artefact.
         """
-        return ReplayEnvironment(env={}, environment_id=lockfile_identity(canonical_root))
+        if not isinstance(selector.locator, FileTarget):
+            return ReplayEnvironment(env={}, environment_id=lockfile_identity(canonical_root))
+        plugin_dir = Path(tempfile.mkdtemp(prefix="spec-runner-verify-reporter-"))
+        try:
+            (plugin_dir / f"{_REPORTER_PLUGIN_MODULE}.py").write_text(_VERIFY_REPORTER_PLUGIN)
+        except OSError as exc:
+            # Review finding: an unguarded write left `plugin_dir` orphaned
+            # on disk whenever it failed — nothing had registered it for
+            # cleanup yet, and this is the only place that can still remove
+            # it before the caller ever sees a `ReplayEnvironment`.
+            shutil.rmtree(plugin_dir, ignore_errors=True)
+            return ReplayEnvironmentRefusal(
+                "reporter_plugin_unwritable",
+                f"could not write the verify reporter plugin: {exc}",
+            )
+        existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        pythonpath = (
+            f"{plugin_dir}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else str(plugin_dir)
+        )
+        return ReplayEnvironment(
+            env={"PYTHONPATH": pythonpath},
+            environment_id=lockfile_identity(canonical_root),
+            cleanup_paths=(plugin_dir,),
+        )
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, PytestNodeId)
@@ -723,13 +955,19 @@ class PytestAdapter:
     )
 
     def build_scoped_command(self, test_command: str, selector: Selector) -> list[str]:
-        assert isinstance(selector.locator, PytestNodeId)
         kept = strip_positional_paths(
             command_tokens(test_command),
             keep_exact=_RUNNER_WRAPPERS,
             executable_names=frozenset({"pytest"}),
             value_flags=self._VALUE_FLAGS,
         )
+        if isinstance(selector.locator, FileTarget):
+            # The reporter connects by invocation flag, never autoload
+            # (design: "не мешает conftest.py проекта и не попадает в его
+            # коллекцию") — and the whole file runs, not one node id, since
+            # a file target's composition IS the file (DT-02).
+            return [*kept, "-p", _REPORTER_PLUGIN_MODULE, str(selector.path)]
+        assert isinstance(selector.locator, PytestNodeId)
         return [*kept, selector.locator.value]
 
     def classify(self, result: subprocess.CompletedProcess) -> RunOutcome:
@@ -1271,6 +1509,8 @@ __all__ = [
     "ADAPTERS",
     "ExUnitAdapter",
     "ExUnitDefinitionLine",
+    "FILE_TARGET_MANIFEST_ENV",
+    "FileComposition",
     "FileTarget",
     "PytestAdapter",
     "PytestNodeId",
@@ -1290,7 +1530,9 @@ __all__ = [
     "infer_adapter",
     "normalise_path",
     "namespace_segment",
+    "parse_group_element",
     "pytest_summary_counts",
+    "read_file_composition",
     "strip_positional_paths",
     "task_slug",
 ]
