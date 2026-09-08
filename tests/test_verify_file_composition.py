@@ -9,12 +9,14 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 kind: integration — real git/pytest subprocesses against a fixture repo.
 """
 
+import json
 import subprocess
 from pathlib import Path
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.live_verify import run_live_verify
 from spec_runner.task import Task
+from spec_runner.tdd_runners import read_file_composition
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -126,3 +128,118 @@ class TestFileTargetCompositionIsResolvedAgainstTheJudgedCommit:
             "the new commit's composition includes the failing test_b; the "
             f"live run must judge it, not replay the earlier commit's answer: {third.detail}"
         )
+
+
+class TestFileTargetEarlyStopStillReportsAGenuineFailure:
+    """Review sr395, major finding 1 (`live_verify.py:168`): `-x`/`--maxfail`
+    stops the run after the first accounted failure, leaving later members
+    of the file silent for a known reason — a real, accounted failure must
+    still classify as `test_failure`, never as `instrument_error` (FR-11's
+    unconditional "падение любого члена даёт test_failure")."""
+
+    def test_minus_x_failure_is_test_failure_not_instrument_error(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert False, 'genuine failure'\n\n\n"
+            "def test_b():\n    assert True\n"
+        )
+        _commit(root, "test_a fails, test_b would pass but -x stops before it runs")
+
+        config = _cfg(root)
+        config.test_command = "python -m pytest -x"
+        result = run_live_verify(_task(), config)
+
+        assert result.ran and not result.passed, (
+            "test_a's accounted failure must be a real test_failure even "
+            f"though -x stopped before test_b ran: {result.detail}"
+        )
+
+
+class TestFileTargetDeselectionStaysGreen:
+    """Review sr395, major finding 2 (`live_verify.py:168`): `-k`/`-m`
+    deselection happens after the reporter's composition snapshot, so a
+    deselected member must be recorded as a NAMED skip (FR-10), not left
+    silent — otherwise a fully green run is misread as `instrument_error`."""
+
+    def test_deselected_member_does_not_block_green(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\n"
+            "def test_slow():\n    assert False, 'must not run: deselected'\n"
+        )
+        _commit(root, "test_a passes, test_slow is deselected by -k and never runs")
+
+        config = _cfg(root)
+        config.test_command = 'python -m pytest -k "not test_slow"'
+        result = run_live_verify(_task(), config)
+
+        assert result.ran and result.passed, (
+            f"test_slow is deselected, not silent — the run must stay green: {result.detail}"
+        )
+
+
+class TestFileTargetXpassedIsNotProvenExecution:
+    """Review sr395, minor finding 3 (`live_verify.py:172`): a non-strict
+    xpass reports `report.outcome == "passed"` but is not an executed pass
+    by the ExecutionProof standard FR-08 references — `xfailed`/`xpassed`
+    are excluded from proven execution on the node-id path too."""
+
+    def test_lone_xpassed_member_is_instrument_error_not_green(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "import pytest\n\n\n"
+            "@pytest.mark.xfail(reason='expected to fail but does not', strict=False)\n"
+            "def test_a():\n    assert True\n"
+        )
+        _commit(root, "test_a is an xfail marker that actually passes (xpass)")
+
+        config = _cfg(root)
+        result = run_live_verify(_task(), config)
+
+        assert not result.ran and not result.passed, (
+            "an xpassed member is not proven execution by itself; it must "
+            f"not be the sole evidence of green: {result.detail}"
+        )
+
+
+class TestFileTargetCompositionAccumulatesAcrossCollectedRecords:
+    """Review sr395, minor finding 4 (`vopros avtoru`, `tdd_runners.py:609`):
+    `read_file_composition` used to REPLACE `members` on every "collected"
+    record while `outcomes` accumulated — a manifest written by more than
+    one process (e.g. pytest-xdist workers, each reporting its own chunk)
+    would end up with `members` equal to only the last writer's chunk, and
+    a failure collected by an earlier chunk would fall outside `members`
+    entirely and never be judged (fail-open). Members must UNION across
+    every "collected" record instead."""
+
+    def test_two_collected_records_union_their_members(self, tmp_path):
+        manifest = tmp_path / "composition.jsonl"
+        lines = [
+            {"phase": "collected", "members": ["tests/test_group.py::test_a"]},
+            {
+                "phase": "outcome",
+                "nodeid": "tests/test_group.py::test_a",
+                "outcome": "failed",
+            },
+            {"phase": "collected", "members": ["tests/test_group.py::test_b"]},
+            {
+                "phase": "outcome",
+                "nodeid": "tests/test_group.py::test_b",
+                "outcome": "passed",
+            },
+            {"phase": "done"},
+        ]
+        manifest.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+
+        composition = read_file_composition(manifest)
+
+        assert composition is not None
+        assert composition.members == (
+            "tests/test_group.py::test_a",
+            "tests/test_group.py::test_b",
+        ), (
+            "both workers' collected members must be present, not just the "
+            f"last writer's chunk: {composition.members}"
+        )
+        assert composition.outcomes["tests/test_group.py::test_a"] == "failed"
+        assert composition.outcomes["tests/test_group.py::test_b"] == "passed"

@@ -155,20 +155,36 @@ def _resolve_file_target_triplet(
     - an unreadable or incomplete manifest (the reporter never installed, or
       the run broke before its closing record) cannot say anything;
     - an empty collected composition names nothing to have run;
-    - a member the outcome phase never mentions is silence — accounted for,
-      not credited;
-    - any accounted failure/error is a genuine, attributable test failure;
+    - any accounted failure/error is a genuine, attributable test failure —
+      checked BEFORE completeness, see below;
+    - a member the outcome phase never mentions (and that isn't already an
+      accounted failure) is silence — accounted for, not credited;
     - otherwise: green only once at least one accounted member actually
       executed (passed).
+
+    Review finding (sr395, early stop): a genuine failure is checked
+    BEFORE the "every member accounted for" check, not after. FR-11 gives
+    "падение или ошибка любого члена состава" `test_failure` with no
+    completeness caveat, and an early-stop flag (`-x`/`--maxfail`) is the
+    concrete case that caveat would otherwise swallow: the run stops
+    *because* an accounted member already failed, leaving later members
+    silent for a known, deterministic reason — not because the instrument
+    broke and left the outcome ambiguous. A real, accounted failure is
+    real regardless of what happened to the rest of the file; silence
+    with NO accounted failure is still read as `instrument_error`, so
+    FR-10's "molчание — отказ" still holds for the ambiguous case this
+    ordering does not touch.
     """
     if composition is None or not composition.complete:
         return RunOutcome.UNRECOGNIZED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
     if not composition.members:
         return RunOutcome.SELECTION_FAILED, SelectionProof.UNKNOWN, ExecutionProof.NOT_EXECUTED
+    if any(
+        composition.outcomes.get(member) in ("failed", "error") for member in composition.members
+    ):
+        return RunOutcome.TESTS_FAILED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
     if any(member not in composition.outcomes for member in composition.members):
         return RunOutcome.TESTS_PASSED, SelectionProof.UNKNOWN, ExecutionProof.UNDETERMINED
-    if any(composition.outcomes[member] in ("failed", "error") for member in composition.members):
-        return RunOutcome.TESTS_FAILED, SelectionProof.PROVEN, ExecutionProof.EXECUTED
     executed = sum(1 for member in composition.members if composition.outcomes[member] == "passed")
     if executed == 0:
         return RunOutcome.TESTS_PASSED, SelectionProof.PROVEN, ExecutionProof.NOT_EXECUTED

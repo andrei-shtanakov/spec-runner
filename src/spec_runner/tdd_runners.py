@@ -527,6 +527,22 @@ _REPORTER_PLUGIN_MODULE = "_spec_runner_verify_reporter"
 #: an incomplete manifest, read as `instrument_error`, never as a pass.
 #: A failure inside the plugin itself is swallowed: it must only ever leave
 #: the manifest unreadable or incomplete, never turn a green run red.
+#:
+#: Two review findings (sr395) shaped this further:
+#: - `pytest_deselected` is its own hookspec, called by the mark/keyword
+#:   plugins' OWN `pytest_collection_modifyitems` from *within* the same
+#:   collection phase — after our `pytest_collection_modifyitems` above has
+#:   already recorded the pre-filter member list (we register via `-p`,
+#:   loaded after pytest's builtins, so pluggy calls us first). A
+#:   deselected member is therefore a NAMED skip (FR-10), not silence: it
+#:   gets its own "outcome" record here rather than being left absent.
+#: - `report.outcome == "passed"` alone does not distinguish an ordinary
+#:   pass from a non-strict xpass (pytest sets `report.wasxfail` on both
+#:   xfail and xpass, but only the outcome word differs the way a strict
+#:   xfail run already does) — `_PROVEN_EXECUTION_WORDS` deliberately
+#:   excludes xpassed for the node-id path (FR-08's "same standard"), so
+#:   the manifest must say "xpassed", not "passed", or the fold in
+#:   `live_verify._resolve_file_target_triplet` cannot tell them apart.
 _VERIFY_REPORTER_PLUGIN = f"""
 import json
 import os
@@ -552,10 +568,21 @@ def pytest_collection_modifyitems(items):
     _append({{"phase": "collected", "members": members}})
 
 
+def pytest_deselected(items):
+    try:
+        for item in items:
+            _append({{"phase": "outcome", "nodeid": item.nodeid, "outcome": "deselected"}})
+    except Exception:
+        pass
+
+
 def pytest_runtest_logreport(report):
     try:
         if report.when == "call":
-            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": report.outcome}})
+            outcome = report.outcome
+            if outcome == "passed" and hasattr(report, "wasxfail"):
+                outcome = "xpassed"
+            _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": outcome}})
         elif report.when in ("setup", "teardown") and report.outcome != "passed":
             _append({{"phase": "outcome", "nodeid": report.nodeid, "outcome": report.outcome}})
     except Exception:
@@ -588,12 +615,27 @@ def read_file_composition(path: Path) -> FileComposition | None:
     """Parse a file target's reporter manifest, or None if it is missing or
     malformed — a broken reporter gives an unreadable manifest, never a
     false verdict either way (design: "не превращает зелёное в красное").
+
+    Review finding (sr395, "collected" overwriting under a parallel run):
+    a single manifest can carry more than one "collected" record when
+    `-n`/`--dist` (pytest-xdist) is part of the command — each worker
+    reports the chunk it collected, exactly as each worker's own outcomes
+    already accumulate rather than replace. Members are therefore UNIONED
+    across every "collected" record, in first-seen order, not replaced by
+    the latest one: last-write-wins here would let a worker's partial
+    chunk silently stand in for the whole file, and a genuine failure
+    collected by an earlier worker would fall outside `members` and never
+    be judged (`live_verify._resolve_file_target_triplet` only iterates
+    `composition.members`). A single-process run still writes exactly one
+    "collected" record, so this is a strict generalisation, not a
+    behaviour change for the common case.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
     members: list[str] = []
+    seen_members: set[str] = set()
     outcomes: dict[str, str] = {}
     complete = False
     for raw_line in text.splitlines():
@@ -606,7 +648,11 @@ def read_file_composition(path: Path) -> FileComposition | None:
             return None
         phase = record.get("phase")
         if phase == "collected":
-            members = [str(member) for member in record.get("members", [])]
+            for member in record.get("members", []):
+                member = str(member)
+                if member not in seen_members:
+                    seen_members.add(member)
+                    members.append(member)
         elif phase == "outcome":
             nodeid = record.get("nodeid")
             if isinstance(nodeid, str):
