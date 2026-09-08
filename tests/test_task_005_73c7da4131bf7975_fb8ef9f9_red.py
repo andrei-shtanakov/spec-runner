@@ -83,9 +83,7 @@ def test_file_target_element_is_byte_locked_not_refused(tmp_path):
 
     with ExecutorState(config) as state:
         try:
-            claims = record_verify_group_claims(
-                config, state, task, head, ["tests/test_group.py"]
-            )
+            claims = record_verify_group_claims(config, state, task, head, ["tests/test_group.py"])
         except ClaimRefused as exc:
             raise AssertionError(
                 "BEH-25: a legal file-target element of the declared group "
