@@ -62,6 +62,5 @@ class TestGroupElementDictionaryIsFinite:
             codes[label] = result.code
 
         assert len(set(codes.values())) == len(codes), (
-            f"each defective form must refuse by its own name, not a shared "
-            f"catch-all code: {codes}"
+            f"each defective form must refuse by its own name, not a shared catch-all code: {codes}"
         )
