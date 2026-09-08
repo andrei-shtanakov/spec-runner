@@ -251,7 +251,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-05]
 
 ### TASK-003: Свёртка пер-членного отчёта в триплет и исходы файловой цели
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-15, BEH-16 (DT-03, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-03
