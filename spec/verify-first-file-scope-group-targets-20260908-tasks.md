@@ -4,7 +4,7 @@ traces_to:
 upstream_hashes:
   decomposition: 928f4e7eb86f7bee8d0542e25f9fca85ee9af360
 spec_stage: tasks
-status: approved
+status: stale
 version: 2
 generated_by: fleet-agent
 generated_at: '2026-09-08T08:26:30+04:00'
