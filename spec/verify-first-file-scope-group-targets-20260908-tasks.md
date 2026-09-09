@@ -1,18 +1,17 @@
 ---
+spec_stage: tasks
+status: draft
+owner_role: stream-owner
+version: 3
+generated_by: fleet-agent
+generated_at: "2026-09-09T21:29:47+04:00"
+source_prompt_version: ""
+validation: ""
+approved_by: ""
 traces_to:
 - decomposition
 upstream_hashes:
-  decomposition: 928f4e7eb86f7bee8d0542e25f9fca85ee9af360
-spec_stage: tasks
-status: stale
-version: 2
-generated_by: fleet-agent
-generated_at: '2026-09-08T08:26:30+04:00'
-source_prompt_version: ''
-validation: pass
-approved_by: andrei-shtanakov
-approved_at: '2026-09-08T04:28:52Z'
-owner_role: stream-owner
+  decomposition: b8f31fe037d4a9795273bb62e082a13a86eea764
 ---
 
 ## Milestone 1: Verify-first file-scope group targets
@@ -226,198 +225,186 @@ BEH-08, BEH-32) стоит на pytest; принимать ExUnit «заодно
 - **AC-29** (manual): Принятая форма объявлена владельцу конвейера без правки его репозитория
 
 ### TASK-001: Вокабуляра объявленной группы и локатор файловой цели
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-03 (DT-01, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-01
 
 **Checklist:**
-- [x] реализовать BEH-03: Словарь остаётся конечным: всё, что матчит «что-нибудь», отказывает по имени
-- [x] проверка группы: tests/test_verify_file_target_dictionary.py (kind: contract) зелёные на BEH-03
+- [ ] реализовать BEH-03: Словарь остаётся конечным: всё, что матчит «что-нибудь», отказывает по имени
+- [ ] проверка группы: tests/test_verify_file_target_dictionary.py (kind: contract) зелёные на BEH-03
 
 **Traces to:** [FR-02]
 
 ### TASK-002: Инвокация файловой цели: preflight по судимому дереву, репортёр адаптера, манифест состава
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-07 (DT-02, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-02
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [x] реализовать BEH-07: Состав разрешается против судимого коммита, а не против рабочего дерева
-- [x] проверка группы: tests/test_verify_file_composition.py (kind: integration) зелёные на BEH-07
+- [ ] реализовать BEH-07: Состав разрешается против судимого коммита, а не против рабочего дерева
+- [ ] проверка группы: tests/test_verify_file_composition.py (kind: integration) зелёные на BEH-07
 
 **Traces to:** [FR-05]
 
 ### TASK-003: Свёртка пер-членного отчёта в триплет и исходы файловой цели
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-15, BEH-16 (DT-03, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-03
 **Depends on:** [TASK-002]
 
 **Checklist:**
-- [x] реализовать BEH-10: Отказ по файловой цели наступает до первого платного вызова
-- [x] реализовать BEH-11: «Прогон вернул 0» доказательством не является
-- [x] реализовать BEH-12: Зелёное по файловой цели — конъюнкция пер-членных фактов
-- [x] реализовать BEH-13: Пустой собранный состав — `instrument_error`, называющий файл
-- [x] реализовать BEH-14: Состав, ни один член которого не исполнился, — не здоровье
-- [x] реализовать BEH-15: Молчание о члене состава — отказ, а не зачёт
-- [x] реализовать BEH-16: Частично пропущенный файл зелёный, и пропуски названы поимённо
-- [x] проверка группы: tests/test_verify_file_target_outcomes.py (kind: integration), tests/test_verify_file_target_outcomes.py (kind: contract) зелёные на BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-15, BEH-16
+- [ ] реализовать BEH-10: Отказ по файловой цели наступает до первого платного вызова
+- [ ] реализовать BEH-11: «Прогон вернул 0» доказательством не является
+- [ ] реализовать BEH-12: Зелёное по файловой цели — конъюнкция пер-членных фактов
+- [ ] реализовать BEH-13: Пустой собранный состав — `instrument_error`, называющий файл
+- [ ] реализовать BEH-14: Состав, ни один член которого не исполнился, — не здоровье
+- [ ] реализовать BEH-15: Молчание о члене состава — отказ, а не зачёт
+- [ ] реализовать BEH-16: Частично пропущенный файл зелёный, и пропуски названы поимённо
+- [ ] проверка группы: tests/test_verify_file_target_outcomes.py (kind: integration), tests/test_verify_file_target_outcomes.py (kind: contract) зелёные на BEH-10, BEH-11, BEH-12, BEH-13, BEH-14, BEH-15, BEH-16
 
 **Traces to:** [FR-07], [FR-09], [FR-08], [FR-10]
 
 ### TASK-004: `validate`: разбор объявления вокабулярой группы и граница ошибки и предупреждения
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-09 (DT-04, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-04
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [x] реализовать BEH-09: `validate` отказывает ровно на том, что решается без прогона
-- [x] проверка группы: tests/test_task_003_55403b38f9226be0_14df0641_red.py (kind: integration) зелёные на BEH-09
+- [ ] реализовать BEH-09: `validate` отказывает ровно на том, что решается без прогона
+- [ ] проверка группы: tests/test_task_003_55403b38f9226be0_14df0641_red.py (kind: integration) зелёные на BEH-09
 
 **Traces to:** [FR-07]
 
 ### TASK-005: Байт-лок файловой цели в `record_verify_group_claims`
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-25 (DT-05, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-05
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [x] реализовать BEH-25: Байт-лок покрывает тот файл, состав которого судился
-- [x] проверка группы: tests/test_verify_claims.py (kind: integration) зелёные на BEH-25
+- [ ] реализовать BEH-25: Байт-лок покрывает тот файл, состав которого судился
+- [ ] проверка группы: tests/test_verify_claims.py (kind: integration) зелёные на BEH-25
 
 **Traces to:** [FR-18]
 
 ### TASK-006: Эвиденция состава: аддитивная колонка, запись и чтение старых строк
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-20, BEH-21, BEH-23 (DT-06, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-06
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [x] реализовать BEH-20: Эвиденция называет состав поимённо и с пер-членным итогом
-- [x] реализовать BEH-21: Объявленное хранится вербатим
-- [x] реализовать BEH-23: Существующая эвиденция остаётся читаемой
-- [x] проверка группы: tests/test_verify_evidence.py (kind: contract) зелёные на BEH-20, BEH-21, BEH-23
+- [ ] реализовать BEH-20: Эвиденция называет состав поимённо и с пер-членным итогом
+- [ ] реализовать BEH-21: Объявленное хранится вербатим
+- [ ] реализовать BEH-23: Существующая эвиденция остаётся читаемой
+- [ ] проверка группы: tests/test_verify_evidence.py (kind: contract) зелёные на BEH-20, BEH-21, BEH-23
 
 **Traces to:** [FR-13], [FR-14], [FR-16]
 
 ### TASK-007: Поверхности оператора: размер состава, «зелено с пропусками», сводка в `--json-result`
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-27, BEH-28, BEH-29 (DT-07, группа state-and-surfaces).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-07
 **Depends on:** [TASK-003], [TASK-004], [TASK-006]
 
 **Checklist:**
-- [x] реализовать BEH-27: Каждый отказ называет файл и причину и читается без логов
-- [x] реализовать BEH-28: Размер разрешённого состава предъявляется по ходу прогона и записывается
-- [x] реализовать BEH-29: Зелёное с пропусками отличимо от полностью исполненного
-- [x] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-27, BEH-28, BEH-29
+- [ ] реализовать BEH-27: Каждый отказ называет файл и причину и читается без логов
+- [ ] реализовать BEH-28: Размер разрешённого состава предъявляется по ходу прогона и записывается
+- [ ] реализовать BEH-29: Зелёное с пропусками отличимо от полностью исполненного
+- [ ] проверка группы: tests/test_verify_cli.py (kind: integration) зелёные на BEH-27, BEH-28, BEH-29
 
 **Traces to:** [FR-20], [FR-21], [FR-22]
 
-### TASK-008: Регрессия ветвления: упавший член и три исхода
+### TASK-008: Ветвление на файловой цели: упавший член и три исхода
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-17, BEH-24 (DT-08, группа regression).
+Реализовать сценарии BEH-17, BEH-24 (DT-08, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-08
-**Mode:** verify_first
-**Verifies:** tests/test_verify_branching.py
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] проверить BEH-17: Упавший член — настоящее падение, а не проблема инструмента
-- [ ] проверить BEH-24: Три исхода и ветвление по ним не меняются
-- [ ] проверка группы: tests/test_verify_branching.py (kind: integration), tests/test_verify_branching.py (kind: contract) зелёные на BEH-17, BEH-24
+- [ ] реализовать BEH-17: Упавший член — настоящее падение, а не проблема инструмента
+- [ ] реализовать BEH-24: Три исхода и ветвление по ним не меняются
+- [ ] проверка группы: tests/test_verify_file_target_branching.py (kind: integration), tests/test_verify_file_target_branching.py (kind: contract) зелёные на BEH-17, BEH-24
 
 **Traces to:** [FR-11], [FR-17]
 
-### TASK-009: Регрессия гейта и переиспользования эвиденции
+### TASK-009: Гейт и переиспользование эвиденции на файловой цели
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-22, BEH-26 (DT-09, группа regression).
+Реализовать сценарии BEH-22, BEH-26 (DT-09, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-09
-**Mode:** verify_first
-**Verifies:** tests/test_verify_gates.py
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] проверить BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
-- [ ] проверить BEH-26: Пред-мерж гейт задаёт тот же вопрос
-- [ ] проверка группы: tests/test_verify_gates.py (kind: integration) зелёные на BEH-22, BEH-26
+- [ ] реализовать BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
+- [ ] реализовать BEH-26: Пред-мерж гейт задаёт тот же вопрос
+- [ ] проверка группы: tests/test_verify_file_target_gates.py (kind: integration) зелёные на BEH-22, BEH-26
 
 **Traces to:** [FR-15], [FR-19]
 
 ### TASK-010: Приёмка объявления снаружи: обе формы, смешанная группа, дубль, отсутствие вывода группы
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-01, BEH-02, BEH-04, BEH-18, BEH-19 (DT-10, группа regression).
+Реализовать сценарии BEH-01, BEH-02, BEH-04, BEH-18, BEH-19 (DT-10, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-10
-**Mode:** verify_first
-**Verifies:** tests/test_verify_file_target_declaration.py
 **Depends on:** [TASK-002], [TASK-003], [TASK-004]
 
 **Checklist:**
-- [ ] проверить BEH-01: Файловая цель объявляется наравне с node id, в обеих формах и в любом порядке
-- [ ] проверить BEH-02: Замеренная выборка целей воркспейса объявляется без ручного расширения
-- [ ] проверить BEH-04: Группа не выводится ни из чего, кроме объявления
-- [ ] проверить BEH-18: Смешанная группа судится как объявлена, включая пересечение
-- [ ] проверить BEH-19: Тест, попавший в состав дважды, удовлетворяет правило оба раза
+- [ ] реализовать BEH-01: Файловая цель объявляется наравне с node id, в обеих формах и в любом порядке
+- [ ] реализовать BEH-02: Замеренная выборка целей воркспейса объявляется без ручного расширения
+- [ ] реализовать BEH-04: Группа не выводится ни из чего, кроме объявления
+- [ ] реализовать BEH-18: Смешанная группа судится как объявлена, включая пересечение
+- [ ] реализовать BEH-19: Тест, попавший в состав дважды, удовлетворяет правило оба раза
 - [ ] проверка группы: tests/test_verify_file_target_declaration.py (kind: contract), tests/test_verify_file_target_declaration.py (kind: e2e), tests/test_verify_file_target_declaration.py (kind: integration) зелёные на BEH-01, BEH-02, BEH-04, BEH-18, BEH-19
 
 **Traces to:** [FR-01], [FR-02], [FR-12]
 
-### TASK-011: Приёмка объявленной границы адаптера
+### TASK-011: Объявленная граница адаптера: два адаптера на одном объявлении
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-05 (DT-11, группа regression).
+Реализовать сценарии BEH-05 (DT-11, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-11
-**Mode:** verify_first
-**Verifies:** tests/test_verify_file_target_adapter.py
 **Depends on:** [TASK-002], [TASK-004]
 
 **Checklist:**
-- [ ] проверить BEH-05: Поддержка файловой цели принадлежит адаптеру, и её отсутствие объявляется по имени
+- [ ] реализовать BEH-05: Поддержка файловой цели принадлежит адаптеру, и её отсутствие объявляется по имени
 - [ ] проверка группы: tests/test_verify_file_target_adapter.py (kind: contract) зелёные на BEH-05
 
 **Traces to:** [FR-03]
 
-### TASK-012: Приёмка аддитивности внешних контрактов
+### TASK-012: Аддитивность внешних контрактов на составе файловой цели
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-30 (DT-12, группа regression).
+Реализовать сценарии BEH-30 (DT-12, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-12
-**Mode:** verify_first
-**Verifies:** tests/test_json_result_contract.py
 **Depends on:** [TASK-007]
 
 **Checklist:**
-- [ ] проверить BEH-30: Внешние контракты расширяются только аддитивно
-- [ ] проверка группы: tests/test_json_result_contract.py (kind: contract) зелёные на BEH-30
+- [ ] реализовать BEH-30: Внешние контракты расширяются только аддитивно
+- [ ] проверка группы: tests/test_verify_file_target_contracts.py (kind: contract) зелёные на BEH-30
 
 **Traces to:** [FR-13], [FR-16]
 
 ### TASK-013: Замер стоимости класса и харнесс-гарантия
 P2 | TODO   Est: 0.5d
 
-Проверить сценарии BEH-08, BEH-32 (DT-13, группа regression).
+Реализовать сценарии BEH-08, BEH-32 (DT-13, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-13
-**Mode:** verify_first
-**Verifies:** tests/test_verify_file_target_cost.py
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] проверить BEH-08: Один элемент объявления — один запуск раннера
-- [ ] проверить BEH-32: Стоимость класса измерена, и ни один тест не вызывает реального агента
+- [ ] реализовать BEH-08: Один элемент объявления — один запуск раннера
+- [ ] реализовать BEH-32: Стоимость класса измерена, и ни один тест не вызывает реального агента
 - [ ] проверка группы: tests/test_verify_file_target_cost.py (kind: e2e) зелёные на BEH-08, BEH-32
 
 **Traces to:** [FR-06], [FR-09]
@@ -428,12 +415,12 @@ P2 | TODO   Est: 0.5d
 Проверить сценарии BEH-06 (DT-14, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-14
 **Mode:** verify_first
-**Verifies:** tests/test_verify_first_declaration.py
+**Verifies:** tests/test_verify_outcomes.py, tests/test_verify_first_declaration.py, tests/test_verify_first_validate.py, tests/test_verify_claims.py, tests/test_verify_evidence.py, tests/test_verify_file_target_outcomes.py
 **Depends on:** [TASK-005], [TASK-007]
 
 **Checklist:**
 - [ ] проверить BEH-06: Группа из одних node id ведёт себя в точности как сегодня
-- [ ] проверка группы: tests/test_verify_first_declaration.py (kind: contract) зелёные на BEH-06
+- [ ] проверка группы: tests/test_verify_outcomes.py (kind: contract) зелёные на BEH-06
 
 **Traces to:** [FR-04]
 
