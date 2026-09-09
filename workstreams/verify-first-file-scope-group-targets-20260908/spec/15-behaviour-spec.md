@@ -1,13 +1,11 @@
 ---
 spec_stage: behaviour-spec
-status: approved
+status: draft
 owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
   requirements: 09689ccf1406dde8f88cc0d2665b9254a19e85f0
-approved_by: andrei-shtanakov
-approved_at: '2026-09-08T04:25:58Z'
 version: 2
 ---
 
@@ -159,6 +157,15 @@ workstream или объявляет её неподдерживаемой по 
 - **And** сегодняшняя строгость сохраняется явно: **пропущенный** одиночный
   селектор остаётся `instrument_error`, а не становится зелёным по правилу
   учтённости (BEH-16) — асимметрия объявлена и наблюдаема на этом входе.
+- **And** предъявление идёт группой файлов, а не одним: «не сдвинулось»
+  утверждается про семь разных наблюдаемых, и каждое из них живёт в своём файле.
+  Группа объявлена структурно — полем `verifies` наблюдающей задачи; `checked_by`
+  здесь называет ровно один файл и означает только редактирующее владение.
+- **And** часть этих файлов бандл **расширяет** (валидация, claims, эвиденция):
+  регрессия на них предъявляется дифом — ни одно существующее ожидание ветки
+  node id не переписано, — а не тем, что файл вовсе не менялся. Отставка
+  ожиданий класса «отказ на файловой цели» из BEH-09 сюда не попадает: она
+  названа поимённо и разрешена явно.
 - **And** миграции существующих tasks-файлов не требуется.
 
 ### B. Разрешение состава
@@ -204,7 +211,6 @@ workstream или объявляет её неподдерживаемой по 
 `traces: [FR-07]`
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_first_validate.py`
-- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_task_003_55403b38f9226be0_14df0641_red.py`
 - **Given** набор объявлений: каждая дефектная форма из BEH-03; объявление под
   адаптером без поддержки (BEH-05); пустая объявленная группа; объявление
   файла, отсутствующего в рабочем дереве; объявление файла, который **в дереве
@@ -338,7 +344,7 @@ workstream или объявляет её неподдерживаемой по 
 #### BEH-17: Упавший член — настоящее падение, а не проблема инструмента
 `traces: [FR-11]`
 
-- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_branching.py`
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_file_target_branching.py`
 - **Given** три входа: объявленный файл, в котором падает один тест из многих;
   файл, в котором один тест завершается ошибкой (не assert, а исключение);
   файл со смешанным составом — часть прошла, часть упала, часть пропущена.
@@ -429,7 +435,7 @@ workstream или объявляет её неподдерживаемой по 
 #### BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
 `traces: [FR-15]`
 
-- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_gates.py`
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_file_target_gates.py`
 - **Given** зелёная эвиденция входного прогона файловой цели и дерево, в котором
   после этого прогона в объявленный файл **добавлен** тест — объявленная строка
   при этом байт-идентична.
@@ -462,7 +468,7 @@ workstream или объявляет её неподдерживаемой по 
 #### BEH-24: Три исхода и ветвление по ним не меняются
 `traces: [FR-17]`
 
-- **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_branching.py`
+- **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_file_target_branching.py`
 - **Given** исчерпывающий набор входов файловой цели: все строки таблицы
   BEH-12, все классы отказа BEH-10, смешанная группа BEH-18.
 - **When** каждый вход исполняется до класса завершения.
@@ -494,7 +500,7 @@ workstream или объявляет её неподдерживаемой по 
 #### BEH-26: Пред-мерж гейт задаёт тот же вопрос
 `traces: [FR-19]`
 
-- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_gates.py`
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_verify_file_target_gates.py`
 - **Given** пред-терминальная оценка verify-first задачи с файловой целью на
   входах: эвиденции нет; эвиденция не зелёная; эвиденция относится к другому
   дереву; эвиденция зелёная и относится к судимому дереву; исход был
@@ -568,7 +574,7 @@ workstream или объявляет её неподдерживаемой по 
 #### BEH-30: Внешние контракты расширяются только аддитивно
 `traces: [FR-13, FR-16]`
 
-- **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_json_result_contract.py`
+- **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_file_target_contracts.py`
 - **Given** зафиксированные внешние поверхности: схема state, `--json-result`,
   схемы в `schemas/` и golden-фикстуры Maestro-интеропа.
 - **When** файловая цель добавляет в них состав, пер-членный итог и размер
