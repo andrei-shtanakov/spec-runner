@@ -448,7 +448,8 @@ FR-12 (смешанная группа, порядок, отсутствие д�
 | `src/spec_runner/claims.py` | `record_verify_group_claims`: разбор элемента вокабулярой группы; остальное без изменений | Q-02, врезка 5 |
 | `src/spec_runner/cli.py` | `build_task_json_result`: аддитивная сводка состава рядом с `verify_outcome` (FR-22) | Q-04 |
 | `src/spec_runner/cli_info.py`, `src/spec_runner/tdd_status.py` | Различимое предъявление «зелено с пропусками» и размера состава в человеческом выводе | FR-21, FR-22 |
-| `schemas/executor-state.schema.json`, `schemas/json-result.schema.json` | Аддитивные необязательные свойства; golden-фикстуры не перегенерируются | Q-04, BEH-30 |
+| `schemas/json-result.schema.json` | `verify_composition` — аддитивное необязательное свойство рядом с `verify_outcome`; golden-фикстуры не перегенерируются. Уже описано в схеме — здесь предъявляется, а не заводится | Q-04, BEH-30 |
+| `schemas/executor-state.schema.json` | **Не меняется.** Перечислена как явная граница: схема описывает legacy JSON-state (`spec/.executor-state.json`), который новые прогоны не пишут, а состав живёт колонкой `composition` таблицы `verify_evidence` в канонической SQLite-схеме — строкой `state.py` выше | Q-04 |
 | `src/spec_runner/gates.py`, `src/spec_runner/hooks.py`, `src/spec_runner/execution.py`, `src/spec_runner/lifecycle.py`, `src/spec_runner/tdd.py` | **Не меняются.** Перечислены как явная граница: гейт, оба повторных прогона, ветвление по трём исходам и словарь RED остаются как доставлены #367/#141 | FR-04, FR-17, FR-19 |
 | `docs/architecture.md`, `CHANGELOG.md`, `CLAUDE.md` | Снятие формулировки «a file target is not declarable today»; описание контракта и объявленной асимметрии | NFR-05, BEH-31 |
 | `tests/` | Новые файлы по целям behaviour-спеки (декларация, словарь, адаптер, состав, исходы, ветвление, эвиденция, гейты, claims, CLI, стоимость) + фикстура выборки целей + артефакт замера | NFR-08 |
