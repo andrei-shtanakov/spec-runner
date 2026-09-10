@@ -634,6 +634,26 @@ workstream или объявляет её неподдерживаемой по 
   `check_before_call` и записывается в ledger — бюджетный гейт #213 не
   ослабляется.
 
+#### BEH-33: Перечень допустимых полей `--json-result` знает `verify_composition` (`OPTIONAL_TASK_RESULT_FIELDS` в `tests/test_json_result_contract.py`)
+`traces: [FR-13, FR-16]`
+
+- **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_verify_file_target_contracts.py`
+- **Given** единственный в дереве перечень допустимых полей `--json-result` —
+  `OPTIONAL_TASK_RESULT_FIELDS` / `ALLOWED_TASK_RESULT_FIELDS` в
+  `tests/test_json_result_contract.py`, — не знающий про верхнеуровневый ключ
+  `verify_composition`.
+- **When** verify_first-задача с непустым разрешённым составом печатает
+  `--json-result`.
+- **Then** запись проходит проверку набора полей: `verify_composition` объявлен
+  допустимым необязательным полем, и `Unknown fields in --json-result entry` на
+  **легальном аддитивном** поле не возникает.
+- **And** пополнение аддитивно и стоит одной строки с комментарием — ровно как
+  `verify_outcome` в #367: ни одно существующее поле не удалено, не
+  переименовано и не сменило обязательность, golden-фикстуры не
+  перегенерируются.
+- **And** факт предъявляется утверждением, а не `grep`: перечень читается из
+  того файла, где он живёт, и судится на принадлежность нового ключа.
+
 ## Матрица трассируемости
 
 | Behaviour | Functional requirements |
@@ -670,6 +690,7 @@ workstream или объявляет её неподдерживаемой по 
 | BEH-30 | FR-13, FR-16 |
 | BEH-31 | FR-01, FR-04, FR-10 |
 | BEH-32 | FR-06, FR-09 |
+| BEH-33 | FR-13, FR-16 |
 
 Обратная трассировка по функциональным требованиям:
 
@@ -687,10 +708,10 @@ workstream или объявляет её неподдерживаемой по 
 | FR-10 | BEH-12, BEH-14, BEH-15, BEH-16, BEH-31 |
 | FR-11 | BEH-17 |
 | FR-12 | BEH-18, BEH-19 |
-| FR-13 | BEH-20, BEH-30 |
+| FR-13 | BEH-20, BEH-30, BEH-33 |
 | FR-14 | BEH-21 |
 | FR-15 | BEH-22 |
-| FR-16 | BEH-23, BEH-30 |
+| FR-16 | BEH-23, BEH-30, BEH-33 |
 | FR-17 | BEH-24 |
 | FR-18 | BEH-25 |
 | FR-19 | BEH-26 |
@@ -704,7 +725,7 @@ upstream нет.
 Нефункциональные требования закреплены наблюдаемыми результатами сценариев без
 введения дополнительных идентификаторов трассировки: NFR-01 — BEH-08 и BEH-32;
 NFR-02 — BEH-09, BEH-10 и BEH-32; NFR-03 — BEH-19 и BEH-28; NFR-04 — BEH-20,
-BEH-23 и BEH-30; NFR-05 — BEH-31; NFR-06 — BEH-31; NFR-07 — BEH-02; NFR-08 —
+BEH-23, BEH-30 и BEH-33; NFR-05 — BEH-31; NFR-06 — BEH-31; NFR-07 — BEH-02; NFR-08 —
 BEH-03, BEH-05, BEH-06, BEH-12, BEH-13, BEH-14, BEH-16, BEH-17, BEH-18 и
 BEH-22; NFR-09 — BEH-07 и BEH-20; NFR-10 — BEH-32.
 
