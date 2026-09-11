@@ -1,16 +1,17 @@
 ---
 spec_stage: design
-status: stale
+status: approval_pending
 owner_role: architects
 traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 09689ccf1406dde8f88cc0d2665b9254a19e85f0
-  behaviour-spec: 842b594edd518bf9589159b11d2af0aeb8d8f2b8
+  requirements: c31c553b20e9d20c0b0631f28911bd177e338a13
+  behaviour-spec: 43dad2076b3c75fa8e36a1d8b18ca0ee21059c66
 approved_by: andrei-shtanakov
 approved_at: '2026-09-08T04:25:58Z'
-version: 2
+version: 3
+approved_content_hash: 5f6f3875987d15848b2fe40df3a15796a57bf957
 ---
 
 # Design — verify-first: объявленная группа принимает файловую цель
