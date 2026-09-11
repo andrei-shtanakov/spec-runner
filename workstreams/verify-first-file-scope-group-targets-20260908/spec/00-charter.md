@@ -1,10 +1,11 @@
 ---
 spec_stage: charter
-status: approved
+status: approval_pending
 owner_role: product
 approved_by: andrei-shtanakov
 approved_at: '2026-09-08T04:25:58Z'
-version: 2
+version: 3
+approved_content_hash: 1231e2db7a2e2aa2b9dbf1acf375c83cbb155c34
 ---
 
 # Charter — verify-first: объявленная группа принимает файловую цель
