@@ -523,11 +523,19 @@ def execute_task(
     attaches them for everyone, and detaching them here would be this same
     bug pointing the other way.
     """
-    from .gates import REGISTRY, ensure_red_gate, has_gates
+    from .gates import REGISTRY, ensure_red_gate, is_registered
 
     if config.resolve_waiver(task) is None:
         return _execute_task(task, config, state, harness_baseline)
-    borrowed = not has_gates()
+    # The question is "were the TDD gates already in force", not "is anything
+    # registered at all" — and `has_gates()` answers the second. A `standard`
+    # project with `review_policy: required` has the review gate attached, so
+    # `has_gates()` reads True while `tdd.claims` is absent; borrowing would
+    # then look like inheriting, the `finally` would detach nothing, and the
+    # leak this wrapper exists to prevent would be back for the whole process.
+    # `is_registered` is the narrower question, and it exists for exactly this
+    # class of mistake.
+    borrowed = not is_registered("tdd.claims", "tests")
     ensure_red_gate()
     try:
         return _execute_task(task, config, state, harness_baseline)

@@ -341,6 +341,17 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
         assert refusal is not None and "claim" in refusal.lower()
 
     def test_point_2_before_the_terminal_transition(self, tmp_path):
+        """Точка 2 — единственная, где facts строит ВЫЗЫВАЮЩАЯ сторона.
+
+        Поэтому здесь они передаются ровно так, как их строит прод
+        (`hooks.py`), и утверждается ПРИЧИНА отказа, а не его наличие.
+        Прежняя редакция звала функцию без facts: гейты отвечали
+        instrument-error'ом «no execution_mode» ещё до ветки про waiver, и
+        `refusal is not None` проходил бы при любой поломке проводки —
+        сними факт в `hooks.py`, верни гейту старый skip, отцепи
+        регистрацию, всё равно не-None. Тест, зеленеющий по неверной
+        причине, хуже отсутствующего: он выглядит покрытием.
+        """
         from spec_runner.hooks import _run_pre_terminal_gates
 
         root, cfg, sha = self._stand(tmp_path)
@@ -348,8 +359,15 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
             ensure_red_gate()
             _frozen(cfg, state, sha)
         broken = _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
-        refusal = _run_pre_terminal_gates(self._waived_task(), cfg, candidate_sha=broken)
+        refusal = _run_pre_terminal_gates(
+            self._waived_task(), cfg, candidate_sha=broken,
+            facts={"execution_mode": "standard", "waiver_applied": True},
+        )
         assert refusal is not None
+        assert "claim" in str(refusal).lower(), (
+            "отказ обязан быть про нарушенный claim, а не про сломанный инструмент"
+        )
+        assert "instrument" not in str(refusal).lower()
 
     def test_point_3_before_paying_a_reviewer(self, tmp_path):
         from spec_runner.hooks import _claims_intact_before_review
@@ -361,6 +379,8 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
         broken = _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
         refusal = _claims_intact_before_review(self._waived_task(), cfg, broken)
         assert refusal is not None
+        assert "claim" in str(refusal).lower()
+        assert "instrument" not in str(refusal).lower()
 
     def test_ordinary_standard_passes_all_three_untouched(self, tmp_path):
         """Половина «ничего не сломано», на том же самом нарушающем дереве.
@@ -614,6 +634,44 @@ class TestAWaivedTaskDoesNotChangeTheNextOrdinaryOne:
         assert during_plain is False, "следующая обычная — как если бы waived не было"
         assert has_gates() is False, "реестр восстановлен"
 
+    def test_a_review_gate_alone_does_not_look_like_inherited_tdd_gates(
+        self, tmp_path
+    ):
+        """`standard` + `review_policy: required` — легальная комбинация.
+
+        Review-гейт зарегистрирован, значит `has_gates()` True, а
+        `tdd.claims` отсутствует: предикат «что-нибудь зарегистрировано»
+        принял бы чужой гейт за наши и не отцепил бы свои. Утечка на весь
+        процесс — ровно та, ради которой обёртка и заведена.
+
+        Реестр здесь НЕ очищается намеренно: очистка делает обе
+        формулировки предиката неразличимыми, и прежний тест был зелёным
+        именно поэтому.
+        """
+        from spec_runner.gates import REGISTRY, is_registered, register_builtin_gates
+
+        cfg = _cfg(tmp_path, execution_mode="standard", review_policy="required")
+        REGISTRY.unregister("tdd.red", "tests")
+        REGISTRY.unregister("tdd.claims", "tests")
+        register_builtin_gates(cfg)
+        assert has_gates(), "review-гейт привязан — общий предикат уже True"
+        assert not is_registered("tdd.claims", "tests"), "а наших гейтов нет"
+
+        from spec_runner import execution
+
+        original = execution._execute_task
+        execution._execute_task = lambda *a, **k: True
+        try:
+            execution.execute_task(
+                _task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None
+            )
+        finally:
+            execution._execute_task = original
+
+        assert not is_registered("tdd.claims", "tests"), (
+            "гейты waived-задачи утекли: чужой review-гейт принят за наследство"
+        )
+
     def test_gates_already_in_force_are_left_alone(self, tmp_path):
         """Проект под `tdd` привязывает гейты всем; снять их здесь значило
         бы тот же баг, только в другую сторону."""
@@ -717,3 +775,72 @@ class TestAMissingFactIsAnInstrumentErrorNotAVerdict:
             ))
         assert verdict.status is GateStatus.INSTRUMENT_ERROR
         assert "waiver" in verdict.detail
+
+
+class TestThePreTerminalWiringItselfIsCovered:
+    """Точка 2 строит facts у ВЫЗЫВАЮЩЕЙ стороны — значит покрывать надо её.
+
+    Тест на самом гейте, которому facts передали руками, проводку не
+    проверяет вовсе: сними строку в `hooks.py` — он останется зелёным,
+    потому что факт пришёл из теста, а не из прода. Именно это и
+    случилось с первой правкой этого майора: я утвердил ПРИЧИНУ отказа,
+    но по-прежнему подавал факт сам.
+
+    Поэтому здесь перехватывается `_run_pre_terminal_gates` и
+    утверждается, ЧТО ему передал прод.
+    """
+
+    def test_the_caller_reports_the_waiver_to_the_gate(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        seen: dict = {}
+
+        def _capture(task, config, candidate_sha=None, facts=None):
+            seen["facts"] = facts
+            return None
+
+        monkeypatch.setattr(hooks, "_run_pre_terminal_gates", _capture)
+        monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(
+            root, run_review=False, auto_commit=False,
+            run_tests_on_done=False, run_lint_on_done=False,
+        )
+        waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
+        try:
+            hooks.post_done_hook(waived, cfg, True)
+        except Exception:
+            # Хук делает много лишнего для этого теста; нам нужен ровно
+            # словарь, который он собрал для точки 2, — и если до него не
+            # дошли, `seen` пуст и assert ниже это назовёт.
+            pass
+
+        assert "facts" in seen, "точка 2 не была вызвана — проводку проверять не на чем"
+        assert seen["facts"].get("waiver_applied") is True
+        assert seen["facts"].get("execution_mode") == "standard"
+
+    def test_an_ordinary_task_reports_false_not_silence(self, tmp_path, monkeypatch):
+        """Обычной задаче факт тоже проставляется — молчание гейт считает
+        instrument-error'ом, и «забыли сказать» сломало бы обычный путь."""
+        from spec_runner import hooks
+
+        seen: dict = {}
+        monkeypatch.setattr(
+            hooks, "_run_pre_terminal_gates",
+            lambda task, config, candidate_sha=None, facts=None: seen.update(facts=facts),
+        )
+        monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(
+            root, run_review=False, auto_commit=False,
+            run_tests_on_done=False, run_lint_on_done=False,
+        )
+        try:
+            hooks.post_done_hook(_task(execution_mode="standard"), cfg, True)
+        except Exception:
+            pass
+
+        assert "facts" in seen
+        assert seen["facts"].get("waiver_applied") is False
