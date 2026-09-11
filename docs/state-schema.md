@@ -233,7 +233,7 @@ to be inferred:
 | Column | Says |
 |---|---|
 | `removed` | the baseline-RED requirement — and nothing else |
-| `retained` | active claims at all three points (pre-implementation, pre-terminal, pre-review); the frozen-files block in every paid prompt |
+| `retained` | what the waiver does **not lift** — stated as policy, not as a report of checks performed: the active-claims check wherever it runs (pre-implementation, pre-terminal, and pre-review **when review is enabled**); the frozen-files block in every paid prompt. The row is written before points 2 and 3 run, and the pre-review point does not run at all under `run_review: false` — so a row claiming "checked at three points" would assert more than was observed |
 | `lifecycle` | that no TDD lifecycle rows exist for this task |
 | `baseline_sha` | the ACTUAL head at the start of the task, read at apply time — at authoring time it does not exist yet |
 

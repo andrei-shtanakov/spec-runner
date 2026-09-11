@@ -885,6 +885,11 @@ class ExecutorState:
         #
         # A different sanction for the same task is NOT deduplicated: that is
         # a different fact and belongs on the record.
+        #
+        # The connection is narrowed the way every other reader here does it:
+        # `self._conn` is `Connection | None`, and the sibling methods assert
+        # before use rather than each inventing its own guard.
+        assert self._conn is not None
         existing = self._conn.execute(
             "SELECT 1 FROM waivers_applied WHERE task_id = ? AND namespace = ? "
             "AND sanction = ? LIMIT 1",
@@ -912,6 +917,7 @@ class ExecutorState:
 
     def applied_waivers(self, namespace: str) -> list[dict]:
         """Applied waivers in ``namespace``, newest last — for `tdd status`."""
+        assert self._conn is not None
         rows = self._conn.execute(
             "SELECT task_id, waiver_class, sanction, removed, retained, "
             "lifecycle, baseline_sha, timestamp FROM waivers_applied "
@@ -919,10 +925,16 @@ class ExecutorState:
             (namespace,),
         ).fetchall()
         keys = (
-            "task_id", "waiver_class", "sanction", "removed", "retained",
-            "lifecycle", "baseline_sha", "timestamp",
+            "task_id",
+            "waiver_class",
+            "sanction",
+            "removed",
+            "retained",
+            "lifecycle",
+            "baseline_sha",
+            "timestamp",
         )
-        return [dict(zip(keys, row)) for row in rows]
+        return [dict(zip(keys, row, strict=True)) for row in rows]
 
     def record_waiver(
         self,

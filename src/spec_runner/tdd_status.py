@@ -238,8 +238,7 @@ def render(data: dict, task_id: str | None) -> str:
     """The human view. Deliberately shows retired records too: the point of
     never deleting them is that someone can reconstruct what was believed."""
     lines = [
-        f"🧪 TDD state — workspace {data['namespace']} "
-        f"(project mode: {data['execution_mode']})"
+        f"🧪 TDD state — workspace {data['namespace']} (project mode: {data['execution_mode']})"
     ]
     # #429: named BEFORE the per-task sections, because a reader who stops at
     # the header would otherwise carry the project mode over to every task —

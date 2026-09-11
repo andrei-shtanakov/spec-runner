@@ -21,10 +21,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   decision, which would make a gate refusal depend on forge availability.
 
   The waiver removes **one** obligation — showing a baseline RED — and
-  nothing else. Active claims are judged at all three points
-  (pre-implementation, pre-terminal, pre-review), and the frozen-files block
-  reaches every paid prompt, the reviewer's included: a task whose byte-lock
-  is still enforced must be told what is frozen. Ordinary `standard` is
+  nothing else. Active claims are judged wherever that check runs —
+  pre-implementation, pre-terminal, and pre-review when review is enabled —
+  and the frozen-files block reaches every paid prompt, the reviewer's
+  included: a task whose byte-lock is still enforced must be told what is
+  frozen. Ordinary `standard` is
   unchanged **by construction** — the predicate is "resolved mode is
   `standard` AND a marker parsed", and without a marker it is false rather
   than usually false. A marker on a `tdd`/`verify_first` task is a
@@ -33,7 +34,9 @@ is a **breaking change** and requires a major version bump plus an entry here.
   Applying a waiver is recorded durably in the new `waivers_applied` table
   (see `docs/state-schema.md`), written after the pre-implementation gate
   passes and idempotent per (task, namespace, sanction). It names what was
-  removed, what stayed in force and that no TDD lifecycle rows exist —
+  removed, what the waiver does not lift (as policy, not as a report of
+  checks already performed — the row is written before two of the three
+  points run) and that no TDD lifecycle rows exist —
   written out rather than inferred, because missing rows are also what a
   crash looks like. `tdd status` reports it (`applied_waivers` in `--json`)
   and its header now says `project mode:`, since with per-task waivers the

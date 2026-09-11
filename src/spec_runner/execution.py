@@ -44,7 +44,7 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def _refuse_task(task, config, state, reason: str) -> bool:
+def _refuse_task(task, config, state, reason: str) -> str:
     """Refuse one task with the attempt recorded, instead of raising (#429).
 
     A declaration the resolver cannot read is an operator error about THIS
@@ -66,7 +66,12 @@ def _refuse_task(task, config, state, reason: str) -> bool:
         error_stage="setup",
     )
     log_progress(f"⛔ {reason}", task.id)
-    return False
+    # TERMINAL, not a plain failure: an unreadable declaration is a fact about
+    # the CONFIGURATION, and retrying it `max_retries` times with a sleep
+    # between attempts asks the same question of the same bytes and gets the
+    # same answer, more slowly. Same reading `Refusal.terminal` already has
+    # for the `auto_commit: false` incompatibility (#380).
+    return "TERMINAL_REFUSAL"
 
 
 def _run_waived_claims_gate(task, config, state, reporter) -> Refusal | None:
@@ -118,12 +123,8 @@ def _run_waived_claims_gate(task, config, state, reporter) -> Refusal | None:
     # as a broken hook here. A dashboard reading `attempts.error_kind` would
     # see a hook failure where a byte-lock was broken.
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
-        return refusal_for(
-            outcome.status, f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
-        )
-    return refusal_for(
-        outcome.status, detail or "a gate refused before the implementation call"
-    )
+        return refusal_for(outcome.status, f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}")
+    return refusal_for(outcome.status, detail or "a gate refused before the implementation call")
 
 
 def _record_waiver_applied(state, config, task, waiver) -> Refusal | None:

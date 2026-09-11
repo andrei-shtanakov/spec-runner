@@ -600,8 +600,7 @@ class ExecutorConfig:
             )
         if not _sanction_is_valid(sanction):
             raise ConfigError(
-                f"unreadable waiver sanction{where}: {sanction!r}; "
-                f"expected {SANCTION_FORMS}"
+                f"unreadable waiver sanction{where}: {sanction!r}; expected {SANCTION_FORMS}"
             )
         return AppliedWaiver(node_class=node_class, sanction=sanction)
 

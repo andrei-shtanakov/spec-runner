@@ -9,6 +9,7 @@ Waiver снимает ОДНО — обязательный baseline-RED. Всё
 waived-половина зеленела бы одна.
 """
 
+import contextlib
 import subprocess
 from pathlib import Path
 
@@ -86,9 +87,13 @@ class TestTheResolverRefusesWhatItCannotRecognise:
             "characterisation · batch-approve-2026-09-09",
         ],
         ids=[
-            "класс-вне-словаря", "санкция-свободный-текст",
-            "дата-несуществующая", "дата-не-ISO", "санкции-нет",
-            "класса-нет", "ключа-sanction-нет",
+            "класс-вне-словаря",
+            "санкция-свободный-текст",
+            "дата-несуществующая",
+            "дата-не-ISO",
+            "санкции-нет",
+            "класса-нет",
+            "ключа-sanction-нет",
         ],
     )
     def test_a_malformed_marker_is_refused_by_name(self, tmp_path, marker):
@@ -125,12 +130,16 @@ class TestOrdinaryModesAreUnchanged:
 
     @pytest.mark.parametrize(
         "project, task_mode",
-        [("standard", None), ("tdd", None), ("verify_first", None),
-         ("standard", "tdd"), ("tdd", "standard"), ("tdd", "verify_first")],
+        [
+            ("standard", None),
+            ("tdd", None),
+            ("verify_first", None),
+            ("standard", "tdd"),
+            ("tdd", "standard"),
+            ("tdd", "verify_first"),
+        ],
     )
-    def test_a_task_without_a_marker_is_never_waived(
-        self, tmp_path, project, task_mode
-    ):
+    def test_a_task_without_a_marker_is_never_waived(self, tmp_path, project, task_mode):
         config = _cfg(tmp_path, execution_mode=project)
         task = _task(execution_mode=task_mode)
         assert config.resolve_waiver(task) is None
@@ -191,6 +200,7 @@ class TestTheMarkerIsReadFromTheTasksFile:
 # Каждая точка — своим тестом, не одним общим: «claims проверяются на одной
 # точке» и «на всех трёх» — разные утверждения, и общий тест их не различит.
 
+
 def _git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
 
@@ -238,28 +248,34 @@ def _frozen(cfg, state, sha, *, task="TASK-002", selector="tests/test_frozen.py:
     `check_claims` судит независимо от того, чья задача принесла кандидата
     (`active_claims`: «whoever made it»).
     """
-    record_claims(cfg, state, RedCheckpoint(
-        task_id=task,
-        namespace=resolve_namespace(cfg),
-        commit_sha=sha,
-        baseline_sha=sha,
-        selector=selector,
-        environment_id="unpinned",
-        execution_mode="tdd",
-        config_hash="h",
-        outcome=RedOutcome.EXPECTED_FAIL,
-        timestamp="2026-09-11T00:00:00",
-    ))
+    record_claims(
+        cfg,
+        state,
+        RedCheckpoint(
+            task_id=task,
+            namespace=resolve_namespace(cfg),
+            commit_sha=sha,
+            baseline_sha=sha,
+            selector=selector,
+            environment_id="unpinned",
+            execution_mode="tdd",
+            config_hash="h",
+            outcome=RedOutcome.EXPECTED_FAIL,
+            timestamp="2026-09-11T00:00:00",
+        ),
+    )
 
 
 def _judge(cfg, state, sha, *, waived: bool, mode: str = "standard"):
-    return evaluate_claims(GateContext(
-        task_id="TASK-008",
-        checkpoint_sha=sha,
-        config=cfg,
-        state=state,
-        facts={"execution_mode": mode, "waiver_applied": waived},
-    ))
+    return evaluate_claims(
+        GateContext(
+            task_id="TASK-008",
+            checkpoint_sha=sha,
+            config=cfg,
+            state=state,
+            facts={"execution_mode": mode, "waiver_applied": waived},
+        )
+    )
 
 
 class TestClaimsAreJudgedForAWaivedTask:
@@ -335,9 +351,7 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
             ensure_red_gate()
             _frozen(cfg, state, sha)
             _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
-            refusal = _run_waived_claims_gate(
-                self._waived_task(), cfg, state, _Reporter()
-            )
+            refusal = _run_waived_claims_gate(self._waived_task(), cfg, state, _Reporter())
         assert refusal is not None and "claim" in refusal.lower()
 
     def test_point_2_before_the_terminal_transition(self, tmp_path):
@@ -360,7 +374,9 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
             _frozen(cfg, state, sha)
         broken = _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
         refusal = _run_pre_terminal_gates(
-            self._waived_task(), cfg, candidate_sha=broken,
+            self._waived_task(),
+            cfg,
+            candidate_sha=broken,
             facts={"execution_mode": "standard", "waiver_applied": True},
         )
         assert refusal is not None
@@ -401,10 +417,15 @@ class TestEachOfTheThreePointsJudgesAWaivedTask:
         # поэтому здесь они передаются так же, как их строит прод, — иначе
         # гейт отвечает instrument-error про отсутствующий режим, и тест
         # утверждал бы про свой вызов, а не про поведение.
-        assert _run_pre_terminal_gates(
-            plain, cfg, candidate_sha=broken,
-            facts={"execution_mode": "standard", "waiver_applied": False},
-        ) is None
+        assert (
+            _run_pre_terminal_gates(
+                plain,
+                cfg,
+                candidate_sha=broken,
+                facts={"execution_mode": "standard", "waiver_applied": False},
+            )
+            is None
+        )
         # Точка 3 строит факты сама — её видно целиком.
         assert _claims_intact_before_review(plain, cfg, broken) is None
 
@@ -431,8 +452,7 @@ class TestTheFrozenFilesBlockReachesEveryPaidPrompt:
         root, cfg, sha = self._stand(tmp_path)
         with ExecutorState(cfg) as state:
             _frozen(cfg, state, sha)
-            waived = self._rendered(cfg, state, _task(
-                execution_mode="standard", tdd_waiver=WAIVER))
+            waived = self._rendered(cfg, state, _task(execution_mode="standard", tdd_waiver=WAIVER))
             plain = self._rendered(cfg, state, _task(execution_mode="standard"))
         assert "tests/test_frozen.py" in waived
         assert plain == "BODY", "обычный standard не тронут"
@@ -446,10 +466,15 @@ class TestTheFrozenFilesBlockReachesEveryPaidPrompt:
         root, cfg, sha = self._stand(tmp_path)
         with ExecutorState(cfg) as state:
             _frozen(cfg, state, sha)
-            waived = self._rendered(cfg, state, _task(
-                execution_mode="standard", tdd_waiver=WAIVER), escape=ESCAPE_REVIEW)
+            waived = self._rendered(
+                cfg,
+                state,
+                _task(execution_mode="standard", tdd_waiver=WAIVER),
+                escape=ESCAPE_REVIEW,
+            )
             plain = self._rendered(
-                cfg, state, _task(execution_mode="standard"), escape=ESCAPE_REVIEW)
+                cfg, state, _task(execution_mode="standard"), escape=ESCAPE_REVIEW
+            )
         assert "tests/test_frozen.py" in waived
         assert ESCAPE_REVIEW in waived
         assert plain == "BODY"
@@ -475,9 +500,7 @@ class TestTheFrozenFilesBlockReachesEveryPaidPrompt:
             waived = append_frozen_files(
                 body, cfg, _task(execution_mode="standard", tdd_waiver=WAIVER), state=state
             )
-            plain = append_frozen_files(
-                body, cfg, _task(execution_mode="standard"), state=state
-            )
+            plain = append_frozen_files(body, cfg, _task(execution_mode="standard"), state=state)
         assert "tests/test_frozen.py" in waived
         assert plain == body, "обычный standard не тронут и здесь"
 
@@ -523,15 +546,14 @@ class TestApplyingAWaiverIsRecordedDurably:
     def test_an_unattributed_application_is_refused(self, tmp_path):
         root = _repo(tmp_path)
         cfg = _repo_cfg(root)
-        with ExecutorState(cfg) as state:
-            with pytest.raises(ValueError):
-                state.record_waiver_applied(
-                    task_id="TASK-008",
-                    namespace=resolve_namespace(cfg),
-                    waiver_class="characterisation",
-                    sanction="   ",
-                    baseline_sha="abc1234",
-                )
+        with ExecutorState(cfg) as state, pytest.raises(ValueError):
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=resolve_namespace(cfg),
+                waiver_class="characterisation",
+                sanction="   ",
+                baseline_sha="abc1234",
+            )
 
     def test_it_is_not_written_into_the_operator_waiver_table(self, tmp_path):
         """`phase_waivers` — про то, что ОПЕРАТОР отменил наблюдённый исход.
@@ -640,9 +662,7 @@ class TestAWaivedTaskDoesNotChangeTheNextOrdinaryOne:
         assert during_plain is False, "следующая обычная — как если бы waived не было"
         assert has_gates() is False, "реестр восстановлен"
 
-    def test_a_review_gate_alone_does_not_look_like_inherited_tdd_gates(
-        self, tmp_path
-    ):
+    def test_a_review_gate_alone_does_not_look_like_inherited_tdd_gates(self, tmp_path):
         """`standard` + `review_policy: required` — легальная комбинация.
 
         Review-гейт зарегистрирован, значит `has_gates()` True, а
@@ -668,9 +688,7 @@ class TestAWaivedTaskDoesNotChangeTheNextOrdinaryOne:
         original = execution._execute_task
         execution._execute_task = lambda *a, **k: True
         try:
-            execution.execute_task(
-                _task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None
-            )
+            execution.execute_task(_task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None)
         finally:
             execution._execute_task = original
 
@@ -690,9 +708,7 @@ class TestAWaivedTaskDoesNotChangeTheNextOrdinaryOne:
         original = execution._execute_task
         execution._execute_task = lambda *a, **k: True
         try:
-            execution.execute_task(
-                _task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None
-            )
+            execution.execute_task(_task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None)
         finally:
             execution._execute_task = original
         assert has_gates() is True
@@ -713,9 +729,11 @@ class TestTheEventRecordsApplicationNotIntention:
         with ExecutorState(cfg) as state:
             for _ in range(3):
                 state.record_waiver_applied(
-                    task_id="TASK-008", namespace=ns,
+                    task_id="TASK-008",
+                    namespace=ns,
                     waiver_class="characterisation",
-                    sanction="batch-approve-2026-09-09", baseline_sha="abc",
+                    sanction="batch-approve-2026-09-09",
+                    baseline_sha="abc",
                 )
             rows = state.applied_waivers(ns)
         assert len(rows) == 1
@@ -728,11 +746,19 @@ class TestTheEventRecordsApplicationNotIntention:
         ns = resolve_namespace(cfg)
         with ExecutorState(cfg) as state:
             state.record_waiver_applied(
-                task_id="TASK-008", namespace=ns, waiver_class="characterisation",
-                sanction="batch-approve-2026-09-09", baseline_sha="abc")
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abc",
+            )
             state.record_waiver_applied(
-                task_id="TASK-008", namespace=ns, waiver_class="characterisation",
-                sanction="spec-runner#429", baseline_sha="abc")
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="spec-runner#429",
+                baseline_sha="abc",
+            )
             rows = state.applied_waivers(ns)
         assert len(rows) == 2
 
@@ -754,7 +780,9 @@ class TestTheEventRecordsApplicationNotIntention:
                 raise RuntimeError("disk is gone")
 
         refusal = _record_waiver_applied(
-            _Broken(), cfg, _task(),
+            _Broken(),
+            cfg,
+            _task(),
             AppliedWaiver(node_class="characterisation", sanction="spec-runner#429"),
         )
         assert refusal is not None
@@ -775,10 +803,15 @@ class TestAMissingFactIsAnInstrumentErrorNotAVerdict:
         sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
         with ExecutorState(cfg) as state:
             _frozen(cfg, state, sha)
-            verdict = evaluate_claims(GateContext(
-                task_id="TASK-008", checkpoint_sha=sha, config=cfg, state=state,
-                facts={"execution_mode": "standard"},
-            ))
+            verdict = evaluate_claims(
+                GateContext(
+                    task_id="TASK-008",
+                    checkpoint_sha=sha,
+                    config=cfg,
+                    state=state,
+                    facts={"execution_mode": "standard"},
+                )
+            )
         assert verdict.status is GateStatus.INSTRUMENT_ERROR
         assert "waiver" in verdict.detail
 
@@ -810,17 +843,18 @@ class TestThePreTerminalWiringItselfIsCovered:
 
         root = _repo(tmp_path)
         cfg = _repo_cfg(
-            root, run_review=False, auto_commit=False,
-            run_tests_on_done=False, run_lint_on_done=False,
+            root,
+            run_review=False,
+            auto_commit=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
         )
         waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
-        try:
+        # Хук делает много лишнего для этого теста; нам нужен ровно словарь,
+        # который он собрал для точки 2, — и если до него не дошли, `seen`
+        # пуст и assert ниже это назовёт.
+        with contextlib.suppress(Exception):
             hooks.post_done_hook(waived, cfg, True)
-        except Exception:
-            # Хук делает много лишнего для этого теста; нам нужен ровно
-            # словарь, который он собрал для точки 2, — и если до него не
-            # дошли, `seen` пуст и assert ниже это назовёт.
-            pass
 
         assert "facts" in seen, "точка 2 не была вызвана — проводку проверять не на чем"
         assert seen["facts"].get("waiver_applied") is True
@@ -833,20 +867,22 @@ class TestThePreTerminalWiringItselfIsCovered:
 
         seen: dict = {}
         monkeypatch.setattr(
-            hooks, "_run_pre_terminal_gates",
+            hooks,
+            "_run_pre_terminal_gates",
             lambda task, config, candidate_sha=None, facts=None: seen.update(facts=facts),
         )
         monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
 
         root = _repo(tmp_path)
         cfg = _repo_cfg(
-            root, run_review=False, auto_commit=False,
-            run_tests_on_done=False, run_lint_on_done=False,
+            root,
+            run_review=False,
+            auto_commit=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
         )
-        try:
+        with contextlib.suppress(Exception):
             hooks.post_done_hook(_task(execution_mode="standard"), cfg, True)
-        except Exception:
-            pass
 
         assert "facts" in seen
         assert seen["facts"].get("waiver_applied") is False
@@ -862,15 +898,16 @@ class TestPointTwoRefusesThroughTheRealCaller:
     этот — что собранный факт доводит до отказа.
     """
 
-    def test_a_waived_task_breaking_a_neighbours_claim_is_blocked_at_merge(
-        self, tmp_path
-    ):
+    def test_a_waived_task_breaking_a_neighbours_claim_is_blocked_at_merge(self, tmp_path):
         from spec_runner import hooks
 
         root = _repo(tmp_path)
         cfg = _repo_cfg(
-            root, run_review=False, auto_commit=False,
-            run_tests_on_done=False, run_lint_on_done=False,
+            root,
+            run_review=False,
+            auto_commit=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
         )
         sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
         with ExecutorState(cfg) as state:
@@ -890,8 +927,11 @@ class TestPointTwoRefusesThroughTheRealCaller:
 
         root = _repo(tmp_path)
         cfg = _repo_cfg(
-            root, run_review=False, auto_commit=False,
-            run_tests_on_done=False, run_lint_on_done=False,
+            root,
+            run_review=False,
+            auto_commit=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
         )
         sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
         with ExecutorState(cfg) as state:
@@ -962,8 +1002,11 @@ class TestAMalformedMarkerRefusesTheTaskNotTheRun:
         finally:
             execution._execute_task = original
 
-        assert result is False
-        assert recorded, "попытка обязана быть записана"
+        # TERMINAL, а не обычный провал: нечитаемое объявление — факт о
+        # КОНФИГУРАЦИИ, и повтор `max_retries` раз со сном между попытками
+        # задаёт тот же вопрос тем же байтам, только дольше.
+        assert result == "TERMINAL_REFUSAL"
+        assert len(recorded) == 1, "ровно одна записанная попытка, без повторов"
         assert recorded[0][1]["error_kind"] == "instrument"
 
 
@@ -978,9 +1021,11 @@ class TestStatusReportsWaiversAsContract:
         cfg = _repo_cfg(root)
         with ExecutorState(cfg) as state:
             state.record_waiver_applied(
-                task_id="TASK-008", namespace=resolve_namespace(cfg),
+                task_id="TASK-008",
+                namespace=resolve_namespace(cfg),
                 waiver_class="characterisation",
-                sanction="batch-approve-2026-09-09", baseline_sha="abcdef1234",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abcdef1234",
             )
         data = collect(cfg, None)
         assert [row["task_id"] for row in data["applied_waivers"]] == ["TASK-008"]
