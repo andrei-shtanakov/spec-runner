@@ -1,13 +1,13 @@
 ---
 spec_stage: requirements
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - charter
 upstream_hashes:
   charter: 5d98631cdf8d228a184a511e77d637482d9ad342
 approved_by: andrei-shtanakov
-approved_at: '2026-09-08T04:25:58Z'
+approved_at: '2026-09-11T08:56:03Z'
 version: 3
 approved_content_hash: 00de1ce319b0444c5f74fee8a4be2671997202d6
 ---
