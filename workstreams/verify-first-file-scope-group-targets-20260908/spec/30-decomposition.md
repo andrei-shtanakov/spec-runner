@@ -321,6 +321,7 @@ parallel_group: state-and-surfaces
 scenarios: [BEH-17, BEH-24]
 depends_on: [DT-03]
 parallel_group: regression
+tdd_waiver: characterisation · sanction: batch-approve-2026-09-09
 
 Предмет — **написать** проверки того, что свёртка не размыла границу между
 настоящим падением и проблемой инструмента: упавший член состава даёт
@@ -361,6 +362,7 @@ WS-spec-runner-367, несущий его BEH-20/21/22 (три исхода `exe
 scenarios: [BEH-22, BEH-26]
 depends_on: [DT-06]
 parallel_group: regression
+tdd_waiver: characterisation · sanction: batch-approve-2026-09-09
 
 Предмет — **написать** проверки резолюции Q-02: новой оси решения не введено, и
 дрейф состава уже покрыт тремя стоящими механизмами — байт-идентичностью дерева
@@ -437,6 +439,7 @@ parallel_group: regression
 scenarios: [BEH-05]
 depends_on: [DT-02, DT-04]
 parallel_group: regression
+tdd_waiver: characterisation · sanction: batch-approve-2026-09-09
 
 Предмет — **написать** сравнение двух реальных адаптеров на одном и том же
 объявлении: под pytest оно исполняется, под ExUnit отказывает на `validate`
