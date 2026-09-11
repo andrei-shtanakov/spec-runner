@@ -286,7 +286,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-07], [FR-09], [FR-08], [FR-10]
 
 ### TASK-004: `validate`: разбор объявления вокабулярой группы и граница ошибки и предупреждения
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-09, BEH-09a (DT-04, группа core).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-04
@@ -294,8 +294,8 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 
 **Checklist:**
 - [x] реализовать BEH-09: `validate` отказывает ровно на том, что решается без прогона
-- [ ] реализовать BEH-09a: Снятая граница отставлена и в эвиденциальном red-артефакте #367/TASK-003 (`tests/test_task_003_55403b38f9226be0_14df0641_red.py`)
-- [ ] проверка группы: tests/test_verify_first_validate.py (kind: integration), tests/test_task_003_55403b38f9226be0_14df0641_red.py (kind: integration) зелёные на BEH-09, BEH-09a
+- [x] реализовать BEH-09a: Снятая граница отставлена и в эвиденциальном red-артефакте #367/TASK-003 (`tests/test_task_003_55403b38f9226be0_14df0641_red.py`)
+- [x] проверка группы: tests/test_verify_first_validate.py (kind: integration), tests/test_task_003_55403b38f9226be0_14df0641_red.py (kind: integration) зелёные на BEH-09, BEH-09a
 
 **Traces to:** [FR-07]
 
