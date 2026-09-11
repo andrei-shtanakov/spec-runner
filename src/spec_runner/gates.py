@@ -585,9 +585,32 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
     # #429: a waived `standard` task is judged here like any other. The fact
     # travels in `facts` for the same reason the mode does — the gate is
     # entitled to see what actually ran, and the site that resolved it is the
-    # one that knows. Ordinary `standard` still skips: `waiver_applied` is
-    # absent, so the condition is unchanged for it by construction.
-    if mode not in ("tdd", "verify_first") and not ctx.facts.get("waiver_applied"):
+    # one that knows.
+    #
+    # A MISSING key is an instrument error, never a verdict — the same rule
+    # `execution_mode` follows above, and for the same reason: the site
+    # failing to report is our bug, and reading its silence as "no waiver"
+    # would launder it into a skip. Not hypothetical inside this very change:
+    # point 1 first sat on a path a waived task never walks, and a permissive
+    # default would have made that absence look like an ordinary skip.
+    if mode in ("tdd", "verify_first"):
+        pass  # claims are judged for these regardless; the waiver fact is moot
+    elif ctx.facts.get("waiver_applied") is None:
+        # Missing where it DECIDES: under `standard` this key is the whole
+        # difference between "judge" and "skip", and the site failing to
+        # report is our bug — laundering its silence into a skip is the
+        # failure mode #138 was about. Not hypothetical inside this change:
+        # point 1 first sat on a path a waived task never walks.
+        #
+        # Under `tdd`/`verify_first` the key decides nothing, so its absence
+        # is not an error there: demanding it would refuse work the gate
+        # would have judged identically, which is the other way to be wrong.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run did not report whether a waiver was applied",
+        )
+    elif not ctx.facts["waiver_applied"]:
         return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
     if ctx.state is None:
         return GateResult(

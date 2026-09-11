@@ -85,7 +85,12 @@ def _evaluate(cfg, state, *, mode="tdd", sha="a" * 40):
         checkpoint_sha=sha,
         config=cfg,
         state=state,
-        facts={"execution_mode": mode},
+        # #429: `waiver_applied` is load-bearing under `standard` — the
+        # gate treats its absence as an instrument error rather than as
+        # "no waiver". Production reports it at every site; this stand
+        # reports it too. The assertions below are untouched: what is
+        # under test is still that ordinary `standard` is not gated.
+        facts={"execution_mode": mode, "waiver_applied": False},
     )
     return evaluate_gates("tests", ctx, registry=registry)
 

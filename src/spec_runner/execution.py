@@ -92,7 +92,7 @@ def _run_waived_claims_gate(task, config, state, reporter) -> str | None:
     return detail or "a gate refused before the implementation call"
 
 
-def _record_waiver_applied(state, config, task, waiver) -> None:
+def _record_waiver_applied(state, config, task, waiver) -> Refusal | None:
     """Write the durable record that an addressed waiver was applied (#429).
 
     Unlike `_record_phase`, a failure here is NOT swallowed. That helper is
@@ -105,22 +105,40 @@ def _record_waiver_applied(state, config, task, waiver) -> None:
     The baseline sha is the ACTUAL head at the start of the task, read here
     rather than declared in the bundle: at authoring time it does not exist
     yet, and a value written in advance would be a guess.
+
+    "Mandatory, not best-effort" is achieved by REFUSING THE TASK, not by
+    letting the process die: an unwritable row is an instrument error about
+    this task, and the same precedent `_freeze_verify_group` states — a
+    broad catch, because the alternative is a traceback through
+    `run_with_retries` into a loop that does not catch it, leaving the attempt
+    unrecorded, the task `in_progress` and every later task unstarted. A
+    refusal stops the one task that cannot be recorded; a crash stops the run.
     """
+    from .gates import GateStatus, refusal_for
     from .tdd import resolve_namespace
 
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=config.project_root,
-        capture_output=True,
-        text=True,
-    )
-    state.record_waiver_applied(
-        task_id=task.id,
-        namespace=resolve_namespace(config),
-        waiver_class=waiver.node_class,
-        sanction=waiver.sanction,
-        baseline_sha=head.stdout.strip() if head.returncode == 0 else "",
-    )
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        state.record_waiver_applied(
+            task_id=task.id,
+            namespace=resolve_namespace(config),
+            waiver_class=waiver.node_class,
+            sanction=waiver.sanction,
+            baseline_sha=head.stdout.strip() if head.returncode == 0 else "",
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        return refusal_for(
+            GateStatus.INSTRUMENT_ERROR,
+            f"{GATE_INSTRUMENT_ERROR_PREFIX}: the applied waiver could not be "
+            f"recorded ({exc}); the task is refused rather than run with no "
+            "durable trace of the sanction it used",
+        )
+    return None
 
 
 def _record_phase(state, config, task, phase, detail=None) -> None:
@@ -484,6 +502,47 @@ def execute_task(
     state: ExecutorState,
     harness_baseline: HarnessBaseline | None = None,
 ) -> bool | str:
+    """Execute a single task, with a waived task's gates scoped to it (#429).
+
+    A thin wrapper for one reason: `ensure_red_gate` writes to the
+    process-wide `REGISTRY`, and `register_builtin_gates` runs once per
+    process. Left attached, a waived task would change the behaviour of every
+    ORDINARY `standard` task that follows it in the same run — `has_gates()`
+    would read True, so `post_done_hook` would commit a pre-review candidate
+    and the pre-terminal gates would evaluate, splitting the history two ways
+    for tasks that opted into nothing. That is the leak `conftest`'s autouse
+    fixture exists to undo in tests, and claiming "ordinary `standard` is
+    untouched" while adding a second source of it would be false.
+
+    Scoped with `try/finally` around the whole body rather than an unregister
+    at each exit: `execute_task` returns from many places, and "remember to
+    detach on this path too" is precisely the instruction that gets forgotten
+    when a branch is added.
+
+    Gates that were already registered are left alone — a `tdd` project
+    attaches them for everyone, and detaching them here would be this same
+    bug pointing the other way.
+    """
+    from .gates import REGISTRY, ensure_red_gate, has_gates
+
+    if config.resolve_waiver(task) is None:
+        return _execute_task(task, config, state, harness_baseline)
+    borrowed = not has_gates()
+    ensure_red_gate()
+    try:
+        return _execute_task(task, config, state, harness_baseline)
+    finally:
+        if borrowed:
+            REGISTRY.unregister("tdd.red", "tests")
+            REGISTRY.unregister("tdd.claims", "tests")
+
+
+def _execute_task(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    harness_baseline: HarnessBaseline | None = None,
+) -> bool | str:
     """Execute a single task via Claude CLI.
 
     Args:
@@ -533,26 +592,12 @@ def execute_task(
     update_task_status(config.tasks_file, task_id, "in_progress")
     send_callback(config.callback_url, task_id, "started")
 
-    # #429: an addressed-waived `standard` task registers the gates itself,
-    # and this call is UNCONDITIONAL on that path for exactly the reason
-    # `_run_verify_first_phase` gives for its own (see its docstring):
-    # `register_builtin_gates` keys on the PROJECT mode, and the two existing
-    # per-task registration sites live on the RED path and the verify-first
-    # path — neither of which a waived `standard` task ever walks. In a
-    # project whose default is `standard`, such a task would otherwise reach
-    # `has_gates() == False`, and the pre-terminal block and the pre-review
-    # claims check would not run at all. That is fail-open, not lenient: the
-    # waiver removes the baseline-RED requirement, never the claims.
-    #
-    # Registering the RED gate alongside costs nothing: `_red_gate` answers
-    # SKIPPED for a `standard` task, which is the intended outcome — the
-    # waiver's whole subject.
+    # #429: the gates a waived task needs are attached by `execute_task`
+    # around this call and detached after it — see its docstring for why the
+    # scope matters. Here we only walk the waived path: point 1 of three
+    # (claims before the paid call), then the durable record.
     applied_waiver = config.resolve_waiver(task)
     if applied_waiver is not None:
-        from .gates import ensure_red_gate
-
-        ensure_red_gate()
-        _record_waiver_applied(state, config, task, applied_waiver)
         waived_refusal = _run_waived_claims_gate(task, config, state, reporter)
         if waived_refusal is not None:
             log_progress(f"⛔ {waived_refusal}", task_id)
@@ -563,6 +608,25 @@ def execute_task(
                 error=waived_refusal,
                 error_code=_refusal_error_code(waived_refusal),
                 error_kind=_refusal_error_kind(waived_refusal),
+                error_stage=reporter.current,
+            )
+            update_task_status(config.tasks_file, task_id, "todo")
+            return False
+        # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
+        # санкция ПРИМЕНЕНА, а не что её собирались применить. Задача,
+        # остановленная гейтом до платного вызова, waiver'ом не
+        # воспользовалась — и строка о снятом baseline-RED про неё была бы
+        # ложью, которую `tdd status` печатал бы как факт.
+        waiver_refusal = _record_waiver_applied(state, config, task, applied_waiver)
+        if waiver_refusal is not None:
+            log_progress(f"⛔ {waiver_refusal}", task_id)
+            state.record_attempt(
+                task_id,
+                False,
+                0.0,
+                error=str(waiver_refusal),
+                error_code=_refusal_error_code(waiver_refusal),
+                error_kind=_refusal_error_kind(waiver_refusal),
                 error_stage=reporter.current,
             )
             update_task_status(config.tasks_file, task_id, "todo")

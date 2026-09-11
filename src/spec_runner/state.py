@@ -871,6 +871,22 @@ class ExecutorState:
         """
         if not sanction.strip():
             raise ValueError("an applied waiver needs its sanction: an unattributed one is not one")
+        # Idempotent on (task_id, namespace, sanction). `run_with_retries`
+        # calls `execute_task` up to `max_retries` times, and the same
+        # sanction applied again on attempt 2 is the SAME application, not a
+        # second one: N identical rows would make `tdd status` report the
+        # waiver N times for one task, and a reader counting rows would read
+        # repetition where there was one decision.
+        #
+        # A different sanction for the same task is NOT deduplicated: that is
+        # a different fact and belongs on the record.
+        existing = self._conn.execute(
+            "SELECT 1 FROM waivers_applied WHERE task_id = ? AND namespace = ? "
+            "AND sanction = ? LIMIT 1",
+            (task_id, namespace, sanction),
+        ).fetchone()
+        if existing is not None:
+            return
         self._conn.execute(
             "INSERT INTO waivers_applied (task_id, namespace, waiver_class, "
             "sanction, removed, retained, lifecycle, baseline_sha, timestamp) "

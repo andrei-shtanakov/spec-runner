@@ -436,13 +436,30 @@ class TestTheFrozenFilesBlockReachesEveryPaidPrompt:
 
     def test_the_lint_round_prompt_carries_it(self, tmp_path):
         """Четвёртый платный промпт — тот, который «не должен быть тем, кто
-        забудет» (#214). Проверяется тем же вызовом, что его строит."""
+        забудет» (#214).
+
+        Зовётся РЕАЛЬНЫЙ строитель этого промпта, а не `append_frozen_files`
+        ещё раз: прежняя редакция дублировала проверку промпта исполнителя и
+        потребителя 20d не касалась вовсе — тест не делал того, что обещает
+        именем, и был бы зелёным, забудь строитель про блок.
+        """
+        from spec_runner.tdd import _lint_agent_round_prompt
+
         root, cfg, sha = self._stand(tmp_path)
         with ExecutorState(cfg) as state:
             _frozen(cfg, state, sha)
-            waived = self._rendered(cfg, state, _task(
-                execution_mode="standard", tdd_waiver=WAIVER))
+            # Строитель читает названный файл — он существует в стенде.
+            body = _lint_agent_round_prompt(
+                cfg, "tests/test_frozen.py::t", ["tests/test_frozen.py"], "findings"
+            )
+            waived = append_frozen_files(
+                body, cfg, _task(execution_mode="standard", tdd_waiver=WAIVER), state=state
+            )
+            plain = append_frozen_files(
+                body, cfg, _task(execution_mode="standard"), state=state
+            )
         assert "tests/test_frozen.py" in waived
+        assert plain == body, "обычный standard не тронут и здесь"
 
 
 # --- Durable-событие ----------------------------------------------------
@@ -550,3 +567,153 @@ class TestTheMarkerDoesNotLeakIntoCheckpoints:
         assert cfg.resolve_execution_mode(waived) == "standard"
         assert "waiver" not in cfg.resolve_execution_mode(waived)
         assert "·" not in cfg.resolve_execution_mode(waived)
+
+
+# --- Правки по ревью #430 ----------------------------------------------
+
+
+class TestAWaivedTaskDoesNotChangeTheNextOrdinaryOne:
+    def test_the_registry_is_restored_after_a_waived_task(self, tmp_path):
+        """Регистрация ограничена исполнением waived-задачи.
+
+        `ensure_red_gate` пишет в ПРОЦЕССНЫЙ реестр, а
+        `register_builtin_gates` зовётся раз на процесс. Оставь мы гейты
+        привязанными — следующая ОБЫЧНАЯ `standard`-задача увидела бы
+        `has_gates()` True, и у неё поменялась бы форма коммитов
+        (кандидат + bookkeeping) и заработали бы пред-терминальные гейты.
+        Это расщепление истории для задачи, которая ни во что не
+        записывалась, — и утверждение «обычный standard не тронут» было бы
+        ложным.
+        """
+        from spec_runner.gates import REGISTRY, has_gates
+
+        REGISTRY.unregister("tdd.red", "tests")
+        REGISTRY.unregister("tdd.claims", "tests")
+        cfg = _cfg(tmp_path, execution_mode="standard")
+        waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
+
+        seen = {}
+
+        def _inner(task, config, state, harness_baseline=None):
+            seen["gates_during"] = has_gates()
+            return True
+
+        from spec_runner import execution
+
+        original = execution._execute_task
+        execution._execute_task = _inner
+        try:
+            execution.execute_task(waived, cfg, None)
+            during_waived = seen["gates_during"]
+            execution.execute_task(_task(execution_mode="standard"), cfg, None)
+            during_plain = seen["gates_during"]
+        finally:
+            execution._execute_task = original
+
+        assert during_waived is True, "waived-задача обязана иметь гейты"
+        assert during_plain is False, "следующая обычная — как если бы waived не было"
+        assert has_gates() is False, "реестр восстановлен"
+
+    def test_gates_already_in_force_are_left_alone(self, tmp_path):
+        """Проект под `tdd` привязывает гейты всем; снять их здесь значило
+        бы тот же баг, только в другую сторону."""
+        from spec_runner.gates import has_gates
+
+        ensure_red_gate()
+        cfg = _cfg(tmp_path, execution_mode="tdd")
+        from spec_runner import execution
+
+        original = execution._execute_task
+        execution._execute_task = lambda *a, **k: True
+        try:
+            execution.execute_task(
+                _task(execution_mode="standard", tdd_waiver=WAIVER), cfg, None
+            )
+        finally:
+            execution._execute_task = original
+        assert has_gates() is True
+
+
+class TestTheEventRecordsApplicationNotIntention:
+    def test_repeated_attempts_write_one_row(self, tmp_path):
+        """`run_with_retries` зовёт `execute_task` до `max_retries` раз.
+
+        Та же санкция, применённая на второй попытке, — ТО ЖЕ применение,
+        а не второе: N одинаковых строк заставили бы `tdd status`
+        напечатать waiver N раз, и читатель, считающий строки, увидел бы
+        повторение там, где было одно решение.
+        """
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            for _ in range(3):
+                state.record_waiver_applied(
+                    task_id="TASK-008", namespace=ns,
+                    waiver_class="characterisation",
+                    sanction="batch-approve-2026-09-09", baseline_sha="abc",
+                )
+            rows = state.applied_waivers(ns)
+        assert len(rows) == 1
+
+    def test_a_different_sanction_is_a_different_fact(self, tmp_path):
+        """Дедупликация по (задача, неймспейс, санкция), а не по задаче:
+        другая санкция — другое решение, и ему место на записи."""
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008", namespace=ns, waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09", baseline_sha="abc")
+            state.record_waiver_applied(
+                task_id="TASK-008", namespace=ns, waiver_class="characterisation",
+                sanction="spec-runner#429", baseline_sha="abc")
+            rows = state.applied_waivers(ns)
+        assert len(rows) == 2
+
+    def test_an_unwritable_row_refuses_the_task_instead_of_crashing(self, tmp_path):
+        """«Обязательно» достигается ОТКАЗОМ задачи, а не крахом прогона.
+
+        Трейсбек ушёл бы через `run_with_retries` в цикл, который его не
+        ловит: попытка не записана, задача `in_progress`, остальные не
+        идут. Отказ останавливает одну задачу, крах — весь прогон.
+        """
+        from spec_runner.config import AppliedWaiver
+        from spec_runner.execution import _record_waiver_applied
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+
+        class _Broken:
+            def record_waiver_applied(self, **kwargs):
+                raise RuntimeError("disk is gone")
+
+        refusal = _record_waiver_applied(
+            _Broken(), cfg, _task(),
+            AppliedWaiver(node_class="characterisation", sanction="spec-runner#429"),
+        )
+        assert refusal is not None
+        assert "could not be recorded" in str(refusal)
+
+
+class TestAMissingFactIsAnInstrumentErrorNotAVerdict:
+    def test_the_claims_gate_refuses_to_guess(self, tmp_path):
+        """Отсутствующий ключ — наша ошибка, а не вердикт о коде.
+
+        Тот же контракт, которому следует `execution_mode`. И это не
+        гипотеза: внутри этой же правки точка 1 сначала стояла там, куда
+        waived-задача не заходит, — с разрешающим дефолтом её отсутствие
+        выглядело бы обычным скипом.
+        """
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            _frozen(cfg, state, sha)
+            verdict = evaluate_claims(GateContext(
+                task_id="TASK-008", checkpoint_sha=sha, config=cfg, state=state,
+                facts={"execution_mode": "standard"},
+            ))
+        assert verdict.status is GateStatus.INSTRUMENT_ERROR
+        assert "waiver" in verdict.detail
