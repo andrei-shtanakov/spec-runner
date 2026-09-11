@@ -1,6 +1,6 @@
 ---
 spec_stage: requirements
-status: approved
+status: stale
 owner_role: product
 traces_to:
 - charter
