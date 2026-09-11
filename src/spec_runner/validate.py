@@ -691,6 +691,16 @@ def _validate_verify_first_declarations(
             result.errors.append(f"{task.id}: {exc}")
             continue
 
+        # #429: the marker is cross-validated against the mode by the same
+        # precedent as `**Verifies:**` below — a declaration that could never
+        # take effect is an operator error, not a no-op. The resolver is the
+        # single place that decides; here we only surface its refusal with the
+        # task named, at config time rather than mid-run.
+        try:
+            config.resolve_waiver(task)
+        except ConfigError as exc:
+            result.errors.append(f"{task.id}: {exc}")
+
         if mode != "verify_first":
             if task.verifies is not None:
                 result.errors.append(

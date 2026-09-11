@@ -582,7 +582,12 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
             PhaseOutcome.ERROR,
             "the run reported no execution_mode to the claims gate",
         )
-    if mode not in ("tdd", "verify_first"):
+    # #429: a waived `standard` task is judged here like any other. The fact
+    # travels in `facts` for the same reason the mode does — the gate is
+    # entitled to see what actually ran, and the site that resolved it is the
+    # one that knows. Ordinary `standard` still skips: `waiver_applied` is
+    # absent, so the condition is unchanged for it by construction.
+    if mode not in ("tdd", "verify_first") and not ctx.facts.get("waiver_applied"):
         return GateResult(GateStatus.SATISFIED, PhaseOutcome.SKIPPED, f"execution_mode is {mode}")
     if ctx.state is None:
         return GateResult(

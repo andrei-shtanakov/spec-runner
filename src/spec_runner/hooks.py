@@ -546,7 +546,11 @@ def _claims_intact_before_review(
                     checkpoint_sha=candidate_sha,
                     config=config,
                     state=state,
-                    facts={"execution_mode": config.resolve_execution_mode(task)},
+                    facts={
+                        "execution_mode": config.resolve_execution_mode(task),
+                        # #429: point 3 of 3 (pre-review).
+                        "waiver_applied": config.resolve_waiver(task) is not None,
+                    },
                 )
             )
     except Exception as exc:  # pragma: no cover - defensive
@@ -1077,7 +1081,13 @@ def post_done_hook(
     if (
         config.run_review
         and is_registered("tdd.claims", "tests")
-        and config.resolve_execution_mode(task) in ("tdd", "verify_first")
+        and (
+            config.resolve_execution_mode(task) in ("tdd", "verify_first")
+            # #429: a waived `standard` task reaches the pre-review check too.
+            # This filter sits BESIDE the gate's own skip, so leaving it alone
+            # would have kept point 3 dark while points 1 and 2 worked.
+            or config.resolve_waiver(task) is not None
+        )
     ):
         candidate_before_review = _head_sha(config)
         claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
@@ -1284,6 +1294,8 @@ def post_done_hook(
                 # never had a confirmed red" is the same question it answers
                 # before the implementation pass.
                 "execution_mode": config.resolve_execution_mode(task),
+                # #429: point 2 of 3 (pre-terminal / merge).
+                "waiver_applied": config.resolve_waiver(task) is not None,
             },
         )
         if blocked is not None:

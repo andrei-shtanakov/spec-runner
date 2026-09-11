@@ -44,6 +44,85 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
+def _run_waived_claims_gate(task, config, state, reporter) -> str | None:
+    """Point 1 of 3 for a waived `standard` task: claims before the paid call.
+
+    Without this the requirement "claims are checked at all three points"
+    would be false for the very mode #429 is about. The pre-implementation
+    evaluation lives inside `_run_red_phase_gate`, and that function runs only
+    for `tdd` (or a verify-first red) — a waived `standard` task never walks
+    it. Points 2 and 3 are on paths every mode walks; this one is not, and the
+    absence would have been invisible: the two working points would have made
+    the mechanism look finished.
+
+    Only the claims question is asked here. The RED gate is registered too
+    (see `execute_task`) and answers SKIPPED for `standard` — which is the
+    waiver's whole subject, not an oversight.
+    """
+    from .gates import GateContext, GateStatus, evaluate_gates
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    reporter.enter("tests")
+    outcome = evaluate_gates(
+        "tests",
+        GateContext(
+            task_id=task.id,
+            checkpoint_sha=head.stdout.strip() if head.returncode == 0 else "",
+            config=config,
+            state=state,
+            facts={
+                "execution_mode": config.resolve_execution_mode(task),
+                "pre_implementation": True,
+                "waiver_applied": True,
+            },
+        ),
+    )
+    if outcome.status is GateStatus.SATISFIED:
+        return None
+    detail = "; ".join(
+        r.detail or "" for r in outcome.results if r.status is not GateStatus.SATISFIED
+    )
+    if outcome.status is GateStatus.INSTRUMENT_ERROR:
+        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
+    return detail or "a gate refused before the implementation call"
+
+
+def _record_waiver_applied(state, config, task, waiver) -> None:
+    """Write the durable record that an addressed waiver was applied (#429).
+
+    Unlike `_record_phase`, a failure here is NOT swallowed. That helper is
+    bookkeeping beside gates that decide anyway; this row is the only durable
+    trace that the waiver was applied and the only place saying what stayed in
+    force. Losing it quietly would leave a task that skipped baseline-RED with
+    nothing on the record explaining why — which is precisely the "silent
+    bypass" the whole mechanism exists to prevent.
+
+    The baseline sha is the ACTUAL head at the start of the task, read here
+    rather than declared in the bundle: at authoring time it does not exist
+    yet, and a value written in advance would be a guess.
+    """
+    from .tdd import resolve_namespace
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    state.record_waiver_applied(
+        task_id=task.id,
+        namespace=resolve_namespace(config),
+        waiver_class=waiver.node_class,
+        sanction=waiver.sanction,
+        baseline_sha=head.stdout.strip() if head.returncode == 0 else "",
+    )
+
+
 def _record_phase(state, config, task, phase, detail=None) -> None:
     """Record a TDD lifecycle transition (#141 slice 4a).
 
@@ -220,6 +299,9 @@ def _run_red_phase_gate(task, config, state, reporter) -> Refusal | None:
             facts={
                 "execution_mode": config.resolve_execution_mode(task),
                 "pre_implementation": True,
+                # #429: point 1 of 3. The claims gate reads this to judge a
+                # waived `standard` task instead of skipping it.
+                "waiver_applied": config.resolve_waiver(task) is not None,
             },
         ),
     )
@@ -450,6 +532,41 @@ def execute_task(
     state.mark_running(task_id)
     update_task_status(config.tasks_file, task_id, "in_progress")
     send_callback(config.callback_url, task_id, "started")
+
+    # #429: an addressed-waived `standard` task registers the gates itself,
+    # and this call is UNCONDITIONAL on that path for exactly the reason
+    # `_run_verify_first_phase` gives for its own (see its docstring):
+    # `register_builtin_gates` keys on the PROJECT mode, and the two existing
+    # per-task registration sites live on the RED path and the verify-first
+    # path — neither of which a waived `standard` task ever walks. In a
+    # project whose default is `standard`, such a task would otherwise reach
+    # `has_gates() == False`, and the pre-terminal block and the pre-review
+    # claims check would not run at all. That is fail-open, not lenient: the
+    # waiver removes the baseline-RED requirement, never the claims.
+    #
+    # Registering the RED gate alongside costs nothing: `_red_gate` answers
+    # SKIPPED for a `standard` task, which is the intended outcome — the
+    # waiver's whole subject.
+    applied_waiver = config.resolve_waiver(task)
+    if applied_waiver is not None:
+        from .gates import ensure_red_gate
+
+        ensure_red_gate()
+        _record_waiver_applied(state, config, task, applied_waiver)
+        waived_refusal = _run_waived_claims_gate(task, config, state, reporter)
+        if waived_refusal is not None:
+            log_progress(f"⛔ {waived_refusal}", task_id)
+            state.record_attempt(
+                task_id,
+                False,
+                0.0,
+                error=waived_refusal,
+                error_code=_refusal_error_code(waived_refusal),
+                error_kind=_refusal_error_kind(waived_refusal),
+                error_stage=reporter.current,
+            )
+            update_task_status(config.tasks_file, task_id, "todo")
+            return False
 
     # Live verify run (#367 FR-05). Under `verify_first` this is the task's
     # first action, before any paid call whatsoever — including before `tdd`'s

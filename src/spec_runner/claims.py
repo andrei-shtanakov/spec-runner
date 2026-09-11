@@ -220,7 +220,16 @@ def append_frozen_files(
     is the one mode still excluded on purpose — its claims gate is never
     registered, so there is truthfully nothing this site could tell it about.
     """
-    if config.resolve_execution_mode(task) not in ("tdd", "verify_first"):
+    # #429: an addressed-waived `standard` task gets the block too. The
+    # waiver removes the baseline-RED requirement and NOTHING else — claims
+    # are still checked at all three points, so a prompt that did not name
+    # the frozen paths would be telling the agent to work blind against a
+    # gate that will still refuse. Ordinary `standard` is untouched: the
+    # predicate is `resolve_waiver`, which returns None without a marker.
+    if (
+        config.resolve_execution_mode(task) not in ("tdd", "verify_first")
+        and config.resolve_waiver(task) is None
+    ):
         return prompt
     block = frozen_files_block(active_claim_paths(config, state), escape)
     if not block:

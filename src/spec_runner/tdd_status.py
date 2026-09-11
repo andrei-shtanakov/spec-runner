@@ -44,6 +44,11 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
             | ({task_id} if task_id else set())
         )
         phases = state.tdd_phase_histories(namespace, phase_tasks)
+        applied_waivers = [
+            row
+            for row in state.applied_waivers(namespace)
+            if task_id is None or row["task_id"] == task_id
+        ]
         remedies = (
             [
                 {
@@ -62,7 +67,12 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
 
     return {
         "namespace": namespace,
+        # The PROJECT mode, and now labelled as such (#429). It was already
+        # the project's, but with per-task waivers the unqualified word would
+        # read as a claim about every task — and for a waived one it would be
+        # false. `applied_waivers` below says which tasks did not run under it.
         "execution_mode": config.execution_mode,
+        "applied_waivers": applied_waivers,
         "active_checkpoints": [
             {
                 "checkpoint_id": cp.checkpoint_id,
@@ -227,7 +237,20 @@ def lifecycle_of(data: dict, task_id: str) -> str:
 def render(data: dict, task_id: str | None) -> str:
     """The human view. Deliberately shows retired records too: the point of
     never deleting them is that someone can reconstruct what was believed."""
-    lines = [f"🧪 TDD state — workspace {data['namespace']} (mode: {data['execution_mode']})"]
+    lines = [
+        f"🧪 TDD state — workspace {data['namespace']} "
+        f"(project mode: {data['execution_mode']})"
+    ]
+    # #429: named BEFORE the per-task sections, because a reader who stops at
+    # the header would otherwise carry the project mode over to every task —
+    # and for a waived task that is simply untrue.
+    for row in data.get("applied_waivers", []):
+        lines.append(
+            f"   ⚖️  {row['task_id']}: addressed TDD waiver applied "
+            f"(class {row['waiver_class']}, sanction {row['sanction']}) — "
+            f"removed: {row['removed']}; retained: {row['retained']}; "
+            f"{row['lifecycle']}; baseline {row['baseline_sha'][:8]}"
+        )
     tasks = sorted(
         {c["task_id"] for c in data["active_checkpoints"]}
         | {r["task_id"] for r in data["retired_checkpoints"]}

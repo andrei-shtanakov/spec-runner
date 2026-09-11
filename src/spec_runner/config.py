@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
@@ -28,6 +28,52 @@ if TYPE_CHECKING:
 #: it is a recognised mode, not yet a driven one; branching on it is later
 #: work (BEH-02+).
 EXECUTION_MODES = ("standard", "tdd", "verify_first")
+
+#: Waiver classes — a CLOSED vocabulary (#429). Closed is the whole point:
+#: with an open one, any word the author found convincing would become a
+#: sanction, which is a guess about authority rather than authority itself.
+#: A new class is a contract change, exactly like a new execution mode.
+WAIVER_CLASSES = ("characterisation",)
+
+#: The two accepted sanction forms. Free text is refused: a sanction field
+#: that accepts any wording is decoration. Only the FORM is checked here —
+#: whether the named decision was really taken is answered by the person who
+#: took it. Resolving it over the network would make a gate refusal depend on
+#: forge availability, i.e. would let an unavailable fact close a door.
+_SANCTION_BATCH = re.compile(r"^batch-approve-(\d{4}-\d{2}-\d{2})$")
+_SANCTION_REF = re.compile(r"^[A-Za-z0-9][\w.-]*#\d+$")
+SANCTION_FORMS = "batch-approve-<YYYY-MM-DD> or <repo>#<number>"
+
+
+def _sanction_is_valid(sanction: str) -> bool:
+    """The sanction matches the closed grammar (#429).
+
+    The date is checked as a CALENDAR date, not merely by shape: `2026-13-45`
+    has the right form and is not a date, and accepting it would be checking
+    the form of the form.
+    """
+    batch = _SANCTION_BATCH.match(sanction)
+    if batch is not None:
+        try:
+            date.fromisoformat(batch.group(1))
+        except ValueError:
+            return False
+        return True
+    return _SANCTION_REF.match(sanction) is not None
+
+
+@dataclass(frozen=True)
+class AppliedWaiver:
+    """An addressed TDD waiver that a task carries and the harness applied.
+
+    ``node_class`` and ``sanction`` are kept apart rather than as one string:
+    the durable event and the status report both name them separately, and
+    re-splitting the line at each reader would be a second parser of one fact.
+    """
+
+    node_class: str
+    sanction: str
+
 
 # === Errors ===
 
@@ -499,6 +545,65 @@ class ExecutorConfig:
             where = f" on {task.id}" if task is not None and declared is not None else ""
             raise ConfigError(f"unknown execution_mode{where}: {mode!r}; available: {available}")
         return mode
+
+    def resolve_waiver(self, task: "Task | None" = None) -> "AppliedWaiver | None":
+        """The addressed waiver this task runs under, or None (#429).
+
+        The predicate is STRUCTURAL, never a heuristic: a task is waived if
+        and only if its resolved mode is `standard` AND it carries a marker
+        this method recognised. Ordinary `standard` — no marker — is therefore
+        unchanged *by construction*, not by the care taken in each condition.
+
+        Refuses, rather than ignoring, three things, and each for the same
+        reason `resolve_execution_mode` refuses a typo — a silent `None` here
+        would let a task believe it is covered when it is not, or run under a
+        waiver nobody granted:
+
+        - a marker on a task that is not `standard`: the waiver's only effect
+          is on the baseline-RED requirement, and `tdd`/`verify_first` have
+          their own; a marker there is a contradiction, not a no-op;
+        - an unknown class;
+        - a sanction outside the closed grammar.
+
+        What the waiver does NOT change is everything else: active claims are
+        still checked at all three points and the frozen-files block still
+        reaches every paid prompt. It removes the obligation to show a
+        baseline RED, and only that.
+        """
+        raw = getattr(task, "tdd_waiver", None) if task is not None else None
+        if raw is None:
+            return None
+        where = f" on {task.id}" if task is not None else ""
+        mode = self.resolve_execution_mode(task)
+        if mode != "standard":
+            raise ConfigError(
+                f"**TDD-waiver:**{where} declares a waiver, but the resolved "
+                f"execution mode is {mode!r}, not 'standard' — a waiver only "
+                "removes the baseline-RED requirement, and this mode does not "
+                "have one to remove"
+            )
+        head, sep, tail = raw.partition("·")
+        node_class = head.strip()
+        sanction = tail.strip()
+        if sep:
+            prefix, _, rest = sanction.partition(":")
+            sanction = rest.strip() if prefix.strip().lower() == "sanction" else ""
+        if not sep or not node_class or not sanction:
+            raise ConfigError(
+                f"**TDD-waiver:**{where} is not readable: {raw!r}; expected "
+                "`<class> · sanction: <id>`"
+            )
+        if node_class not in WAIVER_CLASSES:
+            available = ", ".join(WAIVER_CLASSES)
+            raise ConfigError(
+                f"unknown waiver class{where}: {node_class!r}; available: {available}"
+            )
+        if not _sanction_is_valid(sanction):
+            raise ConfigError(
+                f"unreadable waiver sanction{where}: {sanction!r}; "
+                f"expected {SANCTION_FORMS}"
+            )
+        return AppliedWaiver(node_class=node_class, sanction=sanction)
 
     def resolve_tdd_runner(self) -> str | None:
         """The adapter name that verifies a RED here, or None to refuse.

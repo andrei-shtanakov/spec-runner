@@ -372,6 +372,34 @@ class ExecutorState:
                 provenance TEXT
             )
         """)
+        # #429: applying an addressed waiver is a DIFFERENT fact from
+        # `phase_waivers`, not a second record of it. `phase_waivers` says an
+        # operator overrode an observed outcome — actor, reason, after the
+        # fact. Here nothing was observed and no operator acted at the moment:
+        # the harness APPLIED a sanction granted in advance, in the bundle.
+        # Writing that into `phase_waivers` would record "an operator
+        # overrode" where there was no operator, and break the contract its
+        # own docstring states.
+        #
+        # The row says what was removed and — just as important — what was
+        # NOT: claims and the frozen-files block stay in force, and the task
+        # records no TDD lifecycle at all. That absence is written down
+        # rather than left to be inferred from missing rows, because missing
+        # rows are also what a crash looks like.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS waivers_applied (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                waiver_class TEXT NOT NULL,
+                sanction TEXT NOT NULL,
+                removed TEXT NOT NULL,
+                retained TEXT NOT NULL,
+                lifecycle TEXT NOT NULL,
+                baseline_sha TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
         # #164: a gate verdict is a statement about a specific tree under a
         # specific policy — hence the (checkpoint_sha, config_hash) key. A
         # verdict for another pair is not this one's, which is what stops
@@ -804,6 +832,76 @@ class ExecutorState:
                 phase=phase,
                 error=str(exc),
             )
+
+    #: What an addressed waiver removes — the whole list, and it is one item.
+    WAIVER_REMOVES = "baseline-RED requirement"
+    #: What it explicitly does NOT remove. Written into every row so the
+    #: record answers "what was still in force" without the reader having to
+    #: know the code that wrote it.
+    WAIVER_RETAINS = (
+        "active claims at all three points (pre-implementation, pre-terminal, "
+        "pre-review); frozen-files block in every paid prompt"
+    )
+    #: Said plainly rather than left to be read off absent rows: a waived
+    #: `standard` task records no TDD lifecycle, and missing rows are also
+    #: what a crash looks like.
+    WAIVER_LIFECYCLE = "no TDD lifecycle recorded for this task"
+
+    def record_waiver_applied(
+        self,
+        task_id: str,
+        namespace: str,
+        waiver_class: str,
+        sanction: str,
+        baseline_sha: str,
+    ) -> None:
+        """Record that the harness applied an addressed waiver (#429).
+
+        NOT `record_waiver`: that one is an operator overriding an outcome
+        that was observed, and it requires an actor for that reason. Here the
+        sanction was granted in advance, in the bundle, and the harness is
+        applying it — calling the other method would record a person who was
+        not there.
+
+        Mandatory, not best-effort: this row is the only durable trace that
+        the waiver was applied at all, and — through `retained`/`lifecycle` —
+        the only place saying what stayed in force. A run that could not write
+        it has not recorded the thing that makes the rest of the task
+        readable.
+        """
+        if not sanction.strip():
+            raise ValueError("an applied waiver needs its sanction: an unattributed one is not one")
+        self._conn.execute(
+            "INSERT INTO waivers_applied (task_id, namespace, waiver_class, "
+            "sanction, removed, retained, lifecycle, baseline_sha, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task_id,
+                namespace,
+                waiver_class,
+                sanction,
+                self.WAIVER_REMOVES,
+                self.WAIVER_RETAINS,
+                self.WAIVER_LIFECYCLE,
+                baseline_sha,
+                datetime.now().isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def applied_waivers(self, namespace: str) -> list[dict]:
+        """Applied waivers in ``namespace``, newest last — for `tdd status`."""
+        rows = self._conn.execute(
+            "SELECT task_id, waiver_class, sanction, removed, retained, "
+            "lifecycle, baseline_sha, timestamp FROM waivers_applied "
+            "WHERE namespace = ? ORDER BY id",
+            (namespace,),
+        ).fetchall()
+        keys = (
+            "task_id", "waiver_class", "sanction", "removed", "retained",
+            "lifecycle", "baseline_sha", "timestamp",
+        )
+        return [dict(zip(keys, row)) for row in rows]
 
     def record_waiver(
         self,
