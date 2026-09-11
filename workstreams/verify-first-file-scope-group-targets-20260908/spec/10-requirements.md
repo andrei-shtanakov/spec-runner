@@ -1,14 +1,15 @@
 ---
 spec_stage: requirements
-status: stale
+status: approval_pending
 owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: 035522309fd7ad537870a7bf545942d5ad982a19
+  charter: 5d98631cdf8d228a184a511e77d637482d9ad342
 approved_by: andrei-shtanakov
 approved_at: '2026-09-08T04:25:58Z'
-version: 2
+version: 3
+approved_content_hash: 00de1ce319b0444c5f74fee8a4be2671997202d6
 ---
 
 # Requirements — verify-first: объявленная группа принимает файловую цель
