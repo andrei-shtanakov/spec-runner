@@ -1,9 +1,9 @@
 ---
 spec_stage: charter
-status: approval_pending
+status: approved
 owner_role: product
 approved_by: andrei-shtanakov
-approved_at: '2026-09-08T04:25:58Z'
+approved_at: '2026-09-11T08:51:18Z'
 version: 3
 approved_content_hash: 1231e2db7a2e2aa2b9dbf1acf375c83cbb155c34
 ---
