@@ -12,6 +12,39 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Addressed TDD waivers for `standard` tasks** (#429). A task may carry
+  `**TDD-waiver:** <class> · sanction: <id>` beside `**Mode:** standard`,
+  declaring — machine-readably — that an honest baseline RED is impossible
+  for it. The class is a closed vocabulary (`characterisation`) and the
+  sanction a closed grammar (`batch-approve-<YYYY-MM-DD>` or
+  `<repo>#<number>`); the *form* is checked, never the existence of the
+  decision, which would make a gate refusal depend on forge availability.
+
+  The waiver removes **one** obligation — showing a baseline RED — and
+  nothing else. Active claims are judged wherever that check runs —
+  pre-implementation, pre-terminal, and pre-review when review is enabled —
+  and the frozen-files block reaches every paid prompt, the reviewer's
+  included: a task whose byte-lock is still enforced must be told what is
+  frozen. Ordinary `standard` is
+  unchanged **by construction** — the predicate is "resolved mode is
+  `standard` AND a marker parsed", and without a marker it is false rather
+  than usually false. A marker on a `tdd`/`verify_first` task is a
+  validation error, not a no-op.
+
+  Applying a waiver is recorded durably in the new `waivers_applied` table
+  (see `docs/state-schema.md`), written after the pre-implementation gate
+  passes and idempotent per (task, namespace, sanction). It names what was
+  removed, what the waiver does not lift (as policy, not as a report of
+  checks already performed — the row is written before two of the three
+  points run) and that no TDD lifecycle rows exist —
+  written out rather than inferred, because missing rows are also what a
+  crash looks like. `tdd status` reports it (`applied_waivers` in `--json`)
+  and its header now says `project mode:`, since with per-task waivers the
+  unqualified word would claim too much.
+
+  There is **no** executable gate for the negative-control condition, here or
+  anywhere: that one is verified by the mandatory task review (#428).
+
 - **New `verify_first` execution mode: verify already-delivered behaviour
   with a live run instead of a RED authoring pass** (#367). A task declares
   `**Mode:** verify_first` and a `**Verifies:** <selector>[, <selector>…]`

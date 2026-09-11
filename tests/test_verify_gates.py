@@ -106,8 +106,16 @@ def _task(**overrides) -> Task:
 
 
 def _ctx(state, cfg, sha, *, mode: str, task_id: str = "TASK-101") -> GateContext:
+    # #429: `waiver_applied` is load-bearing under `standard` — the gate
+    # treats its absence as an instrument error rather than as "no waiver".
+    # Production reports it at every site; this stand reports it too, and
+    # the assertions that follow are untouched.
     return GateContext(
-        task_id=task_id, checkpoint_sha=sha, config=cfg, state=state, facts={"execution_mode": mode}
+        task_id=task_id,
+        checkpoint_sha=sha,
+        config=cfg,
+        state=state,
+        facts={"execution_mode": mode, "waiver_applied": False},
     )
 
 

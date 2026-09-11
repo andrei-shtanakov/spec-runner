@@ -216,11 +216,26 @@ def append_frozen_files(
     task too (BEH-24/FR-17, `gates.py`/`hooks.py`) — so this site staying
     `tdd`-only was #214 itself reopened: enforcement covered `verify_first`
     while the prompt telling the agent what is frozen did not, and the money
-    burned proving that is exactly what #214 was written to stop. `standard`
-    is the one mode still excluded on purpose — its claims gate is never
-    registered, so there is truthfully nothing this site could tell it about.
+    burned proving that is exactly what #214 was written to stop. Ordinary
+    `standard` — no waiver marker — is still excluded on purpose: its claims
+    gate does not judge it, so there is truthfully nothing this site could
+    tell it about. An ADDRESSED-WAIVED `standard` task is a different case
+    and does get the block (#429): its claims ARE judged at all three points,
+    and a prompt naming no frozen paths would send the agent to work blind
+    against a gate that will still refuse. The sentence this docstring used
+    to carry — "its claims gate is never registered" — stopped being true
+    with #429 and is removed rather than qualified.
     """
-    if config.resolve_execution_mode(task) not in ("tdd", "verify_first"):
+    # #429: an addressed-waived `standard` task gets the block too. The
+    # waiver removes the baseline-RED requirement and NOTHING else — claims
+    # are still checked at all three points, so a prompt that did not name
+    # the frozen paths would be telling the agent to work blind against a
+    # gate that will still refuse. Ordinary `standard` is untouched: the
+    # predicate is `resolve_waiver`, which returns None without a marker.
+    if (
+        config.resolve_execution_mode(task) not in ("tdd", "verify_first")
+        and config.resolve_waiver(task) is None
+    ):
         return prompt
     block = frozen_files_block(active_claim_paths(config, state), escape)
     if not block:

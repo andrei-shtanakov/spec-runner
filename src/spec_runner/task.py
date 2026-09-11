@@ -56,6 +56,14 @@ BLOCKS = re.compile(r"\*\*Blocks:\*\* (.+)")
 # by `ExecutorConfig.resolve_execution_mode`. Mapping it to a known mode here
 # would hide exactly the typo the resolver exists to catch.
 MODE = re.compile(r"\*\*Mode:\*\* (.+)")
+# #429: the machine-readable marker that this task carries an addressed TDD
+# waiver. A separate line rather than a word inside `**Mode:**` on purpose —
+# the mode value is deliberately *not* interpreted here (see above), and
+# folding two facts into it would make a typo in one of them read as the
+# other. Stored verbatim for the same reason as the mode: the resolver
+# refuses what it cannot recognise, and a parser that "helpfully" normalised
+# would hide exactly that refusal.
+TDD_WAIVER = re.compile(r"\*\*TDD-waiver:\*\* (.+)")
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # #367 FR-02: the declared verify-first check group — a machine-readable
 # metadata line in the same row as `**Mode:**`/`**Traces to:**`, never
@@ -162,6 +170,11 @@ class Task:
     #: project default. Resolved — and validated — by
     #: `ExecutorConfig.resolve_execution_mode`.
     execution_mode: str | None = None
+    #: Raw text of the `**TDD-waiver:**` marker (#429), or None when the task
+    #: carries none. Verbatim and uninterpreted; `ExecutorConfig.resolve_waiver`
+    #: is the single place that decides what it means and refuses what it does
+    #: not recognise.
+    tdd_waiver: str | None = None
     #: Declared verify-first check group (#367 FR-02), verbatim and in the
     #: exact declared order — never sorted, deduplicated, or inferred from
     #: anything else. `None` when no `**Verifies:**` line is present at all;
@@ -351,6 +364,11 @@ def parse_tasks(filepath: Path) -> list[Task]:
         mode_match = MODE.search(line)
         if mode_match:
             current_task.execution_mode = mode_match.group(1).strip().lower()
+            continue
+
+        waiver_match = TDD_WAIVER.search(line)
+        if waiver_match:
+            current_task.tdd_waiver = waiver_match.group(1).strip()
             continue
 
         verifies_match = VERIFIES.search(line)

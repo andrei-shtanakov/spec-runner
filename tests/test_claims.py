@@ -323,7 +323,7 @@ class TestTheGate:
     """Registered alongside the RED gate for the `tests` phase, so it is
     evaluated at both existing points: before GREEN and before merge."""
 
-    def _evaluate(self, cfg, state, candidate, mode="tdd"):
+    def _evaluate(self, cfg, state, candidate, mode="tdd", waived=False):
         from spec_runner.gates import (
             GateContext,
             GateRegistry,
@@ -338,7 +338,13 @@ class TestTheGate:
             checkpoint_sha=candidate,
             config=cfg,
             state=state,
-            facts={"execution_mode": mode},
+            # #429: under `standard` the waiver fact is what decides between
+            # judging and skipping, so the gate treats its ABSENCE as an
+            # instrument error rather than as "no waiver". Production reports
+            # it at all four sites; this stand now reports it too. The
+            # property under test is unchanged — ordinary `standard` is still
+            # not gated on claims — only the facts are complete.
+            facts={"execution_mode": mode, "waiver_applied": waived},
         )
         return evaluate_gates("tests", ctx, registry=registry)
 

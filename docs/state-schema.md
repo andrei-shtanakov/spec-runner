@@ -208,6 +208,55 @@ was waived and by whom. The harness never writes one.
 Experimental: shape may change while the later slices land; external consumers
 should not depend on it yet.
 
+### `waivers_applied` (experimental, #429)
+
+One row per **addressed TDD waiver the harness applied** to a task. Columns:
+`task_id`, `namespace`, `waiver_class`, `sanction`, `removed`, `retained`,
+`lifecycle`, `baseline_sha`, `timestamp`.
+
+Deliberately **not** `phase_waivers`, and the distinction is the point.
+`phase_waivers` records an operator overriding an outcome that was observed —
+which is why it demands an `actor`. Here nothing was observed and no operator
+acted at that moment: the sanction was granted in advance, in the bundle, and
+the harness applied it. Writing this into `phase_waivers` would record a
+person who was not there.
+
+A task is waived when its resolved `execution_mode` is `standard` **and** it
+carries a `**TDD-waiver:** <class> · sanction: <id>` line in `tasks.md`. The
+class is a closed vocabulary (`characterisation` today); the sanction is a
+closed grammar (`batch-approve-<YYYY-MM-DD>` or `<repo>#<number>`) whose
+*form* is checked, never its existence.
+
+The waiver removes **one** thing, and the row says so rather than leaving it
+to be inferred:
+
+| Column | Says |
+|---|---|
+| `removed` | the baseline-RED requirement — and nothing else |
+| `retained` | what the waiver does **not lift** — stated as policy, not as a report of checks performed: the active-claims check wherever it runs (pre-implementation, pre-terminal, and pre-review **when review is enabled**); the frozen-files block in every paid prompt. The row is written before points 2 and 3 run, and the pre-review point does not run at all under `run_review: false` — so a row claiming "checked at three points" would assert more than was observed |
+| `lifecycle` | that no TDD lifecycle rows exist for this task |
+| `baseline_sha` | the ACTUAL head at the start of the task, read at apply time — at authoring time it does not exist yet |
+
+`lifecycle` is written out in words on purpose: missing rows are also what a
+crash looks like, so "there are none" and "we never got there" would otherwise
+be indistinguishable.
+
+Idempotent on (`task_id`, `namespace`, `sanction`): `run_with_retries` may call
+`execute_task` several times, and the same sanction applied again is the same
+application. A *different* sanction for the same task is a different fact and
+gets its own row.
+
+Written **after** the pre-implementation claims gate passes, never before: the
+row records that the waiver was *applied*, not that it was intended. A task
+stopped by the gate before the paid call used no waiver.
+
+Surfaced by `spec-runner tdd status --json` under the `applied_waivers` key,
+and in the human view as a line per waived task before the per-task sections.
+The status header now reads `project mode:` rather than `mode:` — with
+per-task waivers the unqualified word would read as a claim about every task.
+
+Experimental: shape may change; external consumers should not depend on it yet.
+
 ### `gate_verdicts` (experimental, #164)
 
 One row per pre-terminal policy gate evaluation. Columns: `task_id`,
