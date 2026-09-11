@@ -44,7 +44,32 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def _run_waived_claims_gate(task, config, state, reporter) -> str | None:
+def _refuse_task(task, config, state, reason: str) -> bool:
+    """Refuse one task with the attempt recorded, instead of raising (#429).
+
+    A declaration the resolver cannot read is an operator error about THIS
+    task. Letting it propagate would take the whole run with it: `watch`
+    re-reads `tasks.md` between tasks, so a marker typed into a running watch
+    would kill the thread with no attempt written, the task left
+    `in_progress`, and every later task unstarted.
+    """
+    from .gates import GateStatus, refusal_for
+
+    refusal = refusal_for(GateStatus.INSTRUMENT_ERROR, reason)
+    state.record_attempt(
+        task.id,
+        False,
+        0.0,
+        error=str(refusal),
+        error_code=_refusal_error_code(refusal),
+        error_kind=_refusal_error_kind(refusal),
+        error_stage="setup",
+    )
+    log_progress(f"⛔ {reason}", task.id)
+    return False
+
+
+def _run_waived_claims_gate(task, config, state, reporter) -> Refusal | None:
     """Point 1 of 3 for a waived `standard` task: claims before the paid call.
 
     Without this the requirement "claims are checked at all three points"
@@ -59,7 +84,7 @@ def _run_waived_claims_gate(task, config, state, reporter) -> str | None:
     (see `execute_task`) and answers SKIPPED for `standard` — which is the
     waiver's whole subject, not an oversight.
     """
-    from .gates import GateContext, GateStatus, evaluate_gates
+    from .gates import GateContext, GateStatus, evaluate_gates, refusal_for
 
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -87,9 +112,18 @@ def _run_waived_claims_gate(task, config, state, reporter) -> str | None:
     detail = "; ".join(
         r.detail or "" for r in outcome.results if r.status is not GateStatus.SATISFIED
     )
+    # A TYPED refusal, not a bare string (#230): `_refusal_error_kind` reads a
+    # string through its legacy branch and lands on `hook_failure`, so the very
+    # same violated claim would be recorded as `policy` at points 2 and 3 and
+    # as a broken hook here. A dashboard reading `attempts.error_kind` would
+    # see a hook failure where a byte-lock was broken.
     if outcome.status is GateStatus.INSTRUMENT_ERROR:
-        return f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
-    return detail or "a gate refused before the implementation call"
+        return refusal_for(
+            outcome.status, f"{GATE_INSTRUMENT_ERROR_PREFIX}: {detail}"
+        )
+    return refusal_for(
+        outcome.status, detail or "a gate refused before the implementation call"
+    )
 
 
 def _record_waiver_applied(state, config, task, waiver) -> Refusal | None:
@@ -523,9 +557,20 @@ def execute_task(
     attaches them for everyone, and detaching them here would be this same
     bug pointing the other way.
     """
+    from .config import ConfigError
     from .gates import REGISTRY, ensure_red_gate, is_registered
 
-    if config.resolve_waiver(task) is None:
+    # A malformed marker is a REFUSAL OF THIS TASK, not an exception through
+    # the caller. `watch` validates once and then re-reads `tasks.md`, so a
+    # broken marker appended to a running watch would otherwise kill the
+    # daemon thread with nothing recorded — and this call sits even higher up
+    # the stack than `resolve_execution_mode`'s own instance of the problem.
+    try:
+        waiver = config.resolve_waiver(task)
+    except ConfigError as exc:
+        return _refuse_task(task, config, state, str(exc))
+
+    if waiver is None:
         return _execute_task(task, config, state, harness_baseline)
     # The question is "were the TDD gates already in force", not "is anything
     # registered at all" — and `has_gates()` answers the second. A `standard`
@@ -604,6 +649,7 @@ def _execute_task(
     # around this call and detached after it — see its docstring for why the
     # scope matters. Here we only walk the waived path: point 1 of three
     # (claims before the paid call), then the durable record.
+    # Уже разобран обёрткой выше; ConfigError сюда дойти не может.
     applied_waiver = config.resolve_waiver(task)
     if applied_waiver is not None:
         waived_refusal = _run_waived_claims_gate(task, config, state, reporter)

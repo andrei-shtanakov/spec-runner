@@ -510,7 +510,13 @@ class TestApplyingAWaiverIsRecordedDurably:
         assert row["task_id"] == "TASK-008"
         assert row["sanction"] == "batch-approve-2026-09-09"
         assert "baseline-RED" in row["removed"]
-        assert "three points" in row["retained"]
+        # Запись формулирует ПОЛИТИКУ, а не отчёт о проведённых проверках:
+        # строка пишется ДО точек 2 и 3, а пред-ревьюшная при
+        # `run_review: false` не исполняется вовсе. «Проверено на трёх
+        # точках» утверждало бы больше наблюдённого — в записи, вся
+        # ценность которой в том, что она этого не делает.
+        assert row["retained"].startswith("not lifted by this waiver")
+        assert "pre-review when review is enabled" in row["retained"]
         assert "frozen-files" in row["retained"]
         assert "no TDD lifecycle" in row["lifecycle"]
 
@@ -844,3 +850,151 @@ class TestThePreTerminalWiringItselfIsCovered:
 
         assert "facts" in seen
         assert seen["facts"].get("waiver_applied") is False
+
+
+class TestPointTwoRefusesThroughTheRealCaller:
+    """Проводка точки 2 — сквозь `post_done_hook`, как у точки 3.
+
+    Точка 3 ловится мутацией именно потому, что тест идёт через реальную
+    функцию-вызывателя. Здесь то же: хук строит facts сам, гейт судит
+    настоящий нарушенный claim, и утверждается ВИД отказа. Перехват
+    `_run_pre_terminal_gates` (тест выше) доказывает, что факт собран;
+    этот — что собранный факт доводит до отказа.
+    """
+
+    def test_a_waived_task_breaking_a_neighbours_claim_is_blocked_at_merge(
+        self, tmp_path
+    ):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(
+            root, run_review=False, auto_commit=False,
+            run_tests_on_done=False, run_lint_on_done=False,
+        )
+        sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            ensure_red_gate()
+            _frozen(cfg, state, sha)
+        _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
+
+        waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
+        success, error, _status, _findings, _noop = hooks.post_done_hook(waived, cfg, True)
+
+        assert success is False, "нарушенная заморозка обязана остановить мерж"
+        assert "claim" in str(error).lower()
+
+    def test_an_ordinary_standard_task_is_not_blocked_by_the_same_claim(self, tmp_path):
+        """Половина «ничего не сломано» на том же самом дереве."""
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(
+            root, run_review=False, auto_commit=False,
+            run_tests_on_done=False, run_lint_on_done=False,
+        )
+        sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            ensure_red_gate()
+            _frozen(cfg, state, sha)
+        _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
+
+        success, error, _s, _f, _n = hooks.post_done_hook(
+            _task(execution_mode="standard"), cfg, True
+        )
+        assert success is True, f"обычная standard-задача не гейтится: {error}"
+
+
+class TestThePointOneRefusalIsTypedLikeItsSiblings:
+    def test_a_broken_claim_is_policy_not_a_hook_failure(self, tmp_path):
+        """Тот же нарушенный claim обязан называться одинаково на всех точках.
+
+        Голая строка уходит в legacy-ветку `_refusal_error_kind` и пишется
+        как `hook_failure`; дашборд по `attempts.error_kind` увидел бы
+        сбой хука там, где сломана заморозка.
+        """
+        from spec_runner.execution import _refusal_error_kind, _run_waived_claims_gate
+
+        class _Reporter:
+            current = "tests"
+
+            def enter(self, stage):
+                self.current = stage
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            ensure_red_gate()
+            _frozen(cfg, state, sha)
+            _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
+            refusal = _run_waived_claims_gate(
+                _task(execution_mode="standard", tdd_waiver=WAIVER), cfg, state, _Reporter()
+            )
+        assert refusal is not None
+        assert _refusal_error_kind(refusal) == "policy"
+
+
+class TestAMalformedMarkerRefusesTheTaskNotTheRun:
+    def test_the_attempt_is_recorded_and_nothing_is_raised(self, tmp_path):
+        """`watch` перечитывает `tasks.md` между задачами.
+
+        Маркер, дописанный в работающий watch, не должен убивать поток:
+        иначе попытка не записана, задача `in_progress`, остальные не
+        идут. Отказ одной задачи — да; исключение через цикл — нет.
+        """
+        from spec_runner import execution
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        broken = _task(execution_mode="standard", tdd_waiver="выдумка · sanction: нет")
+
+        recorded: list = []
+
+        class _State:
+            def record_attempt(self, *args, **kwargs):
+                recorded.append((args, kwargs))
+
+        original = execution._execute_task
+        execution._execute_task = lambda *a, **k: pytest.fail("до тела дойти не должно")
+        try:
+            result = execution.execute_task(broken, cfg, _State())
+        finally:
+            execution._execute_task = original
+
+        assert result is False
+        assert recorded, "попытка обязана быть записана"
+        assert recorded[0][1]["error_kind"] == "instrument"
+
+
+class TestStatusReportsWaiversAsContract:
+    def test_collect_and_render_expose_the_applied_waiver(self, tmp_path):
+        """`applied_waivers` в `--json`, строка в человеческом виде и
+        заголовок `project mode:` объявлены контрактом в CHANGELOG —
+        значит их обязан охранять тест, а не только текст."""
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008", namespace=resolve_namespace(cfg),
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09", baseline_sha="abcdef1234",
+            )
+        data = collect(cfg, None)
+        assert [row["task_id"] for row in data["applied_waivers"]] == ["TASK-008"]
+
+        text = render(data, None)
+        assert "project mode:" in text
+        assert "TASK-008" in text and "batch-approve-2026-09-09" in text
+        assert "no TDD lifecycle" in text
+
+    def test_a_run_without_waivers_says_nothing_extra(self, tmp_path):
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        data = collect(cfg, None)
+        assert data["applied_waivers"] == []
+        assert "addressed TDD waiver" not in render(data, None)

@@ -835,12 +835,17 @@ class ExecutorState:
 
     #: What an addressed waiver removes — the whole list, and it is one item.
     WAIVER_REMOVES = "baseline-RED requirement"
-    #: What it explicitly does NOT remove. Written into every row so the
-    #: record answers "what was still in force" without the reader having to
-    #: know the code that wrote it.
+    #: What the waiver does NOT remove — stated as POLICY, not as a report of
+    #: checks performed. The distinction matters because this string is
+    #: written BEFORE points 2 and 3 run, and the pre-review point does not
+    #: run at all under `run_review: false`: a row claiming "checked at three
+    #: points" would assert more than was observed, in a record whose whole
+    #: value is that it does not. What is true unconditionally is the policy —
+    #: the waiver does not lift these — and that is what the row says.
     WAIVER_RETAINS = (
-        "active claims at all three points (pre-implementation, pre-terminal, "
-        "pre-review); frozen-files block in every paid prompt"
+        "not lifted by this waiver: the active-claims check wherever it runs "
+        "(pre-implementation, pre-terminal, and pre-review when review is "
+        "enabled); the frozen-files block in every paid prompt"
     )
     #: Said plainly rather than left to be read off absent rows: a waived
     #: `standard` task records no TDD lifecycle, and missing rows are also
