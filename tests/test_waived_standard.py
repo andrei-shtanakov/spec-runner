@@ -1034,6 +1034,12 @@ class TestStatusReportsWaiversAsContract:
         assert "project mode:" in text
         assert "TASK-008" in text and "batch-approve-2026-09-09" in text
         assert "no TDD lifecycle" in text
+        # СОСТАВ вывода, а не вхождение: прежняя редакция исполняла ветку
+        # пустоты и не видела, что отчёт двумя соседними строками сообщает
+        # факт и тут же отрицает наличие фактов. Для waived-задачи пустота
+        # записей штатна и уже названа — «(nothing recorded)» здесь ложь.
+        assert "(nothing recorded)" not in text
+        assert "expected for the waived task(s) above" in text
 
     def test_a_run_without_waivers_says_nothing_extra(self, tmp_path):
         from spec_runner.tdd_status import collect, render
@@ -1043,3 +1049,134 @@ class TestStatusReportsWaiversAsContract:
         data = collect(cfg, None)
         assert data["applied_waivers"] == []
         assert "addressed TDD waiver" not in render(data, None)
+
+
+class TestPointOneStopsTheTaskBeforeThePaidCall:
+    """Сквозной прогон через НАСТОЯЩИЙ `_execute_task`, не через заглушку.
+
+    Точка 1 проверялась прямым вызовом `_run_waived_claims_gate`, а все
+    тесты уровня `execute_task` подменяли `_execute_task` целиком —
+    значит блок, где живёт проводка, не исполнялся ни разу, и выключить
+    его можно было без единого красного теста. Точкам 2 и 3 стандарт
+    сквозного теста применён, а точке 1 — нет, притом что именно она
+    стоит перед платным вызовом, то есть закрывает тот самый тихий
+    обход, ради которого механизм и заведён.
+    """
+
+    def _stand(self, tmp_path, monkeypatch):
+        from spec_runner import execution
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(
+            root,
+            run_review=False,
+            auto_commit=False,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+        )
+        monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
+        monkeypatch.setattr(execution, "update_task_status", lambda *a, **k: True)
+        monkeypatch.setattr(execution, "send_callback", lambda *a, **k: None)
+        monkeypatch.setattr(execution, "build_task_prompt", lambda *a, **k: "prompt")
+        paid: list = []
+        monkeypatch.setattr(
+            execution,
+            "build_cli_invocation",
+            lambda **k: paid.append(k)
+            or type("I", (), {"argv": ["true"], "result_format": "text"})(),
+        )
+        sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
+        return root, cfg, sha, paid
+
+    def test_a_broken_neighbour_claim_stops_it_before_any_paid_call(self, tmp_path, monkeypatch):
+        from spec_runner import execution
+
+        root, cfg, sha, paid = self._stand(tmp_path, monkeypatch)
+        waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
+        with ExecutorState(cfg) as state:
+            _frozen(cfg, state, sha)
+            _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
+            result = execution.execute_task(waived, cfg, state)
+            attempts = state.attempts_for(waived.id) if hasattr(state, "attempts_for") else None
+            rows = state.applied_waivers(resolve_namespace(cfg))
+
+        assert result is False
+        assert paid == [], "платный вызов не должен был состояться"
+        assert rows == [], "waiver не применён — строки быть не должно"
+        if attempts is not None:
+            assert attempts, "попытка обязана быть записана"
+
+    def test_a_clean_tree_records_exactly_one_applied_waiver(self, tmp_path, monkeypatch):
+        """Вторая половина: точка 1 пройдена — событие есть, и ровно одно.
+
+        Без неё тест выше зеленел бы и у реализации, которая отказывает
+        ВСЕГДА: «не пустил» и «не пускает никогда» на одном отказном
+        тесте неразличимы.
+        """
+        from spec_runner import execution
+
+        root, cfg, sha, paid = self._stand(tmp_path, monkeypatch)
+        waived = _task(execution_mode="standard", tdd_waiver=WAIVER)
+        with ExecutorState(cfg) as state:
+            _frozen(cfg, state, sha)
+            # Дерево не трогает замороженный путь — точка 1 обязана пропустить.
+            _commit(root, {"other.py": "x = 1\n"})
+            with contextlib.suppress(Exception):
+                execution.execute_task(waived, cfg, state)
+            rows = state.applied_waivers(resolve_namespace(cfg))
+
+        assert len(rows) == 1, f"ожидалась одна запись применения, получено {rows}"
+        assert rows[0]["task_id"] == waived.id
+        assert rows[0]["sanction"] == "batch-approve-2026-09-09"
+
+    def test_an_ordinary_standard_task_records_nothing(self, tmp_path, monkeypatch):
+        """Половина «обычный режим не тронут» на том же стенде."""
+        from spec_runner import execution
+
+        root, cfg, sha, paid = self._stand(tmp_path, monkeypatch)
+        with ExecutorState(cfg) as state:
+            _frozen(cfg, state, sha)
+            _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
+            with contextlib.suppress(Exception):
+                execution.execute_task(_task(execution_mode="standard"), cfg, state)
+            rows = state.applied_waivers(resolve_namespace(cfg))
+        assert rows == []
+
+
+class TestValidateReportsMarkerDefectsTogetherWithTheRest:
+    """`validate` существует, чтобы назвать ВСЕ дефекты за один проход.
+
+    Кросс-проверка маркера стояла за `continue` по `verifies_error`:
+    задача с обеими ошибками отдала бы одну, оператор сходил бы два
+    круга за тем, что было видно сразу. Заодно до сих пор ни один тест
+    не звал `resolve_waiver` из `validate` вовсе.
+    """
+
+    def _validate(self, tasks, cfg):
+        from spec_runner.validate import _validate_verify_first_declarations
+
+        return _validate_verify_first_declarations(tasks, cfg)
+
+    def test_a_contradictory_marker_is_reported(self, tmp_path):
+        cfg = _cfg(tmp_path, execution_mode="tdd")
+        task = _task(execution_mode="tdd", tdd_waiver=WAIVER)
+        result = self._validate([task], cfg)
+        assert any("TASK-008" in e and "standard" in e for e in result.errors), (
+            f"противоречивый маркер не назван: {result.errors}"
+        )
+
+    def test_both_defects_surface_in_one_pass(self, tmp_path):
+        """Обе ошибки за один проход, а не по одной за круг."""
+        cfg = _cfg(tmp_path, execution_mode="tdd")
+        task = _task(execution_mode="tdd", tdd_waiver=WAIVER)
+        task.verifies_error = "unparseable **Verifies:** declaration"
+        result = self._validate([task], cfg)
+        joined = "\n".join(result.errors)
+        assert "standard" in joined, f"дефект маркера потерян за continue: {joined}"
+
+    def test_a_clean_task_produces_no_marker_error(self, tmp_path):
+        """Половина «не отвергает всё подряд»."""
+        cfg = _cfg(tmp_path, execution_mode="tdd")
+        task = _task(execution_mode="standard", tdd_waiver=WAIVER)
+        result = self._validate([task], cfg)
+        assert not any("waiver" in e.lower() for e in result.errors), result.errors

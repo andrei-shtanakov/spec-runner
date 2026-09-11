@@ -259,7 +259,15 @@ def render(data: dict, task_id: str | None) -> str:
     if task_id:
         tasks = [task_id]
     if not tasks:
-        lines.append("   (nothing recorded)")
+        # #429: "(nothing recorded)" printed directly under an applied-waiver
+        # line would say the two things at once — here is a fact, and there
+        # are no facts. For a waived task the emptiness is EXPECTED and
+        # already stated (`WAIVER_LIFECYCLE`), so the report says which of
+        # the two silences this is rather than the one that is untrue.
+        if data.get("applied_waivers"):
+            lines.append("   (no TDD records — expected for the waived task(s) above)")
+        else:
+            lines.append("   (nothing recorded)")
         return "\n".join(lines)
 
     for tid in tasks:

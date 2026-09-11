@@ -680,6 +680,16 @@ def _validate_verify_first_declarations(
     adapter = adapter_for(adapter_name) if adapter_name else None
 
     for task in tasks:
+        # #429: checked BEFORE the `verifies_error` skip, because they are
+        # independent defects. Behind the skip, a task carrying both would
+        # surface one per validation run and send the operator round twice
+        # for errors that were visible together the first time — and
+        # `validate` exists precisely to report them all at once.
+        try:
+            config.resolve_waiver(task)
+        except ConfigError as exc:
+            result.errors.append(f"{task.id}: {exc}")
+
         if task.verifies_error:
             # Already reported by validate_task_fields — a different defect
             # (unparseable declaration) from the ones checked here.
@@ -690,16 +700,6 @@ def _validate_verify_first_declarations(
         except ConfigError as exc:
             result.errors.append(f"{task.id}: {exc}")
             continue
-
-        # #429: the marker is cross-validated against the mode by the same
-        # precedent as `**Verifies:**` below — a declaration that could never
-        # take effect is an operator error, not a no-op. The resolver is the
-        # single place that decides; here we only surface its refusal with the
-        # task named, at config time rather than mid-run.
-        try:
-            config.resolve_waiver(task)
-        except ConfigError as exc:
-            result.errors.append(f"{task.id}: {exc}")
 
         if mode != "verify_first":
             if task.verifies is not None:
