@@ -847,3 +847,38 @@ class TestBEH18MixedGroupIsStillOneOfTheThree:
             f"a mixed group with a failing member must read test_failure, got "
             f"{result.outcome} — {result.detail}"
         )
+
+    def test_a_failing_node_id_alone_also_makes_the_mixed_group_a_failure(self, tmp_path):
+        """The other half of BEH-18's conjunction, and it is a separate claim.
+
+        The spec asks for the verdict to be proven "падением внутри файловой
+        цели и падением внутри node id по отдельности" — two halves, not one
+        example. The test above carries the file-target half; this one carries
+        the node-id half, with the roles swapped: the node id in front is red
+        and the file target behind it is green.
+
+        Deliberately NOT merged with the test above, even though both assert
+        `test_failure`. The group returns on its first non-green element, so
+        here the file target is never reached — which is exactly why this
+        arrangement cannot observe the `prepare_replay` fallback scan, and why
+        the other test needs its green node id. Collapsing the two would drop
+        one half of the conjunction (the state this file was in before) or
+        blind the scan (the state before that).
+        """
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_a():\n    assert True\n")
+        (root / "tests" / "test_other.py").write_text(
+            "def test_c():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed-red-node.db")
+
+        task = _task(
+            id="TASK-412",
+            verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome is VerifyOutcome.TEST_FAILURE, (
+            f"a mixed group whose node id fails must read test_failure, got "
+            f"{result.outcome} — {result.detail}"
+        )
