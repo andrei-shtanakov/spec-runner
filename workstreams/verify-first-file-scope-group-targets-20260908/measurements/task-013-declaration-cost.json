@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-013",
+  "scenario": "verify-first-file-scope-group-targets-20260908#DT-13-declaration-cost",
+  "declaration_chars_file_target": 52,
+  "declaration_chars_expanded": 2982,
+  "file_target_runs": 1,
+  "expanded_runs": 20,
+  "file_target_elapsed_seconds": 0.35295495798345655,
+  "expanded_elapsed_seconds": 5.46077875001356,
+  "baseline": {
+    "declaration_chars_file_target": 48,
+    "declaration_chars_expanded": 2984,
+    "file_target_elapsed_seconds": 0.36,
+    "expanded_elapsed_seconds": 7.3
+  }
+}
