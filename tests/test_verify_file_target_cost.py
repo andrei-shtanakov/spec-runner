@@ -1,0 +1,523 @@
+"""BEH-08 + BEH-32 (spec-runner#402/TASK-013, DT-13).
+
+BEH-08's deterministic gate is the runner-invocation *count*, not seconds
+(decomposition's own boundary): a declared file-target element costs exactly
+one runner invocation, never one per collected member, while the same file
+manually expanded into node ids costs one invocation per element. Measured
+here on this project's own `tests/test_verify_first_declaration.py` — the
+file the charter's 2026-09-08 measurement named (00-charter.md,
+`10-requirements.md#NFR-01`) — copied byte-for-byte into an isolated fixture
+repo so the run is a plain, fast `pytest` invocation rather than a worktree
+checkout of this whole project. The charter's own numbers (2984 -> ~48
+chars, 6.9-7.3s -> 0.36s) are a comparison baseline recorded alongside this
+run's own artifact, never a literal this test is pinned to reproduce
+(NFR-01: "числа приводятся замером, а не оценкой" — a different machine and
+runner version measure different seconds).
+
+BEH-32 asks two more things: the class this workstream adds never spends
+money on its own (parsing, `validate`, composition resolution, the live
+verify run itself) and the harness guard that already prevents that is not
+weakened — plus that the one call this class *can* legitimately still
+reach (RED-authoring, after a genuine `test_failure`) still goes through
+`check_before_call` and lands in the agent-call ledger rather than being
+silently skipped for `verify_first` tasks.
+
+Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/15-behaviour-spec.md#BEH-08
+Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/15-behaviour-spec.md#BEH-32
+Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-13
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import subprocess
+import sys
+import time
+from importlib.metadata import version as _package_version
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from spec_runner import tdd
+from spec_runner.config import ExecutorConfig
+from spec_runner.executor import execute_task
+from spec_runner.live_verify import run_live_verify
+from spec_runner.runner import CliInvocation
+from spec_runner.state import ErrorCode, ExecutorState
+from spec_runner.task import Task
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MEASUREMENTS_DIR = (
+    REPO_ROOT / "workstreams" / "verify-first-file-scope-group-targets-20260908" / "measurements"
+)
+ARTIFACT_PATH = MEASUREMENTS_DIR / "task-013-declaration-cost.json"
+DECLARATION_TARGET = "tests/test_verify_first_declaration.py"
+
+#: The charter's own 2026-09-08 measurement on this same file (00-charter.md,
+#: NFR-01) — a comparison baseline the live artifact is recorded next to,
+#: never a constant this test asserts equality against.
+CHARTER_BASELINE = {
+    "declaration_chars_file_target": 48,
+    "declaration_chars_expanded": 2984,
+    "file_target_elapsed_seconds": 0.36,
+    "expanded_elapsed_seconds": 7.3,
+}
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+
+
+def measurement_environment() -> dict[str, object]:
+    """The hardware and the runner versions this measurement was taken on.
+
+    DT-13 asks for "замеренные секунды с указанием железа и версии
+    раннера", and 20-design.md#DT-13 gives the reason: seconds are not
+    comparable across machines, so an artifact that records only seconds
+    invites an absolute threshold on someone else's CI — "генератор ложных
+    красных". A reader comparing two artifacts needs to know whether the
+    difference is the change or the machine.
+
+    Shared by both DT-13 artifacts on purpose: one definition means the two
+    files cannot drift into different notions of "environment".
+    """
+    return {
+        "machine": platform.machine(),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "cpu_count": os.cpu_count(),
+        "python": platform.python_version(),
+        "pytest": pytest.__version__,
+        "spec_runner": _package_version("spec-runner"),
+        # Dependency identity, not a version string: the same runner version
+        # on a different lockfile is a different environment (`tdd.environment_id`).
+        "lockfile": tdd.environment_id(REPO_ROOT),
+    }
+
+
+#: Every key `measurement_environment` promises. The read-backs assert this
+#: set is present in the COMMITTED artifact, so a file written before the
+#: block existed (or hand-trimmed since) is caught on an ordinary run rather
+#: than only when someone regenerates.
+ENVIRONMENT_KEYS = frozenset(
+    {
+        "machine",
+        "platform",
+        "processor",
+        "cpu_count",
+        "python",
+        "pytest",
+        "spec_runner",
+        "lockfile",
+    }
+)
+
+
+def _declaration_node_ids(path: Path, *, declared_as: str) -> list[str]:
+    """Every test pytest actually COLLECTS in `path`, as node ids rooted at
+    `declared_as`.
+
+    Read from a real collection rather than from the file's AST. One
+    `@pytest.mark.parametrize` turns a single `FunctionDef` into several node
+    ids (`...::test_x[1]`), and an AST walk then produces BOTH a wrong count
+    and ids that are not selectors: the manual-expansion run cannot prove
+    which test executed, and BEH-08's measurement reddens for a reason that
+    has nothing to do with cost. The declaration file belongs to another
+    task (TASK-014's target) and is expected to grow, so this must follow it.
+
+    Collected before the invocation counter is installed, so this collection
+    is not itself counted as a runner invocation.
+
+    The measurement follows the file; the committed artifact does not. It
+    records what the tree looked like when it was measured, and an ordinary
+    run checks it by relations rather than by equality with today's tree —
+    otherwise a test added to a file this one does not own would report a
+    cost regression that never happened.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            declared_as,
+            "--collect-only",
+            "-q",
+            "--no-header",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=path.parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"collecting {declared_as} failed: {result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+    )
+    prefix = f"{declared_as}::"
+    return [line.strip() for line in result.stdout.splitlines() if line.strip().startswith(prefix)]
+
+
+def _repo_with_real_declaration_file(tmp_path: Path) -> Path:
+    """A fixture repo carrying a byte-for-byte copy of this project's own
+    `tests/test_verify_first_declaration.py` (BEH-08's `Given`) — isolated
+    from the live project tree so the measurement is a plain, fast pytest
+    run rather than a worktree checkout of everything else in this repo."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    real_file = REPO_ROOT / DECLARATION_TARGET
+    (tests_dir / real_file.name).write_text(real_file.read_text())
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "base")
+    return root
+
+
+def _cfg(root: Path, **overrides) -> ExecutorConfig:
+    defaults: dict = {
+        "project_root": root,
+        "state_file": root / ".state.db",
+        "logs_dir": root / ".logs",
+        "test_command": "python -m pytest",
+        "max_retries": 1,
+        "retry_delay_seconds": 0,
+        "create_git_branch": False,
+        "run_tests_on_done": False,
+        "auto_commit": False,
+        "run_review": False,
+        "callback_url": "",
+    }
+    defaults.update(overrides)
+    cfg = ExecutorConfig(**defaults)
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    return cfg
+
+
+def _verify_task(task_id: str, verifies: list[str]) -> Task:
+    return Task(
+        id=task_id,
+        name=f"verify-first cost probe {task_id}",
+        priority="p1",
+        status="todo",
+        estimate="1h",
+        execution_mode="verify_first",
+        verifies=verifies,
+    )
+
+
+def _count_runner_invocations(monkeypatch, module) -> dict:
+    """One shared counting seam (frozen checkpoint's own technique, #13
+    red): git plumbing (HEAD resolution, worktree add/remove) goes through
+    this same patched name; only an actual runner invocation — never `git`
+    as argv[0] — counts toward BEH-08."""
+    invocations = {"count": 0}
+    real_run = subprocess.run
+
+    def _counting_run(argv, *args, **kwargs):
+        if isinstance(argv, (list, tuple)) and argv and argv[0] != "git":
+            invocations["count"] += 1
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", _counting_run)
+    return invocations
+
+
+@pytest.fixture
+def update_golden(request) -> bool:
+    return bool(request.config.getoption("--update-golden"))
+
+
+class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
+    """kind: e2e — BEH-08: `tests/test_verify_first_declaration.py`,
+    declared as a file target, costs exactly one runner invocation and a
+    ~48-char declaration line; the same file manually expanded into node ids
+    costs one invocation per member and a line long enough to list every one
+    of them — measured live, under pytest, never assumed from the charter's
+    own numbers (AC-26)."""
+
+    def test_declaration_is_one_run_and_the_reduction_is_measured(
+        self, tmp_path, monkeypatch, update_golden
+    ):
+        import spec_runner.live_verify as live_verify_module
+
+        root = _repo_with_real_declaration_file(tmp_path)
+        node_ids = _declaration_node_ids(
+            root / "tests" / "test_verify_first_declaration.py", declared_as=DECLARATION_TARGET
+        )
+        assert node_ids, "the real declaration file grew zero tests to expand"
+
+        file_target_line = f"**Verifies:** {DECLARATION_TARGET}"
+        expanded_line = f"**Verifies:** {', '.join(node_ids)}"
+
+        invocations = _count_runner_invocations(monkeypatch, live_verify_module)
+        start = time.perf_counter()
+        file_target_result = run_live_verify(
+            _verify_task("TASK-013-charter-a", [DECLARATION_TARGET]), _cfg(root)
+        )
+        file_target_elapsed = time.perf_counter() - start
+        file_target_runs = invocations["count"]
+
+        invocations["count"] = 0
+        start = time.perf_counter()
+        expanded_result = run_live_verify(
+            _verify_task("TASK-013-charter-b", node_ids),
+            _cfg(root, state_file=root / ".expanded.db"),
+        )
+        expanded_elapsed = time.perf_counter() - start
+        expanded_runs = invocations["count"]
+
+        assert file_target_result.passed, file_target_result.detail
+        assert expanded_result.passed, expanded_result.detail
+
+        # BEH-08's deterministic gate: run count, not seconds. The file
+        # target never unrolls into one invocation per collected member.
+        assert file_target_runs == 1
+        assert expanded_runs == len(node_ids)
+
+        # BEH-08 also asks for the per-member facts to come from that SAME
+        # single run (15-behaviour-spec.md): one invocation is only the
+        # cheap half of the claim — it would also be satisfied by a run
+        # that saw one member and reported nothing about the rest. The
+        # composition is what proves the single run actually accounted for
+        # every member the manual expansion had to pay a run apiece for.
+        # Compared against what the run actually COLLECTED, not against the
+        # AST count: `_declaration_node_ids` counts `FunctionDef`s, while the
+        # manifest names real pytest node ids — so one `@pytest.mark.
+        # parametrize` in a file this test does not own turns N functions
+        # into N+k members. Equality would report that growth as a cost
+        # regression, which is the same defect just removed from the
+        # artifact read-back. The claim that matters survives either shape:
+        # every declared test is accounted for by at least one member, and
+        # nothing is silently dropped.
+        members = [entry.member for entry in file_target_result.composition]
+        assert len(members) >= len(node_ids), (
+            f"one run must still account for every member: {len(members)} "
+            f"reported, {len(node_ids)} tests declared"
+        )
+        unaccounted = [
+            node_id
+            for node_id in node_ids
+            if not any(m == node_id or m.startswith(f"{node_id}[") for m in members)
+        ]
+        assert not unaccounted, (
+            f"the single run must report a per-member fact for every declared "
+            f"test; nothing was reported for {unaccounted[:3]} "
+            f"({len(unaccounted)} of {len(node_ids)})"
+        )
+
+        # The declaration itself shrinks (charter: 2984 -> ~48 chars).
+        assert len(file_target_line) < len(expanded_line)
+
+        # A real, live-measured speedup — not pinned to the charter's own
+        # seconds, only to the same direction of reduction.
+        assert file_target_elapsed < expanded_elapsed
+
+        if update_golden:
+            MEASUREMENTS_DIR.mkdir(parents=True, exist_ok=True)
+            ARTIFACT_PATH.write_text(
+                json.dumps(
+                    {
+                        "task_id": "TASK-013",
+                        "scenario": (
+                            "verify-first-file-scope-group-targets-20260908#DT-13-declaration-cost"
+                        ),
+                        "declaration_chars_file_target": len(file_target_line),
+                        "declaration_chars_expanded": len(expanded_line),
+                        "file_target_runs": file_target_runs,
+                        "expanded_runs": expanded_runs,
+                        "file_target_elapsed_seconds": file_target_elapsed,
+                        "expanded_elapsed_seconds": expanded_elapsed,
+                        "environment": measurement_environment(),
+                        "baseline": CHARTER_BASELINE,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+
+        recorded = json.loads(ARTIFACT_PATH.read_text())
+        assert recorded["task_id"] == "TASK-013"
+
+        # DT-13: seconds are only readable next to the machine that
+        # produced them, so the committed artifact must carry them. Asserted
+        # on every run, not only under --update-golden: an artifact written
+        # before this block existed is exactly the file this catches.
+        assert set(recorded.get("environment", {})) >= ENVIRONMENT_KEYS, (
+            f"the artifact must name the hardware and the runner versions "
+            f"it was measured on; missing "
+            f"{sorted(ENVIRONMENT_KEYS - set(recorded.get('environment', {})))}"
+        )
+
+        # What an ordinary run may assert about the COMMITTED artifact are
+        # the relations that hold for ANY tree — not equality with this
+        # tree's numbers. `declaration_chars_expanded` and `expanded_runs`
+        # are read off `tests/test_verify_first_declaration.py`'s own AST,
+        # a file this test does not own: pinning the committed artifact to
+        # them made the FIRST test added there fail this measurement with
+        # `assert 2982 == 3050`, repairable only by regenerating a golden
+        # file — a foreign file's growth reported as a cost regression.
+        assert recorded["file_target_runs"] == 1
+        assert recorded["expanded_runs"] > recorded["file_target_runs"]
+        assert recorded["declaration_chars_file_target"] < recorded["declaration_chars_expanded"]
+        assert recorded["expanded_elapsed_seconds"] > recorded["file_target_elapsed_seconds"]
+        assert recorded["file_target_elapsed_seconds"] > 0
+        assert recorded["expanded_elapsed_seconds"] > 0
+
+        # Equality with THIS tree belongs to the run that regenerates the
+        # artifact: there it is a real check that what was written is what
+        # was measured, and it cannot go stale, because it is asserted at
+        # the moment of writing.
+        if update_golden:
+            assert recorded["declaration_chars_file_target"] == len(file_target_line)
+            assert recorded["declaration_chars_expanded"] == len(expanded_line)
+            assert recorded["expanded_runs"] == len(node_ids)
+
+        assert (
+            recorded["baseline"]["expanded_elapsed_seconds"]
+            > recorded["baseline"]["file_target_elapsed_seconds"]
+        )
+        assert (
+            recorded["baseline"]["declaration_chars_expanded"]
+            > recorded["baseline"]["declaration_chars_file_target"]
+        )
+
+
+class TestBEH32ClassCostAndHarnessGuard:
+    """kind: e2e — BEH-32: the class of verify-first file-target tasks never
+    spends money on its own (parsing/`validate`/resolution/the live run
+    itself), the harness guard is not weakened, and the one legitimate paid
+    call this class can still reach — RED-authoring after a genuine
+    `test_failure` — passes through `check_before_call` and lands in the
+    agent-call ledger rather than being silently skipped for `verify_first`.
+    """
+
+    def _repo(self, tmp_path: Path, *, failing: bool) -> Path:
+        root = tmp_path / "repo"
+        root.mkdir()
+        _git(root, "init", "-q")
+        _git(root, "config", "user.email", "t@example.com")
+        _git(root, "config", "user.name", "t")
+        tests_dir = root / "tests"
+        tests_dir.mkdir()
+        assertion = "False" if failing else "True"
+        (tests_dir / "test_probe.py").write_text(f"def test_it():\n    assert {assertion}\n")
+        spec = root / "spec"
+        spec.mkdir()
+        (spec / "tasks.md").write_text("# Tasks\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "base")
+        return root
+
+    def _verify_first_cfg(self, root: Path, **overrides) -> ExecutorConfig:
+        defaults: dict = {
+            "project_root": root,
+            "state_file": root / ".state.db",
+            "logs_dir": root / ".logs",
+            "test_command": "pytest",
+            "tdd_runner": "pytest",
+            "run_tests_on_done": False,
+            "create_git_branch": False,
+            "auto_commit": True,
+            "run_review": False,
+        }
+        defaults.update(overrides)
+        cfg = ExecutorConfig(**defaults)
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        return cfg
+
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.execution.post_done_hook",
+        return_value=(True, None, "skipped", "", False),
+    )
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution._run_agent_process")
+    def test_a_green_class_member_never_calls_the_red_authoring_seam(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+        monkeypatch,
+    ):
+        # The green implementation call is the one paid seam this class
+        # legitimately still uses on a fully green group (same as every
+        # other execution mode); it is stubbed here, never invoked for
+        # real, exactly like `PAID_AGENT_COMMANDS` demands.
+        mock_run.return_value = MagicMock(
+            stdout="output TASK_COMPLETE", stderr="cost: $0.01", returncode=0
+        )
+
+        red_authoring_calls: list[str] = []
+
+        def _spy_run_agent(config, prompt, **kwargs):
+            red_authoring_calls.append("called")
+            return tdd.AgentCall(text="TDD_SELECTOR: tests/should_not_exist.py::never")
+
+        monkeypatch.setattr(tdd, "_run_agent", _spy_run_agent)
+
+        root = self._repo(tmp_path, failing=False)
+        cfg = self._verify_first_cfg(root)
+        task = _verify_task("TASK-100", ["tests/test_probe.py"])
+
+        with ExecutorState(cfg) as state:
+            outcome = execute_task(task, cfg, state)
+            red_calls = [
+                call for call in state.agent_calls(task.id) if call["provenance"] == "red_authoring"
+            ]
+
+        assert outcome is not False, "a fully green file target must not fail the task"
+        assert red_authoring_calls == []
+        assert red_calls == []
+
+    def test_the_red_call_on_a_genuine_failure_is_refused_before_it_is_authored(self, tmp_path):
+        root = self._repo(tmp_path, failing=True)
+        cfg = self._verify_first_cfg(root, task_budget_usd=1.0)
+        task = _verify_task("TASK-101", ["tests/test_probe.py"])
+
+        with ExecutorState(cfg) as state:
+            state.record_agent_call(task.id, "review", cost_usd=1.0)
+            with patch("spec_runner.tdd._run_agent") as agent:
+                outcome = execute_task(task, cfg, state)
+            attempts = state.tasks[task.id].attempts
+
+        assert outcome is False
+        agent.assert_not_called()
+        assert attempts[-1].error_code is ErrorCode.BUDGET_EXCEEDED
+        assert "red_authoring" in (attempts[-1].error or "")
+
+    def test_the_red_call_on_a_genuine_failure_is_priced_and_ledgered(self, tmp_path):
+        root = self._repo(tmp_path, failing=True)
+        cfg = self._verify_first_cfg(root)
+        task = _verify_task("TASK-102", ["tests/test_probe.py"])
+
+        fake_call = tdd.AgentCall(
+            text="TDD_SELECTOR: tests/test_probe.py::test_it",
+            cost_usd=1.23,
+        )
+
+        with ExecutorState(cfg) as state:
+            with patch("spec_runner.tdd._run_agent", return_value=fake_call):
+                execute_task(task, cfg, state)
+            red_calls = [
+                call for call in state.agent_calls(task.id) if call["provenance"] == "red_authoring"
+            ]
+
+        assert len(red_calls) == 1
+        assert red_calls[0]["cost_usd"] == pytest.approx(1.23)

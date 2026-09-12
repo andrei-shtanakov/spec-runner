@@ -1,0 +1,26 @@
+{
+  "task_id": "TASK-013",
+  "scenario": "verify-first-file-scope-group-targets-20260908#DT-13-declaration-cost",
+  "declaration_chars_file_target": 52,
+  "declaration_chars_expanded": 2982,
+  "file_target_runs": 1,
+  "expanded_runs": 20,
+  "file_target_elapsed_seconds": 0.4220238330308348,
+  "expanded_elapsed_seconds": 6.814739042019937,
+  "environment": {
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "cpu_count": 12,
+    "python": "3.13.7",
+    "pytest": "9.0.3",
+    "spec_runner": "2.35.0",
+    "lockfile": "uv.lock:238ddaf5a38a6031"
+  },
+  "baseline": {
+    "declaration_chars_file_target": 48,
+    "declaration_chars_expanded": 2984,
+    "file_target_elapsed_seconds": 0.36,
+    "expanded_elapsed_seconds": 7.3
+  }
+}
