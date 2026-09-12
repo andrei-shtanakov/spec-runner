@@ -425,7 +425,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-13], [FR-16]
 
 ### TASK-013: Замер стоимости класса и харнесс-гарантия
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-08, BEH-32 (DT-13, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-13
