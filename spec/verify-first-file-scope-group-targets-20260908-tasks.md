@@ -361,7 +361,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-11], [FR-17]
 
 ### TASK-009: Гейт и переиспользование эвиденции на файловой цели
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-22, BEH-26 (DT-09, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-09
@@ -370,10 +370,10 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] TDD-waiver DT-09, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
-- [ ] реализовать BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
-- [ ] реализовать BEH-26: Пред-мерж гейт задаёт тот же вопрос
-- [ ] проверка группы: tests/test_verify_file_target_gates.py (kind: integration) зелёные на BEH-22, BEH-26
+- [x] TDD-waiver DT-09, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
+- [x] реализовать BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
+- [x] реализовать BEH-26: Пред-мерж гейт задаёт тот же вопрос
+- [x] проверка группы: tests/test_verify_file_target_gates.py (kind: integration) зелёные на BEH-22, BEH-26
 
 **Traces to:** [FR-15], [FR-19]
 
