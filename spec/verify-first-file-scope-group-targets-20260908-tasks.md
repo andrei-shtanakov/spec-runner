@@ -454,15 +454,15 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-04]
 
 ### TASK-015: Снятие объявленной границы из документации и описание принятого контракта
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-31 (DT-15, группа solo).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-15
 **Depends on:** [TASK-005], [TASK-007]
 
 **Checklist:**
-- [ ] реализовать BEH-31: Объявленная граница снимается и заменяется описанным контрактом
-- [ ] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-31
+- [x] реализовать BEH-31: Объявленная граница снимается и заменяется описанным контрактом
+- [x] проверка группы: docs/architecture.md (kind: manual) зелёные на BEH-31
 
 **Traces to:** [FR-01], [FR-04], [FR-10]
 
