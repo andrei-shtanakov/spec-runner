@@ -378,19 +378,19 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-15], [FR-19]
 
 ### TASK-010: Приёмка объявления снаружи: обе формы, смешанная группа, дубль, отсутствие вывода группы
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-01, BEH-02, BEH-04, BEH-18, BEH-19 (DT-10, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-10
 **Depends on:** [TASK-002], [TASK-003], [TASK-004]
 
 **Checklist:**
-- [ ] реализовать BEH-01: Файловая цель объявляется наравне с node id, в обеих формах и в любом порядке
-- [ ] реализовать BEH-02: Замеренная выборка целей воркспейса объявляется без ручного расширения
-- [ ] реализовать BEH-04: Группа не выводится ни из чего, кроме объявления
-- [ ] реализовать BEH-18: Смешанная группа судится как объявлена, включая пересечение
-- [ ] реализовать BEH-19: Тест, попавший в состав дважды, удовлетворяет правило оба раза
-- [ ] проверка группы: tests/test_verify_file_target_declaration.py (kind: contract), tests/test_verify_file_target_declaration.py (kind: e2e), tests/test_verify_file_target_declaration.py (kind: integration) зелёные на BEH-01, BEH-02, BEH-04, BEH-18, BEH-19
+- [x] реализовать BEH-01: Файловая цель объявляется наравне с node id, в обеих формах и в любом порядке
+- [x] реализовать BEH-02: Замеренная выборка целей воркспейса объявляется без ручного расширения
+- [x] реализовать BEH-04: Группа не выводится ни из чего, кроме объявления
+- [x] реализовать BEH-18: Смешанная группа судится как объявлена, включая пересечение
+- [x] реализовать BEH-19: Тест, попавший в состав дважды, удовлетворяет правило оба раза
+- [x] проверка группы: tests/test_verify_file_target_declaration.py (kind: contract), tests/test_verify_file_target_declaration.py (kind: e2e), tests/test_verify_file_target_declaration.py (kind: integration) зелёные на BEH-01, BEH-02, BEH-04, BEH-18, BEH-19
 
 **Traces to:** [FR-01], [FR-02], [FR-12]
 
