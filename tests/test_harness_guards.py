@@ -12,13 +12,17 @@ because a guard nothing checks is a guard that quietly stops working — and its
 failure mode is a bill.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
+from spec_runner.executor import execute_task
 from spec_runner.preset_cmd import list_presets, load_fragment
+from spec_runner.state import ExecutorState
+from spec_runner.task import Task
 from tests.conftest import PAID_AGENT_COMMANDS
 
 
@@ -88,3 +92,65 @@ class TestTheGuard:
         assert shipped <= PAID_AGENT_COMMANDS, (
             f"these CLIs have presets but are not guarded: {sorted(shipped - PAID_AGENT_COMMANDS)}"
         )
+
+
+class TestTheGuardCoversVerifyFirst:
+    """spec-runner#402/TASK-013 (BEH-32): a `verify_first` task whose live
+    entry run observes a genuine `test_failure` walks the same RED-authoring
+    seam a `tdd` task does (`execution.py`'s `verify_first_red` branch) —
+    a path that did not exist when `TestTheGuard` above was written and that
+    it never exercises (it calls `tdd._run_agent` directly, never through
+    `execute_task`). The guard must fire there too, not only on the seam in
+    isolation.
+    """
+
+    def _repo(self, tmp_path: Path) -> Path:
+        root = tmp_path / "repo"
+        root.mkdir()
+        for args in (
+            ("init", "-q"),
+            ("config", "user.email", "t@example.com"),
+            ("config", "user.name", "t"),
+        ):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        tests_dir = root / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_probe.py").write_text("def test_it():\n    assert False\n")
+        spec = root / "spec"
+        spec.mkdir()
+        (spec / "tasks.md").write_text(
+            "# Tasks\n\n### TASK-900: Probe\n🟠 P1 | ⬜ TODO | Est: 1d\n\n"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True, capture_output=True)
+        return root
+
+    def test_a_verify_first_red_authoring_call_is_refused(self, tmp_path):
+        root = self._repo(tmp_path)
+        cfg = ExecutorConfig(
+            project_root=root,
+            state_file=root / ".state.db",
+            logs_dir=root / ".logs",
+            test_command="pytest",
+            tdd_runner="pytest",
+            run_tests_on_done=False,
+            create_git_branch=False,
+            auto_commit=True,
+            claude_command="claude",
+        )
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        task = Task(
+            id="TASK-900",
+            name="Probe",
+            priority="p1",
+            status="todo",
+            estimate="1d",
+            execution_mode="verify_first",
+            verifies=["tests/test_probe.py"],
+        )
+
+        with (
+            ExecutorState(cfg) as state,
+            pytest.raises(AssertionError, match="would call the real agent"),
+        ):
+            execute_task(task, cfg, state)
