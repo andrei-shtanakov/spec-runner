@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import subprocess
 from pathlib import PurePath
 
@@ -24,7 +25,8 @@ class PaidBinaryReached(BaseException):
     call paths catch `Exception` and turn it into a failed attempt, so a belt
     raising one would be swallowed: the test would fail later, for another
     reason, and the belt's own verdict would be lost. Nothing in the product
-    catches `BaseException`.
+    catches and *swallows* `BaseException` — the four handlers that name it
+    (`spec.py`, `obs.py`, `change_commands.py`) re-raise after cleanup.
     """
 
 
@@ -51,6 +53,9 @@ _NEVER_EXECUTE = frozenset(
         "pi",
         "ollama",
         "llama-cli",
+        # Listed for completeness, and unreachable by name: that branch issues
+        # `curl http://localhost:8080/completion`, so no argv element carries
+        # this basename. Harmless to keep, misleading to rely on.
         "llama-server",
         "qwen",
         "copilot",
@@ -63,14 +68,40 @@ _NEVER_EXECUTE = frozenset(
 
 
 def _argv_names(argv) -> set[str]:
-    """Every basename visible in `argv`.
+    """Every basename visible in `argv`, including inside composite elements.
 
-    A wrapped template (`bash -lc '<cmd> …'`) or the llama-server branch
-    (`curl …`) hides the agent name deeper in argv, so argv[0] alone is not
-    enough — the whole vector is read, by basename.
+    Reading `PurePath(part).name` per element is not enough, and the two cases
+    it misses are the ones that matter (spec-runner#459 review):
+
+    * a wrapped template (`command_template: bash -lc '{cmd} -p {prompt}'`)
+      goes through `shlex.split` in `build_cli_invocation`, so the agent name
+      ends up INSIDE one element: `["bash", "-lc", "claude -p '…'"]`. The
+      basename of that third element is the whole string;
+    * `subprocess.run("<cmd> --flag", shell=True)` passes one string.
+
+    So each element is also split as a shell word vector and every token's
+    basename is taken. An element that does not lex (an unbalanced quote in a
+    prompt, say) falls back to a plain whitespace split: a malformed element
+    must not become a way to hide a name, which is what returning the raw
+    string alone would have made it.
+
+    Not every paid path is an argv with a name in it: the llama-server branch
+    sends `["curl", "-s", "http://localhost:8080/completion", …]`, where no
+    element has an agent basename. That request is not caught here, and the
+    list below does not pretend otherwise — it is an HTTP call to a local
+    server, not the execution of a paid CLI binary.
     """
     parts = argv if isinstance(argv, (list, tuple)) else [argv]
-    return {PurePath(str(part)).name for part in parts}
+    names: set[str] = set()
+    for part in parts:
+        text = str(part)
+        names.add(PurePath(text).name)
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.split()
+        names.update(PurePath(token).name for token in tokens)
+    return names
 
 
 @pytest.fixture(autouse=True)

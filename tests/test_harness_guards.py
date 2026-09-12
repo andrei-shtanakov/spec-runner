@@ -226,8 +226,13 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
     **Nothing here may execute a paid binary even if the belt is broken.**
     The command under test is `BELT_PROBE_COMMAND`, a name that exists in no
     PATH: a belt that fails to fire produces `FileNotFoundError`, not a bill.
-    Real CLI names (`claude`, `codex`, …) appear in this file only inside
-    static set comparisons, never in anything that runs.
+
+    Real CLI names do appear elsewhere in this file — `TestTheGuard`
+    parametrizes over `PAID_AGENT_COMMANDS`, and the verify-first test drives
+    `execute_task` with `claude_command="claude"` — but always with something
+    ahead of the process: an exploded `subprocess.run`, or the guard and the
+    belt together. In THIS class, where the guard is deliberately emptied,
+    only the sentinel is ever passed to a seam.
     """
 
     def _unguarded(self, monkeypatch) -> None:
@@ -317,3 +322,47 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
 
         with pytest.raises(PaidBinaryReached):
             asyncio.run(_spawn())
+
+    def test_a_wrapped_template_hides_the_name_inside_one_element(self, monkeypatch):
+        """`command_template: bash -lc '{cmd} …'` is the case the docstring
+        always claimed to cover and did not (spec-runner#459 review).
+
+        `build_cli_invocation` runs the formatted template through
+        `shlex.split`, so the agent name ends up INSIDE the third element:
+        `["bash", "-lc", "<cmd> -p '…'"]`. Taking `PurePath(part).name` per
+        element yields the basename of that whole string and misses it — and
+        on the review seam, which no name-based guard covers, that is a real
+        paid call.
+        """
+        self._unguarded(monkeypatch)
+        from spec_runner.runner import build_cli_invocation
+
+        invocation = build_cli_invocation(
+            cmd=BELT_PROBE_COMMAND,
+            prompt="any prompt",
+            model=None,
+            template="bash -lc '{cmd} -p {prompt}'",
+            skip_permissions=False,
+            json_output=True,
+        )
+        assert invocation.argv[0] == "bash", (
+            f"fixture must produce a wrapped invocation, got {invocation.argv!r}"
+        )
+        assert BELT_PROBE_COMMAND not in invocation.argv, (
+            "the name must be hidden INSIDE an element, or this test proves nothing"
+        )
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            subprocess.run(invocation.argv, capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_a_shell_string_is_one_element_too(self, monkeypatch):
+        """`subprocess.run("<cmd> --flag", shell=True)` passes a single
+        string; its basename is the whole command line."""
+        self._unguarded(monkeypatch)
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            subprocess.run(f"{BELT_PROBE_COMMAND} --version", shell=True, capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
