@@ -3,8 +3,18 @@
   "scenario": "verify-first-file-scope-group-targets-20260908#DT-13",
   "file_target_runs": 1,
   "expanded_runs": 6,
-  "file_target_elapsed_seconds": 0.18146695900941268,
-  "expanded_elapsed_seconds": 0.8103600839967839,
+  "file_target_elapsed_seconds": 0.26169266598299146,
+  "expanded_elapsed_seconds": 1.2065709159942344,
+  "environment": {
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "cpu_count": 12,
+    "python": "3.13.7",
+    "pytest": "9.0.3",
+    "spec_runner": "2.35.0",
+    "lockfile": "uv.lock:238ddaf5a38a6031"
+  },
   "baseline": {
     "file_target_runs": 1,
     "expanded_runs": 6

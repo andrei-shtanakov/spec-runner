@@ -31,8 +31,11 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import platform
 import subprocess
 import time
+from importlib.metadata import version as _package_version
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -68,11 +71,62 @@ def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
 
 
+def measurement_environment() -> dict[str, object]:
+    """The hardware and the runner versions this measurement was taken on.
+
+    DT-13 asks for "замеренные секунды с указанием железа и версии
+    раннера", and 20-design.md#DT-13 gives the reason: seconds are not
+    comparable across machines, so an artifact that records only seconds
+    invites an absolute threshold on someone else's CI — "генератор ложных
+    красных". A reader comparing two artifacts needs to know whether the
+    difference is the change or the machine.
+
+    Shared by both DT-13 artifacts on purpose: one definition means the two
+    files cannot drift into different notions of "environment".
+    """
+    return {
+        "machine": platform.machine(),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "cpu_count": os.cpu_count(),
+        "python": platform.python_version(),
+        "pytest": pytest.__version__,
+        "spec_runner": _package_version("spec-runner"),
+        # Dependency identity, not a version string: the same runner version
+        # on a different lockfile is a different environment (`tdd.environment_id`).
+        "lockfile": tdd.environment_id(REPO_ROOT),
+    }
+
+
+#: Every key `measurement_environment` promises. The read-backs assert this
+#: set is present in the COMMITTED artifact, so a file written before the
+#: block existed (or hand-trimmed since) is caught on an ordinary run rather
+#: than only when someone regenerates.
+ENVIRONMENT_KEYS = frozenset(
+    {
+        "machine",
+        "platform",
+        "processor",
+        "cpu_count",
+        "python",
+        "pytest",
+        "spec_runner",
+        "lockfile",
+    }
+)
+
+
 def _declaration_node_ids(path: Path, *, declared_as: str) -> list[str]:
     """Every `test_*` in `path`, as real pytest node ids rooted at
     `declared_as` — derived from the file's own AST rather than a hardcoded
     count, so a rename or an added test does not silently stale BEH-08's
-    manual-expansion side."""
+    manual-expansion side.
+
+    The measurement follows the file; the committed artifact does not. It
+    records what the tree looked like when it was measured, and an ordinary
+    run checks it by relations rather than by equality with today's AST —
+    otherwise adding a test to a file this test does not own would report a
+    cost regression that never happened."""
     tree = ast.parse(path.read_text())
     ids: list[str] = []
     for node in ast.iter_child_nodes(tree):
@@ -205,6 +259,18 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         assert file_target_runs == 1
         assert expanded_runs == len(node_ids)
 
+        # BEH-08 also asks for the per-member facts to come from that SAME
+        # single run (15-behaviour-spec.md): one invocation is only the
+        # cheap half of the claim — it would also be satisfied by a run
+        # that saw one member and reported nothing about the rest. The
+        # composition is what proves the single run actually accounted for
+        # every member the manual expansion had to pay a run apiece for.
+        assert len(file_target_result.composition) == len(node_ids), (
+            f"one run must still account for every member: "
+            f"{len(file_target_result.composition)} member(s) reported, "
+            f"{len(node_ids)} expanded into node ids"
+        )
+
         # The declaration itself shrinks (charter: 2984 -> ~48 chars).
         assert len(file_target_line) < len(expanded_line)
 
@@ -227,6 +293,7 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
                         "expanded_runs": expanded_runs,
                         "file_target_elapsed_seconds": file_target_elapsed,
                         "expanded_elapsed_seconds": expanded_elapsed,
+                        "environment": measurement_environment(),
                         "baseline": CHARTER_BASELINE,
                     },
                     indent=2,
@@ -236,16 +303,41 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
 
         recorded = json.loads(ARTIFACT_PATH.read_text())
         assert recorded["task_id"] == "TASK-013"
+
+        # DT-13: seconds are only readable next to the machine that
+        # produced them, so the committed artifact must carry them. Asserted
+        # on every run, not only under --update-golden: an artifact written
+        # before this block existed is exactly the file this catches.
+        assert set(recorded.get("environment", {})) >= ENVIRONMENT_KEYS, (
+            f"the artifact must name the hardware and the runner versions "
+            f"it was measured on; missing "
+            f"{sorted(ENVIRONMENT_KEYS - set(recorded.get('environment', {})))}"
+        )
+
+        # What an ordinary run may assert about the COMMITTED artifact are
+        # the relations that hold for ANY tree — not equality with this
+        # tree's numbers. `declaration_chars_expanded` and `expanded_runs`
+        # are read off `tests/test_verify_first_declaration.py`'s own AST,
+        # a file this test does not own: pinning the committed artifact to
+        # them made the FIRST test added there fail this measurement with
+        # `assert 2982 == 3050`, repairable only by regenerating a golden
+        # file — a foreign file's growth reported as a cost regression.
         assert recorded["file_target_runs"] == 1
-        assert recorded["expanded_runs"] == len(node_ids)
+        assert recorded["expanded_runs"] > recorded["file_target_runs"]
         assert recorded["declaration_chars_file_target"] < recorded["declaration_chars_expanded"]
+        assert recorded["expanded_elapsed_seconds"] > recorded["file_target_elapsed_seconds"]
         assert recorded["file_target_elapsed_seconds"] > 0
         assert recorded["expanded_elapsed_seconds"] > 0
-        # These two fields are deterministic (derived from this file's own
-        # AST, not from wall-clock timing), so a stale or hand-edited
-        # artifact is caught here even outside --update-golden runs.
-        assert recorded["declaration_chars_file_target"] == len(file_target_line)
-        assert recorded["declaration_chars_expanded"] == len(expanded_line)
+
+        # Equality with THIS tree belongs to the run that regenerates the
+        # artifact: there it is a real check that what was written is what
+        # was measured, and it cannot go stale, because it is asserted at
+        # the moment of writing.
+        if update_golden:
+            assert recorded["declaration_chars_file_target"] == len(file_target_line)
+            assert recorded["declaration_chars_expanded"] == len(expanded_line)
+            assert recorded["expanded_runs"] == len(node_ids)
+
         assert (
             recorded["baseline"]["expanded_elapsed_seconds"]
             > recorded["baseline"]["file_target_elapsed_seconds"]

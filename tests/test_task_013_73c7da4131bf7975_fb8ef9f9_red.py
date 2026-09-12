@@ -26,6 +26,7 @@ import pytest
 from spec_runner.config import ExecutorConfig
 from spec_runner.live_verify import run_live_verify
 from spec_runner.task import Task
+from tests.test_verify_file_target_cost import ENVIRONMENT_KEYS, measurement_environment
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MEASUREMENTS_DIR = (
@@ -163,6 +164,11 @@ class TestFileTargetRunCountIsMeasuredAndRecorded:
                         "expanded_runs": expanded_runs,
                         "file_target_elapsed_seconds": file_target_elapsed,
                         "expanded_elapsed_seconds": expanded_elapsed,
+                        # DT-13: seconds without the machine and the runner
+                        # versions invite an absolute threshold on someone
+                        # else's CI. Same block, same definition, as the
+                        # other DT-13 artifact.
+                        "environment": measurement_environment(),
                         "baseline": {
                             "file_target_runs": 1,
                             "expanded_runs": _TEST_COUNT,
@@ -179,3 +185,13 @@ class TestFileTargetRunCountIsMeasuredAndRecorded:
         assert recorded["expanded_runs"] == _TEST_COUNT
         assert recorded["file_target_elapsed_seconds"] > 0
         assert recorded["expanded_elapsed_seconds"] > 0
+        # DT-13 again, and checked on every run for the same reason: an
+        # artifact written before the block existed is what this catches.
+        # (`expanded_runs` above may stay an equality here — unlike the
+        # declaration-cost artifact, this fixture's sample file is generated
+        # by this test and cannot grow behind its back.)
+        assert set(recorded.get("environment", {})) >= ENVIRONMENT_KEYS, (
+            f"the artifact must name the hardware and the runner versions "
+            f"it was measured on; missing "
+            f"{sorted(ENVIRONMENT_KEYS - set(recorded.get('environment', {})))}"
+        )
