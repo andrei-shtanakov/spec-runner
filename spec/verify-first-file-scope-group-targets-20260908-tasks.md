@@ -411,16 +411,16 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-03]
 
 ### TASK-012: Аддитивность внешних контрактов на составе файловой цели
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-30, BEH-33 (DT-12, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-12
 **Depends on:** [TASK-007]
 
 **Checklist:**
-- [ ] реализовать BEH-30: Внешние контракты расширяются только аддитивно
-- [ ] реализовать BEH-33: Перечень допустимых полей `--json-result` знает `verify_composition` (`OPTIONAL_TASK_RESULT_FIELDS` в `tests/test_json_result_contract.py`)
-- [ ] проверка группы: tests/test_verify_file_target_contracts.py (kind: contract) зелёные на BEH-30, BEH-33
+- [x] реализовать BEH-30: Внешние контракты расширяются только аддитивно
+- [x] реализовать BEH-33: Перечень допустимых полей `--json-result` знает `verify_composition` (`OPTIONAL_TASK_RESULT_FIELDS` в `tests/test_json_result_contract.py`)
+- [x] проверка группы: tests/test_verify_file_target_contracts.py (kind: contract) зелёные на BEH-30, BEH-33
 
 **Traces to:** [FR-13], [FR-16]
 
