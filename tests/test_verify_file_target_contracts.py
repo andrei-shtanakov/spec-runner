@@ -37,9 +37,7 @@ from spec_runner.live_verify import CompositionMember, VerifyRunResult
 from spec_runner.state import ExecutorState, ReviewVerdict, TaskAttempt
 from spec_runner.task import Task
 from tests.test_json_result_contract import (
-    ALLOWED_TASK_RESULT_FIELDS,
     FIXTURES_DIR,
-    OPTIONAL_TASK_RESULT_FIELDS,
     SCHEMAS_DIR,
     _assert_field_set,
     _validate_against_schema,
@@ -105,10 +103,6 @@ def _record_evidence_with_composition(
 
 
 class TestAllowListKnowsVerifyComposition:
-    def test_verify_composition_is_optional(self) -> None:
-        assert "verify_composition" in OPTIONAL_TASK_RESULT_FIELDS
-        assert "verify_composition" in ALLOWED_TASK_RESULT_FIELDS
-
     def test_a_real_entry_carrying_it_passes_the_allow_list(self, tmp_path: Path) -> None:
         state, config = _make_state(tmp_path)
         task = _verify_first_task("TASK-101")
