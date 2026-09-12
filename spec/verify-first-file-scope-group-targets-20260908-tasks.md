@@ -2,16 +2,16 @@
 spec_stage: tasks
 status: draft
 owner_role: stream-owner
-version: 3
+version: 4
 generated_by: fleet-agent
-generated_at: "2026-09-11T13:09:01+04:00"
+generated_at: "2026-09-12T08:40:15+04:00"
 source_prompt_version: ""
 validation: ""
 approved_by: ""
 traces_to:
 - decomposition
 upstream_hashes:
-  decomposition: 6741cccfbf6c613d00583e19ed9e9575d5334ca1
+  decomposition: 6cc1598fb874c0c9d6b7a5f39981a56bf9967257
 ---
 
 ## Milestone 1: Verify-first file-scope group targets
@@ -347,9 +347,12 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-17, BEH-24 (DT-08, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-08
+**Mode:** standard
+**TDD-waiver:** characterisation · sanction: batch-approve-2026-09-09
 **Depends on:** [TASK-003]
 
 **Checklist:**
+- [ ] TDD-waiver DT-08, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
 - [ ] реализовать BEH-17: Упавший член — настоящее падение, а не проблема инструмента
 - [ ] реализовать BEH-24: Три исхода и ветвление по ним не меняются
 - [ ] проверка группы: tests/test_verify_file_target_branching.py (kind: integration), tests/test_verify_file_target_branching.py (kind: contract) зелёные на BEH-17, BEH-24
@@ -361,9 +364,12 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-22, BEH-26 (DT-09, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-09
+**Mode:** standard
+**TDD-waiver:** characterisation · sanction: batch-approve-2026-09-09
 **Depends on:** [TASK-006]
 
 **Checklist:**
+- [ ] TDD-waiver DT-09, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
 - [ ] реализовать BEH-22: Вердикт не наследуется деревом, в котором состав мог измениться
 - [ ] реализовать BEH-26: Пред-мерж гейт задаёт тот же вопрос
 - [ ] проверка группы: tests/test_verify_file_target_gates.py (kind: integration) зелёные на BEH-22, BEH-26
@@ -392,9 +398,12 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-05 (DT-11, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-11
+**Mode:** standard
+**TDD-waiver:** characterisation · sanction: batch-approve-2026-09-09
 **Depends on:** [TASK-002], [TASK-004]
 
 **Checklist:**
+- [ ] TDD-waiver DT-11, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
 - [ ] реализовать BEH-05: Поддержка файловой цели принадлежит адаптеру, и её отсутствие объявляется по имени
 - [ ] проверка группы: tests/test_verify_file_target_adapter.py (kind: contract) зелёные на BEH-05
 
