@@ -2,9 +2,162 @@
 
 from __future__ import annotations
 
+import asyncio
+import shlex
+import subprocess
+from pathlib import PurePath
+
 import pytest
 
 from spec_runner.spec import StageDef, StageProfile
+
+#: A name that exists in no PATH, reserved for tests that must drive a seam
+#: all the way to its subprocess call. Pointing `claude_command` (or the
+#: review command) at this instead of a real CLI means the worst case of a
+#: broken belt is `FileNotFoundError`, never a bill.
+BELT_PROBE_COMMAND = "spec-runner-belt-probe"
+
+
+class PaidBinaryReached(BaseException):
+    """The belt fired: a paid agent binary was about to be executed.
+
+    Deliberately **not** an `Exception`. `execute_task` and several other
+    call paths catch `Exception` and turn it into a failed attempt, so a belt
+    raising one would be swallowed: the test would fail later, for another
+    reason, and the belt's own verdict would be lost. Nothing in the product
+    catches and *swallows* `BaseException` — the four handlers that name it
+    (`spec.py`, `obs.py`, `change_commands.py`) re-raise after cleanup.
+    """
+
+
+#: The belt's OWN list of CLI names, deliberately a literal rather than a
+#: reference to `PAID_AGENT_COMMANDS` below.
+#:
+#: A belt keyed on the constant whose guard is under test is not a belt:
+#: weakening that constant is both how the guard fails in reality and what a
+#: reviewer does to check it, so a shared list switches the guard and the belt
+#: off in the same stroke. Measured the hard way (spec-runner#455,
+#: 2026-09-12): dropping "claude" from `PAID_AGENT_COMMANDS` while the belt
+#: read that same constant executed the real agent — seven sessions across
+#: three runs, including one through the then-unguarded review seam.
+#:
+#: Kept deliberately broad, and a superset of `PAID_AGENT_COMMANDS`: an extra
+#: name here costs nothing, a missing one costs money. `test_harness_guards`
+#: pins that relationship statically, without executing anything.
+_NEVER_EXECUTE = frozenset(
+    {
+        "claude",
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "ollama",
+        "llama-cli",
+        # Listed for completeness, and unreachable by name: that branch issues
+        # `curl http://localhost:8080/completion`, so no argv element carries
+        # this basename. Harmless to keep, misleading to rely on.
+        "llama-server",
+        "qwen",
+        "copilot",
+        "gemini",
+        "aider",
+        "cursor-agent",
+        BELT_PROBE_COMMAND,
+    }
+)
+
+
+def _argv_names(argv) -> set[str]:
+    """Every basename visible in `argv`, including inside composite elements.
+
+    Reading `PurePath(part).name` per element is not enough, and the two cases
+    it misses are the ones that matter (spec-runner#459 review):
+
+    * a wrapped template (`command_template: bash -lc '{cmd} -p {prompt}'`)
+      goes through `shlex.split` in `build_cli_invocation`, so the agent name
+      ends up INSIDE one element: `["bash", "-lc", "claude -p '…'"]`. The
+      basename of that third element is the whole string;
+    * `subprocess.run("<cmd> --flag", shell=True)` passes one string.
+
+    So each element is also split as a shell word vector and every token's
+    basename is taken. An element that does not lex (an unbalanced quote in a
+    prompt, say) falls back to a plain whitespace split: a malformed element
+    must not become a way to hide a name, which is what returning the raw
+    string alone would have made it.
+
+    Lexing every element means a paid name appearing as **data** also
+    refuses: `["git", "commit", "-m", "use claude later"]` is stopped even
+    though the process is git. That is deliberate, and the trade is not
+    symmetric — a false refusal is loud, lands on the test that caused it,
+    and is fixed by rewording a fixture; a miss is silent and costs money.
+    The whole suite runs clean under this rule today, so the cost of the
+    choice is currently zero; if a legitimate fixture ever needs such a
+    string, narrow it there rather than teaching the belt to reason about
+    which element is a command and which is a message.
+
+    Not every paid path is an argv with a name in it: the llama-server branch
+    sends `["curl", "-s", "http://localhost:8080/completion", …]`, where no
+    element has an agent basename. That request is not caught here, and the
+    list below does not pretend otherwise — it is an HTTP call to a local
+    server, not the execution of a paid CLI binary.
+    """
+    parts = argv if isinstance(argv, (list, tuple)) else [argv]
+    names: set[str] = set()
+    for part in parts:
+        text = str(part)
+        names.add(PurePath(text).name)
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.split()
+        names.update(PurePath(token).name for token in tokens)
+    return names
+
+
+@pytest.fixture(autouse=True)
+def _belt_never_executes_a_paid_binary(monkeypatch):
+    """Run-wide belt: no test may execute a paid agent CLI, ever.
+
+    `_no_real_agent_calls` below guards the two *seams* by name, which is the
+    first line and the one that produces a readable message. This is the
+    second line, underneath it, at the point where a process would actually
+    be created — `subprocess.run`, `subprocess.Popen` and
+    `asyncio.create_subprocess_exec` (runner.py's streaming path). It exists
+    because the first line has failure modes of its own: a seam it does not
+    cover (the review seam had none until spec-runner#455), a test that
+    replaces the patched seam itself, or `PAID_AGENT_COMMANDS` losing a name.
+
+    Everything else passes through untouched: git, pytest, mix, fake scripts
+    under tmp_path — only a known agent name is refused.
+    """
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
+    real_exec = asyncio.create_subprocess_exec
+
+    def _refuse(argv) -> None:
+        hit = _argv_names(argv) & _NEVER_EXECUTE
+        if hit:
+            raise PaidBinaryReached(
+                f"belt: a test was about to execute a paid agent binary "
+                f"({sorted(hit)}) — argv={argv!r}. Point `claude_command` at a "
+                f"fake script under tmp_path, or stub the seam."
+            )
+
+    def _belted_run(argv, *args, **kwargs):
+        _refuse(argv)
+        return real_run(argv, *args, **kwargs)
+
+    def _belted_popen(argv, *args, **kwargs):
+        _refuse(argv)
+        return real_popen(argv, *args, **kwargs)
+
+    async def _belted_exec(program, *argv, **kwargs):
+        _refuse([program, *argv])
+        return await real_exec(program, *argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _belted_run)
+    monkeypatch.setattr(subprocess, "Popen", _belted_popen)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _belted_exec)
 
 
 @pytest.fixture
@@ -91,16 +244,19 @@ def _no_real_agent_calls(monkeypatch):
     called `claude`. Nothing was wrong with the product; the test was missing
     one `monkeypatch.setattr`, and the only signal was a minute of silence.
 
-    The guard covers TWO of the paid seams: `tdd._run_agent` for the TDD
-    red/fix passes and `execution._run_agent_process` for the standard
+    The guard covers TWO of the paid seams by name: `tdd._run_agent` for the
+    TDD red/fix passes and `execution._run_agent_process` for the standard
     execution path (#341/#334 BEH-24: the second seam that used to have no
-    guard at all). NOT yet covered: the review seam (`review._run_reviewer`,
-    also reached from `post_done_hook` with `run_review=True`) and the
-    plan/review-pr seams — a test driving those with a default
-    `claude_command` still reaches a real CLI. The guard fires only on a
-    **known agent name**: a fake script (an absolute path under `tmp_path`)
-    runs as before, and a test that stubs either seam itself replaces this
-    patch and never sees it.
+    guard at all). It still does NOT cover the review seam
+    (`review._run_reviewer`, also reached from `post_done_hook` with
+    `run_review=True`) or the plan/review-pr seams — but since
+    spec-runner#455 those are no longer unprotected: they are caught one
+    level down by `_belt_never_executes_a_paid_binary` above, at process
+    creation, which is exactly the case that seam-by-seam guarding keeps
+    missing. The guard fires only on a **known agent name**: a fake script
+    (an absolute path under `tmp_path`) runs as before, and a test that stubs
+    either seam itself replaces this patch and never sees it — the belt
+    underneath still applies.
     """
     from spec_runner import execution, tdd
 
