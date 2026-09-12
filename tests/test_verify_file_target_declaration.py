@@ -211,8 +211,20 @@ class TestMeasuredWorkspaceSampleIsDeclaredWithoutManualExpansion:
 
         # BEH-02: the sample is declared without a manual expansion step —
         # every target is judged as a file target directly, and the class as
-        # a whole is not vacuously refused.
-        assert accepted, f"nothing accepted; first refusals: {refused[:5]}"
+        # a whole is not vacuously refused. A weak `accepted` (non-empty
+        # only) would still pass if acceptance regressed to a single lucky
+        # target; the fixture's measured composition is 57 accepted / 85
+        # `not_a_regular_file` / 3 `not_discoverable`, so pin a floor well
+        # below that instead of the exact count (this repo's own tree can
+        # gain or lose a handful of matching paths over time).
+        assert len(accepted) >= 40, (
+            f"only {len(accepted)}/{len(lines)} accepted, first refusals: {refused[:5]}"
+        )
+        refusal_codes = {code for _, code, _ in refused}
+        assert len(refusal_codes) >= 2, (
+            "refusals collapsed onto a single reason "
+            f"({refusal_codes!r}); the sample is expected to exercise more than one"
+        )
         for target, code, message in refused:
             assert target in message, (
                 f"refusal for {target!r} must name the rejected value itself, "
