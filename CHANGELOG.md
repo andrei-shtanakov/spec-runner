@@ -12,6 +12,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **The reviewer of a waived task is told what to verify** (#433). A task
+  carrying an addressed TDD waiver gets a block appended to its review
+  prompt: the waiver class, the sanction, and the reviewer's obligation —
+  check that the new test has a NEGATIVE CONTROL proving it fails when the
+  property it claims to check is broken, and report `REVIEW_FAILED` if that
+  evidence is absent or does not demonstrate it.
+
+  Appended after rendering, like the frozen-files block, and for the same
+  reason: a project-owned `review.txt` replaces the built-in prompt wholesale
+  and knows only four variables, so anything written inside the built-in text
+  is invisible to exactly the projects that customise it. Ordinary `standard`
+  tasks are untouched — the block appears only for a task whose marker
+  resolves.
+
+  The obligation text is keyed on the waiver CLASS, never taken from the
+  marker's own words: a declaration names a class, it does not get to write
+  the terms it is judged by. `WAIVER_CLASSES` is now derived from
+  `WAIVER_REVIEW_OBLIGATIONS`, so a class without a stated review obligation
+  cannot be added.
+
+  This closes the gap that made "negative control is verified by review"
+  true only on paper: until now the reviewer was told nothing about the
+  waiver at all. There is still no executable gate for it (#428) — the
+  reviewer is the only check, and the block says so.
+
 - **Addressed TDD waivers for `standard` tasks** (#429). A task may carry
   `**TDD-waiver:** <class> · sanction: <id>` beside `**Mode:** standard`,
   declaring — machine-readably — that an honest baseline RED is impossible

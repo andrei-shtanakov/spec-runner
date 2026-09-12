@@ -33,7 +33,33 @@ EXECUTION_MODES = ("standard", "tdd", "verify_first")
 #: with an open one, any word the author found convincing would become a
 #: sanction, which is a guess about authority rather than authority itself.
 #: A new class is a contract change, exactly like a new execution mode.
-WAIVER_CLASSES = ("characterisation",)
+#: What the REVIEWER of a waived task must verify, per class. Kept here, one
+#: entry per class, and `WAIVER_CLASSES` is derived from it: a class without a
+#: stated review obligation is impossible by construction rather than "we
+#: forgot to add one".
+#:
+#: The text comes from the CLASS, never from the marker's free text (#433).
+#: The marker names a class and a sanction; what that class obliges is decided
+#: here. Rendering the obligation from the task's own string would let the
+#: declaration dictate the terms it is judged by.
+WAIVER_REVIEW_OBLIGATIONS: dict[str, str] = {
+    "characterisation": (
+        "This task ran under an addressed TDD waiver: it was NOT required to "
+        "show a failing baseline test first. The one guarantee that a "
+        "no-baseline test is worth anything is its NEGATIVE CONTROL — "
+        "evidence, in the diff or the task record, that the new test FAILS "
+        "when the property it claims to check is broken (e.g. the assertion "
+        "was inverted, or the code under test was temporarily reverted, and "
+        "the test went red).\n"
+        "Verify that this evidence is present and that it actually "
+        "demonstrates the test is substantive. If it is absent, or it does "
+        "not demonstrate that, report REVIEW_FAILED and say so. A test that "
+        "cannot fail is not coverage, and no gate anywhere checks this — you "
+        "are the only check."
+    ),
+}
+
+WAIVER_CLASSES = tuple(WAIVER_REVIEW_OBLIGATIONS)
 
 #: The two accepted sanction forms. Free text is refused: a sanction field
 #: that accepts any wording is decoration. Only the FORM is checked here —

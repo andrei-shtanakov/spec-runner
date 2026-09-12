@@ -140,7 +140,56 @@ def build_review_prompt(
     from .claims import ESCAPE_REVIEW, append_frozen_files
 
     body = _render_review_prompt(task, config, cli_name, test_output, lint_output, previous_error)
+    body = append_waiver_obligation(body, config, task)
     return append_frozen_files(body, config, task, escape=ESCAPE_REVIEW)
+
+
+#: Header of the waiver block, so a test can look for the section rather than
+#: for a sentence that may be rephrased.
+WAIVER_HEADER = "## Addressed TDD waiver — what you must verify"
+
+
+def append_waiver_obligation(prompt: str, config: ExecutorConfig, task: Task) -> str:
+    """Append the reviewer's waiver obligation, or return the prompt unchanged.
+
+    Appended AFTER rendering, exactly like `append_frozen_files`, and for the
+    same reason: a project `review.txt` replaces the built-in prompt whole
+    (`prompt.py`), and its own variables are only TASK_ID/TASK_NAME/
+    CHANGED_FILES/GIT_DIFF. Put this inside the built-in text and the one
+    configuration that matters here — ours, which ships a custom template —
+    would be the one that never sees it. Appending is what makes the block
+    independent of the template.
+
+    Fires only for a VALID addressed-waived task: `resolve_waiver` returns
+    None without a marker, so an ordinary `standard` task is untouched, and a
+    malformed marker raises rather than silently producing a half-block —
+    the same fail-closed reading the resolver has everywhere else.
+
+    The obligation text comes from the CLASS (`WAIVER_REVIEW_OBLIGATIONS`),
+    never from the marker's own words: the declaration names a class, it does
+    not get to write the terms it is judged by.
+
+    Why the reviewer at all: negative control is the one condition of the
+    class with no executable gate anywhere (#428). The waiver removes the
+    baseline-RED requirement, and the only thing left standing between "no
+    baseline" and "a test that cannot fail" is this reader.
+    """
+    from .config import WAIVER_REVIEW_OBLIGATIONS, ConfigError
+
+    try:
+        waiver = config.resolve_waiver(task)
+    except ConfigError:
+        # A declaration the resolver cannot read is refused where the task is
+        # executed; here we simply say nothing rather than invent terms.
+        return prompt
+    if waiver is None:
+        return prompt
+    obligation = WAIVER_REVIEW_OBLIGATIONS[waiver.node_class]
+    return (
+        f"{prompt.rstrip()}\n\n{WAIVER_HEADER}\n"
+        f"Class: {waiver.node_class}\nSanction: {waiver.sanction}\n\n"
+        f"{obligation}\n"
+    )
 
 
 def _render_review_prompt(
