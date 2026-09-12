@@ -395,7 +395,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-01], [FR-02], [FR-12]
 
 ### TASK-011: Объявленная граница адаптера: два адаптера на одном объявлении
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-05 (DT-11, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-11
@@ -404,9 +404,9 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Depends on:** [TASK-002], [TASK-004]
 
 **Checklist:**
-- [ ] TDD-waiver DT-11, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
-- [ ] реализовать BEH-05: Поддержка файловой цели принадлежит адаптеру, и её отсутствие объявляется по имени
-- [ ] проверка группы: tests/test_verify_file_target_adapter.py (kind: contract) зелёные на BEH-05
+- [x] TDD-waiver DT-11, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
+- [x] реализовать BEH-05: Поддержка файловой цели принадлежит адаптеру, и её отсутствие объявляется по имени
+- [x] проверка группы: tests/test_verify_file_target_adapter.py (kind: contract) зелёные на BEH-05
 
 **Traces to:** [FR-03]
 
