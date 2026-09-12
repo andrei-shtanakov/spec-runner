@@ -117,8 +117,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
   DONE like any other claim; these live verify replays and
   `post_done_hook`'s own full-suite test run remain intentionally
   un-deduplicated (they judge different trees, scoped differently, at
-  different times); and the selector dictionary is unchanged — node ids
-  only, a bare file target is not declarable. See
+  different times); and the selector dictionary accepts a node id or a
+  file target (the file-target contract landed in a later workstream —
+  see the referenced section for the current rules and the declared
+  asymmetry between the two). See
   `docs/architecture.md#verify-first-execution-mode-execution_mode-verify_first-367`
   for the full contract.
 
