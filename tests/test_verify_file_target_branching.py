@@ -480,11 +480,16 @@ class TestBEH17EntersTheUnmodifiedTddCycle:
 
 
 class TestBEH24ThreeOutcomesExhaustive:
-    """kind: contract — BEH-24: across the file target's whole input space
-    (BEH-12's composition table, BEH-10's refusal classes, a BEH-18-style
-    mixed composition), the observable outcome is always exactly one of
-    `green`/`test_failure`/`instrument_error` — never a fourth value — and
-    all three are actually reachable, not just individually well-typed."""
+    """kind: contract — BEH-24 over the COMPOSITION space: whatever the
+    per-member manifest looks like, the observable outcome is exactly one of
+    `green`/`test_failure`/`instrument_error`, and all three are reachable.
+
+    BEH-10's refusal classes are NOT exercised here, and saying they were
+    was wrong: a `SelectorRefusal` is raised before `_resolve_file_target_triplet`
+    is reached at all, so no row of this table can express one. They are
+    pinned where they happen — `tests/test_verify_file_target_outcomes.py`,
+    `TestBEH10FileTargetStopsBeforeAnyPaidCall`.
+    """
 
     _GREEN_PARTIAL_SKIP = FileComposition(("a", "b"), {"a": "passed", "b": "skipped"}, True)
     _TEST_FAILURE_ONE_FAILED = FileComposition(("a", "b"), {"a": "passed", "b": "failed"}, True)
@@ -536,43 +541,62 @@ class TestBEH24ThreeOutcomesExhaustive:
             VerifyOutcome.INSTRUMENT_ERROR,
         }
 
-    def test_negative_control_a_regressed_fold_moves_rows_off_their_outcome(self, monkeypatch):
-        """Negative control that mutates the FOLD, not the table.
+    def test_negative_control_the_table_discriminates_a_regressed_fold(self):
+        """Negative control: the expectations above tell a healthy fold from
+        a regressed one.
 
-        The earlier control removed green rows from this class's own `ROWS`
-        and observed that the set shrank — true whatever
-        `classify_verify_outcome` does, because it never asked the fold
-        anything. It could not have caught the regression that matters here:
-        a failure folded into `instrument_error`.
+        The previous version patched `lv.classify_verify_outcome` and then
+        called `lv.classify_verify_outcome` — i.e. it called its own patch,
+        whose first arm returned `INSTRUMENT_ERROR` before ever delegating.
+        Both of its assertions held by construction of that closure, on
+        healthy code and on regressed code alike, and it stayed green under
+        a real source mutation of the arm. A control that cannot fail is the
+        same defect as a claim that cannot fail.
 
-        So the violation is applied where the verdict is decided — the
-        `TESTS_FAILED + PROVEN` arm of the fold — and the rows must move off
-        their expected outcomes. If they do not, the table above is not
-        reading the fold at all.
+        This version patches nothing. It runs the rows through the REAL
+        function and through a regressed copy of it, and requires the two to
+        disagree — which is what "these expectations would have caught the
+        regression" means. That the production function is the one the
+        positive tests read is shown by mutating the source: with
+        `TESTS_FAILED + PROVEN` folded to `INSTRUMENT_ERROR`,
+        `test_row_lands_on_the_expected_named_outcome` reddens on both
+        test_failure rows (recorded in the commit that added this).
         """
-        import spec_runner.live_verify as lv
 
-        real = lv.classify_verify_outcome
-
-        def _regressed(run_outcome, proof, execution):
-            # The exact regression BEH-24 exists to catch: a genuine failure
-            # reported as an instrument that could not tell.
+        def _regressed_copy(run_outcome, proof, execution):
+            # The regression BEH-24 exists to catch, written out rather than
+            # injected: a genuine failure reported as an instrument that
+            # could not tell. Every other arm copies the real contract.
             if run_outcome is RunOutcome.TESTS_FAILED and proof is SelectionProof.PROVEN:
                 return VerifyOutcome.INSTRUMENT_ERROR
-            return real(run_outcome, proof, execution)
+            if (
+                run_outcome is RunOutcome.TESTS_PASSED
+                and proof is SelectionProof.PROVEN
+                and execution is ExecutionProof.EXECUTED
+            ):
+                return VerifyOutcome.GREEN
+            return VerifyOutcome.INSTRUMENT_ERROR
 
-        failing = [row for row in self.ROWS if row[2] is VerifyOutcome.TEST_FAILURE]
-        assert failing, "control setup: the table must contain a test_failure row"
-
-        monkeypatch.setattr(lv, "classify_verify_outcome", _regressed)
-        for case_id, composition, expected in failing:
-            got = lv.classify_verify_outcome(*_resolve_file_target_triplet(composition))
-            assert got is not expected, (
-                f"negative control: under a regressed fold {case_id} must stop "
-                f"landing on {expected}; it still reads {got}, so the row "
-                "assertions are not discriminating"
+        disagreements = []
+        for case_id, composition, expected in self.ROWS:
+            triplet = _resolve_file_target_triplet(composition)
+            real = classify_verify_outcome(*triplet)
+            regressed = _regressed_copy(*triplet)
+            assert real is expected, (
+                f"control setup: {case_id} must land on {expected} under the real fold, got {real}"
             )
-            assert got is VerifyOutcome.INSTRUMENT_ERROR
+            if regressed is not real:
+                disagreements.append((case_id, real, regressed))
+
+        assert disagreements, (
+            "negative control: no row distinguishes the real fold from one "
+            "that folds a genuine failure into instrument_error — the table "
+            "would pass unchanged through that regression"
+        )
+        assert all(
+            regressed is VerifyOutcome.INSTRUMENT_ERROR and real is VerifyOutcome.TEST_FAILURE
+            for _case_id, real, regressed in disagreements
+        ), f"the disagreement must be exactly the regressed arm, got {disagreements}"
 
 
 class TestBEH24FileTargetAndNodeIdBranchIdentically:
@@ -640,10 +664,17 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
         reaches through its own path.
 
         Here the only test in the group is skipped. For the FILE target that
-        is an all-skipped composition; for the NODE ID it is a selector that
-        matched but was proven not to execute. Different routes, same named
-        outcome — which is exactly what "the branch is not overridden by a
-        file target" means.
+        is an all-skipped composition — the fold's own arm, reported as
+        "was not executed (skipped, xfail, or deselected)". For the NODE ID
+        the run does not print node ids at all without `-v`, so the selection
+        is never PROVEN and the outcome comes from the UNKNOWN arm: "the run
+        did not prove which test executed". Both are genuine instrument
+        errors and neither is the other's mechanism — which is the point:
+        different routes, same named outcome, which is what "the branch is
+        not overridden by a file target" means.
+
+        (Both detail strings were read off a live run before being written
+        here, rather than inferred from the fold.)
         """
         root = _init_repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
@@ -787,9 +818,14 @@ class TestBEH18MixedGroupIsStillOneOfTheThree:
         _commit(root, "base")
         config = _cfg(root, state_file=root / ".state-mixed-red.db")
 
+        # NODE ID FIRST, deliberately: the file-first order above and this
+        # one do not share a code path. `live_verify` has a branch of its own
+        # for a node id that opens the group — the one carrying the refusal
+        # mode — and until this test nothing in the tree entered it. Two
+        # tests with the same order would have been one test twice.
         task = _task(
             id="TASK-411",
-            verifies=["tests/test_group.py", "tests/test_other.py::test_c"],
+            verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
         )
         result = run_live_verify(task, config)
         assert result.outcome is VerifyOutcome.TEST_FAILURE, (
