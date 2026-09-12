@@ -467,17 +467,37 @@ the project's full test command, after the work happens — always run,
 independent of `verify_first`. Collapsing any of these would answer one
 question with another's evidence.
 
-**Selector dictionary boundary.** The declared group's selectors are drawn
-from whatever dictionary the project's resolved runner adapter already
-accepts — for pytest, that is a node id of the form `path::test`; nothing
-else is a selector, including a bare file path. A **file target is not
-declarable today** (unlike the `checked_by target: tests/test_x.py` form
-seen upstream): a caller that wants to verify "this file's tests" must
-emit node ids, one per test, not a single file-level target. Extending the
-dictionary to file-level selectors, with proof of selection at the same
-strength (which tests in the file actually ran, not merely "exit 0"), is a
-deliberately open question left to a later workstream, not a defect of
-this one.
+**Selector dictionary — node ids and file targets.** The declared group's
+selectors are drawn from whatever dictionary the project's resolved runner
+adapter already accepts — for pytest, that is a node id of the form
+`path::test`, or a **file target**: a bare path to a project test file,
+carrying no node-id pointer. A file target is declared exactly like a node
+id, in either the inline or block `**Verifies:**` form, in the order
+written; a group may mix file targets and node ids freely (matching the
+`checked_by target: tests/test_x.py` form seen upstream one-for-one — the
+two dictionaries no longer diverge).
+
+A file target's composition — which tests are its members — resolves
+against the judged commit, read from the adapter's own reporter in the
+same run that executes them; membership is never inferred from anything
+but that run's own report. Green requires every member to be **accounted
+for**: proven executed-and-passed, or explicitly reported
+skipped/xfail/deselected by the runner with a named reason. A member the
+run says nothing about is `instrument_error`, not green — "the run
+returned 0" is never proof of anything by itself.
+
+This is a declared **asymmetry** between the two selector kinds, not a
+defect: a group made only of node ids keeps today's stricter rule
+(BEH-06) — a skipped selector is `instrument_error`, because a skip is
+not execution. A file target instead earns the accounted-for rule
+(BEH-16) — a file that is partially skipped can still be green, as long
+as every skip is named. An operator who needs per-test strictness
+declares node ids, one per test, rather than a file target.
+
+The accepted contract above was announced to the pipeline owner,
+`devtools` — whose own `checked_by target:` form motivated it — via issue
+(andrei-shtanakov/devtools#201), rather than by editing that repository's
+files directly.
 
 ## Notes
 
