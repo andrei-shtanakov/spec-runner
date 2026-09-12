@@ -344,7 +344,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-20], [FR-21], [FR-22]
 
 ### TASK-008: Ветвление на файловой цели: упавший член и три исхода
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-17, BEH-24 (DT-08, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-08
