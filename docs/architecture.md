@@ -473,26 +473,53 @@ adapter already accepts — for pytest, that is a node id of the form
 `path::test`, or a **file target**: a bare path to a project test file,
 carrying no node-id pointer. A file target is declared exactly like a node
 id, in either the inline or block `**Verifies:**` form, in the order
-written; a group may mix file targets and node ids freely (matching the
-`checked_by target: tests/test_x.py` form seen upstream one-for-one — the
-two dictionaries no longer diverge).
+written; a group may mix file targets and node ids freely.
+
+The overlap with the `checked_by target:` form seen upstream is a
+**subset**, not a correspondence. What this dictionary accepts is a bare
+path, inside the repository, to a regular file that the resolved adapter's
+own discovery would collect as tests — and only under an adapter that
+declares file-target support (pytest does; the ExUnit adapter does not, so
+the same declaration is refused by name there). Everything else an upstream
+`checked_by` may legitimately name stays outside it and is refused with its
+own code: a directory, a symlink, a path resolving outside the repository, a
+file the adapter would not collect (a prose target such as
+`docs/architecture.md` — which `validate` reports as an **error**, not a
+warning), and any form that is not a path at all (a glob, a `-k`/`-m`
+expression). A `checked_by` whose `kind:` is manual names a document by
+design, and no selector dictionary is meant to express it.
 
 A file target's composition — which tests are its members — resolves
 against the judged commit, read from the adapter's own reporter in the
 same run that executes them; membership is never inferred from anything
-but that run's own report. Green requires every member to be **accounted
-for**: proven executed-and-passed, or explicitly reported
-skipped/xfail/deselected by the runner with a named reason. A member the
-run says nothing about is `instrument_error`, not green — "the run
-returned 0" is never proof of anything by itself.
+but that run's own report. Green requires two things of that report, and
+the second is what keeps the first from degenerating:
+
+1. every member is **accounted for** — each one carries its own outcome
+   from that run, whether executed-and-passed or explicitly reported
+   skipped/xfail/deselected. A member the run says nothing about is
+   `instrument_error`, not green — "the run returned 0" is never proof of
+   anything by itself;
+2. **at least one member actually executed and passed**. A file whose every
+   member was skipped, xfailed or deselected is fully accounted for and is
+   still `instrument_error`: a project's silence about results is not read
+   as proof of health. An `xpass` does not count as an execution here
+   either.
+
+The boundary is exactly "at least one executed", and it is observable: the
+same file with one passing member is green (BEH-14/BEH-16).
 
 This is a declared **asymmetry** between the two selector kinds, not a
 defect: a group made only of node ids keeps today's stricter rule
 (BEH-06) — a skipped selector is `instrument_error`, because a skip is
 not execution. A file target instead earns the accounted-for rule
-(BEH-16) — a file that is partially skipped can still be green, as long
-as every skip is named. An operator who needs per-test strictness
-declares node ids, one per test, rather than a file target.
+(BEH-16): a **partially** skipped file can still be green, because the
+rest of it ran. What pays for the asymmetry is the composition being
+visible — every member named in the evidence with its own outcome, and
+with the runner's or the project's own reason where one was stated (a
+deselection, for instance, carries no reason, and the file is green all
+the same). An operator who needs per-test strictness declares node ids,
+one per test, rather than a file target.
 
 The accepted contract above was announced to the pipeline owner,
 `devtools` — whose own `checked_by target:` form motivated it — via issue
