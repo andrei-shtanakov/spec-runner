@@ -378,7 +378,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-15], [FR-19]
 
 ### TASK-010: Приёмка объявления снаружи: обе формы, смешанная группа, дубль, отсутствие вывода группы
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-01, BEH-02, BEH-04, BEH-18, BEH-19 (DT-10, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-10
