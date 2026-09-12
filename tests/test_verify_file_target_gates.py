@@ -21,7 +21,10 @@ All five conditions of the class, confirmed:
   mechanisms above hold for a **file target** exactly as they do for a
   node-id group (BEH-22), and that the pre-merge gate's verdict classes are
   the same for a file target as for a node-id group on the same five inputs
-  (BEH-26);
+  (BEH-26) — including BEH-26's third And-clause, which is asserted by
+  spying one real `post_done_hook` rather than left to reading: exactly one
+  pre-terminal evaluation happens, and it happens after the candidate's
+  fresh re-verify;
 - an honest baseline RED is not possible: the tree-hash axis, the re-verify
   ordering and `_verify_first_gate`'s verdict table already exist and already
   pass for a file target the same way they do for a node-id group — writing
@@ -33,10 +36,13 @@ All five conditions of the class, confirmed:
   - reuse-before-run (BEH-22, first half) — `live_verify._tree_hash` is
     monkeypatched to a constant, simulating the byte-identity axis removed,
     and a tree that gained a member is then (wrongly) reused;
-  - pre-merge gate (BEH-22, second half) — the isolated gate is evaluated
-    directly against stale evidence, *skipping* the re-verify call the real
-    pipeline always makes first, and is shown to (wrongly) accept a
-    candidate whose declared file gained a failing member;
+  - pre-merge gate (BEH-22, second half) — the fresh replay is removed
+    (`run_live_verify` hands back the entry run's own green row) and the
+    positive test's own observations invert: the candidate whose declared
+    file gained a failing member is no longer refused, and the durable row
+    keeps the stale one-member green. The intact baseline is asserted first
+    in the same test, so a re-verify that is simply gone reddens the control
+    too rather than satisfying it;
   - parity (BEH-26) — `gates._verify_first_gate` is monkeypatched to
     special-case any evidence carrying a `composition` (i.e. a file target)
     as always `SATISFIED`, and the file-target/node-id parity assertion is
@@ -229,7 +235,12 @@ class TestBEH22ReuseBeforeRunDoesNotInheritChangedComposition:
         """Mutation-kill: simulate the violated property — the byte-identity
         axis `reusable_verify_evidence` relies on is disabled — and confirm a
         tree that gained a member is then (wrongly) treated as reusable,
-        proving the refusal above is not vacuous."""
+        proving the refusal above is not vacuous.
+
+        A/B in one test, for the same reason the gate control below states:
+        the intact baseline is asserted first, so that code in which the
+        refusal is simply gone reddens this control instead of satisfying
+        its flipped half."""
         root = _repo(tmp_path)
         task = _file_task()
         cfg = _cfg(root, execution_mode="verify_first")
@@ -244,6 +255,14 @@ class TestBEH22ReuseBeforeRunDoesNotInheritChangedComposition:
         )
         _git(root, "add", "-A")
         _git(root, "commit", "-qm", "add a member")
+
+        with ExecutorState(cfg) as state:
+            baseline = reusable_verify_evidence(cfg, state, task)
+        assert baseline is None, (
+            "control baseline: with the axis intact the changed tree must "
+            "not be reusable — if this half passes vacuously, the flip "
+            "below proves nothing"
+        )
 
         # Regressed: every tree hashes the same, so byte-identity can never
         # fail the reuse decision.
@@ -345,26 +364,51 @@ class TestBEH22PreMergeGateDoesNotInheritChangedComposition:
             "the entry run's one-member snapshot"
         )
 
-    def test_negative_control_without_the_reverify_the_naked_gate_would_wrongly_accept(
-        self, tmp_path
+    def test_negative_control_a_reverify_that_trusts_the_stale_row_lets_it_through(
+        self, tmp_path, monkeypatch
     ):
-        """Mutation-kill for the gate axis: skip the re-verify call the real
-        pipeline always makes first (`_reverify_live_evidence_for_candidate`)
-        and ask `_verify_first_gate` directly about the stale green row —
-        `evidence.outcome == GREEN` and the candidate descends from it, so
-        the isolated gate is satisfied even though the declared file now
-        contains a failing member. This is exactly the silent inheritance
-        BEH-22 forbids, and it is only prevented because the real pipeline
-        never evaluates the gate without re-verifying first — proving that
-        ordering, not the gate alone, is what BEH-22 depends on."""
+        """Mutation-kill for the claim above, by the rule the class itself
+        states: break the property the positive test stands on, repeat that
+        test's OWN observations, and show they flip.
+
+        The property is that this path replays the declared group **fresh
+        against the candidate** instead of trusting a prior row. It is
+        violated here by making `run_live_verify` hand back the entry run's
+        own green result — the stale row BEH-22 forbids inheriting — while
+        the gate, the ordering and the recording all stay untouched. Both
+        observations of the positive test then invert: the refusal becomes
+        `None`, and the durable row keeps the entry run's one-member green
+        instead of the fresh failure.
+
+        Both halves run here, against one fixture, and the baseline half is
+        load-bearing: a control that only asserts the flipped observation is
+        satisfied by code in which the mechanism is simply gone (gut
+        `_reverify_live_evidence_for_candidate` to `return None` and "no
+        refusal" becomes true by itself). Measured: that mutation reddens
+        this test on the baseline assertion, beside the two positive tests.
+
+        Patched on `live_verify` rather than on `hooks`, deliberately: the
+        function imports `run_live_verify` from `.live_verify` at call time
+        (`hooks.py`), so a patch on the `hooks` namespace would bind nothing
+        and the control would pass without having mutated anything.
+
+        What is deliberately NOT asserted: the verdict of `_verify_first_gate`
+        in isolation on stale evidence. An isolated gate that accepts is
+        today's fail-open answer, not a guarantee BEH-22 rests on; asserting
+        it would pin fail-open as an invariant, so that any future hardening
+        of the gate would redden this test with a message telling the
+        maintainer to roll the hardening back.
+        """
         root = _repo(tmp_path)
         task = _file_task()
         cfg = _cfg(root, execution_mode="verify_first", auto_commit=True, run_review=False)
         registry = GateRegistry()
         register_builtin_gates(cfg, registry=registry)
+        monkeypatch.setattr(gates_mod, "REGISTRY", registry)
 
         entry = run_live_verify(task, cfg)
         assert entry.passed, entry.detail
+        assert len(entry.composition) == 1
         with ExecutorState(cfg) as state:
             assert state.record_verify_evidence(task=task, config=cfg, result=entry)
 
@@ -374,18 +418,44 @@ class TestBEH22PreMergeGateDoesNotInheritChangedComposition:
         )
         _git(root, "add", "-A")
         _git(root, "commit", "-qm", "implementation adds a failing member")
-        candidate = _head(root)
+
+        # A/B inside one test, on one fixture. First the world as it is:
+        # the property holds and the candidate is refused. Without this half
+        # the control would be satisfiable by broken code — gutting the
+        # re-verify to `return None` makes the "flipped" observation below
+        # true on its own, and the control would pass while guarding nothing.
+        baseline = hooks._reverify_live_evidence_for_candidate(task, cfg, None, "")
+        assert baseline is not None, (
+            "control baseline: with the replay intact the candidate must be "
+            "refused — if this half passes vacuously, the flip below proves "
+            "nothing"
+        )
+
+        # Then the violated property: no fresh replay — the entry run's own
+        # result is handed back as though the candidate had been re-examined.
+        monkeypatch.setattr(live_verify_module, "run_live_verify", lambda *a, **kw: entry)
+
+        blocked = hooks._reverify_live_evidence_for_candidate(task, cfg, None, "")
+
+        assert blocked is None, (
+            "negative control: with the fresh replay removed, a candidate "
+            "whose declared file gained a failing member is let through — "
+            "proving the refusal above is produced by the replay, not by "
+            "something that would have refused anyway"
+        )
+
+        from spec_runner.tdd import resolve_namespace
 
         with ExecutorState(cfg) as state:
-            outcome = evaluate_gates(
-                "tests", _ctx(state, cfg, candidate, task_id=task.id), registry=registry
-            )
-
-        assert outcome.status is GateStatus.SATISFIED, (
-            "negative control: bypassing the re-verify step and asking the "
-            "isolated gate about stale evidence wrongly accepts a candidate "
-            "whose declared file now fails — proving the real pipeline's "
-            "re-verify-before-gate ordering is what BEH-22 actually rests on"
+            stale = state.verify_evidence(resolve_namespace(cfg), task.id)
+        assert stale is not None
+        assert stale.outcome == VerifyOutcome.GREEN.value, (
+            "negative control: the recorded row is the inherited green, not "
+            "the fresh verdict the positive test observes"
+        )
+        assert len(stale.composition) == 1, (
+            "negative control: the composition stays the entry run's "
+            "one-member snapshot, blind to the member that was added"
         )
 
 
@@ -636,4 +706,48 @@ class TestBEH26PreMergeGateAsksTheSameQuestionForAFileTarget:
             "diverges from the node-id verdict on the same 'different tree' "
             "input — proving the parity assertions above would have caught "
             "exactly this class of defect"
+        )
+
+    def test_the_pre_terminal_site_stays_one_site_and_the_reverify_precedes_it(
+        self, tmp_path, monkeypatch
+    ):
+        """BEH-26's third And-clause: "гейт остаётся тем же гейтом в том же
+        месте: нового пред-терминального места оценки не появляется".
+
+        Asserted, not left to reading: one real `post_done_hook` of a
+        file-target verify_first task is run end to end with both points
+        spied, and the recorded sequence must be exactly one re-verify
+        followed by exactly one pre-terminal evaluation. A second evaluation
+        site — or a gate evaluated before the candidate got fresh evidence,
+        which is the ordering BEH-22 rests on — changes this sequence and
+        fails here.
+        """
+        calls: list[str] = []
+        root = _repo(tmp_path)
+        task = _file_task()
+        cfg = _cfg(root, execution_mode="verify_first", auto_commit=True, run_review=False)
+        registry = GateRegistry()
+        register_builtin_gates(cfg, registry=registry)
+        monkeypatch.setattr(gates_mod, "REGISTRY", registry)
+
+        real_verify = live_verify_module.run_live_verify
+        real_gates = hooks._run_pre_terminal_gates
+
+        def spy_verify(*args, **kwargs):
+            calls.append("reverify")
+            return real_verify(*args, **kwargs)
+
+        def spy_gates(*args, **kwargs):
+            calls.append("pre_terminal_gates")
+            return real_gates(*args, **kwargs)
+
+        monkeypatch.setattr(live_verify_module, "run_live_verify", spy_verify)
+        monkeypatch.setattr(hooks, "_run_pre_terminal_gates", spy_gates)
+
+        success, error, _verdict, _findings, _no_op = hooks.post_done_hook(task, cfg, True)
+
+        assert success, error
+        assert calls == ["reverify", "pre_terminal_gates"], (
+            f"the pre-terminal evaluation must happen once, and after the "
+            f"candidate's fresh re-verify — observed {calls}"
         )
