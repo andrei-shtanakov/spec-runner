@@ -344,7 +344,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-20], [FR-21], [FR-22]
 
 ### TASK-008: Ветвление на файловой цели: упавший член и три исхода
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-17, BEH-24 (DT-08, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-08
@@ -353,10 +353,10 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] TDD-waiver DT-08, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
-- [ ] реализовать BEH-17: Упавший член — настоящее падение, а не проблема инструмента
-- [ ] реализовать BEH-24: Три исхода и ветвление по ним не меняются
-- [ ] проверка группы: tests/test_verify_file_target_branching.py (kind: integration), tests/test_verify_file_target_branching.py (kind: contract) зелёные на BEH-17, BEH-24
+- [x] TDD-waiver DT-08, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
+- [x] реализовать BEH-17: Упавший член — настоящее падение, а не проблема инструмента
+- [x] реализовать BEH-24: Три исхода и ветвление по ним не меняются
+- [x] проверка группы: tests/test_verify_file_target_branching.py (kind: integration), tests/test_verify_file_target_branching.py (kind: contract) зелёные на BEH-17, BEH-24
 
 **Traces to:** [FR-11], [FR-17]
 
