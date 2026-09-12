@@ -172,9 +172,18 @@ class TestBEH17FailedMemberIsGenuineFailure:
         assert result.outcome is VerifyOutcome.GREEN
 
     def test_one_genuine_exception_among_many_is_test_failure(self, tmp_path):
-        """A fixture-setup exception — not an assertion — reports pytest's
-        own `error` outcome (distinct from `failed`) and must fold into the
-        same `test_failure` bucket."""
+        """A fixture-setup exception — not an assertion in the test body —
+        still folds into the same `test_failure` bucket. Note: pytest's own
+        `TestReport.outcome` (read verbatim by `pytest_runtest_logreport` in
+        `tdd_runners.py`) only ever takes `passed`/`failed`/`skipped` — a
+        setup-phase exception records `outcome == "failed"` too, the same
+        string a body-assertion failure records. "ERROR" is purely a
+        terminal-display label pytest's own reporter applies for non-`call`
+        phase failures; it is never the value written into the manifest.
+        The `("failed", "error")` tuple check at `live_verify.py:184` covers
+        a value this pytest adapter never actually emits — this test does
+        not exercise that `"error"` branch, only confirms a setup-phase
+        failure is read as `"failed"`, same as a body assertion."""
         root = _init_repo(tmp_path)
         (root / "tests" / "test_group.py").write_text(
             "import pytest\n\n\n"
