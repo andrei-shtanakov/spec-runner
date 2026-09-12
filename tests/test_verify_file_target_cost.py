@@ -241,6 +241,11 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         assert recorded["declaration_chars_file_target"] < recorded["declaration_chars_expanded"]
         assert recorded["file_target_elapsed_seconds"] > 0
         assert recorded["expanded_elapsed_seconds"] > 0
+        # These two fields are deterministic (derived from this file's own
+        # AST, not from wall-clock timing), so a stale or hand-edited
+        # artifact is caught here even outside --update-golden runs.
+        assert recorded["declaration_chars_file_target"] == len(file_target_line)
+        assert recorded["declaration_chars_expanded"] == len(expanded_line)
         assert (
             recorded["baseline"]["expanded_elapsed_seconds"]
             > recorded["baseline"]["file_target_elapsed_seconds"]
