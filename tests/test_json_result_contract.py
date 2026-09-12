@@ -126,6 +126,8 @@ OPTIONAL_TASK_RESULT_FIELDS = {
     "no_op",  # v2.16.0 (#97): emitted only when true
     "exit_code",
     "verify_outcome",  # #367 BEH-32: emitted only for a verify_first task
+    "verify_composition",  # #367 BEH-30/BEH-33: emitted only alongside a
+    # verify_outcome whose evidence carries a file-target composition
 }
 ALLOWED_TASK_RESULT_FIELDS = REQUIRED_TASK_RESULT_FIELDS | OPTIONAL_TASK_RESULT_FIELDS
 
