@@ -439,7 +439,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-06], [FR-09]
 
 ### TASK-014: Регрессия ветки node id
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Проверить сценарии BEH-06 (DT-14, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-14
@@ -448,8 +448,8 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Depends on:** [TASK-005], [TASK-007]
 
 **Checklist:**
-- [ ] проверить BEH-06: Группа из одних node id ведёт себя в точности как сегодня
-- [ ] проверка группы: tests/test_verify_outcomes.py (kind: contract) зелёные на BEH-06
+- [x] проверить BEH-06: Группа из одних node id ведёт себя в точности как сегодня
+- [x] проверка группы: tests/test_verify_outcomes.py (kind: contract) зелёные на BEH-06
 
 **Traces to:** [FR-04]
 
