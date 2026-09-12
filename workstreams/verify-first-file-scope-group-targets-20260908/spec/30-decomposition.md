@@ -1,6 +1,6 @@
 ---
 spec_stage: decomposition
-status: approved
+status: approval_pending
 owner_role: tech-lead
 traces_to:
 - design
@@ -8,8 +8,8 @@ traces_to:
 upstream_hashes:
   design: c26052ce6ff1688869f122ca526e23b26704e127
   acceptance: da19282bdb31a120817bf106c25a87aaecc8b3b9
-version: 3
-approved_content_hash: 1d3a303d2dee71e2ec682bfe3b94d749a5013527
+version: 4
+approved_content_hash: fcdfb89ffb5bbf4b39853a8176f23633634ef0d9
 approved_by: andrei-shtanakov
 approved_at: '2026-09-11T09:06:21Z'
 ---
