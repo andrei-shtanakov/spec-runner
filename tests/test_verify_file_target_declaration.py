@@ -24,7 +24,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
+from spec_runner.git_ops import find_changed_source_files, map_source_to_test_files
 from spec_runner.live_verify import run_live_verify
 from spec_runner.task import Task, parse_tasks
 from spec_runner.tdd_runners import PytestAdapter, Selector, SelectorRefusal, parse_group_element
@@ -221,9 +224,36 @@ class TestMeasuredWorkspaceSampleIsDeclaredWithoutManualExpansion:
             f"only {len(accepted)}/{len(lines)} accepted, first refusals: {refused[:5]}"
         )
         refusal_codes = {code for _, code, _ in refused}
-        assert len(refusal_codes) >= 2, (
-            "refusals collapsed onto a single reason "
-            f"({refusal_codes!r}); the sample is expected to exercise more than one"
+
+        # #446 finding 2: "more than one reason" used to be a bare count,
+        # and the whole of the second class rested on a single workspace
+        # file — every `not_discoverable` in this sample is
+        # `docs/architecture.md`, which DT-15 owns and may move. The day it
+        # moves, a count would fail here and name the wrong cause. So each
+        # class is asserted against what the tree can still witness.
+        #
+        # `not_a_regular_file` is structural: the sample is cross-repo, so
+        # it always carries paths that do not exist in THIS checkout.
+        assert "not_a_regular_file" in refusal_codes, (
+            f"a cross-repo sample must still contain paths absent from this "
+            f"tree; got {refusal_codes!r}"
+        )
+
+        # The second class needs a sampled path that EXISTS here and is not
+        # a test file. Missing witness is reported as a skip that names what
+        # went, never as a silent loss of the assertion.
+        present = {t for t, _, _ in refused if (root / t.split("::")[0]).is_file()}
+        if not present:
+            pytest.skip(
+                "no sampled target is a present-but-not-a-test file in this "
+                "tree any more (`docs/architecture.md` was the only such "
+                "representative, DT-15 owns it) — the second refusal class "
+                "has no witness left, so the sample can no longer exercise it"
+            )
+        codes_for_present = {code for t, code, _ in refused if t in present}
+        assert codes_for_present == {"not_discoverable"}, (
+            f"a sampled file that exists but is not a test must be refused as "
+            f"not_discoverable, got {codes_for_present!r} for {sorted(present)}"
         )
         for target, code, message in refused:
             assert target in message, (
@@ -251,8 +281,26 @@ class TestGroupIsNeverInferredForAFileTarget:
         defaults.update(overrides)
         return _task(**defaults)
 
-    def test_declared_file_target_wins_over_every_hint(self, tmp_path):
+    def _repo_with_a_diff_the_group_could_be_inferred_from(self, tmp_path: Path) -> Path:
+        """A tree in which every plausible inference has something to find.
+
+        The hints in `_decoy_task` are prose; a group guessed from them
+        would be a guess about text. But this codebase already owns a
+        *mechanical* inference — `find_changed_source_files` +
+        `map_source_to_test_files` (git_ops.py), which read changed sources
+        under `src/` and map `src/<name>.py` onto `tests/test_<name>.py`.
+        Without such a change on disk the claim below is untestable: a
+        regression that inferred the group from the diff would find no diff,
+        and these tests would pass for a reason that has nothing to do with
+        what they assert.
+
+        So the fixture carries both shapes of "changed": `src/y.py` moves in
+        a SECOND COMMIT, `src/z.py` is left UNCOMMITTED. Both map onto
+        `tests/test_y.py` and `tests/test_z.py`, and both of those fail if
+        anything ever runs them.
+        """
         root = _init_repo(tmp_path)
+        (root / "src").mkdir()
         (root / "tests" / "test_x.py").write_text("def test_a():\n    assert True\n")
         (root / "tests" / "test_y.py").write_text(
             "def test_must_not_run():\n    assert False, 'must not run'\n"
@@ -260,33 +308,47 @@ class TestGroupIsNeverInferredForAFileTarget:
         (root / "tests" / "test_z.py").write_text(
             "def test_must_not_run():\n    assert False, 'must not run'\n"
         )
+        (root / "src" / "y.py").write_text("VALUE = 1\n")
         _commit(root, "base")
+
+        (root / "src" / "y.py").write_text("VALUE = 2\n")
+        _commit(root, "second commit touching src/y.py")
+        (root / "src" / "z.py").write_text("VALUE = 3\n")
+
+        # The inference is real and reachable — asserted here so that a
+        # fixture which quietly stopped producing a mappable diff could not
+        # make the two tests below vacuous.
+        mapped = map_source_to_test_files(find_changed_source_files(root, 0.0), root)
+        assert {m.name for m in mapped} == {"test_y.py", "test_z.py"}, (
+            f"fixture must offer exactly the decoy test files to infer, got {mapped}"
+        )
+        return root
+
+    def test_declared_file_target_wins_over_every_hint(self, tmp_path):
+        root = self._repo_with_a_diff_the_group_could_be_inferred_from(tmp_path)
 
         task = self._decoy_task(verifies=["tests/test_x.py"])
         result = run_live_verify(task, _cfg(root))
 
         assert result.ran and result.passed, (
-            "only the declared file target must run; a hint-derived file "
-            f"would have failed: {result.detail}"
+            "only the declared file target must run; a hint-derived or "
+            f"diff-derived file would have failed: {result.detail}"
         )
         assert result.group_executed == ("tests/test_x.py",), (
-            "none of Traces to, the task name, the description, or the "
-            f"checklist prose may contribute a member: {result.group_executed}"
+            "none of Traces to, the task name, the description, the "
+            "checklist prose, or the changed sources may contribute a "
+            f"member: {result.group_executed}"
         )
 
     def test_no_verifies_line_is_not_guessed_from_the_same_hints(self, tmp_path):
-        root = _init_repo(tmp_path)
-        (root / "tests" / "test_x.py").write_text("def test_a():\n    assert True\n")
-        (root / "tests" / "test_y.py").write_text("def test_b():\n    assert True\n")
-        (root / "tests" / "test_z.py").write_text("def test_c():\n    assert True\n")
-        _commit(root, "base")
+        root = self._repo_with_a_diff_the_group_could_be_inferred_from(tmp_path)
 
         task = self._decoy_task(verifies=None)
         result = run_live_verify(task, _cfg(root))
 
         assert not result.ran and not result.passed, (
             "an undeclared group must refuse today, not run something "
-            f"inferred from the hints: {result.detail}"
+            f"inferred from the hints or from the diff: {result.detail}"
         )
         assert "tests/test_y.py" not in result.detail
         assert "tests/test_z.py" not in result.detail

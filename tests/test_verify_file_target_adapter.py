@@ -244,6 +244,16 @@ class TestExecutionNeverAcceptsAFileTargetSilentlyUnderTheAdapterWithoutSupport:
             "start — if this half passes vacuously, the flip below proves "
             "nothing"
         )
+        # #448 finding 2: `ran is False` alone is true of every refusal,
+        # including ones this control never arranged. A dispatcher that
+        # accepted the bare path and left `preflight` to reject it as "does
+        # not parse as Elixir" would satisfy the line above while the named
+        # static refusal — the one BEH-05 is about — was already gone. The
+        # same pin the positive test carries says which refusal happened.
+        assert "path:line" in baseline.detail, (
+            "control baseline: the refusal must be the named static one "
+            f"(the adapter has no such method), got {baseline.detail!r}"
+        )
         prepare_spy.assert_not_called()
 
         monkeypatch.setattr(

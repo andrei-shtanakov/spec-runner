@@ -683,9 +683,18 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
         )
         _commit(root, "base")
 
-        for task_id, verifies in (
-            ("TASK-401", ["tests/test_group.py"]),
-            ("TASK-402", ["tests/test_group.py::test_it"]),
+        # The third element is each kind's OWN reason, in the refusal's own
+        # words. Pinning it is what separates "both reached instrument_error"
+        # from "both reached it by the same mechanism" — and the latter would
+        # make the parity claim vacuous, since one shared cause says nothing
+        # about the file target's fold having an arm of its own.
+        for task_id, verifies, expected_reason in (
+            ("TASK-401", ["tests/test_group.py"], "was not executed"),
+            (
+                "TASK-402",
+                ["tests/test_group.py::test_it"],
+                "did not prove which test executed",
+            ),
         ):
             red_agent = MagicMock(
                 side_effect=AssertionError("BEH-24: no red authoring for an instrument error")
@@ -715,6 +724,28 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
 
                 namespace = resolve_namespace(config)
                 assert state.red_checkpoint(task.id, namespace) is None
+
+                # #441 finding 2: the outcome is read from the durable row,
+                # not only from the attempt's error code. `INFRASTRUCTURE`
+                # above is what a broken reporter, an unreadable manifest or
+                # a refused replay environment produce too, so every
+                # assertion before this line holds for instrument errors
+                # this test never arranged. The named outcome, plus each
+                # kind's own reason, is what makes the pair an observation
+                # about the two paths actually under test.
+                evidence = state.verify_evidence(namespace, task.id)
+                assert evidence is not None, (
+                    f"{task_id}: an instrument error must still leave a durable row"
+                )
+                assert evidence.outcome == VerifyOutcome.INSTRUMENT_ERROR.value, (
+                    f"{task_id}: expected the row to name instrument_error, got "
+                    f"{evidence.outcome} — {evidence.detail}"
+                )
+                assert expected_reason in evidence.detail, (
+                    f"{task_id}: expected this kind's own reason "
+                    f"({expected_reason!r}) in the recorded detail, got "
+                    f"{evidence.detail!r}"
+                )
 
     def test_negative_control_a_diverging_file_target_fold_breaks_parity(
         self, tmp_path, monkeypatch

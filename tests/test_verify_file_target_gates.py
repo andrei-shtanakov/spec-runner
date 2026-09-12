@@ -126,6 +126,14 @@ def _cfg(root: Path, **overrides) -> ExecutorConfig:
         "auto_commit": False,
         "run_review": False,
         "callback_url": "",
+        # #444 finding 1: `post_done_hook` (the BEH-26 site-and-order test
+        # below runs the real one) would otherwise inherit the default lint
+        # command and shell out to `uv run ruff check .` inside a bare temp
+        # repo — a call that judges nothing here, costs a subprocess, and
+        # can fail for reasons belonging to the fixture rather than to the
+        # behaviour under test. Same neutralisation as
+        # `test_verify_file_target_branching.py`'s own `_cfg`.
+        "lint_command": "",
     }
     defaults.update(overrides)
     cfg = ExecutorConfig(**defaults)
@@ -715,12 +723,26 @@ class TestBEH26PreMergeGateAsksTheSameQuestionForAFileTarget:
         месте: нового пред-терминального места оценки не появляется".
 
         Asserted, not left to reading: one real `post_done_hook` of a
-        file-target verify_first task is run end to end with both points
-        spied, and the recorded sequence must be exactly one re-verify
-        followed by exactly one pre-terminal evaluation. A second evaluation
-        site — or a gate evaluated before the candidate got fresh evidence,
-        which is the ordering BEH-22 rests on — changes this sequence and
-        fails here.
+        file-target verify_first task is run end to end with three points
+        spied, and the recorded sequence must be exactly one re-verify, then
+        the named helper, then exactly one evaluation at the shared seam. A
+        second evaluation site — or a gate evaluated before the candidate
+        got fresh evidence, which is the ordering BEH-22 rests on — changes
+        this sequence and fails here.
+
+        The seam (`evaluate_pre_terminal`) is spied **in addition to**
+        `_run_pre_terminal_gates`, and that is what makes the claim match
+        its wording (#444 finding 2). "No new pre-terminal evaluation site
+        appears" is a statement about evaluations, not about one helper: a
+        site that called the seam directly would bypass the helper
+        entirely and go unseen by a spy on the helper alone. Measured, not
+        assumed — adding such a site to `post_done_hook` leaves the
+        helper-only sequence untouched and reddens only this seam
+        assertion.
+
+        `hooks.evaluate_pre_terminal` rather than `gates.evaluate_pre_
+        terminal`: `hooks` binds the name at import time, so the module's
+        own binding is what its call sites resolve.
         """
         calls: list[str] = []
         root = _repo(tmp_path)
@@ -732,6 +754,7 @@ class TestBEH26PreMergeGateAsksTheSameQuestionForAFileTarget:
 
         real_verify = live_verify_module.run_live_verify
         real_gates = hooks._run_pre_terminal_gates
+        real_seam = hooks.evaluate_pre_terminal
 
         def spy_verify(*args, **kwargs):
             calls.append("reverify")
@@ -741,13 +764,19 @@ class TestBEH26PreMergeGateAsksTheSameQuestionForAFileTarget:
             calls.append("pre_terminal_gates")
             return real_gates(*args, **kwargs)
 
+        def spy_seam(*args, **kwargs):
+            calls.append("evaluate_pre_terminal")
+            return real_seam(*args, **kwargs)
+
         monkeypatch.setattr(live_verify_module, "run_live_verify", spy_verify)
         monkeypatch.setattr(hooks, "_run_pre_terminal_gates", spy_gates)
+        monkeypatch.setattr(hooks, "evaluate_pre_terminal", spy_seam)
 
         success, error, _verdict, _findings, _no_op = hooks.post_done_hook(task, cfg, True)
 
         assert success, error
-        assert calls == ["reverify", "pre_terminal_gates"], (
-            f"the pre-terminal evaluation must happen once, and after the "
+        assert calls == ["reverify", "pre_terminal_gates", "evaluate_pre_terminal"], (
+            f"the pre-terminal evaluation must happen once, at the shared "
+            f"seam, reached through the named helper, and after the "
             f"candidate's fresh re-verify — observed {calls}"
         )
