@@ -808,21 +808,36 @@ class TestBEH18MixedGroupIsStillOneOfTheThree:
         )
 
     def test_one_failing_member_of_a_mixed_group_makes_the_group_a_failure(self, tmp_path):
-        """The group is judged as a whole: a green file target does not
-        rescue a failing node id beside it."""
+        """The group is judged as a whole: a green node id does not rescue a
+        failing file target beside it.
+
+        NODE ID FIRST, and the failing member is the *file*, deliberately —
+        both halves are load-bearing:
+
+        * order: the file-first case above and this one do not share a code
+          path. When a node id opens the group, `run_live_verify` cannot use
+          it as the representative selector for `prepare_replay` (only a
+          `FileTarget` gets the reporter plugin deployed), so it scans the
+          rest of the group for the first file target. Nothing in THIS file
+          entered that scan before.
+        * which member fails: the group stops at its first failing member, so
+          a failing node id in front would end the run before the file target
+          is ever reached — and the scan's effect would be unobservable here.
+          With the node id green, execution walks on to the file target,
+          whose `-p` flag needs the plugin the scan arranged for.
+
+        Consequence, and the point of the arrangement: deleting the scan
+        turns this expectation from `test_failure` into `instrument_error`
+        (`ImportError: ... _spec_runner_verify_reporter`), so the test fails.
+        """
         root = _init_repo(tmp_path)
-        (root / "tests" / "test_group.py").write_text("def test_a():\n    assert True\n")
-        (root / "tests" / "test_other.py").write_text(
-            "def test_c():\n    assert False, 'not implemented'\n"
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert False, 'not implemented'\n"
         )
+        (root / "tests" / "test_other.py").write_text("def test_c():\n    assert True\n")
         _commit(root, "base")
         config = _cfg(root, state_file=root / ".state-mixed-red.db")
 
-        # NODE ID FIRST, deliberately: the file-first order above and this
-        # one do not share a code path. `live_verify` has a branch of its own
-        # for a node id that opens the group — the one carrying the refusal
-        # mode — and until this test nothing in the tree entered it. Two
-        # tests with the same order would have been one test twice.
         task = _task(
             id="TASK-411",
             verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
@@ -830,5 +845,40 @@ class TestBEH18MixedGroupIsStillOneOfTheThree:
         result = run_live_verify(task, config)
         assert result.outcome is VerifyOutcome.TEST_FAILURE, (
             f"a mixed group with a failing member must read test_failure, got "
+            f"{result.outcome} — {result.detail}"
+        )
+
+    def test_a_failing_node_id_alone_also_makes_the_mixed_group_a_failure(self, tmp_path):
+        """The other half of BEH-18's conjunction, and it is a separate claim.
+
+        The spec asks for the verdict to be proven "падением внутри файловой
+        цели и падением внутри node id по отдельности" — two halves, not one
+        example. The test above carries the file-target half; this one carries
+        the node-id half, with the roles swapped: the node id in front is red
+        and the file target behind it is green.
+
+        Deliberately NOT merged with the test above, even though both assert
+        `test_failure`. The group returns on its first non-green element, so
+        here the file target is never reached — which is exactly why this
+        arrangement cannot observe the `prepare_replay` fallback scan, and why
+        the other test needs its green node id. Collapsing the two would drop
+        one half of the conjunction (the state this file was in before) or
+        blind the scan (the state before that).
+        """
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_a():\n    assert True\n")
+        (root / "tests" / "test_other.py").write_text(
+            "def test_c():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed-red-node.db")
+
+        task = _task(
+            id="TASK-412",
+            verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome is VerifyOutcome.TEST_FAILURE, (
+            f"a mixed group whose node id fails must read test_failure, got "
             f"{result.outcome} — {result.detail}"
         )
