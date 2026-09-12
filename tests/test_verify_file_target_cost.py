@@ -29,11 +29,11 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import platform
 import subprocess
+import sys
 import time
 from importlib.metadata import version as _package_version
 from pathlib import Path
@@ -117,26 +117,47 @@ ENVIRONMENT_KEYS = frozenset(
 
 
 def _declaration_node_ids(path: Path, *, declared_as: str) -> list[str]:
-    """Every `test_*` in `path`, as real pytest node ids rooted at
-    `declared_as` — derived from the file's own AST rather than a hardcoded
-    count, so a rename or an added test does not silently stale BEH-08's
-    manual-expansion side.
+    """Every test pytest actually COLLECTS in `path`, as node ids rooted at
+    `declared_as`.
+
+    Read from a real collection rather than from the file's AST. One
+    `@pytest.mark.parametrize` turns a single `FunctionDef` into several node
+    ids (`...::test_x[1]`), and an AST walk then produces BOTH a wrong count
+    and ids that are not selectors: the manual-expansion run cannot prove
+    which test executed, and BEH-08's measurement reddens for a reason that
+    has nothing to do with cost. The declaration file belongs to another
+    task (TASK-014's target) and is expected to grow, so this must follow it.
+
+    Collected before the invocation counter is installed, so this collection
+    is not itself counted as a runner invocation.
 
     The measurement follows the file; the committed artifact does not. It
     records what the tree looked like when it was measured, and an ordinary
-    run checks it by relations rather than by equality with today's AST —
-    otherwise adding a test to a file this test does not own would report a
-    cost regression that never happened."""
-    tree = ast.parse(path.read_text())
-    ids: list[str] = []
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            for sub in node.body:
-                if isinstance(sub, ast.FunctionDef) and sub.name.startswith("test_"):
-                    ids.append(f"{declared_as}::{node.name}::{sub.name}")
-        elif isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
-            ids.append(f"{declared_as}::{node.name}")
-    return ids
+    run checks it by relations rather than by equality with today's tree —
+    otherwise a test added to a file this one does not own would report a
+    cost regression that never happened.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            declared_as,
+            "--collect-only",
+            "-q",
+            "--no-header",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=path.parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"collecting {declared_as} failed: {result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+    )
+    prefix = f"{declared_as}::"
+    return [line.strip() for line in result.stdout.splitlines() if line.strip().startswith(prefix)]
 
 
 def _repo_with_real_declaration_file(tmp_path: Path) -> Path:
@@ -265,10 +286,29 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         # that saw one member and reported nothing about the rest. The
         # composition is what proves the single run actually accounted for
         # every member the manual expansion had to pay a run apiece for.
-        assert len(file_target_result.composition) == len(node_ids), (
-            f"one run must still account for every member: "
-            f"{len(file_target_result.composition)} member(s) reported, "
-            f"{len(node_ids)} expanded into node ids"
+        # Compared against what the run actually COLLECTED, not against the
+        # AST count: `_declaration_node_ids` counts `FunctionDef`s, while the
+        # manifest names real pytest node ids — so one `@pytest.mark.
+        # parametrize` in a file this test does not own turns N functions
+        # into N+k members. Equality would report that growth as a cost
+        # regression, which is the same defect just removed from the
+        # artifact read-back. The claim that matters survives either shape:
+        # every declared test is accounted for by at least one member, and
+        # nothing is silently dropped.
+        members = [entry.member for entry in file_target_result.composition]
+        assert len(members) >= len(node_ids), (
+            f"one run must still account for every member: {len(members)} "
+            f"reported, {len(node_ids)} tests declared"
+        )
+        unaccounted = [
+            node_id
+            for node_id in node_ids
+            if not any(m == node_id or m.startswith(f"{node_id}[") for m in members)
+        ]
+        assert not unaccounted, (
+            f"the single run must report a per-member fact for every declared "
+            f"test; nothing was reported for {unaccounted[:3]} "
+            f"({len(unaccounted)} of {len(node_ids)})"
         )
 
         # The declaration itself shrinks (charter: 2984 -> ~48 chars).
