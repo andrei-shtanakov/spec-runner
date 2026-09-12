@@ -361,7 +361,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Traces to:** [FR-11], [FR-17]
 
 ### TASK-009: Гейт и переиспользование эвиденции на файловой цели
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-22, BEH-26 (DT-09, группа regression).
 Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decomposition.md#DT-09
