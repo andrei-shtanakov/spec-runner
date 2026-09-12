@@ -26,13 +26,43 @@ All five conditions of the class, confirmed:
   asserted by any test here);
 - every claim below carries a negative control that flips the observed
   outcome under a deliberately violated property, proving the assertion
-  actually discriminates rather than passing vacuously;
+  actually discriminates rather than passing vacuously. Per class, the
+  violated property and where it is applied:
+  - BEH-17 genuine failure — the classifier is regressed to fold a failure
+    into `instrument_error` (`classify_verify_outcome`), and a real fixture
+    whose assertion is then fixed flips to green;
+  - BEH-17 TDD cycle — the entry verdict is made `green`, which is exactly
+    what `execution.py`'s `verify_first_red` keys on, and the red-authoring
+    call and checkpoint must both disappear;
+  - BEH-24 exhaustiveness — the FOLD itself is regressed on its
+    `TESTS_FAILED + PROVEN` arm, and the table's rows must move off their
+    expected outcomes. (The earlier control removed rows from this file's own
+    table and observed the set shrink — true whatever the fold does, so it
+    could not have caught the one regression BEH-24 exists to catch.)
+  - BEH-24 parity — `_resolve_file_target_triplet`, which is the file
+    target's own fold and is not on the node-id path, is made to disagree,
+    and the two kinds must become distinguishable;
+  - BEH-18 mixed group — the two tests are each other's control: same group
+    shape, one member's assertion flipped, the group's named outcome moves
+    with it;
 - baseline commit at the start of this task: `c4fe0a28f4ecc9cb69ae53c7c634ac9c2755007a`.
 
 `tests/test_verify_branching.py` (WS-spec-runner-367's own file) is not
 touched or duplicated here: it carries that workstream's BEH-20/21/22 for a
 node-id group, and none of this workstream's BEH-17/BEH-24 is a line in it
 (DT-08's own boundary). This file owns the file-target case beside it.
+
+Scope of BEH-24 in this file, stated rather than implied: the `ROWS` table
+is a representative subset of BEH-12's composition table, not the whole of
+it. The remaining rows (plain green, `error`, `xpassed`, `deselected`,
+fail+unaccounted) and every BEH-10 refusal class are pinned by TASK-003's
+own file, `tests/test_verify_file_target_outcomes.py` (BEH-10..BEH-16), on
+the same fold this file exercises — duplicating them here would be a second
+copy of one contract, not more coverage. What was genuinely missing and is
+added here is a MIXED group (a file target and a node id in one
+declaration, BEH-18) driven through `run_live_verify`: no test ran one
+before, and `_TEST_FAILURE_MIXED` is a mixed composition of a single file,
+which is a different thing.
 
 Two kinds, per the behaviour spec's own `checked_by` lines:
 - `kind: integration` (BEH-17) — a real git/pytest replay against a fixture
@@ -55,6 +85,9 @@ from spec_runner.claims import ClaimStatus, check_claims
 from spec_runner.config import ExecutorConfig
 from spec_runner.executor import execute_task
 from spec_runner.live_verify import (
+    ExecutionProof,
+    RunOutcome,
+    SelectionProof,
     VerifyOutcome,
     _resolve_file_target_triplet,
     classify_verify_outcome,
@@ -355,6 +388,96 @@ class TestBEH17EntersTheUnmodifiedTddCycle:
             f"later legitimate edit to the same file, got {violations}"
         )
 
+    @patch("spec_runner.execution.update_task_status")
+    @patch("spec_runner.execution.log_progress")
+    @patch(
+        "spec_runner.execution.build_cli_invocation",
+        return_value=CliInvocation(["echo", "hi"], "text"),
+    )
+    @patch("spec_runner.execution.build_task_prompt", return_value="test prompt")
+    @patch(
+        "spec_runner.execution.post_done_hook",
+        return_value=(True, None, "skipped", "", False),
+    )
+    @patch("spec_runner.execution.pre_start_hook", return_value=True)
+    @patch("spec_runner.execution._run_agent_process")
+    def test_negative_control_a_green_entry_would_not_walk_the_red_cycle(
+        self,
+        mock_run,
+        mock_pre,
+        mock_post,
+        mock_prompt,
+        mock_cmd,
+        mock_log,
+        mock_status,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Negative control for the claim above, on the branch that carries it.
+
+        The assertions above (`red_calls`, a confirmed checkpoint, a released
+        claim) say "a file target read as `test_failure` walks the ordinary
+        cycle". They would be vacuous if the same observations appeared for
+        any outcome. So the property is violated exactly where the code
+        decides it — `execution.py`'s `verify_first_red`, which is true only
+        for `VerifyOutcome.TEST_FAILURE` — by making the entry run classify
+        the very same failing composition as `green`.
+
+        Under the violation every observation must flip: no red-authoring
+        call, no checkpoint, no claim. That is what proves the assertions
+        discriminate rather than describing whatever happened to occur.
+        """
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\n"
+            "def test_b():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+
+        mock_run.return_value = MagicMock(stdout="output TASK_COMPLETE", stderr="", returncode=0)
+
+        red_calls: list[str] = []
+
+        def _fake_red_agent_recording(config, prompt, **kwargs):
+            red_calls.append("red_authoring")
+            return _fake_red_agent(config, prompt, **kwargs)
+
+        monkeypatch.setattr(tdd, "_run_agent", _fake_red_agent_recording)
+        # The violated property: the same failing composition now folds to
+        # `green`, so `verify_first_red` is false and the red branch is not
+        # entered at all.
+        monkeypatch.setattr(
+            live_verify_module,
+            "classify_verify_outcome",
+            lambda *a, **k: VerifyOutcome.GREEN,
+        )
+
+        task = _task(id="TASK-190", verifies=["tests/test_group.py"])
+        config = _cfg(root, state_file=root / ".state-control.db")
+        with ExecutorState(config) as state:
+            execute_task(task, config, state)
+
+            namespace = resolve_namespace(config)
+            evidence = state.verify_evidence(namespace, task.id)
+            assert evidence is not None and evidence.outcome == "green", (
+                "control setup: the violated property must actually change the "
+                "entry verdict, or the control proves nothing"
+            )
+            assert red_calls == [], (
+                "negative control: with the outcome flipped to green there is "
+                "no red-authoring call — so the claim above was reading the "
+                "test_failure branch, not something true regardless"
+            )
+            assert state.red_checkpoint(task.id, namespace) is None, (
+                "negative control: no confirmed red is recorded when the entry verdict is green"
+            )
+            # Claims are deliberately NOT asserted empty here, and the
+            # control found the reason: a green entry freezes its declared
+            # group before the paid call (#367 BEH-26/FR-19), so claims exist
+            # on both sides and do not discriminate between the branches. The
+            # two observations that do — the red-authoring call and the
+            # checkpoint — are the ones asserted above.
+
 
 class TestBEH24ThreeOutcomesExhaustive:
     """kind: contract — BEH-24: across the file target's whole input space
@@ -402,15 +525,6 @@ class TestBEH24ThreeOutcomesExhaustive:
         outcome = classify_verify_outcome(*_resolve_file_target_triplet(composition))
         assert outcome is expected
 
-    def test_every_row_is_one_of_exactly_three_named_outcomes(self):
-        for _case_id, composition, _expected in self.ROWS:
-            outcome = classify_verify_outcome(*_resolve_file_target_triplet(composition))
-            assert outcome in (
-                VerifyOutcome.GREEN,
-                VerifyOutcome.TEST_FAILURE,
-                VerifyOutcome.INSTRUMENT_ERROR,
-            )
-
     def test_all_three_outcomes_are_actually_reachable(self):
         seen = {
             classify_verify_outcome(*_resolve_file_target_triplet(composition))
@@ -422,20 +536,43 @@ class TestBEH24ThreeOutcomesExhaustive:
             VerifyOutcome.INSTRUMENT_ERROR,
         }
 
-    def test_negative_control_dropping_an_outcome_class_breaks_the_exhaustiveness_claim(self):
-        """Negative control: the previous claim is not vacuously true — drop
-        every row of one named outcome and the "all three reachable" claim
-        must fail, proving the check actually counts distinct outcomes."""
-        reduced = [row for row in self.ROWS if row[2] is not VerifyOutcome.GREEN]
-        seen = {
-            classify_verify_outcome(*_resolve_file_target_triplet(composition))
-            for _, composition, _expected in reduced
-        }
-        assert seen != {
-            VerifyOutcome.GREEN,
-            VerifyOutcome.TEST_FAILURE,
-            VerifyOutcome.INSTRUMENT_ERROR,
-        }, "negative control: removing every green row must break the all-three-outcomes claim"
+    def test_negative_control_a_regressed_fold_moves_rows_off_their_outcome(self, monkeypatch):
+        """Negative control that mutates the FOLD, not the table.
+
+        The earlier control removed green rows from this class's own `ROWS`
+        and observed that the set shrank — true whatever
+        `classify_verify_outcome` does, because it never asked the fold
+        anything. It could not have caught the regression that matters here:
+        a failure folded into `instrument_error`.
+
+        So the violation is applied where the verdict is decided — the
+        `TESTS_FAILED + PROVEN` arm of the fold — and the rows must move off
+        their expected outcomes. If they do not, the table above is not
+        reading the fold at all.
+        """
+        import spec_runner.live_verify as lv
+
+        real = lv.classify_verify_outcome
+
+        def _regressed(run_outcome, proof, execution):
+            # The exact regression BEH-24 exists to catch: a genuine failure
+            # reported as an instrument that could not tell.
+            if run_outcome is RunOutcome.TESTS_FAILED and proof is SelectionProof.PROVEN:
+                return VerifyOutcome.INSTRUMENT_ERROR
+            return real(run_outcome, proof, execution)
+
+        failing = [row for row in self.ROWS if row[2] is VerifyOutcome.TEST_FAILURE]
+        assert failing, "control setup: the table must contain a test_failure row"
+
+        monkeypatch.setattr(lv, "classify_verify_outcome", _regressed)
+        for case_id, composition, expected in failing:
+            got = lv.classify_verify_outcome(*_resolve_file_target_triplet(composition))
+            assert got is not expected, (
+                f"negative control: under a regressed fold {case_id} must stop "
+                f"landing on {expected}; it still reads {got}, so the row "
+                "assertions are not discriminating"
+            )
+            assert got is VerifyOutcome.INSTRUMENT_ERROR
 
 
 class TestBEH24FileTargetAndNodeIdBranchIdentically:
@@ -493,8 +630,26 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
     def test_instrument_error_stops_fail_closed_identically_for_both_target_kinds(
         self, tmp_path, monkeypatch
     ):
+        """Instrument error driven by the GROUP, not by a composite command.
+
+        The earlier version used `test_command "… && echo done"`, which
+        `run_live_verify` rejects before it resolves an adapter or reads
+        `**Verifies:**` at all: both iterations then walked byte-identical
+        code and the loop compared a file target with a node id without ever
+        looking at either. The parity claim needs a cause that each kind
+        reaches through its own path.
+
+        Here the only test in the group is skipped. For the FILE target that
+        is an all-skipped composition; for the NODE ID it is a selector that
+        matched but was proven not to execute. Different routes, same named
+        outcome — which is exactly what "the branch is not overridden by a
+        file target" means.
+        """
         root = _init_repo(tmp_path)
-        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        (root / "tests" / "test_group.py").write_text(
+            "import pytest\n\n\n@pytest.mark.skip(reason='nothing executes here')\n"
+            "def test_it():\n    assert True\n"
+        )
         _commit(root, "base")
 
         for task_id, verifies in (
@@ -507,11 +662,7 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
             monkeypatch.setattr(tdd, "_run_agent", red_agent)
 
             task = _task(id=task_id, verifies=verifies)
-            config = _cfg(
-                root,
-                state_file=root / f".state-{task_id}.db",
-                test_command="python -m pytest tests/ && echo done",
-            )
+            config = _cfg(root, state_file=root / f".state-{task_id}.db")
 
             with (
                 patch("spec_runner.execution.update_task_status"),
@@ -533,3 +684,115 @@ class TestBEH24FileTargetAndNodeIdBranchIdentically:
 
                 namespace = resolve_namespace(config)
                 assert state.red_checkpoint(task.id, namespace) is None
+
+    def test_negative_control_a_diverging_file_target_fold_breaks_parity(
+        self, tmp_path, monkeypatch
+    ):
+        """Negative control for the parity claim itself.
+
+        The two tests above say "same outcome, same behaviour, whichever
+        kind of target". That is only meaningful if a DIVERGENCE would be
+        seen. So the file-target fold is made to disagree with the node-id
+        path on the very same fixture — a green group reads as
+        `test_failure` for the file target only — and the two kinds must
+        then be distinguishable through `run_live_verify`.
+
+        Patched at `_resolve_file_target_triplet`, which is the file
+        target's own fold and is not on the node-id path at all: a
+        divergence introduced anywhere else would change both kinds and
+        prove nothing.
+        """
+        import spec_runner.live_verify as lv
+
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_it():\n    assert True\n")
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-parity-control.db")
+
+        def _run(verifies):
+            task = _task(id="TASK-403", verifies=verifies)
+            return lv.run_live_verify(task, config).outcome
+
+        # Unmodified: both kinds agree, which is the claim under test.
+        assert _run(["tests/test_group.py"]) is VerifyOutcome.GREEN
+        assert _run(["tests/test_group.py::test_it"]) is VerifyOutcome.GREEN
+
+        monkeypatch.setattr(
+            lv,
+            "_resolve_file_target_triplet",
+            lambda composition: (
+                RunOutcome.TESTS_FAILED,
+                SelectionProof.PROVEN,
+                ExecutionProof.EXECUTED,
+            ),
+        )
+
+        file_kind = _run(["tests/test_group.py"])
+        node_kind = _run(["tests/test_group.py::test_it"])
+        assert file_kind is VerifyOutcome.TEST_FAILURE, (
+            "control setup: the violated property must actually move the file target's verdict"
+        )
+        assert node_kind is VerifyOutcome.GREEN, (
+            "the node-id path must be untouched by the file target's fold — "
+            "otherwise the control changed both sides and proves nothing"
+        )
+        assert file_kind is not node_kind, (
+            "negative control: a divergence between the two kinds is "
+            "observable, so the parity assertions above are not vacuous"
+        )
+
+
+class TestBEH18MixedGroupIsStillOneOfTheThree:
+    """kind: contract — BEH-18's shape inside BEH-24's claim.
+
+    A declaration may mix a file target and a node id in ONE group. Until
+    now no test ran such a group through `run_live_verify` at all — the
+    class-level `_TEST_FAILURE_MIXED` is a mixed *composition* of one file,
+    which is a different thing. The outcome space must be the same three
+    for a mixed group too, and the group must be judged as a whole.
+    """
+
+    def test_a_mixed_group_of_a_file_and_a_node_id_folds_to_one_named_outcome(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n"
+        )
+        (root / "tests" / "test_other.py").write_text("def test_c():\n    assert True\n")
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed.db")
+
+        task = _task(
+            id="TASK-410",
+            verifies=["tests/test_group.py", "tests/test_other.py::test_c"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome in (
+            VerifyOutcome.GREEN,
+            VerifyOutcome.TEST_FAILURE,
+            VerifyOutcome.INSTRUMENT_ERROR,
+        )
+        assert result.outcome is VerifyOutcome.GREEN, (
+            f"a mixed group whose every member passes must read green, got "
+            f"{result.outcome} — {result.detail}"
+        )
+
+    def test_one_failing_member_of_a_mixed_group_makes_the_group_a_failure(self, tmp_path):
+        """The group is judged as a whole: a green file target does not
+        rescue a failing node id beside it."""
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_a():\n    assert True\n")
+        (root / "tests" / "test_other.py").write_text(
+            "def test_c():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed-red.db")
+
+        task = _task(
+            id="TASK-411",
+            verifies=["tests/test_group.py", "tests/test_other.py::test_c"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome is VerifyOutcome.TEST_FAILURE, (
+            f"a mixed group with a failing member must read test_failure, got "
+            f"{result.outcome} — {result.detail}"
+        )

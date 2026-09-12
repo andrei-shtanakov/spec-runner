@@ -355,7 +355,7 @@ Source: workstreams/verify-first-file-scope-group-targets-20260908/spec/30-decom
 **Checklist:**
 - [x] TDD-waiver DT-08, класс characterisation (санкция batch-approve-2026-09-09) — подтвердить ВСЕ условия класса: поведение уже доставлено зависимостями задачи; задача добавляет отсутствующее characterisation/acceptance-покрытие; честный baseline RED невозможен; новый тест имеет negative control, доказывающий, что он краснеет при нарушении свойства; baseline-sha зафиксирован фактический на старте задачи
 - [x] реализовать BEH-17: Упавший член — настоящее падение, а не проблема инструмента
-- [x] реализовать BEH-24: Три исхода и ветвление по ним не меняются
+- [x] реализовать BEH-24: Три исхода и ветвление по ним не меняются — объём назван явно: таблица `ROWS` этого файла есть представительное подмножество таблицы BEH-12, а не вся она; остальные строки (plain green, `error`, `xpassed`, `deselected`, fail+unaccounted) и классы отказа BEH-10 запинованы файлом TASK-003 (`tests/test_verify_file_target_outcomes.py`, BEH-10..BEH-16) на той же свёртке, и дублировать их здесь значило бы завести вторую копию одного контракта. Смешанная группа BEH-18 (файловая цель и node id в одном объявлении) добавлена здесь — до этой правки её не прогонял ни один тест
 - [x] проверка группы: tests/test_verify_file_target_branching.py (kind: integration), tests/test_verify_file_target_branching.py (kind: contract) зелёные на BEH-17, BEH-24
 
 **Traces to:** [FR-11], [FR-17]
