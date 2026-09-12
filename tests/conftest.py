@@ -85,6 +85,16 @@ def _argv_names(argv) -> set[str]:
     must not become a way to hide a name, which is what returning the raw
     string alone would have made it.
 
+    Lexing every element means a paid name appearing as **data** also
+    refuses: `["git", "commit", "-m", "use claude later"]` is stopped even
+    though the process is git. That is deliberate, and the trade is not
+    symmetric — a false refusal is loud, lands on the test that caused it,
+    and is fixed by rewording a fixture; a miss is silent and costs money.
+    The whole suite runs clean under this rule today, so the cost of the
+    choice is currently zero; if a legitimate fixture ever needs such a
+    string, narrow it there rather than teaching the belt to reason about
+    which element is a command and which is a message.
+
     Not every paid path is an argv with a name in it: the llama-server branch
     sends `["curl", "-s", "http://localhost:8080/completion", …]`, where no
     element has an agent basename. That request is not caught here, and the

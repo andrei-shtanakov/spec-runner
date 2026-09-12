@@ -366,3 +366,42 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
             subprocess.run(f"{BELT_PROBE_COMMAND} --version", shell=True, capture_output=True)
 
         assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_the_plan_seam_is_belted_through_its_captured_default(self, monkeypatch):
+        """The plan seam captures `subprocess.run` at import time — and is
+        still belted, one level further down.
+
+        `cli_plan._generate_stage_draft` and `run_gated_stage` take
+        `invoke=subprocess.run` as a **default argument**, bound when the
+        module was imported. Patching the `subprocess.run` attribute cannot
+        reach that binding: the default holds the original function object,
+        so a reader can reasonably conclude this seam escapes the belt.
+
+        It does not, and the reason is worth pinning rather than
+        rediscovering: CPython's `subprocess.run` creates the child through
+        `Popen`, looked up as a module global at call time — and the belt
+        patches `Popen` too. So the captured `run` walks into the belt on its
+        way to spawning anything.
+
+        This test holds that chain in place. Delete the `Popen` line from the
+        belt and this test goes red while the seams that go through the
+        patched `run` attribute stay green — which is exactly the coverage
+        that would otherwise be lost silently.
+        """
+        self._unguarded(monkeypatch)
+        from spec_runner import cli_plan
+
+        captured = cli_plan.run_gated_stage.__defaults__[-1]
+        assert captured is not subprocess.run, (
+            "the premise of this test is that the default is the ORIGINAL "
+            "`subprocess.run`, captured before the attribute was patched"
+        )
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            captured([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+        captured_draft = cli_plan._generate_stage_draft.__defaults__[-1]
+        with pytest.raises(PaidBinaryReached):
+            captured_draft([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)
