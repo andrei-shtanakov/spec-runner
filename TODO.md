@@ -717,6 +717,41 @@ evidence-плагин видел две базы и справедливо от�
       `tests/test_verify_cli.py`, `tests/test_tui.py`, `tests/test_mcp.py`,
       `tests/test_sync_cmd.py`.
 
+**Принято 2026-09-13: #478** (inbox, from devtools) — инвентаризация локального
+runtime-state по инварианту конвейера «нужное для продолжения/аудита не живёт
+только на машине оператора».
+
+- [x] **executor-state-inventory** (spec-runner#478, from devtools) @owner:github:andrei-shtanakov @id:executor-state-inventory
+      `docs/architecture.md` теперь классифицирует managed specs, SQLite/WAL,
+      claims/checkpoints/evidence/authority rows, review-loop state, prompt и
+      process logs, task history, audit/OTel, Git refs/stashes и временные
+      маркеры. Для каждого объекта зафиксированы восстановимость и решение по
+      доставке. Принято два разных артефакта: приватный консистентный SQLite
+      checkpoint вместе с Git/WIP payload для продолжения и immutable
+      санитизированный bundle для аудита каждого paid call/task attempt/run
+      closure, включая planning и failed/blocked пути. Для SQLite degraded
+      mode требуется независимый durable emergency spool; без подтверждения
+      DB или spool продолжение fail-closed. Manifest также несёт effective TDD
+      namespace: fallback зависит от абсолютного `project_root`, поэтому
+      перенос обязан применить сохранённое значение или остановиться до paid
+      call/claims gate. Один глобально уникальный `run_id` связывает OTel,
+      audit, calls и closure; durable call-start подтверждается до траты, а
+      run-closure пишется на каждом orderly exit, включая ранние отказы без
+      task/attempt.
+- [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export
+      Реализовать принятый механизм. До него инвариант не выполнен: `tasks.md`
+      восстанавливает очередь, но не claims, authority decisions, стоимость и
+      результаты неуспешных вызовов; planning вообще не имеет task-attempt
+      ledger, а success-only `post_review` оба разрыва не закрывает.
+- [ ] **mcp-stop-shared-marker** (spec-runner#481) @owner:TBD @id:mcp-stop-shared-marker
+      Найдено инвентаризацией: MCP пишет DB-derived `.executor-state.stop`, а
+      исполнитель читает `config.stop_file` (`.executor-stop`), поэтому ответ
+      `stop_requested` не означает, что run остановится. Исправить отдельным
+      кодовым PR с интеграционным тестом через `check_stop_requested`.
+- [ ] **otel-default-dir-pipeline-id** (spec-runner#482) @owner:TBD @id:otel-default-dir-pipeline-id
+      Default OTel path генерирует ULID каталога отдельно от embedded
+      `pipeline_id`; унифицировать identity и покрыть путь без обеих env-vars.
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),

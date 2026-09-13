@@ -12,6 +12,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Runtime-state delivery policy is now explicit** (#478). The architecture
+  inventories every local executor artifact by continuation/evidence/temporary
+  class and recoverability. It records the required split between a private,
+  SQLite-consistent continuation checkpoint and immutable, redacted evidence
+  protocol for every paid call, task attempt, and orderly run closure —
+  including planning, early refusal, failed, and blocked paths, which the
+  success-only `post_review` hook cannot cover. Paid calls require a durable
+  start record before launch, so a crash cannot make an already-spent call
+  look safe to repeat.
+
 - **Plugin hooks receive the active state namespace** (#339). Every hook now
   gets `SR_SPEC_PREFIX` and the resolved absolute `SR_STATE_DB` path, so a
   blocking plugin can select this run's state deterministically even when

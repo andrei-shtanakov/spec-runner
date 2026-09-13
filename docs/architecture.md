@@ -226,6 +226,125 @@ flowchart LR
     class mem degraded
 ```
 
+### Runtime-state inventory and delivery policy (#478)
+
+The task file and the executor database answer different questions. The
+versioned `tasks.md` is the durable queue: it says what is currently TODO,
+running, blocked, under review, or done. It does **not** prove how a task got
+there, what was paid for, what a gate observed, or which operator decision
+made a retry legal. Those facts live in runtime state and must not be treated
+as reproducible merely because the final source tree is in Git.
+
+In this table, **continuation** means state needed to resume without silently
+repeating work or losing an active constraint; **evidence** means state needed
+to audit or reproduce a decision; **temporary** means coordination state whose
+loss must not change either answer. “Recoverable” asks whether a fresh machine
+can reconstruct the object from the repository and forge alone today.
+
+| Object | Location / namespace | Class | Recoverable today? | Delivery decision |
+|---|---|---|---|---|
+| Managed specs and task status | `spec/{tasks,requirements,design}.md`; `spec/<prefix>-*.md`; `spec/changes/<id>/` | continuation + product input | Yes, when committed and pushed | Keep in Git. This is the queue baseline, but never a substitute for the attempt ledger. |
+| Executor database, including task/attempt rows and metadata | `spec/.executor-state.db`; `spec/.executor-<prefix>state.db`; `spec/changes/<id>/.executor-state.db` | continuation + evidence | **No.** Status can be approximated from `tasks.md`; attempt text, timing, cost, stop cause, and counters cannot. | Never commit the live DB. Take a consistent SQLite backup as a private continuation checkpoint after every continuation-relevant mutation. Treat `-wal`/`-shm` as part of the live storage unit, not as independent artifacts. |
+| RED checkpoints, verify-first evidence, lifecycle phases, gate verdicts, waivers, remedies, budget authorizations, and claims | Tables inside the executor DB | continuation + evidence | **No.** Git contains referenced commits and blobs, but not the fact that the harness or an operator accepted, refused, froze, retired, or authorized them. | Include a logical, append-only export in every evidence bundle. Preserve namespace, task, attempt, policy/config hash, actor, reason, referenced SHA/blob, timestamp, and supersession status. Restore continuation from the private DB checkpoint, not by guessing rows from Git. |
+| PR-review loop state | `pr_review_comments`, `pr_review_rounds`, and `pr_agent_calls` in the same DB | continuation + evidence | Partly: forge comments remain, but verification verdicts, processed state, limits, and agent cost do not. | Carry it in the same checkpoint and logical export as executor state; do not start a second state domain. |
+| Paid-call prompt and result logs; TUI/run/watch/plan logs | `spec/.executor-logs/`, prefixed or per-change equivalent | evidence | **No.** A prompt can usually be regenerated only approximately; failed/partial output and timeout/not-started distinctions cannot. Planning calls have no task/attempt ledger identity today. | Attach bounded, redacted logs to a private call-evidence record, including failed and blocked calls. Record a digest and relative name in the manifest. Do not rely on `post_review`: that hook runs only on a task's successful completion path and does not cover planning. |
+| Task change history | `spec/.task-history.log`; `spec/.<prefix>task-history.log`; per-change equivalent | evidence / operator convenience | Partly. Git reconstructs status text changes, but not all local timestamps or invocations. | Keep local by default; include it in the evidence bundle when present. It is corroborating history, not the authority for current status. |
+| Compliance audit trail | configured `audit_log_path` (disabled by default) | evidence | **No** when the configured path is machine-local. | On regulated runs, point it at an orchestrator-managed durable volume or upload it with the evidence bundle. It is access-controlled evidence, not a repository file. |
+| OTel JSONL | `$ORCHESTRA_LOG_DIR/<project>-<pid>.jsonl`, otherwise `logs/<generated-log-dir-id>/...`; that generated id currently differs from the embedded `pipeline_id` (#482) | evidence / diagnostics | **No** without a collector or artifact upload. | Prefer an external telemetry collector; otherwise upload the actual run directory as a private diagnostic attachment and record both its path and embedded pipeline id. It complements, but does not replace, the evidence manifest. |
+| Progress file | `spec/.executor-progress.txt` | temporary diagnostics | No, but its facts should also appear in structured logs/state | Do not deliver as authority. It may be included for troubleshooting, but restoration must not depend on it. |
+| Run lock, spec mutation lock, and stop markers | state-path `.lock`, `.<prefix>spec.lock`, `.executor-stop`; MCP currently writes the unconsumed DB-derived `*.stop` (#481) | temporary coordination | Intentionally recreated | Never deliver or restore. A restored stale lock/stop marker would change behaviour without representing live ownership. The MCP writer must converge on `config.stop_file`, the executor's one consumed path. |
+| Harness-managed runtime ignore file | `spec/.gitignore` entries `.executor-*`, `.*task-history.log`, `.*spec.lock` | temporary safety configuration | Yes; recreated before task execution | Do not treat it as evidence. Keep it untracked unless the project already owns a tracked copy. |
+| Replay worktrees and reporter manifests | OS temp dirs such as `spec-runner-red-*`, `spec-runner-verify-*`, `spec-runner-claim-*`, and `composition-*.jsonl` | temporary instrumentation | Intentionally recreated; conclusions are folded into DB rows | Never deliver. Cleanup is safe once the corresponding checkpoint/evidence row and logs have been persisted. |
+| Task branch, commits, dirty work, and rescue stash | local Git refs/index/worktree; `spec-runner rescue: ...` stash | product result + continuation | Pushed commits are; local commits, dirty bytes, and stashes are **not** | Push authoritative task commits/refs before declaring them durable. A runner-created rescue stash is a local safety net, not delivery; continuation infrastructure must publish an access-controlled WIP ref or artifact before moving machines. |
+| Legacy pre-2.0 state | `.executor-state.json`, renamed to `.executor-state.json.bak` after migration | continuation + migration evidence | No, unless separately copied | Once a consistent DB checkpoint and its manifest exist, retain the legacy backup only for the migration retention window; do not establish it as a second live state domain. |
+
+#### Required delivery mechanism
+
+The inventory implies two artifacts with different trust and retention needs:
+
+1. A **continuation checkpoint** is a private, access-controlled, consistent
+   SQLite backup plus the Git material needed to reopen it. Naming
+   repository/ref/HEAD is insufficient: the named commit must be reachable
+   from a published ref, and local-only commits, dirty work, untracked files,
+   and runner-created rescue stashes must travel as an encrypted WIP artifact
+   or published access-controlled ref. The checkpoint is refreshed after
+   every committed continuation-relevant mutation — in particular attempts,
+   checkpoints/claims/verify evidence, and operator authority mutations
+   (`waive`, remedy, budget authorization). Copying the live `.db` while WAL
+   pages are outstanding is not a checkpoint; use SQLite's backup mechanism
+   or an equivalent transactionally consistent snapshot.
+2. An **evidence bundle** is immutable and rooted at `run_id`. Every paid
+   subprocess gets a `call_id`, stage/provenance, and optional task/attempt
+   identity, so `plan --full` and gated planning calls are covered even though
+   they do not create task attempts today. A terminal task attempt adds its
+   logical append-only rows and references its call records; failure, blocked,
+   and infrastructure-error paths are emitted just like successful review.
+   Each record carries bounded/redacted prompt-result logs and SHA-256 digests.
+   Every orderly terminal path produces a separate immutable run-closure
+   record keyed by `run_id`, with status, reason, and latest acknowledged
+   checkpoint/bundle ids. This includes completed/no-ready, validation
+   failure, budget or policy refusal, session timeout, infrastructure error,
+   and operator stop, including paths with no task/attempt. An acknowledged
+   run-start with no closure means crash or unknown termination; it must never
+   be interpreted as an empty successful run.
+
+`run_id` is one full UUIDv4, created exactly once per
+spec-runner invocation and passed unchanged to structlog/OTel, the compliance
+`AuditLogger`, call records, checkpoint manifests, and run closure. It is not
+the current shortened CLI display id and not the independently generated audit
+UUID. `pipeline_id` remains a separate parent correlation id that may group
+several invocations; every event records both when a pipeline exists.
+
+Evidence publication is an append-only protocol, not one upload after the
+work. A durable run-start is acknowledged first. Before each paid subprocess,
+the artifact service must acknowledge a call-start/intention record containing
+`run_id`, `call_id`, stage/provenance, optional task/attempt, policy identity,
+and the redacted prompt or its digest. Only then may the process launch. Its
+terminal call-result is a separate record, so an open call-start after machine
+loss truthfully means “may have run and may have cost money”; restore must not
+silently repeat it. Failure to acknowledge call-start is a fail-closed refusal
+before spend. `call_id` is also a full UUIDv4 and is unique within and across
+runs.
+
+The checkpoint manifest must record the run's **effective TDD namespace** and
+whether it was declared or computed. The computed fallback hashes the absolute
+`project_root`, so merely reopening the same DB under a different checkout
+path selects a different namespace and makes old checkpoints and active claims
+invisible. A portable run therefore either declares a stable `tdd_namespace`,
+or its restore operation explicitly reapplies the recorded effective value.
+Before any paid call or claims gate, restore must fail closed when the active
+namespace differs from the checkpoint; silently starting an empty namespace
+would repeat work and drop frozen-file constraints.
+
+Both belong in an orchestrator artifact store (or an equivalent private CI
+artifact service), with retention and access policy set by the operator. They
+must not be committed automatically: attempt output may contain credentials,
+private source, or provider responses, and the live database is deliberately
+excluded from task commits. The existing `post_review` plugin remains the
+right extension point for a project that wants a *selected, project-owned*
+proof committed with successful work; it cannot be the general exporter
+because unsuccessful attempts and planning calls never reach that hook.
+
+SQLite degraded mode needs a separate write path. A mutation that failed to
+commit to SQLite exists only in process memory and therefore cannot be
+recovered from a database backup or logical query. The exporter must write the
+mutation payload and its ordering/join keys to a durable emergency spool that
+does not depend on the failed database, then include that spool in the next
+checkpoint and evidence bundle. If neither SQLite nor the spool acknowledges
+the mutation, the executor must stop at the current safe boundary: continuing
+would claim resumability while losing the attempt or authority fact that makes
+the next step safe.
+
+Until the exporter in #480 exists, the invariant is **not satisfied** for a
+run whose only copy is on the operator machine. The operational minimum is to
+preserve the state DB with a SQLite-aware backup, the matching log directory,
+and every Git object/WIP payload needed by the active ref/HEAD together. A run
+that entered degraded mode additionally needs its in-memory mutation journal;
+without the future emergency spool there is no crash-safe manual substitute,
+so it must not be represented as fully checkpointed. Copying only `tasks.md`,
+only the DB file, only ref names, or only the logs loses a required join key,
+unpublished object, or uncheckpointed WAL page.
+
 ## TDD checkpoint machinery (`execution_mode: tdd`)
 
 Under `execution_mode: tdd`, `execute_task` runs a RED authoring pass before
