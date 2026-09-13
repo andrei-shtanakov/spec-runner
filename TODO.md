@@ -717,6 +717,14 @@ evidence-плагин видел две базы и справедливо от�
       `tests/test_verify_cli.py`, `tests/test_tui.py`, `tests/test_mcp.py`,
       `tests/test_sync_cmd.py`.
 
+**Принято 2026-09-13: #351** — self-hosted post-done lint должен совпадать с
+CI lint gate, чтобы формат агентских файлов проверялся до push.
+
+- [x] **post-done-format-check** (spec-runner#351) @owner:github:andrei-shtanakov @id:post-done-format-check
+      Отдельный read-only `commands.format_check` запускается после lint и
+      после review-fix. Pre-freeze RED сохраняет одиночный narrowable/autofix
+      `commands.lint`; format-only drift блокируется до commit/push.
+
 **Принято 2026-09-13: #478** (inbox, from devtools) — инвентаризация локального
 runtime-state по инварианту конвейера «нужное для продолжения/аудита не живёт
 только на машине оператора».

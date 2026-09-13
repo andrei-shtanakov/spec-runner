@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.hooks import (
     REVIEW_ROLES,
@@ -1038,6 +1040,467 @@ class TestStageEmissionPostDone:
         assert "stage: tests" in joined
         assert "stage: commit" not in joined
         assert "stage: merge" not in joined
+
+
+class TestSelfHostedPostDoneFormatCheck:
+    def test_review_fingerprint_sees_dirty_bytes_when_head_does_not_move(self, tmp_path):
+        import subprocess
+
+        from spec_runner import hooks
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        changed = tmp_path / "changed.py"
+        changed.write_text("value = 1\n")
+        git("add", "changed.py")
+        git("commit", "-q", "-m", "baseline")
+        config = _make_config(project_root=tmp_path)
+
+        before = hooks._review_tree_fingerprint(config)
+        head_before = git("rev-parse", "HEAD").stdout.strip()
+        changed.write_text("value = 2\n")
+        after = hooks._review_tree_fingerprint(config)
+        head_after = git("rev-parse", "HEAD").stdout.strip()
+
+        assert before is not None and after is not None
+        assert before != after
+        assert head_before == head_after
+
+    def test_review_fingerprint_sees_changed_untracked_bytes(self, tmp_path):
+        import subprocess
+
+        from spec_runner import hooks
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        baseline = tmp_path / "baseline.txt"
+        baseline.write_text("baseline\n")
+        git("add", "baseline.txt")
+        git("commit", "-q", "-m", "baseline")
+        changed = tmp_path / "new.py"
+        changed.write_text("value = 1\n")
+        config = _make_config(project_root=tmp_path)
+
+        status_before = git("status", "--porcelain=v1").stdout
+        fingerprint_before = hooks._review_tree_fingerprint(config)
+        changed.write_text("value = 2\n")
+        status_after = git("status", "--porcelain=v1").stdout
+        fingerprint_after = hooks._review_tree_fingerprint(config)
+
+        assert status_before == status_after == "?? new.py\n"
+        assert fingerprint_before is not None and fingerprint_after is not None
+        assert fingerprint_before != fingerprint_after
+
+    def test_review_fingerprint_ignores_runtime_prompt_logs(self, tmp_path):
+        import subprocess
+
+        from spec_runner import hooks
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True
+            )
+
+        git("init", "-q")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        baseline = tmp_path / "baseline.txt"
+        baseline.write_text("baseline\n")
+        git("add", "baseline.txt")
+        git("commit", "-q", "-m", "baseline")
+        config = _make_config(
+            project_root=tmp_path,
+            logs_dir=tmp_path / "runtime-logs",
+            state_file=tmp_path / "runtime-state.db",
+        )
+
+        before = hooks._review_tree_fingerprint(config)
+        config.logs_dir.mkdir()
+        (config.logs_dir / "review-prompt.log").write_text("runner-owned\n")
+        after = hooks._review_tree_fingerprint(config)
+
+        assert before is not None
+        assert after == before
+
+    def test_tracked_config_blocks_format_only_drift(self, tmp_path, monkeypatch):
+        """#351: formatting must fail before commit without changing RED lint."""
+        from spec_runner import hooks
+        from spec_runner.config import load_config_from_yaml
+
+        root = Path(__file__).parents[1]
+        loaded = load_config_from_yaml(root / "spec-runner.config.yaml")
+        assert loaded["lint_command"] == "uv run ruff check ."
+        assert loaded["format_check_command"] == "uv run ruff format --check ."
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command=loaded["lint_command"],
+            format_check_command=loaded["format_check_command"],
+            lint_fix_command=loaded["lint_fix_command"],
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        commands: list[str] = []
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            result = MagicMock(stdout="", stderr="", returncode=0)
+            if command == config.format_check_command:
+                result.returncode = 1
+                result.stderr = "Would reformat: tests/test_agent_output.py"
+            return result
+
+        monkeypatch.setattr(hooks.subprocess, "run", run)
+
+        success, error, review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert error is not None and "Would reformat" in error
+        assert error.startswith("Lint errors")
+        assert review_status == ReviewVerdict.SKIPPED.value
+        assert commands == [config.lint_command, config.format_check_command]
+
+    def test_missing_formatter_is_instrument_error_even_when_findings_are_advisory(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner import hooks
+        from spec_runner.phases import Refusal, RefusalKind
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command="missing-formatter --check .",
+            lint_blocking=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        monkeypatch.setattr(
+            hooks.subprocess,
+            "run",
+            lambda *_args, **_kwargs: MagicMock(
+                stdout="", stderr="missing-formatter: not found", returncode=127
+            ),
+        )
+
+        success, error, _review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert isinstance(error, Refusal)
+        assert error.kind is RefusalKind.INSTRUMENT
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "RUFF_CACHE_DIR=.cache",
+            "RUFF_CACHE_DIR=.cache > /dev/null",
+            "RUFF_CACHE_DIR=.cache # no formatter",
+        ],
+    )
+    def test_format_command_without_executable_is_instrument_error(
+        self, tmp_path, monkeypatch, command
+    ):
+        from spec_runner.phases import Refusal, RefusalKind
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command=command,
+            lint_blocking=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        run = MagicMock()
+        monkeypatch.setattr("spec_runner.hooks.subprocess.run", run)
+
+        success, error, *_ = post_done_hook(_make_task(), config, True)
+
+        assert success is False
+        assert isinstance(error, Refusal)
+        assert error.kind is RefusalKind.INSTRUMENT
+        assert error.terminal is True
+        run.assert_not_called()
+
+    def test_format_command_may_have_a_leading_redirection(self, tmp_path, monkeypatch):
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command="2>/tmp/format.log project-format --check",
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        run = MagicMock(return_value=MagicMock(stdout="", stderr="", returncode=0))
+        monkeypatch.setattr("spec_runner.hooks.subprocess.run", run)
+
+        success, error, *_ = post_done_hook(_make_task(), config, True)
+
+        assert success is True, error
+        assert run.call_count == 2
+
+    def test_signalled_formatter_is_instrument_error_even_when_findings_are_advisory(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner import hooks
+        from spec_runner.phases import Refusal, RefusalKind
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command="project-format --check",
+            lint_blocking=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        monkeypatch.setattr(
+            hooks.subprocess,
+            "run",
+            lambda *_args, **_kwargs: MagicMock(stdout="", stderr="killed", returncode=-9),
+        )
+
+        success, error, _review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert isinstance(error, Refusal)
+        assert error.kind is RefusalKind.INSTRUMENT
+
+    def test_formatter_exit_two_is_instrument_error_even_when_findings_are_advisory(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner import hooks
+        from spec_runner.phases import Refusal, RefusalKind
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command="project-format --check",
+            lint_blocking=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=False,
+        )
+        monkeypatch.setattr(
+            hooks.subprocess,
+            "run",
+            lambda *_args, **_kwargs: MagicMock(
+                stdout="", stderr="formatter internal error", returncode=2
+            ),
+        )
+
+        success, error, _review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert isinstance(error, Refusal)
+        assert error.kind is RefusalKind.INSTRUMENT
+
+    def test_unchanged_parallel_review_skips_the_review_fix_recheck(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="project-lint",
+            format_check_command="project-format --check",
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=True,
+            review_parallel=True,
+        )
+        format_runs = 0
+
+        def run(command, **_kwargs):
+            nonlocal format_runs
+            if command == config.format_check_command:
+                format_runs += 1
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        monkeypatch.setattr(hooks.subprocess, "run", run)
+        monkeypatch.setattr(hooks, "_review_tree_fingerprint", lambda _config: "same-tree")
+        monkeypatch.setattr(
+            hooks,
+            "run_parallel_review",
+            lambda *_args, **_kwargs: (ReviewVerdict.PASSED, None, "all passed"),
+        )
+
+        success, error, review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is True
+        assert error is None
+        assert review_status == ReviewVerdict.PASSED.value
+        # Initial check + final post-plugin check. A false review-mutation
+        # signal would add a third run in the review-fix block.
+        assert format_runs == 2
+
+    def test_parallel_review_without_git_still_runs(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=False,
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=True,
+            review_parallel=True,
+        )
+        monkeypatch.setattr(
+            hooks.subprocess,
+            "run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("git")),
+        )
+        monkeypatch.setattr(
+            hooks,
+            "run_parallel_review",
+            lambda *_args, **_kwargs: (ReviewVerdict.PASSED, None, "all passed"),
+        )
+
+        success, error, review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is True
+        assert error is None
+        assert review_status == ReviewVerdict.PASSED.value
+
+    def test_format_is_rechecked_after_review_fixes(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="project-lint",
+            format_check_command="project-format --check",
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=True,
+        )
+        format_runs = 0
+
+        def run(command, **_kwargs):
+            nonlocal format_runs
+            if not isinstance(command, str):
+                return MagicMock(stdout="", stderr="", returncode=1)
+            result = MagicMock(stdout="", stderr="", returncode=0)
+            if command == config.format_check_command:
+                format_runs += 1
+                if format_runs == 2:
+                    result.returncode = 1
+                    result.stderr = "Would reformat after review"
+            return result
+
+        monkeypatch.setattr(hooks.subprocess, "run", run)
+        monkeypatch.setattr(
+            hooks,
+            "run_code_review",
+            lambda *_args, **_kwargs: (ReviewVerdict.FIXED, None, "REVIEW_FIXED"),
+        )
+
+        success, error, review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert error is not None and "Would reformat after review" in error
+        assert error.startswith("Lint errors")
+        assert review_status == ReviewVerdict.FIXED.value
+        assert format_runs == 2
+
+    def test_mixed_parallel_failed_and_fixed_still_rechecks_format(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        config = _make_config(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="project-lint",
+            format_check_command="project-format --check",
+            auto_commit=False,
+            create_git_branch=False,
+            run_review=True,
+            review_parallel=True,
+        )
+        format_runs = 0
+        fingerprints = iter(
+            [
+                "same-head\0 M spec/tasks.md",
+                "same-head\0 M spec/tasks.md\0M  src/changed_by_review.py",
+            ]
+        )
+
+        def run(command, **_kwargs):
+            nonlocal format_runs
+            result = MagicMock(stdout="", stderr="", returncode=0)
+            if command == config.format_check_command:
+                format_runs += 1
+                if format_runs == 2:
+                    result.returncode = 1
+                    result.stderr = "Would reformat mixed review fix"
+            return result
+
+        monkeypatch.setattr(hooks.subprocess, "run", run)
+        monkeypatch.setattr(
+            hooks,
+            "_review_tree_fingerprint",
+            lambda _config: next(fingerprints),
+        )
+        monkeypatch.setattr(
+            hooks,
+            "run_parallel_review",
+            lambda *_args, **_kwargs: (
+                ReviewVerdict.FAILED,
+                "quality found an issue after testing fixed another",
+                "mixed review output",
+            ),
+        )
+
+        success, error, review_status, _findings, _no_op = post_done_hook(
+            _make_task(), config, True
+        )
+
+        assert success is False
+        assert error is not None and "Would reformat mixed review fix" in error
+        assert error.startswith("Lint errors")
+        assert review_status == ReviewVerdict.FAILED.value
+        assert format_runs == 2
 
 
 class TestReviewStageEmitted:

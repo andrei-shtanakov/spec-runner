@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import ExecutorConfig
+from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .logging import get_logger
 
 logger = get_logger("review_pr")
@@ -746,7 +746,7 @@ def verify_comment(
     return verdict, evidence, cli_result.cost_usd
 
 
-def _dirty_paths(config: ExecutorConfig) -> list[str]:
+def _dirty_paths(config: ExecutorConfig, *, require_git: bool = False) -> list[str]:
     """`git status --porcelain` lines, minus executor runtime state.
 
     The loop's own state DB (and its WAL/SHM sidecars, logs, locks) lives
@@ -770,6 +770,8 @@ def _dirty_paths(config: ExecutorConfig) -> list[str]:
         text=True,
         cwd=config.project_root,
     )
+    if result.returncode != 0 and require_git:
+        raise ReviewPrError(f"cannot inspect working tree: {result.stderr.strip()[:200]}")
     for line in result.stdout.splitlines():
         path = line[3:].strip().strip('"')
         if any(path == r or path.startswith(r + "/") or path.startswith(r + "-") for r in rels):
@@ -790,6 +792,20 @@ def _worktree_fingerprint(config: ExecutorConfig) -> str:
 
 def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], capture_output=True, text=True, cwd=config.project_root)
+
+
+def _rollback_fix(config: ExecutorConfig, head: str) -> bool:
+    """Restore tracked state; report whether no untracked residue remains.
+
+    Untracked paths cannot safely be attributed to an agent in a shared
+    worktree: another process may have created them while the agent ran. They
+    are therefore never deleted automatically. A residue stops this fix loop,
+    and the next invocation's dirty-tree precondition remains fail-closed.
+    """
+    reset = _git(config, "reset", "--hard", head)
+    if reset.returncode != 0:
+        raise ReviewPrError(f"cannot roll back rejected fix: {reset.stderr.strip()[:200]}")
+    return not _dirty_paths(config, require_git=True)
 
 
 FIX_PROMPT = """\
@@ -941,6 +957,20 @@ def _run_gates(config: ExecutorConfig) -> tuple[bool, str]:
         )
         if result.returncode != 0:
             return False, f"lint failed: {(result.stdout + result.stderr)[-500:]}"
+    if config.run_lint_on_done and config.format_check_command:
+        if not command_has_executable(config.format_check_command):
+            return False, "format check failed: command has no executable"
+        result = subprocess.run(
+            config.format_check_command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        if result.returncode != 0 and (
+            config.lint_blocking or format_check_instrument_error(result.returncode)
+        ):
+            return False, f"format check failed: {(result.stdout + result.stderr)[-500:]}"
     return True, ""
 
 
@@ -974,7 +1004,7 @@ def _check_apply_preconditions(
     """Fail-closed preconditions for the mutating phase."""
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         raise ReviewPrError("not a git repository — cannot apply fixes")
-    dirty = _dirty_paths(config)
+    dirty = _dirty_paths(config, require_git=True)
     if dirty:
         raise ReviewPrError(
             "working tree is not clean — commit or stash before applying fixes:\n"
@@ -1145,7 +1175,7 @@ def _apply_phase(
             # is spent either way, but pushing it would mean the limit
             # changed the PR) and the loop stops — remaining comments stay
             # unresolved → NEEDS_HUMAN.
-            _git(config, "reset", "--hard", pre_fix_head)
+            _rollback_fix(config, pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning(
                 "review-pr cost limit exceeded — fix reverted, stopping",
@@ -1154,9 +1184,12 @@ def _apply_phase(
             )
             break
         if not ok:
-            _git(config, "reset", "--hard", pre_fix_head)
+            clean_rollback = _rollback_fix(config, pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning("Fix agent failed", comment_id=cid, note=note)
+            if not clean_rollback:
+                logger.warning("Untracked residue after failed fix — stopping safely")
+                break
             continue
         if not _worktree_fingerprint(config).strip():
             state.set_resolution(repo, pr_number, cid, "needs_human")
@@ -1164,19 +1197,28 @@ def _apply_phase(
             continue
         gates_ok, gate_detail = _run_gates(config)
         if not gates_ok:
-            _git(config, "reset", "--hard", pre_fix_head)
+            clean_rollback = _rollback_fix(config, pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning("Gates failed after fix — reverted", comment_id=cid, detail=gate_detail)
+            if not clean_rollback:
+                logger.warning("Untracked residue after rejected fix — stopping safely")
+                break
             continue
         sha = _commit_fix(config, comment, note)
         if sha is None:
-            _git(config, "reset", "--hard", pre_fix_head)
+            clean_rollback = _rollback_fix(config, pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")
+            if not clean_rollback:
+                logger.warning("Untracked residue after failed commit — stopping safely")
+                break
             continue
         if _changed_lines_in_head(config) > config.review_pr_max_changed_lines:
-            _git(config, "reset", "--hard", pre_fix_head)
+            clean_rollback = _rollback_fix(config, pre_fix_head)
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning("Fix exceeds diff-size limit — reverted", comment_id=cid)
+            if not clean_rollback:
+                logger.warning("Untracked residue after oversized fix — stopping safely")
+                break
             continue
         state.set_resolution(repo, pr_number, cid, "fixed", fix_sha=sha)
         pushed_shas.append((cid, sha))

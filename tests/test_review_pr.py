@@ -397,6 +397,70 @@ def _fix_agent_factory(work: Path, content: str = "x = 2\n"):
     return agent
 
 
+class TestPostFixGates:
+    def test_assignment_only_format_command_is_not_a_green_gate(self, tmp_path):
+        cfg = _m2_cfg(
+            tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="",
+            format_check_command="RUFF_CACHE_DIR=.cache",
+        )
+
+        ok, detail = rp._run_gates(cfg)
+
+        assert ok is False
+        assert "no executable" in detail
+
+    def test_format_check_failure_rejects_review_pr_mutation(self, tmp_path, monkeypatch):
+        cfg = _m2_cfg(
+            tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="project-lint",
+            format_check_command="project-format --check",
+        )
+        commands: list[str] = []
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            if command == cfg.format_check_command:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="Would reformat review fix"
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(rp.subprocess, "run", run)
+
+        ok, detail = rp._run_gates(cfg)
+
+        assert ok is False
+        assert "Would reformat review fix" in detail
+        assert commands == [cfg.lint_command, cfg.format_check_command]
+
+    def test_format_drift_is_advisory_when_lint_is_advisory(self, tmp_path, monkeypatch):
+        cfg = _m2_cfg(
+            tmp_path,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="project-lint",
+            format_check_command="project-format --check",
+            lint_blocking=False,
+        )
+
+        def run(command, **_kwargs):
+            return subprocess.CompletedProcess(
+                command,
+                1 if command == cfg.format_check_command else 0,
+                stdout="",
+                stderr="Would reformat" if command == cfg.format_check_command else "",
+            )
+
+        monkeypatch.setattr(rp.subprocess, "run", run)
+
+        assert rp._run_gates(cfg) == (True, "")
+
+
 class TestApplyPhase:
     def test_full_loop_fixes_pushes_and_replies(self, tmp_path, monkeypatch):
         work, bare, head = _init_repo_with_remote(tmp_path)
@@ -483,6 +547,56 @@ class TestApplyPhase:
         assert reply_log == []
         with ReviewPrState(cfg) as st:
             assert st.rows(REPO, 6)[0]["resolution"] == "needs_human"
+
+    def test_format_gate_failure_preserves_untracked_residue_and_stops(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(
+                comments=[_comment_payload(1), _comment_payload(2)],
+                head_sha=head,
+                reply_log=reply_log,
+            ),
+        )
+        cfg = _m2_cfg(
+            work,
+            run_tests_on_done=False,
+            run_lint_on_done=True,
+            lint_command="true",
+            format_check_command="false",
+        )
+
+        def create_untracked(*_args, **_kwargs):
+            (work / "new.py").write_text("bad =  [1,2]\n")
+            return True, "created new.py", 0.01
+
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
+            patch.object(rp, "run_fix_agent", side_effect=create_untracked) as fix_agent,
+        ):
+            code = cmd_review_pr(_args(), cfg)
+
+        assert code == EXIT_NEEDS_HUMAN
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head
+        assert (work / "new.py").exists()
+        assert rp._dirty_paths(cfg) == ["?? new.py"]
+        assert fix_agent.call_count == 1
+        assert reply_log == []
+
+    def test_rollback_fails_closed_when_git_status_fails(self, tmp_path, monkeypatch):
+        cfg = _m2_cfg(tmp_path)
+        results = iter(
+            [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 1, stdout="", stderr="status failed"),
+            ]
+        )
+        monkeypatch.setattr(rp.subprocess, "run", lambda *_args, **_kwargs: next(results))
+
+        with pytest.raises(rp.ReviewPrError, match="cannot inspect working tree"):
+            rp._rollback_fix(cfg, "deadbeef")
 
     def test_diff_size_limit_reverts_fix(self, tmp_path, monkeypatch):
         work, _, head = _init_repo_with_remote(tmp_path)

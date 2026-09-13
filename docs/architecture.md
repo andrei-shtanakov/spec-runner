@@ -425,6 +425,16 @@ never touches files outside the claim, and a repair that makes the test pass
 (or breaks the build) does not produce a checkpoint — a green or unbuildable
 result is not a confirmed red.
 
+Full-tree formatting belongs to the optional read-only
+`commands.format_check` completion gate (#351), not to a composite
+`commands.lint`. Post-done runs it after lint, again after review fixes, and
+after committable `post_review` plugin output; `review-pr` mutations run it
+before commit. Pre-freeze TDD never reads it, so
+the declared `commands.lint` remains narrowable and repairable on the claimed
+RED file.
+The format-check command has a deliberately narrow result contract: exit 0 is
+clean, exit 1 is measured drift, and every other status is an instrument error.
+
 ## Verify-first execution mode (`execution_mode: verify_first`, #367)
 
 `verify_first` is the **third** execution mode, alongside `standard` and

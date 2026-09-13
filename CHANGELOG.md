@@ -231,6 +231,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The self-hosted post-done hook now catches formatting drift before push**
+  (#351). The tracked config declares a separate read-only
+  `commands.format_check` (`ruff format --check .`) after its normal lint
+  command. Keeping the checks separate preserves the narrowable, repairable
+  pre-freeze RED lint path while matching the PR's formatting gate. Review
+  fixes — including mixed parallel verdicts and a failed review-fix commit —
+  `post_review` plugin output, and `review-pr` mutations run the same format
+  check before commit. Preflight reports a missing format runner as blocking;
+  only exit 1 is formatting drift, while other non-zero exits are instrument
+  failures even when lint findings are advisory.
+
 - **Default OTel directory and embedded pipeline identity now agree** (#482).
   Without `ORCHESTRA_LOG_DIR` or `ORCHESTRA_PIPELINE_ID`, `init_logging`
   generates one pipeline ULID and uses it both for `logs/<pipeline-id>/` and
