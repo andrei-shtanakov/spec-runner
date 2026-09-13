@@ -1,6 +1,6 @@
 ---
 spec_stage: behaviour-spec
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - requirements
@@ -9,7 +9,7 @@ upstream_hashes:
 version: 4
 approved_content_hash: 68a6f01d5c4ee9252fbc5680b1e51c07d99558b7
 approved_by: andrei-shtanakov
-approved_at: '2026-09-11T08:57:52Z'
+approved_at: '2026-09-13T04:45:49Z'
 ---
 
 # Behaviour spec — verify-first: объявленная группа принимает файловую цель
