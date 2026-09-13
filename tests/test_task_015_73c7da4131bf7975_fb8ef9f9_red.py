@@ -12,29 +12,59 @@ owner (devtools) via issue or handoff.
 import re
 from pathlib import Path
 
-ARCHITECTURE_DOC = Path(__file__).resolve().parent.parent / "docs" / "architecture.md"
+_REPO = Path(__file__).resolve().parent.parent
+ARCHITECTURE_DOC = _REPO / "docs" / "architecture.md"
+
+#: Every file DT-15 names as carrying the retired wording. The red used to
+#: read only the first, so putting "node ids only, a bare file target is not
+#: declarable" back into `CHANGELOG.md` left the suite green and the task
+#: DONE (spec-runner#458). A boundary retired in three places has to be
+#: guarded in three places.
+DECLARED_DOCS = (
+    ARCHITECTURE_DOC,
+    _REPO / "CHANGELOG.md",
+    _REPO / "CLAUDE.md",
+)
+
+RETIRED_WORDING = "a file target is not declarable today"
 
 
 class TestBEH31DeclaredBoundaryReplacedByContract:
     def test_removed_wording_gone_and_contract_named(self):
-        text = ARCHITECTURE_DOC.read_text(encoding="utf-8")
-        normalized = re.sub(r"\s+", " ", text.replace("**", "")).lower()
+        for doc in DECLARED_DOCS:
+            normalized = re.sub(
+                r"\s+", " ", doc.read_text(encoding="utf-8").replace("**", "")
+            ).lower()
+            assert RETIRED_WORDING not in normalized, (
+                f"BEH-31: the retired wording must be removed from "
+                f"{doc.name}, replaced by the accepted contract"
+            )
 
-        assert "a file target is not declarable today" not in normalized, (
-            "BEH-31: the retired wording must be removed from "
-            "docs/architecture.md, replaced by the accepted contract"
-        )
+        text = ARCHITECTURE_DOC.read_text(encoding="utf-8")
+
         assert "asymmetry" in text, (
             "BEH-31: the doc must name the declared asymmetry between the "
             "node-id group and the file target explicitly"
         )
-        assert "not execution" in text, (
-            "BEH-31: the node-id group's existing rule (BEH-06 — a skip is "
-            "not execution) must still be named as one half of the asymmetry"
+
+        # Both halves must be named **in the asymmetry paragraph itself**.
+        # Unscoped, `"not execution" in text` was satisfied by unrelated
+        # #367 prose elsewhere in the document, so the assertion held even if
+        # the asymmetry were described with only one of its two halves
+        # (spec-runner#458).
+        paragraphs = [p for p in text.split("\n\n") if "asymmetry" in p]
+        assert len(paragraphs) == 1, (
+            f"expected exactly one paragraph declaring the asymmetry, found {len(paragraphs)}"
         )
-        assert "accounted" in text, (
+        asymmetry = paragraphs[0]
+        assert "not execution" in asymmetry, (
+            "BEH-31: the node-id group's existing rule (BEH-06 — a skip is "
+            f"not execution) must be named in the asymmetry paragraph itself: "
+            f"{asymmetry!r}"
+        )
+        assert "accounted" in asymmetry, (
             "BEH-31: the file target's own rule (BEH-16 — every member is "
-            "accounted for) must be named as the other half of the asymmetry"
+            f"accounted for) must be named in the same paragraph: {asymmetry!r}"
         )
         assert "devtools" in text, (
             "BEH-31: the accepted contract must record that it was "
