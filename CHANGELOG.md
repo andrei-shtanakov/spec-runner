@@ -231,6 +231,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **MCP graceful stop now writes the executor's configured marker** (#481).
+  `spec_runner_stop` uses the same `config.stop_file` consumed by CLI, TUI,
+  and the run loop for default, prefixed, per-change, and explicitly relocated
+  state configurations. The server retains the CLI-resolved launch config for
+  stop requests, so `spec-runner mcp --change ...` addresses the matching
+  per-change executor. It no longer reports success after writing an unobserved
+  DB-derived `.stop` sibling.
+
 - **Read-only commands no longer create an empty state database** (#337).
   Status, costs, verify/report, TDD status, TUI refreshes, MCP queries, and
   `sync --dry-run` use an in-memory empty state when their resolved database

@@ -16,6 +16,7 @@ from .state import ExecutorState
 from .task import parse_tasks, resolve_dependencies
 
 mcp_app = MCPServer("spec-runner")
+_launch_stop_config: ExecutorConfig | None = None
 
 
 def _build_config(spec_prefix: str = "") -> ExecutorConfig:
@@ -226,8 +227,9 @@ def spec_runner_stop(spec_prefix: str = "") -> str:
     same workspace to finish the current task and exit. Does not kill
     processes. See README.md#security-model.
     """
-    config = _build_config(spec_prefix)
-    stop_file = config.state_file.with_suffix(".stop")
+    config = _launch_stop_config or _build_config(spec_prefix)
+    stop_file = config.stop_file
+    stop_file.parent.mkdir(parents=True, exist_ok=True)
     stop_file.write_text("stop")
     return json.dumps({"status": "stop_requested", "stop_file": str(stop_file)})
 
@@ -279,6 +281,13 @@ def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
     return json.dumps(detail)
 
 
-def run_server() -> None:
+def run_server(config: ExecutorConfig | None = None) -> None:
     """Run the MCP server (stdio transport)."""
-    mcp_app.run(transport="stdio")
+    global _launch_stop_config
+
+    previous = _launch_stop_config
+    _launch_stop_config = config
+    try:
+        mcp_app.run(transport="stdio")
+    finally:
+        _launch_stop_config = previous
