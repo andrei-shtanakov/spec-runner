@@ -12,6 +12,7 @@ because a guard nothing checks is a guard that quietly stops working — and its
 failure mode is a bill.
 """
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -26,32 +27,12 @@ from spec_runner.preset_cmd import list_presets, load_fragment
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
 from spec_runner.tdd import resolve_namespace
-from tests.conftest import PAID_AGENT_COMMANDS
-
-#: The belt's OWN list, deliberately a literal rather than a reference to
-#: `PAID_AGENT_COMMANDS`. A belt keyed on the constant under test is not a
-#: belt: weakening that constant — which is exactly how this guard fails in
-#: reality, and exactly what a reviewer mutates to check the guard — disables
-#: the guard and the belt in the same stroke, and the paid CLI runs. Measured
-#: the hard way (2026-09-12): dropping "claude" from `PAID_AGENT_COMMANDS`
-#: with a belt that read the same constant executed the real agent twice.
-#: Kept broad on purpose; drift towards `PAID_AGENT_COMMANDS` growing a name
-#: this set lacks costs nothing, while sharing the set costs money.
-_NEVER_EXECUTE = frozenset(
-    {
-        "claude",
-        "claude-code",
-        "codex",
-        "opencode",
-        "pi",
-        "ollama",
-        "llama-cli",
-        "llama-server",
-        "qwen",
-        "copilot",
-        "gemini",
-        "aider",
-    }
+from tests import conftest
+from tests.conftest import (
+    _NEVER_EXECUTE,
+    BELT_PROBE_COMMAND,
+    PAID_AGENT_COMMANDS,
+    PaidBinaryReached,
 )
 
 
@@ -154,7 +135,7 @@ class TestTheGuardCoversVerifyFirst:
         subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True, capture_output=True)
         return root
 
-    def test_a_verify_first_red_authoring_call_is_refused(self, tmp_path, monkeypatch):
+    def test_a_verify_first_red_authoring_call_is_refused(self, tmp_path):
         """The refusal must come from the RED-authoring seam, and nothing may
         run even if the guard is gone.
 
@@ -172,33 +153,15 @@ class TestTheGuardCoversVerifyFirst:
           phase is asserted, so the RED path must genuinely have been entered.
         * a test about not spending money relied wholly on the autouse guard.
           Drop `"claude"` from `PAID_AGENT_COMMANDS` and `_refuse_tdd` falls
-          through to the real `tdd._run_agent` and executes the CLI. The belt
-          below makes that impossible: whatever else happens, no paid binary
-          is executed by this test. Same technique as
-          `TestTheGuard.test_a_bare_agent_name_is_refused`, which learned it
-          the same way.
+          through to the real `tdd._run_agent` and executes the CLI. That is
+          not hypothetical: it happened while measuring this very test
+          (spec-runner#455, 2026-09-12) and executed the real agent **seven
+          times across three runs** — RED authoring, task execution, and once
+          the review seam, which no guard covered. The belt that prevents it
+          now lives in `conftest._belt_never_executes_a_paid_binary`, one
+          level below every seam, so it protects the whole suite rather than
+          this test alone.
         """
-
-        class _PaidBinaryReached(BaseException):
-            """Deliberately not an `Exception`: `execute_task` catches those
-            and turns them into a failed attempt, so a belt raising one would
-            be swallowed and the test would fail as "DID NOT RAISE" — naming
-            the wrong cause. Nothing in the product catches `BaseException`."""
-
-        real_run = subprocess.run
-
-        def _never_a_paid_binary(argv, *args, **kwargs):
-            # git and the live verify-first pytest run must still work — only
-            # a known agent name is refused, by basename, anywhere in argv.
-            parts = argv if isinstance(argv, (list, tuple)) else [argv]
-            visible = {Path(str(part)).name for part in parts}
-            if visible & _NEVER_EXECUTE:
-                raise _PaidBinaryReached(
-                    f"belt: this test must never execute a paid agent binary, got {argv!r}"
-                )
-            return real_run(argv, *args, **kwargs)
-
-        monkeypatch.setattr(subprocess, "run", _never_a_paid_binary)
 
         root = self._repo(tmp_path)
         cfg = ExecutorConfig(
@@ -243,3 +206,202 @@ class TestTheGuardCoversVerifyFirst:
             f"the RED-authoring phase must be recorded before the paid call is "
             f"refused; observed {phases}"
         )
+
+
+class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
+    """spec-runner#455: the belt underneath the name-based guard.
+
+    `_no_real_agent_calls` refuses by CLI name at two seams. Its failure
+    modes are known and were all observed for real: a seam it does not cover
+    (the review seam had none), a test that replaces the patched seam itself,
+    and — the one that cost money on 2026-09-12 — `PAID_AGENT_COMMANDS`
+    losing a name, which is both how the guard decays in production and what
+    a reviewer does deliberately to check it.
+
+    So each test here empties `PAID_AGENT_COMMANDS` entirely, drives the seam
+    all the way to its subprocess call, and asserts that
+    `conftest.PaidBinaryReached` — the belt, not the guard — is what stopped
+    it.
+
+    **Nothing here may execute a paid binary even if the belt is broken.**
+    The command under test is `BELT_PROBE_COMMAND`, a name that exists in no
+    PATH: a belt that fails to fire produces `FileNotFoundError`, not a bill.
+
+    Real CLI names do appear elsewhere in this file — `TestTheGuard`
+    parametrizes over `PAID_AGENT_COMMANDS`, and the verify-first test drives
+    `execute_task` with `claude_command="claude"` — but always with something
+    ahead of the process: an exploded `subprocess.run`, or the guard and the
+    belt together. In THIS class, where the guard is deliberately emptied,
+    only the sentinel is ever passed to a seam.
+    """
+
+    def _unguarded(self, monkeypatch) -> None:
+        """The guard at its worst: every name gone from its list."""
+        monkeypatch.setattr(conftest, "PAID_AGENT_COMMANDS", frozenset())
+
+    def test_the_tdd_red_authoring_seam_is_belted(self, tmp_path, monkeypatch):
+        self._unguarded(monkeypatch)
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            tdd._run_agent(_cfg(tmp_path, BELT_PROBE_COMMAND), "any prompt")
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_the_standard_execution_seam_is_belted(self, tmp_path, monkeypatch):
+        self._unguarded(monkeypatch)
+        from spec_runner.execution import _run_agent_process
+        from spec_runner.runner import build_cli_invocation
+
+        invocation = build_cli_invocation(
+            cmd=BELT_PROBE_COMMAND,
+            prompt="any prompt",
+            model=None,
+            template=None,
+            skip_permissions=False,
+            json_output=True,
+        )
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            _run_agent_process(_cfg(tmp_path, BELT_PROBE_COMMAND), invocation)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_the_review_seam_is_belted(self, tmp_path, monkeypatch):
+        """The seam the name-based guard never covered at all — and the one
+        that produced the seventh session of the 2026-09-12 incident."""
+        self._unguarded(monkeypatch)
+        from spec_runner.review import _run_reviewer
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            _run_reviewer(
+                _cfg(tmp_path, BELT_PROBE_COMMAND),
+                task_id="TASK-901",
+                provenance="review",
+                prompt="any prompt",
+                review_cmd=BELT_PROBE_COMMAND,
+                review_model="",
+                review_template="",
+            )
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_the_belt_knows_every_name_the_guard_and_the_presets_know(self):
+        """Drift, caught statically — nothing is executed to check this.
+
+        The belt is allowed to be broader than the guard (an extra name costs
+        nothing), but never narrower: a name the guard refuses, or a CLI this
+        project ships a preset for, must also be one the belt would stop if
+        the guard ever let it through.
+        """
+        shipped = {load_fragment(name).command for name in list_presets()}
+
+        assert PAID_AGENT_COMMANDS <= _NEVER_EXECUTE, (
+            "the guard refuses names the belt would execute: "
+            f"{sorted(PAID_AGENT_COMMANDS - _NEVER_EXECUTE)}"
+        )
+        assert shipped <= _NEVER_EXECUTE, (
+            f"these CLIs have presets but the belt does not know them: "
+            f"{sorted(shipped - _NEVER_EXECUTE)}"
+        )
+
+    def test_every_process_creation_primitive_is_belted(self, monkeypatch):
+        """All three doors, not just the one the seams happen to use today.
+
+        The seams above reach `subprocess.run`. `runner.py` also streams a CLI
+        through `asyncio.create_subprocess_exec`, and `Popen` is one
+        refactoring away from being the path a seam takes — a belt that
+        covered only `run` would be silently bypassed the day that happens.
+        """
+        self._unguarded(monkeypatch)
+
+        with pytest.raises(PaidBinaryReached):
+            subprocess.Popen([BELT_PROBE_COMMAND])
+
+        async def _spawn():
+            await asyncio.create_subprocess_exec(BELT_PROBE_COMMAND)
+
+        with pytest.raises(PaidBinaryReached):
+            asyncio.run(_spawn())
+
+    def test_a_wrapped_template_hides_the_name_inside_one_element(self, monkeypatch):
+        """`command_template: bash -lc '{cmd} …'` is the case the docstring
+        always claimed to cover and did not (spec-runner#459 review).
+
+        `build_cli_invocation` runs the formatted template through
+        `shlex.split`, so the agent name ends up INSIDE the third element:
+        `["bash", "-lc", "<cmd> -p '…'"]`. Taking `PurePath(part).name` per
+        element yields the basename of that whole string and misses it — and
+        on the review seam, which no name-based guard covers, that is a real
+        paid call.
+        """
+        self._unguarded(monkeypatch)
+        from spec_runner.runner import build_cli_invocation
+
+        invocation = build_cli_invocation(
+            cmd=BELT_PROBE_COMMAND,
+            prompt="any prompt",
+            model=None,
+            template="bash -lc '{cmd} -p {prompt}'",
+            skip_permissions=False,
+            json_output=True,
+        )
+        assert invocation.argv[0] == "bash", (
+            f"fixture must produce a wrapped invocation, got {invocation.argv!r}"
+        )
+        assert BELT_PROBE_COMMAND not in invocation.argv, (
+            "the name must be hidden INSIDE an element, or this test proves nothing"
+        )
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            subprocess.run(invocation.argv, capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_a_shell_string_is_one_element_too(self, monkeypatch):
+        """`subprocess.run("<cmd> --flag", shell=True)` passes a single
+        string; its basename is the whole command line."""
+        self._unguarded(monkeypatch)
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            subprocess.run(f"{BELT_PROBE_COMMAND} --version", shell=True, capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+    def test_the_plan_seam_is_belted_through_its_captured_default(self, monkeypatch):
+        """The plan seam captures `subprocess.run` at import time — and is
+        still belted, one level further down.
+
+        `cli_plan._generate_stage_draft` and `run_gated_stage` take
+        `invoke=subprocess.run` as a **default argument**, bound when the
+        module was imported. Patching the `subprocess.run` attribute cannot
+        reach that binding: the default holds the original function object,
+        so a reader can reasonably conclude this seam escapes the belt.
+
+        It does not, and the reason is worth pinning rather than
+        rediscovering: CPython's `subprocess.run` creates the child through
+        `Popen`, looked up as a module global at call time — and the belt
+        patches `Popen` too. So the captured `run` walks into the belt on its
+        way to spawning anything.
+
+        This test holds that chain in place. Delete the `Popen` line from the
+        belt and this test goes red while the seams that go through the
+        patched `run` attribute stay green — which is exactly the coverage
+        that would otherwise be lost silently.
+        """
+        self._unguarded(monkeypatch)
+        from spec_runner import cli_plan
+
+        captured = cli_plan.run_gated_stage.__defaults__[-1]
+        assert captured is not subprocess.run, (
+            "the premise of this test is that the default is the ORIGINAL "
+            "`subprocess.run`, captured before the attribute was patched"
+        )
+
+        with pytest.raises(PaidBinaryReached) as belted:
+            captured([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)
+
+        assert BELT_PROBE_COMMAND in str(belted.value)
+
+        captured_draft = cli_plan._generate_stage_draft.__defaults__[-1]
+        with pytest.raises(PaidBinaryReached):
+            captured_draft([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)
