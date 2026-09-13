@@ -181,7 +181,10 @@ class TestVerifyEvidenceIsASeparateGround:
     ) -> None:
         task = Task(id=task_id, name="t", priority="p1", status="todo", estimate="1h")
         with ExecutorState(cfg) as state:
-            state.record_verify_evidence(
+            # The write swallows its own failure and answers False; without
+            # this the negative tests below would pass on a missing row,
+            # not on a row whose outcome is not green.
+            assert state.record_verify_evidence(
                 task=task,
                 config=cfg,
                 result=VerifyRunResult(sha, ran, passed, "detail"),
