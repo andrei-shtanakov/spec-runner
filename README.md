@@ -638,6 +638,7 @@ the failed hook left in the tree stays uncommitted.
 
 Every hook gets the same environment from `build_task_env`: `SR_TASK_ID`,
 `SR_TASK_NAME`, `SR_TASK_STATUS`, `SR_TASK_PRIORITY`, `SR_PROJECT_ROOT`,
+`SR_SPEC_PREFIX`, `SR_STATE_DB` (the absolute path selected for this run),
 `SR_ATTEMPT_NUMBER`, `SR_DURATION_SECONDS`, `SR_ERROR`, `SR_ERROR_CODE`.
 
 ## Project Structure

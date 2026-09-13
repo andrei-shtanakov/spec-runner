@@ -221,6 +221,21 @@ class TestBuildTaskEnv:
         assert env["SR_TASK_STATUS"] == "success"
         assert env["SR_TASK_PRIORITY"] == "p1"
         assert env["SR_PROJECT_ROOT"] == str(config.project_root)
+        assert env["SR_SPEC_PREFIX"] == ""
+        assert env["SR_STATE_DB"] == str(config.state_file)
+
+    def test_active_state_namespace_env_vars(self, tmp_path: Path) -> None:
+        """Hooks receive the resolved state DB and its exact spec prefix."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-010", name="My Task", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=tmp_path, spec_prefix="WS-active-")
+
+        env = build_task_env(task, config, success=True)
+
+        assert env["SR_SPEC_PREFIX"] == "WS-active-"
+        assert env["SR_STATE_DB"] == str(tmp_path / "spec" / ".executor-WS-active-state.db")
 
     def test_failure_status(self) -> None:
         """success=False produces SR_TASK_STATUS=failed."""
@@ -338,6 +353,42 @@ class TestPluginIntegration:
             pre_start_hook(task, config)
 
         assert marker.exists()
+
+    def test_blocking_plugin_selects_active_db_among_neighbours(self, tmp_path: Path) -> None:
+        """A plugin needs no filesystem heuristic when more than one state DB exists."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.hooks import pre_start_hook
+        from spec_runner.task import Task
+
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        (spec_dir / ".executor-WS-old-state.db").touch()
+        (spec_dir / ".executor-WS-active-state.db").touch()
+
+        plugins_dir = spec_dir / "plugins"
+        plugin_dir = _create_plugin(
+            plugins_dir,
+            "state-reader",
+            {"pre_start": {"command": "./select.sh", "blocking": True}},
+        )
+        self._make_script(
+            plugin_dir,
+            "select.sh",
+            "#!/bin/bash\n"
+            'test "$SR_SPEC_PREFIX" = "WS-active-" && '
+            'test "$SR_STATE_DB" = "$SR_PROJECT_ROOT/spec/.executor-WS-active-state.db"\n',
+        )
+
+        task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            spec_prefix="WS-active-",
+            sync_deps=False,
+            create_git_branch=False,
+            plugins_dir=plugins_dir,
+        )
+
+        assert pre_start_hook(task, config) is True
 
     def test_post_done_runs_plugins(self, tmp_path: Path) -> None:
         """post_done_hook discovers and runs post_done plugin hooks."""
