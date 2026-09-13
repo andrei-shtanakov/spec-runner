@@ -1,15 +1,15 @@
 ---
 spec_stage: decomposition
-status: stale
+status: approval_pending
 owner_role: tech-lead
 traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: c26052ce6ff1688869f122ca526e23b26704e127
-  acceptance: da19282bdb31a120817bf106c25a87aaecc8b3b9
-version: 4
-approved_content_hash: fcdfb89ffb5bbf4b39853a8176f23633634ef0d9
+  design: c3490f638646850d0fb2045758a26c72fd2cc3bd
+  acceptance: 8175b378717d4e43f0bfacbb99979f935289ea0b
+version: 5
+approved_content_hash: b18a74235b2bc567d03bd7279b7764d5f9b9b9f7
 approved_by: andrei-shtanakov
 approved_at: '2026-09-12T04:32:02Z'
 ---
