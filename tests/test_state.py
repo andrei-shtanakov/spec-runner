@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -664,6 +666,34 @@ class TestJsonToSqliteMigration:
         assert not json_path.exists()  # renamed to .bak
         assert (tmp_path / "state.json.bak").exists()
 
+    def test_empty_legacy_state_is_renamed_after_commit_window(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config):
+            pass
+        json_path = config.state_file.with_suffix(".json")
+        json_path.write_text(
+            json.dumps(
+                {"tasks": {}, "consecutive_failures": 0, "total_completed": 0, "total_failed": 0}
+            )
+        )
+        with sqlite3.connect(config.state_file) as conn:
+            conn.executemany(
+                "INSERT INTO executor_meta (key, value) VALUES (?, ?)",
+                [
+                    ("consecutive_failures", "0"),
+                    ("total_completed", "0"),
+                    ("total_failed", "0"),
+                ],
+            )
+
+        with ExecutorState(config) as state:
+            assert state.tasks == {}
+
+        assert not json_path.exists()
+        assert json_path.with_suffix(".json.bak").exists()
+        with sqlite3.connect(config.state_file) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+
     def test_partial_migration_is_side_effect_free_for_reader(self, tmp_path):
         json_path = tmp_path / "state.json"
         db_path = tmp_path / "state.db"
@@ -760,6 +790,38 @@ class TestJsonToSqliteMigration:
 
         assert json_path.exists()
         assert db_path.exists()
+
+    def test_partial_probe_waits_for_sqlite_lock(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config):
+            pass
+        config.state_file.with_suffix(".json").write_text(
+            json.dumps(
+                {"tasks": {}, "consecutive_failures": 0, "total_completed": 0, "total_failed": 0}
+            )
+        )
+        lock = sqlite3.connect(config.state_file, timeout=0, check_same_thread=False)
+        lock.execute("PRAGMA journal_mode=DELETE")
+        lock.commit()
+        lock.execute("BEGIN EXCLUSIVE")
+        released = threading.Event()
+
+        def release_lock() -> None:
+            time.sleep(0.15)
+            lock.rollback()
+            lock.close()
+            released.set()
+
+        thread = threading.Thread(target=release_lock)
+        thread.start()
+        started = time.monotonic()
+        try:
+            with ExecutorState(config) as state:
+                assert state.tasks == {}
+        finally:
+            thread.join(timeout=2)
+        assert released.is_set()
+        assert time.monotonic() - started >= 0.1
 
     def test_legacy_json_does_not_hide_ledger_only_sqlite_state(self, tmp_path):
         config = _make_config(tmp_path)
