@@ -10,10 +10,12 @@ All five conditions of the class, confirmed:
 - the behaviour is already delivered by this task's own dependencies:
   `PytestAdapter.parse_group_element` (TASK-002/DT-02) accepts a bare file
   path as a `FileTarget`; `ExUnitAdapter` declares no such method, so
-  `parse_group_element`'s dispatch (`tdd_runners.py`) falls back to its
-  ordinary `parse_selector`, which refuses anything that is not `path:line`
-  — including a bare file path — under its own stable
-  `SelectorRefusal.code`; and `validate._validate_verify_first_declarations`
+  `parse_group_element`'s dispatch (`tdd_runners.py`) refuses a bare file
+  path **by capability** — `supports_file_targets` is false, and the refusal
+  names the adapter, the class and the form this adapter expects
+  (`file_target_unsupported`, spec-runner#460). Everything that is not a bare
+  path still reaches its ordinary `parse_selector` and keeps that method's own
+  stable `SelectorRefusal.code`; and `validate._validate_verify_first_declarations`
   (TASK-004/DT-04) already turns any `parse_group_element` refusal into a
   named `validate` error quoting the adapter and the declared value. None of
   `tdd_runners.py`, `validate.py` or `live_verify.py` is modified by this

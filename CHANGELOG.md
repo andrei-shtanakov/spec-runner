@@ -12,6 +12,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **A declared verify-first group may name a whole test file** (#402). Beside
+  a node id, an element of `**Verifies:**` may be a **file target** — a bare
+  path to a test file the resolved adapter's own discovery would collect,
+  under an adapter that supports them (pytest does; ExUnit refuses by name).
+  The file's composition is read from that same run's reporter, never
+  inferred. Green requires every member to be accounted for **and** at least
+  one member to have actually executed and passed: a fully skipped file is
+  `instrument_error`, not green. This is a declared asymmetry with the
+  node-id rule, where a skipped selector stays `instrument_error` — paid for
+  by the composition being visible per member. See
+  `docs/architecture.md#verify-first-execution-mode-execution_mode-verify_first-367`.
+
+- **`--json-result` gains an additive `verify_composition` field** (#402,
+  BEH-30/BEH-33). A task whose live verify-first evidence carried a file
+  target's composition now surfaces `{size, executed, skipped}` alongside its
+  existing fields. Additive: every previously valid result stays valid, and
+  the field is absent for a group of node ids only.
+
 - **The reviewer of a waived task is told what to verify** (#433). A task
   carrying an addressed TDD waiver gets a block appended to its review
   prompt: the waiver class, the sanction, and the reviewer's obligation —

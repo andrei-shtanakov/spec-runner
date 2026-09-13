@@ -286,13 +286,12 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         # that saw one member and reported nothing about the rest. The
         # composition is what proves the single run actually accounted for
         # every member the manual expansion had to pay a run apiece for.
-        # Compared against what the run actually COLLECTED, not against the
-        # AST count: `_declaration_node_ids` counts `FunctionDef`s, while the
-        # manifest names real pytest node ids — so one `@pytest.mark.
-        # parametrize` in a file this test does not own turns N functions
-        # into N+k members. Equality would report that growth as a cost
-        # regression, which is the same defect just removed from the
-        # artifact read-back. The claim that matters survives either shape:
+        # Both sides now name real pytest node ids: `_declaration_node_ids`
+        # reads a real collection, so a `@pytest.mark.parametrize` in the
+        # declaration file produces `…::test_x[1]` on both sides rather than
+        # one `FunctionDef` against N members. The comparison stays a
+        # relation rather than an equality anyway, because the two are
+        # produced by different runs and only one of them is this test's:
         # every declared test is accounted for by at least one member, and
         # nothing is silently dropped.
         members = [entry.member for entry in file_target_result.composition]
@@ -357,13 +356,20 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         # What an ordinary run may assert about the COMMITTED artifact are
         # the relations that hold for ANY tree — not equality with this
         # tree's numbers. `declaration_chars_expanded` and `expanded_runs`
-        # are read off `tests/test_verify_first_declaration.py`'s own AST,
-        # a file this test does not own: pinning the committed artifact to
-        # them made the FIRST test added there fail this measurement with
-        # `assert 2982 == 3050`, repairable only by regenerating a golden
-        # file — a foreign file's growth reported as a cost regression.
+        # are read off `tests/test_verify_first_declaration.py`'s own
+        # collected tests, a file this test does not own: pinning the
+        # committed artifact to them made the FIRST test added there fail
+        # this measurement with `assert 2982 == 3050`, repairable only by
+        # regenerating a golden file — a foreign file's growth reported as a
+        # cost regression.
+        #
+        # `declaration_chars_file_target` is NOT one of those: it is the
+        # length of `**Verifies:** ` plus this test's own `DECLARATION_TARGET`
+        # constant, so it cannot drift with a file this test does not own,
+        # and an ordinary run checks it exactly (spec-runner#454).
         assert recorded["file_target_runs"] == 1
         assert recorded["expanded_runs"] > recorded["file_target_runs"]
+        assert recorded["declaration_chars_file_target"] == len(file_target_line)
         assert recorded["declaration_chars_file_target"] < recorded["declaration_chars_expanded"]
         assert recorded["expanded_elapsed_seconds"] > recorded["file_target_elapsed_seconds"]
         assert recorded["file_target_elapsed_seconds"] > 0
@@ -374,7 +380,6 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         # was measured, and it cannot go stale, because it is asserted at
         # the moment of writing.
         if update_golden:
-            assert recorded["declaration_chars_file_target"] == len(file_target_line)
             assert recorded["declaration_chars_expanded"] == len(expanded_line)
             assert recorded["expanded_runs"] == len(node_ids)
 

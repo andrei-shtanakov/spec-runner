@@ -155,6 +155,28 @@ def _belt_never_executes_a_paid_binary(monkeypatch):
         _refuse([program, *argv])
         return await real_exec(program, *argv, **kwargs)
 
+    # Each wrapper carries a mark naming the door it closes.
+    #
+    # The three doors are deliberately redundant, and on CPython/Unix the
+    # redundancy is total: both `subprocess.run` and
+    # `asyncio.create_subprocess_exec` spawn through `subprocess.Popen`, so
+    # `Popen` alone would stop every case these tests exercise — measured by
+    # removing each patch in turn (spec-runner#455 round 3). The other two
+    # are kept anyway: they refuse *earlier*, with a message naming the call
+    # the test actually made, and they do not depend on an implementation
+    # detail of the standard library that a future version may change.
+    #
+    # The cost of redundancy is that no single deletion can open a door, so
+    # behavioural mutation cannot see these lines at all. Hence the mark: a
+    # test asserts its own door is marked, and deleting that line names the
+    # door left unwatched instead of passing quietly.
+    for door, wrapper in (
+        ("subprocess.run", _belted_run),
+        ("subprocess.Popen", _belted_popen),
+        ("asyncio.create_subprocess_exec", _belted_exec),
+    ):
+        wrapper.belted_door = door  # type: ignore[attr-defined]
+
     monkeypatch.setattr(subprocess, "run", _belted_run)
     monkeypatch.setattr(subprocess, "Popen", _belted_popen)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _belted_exec)
