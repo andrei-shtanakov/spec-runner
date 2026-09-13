@@ -791,8 +791,8 @@ BEH-30.
 введения дополнительных идентификаторов трассировки: NFR-01 — BEH-08 и BEH-32;
 NFR-02 — BEH-09, BEH-10 и BEH-32; NFR-03 — BEH-19 и BEH-28; NFR-04 — BEH-20,
 BEH-23, BEH-30 и BEH-33; NFR-05 — BEH-31; NFR-06 — BEH-31; NFR-07 — BEH-02; NFR-08 —
-BEH-03, BEH-05, BEH-06, BEH-09a, BEH-12, BEH-13, BEH-14, BEH-16, BEH-17,
-BEH-18 и BEH-22; NFR-09 — BEH-07 и BEH-20; NFR-10 — BEH-32.
+BEH-03, BEH-05, BEH-06, BEH-09, BEH-09a, BEH-12, BEH-13, BEH-14, BEH-16,
+BEH-17, BEH-18 и BEH-22; NFR-09 — BEH-07 и BEH-20; NFR-10 — BEH-32.
 
 ## Границы спецификации
 
