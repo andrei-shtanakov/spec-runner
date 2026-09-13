@@ -12,6 +12,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`has_verify_evidence` is covered** (#432). The second legal ground for
+  reaching `green_implementing` without a red (#367 FR-21) had no test;
+  `tests/test_lifecycle_reads_the_evidence.py` now asks it the same three
+  questions the file already asks of a red — a green run counts, a
+  `test_failure` run and an instrument error do not, and another task's
+  evidence is not this task's. Tests only; no behaviour change.
+
 - **A declared verify-first group may name a whole test file** (#402). Beside
   a node id, an element of `**Verifies:**` may be a **file target** — a bare
   path to a test file the resolved adapter's own discovery would collect,

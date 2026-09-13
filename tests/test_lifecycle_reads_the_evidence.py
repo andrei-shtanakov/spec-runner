@@ -51,8 +51,11 @@ from spec_runner.lifecycle import (
     TddPhase,
     advance,
     has_confirmed_red,
+    has_verify_evidence,
 )
+from spec_runner.live_verify import VerifyRunResult
 from spec_runner.state import ExecutorState
+from spec_runner.task import Task
 from spec_runner.tdd import RedCheckpoint, RedOutcome, _config_hash, resolve_namespace
 
 
@@ -165,6 +168,57 @@ class TestTheRuleIsAboutEvidence:
         assert (TddPhase.RED_AUTHORING, TddPhase.GREEN_IMPLEMENTING) in ILLEGAL
         assert (TddPhase.READY, TddPhase.GREEN_VERIFYING) in ILLEGAL
         assert (TddPhase.RED_VERIFYING, TddPhase.GREEN_IMPLEMENTING) not in ILLEGAL
+
+
+class TestVerifyEvidenceIsASeparateGround:
+    """#367 FR-21: `has_verify_evidence` is `has_confirmed_red`'s sibling —
+    same restraint (existence and outcome only), same three questions this
+    file already asks of a red: does a non-qualifying record count, does
+    another task's record count, and does the real thing still work."""
+
+    def _evidence(
+        self, cfg: ExecutorConfig, task_id: str, sha: str, *, ran: bool, passed: bool
+    ) -> None:
+        task = Task(id=task_id, name="t", priority="p1", status="todo", estimate="1h")
+        with ExecutorState(cfg) as state:
+            state.record_verify_evidence(
+                task=task,
+                config=cfg,
+                result=VerifyRunResult(sha, ran, passed, "detail"),
+            )
+
+    def test_green_verify_evidence_is_a_legal_ground_without_a_red(self, tmp_path):
+        cfg, ns, sha = _bed(tmp_path)
+        self._evidence(cfg, "TASK-1", sha, ran=True, passed=True)
+        with ExecutorState(cfg) as state:
+            assert has_verify_evidence(state, ns, "TASK-1") is True
+
+            advance(state, ns, "TASK-1", TddPhase.GREEN_IMPLEMENTING)
+
+            phases = [r["phase"] for r in state.tdd_phase_history("TASK-1", ns)]
+        assert phases == ["green_implementing"]
+
+    def test_a_test_failure_does_not_count(self, tmp_path):
+        """Only a green run is evidence; a run that ranked and failed is not
+        a red recorded under another name."""
+        cfg, ns, sha = _bed(tmp_path)
+        self._evidence(cfg, "TASK-1", sha, ran=True, passed=False)
+        with ExecutorState(cfg) as state:
+            assert has_verify_evidence(state, ns, "TASK-1") is False
+            with pytest.raises(IllegalTransition):
+                advance(state, ns, "TASK-1", TddPhase.GREEN_IMPLEMENTING)
+
+    def test_an_instrument_error_does_not_count(self, tmp_path):
+        cfg, ns, sha = _bed(tmp_path)
+        self._evidence(cfg, "TASK-1", sha, ran=False, passed=False)
+        with ExecutorState(cfg) as state:
+            assert has_verify_evidence(state, ns, "TASK-1") is False
+
+    def test_another_tasks_verify_evidence_is_not_this_tasks_evidence(self, tmp_path):
+        cfg, ns, sha = _bed(tmp_path)
+        self._evidence(cfg, "TASK-1", sha, ran=True, passed=True)
+        with ExecutorState(cfg) as state:
+            assert has_verify_evidence(state, ns, "TASK-2") is False
 
 
 class TestTheHistoryKeepsBeingWritten:
