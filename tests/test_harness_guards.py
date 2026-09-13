@@ -304,18 +304,33 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
             f"{sorted(shipped - _NEVER_EXECUTE)}"
         )
 
-    def test_every_process_creation_primitive_is_belted(self, monkeypatch):
-        """All three doors, not just the one the seams happen to use today.
-
-        The seams above reach `subprocess.run`. `runner.py` also streams a CLI
-        through `asyncio.create_subprocess_exec`, and `Popen` is one
-        refactoring away from being the path a seam takes — a belt that
-        covered only `run` would be silently bypassed the day that happens.
-        """
+    def test_the_popen_door_is_belted(self, monkeypatch):
+        """`Popen` is one refactoring away from being the path a seam takes,
+        and is already the path the plan seam's captured `run` goes through."""
         self._unguarded(monkeypatch)
+
+        assert getattr(subprocess.Popen, "belted_door", None) == "subprocess.Popen", (
+            "the Popen door has no belt of its own installed"
+        )
 
         with pytest.raises(PaidBinaryReached):
             subprocess.Popen([BELT_PROBE_COMMAND])
+
+    def test_the_asyncio_door_is_belted(self, monkeypatch):
+        """`runner.py` streams a CLI through `asyncio.create_subprocess_exec`
+        — a third door, and the only one no other test in this class walks.
+
+        Its own test rather than a shared one (spec-runner#455 review round
+        3): while the three doors were asserted together, deleting the
+        `create_subprocess_exec` line from the belt reddened a test that also
+        covered `Popen`, so the failure did not say which door had been left
+        open. Now the mutation names the door.
+        """
+        self._unguarded(monkeypatch)
+
+        assert getattr(asyncio.create_subprocess_exec, "belted_door", None) == (
+            "asyncio.create_subprocess_exec"
+        ), "the asyncio door has no belt of its own installed"
 
         async def _spawn():
             await asyncio.create_subprocess_exec(BELT_PROBE_COMMAND)
