@@ -237,6 +237,18 @@ class TestBuildTaskEnv:
         assert env["SR_SPEC_PREFIX"] == "WS-active-"
         assert env["SR_STATE_DB"] == str(tmp_path / "spec" / ".executor-WS-active-state.db")
 
+    def test_spec_prefix_is_normalized_for_the_subprocess_environment(self, tmp_path: Path) -> None:
+        """A loosely typed YAML scalar cannot make every plugin hook fail."""
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-010", name="My Task", priority="p1", status="todo", estimate="1d")
+        config = ExecutorConfig(project_root=tmp_path, spec_prefix=5)  # type: ignore[arg-type]
+
+        env = build_task_env(task, config, success=True)
+
+        assert env["SR_SPEC_PREFIX"] == "5"
+
     def test_failure_status(self) -> None:
         """success=False produces SR_TASK_STATUS=failed."""
         from spec_runner.config import ExecutorConfig
@@ -376,7 +388,8 @@ class TestPluginIntegration:
             "select.sh",
             "#!/bin/bash\n"
             'test "$SR_SPEC_PREFIX" = "WS-active-" && '
-            'test "$SR_STATE_DB" = "$SR_PROJECT_ROOT/spec/.executor-WS-active-state.db"\n',
+            'test "$SR_STATE_DB" = "$SR_PROJECT_ROOT/spec/.executor-WS-active-state.db" && '
+            'touch "$SR_PROJECT_ROOT/selected-state-db"\n',
         )
 
         task = Task(id="TASK-001", name="Test", priority="p0", status="todo", estimate="1d")
@@ -389,6 +402,7 @@ class TestPluginIntegration:
         )
 
         assert pre_start_hook(task, config) is True
+        assert (tmp_path / "selected-state-db").exists()
 
     def test_post_done_runs_plugins(self, tmp_path: Path) -> None:
         """post_done_hook discovers and runs post_done plugin hooks."""

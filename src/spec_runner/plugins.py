@@ -265,7 +265,7 @@ def build_task_env(
         "SR_TASK_STATUS": status,
         "SR_TASK_PRIORITY": task.priority,
         "SR_PROJECT_ROOT": str(config.project_root),
-        "SR_SPEC_PREFIX": config.spec_prefix,
+        "SR_SPEC_PREFIX": str(config.spec_prefix),
         "SR_STATE_DB": str(config.state_file),
         "SR_ATTEMPT_NUMBER": str(attempt_number),
         "SR_DURATION_SECONDS": f"{duration_seconds:.1f}",
