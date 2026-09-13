@@ -683,7 +683,7 @@ state-DB, а `--spec-prefix` меняет файл базы (`config.py:397` →
       сути, но спрашивает функцию, а не `advance`).
       Стенд проверен на различимость: с `has_verify_evidence`, отвечающим
       «есть строка» вместо «есть зелёная строка», падают 2 из 4.
-      Тесты: `tests/test_lifecycle_reads_the_evidence.py` (+4, всего 14)
+      Тесты: `tests/test_lifecycle_reads_the_evidence.py` (+5, всего 15)
 
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 

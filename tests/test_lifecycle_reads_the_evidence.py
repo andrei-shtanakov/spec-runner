@@ -223,6 +223,17 @@ class TestVerifyEvidenceIsASeparateGround:
         with ExecutorState(cfg) as state:
             assert has_verify_evidence(state, ns, "TASK-2") is False
 
+    def test_a_green_superseded_by_a_later_failure_no_longer_counts(self, tmp_path):
+        """The table is append-only and the question is asked of the latest
+        row — the sibling of "a retired red does not count" above."""
+        cfg, ns, sha = _bed(tmp_path)
+        self._evidence(cfg, "TASK-1", sha, ran=True, passed=True)
+        self._evidence(cfg, "TASK-1", sha, ran=True, passed=False)
+        with ExecutorState(cfg) as state:
+            assert has_verify_evidence(state, ns, "TASK-1") is False
+            with pytest.raises(IllegalTransition):
+                advance(state, ns, "TASK-1", TddPhase.GREEN_IMPLEMENTING)
+
 
 class TestTheHistoryKeepsBeingWritten:
     def test_green_rows_survive_a_resumed_run(self, tmp_path):
