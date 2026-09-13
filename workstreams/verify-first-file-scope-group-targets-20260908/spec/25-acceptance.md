@@ -1,6 +1,6 @@
 ---
 spec_stage: acceptance
-status: approved
+status: stale
 owner_role: qa
 traces_to:
 - requirements

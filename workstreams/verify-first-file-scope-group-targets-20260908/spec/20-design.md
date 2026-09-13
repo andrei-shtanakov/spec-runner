@@ -1,6 +1,6 @@
 ---
 spec_stage: design
-status: approved
+status: stale
 owner_role: architects
 traces_to:
 - requirements

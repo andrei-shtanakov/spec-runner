@@ -1,6 +1,6 @@
 ---
 spec_stage: decomposition
-status: approved
+status: stale
 owner_role: tech-lead
 traces_to:
 - design
