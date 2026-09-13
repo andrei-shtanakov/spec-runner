@@ -26,6 +26,7 @@ production path reads or enforces it.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 from pathlib import Path
@@ -115,13 +116,42 @@ class TestAllowListKnowsVerifyComposition:
         _validate_against_schema(result, "json-result.schema.json")
 
     def test_allow_list_is_test_only_no_production_path_reads_it(self) -> None:
-        """The subject is a test contract, not runtime (BEH-33): the fix
-        lives entirely in tests/test_json_result_contract.py, and
-        `build_task_json_result` neither imports nor references the
-        allow-list to decide what it prints."""
-        source = inspect.getsource(cli_module)
-        assert "OPTIONAL_TASK_RESULT_FIELDS" not in source
-        assert "ALLOWED_TASK_RESULT_FIELDS" not in source
+        """The subject is a test contract, not runtime (BEH-33).
+
+        Asserted by imports rather than by text (spec-runner#450). The
+        previous version read `inspect.getsource(cli_module)` and required
+        the two names to be absent from it, which was both too narrow and too
+        brittle: the allow-list applied in any OTHER production module
+        (`cli_info.py`, `mcp_server.py`, `review_pr.py`) went unseen, while a
+        mere sentence — "keep in sync with `OPTIONAL_TASK_RESULT_FIELDS`" in
+        a docstring — would have reddened the contract group without any
+        change in behaviour. `20-design.md` forbids proving BEH-33 by grep
+        for exactly this reason.
+
+        The allow-list is defined in `tests/test_json_result_contract.py`, so
+        the real property is structural and covers the whole package: no
+        module under `spec_runner` imports the test suite. What
+        `build_task_json_result` actually prints is asserted by the test
+        above, against a real result and the schema.
+        """
+        package = Path(inspect.getfile(cli_module)).parent
+        offenders: list[str] = []
+        for module in sorted(package.rglob("*.py")):
+            tree = ast.parse(module.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""]
+                else:
+                    continue
+                if any(name == "tests" or name.startswith("tests.") for name in names):
+                    offenders.append(f"{module.relative_to(package)}:{node.lineno}")
+
+        assert not offenders, (
+            f"production modules import the test suite, so a test-only "
+            f"allow-list could reach runtime: {offenders}"
+        )
 
 
 # --- BEH-30: the extension is additive ------------------------------------
