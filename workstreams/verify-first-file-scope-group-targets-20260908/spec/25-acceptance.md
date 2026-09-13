@@ -1,17 +1,17 @@
 ---
 spec_stage: acceptance
-status: stale
+status: approval_pending
 owner_role: qa
 traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
   requirements: c31c553b20e9d20c0b0631f28911bd177e338a13
-  behaviour-spec: 43dad2076b3c75fa8e36a1d8b18ca0ee21059c66
+  behaviour-spec: f53c7179e2f44368448045e9585bf82ff85ca459
 approved_by: andrei-shtanakov
 approved_at: '2026-09-11T09:03:59Z'
-version: 3
-approved_content_hash: e1c38f3df391064df4a67ec31155cb041b3ce7e8
+version: 4
+approved_content_hash: 6ffba54c6b23939696a19c15cb2d6edb03197db1
 ---
 
 # Acceptance — verify-first: объявленная группа принимает файловую цель
