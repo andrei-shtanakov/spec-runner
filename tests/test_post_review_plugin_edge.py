@@ -136,6 +136,45 @@ class TestWhatThePluginWritesIsDelivered:
         committed = _git(root, "show", "HEAD:spec/.tdd-evidence/TASK-001.json").stdout
         assert '"task":"TASK-001"' in committed
 
+    def test_plugin_output_must_pass_format_before_commit(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner.stages import StageReporter
+        from spec_runner.state import PhaseOutcome
+
+        root = _repo(tmp_path)
+        plugin_dir = _plugin(root, "writer", {"post_review": {"command": "./write.sh"}})
+        _script(
+            plugin_dir,
+            "write.sh",
+            '#!/bin/bash\nprintf "bad =  [1,2]\n" > "$SR_PROJECT_ROOT/plugin_output.py"\n',
+        )
+        check = root / "format-check.sh"
+        _script(
+            root,
+            "format-check.sh",
+            '#!/bin/bash\nif test -f plugin_output.py; then echo "Would reformat plugin_output.py"; exit 1; fi\n',
+        )
+        _stub_review(monkeypatch)
+        cfg = _cfg(
+            root,
+            run_lint_on_done=True,
+            lint_command="true",
+            format_check_command=str(check),
+        )
+
+        outcomes = []
+        reporter = StageReporter(
+            "TASK-001",
+            lambda _line: None,
+            sink=lambda phase, outcome, detail: outcomes.append((phase, outcome, detail)),
+        )
+        ok, error, *_ = hooks.post_done_hook(_task(), cfg, True, reporter=reporter)
+
+        assert ok is False
+        assert error is not None and "Would reformat plugin_output.py" in error
+        assert "plugin_output.py" not in _git(root, "ls-files").stdout.splitlines()
+        assert outcomes[-1][0:2] == ("lint", PhaseOutcome.UNEXPECTED_FAIL)
+
     def test_it_gets_the_same_environment_the_other_hooks_get(self, tmp_path, monkeypatch):
         from spec_runner import hooks
 

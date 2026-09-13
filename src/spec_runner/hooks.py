@@ -4,10 +4,13 @@ Contains pre/post execution hooks that orchestrate git operations,
 code review, testing, linting, and plugin execution around task runs.
 """
 
+import hashlib
+import os
+import stat
 import subprocess
 from typing import TypeVar, cast
 
-from .config import ExecutorConfig
+from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .gates import (
     GateContext,
     GateStatus,
@@ -23,6 +26,7 @@ from .git_ops import (
     get_main_branch,
     get_task_branch_name,
     map_source_to_test_files,
+    runtime_state_paths,
     stage_all_except_runtime,
 )
 from .lifecycle import TddPhase
@@ -374,6 +378,91 @@ def _head_sha(config: ExecutorConfig) -> str:
         cwd=config.project_root,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _review_tree_fingerprint(config: ExecutorConfig) -> str | None:
+    """HEAD plus dirty bytes, so a failed review-fix commit is still visible.
+
+    Parallel review can aggregate to FAILED even when another role returned
+    FIXED. Its commit is best-effort, so HEAD alone cannot answer whether the
+    reviewer left mutations for the later task commit to sweep up (#351).
+    """
+    try:
+        excluded = []
+        for excluded_path in runtime_state_paths(config):
+            try:
+                excluded.append(f":(exclude){excluded_path.relative_to(config.project_root)}")
+            except ValueError:
+                continue
+        status = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--",
+                ".",
+                *excluded,
+            ],
+            capture_output=True,
+            cwd=config.project_root,
+        )
+        if status.returncode != 0:
+            return None
+        diff = subprocess.run(
+            ["git", "diff", "--binary", "HEAD", "--", ".", *excluded],
+            capture_output=True,
+            cwd=config.project_root,
+        )
+        if diff.returncode != 0:
+            return None
+        fingerprint = hashlib.sha256()
+        fingerprint.update(status.stdout)
+        fingerprint.update(diff.stdout)
+        for entry in status.stdout.split(b"\0"):
+            if not entry.startswith(b"?? "):
+                continue
+            relative = entry[3:]
+            untracked_path = os.path.join(os.fsencode(config.project_root), relative)
+            file_stat = os.lstat(untracked_path)
+            fingerprint.update(len(relative).to_bytes(8, "big"))
+            fingerprint.update(relative)
+            fingerprint.update(file_stat.st_mode.to_bytes(8, "big"))
+            if stat.S_ISREG(file_stat.st_mode):
+                fingerprint.update(file_stat.st_size.to_bytes(8, "big"))
+                with open(untracked_path, "rb") as untracked_file:
+                    while chunk := untracked_file.read(1024 * 1024):
+                        fingerprint.update(chunk)
+            elif stat.S_ISLNK(file_stat.st_mode):
+                target = os.readlink(untracked_path)
+                fingerprint.update(len(target).to_bytes(8, "big"))
+                fingerprint.update(target)
+            else:
+                # A reviewer can replace a file between `git status` and this
+                # read. Unknown or transient objects are not evidence of an
+                # unchanged tree, so callers repeat deterministic gates.
+                return None
+            after_read = os.lstat(untracked_path)
+            if (
+                after_read.st_mode,
+                after_read.st_size,
+                after_read.st_mtime_ns,
+                after_read.st_ino,
+            ) != (
+                file_stat.st_mode,
+                file_stat.st_size,
+                file_stat.st_mtime_ns,
+                file_stat.st_ino,
+            ):
+                return None
+        head = _head_sha(config)
+    except OSError:
+        # Git automation is optional. An unmeasurable parallel review does
+        # not skip review; its deterministic gates are repeated fail-closed.
+        return None
+    fingerprint.update(head.encode("ascii"))
+    return fingerprint.hexdigest()
 
 
 def _record_tdd_phase(config: ExecutorConfig, task: Task, phase, detail=None) -> None:
@@ -992,6 +1081,67 @@ def post_done_hook(
             if reporter:
                 reporter.record(PhaseOutcome.PASS, "lint clean")
 
+    # A formatter check is a distinct, read-only completion gate (#351).
+    # Folding it into lint_command would make that command composite, which
+    # deliberately disables the pre-freeze RED repair path (#341).
+    if config.run_lint_on_done and config.format_check_command:
+        if reporter and not config.lint_command:
+            reporter.enter("lint")
+        if not command_has_executable(config.format_check_command):
+            if reporter:
+                reporter.record(PhaseOutcome.ERROR, "format check has no executable")
+            return (
+                False,
+                Refusal(
+                    "Format check infrastructure error: command has no executable",
+                    RefusalKind.INSTRUMENT,
+                    terminal=True,
+                ),
+                ReviewVerdict.SKIPPED.value,
+                "",
+                False,
+            )
+        logger.info("Running format check", command=config.format_check_command)
+        format_result = subprocess.run(
+            config.format_check_command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        if format_result.returncode != 0:
+            format_output = format_result.stdout + format_result.stderr
+            instrument_error = format_check_instrument_error(format_result.returncode)
+            if config.lint_blocking or instrument_error:
+                logger.error("Format check failed")
+                if reporter:
+                    reporter.record(
+                        PhaseOutcome.ERROR if instrument_error else PhaseOutcome.UNEXPECTED_FAIL,
+                        "format check failed",
+                    )
+                initial_format_failure: str = f"Lint errors (format check failed):\n{format_output}"
+                if instrument_error:
+                    initial_format_failure = Refusal(
+                        "Format check infrastructure error "
+                        f"(exit {format_result.returncode}):\n{format_output}",
+                        RefusalKind.INSTRUMENT,
+                    )
+                return (
+                    False,
+                    initial_format_failure,
+                    ReviewVerdict.SKIPPED.value,
+                    "",
+                    False,
+                )
+            logger.warning("Format check warning (non-blocking)")
+            if reporter:
+                reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "non-blocking format warning")
+        else:
+            lint_output_str = lint_output_str or "format clean"
+            logger.info("Format check passed")
+            if reporter and not config.lint_command:
+                reporter.record(PhaseOutcome.PASS, "format clean")
+
     # Commit the exec-stage work under the task label BEFORE review runs
     # (#103): the review stage commits its own fixes, and with nothing
     # committed yet that commit swept the ENTIRE feature under a
@@ -1105,6 +1255,7 @@ def post_done_hook(
     # Run code review (before commit, so fixes can be included)
     review_verdict = ReviewVerdict.SKIPPED
     review_output: str | None = None
+    review_tree_before: str | None = None
     if config.hitl_review and not config.run_review:
         logger.warning("hitl_review enabled but run_review is False; HITL gate skipped")
     if config.run_review:
@@ -1121,6 +1272,16 @@ def post_done_hook(
                 task_id=task.id,
                 file=str(config.tasks_file),
             )
+        # Capture after the harness's own REVIEW status write. Otherwise that
+        # bookkeeping mutation makes an unchanged parallel review look dirty
+        # and needlessly repeats every deterministic gate.
+        #
+        # A parallel review can both commit a FIXED role's edits and aggregate
+        # to FAILED when another role found issues. The aggregate verdict is
+        # intentionally about findings, not whether the tree moved, so retain
+        # the independent fact needed by the post-review gates.
+        if config.review_parallel:
+            review_tree_before = _review_tree_fingerprint(config)
         review_fn = run_parallel_review if config.review_parallel else run_code_review
         logger.info(
             "Running code review",
@@ -1186,12 +1347,25 @@ def post_done_hook(
             logger.info("HITL skipped review", task_id=task.id)
         # "approve" falls through to normal commit flow
 
-    # REVIEW_FIXED mutates the code AFTER the tests/lint gates ran (#65):
+    review_changed_candidate = review_verdict == ReviewVerdict.FIXED
+    if config.run_review and config.review_parallel:
+        review_tree_after = _review_tree_fingerprint(config)
+        # Fail closed when git cannot measure either side: deterministic gates
+        # are cheaper than letting an unmeasured review mutation reach commit.
+        review_changed_candidate = review_changed_candidate or any(
+            fingerprint is None for fingerprint in (review_tree_before, review_tree_after)
+        )
+        if review_tree_before is not None and review_tree_after is not None:
+            review_changed_candidate = (
+                review_changed_candidate or review_tree_after != review_tree_before
+            )
+
+    # Review mutations happen AFTER the tests/lint gates ran (#65):
     # re-run both gates so a broken review fix cannot be committed and
     # merged as a "successful" run. Full suite (not scoped) — a fix may
     # touch anything; strict lint check without auto-fix — another mutation
     # here would reopen the same hole.
-    if review_verdict == ReviewVerdict.FIXED:
+    if review_changed_candidate:
         if config.run_tests_on_done:
             if reporter:
                 reporter.enter("tests")
@@ -1234,6 +1408,38 @@ def post_done_hook(
                         False,
                     )
                 logger.warning("Lint warnings after review fixes (non-blocking)")
+        if config.run_lint_on_done and config.format_check_command:
+            if reporter and not config.lint_command:
+                reporter.enter("lint")
+            result = subprocess.run(
+                config.format_check_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=config.project_root,
+            )
+            if result.returncode != 0:
+                instrument_error = format_check_instrument_error(result.returncode)
+                if config.lint_blocking or instrument_error:
+                    logger.error("Format check failed after review fixes")
+                    review_format_failure: str = (
+                        "Lint errors (format check failed after review fixes):\n"
+                        f"{result.stdout + result.stderr}"
+                    )
+                    if instrument_error:
+                        review_format_failure = Refusal(
+                            "Format check infrastructure error after review fixes "
+                            f"(exit {result.returncode}):\n{result.stdout + result.stderr}",
+                            RefusalKind.INSTRUMENT,
+                        )
+                    return (
+                        False,
+                        review_format_failure,
+                        review_verdict.value,
+                        (review_output or "")[:2048],
+                        False,
+                    )
+                logger.warning("Format check warning after review fixes (non-blocking)")
 
     # Pre-terminal policy gates (#164), evaluated BEFORE anything writes DONE.
     #
@@ -1340,6 +1546,48 @@ def post_done_hook(
             gated_sha or _head_sha(config),
         )
         return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
+
+    # post_review is intentionally allowed to write committable evidence. It
+    # runs after the earlier review gates, so the final read-only format gate
+    # must run here as well before its output can be swept into git add -A.
+    if config.run_lint_on_done and config.format_check_command:
+        if reporter:
+            reporter.enter("lint")
+        result = subprocess.run(
+            config.format_check_command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+        if result.returncode != 0:
+            format_output = result.stdout + result.stderr
+            instrument_error = format_check_instrument_error(result.returncode)
+            if config.lint_blocking or instrument_error:
+                if reporter:
+                    reporter.record(
+                        PhaseOutcome.ERROR if instrument_error else PhaseOutcome.UNEXPECTED_FAIL,
+                        "format check failed after post_review",
+                    )
+                plugin_format_failure: str = f"Lint errors (format check failed):\n{format_output}"
+                if instrument_error:
+                    plugin_format_failure = Refusal(
+                        "Format check infrastructure error "
+                        f"(exit {result.returncode}):\n{format_output}",
+                        RefusalKind.INSTRUMENT,
+                    )
+                return (
+                    False,
+                    plugin_format_failure,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                    False,
+                )
+            logger.warning("Format check warning after post_review (non-blocking)")
+            if reporter:
+                reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "non-blocking format warning")
+        elif reporter:
+            reporter.record(PhaseOutcome.PASS, "format clean after post_review")
 
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the

@@ -267,6 +267,9 @@ guarantee). A lint failure records no checkpoint, so the gate answers
 `no confirmed red` → `HOOK_FAILURE` → fatal. Paid RED calls: the authoring
 call plus at most one BEH-07 agent round (declared fix ran and left
 findings) — up to two, both budget-gated and ledger-recorded; no retry.
+The optional read-only `commands.format_check` (#351) runs only on completed
+work and review mutations; keeping it separate prevents the full-tree format
+gate from turning pre-freeze `commands.lint` into an unrepairable composite.
 
 ### Review policy (#157)
 

@@ -116,6 +116,231 @@ class TestMissingTool:
         monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
         assert _by_id(run_preflight(_cfg(project)), "agent.cli").status == "ok"
 
+    def test_absent_format_runner_is_a_blocker(self, project, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which", lambda name: None if name == "black" else f"/bin/{name}"
+        )
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command="black --check .",
+                    lint_blocking=False,
+                )
+            ),
+            "format.runner",
+        )
+        assert check.status == "missing"
+        assert check.blocking
+        assert "black" in check.detail
+
+    def test_format_runner_skips_shell_environment_assignments(self, project, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: None if "=" in name else f"/bin/{name}",
+        )
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command="RUFF_CACHE_DIR=.cache uv run ruff format --check .",
+                )
+            ),
+            "format.runner",
+        )
+        assert check.status == "ok"
+        assert "uv" in check.detail
+
+    @pytest.mark.parametrize("wrapper", ["env", "/missing/env"])
+    def test_format_runner_treats_env_wrapper_as_unavailable(self, project, monkeypatch, wrapper):
+        monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command=(
+                        f"{wrapper} RUFF_CACHE_DIR=.cache missing-formatter --check ."
+                    ),
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "unavailable"
+        assert check.blocking
+
+    def test_format_runner_uses_declared_path(self, project, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name, path=None: None if path == "/an/empty/directory" else f"/bin/{name}",
+        )
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command="PATH=/an/empty/directory ruff format --check .",
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "missing"
+        assert check.blocking
+        assert "ruff" in check.detail
+
+    def test_relative_format_runner_is_resolved_from_project_root(self, project, monkeypatch):
+        tool = project / "tools" / "check-format"
+        tool.parent.mkdir()
+        tool.write_text("#!/bin/sh\nexit 0\n")
+        tool.chmod(0o755)
+
+        check = _by_id(
+            run_preflight(_cfg(project, format_check_command="./tools/check-format")),
+            "format.runner",
+        )
+
+        assert check.status == "ok"
+
+    def test_format_runner_skips_leading_redirection(self, project, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name, path=None: f"/bin/{name}" if name == "project-format" else None,
+        )
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command="2>/tmp/format.log project-format --check",
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "ok"
+        assert "project-format" in check.detail
+
+    def test_format_runner_applies_path_after_leading_redirection(self, project, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name, path=None: None if path == "/definitely-empty" else f"/bin/{name}",
+        )
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command=(
+                        "2>/dev/null PATH=/definitely-empty ruff format --check ."
+                    ),
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "missing"
+        assert check.blocking
+
+    def test_format_path_with_shell_expansion_is_unavailable(self, project, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name, path=None: f"/bin/{name}")
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command='PATH="$PATH:/project-tools" ruff format --check .',
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "unavailable"
+        assert check.blocking
+
+    def test_composite_format_runner_is_blocking_unavailable(self, project, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+        report = run_preflight(
+            _cfg(
+                project,
+                format_check_command="uv --version && definitely-missing-formatter --check .",
+            )
+        )
+
+        check = _by_id(report, "format.runner")
+        assert check.status == "unavailable"
+        assert check.blocking
+        assert report.verdict == "blocked"
+
+    def test_backgrounded_format_runner_is_blocking_unavailable(self, project, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command=(
+                        "ruff --version & definitely-missing-formatter --check ."
+                    ),
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "unavailable"
+        assert check.blocking
+
+    def test_composite_lint_keeps_existing_first_runner_check(self, project, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+        check = _by_id(
+            run_preflight(_cfg(project, lint_command="ruff check . && mypy src")),
+            "lint.runner",
+        )
+
+        assert check.status == "ok"
+        assert not check.blocking
+        assert "ruff" in check.detail
+
+    def test_lint_env_child_path_does_not_resolve_the_env_wrapper(self, project, monkeypatch):
+        lookups = []
+
+        def which(name, path=None):
+            lookups.append((name, path))
+            return f"/usr/bin/{name}" if path is None else None
+
+        monkeypatch.setattr("shutil.which", which)
+        check = _by_id(
+            run_preflight(_cfg(project, lint_command="env PATH=/project-tools ruff check .")),
+            "lint.runner",
+        )
+
+        assert check.status == "ok"
+        assert ("env", None) in lookups
+
+    def test_relative_lint_path_is_resolved_from_project_root(self, project, monkeypatch):
+        expected = str(project / "tools")
+
+        def which(name, path=None):
+            return f"{expected}/{name}" if path == expected else None
+
+        monkeypatch.setattr("shutil.which", which)
+        check = _by_id(
+            run_preflight(_cfg(project, lint_command="PATH=tools project-lint")),
+            "lint.runner",
+        )
+
+        assert check.status == "ok"
+
+    def test_quoted_shell_program_is_conservatively_unavailable(self, project, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+        check = _by_id(
+            run_preflight(
+                _cfg(
+                    project,
+                    format_check_command="python -c 'print(1); print(2)'",
+                )
+            ),
+            "format.runner",
+        )
+
+        assert check.status == "unavailable"
+        assert check.blocking
+
 
 class TestEmptySuiteIsNotHealth:
     """`0 passed` and exit 0 is indistinguishable from "all good" — which is

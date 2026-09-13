@@ -451,6 +451,9 @@ commands:
   test: "uv run pytest tests/ -v"
   lint: "uv run ruff check ."   # absent = no linter: under execution_mode: tdd the
                                 # pre-freeze lint is skipped rather than guessing ruff
+  format_check: "uv run ruff format --check ."
+                                # optional read-only completion/review gate
+  lint_fix: "uv run ruff check . --fix"
   sync: "mix deps.get"       # Dependency sync before each task. Empty/absent =
                              # auto: `uv sync` when pyproject.toml exists, else skip
 
@@ -458,6 +461,16 @@ paths:
   root: "."
   logs: "spec/.executor-logs"
 ```
+
+`commands.format_check` is optional and follows `hooks.post_done.run_lint`.
+It runs after the normal linter on completed work and again after review fixes;
+the final pre-commit pass also covers `post_review` plugin output, and
+`review-pr` mutations use it too. It is deliberately separate from
+`commands.lint`: TDD narrows and may repair that command on the claimed RED
+file, while the format check remains a read-only full-tree gate. `preflight`
+reports the format-check runner separately when this command is configured.
+The command contract is `0` for clean and `1` for measured formatting drift;
+any other exit code is an instrument failure and blocks even advisory lint.
 
 ### Budgets: what the caps actually guarantee
 

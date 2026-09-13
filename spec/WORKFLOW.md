@@ -215,7 +215,14 @@ hooks:
 commands:
   test: "uv run pytest tests/ -v -m 'not slow'"
   lint: "uv run ruff check ."
+  format_check: "uv run ruff format --check ."
 ```
+
+`format_check` is an optional read-only full-tree gate run after the normal
+post-done lint and after review fixes. Keep it separate from `lint`: the TDD
+pre-freeze path narrows and may repair `lint` on the claimed RED file.
+It must return 0 for clean and 1 for measured drift; every other exit status
+means the formatter did not produce evidence and blocks completion.
 
 ---
 

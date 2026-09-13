@@ -9,6 +9,7 @@ import contextlib
 import fcntl
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -28,6 +29,56 @@ if TYPE_CHECKING:
 #: it is a recognised mode, not yet a driven one; branching on it is later
 #: work (BEH-02+).
 EXECUTION_MODES = ("standard", "tdd", "verify_first")
+
+
+def _command_prefix(command: str) -> tuple[str, dict[str, str]]:
+    """Executable and assignments in a simple-command prefix."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return "", {}
+    assignments: dict[str, str] = {}
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        assignment = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", part)
+        if assignment:
+            assignments[assignment.group(1)] = assignment.group(2)
+            index += 1
+            continue
+        # A leading shell operator, redirection, or comment can make an
+        # assignment-only fragment succeed without invoking any instrument.
+        if part.startswith("#") or re.match(r"[|&;()]", part):
+            return "", assignments
+        if re.fullmatch(r"\d*(?:>>?|<<?|<>|>&|<&)", part):
+            index += 2  # the following token is the redirection target
+            continue
+        if re.match(r"\d*(?:>>?|<<?|<>|>&|<&).+", part):
+            index += 1  # target is attached to the operator
+            continue
+        return part, assignments
+    return "", assignments
+
+
+def command_executable(command: str) -> str:
+    """First executable in a simple command, skipping assignments/redirections."""
+    return _command_prefix(command)[0]
+
+
+def command_path_override(command: str) -> str | None:
+    """PATH assigned in the same simple-command prefix, if present."""
+    return _command_prefix(command)[1].get("PATH")
+
+
+def command_has_executable(command: str) -> bool:
+    """Whether a shell command contains a provable executable."""
+    return bool(command_executable(command))
+
+
+def format_check_instrument_error(returncode: int) -> bool:
+    """Whether a formatter result is neither clean (0) nor measured drift (1)."""
+    return returncode not in (0, 1)
+
 
 #: Waiver classes — a CLOSED vocabulary (#429). Closed is the whole point:
 #: with an open one, any word the author found convincing would become a
@@ -354,6 +405,10 @@ class ExecutorConfig:
     # in code is taken at its word, since passing `lint_command` there is itself
     # a declaration.
     lint_command_declared: bool = True
+    # Optional read-only full-tree formatting gate for completion/review.
+    # Separate from lint_command so TDD can keep narrowing and repairing the
+    # pre-freeze RED linter. Empty preserves historical behaviour (#351).
+    format_check_command: str = ""
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     # Whether the project actually declared `commands.lint_fix` (#341 Q-03).
     # Fail-closed, unlike `lint_command_declared`: the fix invocation WRITES
@@ -876,6 +931,12 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         post_done = hooks.get("post_done", {})
         commands = executor_config.get("commands", {})
         paths = executor_config.get("paths", {})
+        format_check = commands.get("format_check")
+        if format_check is not None and not isinstance(format_check, str):
+            raise ConfigError(
+                f"{config_path}: commands.format_check must be a string or null, "
+                f"got {type(format_check).__name__}"
+            )
 
         return {
             "max_retries": executor_config.get("max_retries"),
@@ -911,6 +972,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             # what the RED-phase lint needs to know (#220), so it must reach
             # build_config rather than being dropped with the other Nones.
             "lint_command_declared": bool(commands.get("lint")),
+            "format_check_command": format_check,
             "lint_fix_command": commands.get("lint_fix"),
             "lint_fix_command_declared": bool(commands.get("lint_fix")),
             "sync_command": commands.get("sync"),

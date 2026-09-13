@@ -23,12 +23,16 @@ this project can run tasks at all, and touches nothing.
 """
 
 import json
+import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from .config import ExecutorConfig
+from .config import ExecutorConfig, command_executable, command_path_override
 from .git_ops import is_composite_shell_command
 from .logging import get_logger
 
@@ -81,11 +85,18 @@ class PreflightReport:
 
 def _first_program(command: str) -> str:
     """The executable a simple command runs, or "" when it cannot be told."""
-    parts = command.split()
-    if not parts:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
         return ""
-    # `uv run pytest ...` — the interesting binary is uv; it is what must exist.
-    return parts[0]
+    for part in parts:
+        # Shell-leading NAME=value assignments configure the command; they are
+        # not executables. `shlex` keeps quoted assignment values together.
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", part):
+            continue
+        # `uv run pytest ...` — the interesting binary is uv; it is what must exist.
+        return part
+    return ""
 
 
 def _check_spec(config: ExecutorConfig) -> list[Check]:
@@ -124,13 +135,93 @@ def _check_spec(config: ExecutorConfig) -> list[Check]:
     return checks
 
 
-def _check_tool(check_id: str, command: str, *, blocking: bool, label: str) -> Check:
+def _resolved_command_path(command: str, project_root: Path) -> str | None:
+    declared_path = command_path_override(command)
+    if declared_path is None:
+        return None
+    return os.pathsep.join(
+        str(configured)
+        for item in declared_path.split(os.pathsep)
+        for configured in [Path(item) if Path(item).is_absolute() else project_root / item]
+    )
+
+
+def _check_tool(
+    check_id: str,
+    command: str,
+    *,
+    blocking: bool,
+    label: str,
+    project_root: Path,
+) -> Check:
+    if not command.strip():
+        return Check(check_id, "missing", blocking, f"{label} is not configured")
     program = _first_program(command)
     if not program:
-        return Check(check_id, "missing", blocking, f"{label} is not configured")
-    if shutil.which(program) is None:
+        return Check(
+            check_id,
+            "unavailable",
+            blocking,
+            f"{label} executable cannot be identified without guessing",
+        )
+    declared_path = _resolved_command_path(command, project_root)
+    found = (
+        shutil.which(program)
+        if declared_path is None
+        else shutil.which(program, path=declared_path)
+    )
+    if found is None:
         return Check(check_id, "missing", blocking, f"{label} {program!r} is not on PATH")
     return Check(check_id, "ok", False, f"{label} {program!r} found")
+
+
+def _check_format_tool(config: ExecutorConfig) -> Check:
+    """Check only format commands whose first executable is provable."""
+    command = config.format_check_command
+    executable = command_executable(command)
+    wrapper = executable.rsplit("/", 1)[-1]
+    opaque = {
+        "bash",
+        "command",
+        "dash",
+        "env",
+        "exec",
+        "ksh",
+        "nohup",
+        "sh",
+        "zsh",
+    }
+    background = re.search(r"(?<![>&])&(?![>&])", command)
+    if not executable or wrapper in opaque or is_composite_shell_command(command) or background:
+        return Check(
+            "format.runner",
+            "unavailable",
+            True,
+            "format-check command is not a provable simple executable",
+        )
+    raw_declared_path = command_path_override(command)
+    if raw_declared_path is not None and re.search(r"[$`~]", raw_declared_path):
+        return Check(
+            "format.runner",
+            "unavailable",
+            True,
+            "format-check PATH uses shell expansion and cannot be resolved safely",
+        )
+    declared_path = _resolved_command_path(command, config.project_root)
+    lookup = executable
+    if "/" in executable and not Path(executable).is_absolute():
+        lookup = str(config.project_root / executable)
+    found = (
+        shutil.which(lookup) if declared_path is None else shutil.which(lookup, path=declared_path)
+    )
+    if found is None:
+        return Check(
+            "format.runner",
+            "missing",
+            True,
+            f"format-check runner {executable!r} is not on PATH",
+        )
+    return Check("format.runner", "ok", False, f"format-check runner {executable!r} found")
 
 
 def _check_tests(config: ExecutorConfig) -> list[Check]:
@@ -159,7 +250,13 @@ def _check_tests(config: ExecutorConfig) -> list[Check]:
             ),
         ]
 
-    runner = _check_tool("tests.runner", command, blocking=True, label="test runner")
+    runner = _check_tool(
+        "tests.runner",
+        command,
+        blocking=True,
+        label="test runner",
+        project_root=config.project_root,
+    )
     if runner.status != "ok":
         return [
             runner,
@@ -291,7 +388,15 @@ def _check_state_dir(config: ExecutorConfig) -> Check:
 def run_preflight(config: ExecutorConfig) -> PreflightReport:
     """Collect every check. Writes nothing, raises nothing."""
     checks: list[Check] = list(_check_spec(config))
-    checks.append(_check_tool("agent.cli", config.claude_command, blocking=True, label="agent CLI"))
+    checks.append(
+        _check_tool(
+            "agent.cli",
+            config.claude_command,
+            blocking=True,
+            label="agent CLI",
+            project_root=config.project_root,
+        )
+    )
 
     if getattr(config, "run_tests_on_done", True):
         checks.extend(_check_tests(config))
@@ -307,8 +412,11 @@ def run_preflight(config: ExecutorConfig) -> PreflightReport:
                 config.lint_command,
                 blocking=bool(getattr(config, "lint_blocking", True)),
                 label="lint runner",
+                project_root=config.project_root,
             )
         )
+        if config.format_check_command:
+            checks.append(_check_format_tool(config))
     else:
         checks.append(Check("lint.runner", "skipped", False, "run_lint_on_done is false"))
 

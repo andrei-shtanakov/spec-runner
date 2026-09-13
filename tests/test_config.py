@@ -130,10 +130,27 @@ class TestLoadConfigFromYaml:
 
     def test_loads_commands_from_yaml(self, tmp_path):
         cfg = tmp_path / "config.yaml"
-        cfg.write_text("executor:\n  commands:\n    test: pytest -x\n    lint: ruff check .\n")
+        cfg.write_text(
+            "executor:\n"
+            "  commands:\n"
+            "    test: pytest -x\n"
+            "    lint: ruff check .\n"
+            "    format_check: ruff format --check .\n"
+        )
         result = load_config_from_yaml(cfg)
         assert result["test_command"] == "pytest -x"
         assert result["lint_command"] == "ruff check ."
+        assert result["format_check_command"] == "ruff format --check ."
+
+    @pytest.mark.parametrize("value", ["{}", "[]", "false", "1"])
+    def test_rejects_non_string_format_check(self, tmp_path, value):
+        from spec_runner.config import ConfigError
+
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(f"executor:\n  commands:\n    format_check: {value}\n")
+
+        with pytest.raises(ConfigError, match="commands.format_check must be a string"):
+            load_config_from_yaml(cfg)
 
     def test_loads_plugins_dir_from_yaml(self, tmp_path):
         cfg = tmp_path / "config.yaml"

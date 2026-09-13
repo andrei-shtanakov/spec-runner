@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .budget import budget_is_active
-from .config import ExecutorConfig
+from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
 from .prompt import load_prompt_template, neutralise_markers, render_template
@@ -28,6 +28,33 @@ from .state import ReviewVerdict
 from .task import Task
 
 logger = get_logger("review")
+
+
+def _review_fix_format_failure(config: ExecutorConfig) -> str | None:
+    """Run the read-only format gate before a reviewer mutation is committed."""
+    if not config.run_lint_on_done or not config.format_check_command:
+        return None
+    if not command_has_executable(config.format_check_command):
+        return "Format check command has no executable"
+    result = subprocess.run(
+        config.format_check_command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if result.returncode == 0:
+        return None
+    if result.returncode == 1 and not config.lint_blocking:
+        logger.warning("Format drift after review fix is advisory")
+        return None
+    detail = (result.stdout + result.stderr)[-500:]
+    kind = (
+        "infrastructure error"
+        if format_check_instrument_error(result.returncode)
+        else "formatting drift"
+    )
+    return f"Format check {kind} after review fix: {detail}"
 
 
 #: What a reviewer's output says, once. Both review paths ask this — the
@@ -706,6 +733,12 @@ def run_code_review(
             return ReviewVerdict.PASSED, None, output
         elif signal.only == "REVIEW_FIXED":
             log_progress("✅ Code review: issues fixed", task.id)
+            format_failure = _review_fix_format_failure(config)
+            if format_failure is not None:
+                # The tree still contains reviewer mutations. Preserve FIXED
+                # so post_done repeats every deterministic gate before any
+                # general task commit can sweep them up.
+                return ReviewVerdict.FIXED, format_failure, output
             # Commit the fixes — runtime state stays out of the commit (#62)
             if stage_all_except_runtime(config):
                 commit_result = subprocess.run(
@@ -946,24 +979,28 @@ def run_parallel_review(
     else:
         overall_verdict = ReviewVerdict.PASSED
 
+    format_failure_reason: str | None = None
     if has_fixed:
         # Committing is driven by "a role changed the tree", not by the overall
         # verdict: leaving the edits uncommitted here hands them to the general
         # auto-commit, which runs no gates.
-        # Commit fixes from any review agent — minus runtime state (#62)
-        try:
-            staged = stage_all_except_runtime(config)
-        except RuntimeError as exc:
-            logger.warning("Staging failed after parallel review fixes", error=str(exc))
-            staged = False
-        if staged:
-            subprocess.run(
-                ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
-                capture_output=True,
-                text=True,
-                cwd=config.project_root,
-            )
-
+        format_failure = _review_fix_format_failure(config)
+        if format_failure is not None:
+            format_failure_reason = format_failure
+        else:
+            # Commit fixes from any review agent — minus runtime state (#62)
+            try:
+                staged = stage_all_except_runtime(config)
+            except RuntimeError as exc:
+                logger.warning("Staging failed after parallel review fixes", error=str(exc))
+                staged = False
+            if staged:
+                subprocess.run(
+                    ["git", "commit", "-m", f"{task.id}: parallel review fixes"],
+                    capture_output=True,
+                    text=True,
+                    cwd=config.project_root,
+                )
     combined_output = "\n\n".join(all_outputs)
     log_progress(f"🔍 Parallel review result: {overall_verdict.value}", task.id)
 
@@ -973,6 +1010,8 @@ def run_parallel_review(
     reasons: list[str] = []
     if overall_verdict == ReviewVerdict.FAILED:
         reasons.append("Review found issues")
+    if format_failure_reason:
+        reasons.append(format_failure_reason)
     if silent:
         reasons.append("no verdict from " + ", ".join(silent))
     error = "; ".join(reasons) or None

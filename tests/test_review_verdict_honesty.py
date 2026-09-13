@@ -216,6 +216,67 @@ class TestNonZeroExitIsNeverAVerdict:
         assert output and "nulls unchecked" in output
 
 
+class TestSequentialReviewFixFormatGate:
+    def test_format_failure_prevents_review_fix_commit(self, project, monkeypatch):
+        from spec_runner import review as review_mod
+
+        config = _cfg(
+            project,
+            run_lint_on_done=True,
+            format_check_command="format-check",
+        )
+        commands = []
+
+        def run(command, *args, **kwargs):
+            commands.append(command)
+            if command == config.format_check_command:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="Would reformat changed.py"
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="REVIEW_FIXED\n", stderr="")
+
+        monkeypatch.setattr(review_mod.subprocess, "run", run)
+        staged = []
+        monkeypatch.setattr(
+            review_mod, "stage_all_except_runtime", lambda _cfg: staged.append(True) or True
+        )
+
+        verdict, error, _output = run_code_review(_task(), config)
+
+        assert verdict is ReviewVerdict.FIXED
+        assert error and "Would reformat" in error
+        assert staged == []
+        assert not any(isinstance(command, list) and "commit" in command for command in commands)
+
+    def test_advisory_format_drift_still_commits_review_fix(self, project, monkeypatch):
+        from spec_runner import review as review_mod
+
+        config = _cfg(
+            project,
+            run_lint_on_done=True,
+            lint_blocking=False,
+            format_check_command="format-check",
+        )
+        commands = []
+
+        def run(command, *args, **kwargs):
+            commands.append(command)
+            if command == config.format_check_command:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="Would reformat changed.py"
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="REVIEW_FIXED\n", stderr="")
+
+        monkeypatch.setattr(review_mod.subprocess, "run", run)
+        monkeypatch.setattr(review_mod, "stage_all_except_runtime", lambda _cfg: True)
+
+        verdict, error, _output = run_code_review(_task(), config)
+
+        assert verdict is ReviewVerdict.FIXED
+        assert error is None
+        assert any(isinstance(command, list) and "commit" in command for command in commands)
+
+
 class TestParallelFixesAreAlwaysCommittedAndGated:
     """A role that fixed code changed the working tree; that must not depend on
     what the *other* roles returned (Copilot, PR #156).
