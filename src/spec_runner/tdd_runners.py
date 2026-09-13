@@ -251,6 +251,14 @@ class TddRunnerAdapter(Protocol):
     #: RED is refused before it is replayed.
     selector_instruction: str
 
+    #: Whether this adapter accepts a **file target** — a bare path to a test
+    #: file — as a declared group element, beside its own node-id form. Part
+    #: of the protocol rather than an optional attribute (spec-runner#448):
+    #: it was declared on the adapters and read by nothing, so a declaration
+    #: no runner supported was refused as if it were a typo. A capability
+    #: that decides a refusal has to be one every adapter answers.
+    supports_file_targets: bool
+
     def parse_selector(self, raw: str) -> Selector | SelectorRefusal: ...
 
     def validate_command(self, test_command: str) -> str | None:
@@ -702,19 +710,59 @@ def read_file_composition(path: Path) -> FileComposition | None:
     )
 
 
+def _is_file_target_form(value: str) -> bool:
+    """Whether `value` belongs to the file-target class by FORM alone.
+
+    Stated once, here, because two callers need the same notion and a second
+    copy would drift: this function decides only "which class of selector did
+    the operator write", never whether the file exists or is collectable —
+    that is the owning adapter's job (`PytestAdapter.parse_group_element`).
+
+    The class is "a bare path", and the test for it is that the value carries
+    no colon at all. That is stricter than "no trailing `:<digits>`" on
+    purpose: `x_test.exs:oops` is a **mistyped `path:line`**, not a file
+    target, and answering it with "this adapter does not accept file targets"
+    would reintroduce the very confusion this function exists to remove —
+    only pointing the other way. A `::` node id, any `path:line` (well formed
+    or not), a `-k`/`-m` expression and a glob each have their own class and
+    their own refusal, and must keep reaching the vocabulary that owns them.
+    """
+    if not value or value.startswith("-"):
+        return False
+    if ":" in value:
+        return False
+    return not any(ch in value for ch in _GROUP_ELEMENT_GLOB_CHARS)
+
+
 def parse_group_element(
     adapter: TddRunnerAdapter, raw: str, root: Path
 ) -> Selector | SelectorRefusal:
     """Dispatch to `adapter`'s own declared-group-element vocabulary if it
-    has one (pytest). An adapter that never declared one (ExUnit,
-    `supports_file_targets = False`) has nothing new to add — its existing
-    `parse_selector` already refuses every non-node-id form, including a
-    file target, under its own stable code. Not a second dictionary: only
-    where a caller that accepts both node ids and file targets (`live_verify`)
-    reaches whichever vocabulary applies.
+    has one (pytest). An adapter that never declared one (ExUnit) refuses a
+    file target **by capability**, and everything else through its existing
+    `parse_selector`. Not a second dictionary: only where a caller that
+    accepts both node ids and file targets (`live_verify`) reaches whichever
+    vocabulary applies.
+
+    `supports_file_targets` used to be declared and read by nothing
+    (spec-runner#448): a file target fell through to `parse_selector` and came
+    back as `not_a_line_selector` — the same code, and the same sentence, as a
+    typo in `path:line`. Two defects on one code is what BEH-03 forbids, and
+    the sentence sent the operator to fix syntax when the answer is that this
+    runner does not accept the class at all. So the capability is read here,
+    and the refusal names the adapter, the class, and the form this adapter
+    does expect.
     """
     method = getattr(adapter, "parse_group_element", None)
     if method is None:
+        value = (raw or "").strip()
+        if not adapter.supports_file_targets and _is_file_target_form(value):
+            return SelectorRefusal(
+                "file_target_unsupported",
+                f"the {adapter.name} adapter does not accept file targets "
+                f"(declared {value!r}); this adapter expects 'path:line', "
+                "where line is the test's definition line",
+            )
         return adapter.parse_selector(raw)
     result: Selector | SelectorRefusal = method(raw, root)
     return result

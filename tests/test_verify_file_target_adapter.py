@@ -59,10 +59,18 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from unittest.mock import MagicMock
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.live_verify import run_live_verify
 from spec_runner.task import Task
-from spec_runner.tdd_runners import ExUnitAdapter, ExUnitDefinitionLine, Selector
+from spec_runner.tdd_runners import (
+    ExUnitAdapter,
+    ExUnitDefinitionLine,
+    Selector,
+    SelectorRefusal,
+    parse_group_element,
+)
 from spec_runner.validate import _validate_verify_first_declarations
 
 #: The one declared value driven through both adapters — a bare file path,
@@ -266,3 +274,81 @@ class TestExecutionNeverAcceptsAFileTargetSilentlyUnderTheAdapterWithoutSupport:
         # negative control: with the named refusal gone, the run reaches
         # environment preparation instead of refusing statically.
         prepare_spy.assert_called_once()
+
+
+class TestBEH05RefusalNamesTheCapabilityNotTheSyntax:
+    """kind: contract — BEH-05, the refusal's own words (spec-runner#448).
+
+    `ExUnitAdapter.supports_file_targets = False` declares a capability, and
+    until now nothing read it. A declared file target fell through to
+    `parse_selector`, which refused it as `not_a_line_selector` — the very
+    same code, and the same sentence, as a typo in `path:line`. Two different
+    defects collapsed onto one code is what BEH-03 forbids, and the operator
+    was told the wrong thing: "this is not path:line" invites fixing the
+    syntax, when the real answer is that this runner does not accept the
+    whole class.
+
+    The refusal must therefore be produced BY the capability and must name
+    the adapter, the class of selector it does not accept, and the form it
+    does expect.
+    """
+
+    def test_a_file_target_under_an_adapter_without_support_is_refused_by_class(self):
+        refused = parse_group_element(ExUnitAdapter(), "tests/test_x.py", Path("/nonexistent"))
+
+        assert isinstance(refused, SelectorRefusal)
+        assert refused.code == "file_target_unsupported", (
+            f"a whole unsupported class must not share a code with a typo in "
+            f"`path:line`; got {refused.code!r}: {refused.message}"
+        )
+        assert "exunit" in refused.message.lower(), (
+            f"the refusal must name the adapter that cannot do this: {refused.message!r}"
+        )
+        assert "file target" in refused.message.lower(), (
+            f"the refusal must name the class being refused: {refused.message!r}"
+        )
+        assert "path:line" in refused.message, (
+            f"the refusal must still name the form this adapter does expect: {refused.message!r}"
+        )
+        assert "tests/test_x.py" in refused.message, (
+            f"the refusal must quote the declaration it is about: {refused.message!r}"
+        )
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            # The class this fix is about.
+            ("tests/test_x.py", "file_target_unsupported"),
+            ("test/x_test.exs", "file_target_unsupported"),
+            # Every neighbouring class keeps its own answer. `path:line` —
+            # well formed or mistyped — is an attempt at THIS adapter's own
+            # form, and calling it "an unsupported class" would be the same
+            # confusion pointing the other way.
+            ("test/x_test.exs:notanumber", "not_a_line_selector"),
+            ("tests/test_x.py::test_a", "pytest_style_selector"),
+            ("-k smoke", "not_a_line_selector"),
+            ("-m slow", "not_a_line_selector"),
+            ("tests/*.exs", "not_a_line_selector"),
+            ("", "not_a_line_selector"),
+        ],
+    )
+    def test_only_the_bare_path_class_is_refused_by_capability(self, raw, expected):
+        """The boundaries of the form criterion, pinned.
+
+        `_is_file_target_form` decides which class the operator wrote, and a
+        drift in it would silently re-route a neighbouring form into the new
+        refusal — which is how one code swallowing several defects happens in
+        the first place (BEH-03).
+        """
+        refused = parse_group_element(ExUnitAdapter(), raw, Path("/nonexistent"))
+
+        assert isinstance(refused, SelectorRefusal), f"{raw!r} unexpectedly parsed"
+        assert refused.code == expected, f"{raw!r}: {refused.code!r} — {refused.message}"
+
+    def test_a_well_formed_line_selector_is_still_accepted(self):
+        """The capability check must not stand in front of what this adapter
+        does support."""
+        parsed = parse_group_element(ExUnitAdapter(), "test/x_test.exs:12", Path("/nonexistent"))
+
+        assert isinstance(parsed, Selector)
+        assert parsed.locator == ExUnitDefinitionLine(12)

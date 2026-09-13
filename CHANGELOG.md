@@ -189,6 +189,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A file target declared under a runner that cannot take one is refused by
+  capability, not as a typo** (#448). `supports_file_targets` was declared on
+  every adapter and read by nothing: a `**Verifies:** tests/x.py` under the
+  ExUnit runner fell through to `parse_selector` and came back as
+  `not_a_line_selector` — the same `SelectorRefusal.code`, and the same
+  sentence, as a mistyped `path:line`. The operator was told to fix the
+  syntax of a form this runner does not accept at all. The dispatcher now
+  reads the capability and refuses with a new code,
+  **`file_target_unsupported`**, naming the adapter, the class being refused
+  and the form that runner does expect. `validate` reports it as an error, as
+  it does every other adapter refusal. Neighbouring forms are untouched: a
+  `path:line` (well formed or mistyped), a pytest node id, a `-k`/`-m`
+  expression and a glob each keep their own code, and the pytest adapter —
+  which does support file targets — is unaffected.
+
 - **No cap configured now means no cap at every site.** The between-attempts
   task check (`execution._check_task_budget`) resolved `effective_limits`
   unconditionally, and that function answers with a standing authorization even
