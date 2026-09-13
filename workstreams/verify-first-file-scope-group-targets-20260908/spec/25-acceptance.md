@@ -1,6 +1,6 @@
 ---
 spec_stage: acceptance
-status: approval_pending
+status: approved
 owner_role: qa
 traces_to:
 - requirements
@@ -9,7 +9,7 @@ upstream_hashes:
   requirements: c31c553b20e9d20c0b0631f28911bd177e338a13
   behaviour-spec: f53c7179e2f44368448045e9585bf82ff85ca459
 approved_by: andrei-shtanakov
-approved_at: '2026-09-11T09:03:59Z'
+approved_at: '2026-09-13T04:52:19Z'
 version: 4
 approved_content_hash: 6ffba54c6b23939696a19c15cb2d6edb03197db1
 ---
