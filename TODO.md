@@ -749,9 +749,11 @@ runtime-state по инварианту конвейера «нужное для
       per-change и explicit-state конфигураций. Launch config из CLI сохраняет
       `--change` scope для stop tool. DB-derived `.executor-state.stop` больше
       не создаётся.
-- [ ] **otel-default-dir-pipeline-id** (spec-runner#482) @owner:TBD @id:otel-default-dir-pipeline-id
-      Default OTel path генерирует ULID каталога отдельно от embedded
-      `pipeline_id`; унифицировать identity и покрыть путь без обеих env-vars.
+- [x] **otel-default-dir-pipeline-id** (spec-runner#482) @owner:github:andrei-shtanakov @id:otel-default-dir-pipeline-id
+      Один generated pipeline ULID теперь используется и для default-каталога
+      `logs/<pipeline-id>/`, и для embedded `pipeline_id`; явные env-настройки
+      сохраняют приоритет, а два последовательных процесса получают разные
+      каталоги.
 
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
