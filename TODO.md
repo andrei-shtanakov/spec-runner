@@ -685,6 +685,18 @@ state-DB, а `--spec-prefix` меняет файл базы (`config.py:397` →
       «есть строка» вместо «есть зелёная строка», падают 2 из 4.
       Тесты: `tests/test_lifecycle_reads_the_evidence.py` (+5, всего 15)
 
+**Принято 2026-09-13: #339** (inbox, from devtools) — blocking-плагин не мог
+отличить активную state-DB от завершённых соседних workstream'ов: hook-env
+передавал задачу и корень проекта, но не выбранный `spec_prefix` и не путь базы.
+
+- [x] **hook-env-spec-prefix-state-db** (spec-runner#339, from devtools) @owner:github:andrei-shtanakov @id:hook-env-spec-prefix-state-db
+      Все hook points получают `SR_SPEC_PREFIX` и абсолютный `SR_STATE_DB` из
+      уже разрешённого `ExecutorConfig`. Плагину не нужно перечислять
+      `.executor-*-state.db` и угадывать активную среди соседей. Интеграционная
+      регрессия создаёт две легитимные префиксные базы и доказывает, что
+      blocking `pre_start` выбирает активную только по env.
+      Тесты: `tests/test_plugins.py`
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),

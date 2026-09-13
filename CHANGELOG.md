@@ -12,6 +12,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Plugin hooks receive the active state namespace** (#339). Every hook now
+  gets `SR_SPEC_PREFIX` and the resolved absolute `SR_STATE_DB` path, so a
+  blocking plugin can select this run's state deterministically even when
+  several legitimate prefixed databases coexist under `spec/`.
+
 - **`has_verify_evidence` is covered directly** (#432). The second legal
   ground for reaching `green_implementing` without a red (#367 FR-21) was
   exercised only through `advance()` in the frozen TASK-009 test — the
