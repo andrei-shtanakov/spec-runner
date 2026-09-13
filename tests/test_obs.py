@@ -3,9 +3,79 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+
+def test_default_log_dir_uses_embedded_pipeline_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ORCHESTRA_LOG_DIR", raising=False)
+    monkeypatch.delenv("ORCHESTRA_PIPELINE_ID", raising=False)
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+
+    import importlib
+
+    import spec_runner.obs as mod
+
+    importlib.reload(mod)
+    generated_ids = iter(["01HZKX3P9M7Q2VFGR8BNDAW5YT", "01HZKX3P9M7Q2VFGR8BNDAW5YU"])
+    monkeypatch.setattr(mod.ulid, "new", lambda: next(generated_ids))
+    mod.init_logging("spec-runner")
+    mod.get_logger().info("default.path")
+
+    files = list((tmp_path / "logs").glob("*/*.jsonl"))
+    assert len(files) == 1
+    record = json.loads(files[0].read_text().splitlines()[0])
+    assert files[0].parent.name == record["Attributes"]["pipeline_id"]
+    assert files[0].parent.name == "01HZKX3P9M7Q2VFGR8BNDAW5YT"
+
+
+def test_default_log_dir_honors_explicit_pipeline_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pipeline_id = "01HZKX3P9M7Q2VFGR8BNDAW5YT"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ORCHESTRA_LOG_DIR", raising=False)
+    monkeypatch.setenv("ORCHESTRA_PIPELINE_ID", pipeline_id)
+    monkeypatch.delenv("TRACEPARENT", raising=False)
+
+    import importlib
+
+    import spec_runner.obs as mod
+
+    importlib.reload(mod)
+    mod.init_logging("spec-runner")
+    mod.get_logger().info("explicit.pipeline")
+
+    file = next((tmp_path / "logs" / pipeline_id).glob("*.jsonl"))
+    record = json.loads(file.read_text().splitlines()[0])
+    assert record["Attributes"]["pipeline_id"] == pipeline_id
+
+
+def test_sequential_processes_use_separate_default_log_dirs(tmp_path: Path):
+    env = os.environ.copy()
+    env.pop("ORCHESTRA_LOG_DIR", None)
+    env.pop("ORCHESTRA_PIPELINE_ID", None)
+    env.pop("TRACEPARENT", None)
+    script = (
+        "from spec_runner import obs; "
+        "obs.init_logging('spec-runner'); "
+        "obs.get_logger().info('process.event')"
+    )
+
+    for _ in range(2):
+        subprocess.run([sys.executable, "-c", script], cwd=tmp_path, env=env, check=True)
+
+    files = sorted((tmp_path / "logs").glob("*/*.jsonl"))
+    assert len(files) == 2
+    assert len({file.parent for file in files}) == 2
+    for file in files:
+        record = json.loads(file.read_text().splitlines()[0])
+        assert file.parent.name == record["Attributes"]["pipeline_id"]
 
 
 def test_init_logging_creates_logger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

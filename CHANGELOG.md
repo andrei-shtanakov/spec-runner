@@ -231,6 +231,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Default OTel directory and embedded pipeline identity now agree** (#482).
+  Without `ORCHESTRA_LOG_DIR` or `ORCHESTRA_PIPELINE_ID`, `init_logging`
+  generates one pipeline ULID and uses it both for `logs/<pipeline-id>/` and
+  the JSONL record's `pipeline_id`. Explicit directory and pipeline settings
+  keep their existing precedence, and separate processes still receive
+  separate generated directories.
+
 - **MCP graceful stop now writes the executor's configured marker** (#481).
   `spec_runner_stop` uses the same `config.stop_file` consumed by CLI, TUI,
   and the run loop for default, prefixed, per-change, and explicitly relocated

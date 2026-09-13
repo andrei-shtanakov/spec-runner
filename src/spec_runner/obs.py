@@ -227,12 +227,11 @@ def _console_progress():
     return processor
 
 
-def _default_log_dir() -> Path:
+def _default_log_dir(pipeline_id: str) -> Path:
     env_dir = os.environ.get("ORCHESTRA_LOG_DIR")
     if env_dir:
         return Path(env_dir)
-    pid = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
-    return Path.cwd() / "logs" / pid
+    return Path.cwd() / "logs" / pipeline_id
 
 
 def init_logging(
@@ -248,12 +247,12 @@ def init_logging(
     structlog.contextvars.clear_contextvars()
     _initialized = True
 
-    log_dir = log_dir or _default_log_dir()
+    pipeline_id = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
+    log_dir = log_dir or _default_log_dir(pipeline_id)
     # The directory is created with the file, not here (#301): a command that
     # logs nothing should leave neither.
     output_path = log_dir / f"{project}-{os.getpid()}.jsonl"
 
-    pipeline_id = os.environ.get("ORCHESTRA_PIPELINE_ID") or str(ulid.new())
     trace_id, parent_span_id = _parse_traceparent()
 
     # When TRACEPARENT carries an external parent span, use it as the initial
