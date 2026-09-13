@@ -195,7 +195,8 @@ def run_sync(config: ExecutorConfig, *, dry_run: bool = False) -> list[SyncStep]
             steps.append(SyncStep("remote managed branches", not failed_remote, detail))
 
         # 6. Executor state sanity + close the PR loop.
-        with ExecutorState(config) as state:
+        state_context = ExecutorState.for_read(config) if dry_run else ExecutorState(config)
+        with state_context as state:
             running = [ts.task_id for ts in state.tasks.values() if ts.status == "running"]
             detail = "no tasks stuck in running" if not running else f"running: {running}"
             steps.append(SyncStep("state sanity", not running, detail))

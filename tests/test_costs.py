@@ -105,6 +105,15 @@ class TestCmdCosts:
         output = capsys.readouterr().out
         assert "No tasks found" in output
 
+    def test_query_with_tasks_does_not_create_absent_state_db(self, tmp_path: Path, capsys):
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Untouched", "p0", "todo")])
+
+        cmd_costs(Namespace(json=False, sort="id"), config)
+        capsys.readouterr()
+
+        assert not config.state_file.exists()
+
     def test_basic_table(self, tmp_path: Path, capsys) -> None:
         """3 tasks (2 done with costs, 1 todo) — table shows IDs, costs, '--' for todo."""
         config = _make_config(tmp_path)

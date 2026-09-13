@@ -52,6 +52,10 @@ class ErrorCode(str, Enum):
     INTERRUPTED = "INTERRUPTED"
 
 
+class StateMigrationError(ValueError):
+    """Legacy executor state could not be imported safely."""
+
+
 class ReviewVerdict(str, Enum):
     """Verdict from code review step."""
 
@@ -246,7 +250,7 @@ def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
 class ExecutorState:
     """Global executor state backed by SQLite."""
 
-    def __init__(self, config: ExecutorConfig):
+    def __init__(self, config: ExecutorConfig, *, create_if_missing: bool = True):
         self.config = config
         self.tasks: dict[str, TaskState] = {}
         self.consecutive_failures = 0
@@ -274,29 +278,67 @@ class ExecutorState:
             if self.config.state_file.suffix == ".db"
             else None
         )
+        state_exists = self._file_exists(self.config.state_file)
+        json_exists = bool(json_path and self._file_exists(json_path))
 
-        if json_path and not self.config.state_file.exists() and json_path.exists():
+        if not create_if_missing and not state_exists:
+            # Query commands must not manufacture a second budget/evidence
+            # domain merely because the caller omitted --spec-prefix (#337).
+            # An in-memory schema lets every existing reader keep its normal
+            # empty-state semantics without leaving a SQLite file behind.
+            self._init_db(in_memory=True)
+            if json_path and json_exists:
+                self._import_json(json_path)
+        elif json_path and not state_exists and json_exists:
             # Normal migration path
             self._migrate_from_json(json_path)
-        elif json_path and self.config.state_file.exists() and json_path.exists():
+        elif json_path and state_exists and json_exists:
             # Partial migration recovery: DB was created but JSON wasn't renamed
-            self._init_db()
-            assert self._conn is not None
-            row = self._conn.execute("SELECT COUNT(*) FROM tasks").fetchone()
-            if row[0] == 0:
-                # DB is empty, re-populate from JSON
-                self._conn.close()
-                self._conn = None
-                self._migrate_from_json(json_path)
+            if self._persistent_db_has_no_state_rows(read_only=not create_if_missing):
+                if create_if_missing:
+                    self._migrate_from_json(json_path)
+                else:
+                    # Inspect through SQLite's read-only URI before choosing
+                    # this branch, so even schema migration does not modify
+                    # either recovery artifact during a query.
+                    self._init_db(in_memory=True)
+                    self._import_json(json_path)
+            else:
+                # A task row is not the only durable fact. Ledger-only spend,
+                # evidence, claims, remedies, or metadata make this a live DB
+                # whose contents take precedence over a leftover JSON file.
+                if create_if_missing:
+                    self._init_db()
+                else:
+                    self._init_db_for_read()
         else:
-            self._init_db()
+            if create_if_missing:
+                self._init_db()
+            else:
+                self._init_db_for_read()
 
         self._load()
 
-    def _init_db(self) -> None:
+    @classmethod
+    def for_read(cls, config: ExecutorConfig) -> "ExecutorState":
+        """Open state for a query without creating an absent database.
+
+        Existing databases retain the normal initialization/migration path.
+        A legacy JSON state is imported into memory without renaming it; a
+        genuinely empty domain is represented by the same in-memory schema.
+        """
+        return cls(config, create_if_missing=False)
+
+    def _init_db(self, *, in_memory: bool = False, require_existing: bool = False) -> None:
         """Initialize SQLite database with WAL mode."""
-        self.config.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.config.state_file))
+        if in_memory:
+            self._conn = sqlite3.connect(":memory:")
+        elif require_existing:
+            uri = f"{self.config.state_file.resolve().as_uri()}?mode=rw"
+            self._conn = sqlite3.connect(uri, uri=True)
+        else:
+            self.config.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(self.config.state_file))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.execute("""
@@ -596,12 +638,129 @@ class ExecutorState:
         )
         self._conn.commit()
 
+    def _init_db_for_read(self) -> None:
+        """Open a durable DB without permission to recreate it after a reset."""
+        try:
+            self._init_db(require_existing=True)
+        except sqlite3.OperationalError:
+            self.close()
+            if not self._file_exists(self.config.state_file):
+                self._init_db(in_memory=True)
+                return
+            # A current-schema database may be readable even when its file or
+            # parent is not writable. Preserve the old query behaviour: read
+            # it without attempting idempotent schema upgrades. A genuinely
+            # old schema will still fail explicitly when a missing surface is
+            # queried; unknown state must never be rendered as empty state.
+            uri = f"{self.config.state_file.resolve().as_uri()}?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True)
+            self._conn.execute("PRAGMA busy_timeout=30000")
+
+    @staticmethod
+    def _file_exists(path: Path) -> bool:
+        """Check existence without turning permission or I/O errors into absence."""
+        try:
+            path.stat()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _persistent_db_has_no_state_rows(self, *, read_only: bool) -> bool:
+        """Whether a partial migration candidate contains no durable facts."""
+        mode = "ro" if read_only else "rw"
+        uri = f"{self.config.state_file.resolve().as_uri()}?mode={mode}"
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+        except sqlite3.OperationalError:
+            if not self._file_exists(self.config.state_file):
+                return True
+            raise
+        try:
+            existing = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+
+            def has_row(table: str) -> bool:
+                identifier = '"' + table.replace('"', '""') + '"'
+                return conn.execute(f"SELECT 1 FROM {identifier} LIMIT 1").fetchone() is not None
+
+            return not any(has_row(table) for table in existing)
+        finally:
+            conn.close()
+
     def _migrate_from_json(self, json_path: Path) -> None:
         """Migrate state from JSON file to SQLite."""
-        data = json.loads(json_path.read_text())
+        # Parse before touching the destination: malformed or unreadable
+        # legacy state must not leave a newly-created empty DB behind.
+        data = self._read_json_data(json_path)
+
+        # Exercise the complete import against the real schema in memory
+        # before creating anything durable. Syntactically valid JSON can
+        # still have the wrong shape (for example, ``"tasks": []``), and
+        # those failures must be side-effect free for the same reason.
+        self._init_db(in_memory=True)
+        try:
+            self._import_json_data_checked(data, json_path)
+            self._validate_imported_state(json_path)
+        finally:
+            self.close()
+            self.tasks.clear()
+            self.consecutive_failures = 0
+            self.total_completed = 0
+            self.total_failed = 0
 
         # Init DB first so tables exist
         self._init_db()
+        self._import_json_data_checked(data, json_path)
+
+        # Rename JSON to .bak
+        bak_path = json_path.with_suffix(".json.bak")
+        json_path.rename(bak_path)
+
+    def _import_json(self, json_path: Path) -> None:
+        """Import legacy JSON into the current connection."""
+        data = self._read_json_data(json_path)
+        self._import_json_data_checked(data, json_path)
+        self._validate_imported_state(json_path)
+
+    @staticmethod
+    def _read_json_data(json_path: Path) -> dict:
+        try:
+            data = json.loads(json_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise StateMigrationError(f"Cannot read legacy state {json_path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise StateMigrationError(
+                f"Invalid legacy state {json_path}: top-level value must be an object"
+            )
+        return data
+
+    def _import_json_data_checked(self, data: dict, json_path: Path) -> None:
+        try:
+            self._import_json_data(data)
+        except (AttributeError, KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+            raise StateMigrationError(f"Invalid legacy state {json_path}: {exc}") from exc
+
+    def _validate_imported_state(self, json_path: Path) -> None:
+        """Exercise conversions performed after import before persisting it."""
+        try:
+            self._load()
+        except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+            raise StateMigrationError(f"Invalid legacy state {json_path}: {exc}") from exc
+        finally:
+            # Validation must not leak partially loaded objects into the real
+            # constructor load that follows the import.
+            self.tasks.clear()
+            self.consecutive_failures = 0
+            self.total_completed = 0
+            self.total_failed = 0
+
+    def _import_json_data(self, data: dict) -> None:
+        """Import parsed legacy state into the current connection."""
 
         assert self._conn is not None
         with self._conn:
@@ -646,10 +805,6 @@ class ExecutorState:
                     "INSERT OR REPLACE INTO executor_meta (key, value) VALUES (?, ?)",
                     (key, str(value)),
                 )
-
-        # Rename JSON to .bak
-        bak_path = json_path.with_suffix(".json.bak")
-        json_path.rename(bak_path)
 
     def _load(self) -> None:
         """Load state from SQLite into in-memory dicts."""

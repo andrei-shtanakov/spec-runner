@@ -221,6 +221,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Read-only commands no longer create an empty state database** (#337).
+  Status, costs, verify/report, TDD status, TUI refreshes, MCP queries, and
+  `sync --dry-run` use an in-memory empty state when their resolved database
+  does not exist. An accidental prefixless query during a prefixed workflow
+  therefore cannot manufacture an ambiguous default evidence domain.
+
 - **A file target declared under a runner that cannot take one is refused by
   capability, not as a typo** (#448). `supports_file_targets` was declared on
   every adapter and read by nothing: a `**Verifies:** tests/x.py` under the

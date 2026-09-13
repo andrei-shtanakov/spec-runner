@@ -104,6 +104,7 @@ class TestMCPStatus:
         assert result["total_tasks"] == 1
         assert result["completed"] == 0
         assert result["total_cost"] == 0.0
+        assert not config.state_file.exists()
 
     def test_status_no_tasks_file(self, tmp_path: Path) -> None:
         from spec_runner.mcp_server import _handle_status
@@ -175,6 +176,17 @@ class TestMCPCosts:
         assert result["summary"]["total_cost"] == 0.45
         assert len(result["tasks"]) == 1
         assert result["tasks"][0]["task_id"] == "TASK-001"
+
+    def test_empty_query_does_not_create_absent_state_db(self, tmp_path: Path) -> None:
+        from spec_runner.mcp_server import _handle_costs
+
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Login", "p0", "todo")])
+
+        result = json.loads(_handle_costs(config))
+
+        assert result["summary"]["total_cost"] == 0.0
+        assert not config.state_file.exists()
 
     def test_costs_sort_by_cost(self, tmp_path: Path) -> None:
         from spec_runner.mcp_server import _handle_costs
@@ -303,6 +315,21 @@ class TestMCPTaskDetail:
         with patch("spec_runner.mcp_server._build_config", return_value=config):
             result = json.loads(spec_runner_task_detail("TASK-999"))
         assert "error" in result
+
+    def test_empty_query_does_not_create_absent_state_db(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from spec_runner.mcp_server import spec_runner_task_detail
+
+        config = _make_config(tmp_path)
+        _write_tasks(config.tasks_file, [("TASK-001", "Login", "p0", "todo")])
+
+        with patch("spec_runner.mcp_server._build_config", return_value=config):
+            result = json.loads(spec_runner_task_detail("TASK-001"))
+
+        assert result["id"] == "TASK-001"
+        assert result["execution"]["state_status"] == "pending"
+        assert not config.state_file.exists()
 
 
 class TestMCPRunTask:

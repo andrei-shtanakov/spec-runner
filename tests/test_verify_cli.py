@@ -79,6 +79,17 @@ def _cfg(root: Path, **overrides) -> ExecutorConfig:
     return cfg
 
 
+def test_tdd_status_query_does_not_create_absent_state_db(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    config = _cfg(root)
+
+    data = tdd_status.collect(config)
+
+    assert data["active_checkpoints"] == []
+    assert not config.state_file.exists()
+
+
 def _task(task_id: str, **overrides) -> Task:
     defaults: dict = {
         "id": task_id,

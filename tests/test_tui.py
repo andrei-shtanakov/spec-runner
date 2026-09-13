@@ -19,6 +19,34 @@ class TestSpecRunnerApp:
     def test_app_has_title(self):
         assert hasattr(SpecRunnerApp, "TITLE")
 
+    def test_refresh_does_not_create_absent_state_db(self, tmp_path):
+        config = _make_config(tmp_path, "# Tasks\n")
+        app = SpecRunnerApp(config=config)
+        app.query_one = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+
+        app._do_refresh()
+
+        assert not config.state_file.exists()
+
+    def test_refresh_degrades_when_legacy_state_is_unreadable(self, tmp_path, monkeypatch):
+        config = _make_config(tmp_path, "# Tasks\n")
+        legacy = config.state_file.with_suffix(".json")
+        legacy.write_text("{}")
+        original_read_text = Path.read_text
+
+        def unreadable_legacy(path, *args, **kwargs):
+            if path == legacy:
+                raise PermissionError("legacy state is unreadable")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", unreadable_legacy)
+        app = SpecRunnerApp(config=config)
+        app.query_one = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+
+        app._do_refresh()
+
+        assert not config.state_file.exists()
+
 
 class TestTaskCard:
     """Tests for TaskCard widget."""

@@ -122,7 +122,7 @@ def verify_all(
     report = VerificationReport()
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
 
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         # Verify requested tasks
         if task_id:
             matched = [t for t in tasks if t.id == task_id.upper()]

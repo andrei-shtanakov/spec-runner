@@ -65,6 +65,13 @@ Design for [REQ-002].
 
 
 class TestVerifyAll:
+    def test_query_does_not_create_absent_state_db(self, tmp_path: Path):
+        config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD)
+
+        verify_all(config)
+
+        assert not config.state_file.exists()
+
     def test_verify_done_tasks(self, tmp_path: Path):
         config = _setup_project(tmp_path, TASKS_MD, REQUIREMENTS_MD, DESIGN_MD)
         with ExecutorState(config) as state:

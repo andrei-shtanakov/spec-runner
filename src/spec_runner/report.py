@@ -139,7 +139,7 @@ def build_report(
         report.unreferenced_designs = sorted(set(design_to_req) - referenced_designs)
 
     # Build rows
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         for req_id in all_reqs:
             row = TraceRow(
                 requirement=req_id,

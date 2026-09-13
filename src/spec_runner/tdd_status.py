@@ -32,7 +32,7 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
     and the payload a script parses cannot drift apart.
     """
     namespace = resolve_namespace(config)
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         active = state.active_checkpoints(namespace, task_id)
         retired = state.retired_checkpoints(namespace, task_id)
         claims = state.claims_for(namespace, task_id)

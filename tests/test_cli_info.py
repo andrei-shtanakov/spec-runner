@@ -1,9 +1,10 @@
 """Tests for status output formatting (v2.3.0)."""
 
+from argparse import Namespace
 from pathlib import Path
 
 from spec_runner import __version__
-from spec_runner.cli_info import print_status
+from spec_runner.cli_info import cmd_status, print_status
 from spec_runner.config import ExecutorConfig
 from spec_runner.state import ErrorCode, ExecutorState
 
@@ -28,6 +29,30 @@ class TestStatusVersionHeader:
         first = out.strip().splitlines()[0]
         assert __version__ in first
         assert "spec-runner" in first
+
+    def test_prefixless_status_does_not_create_default_db_beside_prefixed_db(
+        self, tmp_path, capsys
+    ):
+        prefixed = _cfg(tmp_path, state_file=tmp_path / ".executor-phase-state.db")
+        default = _cfg(tmp_path, state_file=tmp_path / ".executor-state.db")
+        prefixed.logs_dir.mkdir()
+        with ExecutorState(prefixed) as state:
+            state.record_attempt("TASK-001", success=True, duration=1.0)
+
+        print_status(default)
+        capsys.readouterr()
+
+        assert prefixed.state_file.exists()
+        assert not default.state_file.exists()
+
+    def test_json_status_does_not_create_absent_state_db(self, tmp_path, capsys):
+        config = _cfg(tmp_path)
+        config.logs_dir.mkdir()
+
+        cmd_status(Namespace(json_output=True), config)
+        capsys.readouterr()
+
+        assert not config.state_file.exists()
 
 
 class TestErrorDisplay:

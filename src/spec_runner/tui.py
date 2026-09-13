@@ -348,7 +348,7 @@ class SpecRunnerApp(App[None]):
         state: ExecutorState | None = None
         try:
             with contextlib.suppress(sqlite3.OperationalError, OSError):
-                state = ExecutorState(config)
+                state = ExecutorState.for_read(config)
 
             # Categorise tasks
             columns: dict[str, list[str]] = {
