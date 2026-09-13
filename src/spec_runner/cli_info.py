@@ -51,7 +51,7 @@ def print_status(config: ExecutorConfig) -> None:
     """Print human-readable status to stdout."""
     from . import __version__
 
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         # Parse tasks from tasks.md to cross-reference
         all_tasks: list[Task] = []
         if config.tasks_file.exists():
@@ -256,7 +256,7 @@ def cmd_status(args, config: ExecutorConfig):
     """Execution status"""
 
     if getattr(args, "json_output", False):
-        with ExecutorState(config) as state:
+        with ExecutorState.for_read(config) as state:
             # Parse tasks from tasks.md to cross-reference
             all_tasks: list[Task] = []
             if config.tasks_file.exists():
@@ -367,7 +367,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             _print_pr_costs(pr_rows, task_cost=0.0)
         return
 
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         # Build per-task cost info
         task_rows: list[dict] = []
         for t in tasks:

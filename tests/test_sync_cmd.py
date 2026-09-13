@@ -88,10 +88,14 @@ class TestRunSync:
         _, work = _setup_remote_pair(tmp_path)
         _make_branch(work, "task/task-003-done", "e.txt", merge=True, push=True)
 
-        steps = run_sync(_cfg(work), dry_run=True)
+        config = _cfg(work)
+        assert not config.state_file.exists()
+
+        steps = run_sync(config, dry_run=True)
         assert all(s.ok for s in steps)
         assert "would delete: task/task-003-done" in _step(steps, "local managed branches").detail
         assert "task/task-003-done" in _git(work, "branch", "--format=%(refname:short)").stdout
+        assert not config.state_file.exists()
 
     def test_dirty_worktree_fails(self, tmp_path):
         _, work = _setup_remote_pair(tmp_path)

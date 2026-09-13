@@ -697,6 +697,26 @@ state-DB, а `--spec-prefix` меняет файл базы (`config.py:397` →
       blocking `pre_start` выбирает активную только по env.
       Тесты: `tests/test_plugins.py`
 
+**Принято 2026-09-13: #337** (inbox, from devtools) — один prefixless read-only
+вызов посреди префиксного workflow создавал пустую default state-DB; внешний
+evidence-плагин видел две базы и справедливо отказывал из-за неоднозначности.
+
+- [x] **prefixless-empty-state-db** (spec-runner#337, from devtools) @owner:github:andrei-shtanakov @id:prefixless-empty-state-db
+      Для запросов добавлено явное read-only открытие: существующая база
+      читается как прежде, а отсутствующая представляется той же SQLite-схемой
+      в памяти и не оставляет файла. На этот путь переведены status/costs,
+      verify/report, TDD status, TUI, MCP queries и `sync --dry-run`; write-команды
+      сохраняют прежнюю семантику. Legacy JSON на read-only пути импортируется
+      в память без миграции/переименования, на write-пути мигрирует как прежде.
+      Регрессия воспроизводит именно боевой топологический случай: активная
+      префиксная база есть, prefixless `status` не создаёт default-соседа.
+      Wiring отдельно закреплён для каждой переведённой поверхности: status
+      (text/JSON), costs, verify/report, TDD status, TUI, три MCP-reader'а и
+      `sync --dry-run`. Тесты: `tests/test_state.py`, `tests/test_cli_info.py`,
+      `tests/test_costs.py`, `tests/test_verify.py`, `tests/test_report.py`,
+      `tests/test_verify_cli.py`, `tests/test_tui.py`, `tests/test_mcp.py`,
+      `tests/test_sync_cmd.py`.
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),

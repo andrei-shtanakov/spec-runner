@@ -217,6 +217,11 @@ spec-runner task list --spec-prefix=phase5-    # List phase 5 tasks
 
 Phase-scoped paths: `spec/phase5-{tasks,requirements,design}.md`, `spec/.executor-phase5-state.db`, `spec/.executor-phase5-logs/`, `spec/.phase5-task-history.log`. Multiple phases coexist without state bleed.
 
+Read-only commands such as `status`, `costs`, `verify`, `report`, TDD status,
+the TUI, and MCP queries do not create an absent state database. In particular,
+an accidental prefixless query beside an active prefixed workflow cannot leave
+an empty `spec/.executor-state.db` that looks like a second evidence domain.
+
 ## Spec Governance (gated generation)
 
 An opt-in workflow for generating and approving `requirements.md` / `design.md` /

@@ -4,6 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from spec_runner.config import ExecutorConfig
 from spec_runner.live_verify import VerifyRunResult
 from spec_runner.state import (
@@ -11,6 +13,7 @@ from spec_runner.state import (
     ExecutorState,
     RetryContext,
     ReviewVerdict,
+    StateMigrationError,
     TaskAttempt,
     TaskState,
     check_stop_requested,
@@ -111,6 +114,136 @@ class TestExecutorState:
         assert state.consecutive_failures == 0
         assert state.total_completed == 0
         assert state.total_failed == 0
+
+    def test_reading_absent_state_uses_memory_without_creating_file(self, tmp_path):
+        config = _make_config(tmp_path / "missing-parent")
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks == {}
+            assert state.total_cost() == 0
+            assert not config.state_file.exists()
+
+        assert not config.state_file.exists()
+
+    def test_reading_existing_state_loads_persisted_rows(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            state.record_attempt("TASK-001", success=True, duration=5.0)
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+            assert state.tasks["TASK-001"].attempt_count == 1
+
+    def test_reader_does_not_recreate_database_deleted_before_open(self, tmp_path, monkeypatch):
+        config = _make_config(tmp_path)
+        with ExecutorState(config):
+            pass
+        original = ExecutorState._init_db_for_read
+
+        def delete_before_open(state):
+            state.config.state_file.unlink()
+            original(state)
+
+        monkeypatch.setattr(ExecutorState, "_init_db_for_read", delete_before_open)
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks == {}
+
+        assert not config.state_file.exists()
+
+    def test_reader_does_not_treat_stat_error_as_absent_state(self, tmp_path, monkeypatch):
+        config = _make_config(tmp_path)
+        original_stat = Path.stat
+
+        def inaccessible_state(path, *args, **kwargs):
+            if path == config.state_file:
+                raise PermissionError("state path is inaccessible")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", inaccessible_state)
+
+        with pytest.raises(PermissionError, match="state path is inaccessible"):
+            ExecutorState.for_read(config)
+
+        with pytest.raises(FileNotFoundError):
+            original_stat(config.state_file)
+
+    def test_reader_falls_back_to_read_only_for_unwritable_existing_db(self, tmp_path, monkeypatch):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            state.record_attempt("TASK-001", success=True, duration=1.0)
+        original_init_db = ExecutorState._init_db
+
+        def refuse_read_write(state, *, in_memory=False, require_existing=False):
+            if require_existing:
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return original_init_db(state, in_memory=in_memory, require_existing=require_existing)
+
+        monkeypatch.setattr(ExecutorState, "_init_db", refuse_read_write)
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+
+        assert config.state_file.exists()
+
+    def test_reading_legacy_json_imports_without_migrating_it(self, tmp_path):
+        config = _make_config(tmp_path)
+        legacy = config.state_file.with_suffix(".json")
+        legacy.write_text(
+            json.dumps(
+                {
+                    "tasks": {
+                        "TASK-001": {
+                            "status": "success",
+                            "started_at": None,
+                            "completed_at": "2026-09-13T00:00:00",
+                            "attempts": [],
+                        }
+                    }
+                }
+            )
+        )
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+
+        assert legacy.exists()
+        assert not config.state_file.exists()
+        assert not legacy.with_suffix(".json.bak").exists()
+
+    def test_malformed_legacy_json_does_not_leave_empty_database(self, tmp_path):
+        config = _make_config(tmp_path)
+        legacy = config.state_file.with_suffix(".json")
+        legacy.write_text("{not-json")
+
+        with pytest.raises(ValueError, match="Cannot read legacy state") as exc:
+            ExecutorState(config)
+
+        assert isinstance(exc.value, StateMigrationError)
+        assert legacy.exists()
+        assert not config.state_file.exists()
+
+    def test_structurally_invalid_legacy_json_does_not_leave_empty_database(self, tmp_path):
+        config = _make_config(tmp_path)
+        legacy = config.state_file.with_suffix(".json")
+        legacy.write_text(json.dumps({"tasks": []}))
+
+        with pytest.raises(StateMigrationError, match="Invalid legacy state"):
+            ExecutorState(config)
+
+        assert legacy.exists()
+        assert not config.state_file.exists()
+
+    def test_invalid_legacy_meta_does_not_leave_empty_database(self, tmp_path):
+        config = _make_config(tmp_path)
+        legacy = config.state_file.with_suffix(".json")
+        legacy.write_text(json.dumps({"tasks": {}, "total_completed": "not-an-int"}))
+
+        with pytest.raises(StateMigrationError, match="Invalid legacy state"):
+            ExecutorState(config)
+
+        assert legacy.exists()
+        assert not config.state_file.exists()
 
     def test_save_and_load_roundtrip(self, tmp_path):
         config = _make_config(tmp_path)
@@ -530,6 +663,146 @@ class TestJsonToSqliteMigration:
         assert state.tasks["TASK-001"].status == "success"
         assert not json_path.exists()  # renamed to .bak
         assert (tmp_path / "state.json.bak").exists()
+
+    def test_partial_migration_is_side_effect_free_for_reader(self, tmp_path):
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+        json_path.write_text(
+            json.dumps(
+                {
+                    "tasks": {
+                        "TASK-001": {
+                            "status": "success",
+                            "attempts": [],
+                            "started_at": None,
+                            "completed_at": "t1",
+                        }
+                    }
+                }
+            )
+        )
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, "
+                "status TEXT, started_at TEXT, completed_at TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE attempts (id INTEGER PRIMARY KEY, "
+                "task_id TEXT, timestamp TEXT, success INTEGER, "
+                "duration_seconds REAL, error TEXT, error_code TEXT, "
+                "claude_output TEXT)"
+            )
+            conn.execute("CREATE TABLE executor_meta (key TEXT PRIMARY KEY, value TEXT)")
+        db_before = db_path.read_bytes()
+
+        config = _make_config(tmp_path, state_file=db_path)
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+
+        assert json_path.exists()
+        assert not (tmp_path / "state.json.bak").exists()
+        assert db_path.read_bytes() == db_before
+        with sqlite3.connect(str(db_path)) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+
+    def test_schema_less_partial_migration_is_read_from_json_without_mutation(self, tmp_path):
+        json_path = tmp_path / "state.json"
+        db_path = tmp_path / "state.db"
+        json_path.write_text(
+            json.dumps(
+                {
+                    "tasks": {
+                        "TASK-001": {
+                            "status": "success",
+                            "attempts": [],
+                            "started_at": None,
+                            "completed_at": "t1",
+                        }
+                    }
+                }
+            )
+        )
+        sqlite3.connect(str(db_path)).close()
+        db_before = db_path.read_bytes()
+
+        config = _make_config(tmp_path, state_file=db_path)
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+
+        assert json_path.exists()
+        assert not (tmp_path / "state.json.bak").exists()
+        assert db_path.read_bytes() == db_before
+
+    def test_partial_migration_path_with_question_mark_is_encoded(self, tmp_path):
+        root = tmp_path / "question?mark"
+        root.mkdir()
+        db_path = root / "state.db"
+        json_path = root / "state.json"
+        json_path.write_text(
+            json.dumps(
+                {
+                    "tasks": {
+                        "TASK-001": {
+                            "status": "success",
+                            "attempts": [],
+                            "started_at": None,
+                            "completed_at": "t1",
+                        }
+                    }
+                }
+            )
+        )
+        sqlite3.connect(str(db_path)).close()
+
+        config = _make_config(root, state_file=db_path)
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks["TASK-001"].status == "success"
+
+        assert json_path.exists()
+        assert db_path.exists()
+
+    def test_legacy_json_does_not_hide_ledger_only_sqlite_state(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config) as state:
+            state.record_agent_call("TASK-001", "red", cost_usd=1.25)
+        json_path = config.state_file.with_suffix(".json")
+        json_path.write_text(json.dumps({"tasks": {}}))
+
+        with ExecutorState.for_read(config) as state:
+            assert state.tasks == {}
+            assert state.total_cost() == 1.25
+
+        assert json_path.exists()
+        assert not json_path.with_suffix(".json.bak").exists()
+
+    def test_legacy_json_does_not_hide_review_pr_ledger(self, tmp_path):
+        config = _make_config(tmp_path)
+        with ExecutorState(config):
+            pass
+        with sqlite3.connect(str(config.state_file)) as conn:
+            conn.execute("CREATE TABLE pr_agent_calls (id INTEGER PRIMARY KEY, cost_usd REAL)")
+            conn.execute("INSERT INTO pr_agent_calls (cost_usd) VALUES (1.25)")
+        json_path = config.state_file.with_suffix(".json")
+        json_path.write_text(
+            json.dumps(
+                {
+                    "tasks": {
+                        "TASK-FROM-JSON": {
+                            "status": "success",
+                            "attempts": [],
+                            "started_at": None,
+                            "completed_at": "t1",
+                        }
+                    }
+                }
+            )
+        )
+
+        with ExecutorState.for_read(config) as state:
+            assert "TASK-FROM-JSON" not in state.tasks
+
+        assert json_path.exists()
+        assert not json_path.with_suffix(".json.bak").exists()
 
     def test_no_migration_for_json_suffix_state_file(self, tmp_path):
         """If state_file has .json suffix, skip migration logic entirely."""

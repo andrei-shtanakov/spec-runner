@@ -44,7 +44,7 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
 def _handle_status(config: ExecutorConfig) -> str:
     """Get execution status summary."""
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         completed = sum(1 for ts in state.tasks.values() if ts.status == "success")
         failed = sum(1 for ts in state.tasks.values() if ts.status == "failed")
         running = sum(1 for ts in state.tasks.values() if ts.status == "running")
@@ -90,7 +90,7 @@ def _handle_costs(config: ExecutorConfig, sort: str = "id") -> str:
     """Per-task cost breakdown."""
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
     rows: list[dict] = []
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         for t in tasks:
             ts = state.tasks.get(t.id)
             cost = state.task_cost(t.id)
@@ -262,7 +262,7 @@ def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
         "checklist": [{"done": done, "text": text} for text, done in task.checklist],
     }
 
-    with ExecutorState(config) as state:
+    with ExecutorState.for_read(config) as state:
         ts = state.get_task_state(task.id)
         if ts:
             detail["execution"] = {
