@@ -2,9 +2,11 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from spec_runner.config import ExecutorConfig
-from spec_runner.state import ExecutorState
+from spec_runner.mcp_server import spec_runner_stop
+from spec_runner.state import ExecutorState, check_stop_requested
 
 
 def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
@@ -244,21 +246,79 @@ class TestMCPLogs:
 class TestMCPStop:
     """Tests for spec_runner_stop tool."""
 
-    def test_stop_creates_stop_file(self, tmp_path: Path) -> None:
-        from spec_runner.mcp_server import spec_runner_stop
+    def test_stop_creates_the_marker_consumed_in_every_namespace(self, tmp_path: Path) -> None:
+        configs = {
+            "default": ExecutorConfig(project_root=tmp_path / "default"),
+            "prefixed": ExecutorConfig(project_root=tmp_path / "prefixed", spec_prefix="phase5-"),
+            "change": ExecutorConfig(project_root=tmp_path / "change", change_id="add-x"),
+            "explicit-state": ExecutorConfig(
+                project_root=tmp_path / "custom",
+                state_file=tmp_path / "custom" / "runtime" / "custom.db",
+            ),
+        }
 
-        config = _make_config(tmp_path)
-        stop_file = config.state_file.with_suffix(".stop")
-        # Ensure state dir exists
-        stop_file.parent.mkdir(parents=True, exist_ok=True)
+        for name, config in configs.items():
+            wrong_marker = config.state_file.with_suffix(".stop")
+            with patch("spec_runner.mcp_server._build_config", return_value=config):
+                result = json.loads(spec_runner_stop(spec_prefix=config.spec_prefix))
 
-        # Call the tool function directly with a mock config
-        from unittest.mock import patch
+            assert result == {
+                "status": "stop_requested",
+                "stop_file": str(config.stop_file),
+            }, name
+            assert check_stop_requested(config) is True, name
+            if wrong_marker != config.stop_file:
+                assert not wrong_marker.exists(), name
 
-        with patch("spec_runner.mcp_server._build_config", return_value=config):
-            result = json.loads(spec_runner_stop())
-        assert result["status"] == "stop_requested"
-        assert stop_file.exists()
+    def test_cli_passes_resolved_config_to_server(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from spec_runner.cli_info import cmd_mcp
+
+        config = ExecutorConfig(project_root=tmp_path, change_id="add-x")
+        with patch("spec_runner.mcp_server.run_server") as run_server:
+            cmd_mcp(SimpleNamespace(), config)
+
+        run_server.assert_called_once_with(config)
+
+    def test_change_scoped_server_preserves_launch_stop_namespace(self, tmp_path: Path) -> None:
+        import spec_runner.mcp_server as server
+
+        config = ExecutorConfig(project_root=tmp_path, change_id="add-x")
+        observed: list[dict] = []
+
+        def invoke(*, transport: str) -> None:
+            assert transport == "stdio"
+            observed.append(json.loads(server.spec_runner_stop()))
+
+        with patch.object(server.mcp_app, "run", side_effect=invoke):
+            server.run_server(config)
+
+        assert observed == [
+            {
+                "status": "stop_requested",
+                "stop_file": str(config.stop_file),
+            }
+        ]
+        assert check_stop_requested(config) is True
+        assert server._launch_stop_config is None
+
+    def test_explicit_prefix_keeps_launch_project_root(self, tmp_path: Path) -> None:
+        import spec_runner.mcp_server as server
+
+        project_root = tmp_path / "external-project"
+        config = ExecutorConfig(project_root=project_root, spec_prefix="phase5-")
+        observed: list[dict] = []
+
+        def invoke(*, transport: str) -> None:
+            assert transport == "stdio"
+            observed.append(json.loads(server.spec_runner_stop(spec_prefix="phase5-")))
+
+        with patch.object(server.mcp_app, "run", side_effect=invoke):
+            server.run_server(config)
+
+        assert observed[0]["stop_file"] == str(project_root / "spec/.executor-stop")
+        assert check_stop_requested(config) is True
 
 
 class TestMCPNextTasks:

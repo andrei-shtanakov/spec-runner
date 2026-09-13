@@ -743,11 +743,12 @@ runtime-state по инварианту конвейера «нужное для
       восстанавливает очередь, но не claims, authority decisions, стоимость и
       результаты неуспешных вызовов; planning вообще не имеет task-attempt
       ledger, а success-only `post_review` оба разрыва не закрывает.
-- [ ] **mcp-stop-shared-marker** (spec-runner#481) @owner:TBD @id:mcp-stop-shared-marker
-      Найдено инвентаризацией: MCP пишет DB-derived `.executor-state.stop`, а
-      исполнитель читает `config.stop_file` (`.executor-stop`), поэтому ответ
-      `stop_requested` не означает, что run остановится. Исправить отдельным
-      кодовым PR с интеграционным тестом через `check_stop_requested`.
+- [x] **mcp-stop-shared-marker** (spec-runner#481) @owner:github:andrei-shtanakov @id:mcp-stop-shared-marker
+      MCP пишет ровно `config.stop_file`; ответ возвращает тот же путь, а
+      `check_stop_requested` подтверждает marker для default, prefixed,
+      per-change и explicit-state конфигураций. Launch config из CLI сохраняет
+      `--change` scope для stop tool. DB-derived `.executor-state.stop` больше
+      не создаётся.
 - [ ] **otel-default-dir-pipeline-id** (spec-runner#482) @owner:TBD @id:otel-default-dir-pipeline-id
       Default OTel path генерирует ULID каталога отдельно от embedded
       `pipeline_id`; унифицировать identity и покрыть путь без обеих env-vars.

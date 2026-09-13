@@ -678,4 +678,4 @@ def cmd_mcp(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Launch MCP server (stdio transport)."""
     from .mcp_server import run_server
 
-    run_server()
+    run_server(config)
