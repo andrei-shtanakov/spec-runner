@@ -668,6 +668,23 @@ state-DB, а `--spec-prefix` меняет файл базы (`config.py:397` →
       различимость: с откаченными только сообщениями падают 8 из 11.
       Тесты: `tests/test_budget_domain_is_named.py` (11)
 
+**Принято 2026-09-13: #432** (inbox-shaped, from devtools) — `has_verify_evidence`
+(#367 FR-21), вторая из двух дверей в `green_implementing` без красного, не
+упоминалась ни в одном тесте: позитивный путь проходил только косвенно, через
+`advance()` во frozen-тесте TASK-009 (`test_task_009_…_red.py`), а что функция
+**отказывает** считать эвиденцией — не спрашивал никто. Готовый патч лежал в
+чужом стеше и всплыл при #430.
+
+- [x] **verify-evidence-lifecycle-coverage** (spec-runner#432, from devtools) @owner:github:andrei-shtanakov @id:verify-evidence-lifecycle-coverage
+      Патч применён как есть (байт-в-байт со `stash@{1}`, ложится на HEAD без
+      конфликтов): класс `TestVerifyEvidenceIsASeparateGround` — `test_failure`
+      и instrument-error не считаются, эвиденция другой задачи — не этой
+      (новое покрытие), плюс прямой позитивный вызов (дублирует TASK-009 по
+      сути, но спрашивает функцию, а не `advance`).
+      Стенд проверен на различимость: с `has_verify_evidence`, отвечающим
+      «есть строка» вместо «есть зелёная строка», падают 2 из 4.
+      Тесты: `tests/test_lifecycle_reads_the_evidence.py` (+5, всего 15)
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),
