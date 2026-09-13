@@ -28,7 +28,7 @@ import pytest
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.git_ops import find_changed_source_files, map_source_to_test_files
-from spec_runner.live_verify import run_live_verify
+from spec_runner.live_verify import VerifyOutcome, run_live_verify
 from spec_runner.task import Task, parse_tasks
 from spec_runner.tdd_runners import PytestAdapter, Selector, SelectorRefusal, parse_group_element
 from spec_runner.validate import _validate_verify_first_declarations
@@ -239,6 +239,18 @@ class TestMeasuredWorkspaceSampleIsDeclaredWithoutManualExpansion:
             f"tree; got {refusal_codes!r}"
         )
 
+        # Every refusal names the value it rejected. Asserted BEFORE the skip
+        # below (spec-runner#453): this loop covers all ~88 refusals and has
+        # nothing to do with the second class's witness, so letting the skip
+        # run first would take it down too — and a regression that stopped
+        # quoting the rejected value would then read as "skipped", which is
+        # not a verdict. A skip must cost only the assertion it guards.
+        for target, code, message in refused:
+            assert target in message, (
+                f"refusal for {target!r} must name the rejected value itself, "
+                f"got code={code!r} message={message!r}"
+            )
+
         # The second class needs a sampled path that EXISTS here and is not
         # a test file. Missing witness is reported as a skip that names what
         # went, never as a silent loss of the assertion.
@@ -255,11 +267,6 @@ class TestMeasuredWorkspaceSampleIsDeclaredWithoutManualExpansion:
             f"a sampled file that exists but is not a test must be refused as "
             f"not_discoverable, got {codes_for_present!r} for {sorted(present)}"
         )
-        for target, code, message in refused:
-            assert target in message, (
-                f"refusal for {target!r} must name the rejected value itself, "
-                f"got code={code!r} message={message!r}"
-            )
 
 
 class TestGroupIsNeverInferredForAFileTarget:
@@ -294,10 +301,25 @@ class TestGroupIsNeverInferredForAFileTarget:
         and these tests would pass for a reason that has nothing to do with
         what they assert.
 
-        So the fixture carries both shapes of "changed": `src/y.py` moves in
-        a SECOND COMMIT, `src/z.py` is left UNCOMMITTED. Both map onto
-        `tests/test_y.py` and `tests/test_z.py`, and both of those fail if
-        anything ever runs them.
+        So the fixture writes `src/y.py` and `src/z.py`, both mapping onto
+        the decoy `tests/test_y.py` and `tests/test_z.py`, and both of those
+        fail if anything ever runs them. One is committed and one is not,
+        which is how a real tree looks — but the guard below does not, and
+        cannot, tell those apart, and the docstring used to claim it did
+        (spec-runner#453).
+
+        What the guard actually proves is reachability, nothing more:
+        `find_changed_source_files` never reads git. It globs `src/**/*.py`
+        and keeps whatever has `mtime > changed_since`, so at `0.0`
+        everything qualifies — a repository with no commits at all would
+        satisfy it. The single production call site passes a run-scoped
+        `changed_since` (`hooks.py`), under which these fixture files, all
+        created before that moment, would not count as changed at all.
+
+        The guard is kept at `0.0` deliberately: its job here is to fail
+        loudly if the fixture ever stops offering the decoy test files to a
+        mapping-based inference — not to model the production call. The
+        assertions that carry the behaviour hold either way.
         """
         root = _init_repo(tmp_path)
         (root / "src").mkdir()
@@ -511,4 +533,125 @@ class TestDuplicatedMemberSatisfiesTheRuleBothTimes:
         assert counter.read_text() == "2", (
             "exactly two real invocations of the shared test — no retry "
             f"and no skipped re-run: counter={counter.read_text()!r}"
+        )
+
+
+class TestBEH18MixedGroupIsStillOneOfTheThree:
+    """kind: integration — BEH-18's shape inside BEH-24's claim.
+
+    A declaration may mix a file target and a node id in ONE group. Until
+    now no test ran such a group through `run_live_verify` at all — the
+    class-level `_TEST_FAILURE_MIXED` in the branching file is a mixed
+    *composition* of one file, which is a different thing. The outcome space
+    must be the same three for a mixed group too, and the group must be
+    judged as a whole.
+
+    Lives here, and under `kind: integration`, because that is what BEH-18
+    declares (`checked_by target: tests/test_verify_file_target_declaration.py`
+    `kind: integration`). It was written in the branching file under
+    `kind: contract`, where the declared behaviours are BEH-17/BEH-24 only,
+    while these tests build real git repositories and run real pytest
+    subprocesses — the spec was right and the tests were misplaced, so the
+    tests moved (spec-runner#441 finding 3). `checked_by` is not validated
+    by anything in `src/`, so this drift was silent.
+    """
+
+    def test_a_mixed_group_of_a_file_and_a_node_id_folds_to_one_named_outcome(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n"
+        )
+        (root / "tests" / "test_other.py").write_text("def test_c():\n    assert True\n")
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed.db")
+
+        task = _task(
+            id="TASK-410",
+            verifies=["tests/test_group.py", "tests/test_other.py::test_c"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome in (
+            VerifyOutcome.GREEN,
+            VerifyOutcome.TEST_FAILURE,
+            VerifyOutcome.INSTRUMENT_ERROR,
+        )
+        assert result.outcome is VerifyOutcome.GREEN, (
+            f"a mixed group whose every member passes must read green, got "
+            f"{result.outcome} — {result.detail}"
+        )
+
+    def test_one_failing_member_of_a_mixed_group_makes_the_group_a_failure(self, tmp_path):
+        """The group is judged as a whole: a green node id does not rescue a
+        failing file target beside it.
+
+        NODE ID FIRST, and the failing member is the *file*, deliberately —
+        both halves are load-bearing:
+
+        * order: the file-first case above and this one do not share a code
+          path. When a node id opens the group, `run_live_verify` cannot use
+          it as the representative selector for `prepare_replay` (only a
+          `FileTarget` gets the reporter plugin deployed), so it scans the
+          rest of the group for the first file target. Nothing in THIS file
+          entered that scan before.
+        * which member fails: the group stops at its first failing member, so
+          a failing node id in front would end the run before the file target
+          is ever reached — and the scan's effect would be unobservable here.
+          With the node id green, execution walks on to the file target,
+          whose `-p` flag needs the plugin the scan arranged for.
+
+        Consequence, and the point of the arrangement: deleting the scan
+        turns this expectation from `test_failure` into `instrument_error`
+        (`ImportError: ... _spec_runner_verify_reporter`), so the test fails.
+        """
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text(
+            "def test_a():\n    assert False, 'not implemented'\n"
+        )
+        (root / "tests" / "test_other.py").write_text("def test_c():\n    assert True\n")
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed-red.db")
+
+        task = _task(
+            id="TASK-411",
+            verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome is VerifyOutcome.TEST_FAILURE, (
+            f"a mixed group with a failing member must read test_failure, got "
+            f"{result.outcome} — {result.detail}"
+        )
+
+    def test_a_failing_node_id_alone_also_makes_the_mixed_group_a_failure(self, tmp_path):
+        """The other half of BEH-18's conjunction, and it is a separate claim.
+
+        The spec asks for the verdict to be proven "падением внутри файловой
+        цели и падением внутри node id по отдельности" — two halves, not one
+        example. The test above carries the file-target half; this one carries
+        the node-id half, with the roles swapped: the node id in front is red
+        and the file target behind it is green.
+
+        Deliberately NOT merged with the test above, even though both assert
+        `test_failure`. The group returns on its first non-green element, so
+        here the file target is never reached — which is exactly why this
+        arrangement cannot observe the `prepare_replay` fallback scan, and why
+        the other test needs its green node id. Collapsing the two would drop
+        one half of the conjunction (the state this file was in before) or
+        blind the scan (the state before that).
+        """
+        root = _init_repo(tmp_path)
+        (root / "tests" / "test_group.py").write_text("def test_a():\n    assert True\n")
+        (root / "tests" / "test_other.py").write_text(
+            "def test_c():\n    assert False, 'not implemented'\n"
+        )
+        _commit(root, "base")
+        config = _cfg(root, state_file=root / ".state-mixed-red-node.db")
+
+        task = _task(
+            id="TASK-412",
+            verifies=["tests/test_other.py::test_c", "tests/test_group.py"],
+        )
+        result = run_live_verify(task, config)
+        assert result.outcome is VerifyOutcome.TEST_FAILURE, (
+            f"a mixed group whose node id fails must read test_failure, got "
+            f"{result.outcome} — {result.detail}"
         )
