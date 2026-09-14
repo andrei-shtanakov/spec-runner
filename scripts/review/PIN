@@ -2,11 +2,12 @@
 #   collect-context.sh — @ steward 57170da (#157 ← steward#154: запись манифеста dir/ отвергается; предложение продюсера в devtools#228)
 # Ре-вендор: скопировать файлы из steward, пересчитать строки:
 #   shasum -a 256 <файл>  — формат строки: '<sha256>  <путь-от-корня>'
-# 7 членов: harness-claude — адаптер claude, бит исполнения 100755 обязателен
+# 7 членов: harness-claude — адаптер claude, бит исполнения 100755 обязателен;
+#   checksum.sh — @ steward 9cfcb3c (#159): адаптер — обязательный член, переходный `?` снят
 d5edbcef9192974161ccba2754b5b191d66bf5ae23ee87367e8c5cdec613fa92  scripts/review/build-prompt.sh
 85bc71445f87186791e24fcf713fad2520c289fd8188c6b15f0a39bf1d4a239b  scripts/review/collect-context.sh
 d96d44c10dc106504144f66c2716849ba0ff1401cae1539cf82fe93baddeb286  scripts/review/apply-threshold.sh
 bdce1ef81ef198768adec88b380067d717e3b1fd6ed144909e431d193df9eb97  scripts/review/local.sh
-7c02fb7d59b5b5673fe534a535362c25a99efc60a4b719c3eca09fd103b09c08  scripts/review/checksum.sh
+285775029ffae80b694a2e82c65271addac2fabdf5cd2a8cae5886d2477759ef  scripts/review/checksum.sh
 8b66c434c6bdd75b535a5141c691fdd95edda56001369b862a0a2361e710b968  .github/codex/review-schema.json
 b35580d4aa84a87cb20e0b77a3aba63c0723ba34ecdf8bd82f6550af5e076aeb  scripts/review/harness-claude
