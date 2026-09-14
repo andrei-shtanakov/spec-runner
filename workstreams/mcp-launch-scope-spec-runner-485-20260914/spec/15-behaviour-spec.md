@@ -1,9 +1,13 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approval_pending
 owner_role: product
-traces_to: [requirements]
-upstream_hashes: {requirements: "4527197fc3891bfef202da34172fd7b683878866"}
+traces_to:
+- requirements
+upstream_hashes:
+  requirements: 1c93693e948d5c19d5da488f578a5968e76a4cd1
+version: 2
+approved_content_hash: 89f46153aac93203485de23fbe84b4f209d7b790
 ---
 
 # Behaviour spec — MCP launch scope (spec-runner#485)
