@@ -244,8 +244,10 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
         return json.dumps({"status": "error", "error": f"⛔ spec governance: {reason}"})
 
     cmd = ["spec-runner", "run", "--task", task_id]
-    if spec_prefix:
-        cmd.extend(["--spec-prefix", spec_prefix])
+    if config.change_id:
+        cmd.extend(["--change", config.change_id])
+    elif config.spec_prefix:
+        cmd.extend(["--spec-prefix", config.spec_prefix])
 
     mcp_launch.clear_stale_ready_file(config.ready_file)
 

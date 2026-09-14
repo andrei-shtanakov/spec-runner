@@ -476,6 +476,53 @@ class TestBEH21ChildDiesBeforeReady:
         assert not config.ready_file.exists()
 
 
+class TestRunTaskForwardsLaunchNamespace:
+    """The spawned child must run in the same namespace the parent resolved
+    (BEH-01/BEH-05) -- not only in `config`, but in the argv `run_task`
+    actually hands to `subprocess.Popen`. A prior version built `cmd` from
+    the tool call's own `spec_prefix` argument instead of the resolved
+    `config`, so a change/prefix-scoped server called the documented way
+    (empty `spec_prefix`, BEH-07) silently spawned the child against the
+    flat `spec/tasks.md` instead of its own scope.
+    """
+
+    def test_change_scoped_launch_passes_change_flag(self, tmp_path: Path) -> None:
+        external = tmp_path / "external"
+        _write_tasks(
+            external / "spec" / "changes" / "add-x" / "tasks.md",
+            [("TASK-001", "T", "p0", "todo")],
+        )
+        config = ExecutorConfig(project_root=external, change_id="add-x")
+
+        with patch("subprocess.Popen", side_effect=_popen_double(config, pid=321)) as mock_popen:
+
+            def invoke(*, transport: str) -> None:
+                result = json.loads(spec_runner_run_task("TASK-001"))
+                assert result["status"] == "started"
+
+            with patch.object(server.mcp_app, "run", side_effect=invoke):
+                server.run_server(config)
+
+        cmd = mock_popen.call_args.args[0]
+        assert cmd == ["spec-runner", "run", "--task", "TASK-001", "--change", "add-x"]
+
+    def test_prefix_scoped_launch_passes_spec_prefix_flag(self, tmp_path: Path) -> None:
+        config = _config(tmp_path, spec_prefix="p-")
+        _write_tasks(config.tasks_file, [("TASK-001", "T", "p0", "todo")])
+
+        with patch("subprocess.Popen", side_effect=_popen_double(config, pid=654)) as mock_popen:
+
+            def invoke(*, transport: str) -> None:
+                result = json.loads(spec_runner_run_task("TASK-001"))
+                assert result["status"] == "started"
+
+            with patch.object(server.mcp_app, "run", side_effect=invoke):
+                server.run_server(config)
+
+        cmd = mock_popen.call_args.args[0]
+        assert cmd == ["spec-runner", "run", "--task", "TASK-001", "--spec-prefix", "p-"]
+
+
 class TestBEH22ChildNeverPublishesReady:
     def test_timeout_response_and_no_leftover_ready_file(self, tmp_path: Path) -> None:
         config = _config(tmp_path, mcp_ready_timeout_seconds=0.2)
