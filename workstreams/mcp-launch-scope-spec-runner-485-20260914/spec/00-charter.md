@@ -8,7 +8,7 @@ traces_to:
 upstream_hashes:
   discovery-brief: 39e8c625f65812f9530876e5d52695015d90d0ae
   discovery-customer: 4d7900d7dc9f3271326594647f21a7b7d54ab676
-version: 2
+version: 3
 approved_content_hash: 0ccc4579f18220a4fa7e6ab69ee93b2169e5bbc0
 ---
 
