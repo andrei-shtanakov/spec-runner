@@ -1,6 +1,7 @@
 """Tests for spec_runner.state module."""
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -19,7 +20,9 @@ from spec_runner.state import (
     TaskAttempt,
     TaskState,
     check_stop_requested,
+    clear_ready_file,
     clear_stop_file,
+    publish_ready_file,
 )
 from spec_runner.task import Task
 
@@ -418,6 +421,69 @@ class TestStopFile:
         # Should not raise
         clear_stop_file(config)
         assert not config.stop_file.exists()
+
+
+# --- Ready file (#485) ---
+
+
+class TestReadyFile:
+    def test_publish_ready_file_writes_pid_and_started(self, tmp_path):
+        (tmp_path / "spec").mkdir()
+        config = _make_config(tmp_path)
+        publish_ready_file(config)
+        lines = config.ready_file.read_text().splitlines()
+        assert lines[0] == f"PID: {os.getpid()}"
+        assert lines[1].startswith("Started: ")
+
+    def test_publish_ready_file_is_atomic_no_leftover_tmp(self, tmp_path):
+        (tmp_path / "spec").mkdir()
+        config = _make_config(tmp_path)
+        publish_ready_file(config)
+        tmp = config.ready_file.with_name(config.ready_file.name + ".tmp")
+        assert not tmp.exists()
+        assert config.ready_file.exists()
+
+    def test_clear_ready_file_removes_own_marker(self, tmp_path):
+        (tmp_path / "spec").mkdir()
+        config = _make_config(tmp_path)
+        publish_ready_file(config)
+        assert config.ready_file.exists()
+        clear_ready_file(config)
+        assert not config.ready_file.exists()
+
+    def test_clear_ready_file_noop_if_missing(self, tmp_path):
+        (tmp_path / "spec").mkdir()
+        config = _make_config(tmp_path)
+        assert not config.ready_file.exists()
+        # Should not raise
+        clear_ready_file(config)
+        assert not config.ready_file.exists()
+
+    def test_clear_ready_file_leaves_another_process_marker_untouched(self, tmp_path):
+        """A ready file published under a different PID -- e.g. a concurrent
+        run in another namespace that happens to share this directory --
+        must survive this process's own cleanup (#485 review).
+        """
+        (tmp_path / "spec").mkdir()
+        config = _make_config(tmp_path)
+        config.ready_file.parent.mkdir(parents=True, exist_ok=True)
+        foreign_pid = os.getpid() + 1
+        config.ready_file.write_text(f"PID: {foreign_pid}\nStarted: now\n")
+        clear_ready_file(config)
+        assert config.ready_file.exists()
+
+    def test_ready_file_is_namespaced_by_spec_prefix(self, tmp_path):
+        """Two `--spec-prefix` namespaces sharing `spec_dir` must not collide
+        on the same ready file path -- the sibling `state_file`/`logs_dir`
+        already namespace this way (#485 review).
+        """
+        (tmp_path / "spec").mkdir()
+        base = _make_config(tmp_path)
+        phase_a = _make_config(tmp_path, spec_prefix="phase-a-")
+        phase_b = _make_config(tmp_path, spec_prefix="phase-b-")
+        assert base.ready_file.name == ".executor-ready"
+        assert base.ready_file != phase_a.ready_file
+        assert phase_a.ready_file != phase_b.ready_file
 
 
 # --- ErrorCode ---

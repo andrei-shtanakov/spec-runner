@@ -335,6 +335,59 @@ Add to `.mcp.json`:
 }
 ```
 
+### Launch scope (#485)
+
+The server is bound to a single **launch scope** for its whole lifetime — the
+config and namespace it was started with — not the caller's CWD at tool-call
+time. Pass `--project-root` and, for a namespaced project, exactly one of
+`--change <id>` / `--spec-prefix <prefix>` on the `mcp` command line, the same
+way you would for `run`:
+
+```json
+{
+  "mcpServers": {
+    "spec-runner": {
+      "command": "spec-runner",
+      "args": ["mcp", "--project-root", "/abs/path/to/project", "--change", "add-x"]
+    }
+  }
+}
+```
+
+All eight tools serve that scope: they read the YAML by `project_root`, never
+by the server's own CWD, and every runtime file a tool or a spawned task
+writes (state DB, lock, stop-file, ready-file, logs) lands under that scope's
+`spec/` directory — nothing appears in the server's CWD or in a sibling
+namespace. One known exception predates the namespacing and is tracked
+separately: `runner.log_progress` writes `spec/.executor-progress.txt`
+relative to the project root, so a `--change`/`--spec-prefix` child still
+leaves that one file in the flat `spec/` of the project. Running `spec-runner mcp` with no `--project-root`/namespace flags
+(or calling `spec_runner.mcp_run_server()` programmatically with no arguments)
+falls back to a flat launch scope built from the current directory, same as
+before this change.
+
+A tool-level `spec_prefix` argument that **contradicts** the launch
+namespace — e.g. a `--change` launch server called with `spec_prefix="p-"` —
+is refused by name (`status: "error"`) before anything runs; a `spec_prefix`
+that agrees with (or refines, for a flat launch) the launch namespace is
+accepted.
+
+`spec_runner_run_task` spawns `spec-runner run --task <id>` as a real
+subprocess of the current interpreter/venv (`sys.executable -m spec_runner`,
+never a `spec-runner` binary resolved off `PATH`), in `project_root`, with the
+launch scope's own effective config reproduced onto the child via CLI flags —
+before spawning, the parent verifies that config *can* be reproduced exactly
+and refuses (naming the field) if it cannot. The tool's response is
+`"status": "started"` only once the child has **taken its run lock and
+published a ready marker** — not merely once `Popen` has returned. That means
+a `stop` call issued right after `started` is guaranteed not to race a child
+that has not even started its task yet: the marker either gets consumed by
+the pre-task check (no attempt is made) or survives a task that already ran
+to completion — never both "gone" and "no attempt". A busy lock, an early
+child exit, or a child that never publishes ready all come back as
+`"status": "error"` (with a log tail and/or the child's exit code) instead of
+a false `started`.
+
 Available tools:
 
 | Tool | Kind | Effect |
