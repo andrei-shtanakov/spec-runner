@@ -4,6 +4,7 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 """
 
 import contextlib
+import fcntl
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -309,6 +310,7 @@ class ExecutorState:
                 # whose contents take precedence over a leftover JSON file.
                 if create_if_missing:
                     self._init_db()
+                    self._cleanup_completed_empty_legacy(json_path)
                 else:
                     self._init_db_for_read()
         else:
@@ -676,6 +678,7 @@ class ExecutorState:
                 return True
             raise
         try:
+            conn.execute("PRAGMA busy_timeout=30000")
             existing = {
                 row[0]
                 for row in conn.execute(
@@ -692,7 +695,53 @@ class ExecutorState:
         finally:
             conn.close()
 
+    def _cleanup_completed_empty_legacy(self, json_path: Path) -> None:
+        """Finish a crash-window migration when only empty legacy state was imported."""
+        try:
+            data = self._read_json_data(json_path)
+            tasks = data.get("tasks", {})
+            if not isinstance(tasks, dict) or tasks:
+                return
+            expected = {
+                key: str(data.get(key, 0))
+                for key in ("consecutive_failures", "total_completed", "total_failed")
+            }
+            assert self._conn is not None
+            tables = {
+                row[0]
+                for row in self._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            for table in tables - {"executor_meta"}:
+                identifier = '"' + table.replace('"', '""') + '"'
+                if self._conn.execute(f"SELECT 1 FROM {identifier} LIMIT 1").fetchone() is not None:
+                    return
+            actual = dict(self._conn.execute("SELECT key, value FROM executor_meta").fetchall())
+            if actual == expected:
+                json_path.rename(json_path.with_suffix(".json.bak"))
+        except (StateMigrationError, OSError, sqlite3.Error, TypeError, ValueError):
+            return
+
     def _migrate_from_json(self, json_path: Path) -> None:
+        """Migrate legacy JSON while serializing competing first writers."""
+        try:
+            lock_file = json_path.open("r")
+        except FileNotFoundError:
+            self._init_db()
+            return
+        with lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            if self._file_exists(self.config.state_file):
+                if not self._persistent_db_has_no_state_rows(read_only=False):
+                    self._init_db()
+                    return
+                if not self._file_exists(json_path):
+                    self._init_db()
+                    return
+            self._migrate_from_json_locked(json_path)
+
+    def _migrate_from_json_locked(self, json_path: Path) -> None:
         """Migrate state from JSON file to SQLite."""
         # Parse before touching the destination: malformed or unreadable
         # legacy state must not leave a newly-created empty DB behind.
@@ -719,7 +768,14 @@ class ExecutorState:
 
         # Rename JSON to .bak
         bak_path = json_path.with_suffix(".json.bak")
-        json_path.rename(bak_path)
+        try:
+            json_path.rename(bak_path)
+        except FileNotFoundError:
+            # Another writer may have completed the same crash-window
+            # migration between our import and rename. Treat that outcome as
+            # success when its backup is already present.
+            if not bak_path.exists():
+                raise
 
     def _import_json(self, json_path: Path) -> None:
         """Import legacy JSON into the current connection."""
