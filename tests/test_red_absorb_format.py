@@ -100,6 +100,20 @@ bad = any("DRIFT" in Path(p).read_text() for p in sys.argv[2:])
 sys.exit(1 if bad else 0)
 """
 
+# ruff's shape, measured: exit 2 when the file cannot be parsed — the same code
+# a crashed tool or a wrapper rejecting an appended path returns.
+_PARSE_SENSITIVE_CHECK = """
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text("ran\\n")
+paths = sys.argv[2:] or [str(p) for p in Path("tests").rglob("*.py")]
+texts = [Path(p).read_text() for p in paths]
+if any("(:" in t for t in texts):
+    sys.exit(2)
+sys.exit(1 if any("DRIFT" in t for t in texts) else 0)
+"""
+
 _FAILING_FORMAT_FIX = """
 import sys
 sys.exit(127)
@@ -151,6 +165,9 @@ class _Scripts:
             "broken_format_check.py", _BROKEN_FORMAT_CHECK, self.format_check_marker
         )
         self.failing_format_fix = self._command("failing_format_fix.py", _FAILING_FORMAT_FIX)
+        self.parse_sensitive_check = self._command(
+            "parse_sensitive_check.py", _PARSE_SENSITIVE_CHECK, self.format_check_marker
+        )
         self.treewide_crashing_check = self._command(
             "treewide_crashing_check.py", _TREEWIDE_CRASHING_CHECK, self.format_check_marker
         )
@@ -608,6 +625,34 @@ class TestAFormatterThatDoesNotRun:
         assert "DRIFT" in (root / "tests/test_x.py").read_text()
 
 
+class TestARedTheFormatterCannotParse:
+    def test_is_left_to_the_replay_not_turned_into_an_infrastructure_retry(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """ruff exits 2 on a syntax error (measured), the same code as a
+        crashed tool. Pre-freeze must not read that as infrastructure — the
+        bytes are the agent's own — nor as drift. It steps aside; the replay
+        judges the red as it did before #507 (review of PR #518, round 7)."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.parse_sensitive_check,
+            format_command=scripts.format_fix,
+            format_command_declared=True,
+        )
+        _agent_writing(monkeypatch, [], "def test_y(:\n    assert False\n")
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.instrument_error is False
+        assert result.outcome is not RedOutcome.EXPECTED_FAIL
+        assert "format" not in result.detail.lower()
+        assert scripts.format_check_marker.exists()
+        assert not scripts.format_fix_marker.exists()
+
+
 class TestTheCheckerItselfBreaking:
     def test_a_gate_that_crashes_tree_wide_on_the_refusal_path_is_an_instrument_error(
         self, tmp_path_factory, monkeypatch
@@ -629,11 +674,13 @@ class TestTheCheckerItselfBreaking:
         assert "declare commands.format" not in result.detail
         assert "exit 2" in result.detail
 
-    def test_an_exit_outside_the_contract_is_an_instrument_error(
+    def test_a_checker_that_always_exits_outside_the_contract_steps_aside(
         self, tmp_path_factory, monkeypatch
     ):
-        """Exit 0 is clean, 1 is measured drift; anything else is the tool
-        failing (#351's contract, `format_check_instrument_error`)."""
+        """Exit 0 is clean, 1 is measured drift; anything else from the
+        narrowed check cannot be attributed (a crashed tool, a wrapper that
+        rejects the appended path, an unparsable red all look the same), so
+        pre-freeze neither refuses nor repairs — post-done will report it."""
         root = _repo(tmp_path_factory.mktemp("proj"))
         scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
         cfg = _cfg(
@@ -647,9 +694,7 @@ class TestTheCheckerItselfBreaking:
         with ExecutorState(cfg) as state:
             result = run_red_phase(_task(), cfg, state)
 
-        assert result.outcome is RedOutcome.UNVERIFIABLE
-        assert result.instrument_error is True
-        assert result.checkpoint is None
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
         assert not scripts.format_fix_marker.exists()
 
 

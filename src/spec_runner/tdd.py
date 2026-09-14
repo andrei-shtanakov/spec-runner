@@ -1307,49 +1307,20 @@ def _format_claimed(
     if result.returncode == 0:
         return None, None, False
     if format_check_instrument_error(result.returncode):
-        # The contract operators declared `format_check` under (#351) is the
-        # verbatim tree-wide command; an exit outside 0/1 from the narrowed
-        # invocation may only mean the tool takes no appended path (a `make`
-        # wrapper, `cargo fmt --check`). Judge with the declared command
-        # itself before calling anything broken (review of PR #518).
-        narrowed_code = result.returncode
-        narrowed_output = _tail(f"{result.stdout}\n{result.stderr}")
+        # Outside the 0/1 contract the narrowed check has said nothing that
+        # can be attributed: a wrapper that takes no appended path (`make
+        # fmt-check`) exits like this, and so does ruff on a red file it
+        # cannot parse (measured: exit 2 for both, narrowed and tree-wide).
+        # Neither is this step's to judge — the first would blame the red for
+        # the tool, the second would turn the agent's own bytes into an
+        # infrastructure retry. Pre-freeze stays out of it, exactly as before
+        # #507: the replay judges the red and the completion gate judges the
+        # tree (review of PR #518, rounds 5 and 7).
         logger.warning(
-            "Narrowed format check exited outside the 0/1 contract — "
-            "commands.format_check may not accept an appended path; judging with "
-            "the tree-wide command instead",
+            "Narrowed format check exited outside the 0/1 contract — pre-freeze "
+            "cannot attribute it; leaving the file to the replay and the completion gate",
             path=str(selector.path),
             returncode=result.returncode,
-        )
-        result = subprocess.run(
-            config.format_check_command,
-            shell=True,
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return None, None, False
-        if format_check_instrument_error(result.returncode):
-            output = _tail(f"{result.stdout}\n{result.stderr}")
-            return (
-                f"format check infrastructure error: exit {result.returncode} on the "
-                f"tree, exit {narrowed_code} narrowed to the claimed file:\n{output}\n"
-                f"{narrowed_output}",
-                None,
-                True,
-            )
-        # Exit 1 tree-wide says the gate fails SOMEWHERE in the tree — the
-        # baseline may carry drift of its own, and nothing here can attribute
-        # it to the claimed file or repair the file alone. Refusing would blame
-        # this red for someone else's bytes on every task of the suite; the
-        # completion gate names the real culprit later. This is exactly the
-        # pre-#507 behaviour for such a gate, kept on purpose (review round 5).
-        logger.warning(
-            "Tree-wide format check fails and commands.format_check cannot be "
-            "narrowed to the claimed file — pre-freeze cannot attribute or repair "
-            "the drift; leaving it to the completion gate",
-            path=str(selector.path),
             detail=_tail(f"{result.stdout}\n{result.stderr}"),
         )
         return None, None, False
