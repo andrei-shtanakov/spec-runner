@@ -249,11 +249,11 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     if isinstance(simulated, mcp_launch.Irreproducible):
         return json.dumps(simulated.to_dict())
 
-    cmd = ["spec-runner", "run", "--task", task_id]
-    if config.change_id:
-        cmd.extend(["--change", config.change_id])
-    elif config.spec_prefix:
-        cmd.extend(["--spec-prefix", config.spec_prefix])
+    # The SAME list the simulation just validated (mcp_launch.child_argv):
+    # scope, namespace and every representable override travel to the child
+    # (FR-03). Building a second, shorter command here made the check
+    # fail-open (review of the DT-02 integration PR).
+    cmd = ["spec-runner", *argv]
 
     mcp_launch.clear_stale_ready_file(config.ready_file)
 

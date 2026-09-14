@@ -8,7 +8,6 @@ must be testable without it installed.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import dataclasses
 import os
@@ -79,30 +78,23 @@ class ScopeContradiction(Exception):
         }
 
 
-def _rebuild_for_namespace(project_root: Path, *, spec_prefix: str = "") -> ExecutorConfig:
-    """Rebuild a config for `project_root` under a different `spec_prefix` --
-    the flat-launch "refinement" branch (§1.3, Q-01 working assumption).
+def _rebuild_for_namespace(scope: LaunchScope, *, spec_prefix: str) -> ExecutorConfig:
+    """Rebuild the launch config under a different `spec_prefix` -- the
+    flat-launch "refinement" branch (§1.3, Q-01 working assumption).
 
-    Reads the same YAML the launch scope reads (by `project_root`, not CWD),
-    same as `mcp_server._build_config` does for the flat/no-namespace case.
+    Goes through the same serializer/parser pair as the child (design §1.3,
+    DT-02): the launch config's representable overrides (`--no-tests`,
+    `--budget`, `--strict`, ...) are serialized by `config_flags`, the
+    namespace flag is appended, and `_build_parser()` + `build_config`
+    rebuild the config from that argv and the YAML the launch scope read
+    (by `project_root`, not CWD). A hand-built `argparse.Namespace` with
+    every flag at "not set" silently dropped those overrides (review of the
+    DT-02 integration PR) -- the refined config was a degraded copy, and
+    the reproducibility check then validated that copy against itself.
     """
-    config_path = _resolve_config_path(project_root)
-    yaml_config = load_config_from_yaml(config_path)
-    args = argparse.Namespace(
-        spec_prefix=spec_prefix,
-        project_root=str(project_root),
-        max_retries=None,
-        timeout=None,
-        no_tests=False,
-        no_branch=False,
-        no_commit=False,
-        no_review=False,
-        hitl_review=False,
-        callback_url="",
-        log_level=None,
-        budget=None,
-        task_budget=None,
-    )
+    yaml_config = load_config_from_yaml(scope.config_path)
+    argv = ["run", "--task", "TASK-000", *config_flags(scope.config), "--spec-prefix", spec_prefix]
+    args = _build_parser().parse_args(argv)
     return build_config(yaml_config, args)
 
 
@@ -127,7 +119,7 @@ def resolve_tool_config(scope: LaunchScope, spec_prefix: str = "") -> ExecutorCo
             return scope.config
         raise ScopeContradiction(scope.namespace, spec_prefix)
 
-    return _rebuild_for_namespace(scope.project_root, spec_prefix=spec_prefix)
+    return _rebuild_for_namespace(scope, spec_prefix=spec_prefix)
 
 
 # === Startup handshake (§3.2) ===
@@ -266,8 +258,12 @@ class RepresentableField:
     common_dests: tuple[str, ...]
 
 
-#: Declarative table: config field -> `common` flag(s). `child_argv` walks
-#: this and nothing else (BEH-10). Order matches design §2.1.
+#: Declarative table: config field -> `common` flag(s) -- the parity
+#: contract of the serializer (BEH-10). `config_flags` below emits one
+#: rule per row (value / negated store-true / namespace), and
+#: `tests/test_mcp_serializer.py` holds the two in step with
+#: `_COMMON_DEFAULTS`; the table is not itself walked at runtime. Order
+#: matches design §2.1.
 REPRESENTABLE: tuple[RepresentableField, ...] = (
     RepresentableField("project_root", ("project_root",)),
     RepresentableField("change_id", ("change",)),
@@ -313,10 +309,23 @@ _REPRESENTABLE_FIELD_NAMES: frozenset[str] = frozenset(
 
 
 def child_argv(config: ExecutorConfig, task_id: str) -> list[str]:
-    """Serialize `config` into the argv a child `run` invocation would carry
-    to reproduce it (§2.1). Enumerates `REPRESENTABLE` and nothing else.
+    """Serialize `config` into the argv a child `run` invocation carries to
+    reproduce it (§2.1): `run --task <id>` + `config_flags(config)`.
+
+    This list is BOTH what `simulate_child_config` validates and what
+    `mcp_server.spec_runner_run_task` hands to `Popen` -- one list, never
+    two (review of the DT-02 integration PR: a check that certifies an argv
+    the child never receives is fail-open for every representable field).
     """
-    argv = ["run", "--task", task_id, "--project-root", str(config.project_root)]
+    return ["run", "--task", task_id, *config_flags(config)]
+
+
+def config_flags(config: ExecutorConfig) -> list[str]:
+    """The representable part of `config` as `run` flags (§2.1): one
+    emission rule per `REPRESENTABLE` row, then the run-only
+    `--strict`/`--no-strict` (`REPRESENTABLE_RUN`).
+    """
+    argv = ["--project-root", str(config.project_root)]
     if config.change_id:
         argv += ["--change", config.change_id]
     elif config.spec_prefix:
@@ -378,6 +387,12 @@ class Irreproducible(Exception):
     """`scope.config` cannot be reproduced by a child rebuilt from `argv` +
     the YAML the parent read (BEH-13) -- the one check that also clears
     BEH-14 when it finds nothing.
+
+    The rendered text and dict name the field and the reason only, never
+    the values: `ExecutorConfig` carries secrets (`telegram_bot_token`,
+    `webhook_headers`, ...) and an MCP error response is not the place for
+    them (Copilot review of the DT-02 integration PR). `diffs` keeps the
+    values in-process for callers that need them.
     """
 
     def __init__(self, diffs: list[FieldDiff]) -> None:
@@ -385,25 +400,14 @@ class Irreproducible(Exception):
         super().__init__(str(self))
 
     def __str__(self) -> str:
-        parts = [
-            f"{d.field} (parent={d.parent_value!r}, child would get={d.child_value!r}): {d.reason}"
-            for d in self.diffs
-        ]
+        parts = [f"{d.field}: {d.reason}" for d in self.diffs]
         return "config is not reproducible by the child: " + "; ".join(parts)
 
     def to_dict(self) -> dict:
         return {
             "status": "error",
             "error": str(self),
-            "fields": [
-                {
-                    "field": d.field,
-                    "parent_value": _jsonable(d.parent_value),
-                    "child_value": _jsonable(d.child_value),
-                    "reason": d.reason,
-                }
-                for d in self.diffs
-            ],
+            "fields": [{"field": d.field, "reason": d.reason} for d in self.diffs],
         }
 
 
@@ -484,12 +488,12 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
         child_value = getattr(child_config, f.name)
         if _normalized(parent_value) == _normalized(child_value):
             continue
-        if yaml_missing:
-            reason = (
-                f"the YAML config the parent read at {scope.config_path} no longer "
-                "exists -- the child would read class defaults for it instead"
-            )
-        elif f.name in _REPRESENTABLE_FIELD_NAMES:
+        # The class of the field decides the reason (BEH-13: "no CLI flag"
+        # vs "flag cannot express the value"); a missing YAML is a remark on
+        # top, never the headline -- `yaml_missing` cannot tell "deleted
+        # after the parent read it" from "never existed" (review of the
+        # DT-02 integration PR), so it is worded for both.
+        if f.name in _REPRESENTABLE_FIELD_NAMES:
             reason = (
                 "this field has a CLI flag, but the flag cannot express the "
                 "parent's current value (e.g. a one-directional --no-* flag)"
@@ -499,6 +503,12 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
                 "no CLI flag carries this field to the child -- only the YAML "
                 "the child reads by project_root can set it, and that YAML "
                 "does not agree with the parent's value"
+            )
+        if yaml_missing:
+            reason += (
+                f"; no YAML config exists at {scope.config_path} now, so the "
+                "child would read class defaults for it (if the parent read "
+                "one there, it has since vanished)"
             )
         diffs.append(FieldDiff(f.name, parent_value, child_value, reason))
 

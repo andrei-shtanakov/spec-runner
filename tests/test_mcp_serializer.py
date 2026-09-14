@@ -11,6 +11,7 @@ contract-level owner of `mcp_launch`'s serializer/reproducibility surface:
 """
 
 import argparse
+from json import dumps as json_dumps
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +24,7 @@ from spec_runner.mcp_launch import (
     Irreproducible,
     LaunchScope,
     child_argv,
+    resolve_tool_config,
     simulate_child_config,
 )
 
@@ -167,6 +169,55 @@ class TestBEH13IrreproducibleOverrideRefusesBeforePopen:
         assert isinstance(result, Irreproducible)
 
 
+class TestRefinementKeepsLaunchOverrides:
+    """Flat launch + tool-level prefix (Q-01 refinement) is rebuilt through
+    the same serializer/parser pair as the child, so launch-time
+    representable overrides survive (DT-02 review finding)."""
+
+    def test_refined_config_keeps_representable_overrides(self, tmp_path: Path) -> None:
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            run_tests_on_done=False,
+            budget_usd=5.0,
+            max_retries=7,
+            spec_governance="strict",
+        )
+        scope = LaunchScope.of(config)
+
+        refined = resolve_tool_config(scope, "p-")
+
+        assert refined.spec_prefix == "p-"
+        assert refined.project_root == tmp_path.resolve()
+        assert refined.run_tests_on_done is False
+        assert refined.budget_usd == 5.0
+        assert refined.max_retries == 7
+        assert refined.spec_governance == "strict"
+        assert refined.tasks_file == tmp_path.resolve() / "spec" / "p-tasks.md"
+
+    def test_refined_config_reads_yaml_by_project_root(self, tmp_path: Path) -> None:
+        _write_yaml(tmp_path, "review_policy: required\n")
+        scope = LaunchScope.of(ExecutorConfig(project_root=tmp_path))
+
+        refined = resolve_tool_config(scope, "p-")
+
+        assert refined.review_policy == "required"
+
+
+class TestIrreproducibleNeverLeaksValues:
+    def test_error_text_and_dict_carry_field_and_reason_only(self, tmp_path: Path) -> None:
+        config = ExecutorConfig(project_root=tmp_path, telegram_bot_token="SECRET-TOKEN-1")
+        scope = LaunchScope.of(config)
+
+        result = simulate_child_config(scope, child_argv(config, "TASK-001"))
+
+        assert isinstance(result, Irreproducible)
+        assert "telegram_bot_token" in str(result)
+        assert "SECRET-TOKEN-1" not in str(result)
+        as_dict = result.to_dict()
+        assert "SECRET-TOKEN-1" not in json_dumps(as_dict)
+        assert set(as_dict["fields"][0]) == {"field", "reason"}
+
+
 class TestMalformedInputsAreRefusedNotRaised:
     """A crash while building/comparing the simulated child config would
     defeat the whole point of checking before `Popen` -- a broken input is
@@ -243,6 +294,82 @@ class TestBEH14ReproducibleConfigSpawnsChildExactlyOnce:
         result = simulate_child_config(scope, argv)
 
         assert not isinstance(result, Irreproducible)
+
+    def test_run_task_spawns_the_validated_argv_exactly_once(self, tmp_path: Path) -> None:
+        """BEH-14 end to end: with the full representable override set,
+        `run_task` refuses nothing, calls `Popen` exactly once, answers
+        `started` -- and the spawned command IS the validated argv (the
+        DT-02 review found a second, shorter command being spawned)."""
+        import json
+        from unittest.mock import MagicMock
+
+        import spec_runner.mcp_server as server
+        from spec_runner.mcp_server import spec_runner_run_task
+
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "tasks.md").write_text(
+            "# Tasks\n\n### TASK-001: T\n\U0001f534 P0 | \u2b1c TODO | Est: 1d\n"
+        )
+        config = ExecutorConfig(
+            project_root=tmp_path,
+            max_retries=7,
+            task_timeout_minutes=9,
+            run_tests_on_done=False,
+            create_git_branch=False,
+            auto_commit=False,
+            run_review=False,
+            integration_pr=True,
+            hitl_review=True,
+            budget_usd=5.0,
+            task_budget_usd=1.5,
+            callback_url="http://callback.invalid/hook",
+            log_level="debug",
+            spec_governance="strict",
+        )
+
+        def _popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.pid = 777
+            proc.poll.return_value = None
+            config.ready_file.parent.mkdir(parents=True, exist_ok=True)
+            config.ready_file.write_text("PID: 777\nStarted: now\n")
+            return proc
+
+        with patch("subprocess.Popen", side_effect=_popen) as mock_popen:
+
+            def invoke(*, transport: str) -> None:
+                result = json.loads(spec_runner_run_task("TASK-001"))
+                assert result["status"] == "started", result
+
+            with patch.object(server.mcp_app, "run", side_effect=invoke):
+                server.run_server(config)
+
+        mock_popen.assert_called_once()
+        cmd = mock_popen.call_args.args[0]
+        assert cmd == ["spec-runner", *child_argv(config, "TASK-001")]
+        for flag in (
+            "--max-retries",
+            "7",
+            "--timeout",
+            "9",
+            "--no-tests",
+            "--no-branch",
+            "--no-commit",
+            "--no-review",
+            "--integration-pr",
+            "--hitl-review",
+            "--budget",
+            "5.0",
+            "--task-budget",
+            "1.5",
+            "--callback-url",
+            "http://callback.invalid/hook",
+            "--log-level",
+            "debug",
+            "--strict",
+        ):
+            assert flag in cmd, flag
+        assert mock_popen.call_args.kwargs["cwd"] == config.project_root
 
     def test_check_itself_never_spawns_a_process(self, tmp_path: Path) -> None:
         """Same non-spawning guarantee as BEH-13's refusal path (§2.2: one
