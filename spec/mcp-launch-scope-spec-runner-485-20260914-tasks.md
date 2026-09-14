@@ -101,7 +101,7 @@ launch namespace и принимается только с `PID`, равным `
 - **AC-22** (manual): README, CHANGELOG и #485 говорят то же, что код
 
 ### TASK-001: Launch scope: holder, предикат, YAML по `project_root`, родительская сторона handshake
-P2 | ⏸️ BLOCKED   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-01, BEH-02, BEH-03, BEH-04, BEH-05, BEH-06, BEH-07, BEH-18, BEH-20, BEH-21, BEH-22, BEH-25, BEH-28 (DT-01, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-01
