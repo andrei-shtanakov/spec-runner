@@ -1,6 +1,6 @@
 ---
 spec_stage: design
-status: approval_pending
+status: approved
 owner_role: architects
 traces_to:
 - requirements
@@ -10,6 +10,8 @@ upstream_hashes:
   behaviour-spec: d45db82f813ae676057dcc2f04703680cdb95a13
 version: 2
 approved_content_hash: ff7f2f9bc10066082c61195d17bd7514e5dffd58
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T06:59:30Z'
 ---
 
 # Design — MCP launch scope (spec-runner#485)
