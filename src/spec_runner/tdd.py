@@ -1807,7 +1807,7 @@ def _absorb_lint_fix(
         return (
             sha,
             (
-                f"{delta_error} after the lint fix; the fix was rolled back "
+                f"{delta_error} after the pre-freeze repair; it was rolled back "
                 "best-effort and the attempt refused rather than guessing "
                 "whether it left bytes outside the candidate"
             ),
@@ -1839,7 +1839,7 @@ def _absorb_lint_fix(
         text=True,
     )
     if add.returncode != 0:
-        return sha, f"could not stage the lint fix ({_tail(add.stderr)}); refusing", True
+        return sha, f"could not stage the pre-freeze repair ({_tail(add.stderr)}); refusing", True
     message = _fix_diff_message(config, sha, changed, created)
     amend = subprocess.run(
         ["git", "commit", "--amend", "-q", "-F", "-"],
@@ -1851,7 +1851,7 @@ def _absorb_lint_fix(
     if amend.returncode != 0:
         return (
             sha,
-            f"could not absorb the lint fix into the red commit: {_tail(amend.stderr)}",
+            f"could not absorb the pre-freeze repair into the red commit: {_tail(amend.stderr)}",
             True,
         )
     head = subprocess.run(
