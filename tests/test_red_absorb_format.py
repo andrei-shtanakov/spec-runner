@@ -87,6 +87,19 @@ import sys
 sys.exit(2)
 """
 
+# A wrapper that takes no file argument (`make fmt-check`): any appended path
+# is a usage error (exit 2); without one it judges the tree.
+_NO_PATH_FORMAT_CHECK = """
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text("ran\\n")
+if len(sys.argv) > 2:
+    sys.exit(2)
+bad = any("DRIFT" in p.read_text() for p in Path("tests").rglob("*.py"))
+sys.exit(1 if bad else 0)
+"""
+
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
@@ -118,6 +131,9 @@ class _Scripts:
         self.lint_fix = self._command("lint_fix.py", _LINT_FIX)
         self.broken_format_check = self._command(
             "broken_format_check.py", _BROKEN_FORMAT_CHECK, self.format_check_marker
+        )
+        self.no_path_format_check = self._command(
+            "no_path_format_check.py", _NO_PATH_FORMAT_CHECK, self.format_check_marker
         )
         self.excluding_format_check = self._command(
             "excluding_format_check.py", _EXCLUDING_FORMAT_CHECK, self.format_check_marker
@@ -375,6 +391,46 @@ class TestWithoutADeclaredFormatterTheRedIsRefusedBeforeItFreezes:
 
         # Post-done would only warn, so pre-freeze does the same.
         assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+
+class TestAGateThatTakesNoFileArgument:
+    """`commands.format_check` was declared under the #351 contract — run
+    verbatim, tree-wide. A wrapper that rejects an appended path must not turn
+    into an instrument error on every RED (review of PR #518)."""
+
+    def test_a_clean_tree_is_judged_by_the_verbatim_command(self, tmp_path_factory, monkeypatch):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(root, format_check_command=scripts.no_path_format_check)
+        _agent_writing(monkeypatch, [], _RED_CLEAN)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+
+    def test_drift_is_a_verdict_that_names_the_unnarrowable_gate(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.no_path_format_check,
+            format_command=scripts.format_fix,
+            format_command_declared=True,
+        )
+        _agent_writing(monkeypatch, [], _RED_WITH_DRIFT)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.instrument_error is False
+        assert result.checkpoint is None
+        # The formatter cannot be narrowed either, so it was not run.
+        assert not scripts.format_fix_marker.exists()
+        assert "does not accept an appended path" in result.detail
 
 
 class TestTheCheckerItselfBreaking:

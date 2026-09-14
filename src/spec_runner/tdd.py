@@ -1281,19 +1281,53 @@ def _format_claimed(
     result = _check()
     if result.returncode == 0:
         return None, None, False
+    narrowable = True
     if format_check_instrument_error(result.returncode):
-        output = _tail(f"{result.stdout}\n{result.stderr}")
-        return (
-            f"format check infrastructure error (exit {result.returncode}) on the "
-            f"claimed file:\n{output}",
-            None,
-            True,
+        # The contract operators declared `format_check` under (#351) is the
+        # verbatim tree-wide command; an exit outside 0/1 from the narrowed
+        # invocation may only mean the tool takes no appended path (a `make`
+        # wrapper, `cargo fmt --check`). Judge with the declared command
+        # itself before calling anything broken (review of PR #518).
+        narrowed_code = result.returncode
+        narrowed_output = _tail(f"{result.stdout}\n{result.stderr}")
+        logger.warning(
+            "Narrowed format check exited outside the 0/1 contract — "
+            "commands.format_check may not accept an appended path; judging with "
+            "the tree-wide command instead",
+            path=str(selector.path),
+            returncode=result.returncode,
         )
+        result = subprocess.run(
+            config.format_check_command,
+            shell=True,
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return None, None, False
+        if format_check_instrument_error(result.returncode):
+            output = _tail(f"{result.stdout}\n{result.stderr}")
+            return (
+                f"format check infrastructure error: exit {result.returncode} on the "
+                f"tree, exit {narrowed_code} narrowed to the claimed file:\n{output}\n"
+                f"{narrowed_output}",
+                None,
+                True,
+            )
+        # Exit 1 tree-wide: the tree is the baseline plus this red, so the
+        # gate WOULD block — but nothing here can be narrowed to the claim.
+        narrowable = False
 
     # Measured drift (exit 1). Repair only with a declared, narrowable formatter.
     fix_command: str | None = None
     skip_reason: str | None
-    if config.format_command_declared and config.format_command:
+    if not narrowable:
+        skip_reason = (
+            "commands.format_check does not accept an appended path, so neither the "
+            "check nor a formatter can be narrowed to the claim; the formatter was not run"
+        )
+    elif config.format_command_declared and config.format_command:
         if is_composite_shell_command(config.format_command):
             skip_reason = "the declared formatter (commands.format) is composite, so it was not run"
         else:
@@ -1388,7 +1422,12 @@ def _format_claimed(
             before,
             False,
         )
-    if config.format_command_declared and config.format_command:
+    if not narrowable:
+        advice = (
+            "declare a commands.format_check that accepts an appended file path, or "
+            "format the red file before the run"
+        )
+    elif config.format_command_declared and config.format_command:
         # Declared but not runnable here: telling the operator to declare it
         # would name a key they already wrote (review of PR #518).
         advice = (
