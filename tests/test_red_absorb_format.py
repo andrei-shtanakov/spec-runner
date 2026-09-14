@@ -402,7 +402,10 @@ class TestWithoutADeclaredFormatterTheRedIsRefusedBeforeItFreezes:
 class TestAGateThatTakesNoFileArgument:
     """`commands.format_check` was declared under the #351 contract — run
     verbatim, tree-wide. A wrapper that rejects an appended path must not turn
-    into an instrument error on every RED (review of PR #518)."""
+    into an instrument error on every RED; and since such a gate cannot say
+    WHICH file drifts, pre-freeze cannot refuse over it either — that would
+    blame this red for drift anywhere in the baseline. Behaviour for such a
+    gate is exactly what it was before #507: nothing (review of PR #518)."""
 
     def test_a_clean_tree_is_judged_by_the_verbatim_command(self, tmp_path_factory, monkeypatch):
         root = _repo(tmp_path_factory.mktemp("proj"))
@@ -415,9 +418,35 @@ class TestAGateThatTakesNoFileArgument:
 
         assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
 
-    def test_drift_is_a_verdict_that_names_the_unnarrowable_gate(
+    def test_drift_elsewhere_in_the_baseline_does_not_refuse_a_clean_red(
         self, tmp_path_factory, monkeypatch
     ):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        (root / "tests").mkdir()
+        (root / "tests/test_legacy.py").write_text("def test_old():  # DRIFT\n    pass\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "legacy drift in the baseline")
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.no_path_format_check,
+            format_command=scripts.format_fix,
+            format_command_declared=True,
+        )
+        _agent_writing(monkeypatch, [], _RED_CLEAN)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        # Nothing was formatted on this task's behalf: the drift is not its own.
+        assert not scripts.format_fix_marker.exists()
+
+    def test_drift_in_the_red_itself_is_left_to_the_completion_gate(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """Unattributable, so not refused — the pre-#507 shape for this gate.
+        The formatter is not run either: it cannot be narrowed any better."""
         root = _repo(tmp_path_factory.mktemp("proj"))
         scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
         cfg = _cfg(
@@ -431,12 +460,8 @@ class TestAGateThatTakesNoFileArgument:
         with ExecutorState(cfg) as state:
             result = run_red_phase(_task(), cfg, state)
 
-        assert result.outcome is RedOutcome.UNVERIFIABLE
-        assert result.instrument_error is False
-        assert result.checkpoint is None
-        # The formatter cannot be narrowed either, so it was not run.
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
         assert not scripts.format_fix_marker.exists()
-        assert "does not accept an appended path" in result.detail
 
 
 class TestTheRefusedResidueOnTheNextRun:

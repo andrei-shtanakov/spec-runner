@@ -1306,7 +1306,6 @@ def _format_claimed(
     result = _check()
     if result.returncode == 0:
         return None, None, False
-    narrowable = True
     if format_check_instrument_error(result.returncode):
         # The contract operators declared `format_check` under (#351) is the
         # verbatim tree-wide command; an exit outside 0/1 from the narrowed
@@ -1340,19 +1339,25 @@ def _format_claimed(
                 None,
                 True,
             )
-        # Exit 1 tree-wide: the tree is the baseline plus this red, so the
-        # gate WOULD block — but nothing here can be narrowed to the claim.
-        narrowable = False
+        # Exit 1 tree-wide says the gate fails SOMEWHERE in the tree — the
+        # baseline may carry drift of its own, and nothing here can attribute
+        # it to the claimed file or repair the file alone. Refusing would blame
+        # this red for someone else's bytes on every task of the suite; the
+        # completion gate names the real culprit later. This is exactly the
+        # pre-#507 behaviour for such a gate, kept on purpose (review round 5).
+        logger.warning(
+            "Tree-wide format check fails and commands.format_check cannot be "
+            "narrowed to the claimed file — pre-freeze cannot attribute or repair "
+            "the drift; leaving it to the completion gate",
+            path=str(selector.path),
+            detail=_tail(f"{result.stdout}\n{result.stderr}"),
+        )
+        return None, None, False
 
     # Measured drift (exit 1). Repair only with a declared, narrowable formatter.
     fix_command: str | None = None
     skip_reason: str | None
-    if not narrowable:
-        skip_reason = (
-            "commands.format_check does not accept an appended path, so neither the "
-            "check nor a formatter can be narrowed to the claim; the formatter was not run"
-        )
-    elif config.format_command_declared and config.format_command:
+    if config.format_command_declared and config.format_command:
         if is_composite_shell_command(config.format_command):
             skip_reason = "the declared formatter (commands.format) is composite, so it was not run"
         else:
@@ -1460,12 +1465,7 @@ def _format_claimed(
             before,
             False,
         )
-    if not narrowable:
-        advice = (
-            "declare a commands.format_check that accepts an appended file path, or "
-            "format the red file before the run"
-        )
-    elif config.format_command_declared and config.format_command:
+    if config.format_command_declared and config.format_command:
         # Declared but not runnable here: telling the operator to declare it
         # would name a key they already wrote (review of PR #518).
         advice = (
