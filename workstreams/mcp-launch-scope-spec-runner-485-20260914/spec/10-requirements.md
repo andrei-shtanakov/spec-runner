@@ -1,6 +1,6 @@
 ---
 spec_stage: requirements
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - charter
@@ -8,6 +8,8 @@ upstream_hashes:
   charter: e7ce8e1028beb990b6a7ba28085bce003e860b46
 version: 2
 approved_content_hash: e0031e1f86da79b95c18a4e900c509b420c5ac7f
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T06:27:30Z'
 ---
 
 # Requirements — MCP launch scope (spec-runner#485)
