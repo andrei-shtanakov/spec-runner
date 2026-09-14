@@ -285,6 +285,10 @@ class ExecutorConfig:
     max_retries: int = 3  # Max attempts per task
     retry_delay_seconds: int = 5  # Pause between attempts
     task_timeout_minutes: int = 30  # Task timeout
+    # MCP `run_task`: how long the parent waits for the child to publish
+    # `ready_file` before treating the child as unresponsive (#485). Parent-only
+    # field -- the child never reads it.
+    mcp_ready_timeout_seconds: int = 60
     max_consecutive_failures: int = 2  # Stop after N consecutive failures
     on_task_failure: str = "skip"  # What to do when task fails: skip | stop | ask
     max_concurrent: int = 3  # Max parallel tasks
@@ -565,6 +569,10 @@ class ExecutorConfig:
         return self.spec_dir / ".executor-stop"
 
     @property
+    def ready_file(self) -> Path:
+        return self.spec_dir / ".executor-ready"
+
+    @property
     def tasks_file(self) -> Path:
         return self.spec_dir / f"{self.spec_prefix}tasks.md"
 
@@ -833,33 +841,41 @@ def _user_set(yaml_config: dict, args: argparse.Namespace, key: str) -> bool:
     return val not in (None, False)
 
 
-def _resolve_config_path() -> Path:
+def _resolve_config_path(base: Path | None = None) -> Path:
     """Find the config file, preferring new location over legacy.
+
+    Args:
+        base: Directory to search from (default: CWD). MCP launch scope
+            (#485) passes the launch ``project_root`` here so the YAML is
+            found by the served project, not by the server process's CWD.
 
     Returns the path to use. Emits deprecation warning for legacy path.
     """
-    if CONFIG_FILE.exists():
-        if LEGACY_CONFIG_FILE.exists():
+    base = base if base is not None else Path(".")
+    config_file = base / CONFIG_FILE
+    legacy_file = base / LEGACY_CONFIG_FILE
+
+    if config_file.exists():
+        if legacy_file.exists():
             from .logging import get_logger
 
             get_logger("config").error(
                 "Both config files exist — remove the legacy one",
-                new=str(CONFIG_FILE),
-                legacy=str(LEGACY_CONFIG_FILE),
+                new=str(config_file),
+                legacy=str(legacy_file),
             )
-        return CONFIG_FILE
+        return config_file
 
-    if LEGACY_CONFIG_FILE.exists():
+    if legacy_file.exists():
         import sys
 
         print(
-            f"WARNING: {LEGACY_CONFIG_FILE} is deprecated. "
-            f"Move it to {CONFIG_FILE} (project root).",
+            f"WARNING: {legacy_file} is deprecated. Move it to {config_file} (project root).",
             file=sys.stderr,
         )
-        return LEGACY_CONFIG_FILE
+        return legacy_file
 
-    return CONFIG_FILE  # default (won't exist, returns empty config)
+    return config_file  # default (won't exist, returns empty config)
 
 
 def missing_config_warning(config: "ExecutorConfig") -> str | None:
@@ -942,6 +958,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "max_retries": executor_config.get("max_retries"),
             "retry_delay_seconds": executor_config.get("retry_delay_seconds"),
             "task_timeout_minutes": executor_config.get("task_timeout_minutes"),
+            "mcp_ready_timeout_seconds": executor_config.get("mcp_ready_timeout_seconds"),
             "max_consecutive_failures": executor_config.get("max_consecutive_failures"),
             "on_task_failure": executor_config.get("on_task_failure"),
             "claude_command": executor_config.get("claude_command"),

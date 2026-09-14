@@ -2436,8 +2436,9 @@ def main():
 
     # Load config from YAML file, then override with CLI args. Resolve the
     # path once — _resolve_config_path() prints a deprecation warning for the
-    # legacy location, which must not appear twice.
-    config_path = _resolve_config_path()
+    # legacy location, which must not appear twice. `--project-root` (#485)
+    # is where the YAML is searched, not the process CWD.
+    config_path = _resolve_config_path(Path(args.project_root) if args.project_root else None)
     from .config import ConfigError
 
     # A config the loader refuses (#182: flat keys silently discarded by an

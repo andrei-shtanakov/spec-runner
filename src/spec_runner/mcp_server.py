@@ -11,16 +11,26 @@ import json
 
 from mcp.server import MCPServer
 
+from . import mcp_launch
 from .config import ExecutorConfig, build_config, load_config_from_yaml
+from .mcp_launch import LaunchScope, ScopeContradiction
 from .state import ExecutorState
 from .task import parse_tasks, resolve_dependencies
 
 mcp_app = MCPServer("spec-runner")
-_launch_stop_config: ExecutorConfig | None = None
+# The one holder for the server's launch scope (#485 §1.2). Empty only when
+# tools are invoked without `run_server` -- exercised by tests only; see
+# `_tool_config`.
+_scope: LaunchScope | None = None
 
 
 def _build_config(spec_prefix: str = "") -> ExecutorConfig:
-    """Build ExecutorConfig from YAML + optional spec_prefix."""
+    """Build ExecutorConfig from YAML (by CWD) + optional spec_prefix.
+
+    Used only for the flat/no-launch-scope case: `run_server(None)` and the
+    holder-empty fallback in `_tool_config` (#485 §1.2/§1.3) -- once a server
+    has a launch scope, no tool calls this (M-02: 0/8, BEH-04).
+    """
     import argparse
 
     yaml_config = load_config_from_yaml()
@@ -42,6 +52,16 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
     return build_config(yaml_config, args)
 
 
+def _tool_config(spec_prefix: str = "") -> ExecutorConfig:
+    """The one helper all eight tools resolve their config through (§1.3).
+
+    Raises `ScopeContradiction` when `spec_prefix` conflicts with the launch
+    namespace (BEH-05/06); callers turn that into the tool's JSON error.
+    """
+    scope = _scope if _scope is not None else LaunchScope.of(_build_config(""))
+    return mcp_launch.resolve_tool_config(scope, spec_prefix)
+
+
 def _handle_status(config: ExecutorConfig) -> str:
     """Get execution status summary."""
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
@@ -52,6 +72,7 @@ def _handle_status(config: ExecutorConfig) -> str:
         cost = state.total_cost()
         inp, out = state.total_tokens()
 
+    scope = LaunchScope.of(config)
     return json.dumps(
         {
             "total_tasks": len(tasks),
@@ -63,6 +84,8 @@ def _handle_status(config: ExecutorConfig) -> str:
             "input_tokens": inp,
             "output_tokens": out,
             "budget_usd": config.budget_usd,
+            "project_root": str(scope.project_root),
+            "namespace": scope.namespace,
         }
     )
 
@@ -149,28 +172,40 @@ def _handle_logs(config: ExecutorConfig, task_id: str, lines: int = 50) -> str:
 @mcp_app.tool()
 def spec_runner_status(spec_prefix: str = "") -> str:
     """Get spec-runner execution status: tasks completed/failed/running, cost, tokens."""
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     return _handle_status(config)
 
 
 @mcp_app.tool()
 def spec_runner_tasks(status: str = "", spec_prefix: str = "") -> str:
     """List tasks from tasks.md with id, name, priority, status, dependencies."""
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     return _handle_tasks(config, status=status or None)
 
 
 @mcp_app.tool()
 def spec_runner_costs(sort: str = "id", spec_prefix: str = "") -> str:
     """Per-task cost breakdown with summary totals."""
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     return _handle_costs(config, sort=sort)
 
 
 @mcp_app.tool()
 def spec_runner_logs(task_id: str, lines: int = 50, spec_prefix: str = "") -> str:
     """Get last N lines of a task's execution log."""
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     return _handle_logs(config, task_id=task_id, lines=lines)
 
 
@@ -188,35 +223,85 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     tasks.md is not approved (mirrors the CLI's `run`/`watch`/`retry` gate).
     No-ops (always allows) under default `off` governance and for unmanaged
     (frontmatter-less) tasks.md files.
+
+    `started` means the child has taken its run lock and published ready
+    (#485) -- not merely that `Popen` returned. A busy lock, an early exit,
+    or a child that never publishes ready all come back as `status: error`
+    instead (see README.md#mcp-server).
     """
     import subprocess
+    from datetime import datetime
 
     from .cli import spec_run_gate_ok
 
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
+
     allowed, reason = spec_run_gate_ok(config)
     if not allowed:
         return json.dumps({"status": "error", "error": f"⛔ spec governance: {reason}"})
 
     cmd = ["spec-runner", "run", "--task", task_id]
-    if spec_prefix:
-        cmd.extend(["--spec-prefix", spec_prefix])
+    if config.change_id:
+        cmd.extend(["--change", config.change_id])
+    elif config.spec_prefix:
+        cmd.extend(["--spec-prefix", config.spec_prefix])
+
+    mcp_launch.clear_stale_ready_file(config.ready_file)
+
+    config.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = config.logs_dir / f"{task_id}-{datetime.now():%Y%m%d-%H%M%S}.log"
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        with open(log_file, "wb") as log_fh:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=config.project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+            )
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e)})
+
+    outcome = mcp_launch.wait_for_ready(
+        proc, config.ready_file, config.mcp_ready_timeout_seconds, log_file=log_file
+    )
+
+    if isinstance(outcome, mcp_launch.Ready):
         return json.dumps(
             {
                 "status": "started",
                 "task_id": task_id,
-                "pid": proc.pid,
+                "pid": outcome.pid,
+                "lock_file": str(config.state_file.with_suffix(".lock")),
+                "log_file": str(log_file),
             }
         )
-    except Exception as e:
-        return json.dumps({"status": "error", "error": str(e)})
+    if isinstance(outcome, mcp_launch.Exited):
+        return json.dumps(
+            {
+                "status": "error",
+                "error": (f"child exited with code {outcome.returncode} before publishing ready"),
+                "exit_code": outcome.returncode,
+                "log_tail": outcome.log_tail,
+                "log_file": str(log_file),
+            }
+        )
+    return json.dumps(
+        {
+            "status": "error",
+            "error": (
+                f"timeout waiting {config.mcp_ready_timeout_seconds}s "
+                "for the child to publish ready"
+            ),
+            "pid": outcome.pid,
+            "terminated": outcome.terminated,
+            "log_file": str(log_file),
+        }
+    )
 
 
 @mcp_app.tool()
@@ -227,7 +312,10 @@ def spec_runner_stop(spec_prefix: str = "") -> str:
     same workspace to finish the current task and exit. Does not kill
     processes. See README.md#security-model.
     """
-    config = _launch_stop_config or _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     stop_file = config.stop_file
     stop_file.parent.mkdir(parents=True, exist_ok=True)
     stop_file.write_text("stop")
@@ -239,7 +327,10 @@ def spec_runner_next_tasks(spec_prefix: str = "") -> str:
     """Get list of tasks ready to execute (resolved dependencies, TODO status)."""
     from .task import get_next_tasks
 
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
     ready = get_next_tasks(tasks)
     return json.dumps([{"id": t.id, "name": t.name, "priority": t.priority} for t in ready])
@@ -248,12 +339,16 @@ def spec_runner_next_tasks(spec_prefix: str = "") -> str:
 @mcp_app.tool()
 def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
     """Get full detail for a task: checklist, attempts, review verdicts, cost."""
-    config = _build_config(spec_prefix)
+    try:
+        config = _tool_config(spec_prefix)
+    except ScopeContradiction as exc:
+        return json.dumps(exc.to_dict())
     tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
     task = next((t for t in tasks if t.id == task_id.upper()), None)
     if not task:
         return json.dumps({"error": f"Task {task_id} not found"})
 
+    scope = LaunchScope.of(config)
     detail: dict = {
         "id": task.id,
         "name": task.name,
@@ -262,6 +357,8 @@ def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
         "depends_on": task.depends_on,
         "traces_to": task.traces_to,
         "checklist": [{"done": done, "text": text} for text, done in task.checklist],
+        "project_root": str(scope.project_root),
+        "namespace": scope.namespace,
     }
 
     with ExecutorState.for_read(config) as state:
@@ -282,12 +379,18 @@ def spec_runner_task_detail(task_id: str, spec_prefix: str = "") -> str:
 
 
 def run_server(config: ExecutorConfig | None = None) -> None:
-    """Run the MCP server (stdio transport)."""
-    global _launch_stop_config
+    """Run the MCP server (stdio transport).
 
-    previous = _launch_stop_config
-    _launch_stop_config = config
+    `config` becomes the launch scope every tool serves (#485). `None` --
+    the programmatic `mcp_run_server()` entry point and the flat
+    `spec-runner mcp` with no `--project-root`/namespace flags -- builds one
+    from CWD via `_build_config("")`, same as before (BEH-23).
+    """
+    global _scope
+
+    previous = _scope
+    _scope = LaunchScope.of(config) if config is not None else LaunchScope.of(_build_config(""))
     try:
         mcp_app.run(transport="stdio")
     finally:
-        _launch_stop_config = previous
+        _scope = previous

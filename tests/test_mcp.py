@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from spec_runner.config import ExecutorConfig
 from spec_runner.mcp_server import spec_runner_stop
@@ -54,6 +54,25 @@ def _write_tasks(tasks_file: Path, tasks: list[tuple[str, str, str, str]]) -> No
         lines.append("")
     tasks_file.parent.mkdir(parents=True, exist_ok=True)
     tasks_file.write_text("\n".join(lines))
+
+
+def _popen_double(config: ExecutorConfig, *, pid: int = 4242):
+    """A `subprocess.Popen` double that completes the ready handshake (#485)
+    the instant it is invoked: writes `config.ready_file` with its own pid
+    and never appears to exit. Simulates a child that took its lock and
+    published ready immediately -- what `TestMCPRunTask` needs now that
+    `run_task` waits for the handshake before answering `started`.
+    """
+
+    def _popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = pid
+        proc.poll.return_value = None
+        config.ready_file.parent.mkdir(parents=True, exist_ok=True)
+        config.ready_file.write_text(f"PID: {pid}\nStarted: now\n")
+        return proc
+
+    return _popen
 
 
 def _seed_state(config: ExecutorConfig, task_data: dict) -> None:
@@ -301,7 +320,7 @@ class TestMCPStop:
             }
         ]
         assert check_stop_requested(config) is True
-        assert server._launch_stop_config is None
+        assert server._scope is None
 
     def test_explicit_prefix_keeps_launch_project_root(self, tmp_path: Path) -> None:
         import spec_runner.mcp_server as server
@@ -420,7 +439,7 @@ class TestMCPRunTask:
         assert "governance" in result["error"].lower()
 
     def test_off_governance_allows_spawn(self, tmp_path: Path) -> None:
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from spec_runner.mcp_server import spec_runner_run_task
         from spec_runner.spec import SpecMeta, write_spec
@@ -430,16 +449,16 @@ class TestMCPRunTask:
 
         with (
             patch("spec_runner.mcp_server._build_config", return_value=config),
-            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.Popen", side_effect=_popen_double(config, pid=4242)) as mock_popen,
         ):
-            mock_popen.return_value = MagicMock(pid=4242)
             result = json.loads(spec_runner_run_task("TASK-001"))
 
         mock_popen.assert_called_once()
         assert result["status"] == "started"
+        assert result["pid"] == 4242
 
     def test_unmanaged_tasks_file_allows_spawn(self, tmp_path: Path) -> None:
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from spec_runner.mcp_server import spec_runner_run_task
 
@@ -448,10 +467,10 @@ class TestMCPRunTask:
 
         with (
             patch("spec_runner.mcp_server._build_config", return_value=config),
-            patch("subprocess.Popen") as mock_popen,
+            patch("subprocess.Popen", side_effect=_popen_double(config, pid=4242)) as mock_popen,
         ):
-            mock_popen.return_value = MagicMock(pid=4242)
             result = json.loads(spec_runner_run_task("TASK-001"))
 
         mock_popen.assert_called_once()
         assert result["status"] == "started"
+        assert result["pid"] == 4242

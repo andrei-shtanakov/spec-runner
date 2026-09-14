@@ -101,26 +101,26 @@ launch namespace и принимается только с `PID`, равным `
 - **AC-22** (manual): README, CHANGELOG и #485 говорят то же, что код
 
 ### TASK-001: Launch scope: holder, предикат, YAML по `project_root`, родительская сторона handshake
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-01, BEH-02, BEH-03, BEH-04, BEH-05, BEH-06, BEH-07, BEH-18, BEH-20, BEH-21, BEH-22, BEH-25, BEH-28 (DT-01, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-01
 
 **Checklist:**
-- [ ] реализовать BEH-01: Все восемь tools обслуживают launch scope, а не CWD сервера
-- [ ] реализовать BEH-02: YAML ищется по `project_root` launch scope, а не по CWD процесса
-- [ ] реализовать BEH-03: Чтение не оставляет следов ни в scope, ни вне его
-- [ ] реализовать BEH-04: Ни один tool не пересобирает config из CWD (M-02: 7/8 → 0/8)
-- [ ] реализовать BEH-05: `run_task` с противоречащим prefix отказывает по имени и ничего не запускает
-- [ ] реализовать BEH-06: Предикат противоречия один и тот же для всех восьми tools
-- [ ] реализовать BEH-07: Совпадающий, пустой и уточняющий prefix — не противоречие
-- [ ] реализовать BEH-18: Таймаут ожидания ready объявлен и конфигурируем
-- [ ] реализовать BEH-20: Занятый lock — ошибка запуска, второй executor не запущен
-- [ ] реализовать BEH-21: Child, умерший до ready, — ошибка с кодом выхода и хвостом лога
-- [ ] реализовать BEH-22: Child, не опубликовавший ready, — `timeout`, и ready-файла после ошибки нет
-- [ ] реализовать BEH-25: `status` и `task_detail` называют обслуживаемый scope
-- [ ] реализовать BEH-28: Существующие MCP-тесты меняют ожидания только там, где этого требует контракт
-- [ ] проверка группы: tests/test_mcp_launch_scope.py (kind: integration), tests/test_mcp_launch_scope.py (kind: contract), tests/test_mcp.py (kind: contract) зелёные на BEH-01, BEH-02, BEH-03, BEH-04, BEH-05, BEH-06, BEH-07, BEH-18, BEH-20, BEH-21, BEH-22, BEH-25, BEH-28
+- [x] реализовать BEH-01: Все восемь tools обслуживают launch scope, а не CWD сервера
+- [x] реализовать BEH-02: YAML ищется по `project_root` launch scope, а не по CWD процесса
+- [x] реализовать BEH-03: Чтение не оставляет следов ни в scope, ни вне его
+- [x] реализовать BEH-04: Ни один tool не пересобирает config из CWD (M-02: 7/8 → 0/8)
+- [x] реализовать BEH-05: `run_task` с противоречащим prefix отказывает по имени и ничего не запускает
+- [x] реализовать BEH-06: Предикат противоречия один и тот же для всех восьми tools
+- [x] реализовать BEH-07: Совпадающий, пустой и уточняющий prefix — не противоречие
+- [x] реализовать BEH-18: Таймаут ожидания ready объявлен и конфигурируем
+- [x] реализовать BEH-20: Занятый lock — ошибка запуска, второй executor не запущен
+- [x] реализовать BEH-21: Child, умерший до ready, — ошибка с кодом выхода и хвостом лога
+- [x] реализовать BEH-22: Child, не опубликовавший ready, — `timeout`, и ready-файла после ошибки нет
+- [x] реализовать BEH-25: `status` и `task_detail` называют обслуживаемый scope
+- [x] реализовать BEH-28: Существующие MCP-тесты меняют ожидания только там, где этого требует контракт
+- [x] проверка группы: tests/test_mcp_launch_scope.py (kind: integration), tests/test_mcp_launch_scope.py (kind: contract), tests/test_mcp.py (kind: contract) зелёные на BEH-01, BEH-02, BEH-03, BEH-04, BEH-05, BEH-06, BEH-07, BEH-18, BEH-20, BEH-21, BEH-22, BEH-25, BEH-28
 
 **Traces to:** [FR-01], [FR-02], [FR-05], [FR-06], [FR-09]
 
