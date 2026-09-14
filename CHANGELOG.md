@@ -261,6 +261,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The RED pass formats the file it freezes** (#507). `commands.format_check`
+  (#351) judges the whole tree after GREEN, when the red file is already
+  byte-locked by its claim — a red the gate rejected failed every GREEN attempt
+  by construction (three paid calls on the live run behind the issue). The
+  pre-freeze step now runs the format check narrowed to the claimed file and
+  repairs drift with the new, separately declared write-mode `commands.format`
+  (`format_command` / `format_command_declared`; no default, never inferred),
+  absorbing the result into the checkpoint commit like the lint fix. The step
+  follows the completion gate: dormant without `format_check` or with
+  `run_lint_on_done: false`; with `format_check` declared but no formatter, a
+  drifting red is refused before it freezes, naming `commands.format`, when
+  the gate is blocking — and only warned about when it is not.
+
 - **The self-hosted post-done hook now catches formatting drift before push**
   (#351). The tracked config declares a separate read-only
   `commands.format_check` (`ruff format --check .`) after its normal lint

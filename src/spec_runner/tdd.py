@@ -830,6 +830,21 @@ def _judge_red_commit(
             RedOutcome.UNVERIFIABLE, lint_failure, instrument_error=lint_instrument
         )
 
+    # Third (#507): format what is about to be frozen. The completion gate
+    # (`commands.format_check`) judges the whole tree after GREEN, when this
+    # file is byte-locked — drift that gets in here fails every attempt by
+    # construction. The earliest snapshot wins: judged against it, the absorb
+    # below folds the lint fix and the format fix into the one candidate.
+    format_failure, tree_before_format, format_instrument = _format_claimed(config, parsed_selector)
+    if tree_before_fix is None:
+        tree_before_fix = tree_before_format
+    if format_failure:
+        if tree_before_fix is not None:
+            _rollback_fix(config, tree_before_fix)
+        return RedPhaseResult(
+            RedOutcome.UNVERIFIABLE, format_failure, instrument_error=format_instrument
+        )
+
     if tree_before_fix is not None:
         # The fix rewrote the working tree after `_commit_red`; absorb its
         # delta into the candidate before anything replays or byte-locks, so
@@ -1193,6 +1208,175 @@ def _lint_claimed(
     )
 
 
+def _format_claimed(
+    config: ExecutorConfig, selector: Selector
+) -> tuple[str | None, set | None, bool]:
+    """Format-check the file about to be frozen; repair it with the declared formatter (#507).
+
+    Same contract as `_lint_claimed`: returns (refusal, tree_before_fix,
+    instrument). `tree_before_fix` is the snapshot taken right before the
+    formatter ran — None whenever it did not run — and the caller absorbs the
+    delta into the candidate commit exactly as it does for the lint fix.
+
+    Why this exists at all: `commands.format_check` is the read-only
+    completion gate (#351) and judges the WHOLE tree after GREEN. By then the
+    red file is byte-locked by its claim, so a red the gate rejects cannot be
+    repaired by any GREEN attempt — each one fails the same gate and the
+    harness pays for every one of them (the live run behind #507: three
+    attempts, $12.99, `on_task_failure: stop`). The cheapest place to notice
+    is here, before anything is frozen; the only place a repair is legal is
+    here too.
+
+    Dormant unless the completion gate is live (`run_lint_on_done` and a
+    declared `format_check`): with the gate off no GREEN would fail on
+    formatting, so there is nothing to protect and no reason to refuse a red.
+    Narrowed to the claim paths through `_scoped_fix_command` — the check
+    itself as well as the fix, because `ruff format --check .` with a path
+    appended still judges the whole tree, and someone else's drift must not
+    refuse this task's red. A check that cannot be narrowed (composite, or
+    naming its own paths) is skipped, not run wide: the same #139 lesson as
+    the lint path.
+
+    The formatter is run only when the project DECLARED one (`commands.format`,
+    `format_command_declared`) — it writes to the tree, and no default is
+    ever inferred (the write-mode half of #220). Drift with no declared
+    formatter is a refusal that names the missing declaration when the gate
+    is blocking, and a warning when it is not — mirroring what post-done
+    would do, one paid call earlier.
+    """
+    from .claims import claim_paths_for
+    from .config import format_check_instrument_error
+    from .git_ops import is_composite_shell_command
+
+    if not (config.run_lint_on_done and config.format_check_command):
+        return None, None, False
+    paths = claim_paths_for(selector)
+    if not paths:
+        return None, None, False
+    if is_composite_shell_command(config.format_check_command):
+        logger.debug(
+            "composite commands.format_check — pre-freeze format check skipped",
+            path=str(selector.path),
+        )
+        return None, None, False
+    check_command = _scoped_fix_command(config.format_check_command, paths, config.project_root)
+    if check_command is None:
+        logger.debug(
+            "commands.format_check names its own paths and cannot be narrowed — "
+            "pre-freeze format check skipped",
+            path=str(selector.path),
+        )
+        return None, None, False
+    scoped_check: str = check_command
+
+    def _check() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            scoped_check,
+            shell=True,
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+
+    result = _check()
+    if result.returncode == 0:
+        return None, None, False
+    if format_check_instrument_error(result.returncode):
+        output = _tail(f"{result.stdout}\n{result.stderr}")
+        return (
+            f"format check infrastructure error (exit {result.returncode}) on the "
+            f"claimed file:\n{output}",
+            None,
+            True,
+        )
+
+    # Measured drift (exit 1). Repair only with a declared, narrowable formatter.
+    fix_command: str | None = None
+    skip_reason: str | None
+    if config.format_command_declared and config.format_command:
+        if is_composite_shell_command(config.format_command):
+            skip_reason = "the declared formatter (commands.format) is composite, so it was not run"
+        else:
+            fix_command = _scoped_fix_command(config.format_command, paths, config.project_root)
+            skip_reason = (
+                None
+                if fix_command is not None
+                else (
+                    "the declared formatter (commands.format) names its own paths and "
+                    "could not be narrowed to the claim, so it was not run"
+                )
+            )
+    else:
+        skip_reason = "no formatter is declared (commands.format) and none is ever inferred"
+
+    before: set | None = None
+    if fix_command is not None:
+        before, status_error = _tree_status(config)
+        if status_error:
+            return (
+                f"{status_error}; refusing to run the declared formatter without a "
+                "tree snapshot to judge its footprint against",
+                None,
+                True,
+            )
+        try:
+            fix_result = subprocess.run(
+                fix_command,
+                shell=True,
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+            logger.debug(
+                "Ran the declared formatter on the claimed file",
+                path=str(selector.path),
+                returncode=fix_result.returncode,
+            )
+            result = _check()
+        except Exception:
+            if before is not None:
+                _rollback_fix(config, before)
+            raise
+        if result.returncode == 0:
+            return None, before, False
+        if format_check_instrument_error(result.returncode):
+            output = _tail(f"{result.stdout}\n{result.stderr}")
+            return (
+                f"format check infrastructure error (exit {result.returncode}) after "
+                f"the declared formatter ran:\n{output}",
+                before,
+                True,
+            )
+        skip_reason = None
+
+    drift = _tail(f"{result.stdout}\n{result.stderr}")
+    if not config.lint_blocking:
+        # Post-done would only warn here; refusing a red over a warning would
+        # make pre-freeze stricter than the gate it exists to anticipate.
+        logger.warning(
+            "Formatting drift on the file about to be frozen (non-blocking completion gate)",
+            path=str(selector.path),
+            detail=drift,
+        )
+        return None, before, False
+    if before is not None:
+        return (
+            "the declared formatter (commands.format) ran on the claimed file and "
+            "formatting drift remains; frozen as is, every GREEN attempt would fail "
+            f"the completion gate (commands.format_check) against a byte-locked file:\n{drift}",
+            before,
+            False,
+        )
+    return (
+        "the file about to be frozen fails the declared format check "
+        f"(commands.format_check) and {skip_reason}; frozen as is, every GREEN "
+        "attempt would fail the completion gate against a byte-locked file — "
+        f"declare commands.format to let the RED pass repair it:\n{drift}",
+        None,
+        False,
+    )
+
+
 def _run_lint_agent_round(
     config: ExecutorConfig,
     state: ExecutorState,
@@ -1488,7 +1672,10 @@ def _fix_diff_message(
         text=True,
     )
     trailer = diff.stdout if diff.returncode == 0 else ""
-    return f"{subject}\n\nFix-Diff: the lint fix rewrote these bytes before the freeze\n\n{trailer}"
+    return (
+        f"{subject}\n\nFix-Diff: the pre-freeze repair (lint fix and/or formatter) "
+        f"rewrote these bytes before the freeze\n\n{trailer}"
+    )
 
 
 def _absorb_lint_fix(

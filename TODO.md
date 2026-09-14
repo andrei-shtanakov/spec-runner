@@ -787,7 +787,7 @@ tasks-артефакта и семь раундов подряд честно н
 приняты под запрошенными slug. Лейбл `inbox` — запрос, не план: до этого
 пункта ни один из них планом не был.
 
-- [ ] **red-absorb-format** (spec-runner#507, from devtools) @owner:github:andrei-shtanakov @id:red-absorb-format
+- [x] **red-absorb-format** (spec-runner#507, from devtools) @owner:github:andrei-shtanakov @id:red-absorb-format
       Подтверждено по коду: `tdd._absorb_lint_fix` гоняет только
       `commands.lint_fix`, форматтер — нет; post-done с #487 (#351) гоняет
       `commands.format_check`; green-фаза red-файл трогать не вправе (claim).
@@ -797,6 +797,13 @@ tasks-артефакта и семь раундов подряд честно н
       форматтер на evidential-файле, чтобы red-коммит уже проходил
       format-check. Регрессия: red с длинной строкой + объявленный
       `format_check` ⇒ задача доходит до review, а не до трёх LINT_FAILURE.
+      Сделано: red-файл прогона не имел длинных строк — дрейф был в склейке
+      строковых литералов, которую `ruff format` сворачивает; класс тот же.
+      Новый ключ `commands.format` (write-mode, fail-closed, без дефолта) и
+      `tdd._format_claimed` после lint: проверка формата сужена до
+      claimed-файла, объявленный форматтер, повторная проверка, absorb тем же
+      amend. Без `commands.format` дрейфующий red отказывается ДО freeze с
+      именем недостающего ключа. Тесты: `tests/test_red_absorb_format.py`.
 
 - [ ] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override
       `SPEC_RUNNER_BUDGET_USD` / `SPEC_RUNNER_TASK_BUDGET_USD` перекрывают

@@ -429,9 +429,24 @@ Full-tree formatting belongs to the optional read-only
 `commands.format_check` completion gate (#351), not to a composite
 `commands.lint`. Post-done runs it after lint, again after review fixes, and
 after committable `post_review` plugin output; `review-pr` mutations run it
-before commit. Pre-freeze TDD never reads it, so
+before commit. It is never folded into `commands.lint`, so
 the declared `commands.lint` remains narrowable and repairable on the claimed
 RED file.
+
+Pre-freeze TDD does read it, though — narrowed to the claimed file, in
+`tdd._format_claimed`, right after the lint step (#507). A red file the
+completion gate rejects is byte-locked once its checkpoint exists, so no GREEN
+attempt can reformat it and every attempt fails the same gate by construction
+(the live run behind the issue paid for three). The RED pass therefore checks
+the file it is about to freeze and repairs drift with the separately
+**declared** write-mode formatter (`commands.format` /
+`config.format_command_declared`; no default, never inferred), absorbing the
+result into the candidate commit through the same delta-judged amend as the
+lint fix. The step is dormant when the completion gate is (no `format_check`,
+or `run_lint_on_done: false`); drift that no declared formatter can cure is a
+refusal naming the missing declaration when the gate is blocking, a warning
+when it is not. A check that cannot be narrowed (composite, or naming its own
+paths) is skipped rather than run tree-wide.
 The format-check command has a deliberately narrow result contract: exit 0 is
 clean, exit 1 is measured drift, and every other status is an instrument error.
 
