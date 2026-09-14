@@ -1435,7 +1435,10 @@ def _format_claimed(
             "whose only path is a lone `.` or which names no path of its own"
         )
     else:
-        advice = "declare commands.format to let the RED pass repair it"
+        advice = (
+            "declare commands.format to let the RED pass repair it — the red commit "
+            "stays at HEAD and is adopted, not re-authored, on the next run (BEH-28)"
+        )
     return (
         "the file about to be frozen fails the declared format check "
         f"(commands.format_check) and {skip_reason}; frozen as is, every GREEN "

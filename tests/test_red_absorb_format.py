@@ -26,7 +26,7 @@ from pathlib import Path
 from spec_runner.config import ExecutorConfig, load_config_from_yaml
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
-from spec_runner.tdd import RedOutcome, resolve_namespace, run_red_phase
+from spec_runner.tdd import RedOutcome, resolve_adapter, resolve_namespace, run_red_phase
 
 # "Formatting drift" is a `DRIFT` token; "lint finding" is a `BADWORD` token.
 # Each check script exits 1 on drift/finding and 0 when clean; each fix script
@@ -175,15 +175,15 @@ _RED_CLEAN = "def test_y():\n    assert False\n"
 _RED_WITH_BOTH = "def test_y():  # DRIFT BADWORD\n    assert False\n"
 
 
-def _agent_writing(monkeypatch, calls: list, body: str) -> None:
+def _agent_writing(monkeypatch, calls: list, body: str, path: str = "tests/test_x.py") -> None:
     from spec_runner import tdd
 
     def fake(config, prompt, **kwargs):
         calls.append("red")
-        path = Path(config.project_root) / "tests/test_x.py"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body)
-        return tdd.AgentCall(text="TDD_SELECTOR: tests/test_x.py::test_y")
+        target = Path(config.project_root) / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        return tdd.AgentCall(text=f"TDD_SELECTOR: {path}::test_y")
 
     monkeypatch.setattr(tdd, "_run_agent", fake)
 
@@ -431,6 +431,79 @@ class TestAGateThatTakesNoFileArgument:
         # The formatter cannot be narrowed either, so it was not run.
         assert not scripts.format_fix_marker.exists()
         assert "does not accept an appended path" in result.detail
+
+
+class TestTheRefusedResidueOnTheNextRun:
+    """After the refusal the red commit is HEAD. BEH-28 adopts this task's own
+    unregistered red before paying for authoring; the alternative is not a
+    fresh, clean red — re-authoring into the same evidential file is refused
+    by #252 D, because the file now exists in the baseline. So the residue is
+    adopted either way; what matters is that the cure works and that the
+    wedge costs no paid call (review of PR #518, measured)."""
+
+    def _lint_declared(self, scripts: _Scripts) -> dict:
+        return {
+            "lint_command": scripts.lint_check,
+            "lint_command_declared": True,
+            "lint_fix_command": scripts.lint_fix,
+            "lint_fix_command_declared": True,
+        }
+
+    @staticmethod
+    def _evidential(cfg: ExecutorConfig) -> str:
+        adapter = resolve_adapter(cfg)
+        assert adapter is not None
+        return str(adapter.evidential_file("TASK-001", namespace=resolve_namespace(cfg)))
+
+    def test_without_a_formatter_the_residue_is_adopted_and_refused_for_free(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(root, format_check_command=scripts.format_check, **self._lint_declared(scripts))
+        calls: list = []
+        _agent_writing(monkeypatch, calls, _RED_WITH_DRIFT, path=self._evidential(cfg))
+        with ExecutorState(cfg) as state:
+            first = run_red_phase(_task(), cfg, state)
+        assert first.outcome is RedOutcome.UNVERIFIABLE
+        assert "commands.format" in first.detail
+        assert "adopted" in first.detail
+        assert _git(root, "log", "-1", "--format=%s").stdout.startswith("TASK-001: red for")
+
+        with ExecutorState(cfg) as state:
+            second = run_red_phase(_task(), cfg, state)
+        # No second authoring call was paid for; the same honest refusal.
+        assert calls == ["red"]
+        assert second.outcome is RedOutcome.UNVERIFIABLE
+        assert "commands.format" in second.detail
+
+    def test_with_a_formatter_declared_later_the_residue_is_adopted_and_repaired(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """The cure the refusal names: declare `commands.format`. The residue
+        is then repairable, adoption saves the authoring call, and the
+        checkpoint carries the formatted bytes."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        lint = self._lint_declared(scripts)
+        cfg = _cfg(root, format_check_command=scripts.format_check, **lint)
+        calls: list = []
+        _agent_writing(monkeypatch, calls, _RED_WITH_DRIFT, path=self._evidential(cfg))
+        with ExecutorState(cfg) as state:
+            assert run_red_phase(_task(), cfg, state).outcome is RedOutcome.UNVERIFIABLE
+
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.format_check,
+            format_command=scripts.format_fix,
+            format_command_declared=True,
+            **lint,
+        )
+        with ExecutorState(cfg) as state:
+            second = run_red_phase(_task(), cfg, state)
+        assert calls == ["red"], "a repairable residue should not cost a second authoring call"
+        assert second.outcome is RedOutcome.EXPECTED_FAIL, second.detail
+        assert "DRIFT" not in _committed(root, second.checkpoint.commit_sha, self._evidential(cfg))
 
 
 class TestTheCheckerItselfBreaking:
