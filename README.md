@@ -300,6 +300,11 @@ integrity), generated-файлы объявляются в `.gitattributes`
 Ре-вендор — рецепт в комментарии PIN; смена состава кита — двухшаговая
 дисциплина из шапки `checksum.sh`.
 
+Курируемый base-контекст объявлен в `.github/codex/review-context.txt`.
+Он прикладывает вендоренный контракт behaviour-бандла → tasks и канонический
+`spec/FORMAT.md`; список и содержимое читаются из merge-base, поэтому PR не
+может переписать правила собственного ревью.
+
 ## Usage as Library
 
 ```python

@@ -79,7 +79,12 @@ Items must start at column 0 (no indentation). Indented checklist items are sile
 - `Blocks` — tasks that depend on this task (reverse of depends_on)
 - `Traces to` — traceability references to requirements/design documents
 
-Pattern for references: `[A-Z]+-\d+` within the bold field value.
+Pattern for references: each id in its own square brackets, comma-separated
+— `[REQ-001], [REQ-002]`. The parser reads only bracketed ids, so
+`[REQ-001, REQ-002]` yields no references at all. The id shape differs per
+field: `Traces to` accepts `[A-Z]+-\d+`; `Depends on` and `Blocks` accept
+`[A-Z][A-Z0-9]*-\d+` (digits allowed in the prefix, e.g. `[KAP2-001]`) and
+then keep only prefixes that task headers actually use.
 
 ### Milestone Grouping (optional)
 
