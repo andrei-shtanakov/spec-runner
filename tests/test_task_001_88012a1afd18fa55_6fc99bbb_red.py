@@ -40,8 +40,7 @@ class TestNoToolRebuildsConfigFromCwd:
 
         def exploding_build_config(spec_prefix: str = "") -> ExecutorConfig:
             raise AssertionError(
-                "tool rebuilt config from CWD instead of using the launch "
-                "scope holder"
+                "tool rebuilt config from CWD instead of using the launch scope holder"
             )
 
         calls = [
@@ -62,9 +61,7 @@ class TestNoToolRebuildsConfigFromCwd:
 
         def invoke(*, transport: str) -> None:
             assert transport == "stdio"
-            with patch.object(
-                server, "_build_config", side_effect=exploding_build_config
-            ):
+            with patch.object(server, "_build_config", side_effect=exploding_build_config):
                 for name, call in calls:
                     try:
                         call()
@@ -75,6 +72,5 @@ class TestNoToolRebuildsConfigFromCwd:
             server.run_server(config)
 
         assert failures == [], (
-            "tools still rebuild config from CWD instead of the launch scope "
-            f"holder: {failures}"
+            f"tools still rebuild config from CWD instead of the launch scope holder: {failures}"
         )
