@@ -56,7 +56,9 @@ from .state import (
     ErrorCode,
     ExecutorState,
     check_stop_requested,
+    clear_ready_file,
     clear_stop_file,
+    publish_ready_file,
     recover_stale_tasks,
 )
 from .sync_cmd import cmd_sync
@@ -256,6 +258,7 @@ def cmd_run(args: argparse.Namespace, config: ExecutorConfig) -> None:
         else:
             _run_tasks(args, config, lock_held=lock_held)
     finally:
+        clear_ready_file(config)
         if lock is not None:
             lock.release()
 
@@ -829,6 +832,11 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
+
+    # Publish ready (#485 §3.1) -- after the stale marker is gone, before
+    # anything else starts. The MCP parent's handshake answers `started`
+    # only once this file (and the lock `cmd_run` already holds) exist.
+    publish_ready_file(config)
 
     tasks = parse_tasks(config.tasks_file)
 

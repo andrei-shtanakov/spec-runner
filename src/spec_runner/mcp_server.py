@@ -249,11 +249,14 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     if isinstance(simulated, mcp_launch.Irreproducible):
         return json.dumps(simulated.to_dict())
 
-    # The SAME list the simulation just validated (mcp_launch.child_argv):
+    # The SAME argv the simulation just validated (mcp_launch.child_argv):
     # scope, namespace and every representable override travel to the child
     # (FR-03). Building a second, shorter command here made the check
-    # fail-open (review of the DT-02 integration PR).
-    cmd = ["spec-runner", *argv]
+    # fail-open (review of the DT-02 integration PR). `child_entry()` is the
+    # interpreter-bound prefix (BEH-11): the parent's own venv, never a
+    # `spec-runner` console script that PATH might resolve elsewhere or not
+    # at all.
+    cmd = [*mcp_launch.child_entry(), *argv]
 
     mcp_launch.clear_stale_ready_file(config.ready_file)
 

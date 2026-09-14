@@ -504,14 +504,15 @@ class TestRunTaskForwardsLaunchNamespace:
             with patch.object(server.mcp_app, "run", side_effect=invoke):
                 server.run_server(config)
 
+        from spec_runner.mcp_launch import child_argv, child_entry
+
         cmd = mock_popen.call_args.args[0]
-        assert cmd[:4] == ["spec-runner", "run", "--task", "TASK-001"]
-        assert cmd[4:] and "--change" in cmd and cmd[cmd.index("--change") + 1] == "add-x"
+        entry = child_entry()
+        assert cmd[: len(entry) + 2] == [*entry, "run", "--task"]
+        assert "--change" in cmd and cmd[cmd.index("--change") + 1] == "add-x"
         assert "--spec-prefix" not in cmd
         # One list, never two: the spawned argv is the validated argv.
-        from spec_runner.mcp_launch import child_argv
-
-        assert cmd == ["spec-runner", *child_argv(config, "TASK-001")]
+        assert cmd == [*entry, *child_argv(config, "TASK-001")]
 
     def test_prefix_scoped_launch_passes_spec_prefix_flag(self, tmp_path: Path) -> None:
         config = _config(tmp_path, spec_prefix="p-")
@@ -526,13 +527,14 @@ class TestRunTaskForwardsLaunchNamespace:
             with patch.object(server.mcp_app, "run", side_effect=invoke):
                 server.run_server(config)
 
+        from spec_runner.mcp_launch import child_argv, child_entry
+
         cmd = mock_popen.call_args.args[0]
-        assert cmd[:4] == ["spec-runner", "run", "--task", "TASK-001"]
+        entry = child_entry()
+        assert cmd[: len(entry) + 2] == [*entry, "run", "--task"]
         assert cmd[cmd.index("--spec-prefix") + 1] == "p-"
         assert "--change" not in cmd
-        from spec_runner.mcp_launch import child_argv
-
-        assert cmd == ["spec-runner", *child_argv(config, "TASK-001")]
+        assert cmd == [*entry, *child_argv(config, "TASK-001")]
 
 
 class TestBEH22ChildNeverPublishesReady:

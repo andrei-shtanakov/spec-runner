@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,9 +204,18 @@ def wait_for_ready(
     timeout: float,
     *,
     log_file: Path | None = None,
-    poll_interval: float = 0.05,
+    poll_interval: float = 0.01,
 ) -> WaitOutcome:
     """Poll for the child publishing `ready_file`, or dying, or timing out.
+
+    `ready_file` is published right after `clear_stop_file` and removed by
+    `cmd_run`'s own `finally` as the child's very last step -- for a fast
+    task (no hooks, an instant fake CLI) that whole window measured as
+    narrow as ~30ms (#485, BEH-15 live measurement). A 0.05s poll interval
+    straddles that window about as often as it catches it (measured ~50%
+    `Exited` on a real child); 0.01s catches it reliably (measured 0/50
+    misses) at a negligible added cost (a few thousand extra stats over the
+    full `mcp_ready_timeout_seconds` budget).
 
     (а) `ready_file` exists with `PID == proc.pid` -> unlink -> `Ready`.
     (б) `proc.poll()` is not `None` -> `Exited(returncode, log_tail)`.
@@ -306,6 +316,18 @@ PARENT_ONLY_FIELDS: frozenset[str] = frozenset({"config_found", "mcp_ready_timeo
 _REPRESENTABLE_FIELD_NAMES: frozenset[str] = frozenset(
     row.config_field for row in REPRESENTABLE
 ) | frozenset(REPRESENTABLE_RUN)
+
+
+def child_entry() -> list[str]:
+    """The interpreter-bound argv prefix a child is launched with (§2.3,
+    BEH-11): `[sys.executable, "-m", "spec_runner"]`, resolving inside the
+    parent's own venv via `src/spec_runner/__main__.py` -- never a
+    `spec-runner` console script, which could resolve to a different venv or
+    nothing at all on a trimmed `PATH`. A seam: E2E BEH-09 replaces it with a
+    test entry point that writes its resolved `ExecutorConfig` to a file
+    instead of running the executor.
+    """
+    return [sys.executable, "-m", "spec_runner"]
 
 
 def child_argv(config: ExecutorConfig, task_id: str) -> list[str]:

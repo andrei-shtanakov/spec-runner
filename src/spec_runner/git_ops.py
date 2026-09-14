@@ -36,6 +36,7 @@ def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
         state.with_suffix(".lock"),
         config.logs_dir,
         config.stop_file,
+        config.ready_file,
         config.spec_lock_file,
         config.project_root / PROGRESS_FILE,
         history_file_for(config.tasks_file),

@@ -345,8 +345,10 @@ class TestBEH14ReproducibleConfigSpawnsChildExactlyOnce:
                 server.run_server(config)
 
         mock_popen.assert_called_once()
+        from spec_runner.mcp_launch import child_entry
+
         cmd = mock_popen.call_args.args[0]
-        assert cmd == ["spec-runner", *child_argv(config, "TASK-001")]
+        assert cmd == [*child_entry(), *child_argv(config, "TASK-001")]
         for flag in (
             "--max-retries",
             "7",
