@@ -140,7 +140,7 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Traces to:** [FR-03], [FR-04]
 
 ### TASK-003: Programmatic-контракт `mcp_run_server()` и lazy import не сдвинулись
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Проверить сценарии BEH-23 (DT-03, группа solo).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-03
@@ -149,8 +149,8 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] проверить BEH-23: `mcp_run_server()` без аргументов работает как прежде
-- [ ] проверка группы: tests/test_lazy_mcp_import.py (kind: contract) зелёные на BEH-23
+- [x] проверить BEH-23: `mcp_run_server()` без аргументов работает как прежде
+- [x] проверка группы: tests/test_lazy_mcp_import.py (kind: contract) зелёные на BEH-23
 
 **Traces to:** [FR-07]
 
