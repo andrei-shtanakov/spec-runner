@@ -763,6 +763,25 @@ runtime-state по инварианту конвейера «нужное для
       сохраняют приоритет, а два последовательных процесса получают разные
       каталоги.
 
+**Принято 2026-09-13: #474** (inbox, from devtools#124) — терминальный
+ревьюер не имел в base-контексте контракта behaviour-бандла и доставленного
+tasks-артефакта и семь раундов подряд честно называл внешний devtools
+непрочитанным предусловием.
+
+- [ ] **review-context-spec-runner** (spec-runner#474, from devtools#124) @owner:github:andrei-shtanakov @blocked_by:steward#150 @id:review-context-spec-runner
+      `.github/codex/review-context.txt` прикладывает из merge-base два
+      репо-локальных файла: вендоренную контрактную поверхность с пином
+      devtools commit + SHA-256 шести источников и `spec/FORMAT.md`. Контекст
+      фиксирует full/legacy DAG, различие node-level `traces_to` и scenario
+      `traces`, DSL `checked_by`, а также рендер Source/checklist/traces и
+      verify-DT. Доступ к рабочему дереву devtools ревьюеру не нужен.
+      Подготовлено в draft PR #476 (`docs/review-context-contract-474`), но
+      мержить нельзя до producer-fix steward#150: review-kit сейчас теряет
+      manifest при поддержанном запуске `local.sh` из подкаталога и fail-open
+      продолжает diff-only ревью. После фикса: перевендорить review-kit,
+      перепроверить ревью из корня и подкаталога, снять draft, human merge
+      (PR меняет `.github/`), закрыть #474.
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),
