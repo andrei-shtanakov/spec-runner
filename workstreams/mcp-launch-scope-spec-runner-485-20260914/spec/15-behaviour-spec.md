@@ -1,6 +1,6 @@
 ---
 spec_stage: behaviour-spec
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - requirements
@@ -8,6 +8,8 @@ upstream_hashes:
   requirements: 1c93693e948d5c19d5da488f578a5968e76a4cd1
 version: 2
 approved_content_hash: 89f46153aac93203485de23fbe84b4f209d7b790
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T06:40:50Z'
 ---
 
 # Behaviour spec — MCP launch scope (spec-runner#485)
