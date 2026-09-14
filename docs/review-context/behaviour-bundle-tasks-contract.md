@@ -16,7 +16,7 @@ The rules below are vendored from `andrei-shtanakov/devtools` commit
 | `governance/bundle_dag.py` | `18729f97ad289698a731c852a0bf46cffbfd21023928379c555cdb77cff88afe` |
 | `governance/bundle_state.py` | `6a2d27d989bc6f9e0eb178e58530248a9707bacfb71585275a56b91bc8961f05` |
 | `governance/decomposition_guard.py` | `b3fcaa3c07734c4eadc7fde8feac5b001f9e702e1f552a40b946145f8fa6dbdb` |
-| `governance/task_bridge.py` | `ee7963ede05785be892249b699206db856691589ce2be361d3726c5e86b8f61f05` |
+| `governance/task_bridge.py` | `ee7963ede05785be892249b699206db856691589ce2be361d3726c5e86b8f61f` |
 | `tests/governance_fixtures/bundles.py` | `bd20bb9136ff4dbd7c6dae7e22ba32cf1b6d23f4b6ef459f68d469afa0de301e` |
 
 This vendored reading, together with `spec/FORMAT.md`, is the contract for
