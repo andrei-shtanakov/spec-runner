@@ -435,12 +435,7 @@ class TestBEH16StopAfterStartedIsNotLost:
         self, tmp_path: Path, monkeypatch
     ) -> None:
         external = tmp_path / "external"
-        _write_project(
-            external,
-            config_yaml=CONFIG_YAML.replace(
-                'claude_command: "{fake_cli}"', 'claude_command: "{fake_cli}"'
-            ),
-        )
+        _write_project(external)
         (external / "spec-runner.config.yaml").write_text(
             CONFIG_YAML.format(fake_cli=str(FAKE_CLI_SIGNAL_WAIT))
         )

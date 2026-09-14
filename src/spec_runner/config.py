@@ -570,7 +570,14 @@ class ExecutorConfig:
 
     @property
     def ready_file(self) -> Path:
-        return self.spec_dir / ".executor-ready"
+        """Namespaced like `state_file`/`logs_dir` (`.executor-{prefix}ready`,
+        empty prefix reproduces the historical `.executor-ready`) -- two
+        `--spec-prefix` runs against the same `spec_dir` get separate locks
+        (derived from `state_file`) and must get separate ready markers too,
+        or one namespace's cleanup can delete the other's freshly published
+        ready file (#485 review).
+        """
+        return self.spec_dir / f".executor-{self.spec_prefix}ready"
 
     @property
     def tasks_file(self) -> Path:

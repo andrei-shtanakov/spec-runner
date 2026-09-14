@@ -2671,9 +2671,22 @@ def publish_ready_file(config: ExecutorConfig) -> None:
 def clear_ready_file(config: ExecutorConfig) -> None:
     """Remove this run's ready file, if any (`cmd_run`'s `finally`, beside
     `lock.release()`) -- an ordinary CLI run leaves none behind.
+
+    Only unlinks a ready file this process itself published: the on-disk
+    ``PID:`` line must match `os.getpid()`, mirroring
+    `mcp_launch._cleanup_own_ready_file`. Without this check a stray unlink
+    could remove a marker some *other* process just published at the same
+    path (#485 review).
     """
+    ready_file = config.ready_file
+    try:
+        first_line = ready_file.read_text().splitlines()[0]
+    except (OSError, IndexError):
+        return
+    if first_line != f"PID: {os.getpid()}":
+        return
     with contextlib.suppress(FileNotFoundError):
-        config.ready_file.unlink()
+        ready_file.unlink()
 
 
 def recover_stale_tasks(
