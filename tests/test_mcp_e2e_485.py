@@ -672,14 +672,25 @@ class TestBEH26NoStrayRuntimeFiles:
             server.run_server(irreproducible)
         contained()
 
-        # (b) early child exit: a task id the child cannot find.
+        # (b) early child exit: a real child process that dies before it could
+        # publish ready (exit 3). Not an unknown task id -- the child
+        # publishes ready before it looks the task up, so that one races
+        # with `started` and is a legitimate outcome either way.
         config = _resolved_launch_config(base_argv)
 
         def invoke_early_exit(*, transport: str) -> None:
-            result = json.loads(spec_runner_run_task("TASK-999"))
+            result = json.loads(spec_runner_run_task("TASK-001"))
             assert result["status"] == "error", result
+            assert result.get("exit_code") == 3, result
 
-        with patch.object(server.mcp_app, "run", side_effect=invoke_early_exit):
+        with (
+            patch.object(
+                mcp_launch,
+                "child_entry",
+                return_value=[sys.executable, "-c", "import sys; sys.exit(3)"],
+            ),
+            patch.object(server.mcp_app, "run", side_effect=invoke_early_exit),
+        ):
             server.run_server(config)
         contained()
 
