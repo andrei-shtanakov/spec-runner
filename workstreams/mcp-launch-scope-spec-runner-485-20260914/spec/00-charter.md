@@ -1,6 +1,6 @@
 ---
 spec_stage: charter
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - discovery-brief
@@ -10,6 +10,8 @@ upstream_hashes:
   discovery-customer: 4d7900d7dc9f3271326594647f21a7b7d54ab676
 version: 3
 approved_content_hash: 0ccc4579f18220a4fa7e6ab69ee93b2169e5bbc0
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T06:21:13Z'
 ---
 
 # Charter — MCP launch scope (spec-runner#485): один scope на сервер, один config на всех tools
