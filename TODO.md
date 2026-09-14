@@ -768,19 +768,17 @@ runtime-state по инварианту конвейера «нужное для
 tasks-артефакта и семь раундов подряд честно называл внешний devtools
 непрочитанным предусловием.
 
-- [ ] **review-context-spec-runner** (spec-runner#474, from devtools#124) @owner:github:andrei-shtanakov @blocked_by:steward#150 @id:review-context-spec-runner
+- [x] **review-context-spec-runner** (spec-runner#474, from devtools#124) @owner:github:andrei-shtanakov @id:review-context-spec-runner
       `.github/codex/review-context.txt` прикладывает из merge-base два
       репо-локальных файла: вендоренную контрактную поверхность с пином
       devtools commit + SHA-256 шести источников и `spec/FORMAT.md`. Контекст
       фиксирует full/legacy DAG, различие node-level `traces_to` и scenario
       `traces`, DSL `checked_by`, а также рендер Source/checklist/traces и
       verify-DT. Доступ к рабочему дереву devtools ревьюеру не нужен.
-      Подготовлено в draft PR #476 (`docs/review-context-contract-474`), но
-      мержить нельзя до producer-fix steward#150: review-kit сейчас теряет
-      manifest при поддержанном запуске `local.sh` из подкаталога и fail-open
-      продолжает diff-only ревью. После фикса: перевендорить review-kit,
-      перепроверить ревью из корня и подкаталога, снять draft, human merge
-      (PR меняет `.github/`), закрыть #474.
+      Блокер steward#150 закрыт 2026-09-14 (steward PR #151, `9d5f8e7`);
+      сборщик контекста перевендорен PR #491 — пакет из корня и из
+      подкаталога совпадает байт в байт. Доставлено PR #476 (human merge:
+      трогает `.github/`).
 
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 

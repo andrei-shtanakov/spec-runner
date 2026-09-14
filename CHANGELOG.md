@@ -12,6 +12,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Terminal review has repository-local bundle context** (#474). The
+  merge-base context pack now includes a pinned, vendored reading of the
+  devtools behaviour-bundle → tasks-artifact contract plus `spec/FORMAT.md`,
+  so review of `spec_stage`, `checked_by`, traces, and delivered tasks no
+  longer depends on access to a sibling devtools checkout.
+
 - **Runtime-state delivery policy is now explicit** (#478). The architecture
   inventories every local executor artifact by continuation/evidence/temporary
   class and recoverability. It records the required split between a private,
