@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .cli import _build_parser
-from .config import ExecutorConfig, _resolve_config_path, build_config, load_config_from_yaml
+from .config import (
+    ConfigError,
+    ExecutorConfig,
+    _resolve_config_path,
+    build_config,
+    load_config_from_yaml,
+)
 
 if TYPE_CHECKING:
     import subprocess
@@ -416,11 +422,59 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
     forced to `False`) are always carried to the simulated child explicitly
     via `--no-branch`/`--no-commit` in `argv` already, whatever produced them
     on the parent's side.
+
+    Never lets a broken input crash the check itself: an unreadable YAML
+    (`ConfigError`), an argv `_build_parser()` itself rejects (`SystemExit`
+    -- e.g. a `log_level` value outside the `run` subparser's `choices`,
+    which `ExecutorConfig.log_level` does not otherwise restrict), or a
+    config `build_config` refuses to build (`ConfigError`) are each reported
+    as `Irreproducible` like any other mismatch, never raised -- the whole
+    point of this check is to answer before `Popen`, not to replace one
+    crash with another.
     """
     yaml_missing = not scope.config_path.exists()
-    yaml_config = load_config_from_yaml(scope.config_path)
-    args = _build_parser().parse_args(argv)
-    child_config = build_config(yaml_config, args, detect_subdir=False)
+    try:
+        yaml_config = load_config_from_yaml(scope.config_path)
+    except ConfigError as exc:
+        return Irreproducible(
+            [
+                FieldDiff(
+                    "<yaml>",
+                    None,
+                    None,
+                    f"the parent's own config file at {scope.config_path} could not "
+                    f"be re-read: {exc}",
+                )
+            ]
+        )
+    try:
+        args = _build_parser().parse_args(argv)
+    except SystemExit:
+        return Irreproducible(
+            [
+                FieldDiff(
+                    "<argv>",
+                    None,
+                    None,
+                    "the serialized argv was rejected by the child's own CLI parser "
+                    f"(argv={argv!r}) -- a field's current value cannot be represented "
+                    "as a valid CLI flag for the child to parse",
+                )
+            ]
+        )
+    try:
+        child_config = build_config(yaml_config, args, detect_subdir=False)
+    except ConfigError as exc:
+        return Irreproducible(
+            [
+                FieldDiff(
+                    "<config>",
+                    None,
+                    None,
+                    f"the child could not build a config from argv + YAML: {exc}",
+                )
+            ]
+        )
 
     diffs: list[FieldDiff] = []
     for f in dataclasses.fields(ExecutorConfig):

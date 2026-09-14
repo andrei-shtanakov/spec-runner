@@ -63,17 +63,6 @@ class TestBEH10SerializerAndCommonParserAgree:
         for _field, dests in REPRESENTABLE_RUN.items():
             assert set(dests) <= run_dests
 
-    def test_adding_a_common_flag_without_the_serializer_is_caught(self) -> None:
-        """A flag `common` grows that the serializer doesn't know about
-        breaks the parity equality -- simulating the drift `_COMMON_DEFAULTS`
-        itself would see (the real regression this scenario protects against
-        already fails parser build in `cli.py`; this proves the *serializer*
-        side of the same contract independently)."""
-        common_dests = {dest for row in REPRESENTABLE for dest in row.common_dests}
-        covered = common_dests | set(NOT_FORWARDED)
-        drifted = set(_COMMON_DEFAULTS) | {"a_new_flag_nobody_declared"}
-        assert covered != drifted
-
 
 class TestBEH13IrreproducibleOverrideRefusesBeforePopen:
     """A parent override the child cannot rebuild is refused -- named,
@@ -107,6 +96,30 @@ class TestBEH13IrreproducibleOverrideRefusesBeforePopen:
         assert isinstance(result, Irreproducible)
         assert any(d.field == "review_policy" for d in result.diffs)
 
+    def test_non_representable_string_field_override_is_named(self, tmp_path: Path) -> None:
+        """`review_policy`/`execution_mode` aren't the only fields with no
+        CLI flag -- a plain `str` field (`main_branch`) is refused the same
+        way, proving the branch isn't keyed to those two names."""
+        config = ExecutorConfig(project_root=tmp_path, main_branch="develop")
+        scope = LaunchScope.of(config)
+        argv = child_argv(config, "TASK-001")
+
+        result = simulate_child_config(scope, argv)
+
+        assert isinstance(result, Irreproducible)
+        assert any(d.field == "main_branch" for d in result.diffs)
+
+    def test_non_representable_int_field_override_is_named(self, tmp_path: Path) -> None:
+        """Same branch, a plain `int` field (`retry_delay_seconds`)."""
+        config = ExecutorConfig(project_root=tmp_path, retry_delay_seconds=99)
+        scope = LaunchScope.of(config)
+        argv = child_argv(config, "TASK-001")
+
+        result = simulate_child_config(scope, argv)
+
+        assert isinstance(result, Irreproducible)
+        assert any(d.field == "retry_delay_seconds" for d in result.diffs)
+
     def test_yaml_deleted_after_parent_read_it_is_also_refused(self, tmp_path: Path) -> None:
         _write_yaml(tmp_path, "review_policy: required\nexecution_mode: tdd\n")
         config = ExecutorConfig(
@@ -125,8 +138,63 @@ class TestBEH13IrreproducibleOverrideRefusesBeforePopen:
         assert "review_policy" in names
         assert "execution_mode" in names
 
+    def test_yaml_deleted_but_values_already_match_defaults_is_not_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """`yaml_missing` alone must not trigger a refusal -- only a value
+        the vanished YAML actually changed relative to class defaults does
+        (the sibling test above only covers the case where it does)."""
+        _write_yaml(tmp_path, "review_policy: advisory\n")  # already the class default
+        config = ExecutorConfig(project_root=tmp_path, review_policy="advisory")
+        scope = LaunchScope.of(config)
+        argv = child_argv(config, "TASK-001")
+
+        (tmp_path / "spec-runner.config.yaml").unlink()
+
+        result = simulate_child_config(scope, argv)
+
+        assert not isinstance(result, Irreproducible)
+
     def test_check_never_spawns_a_process(self, tmp_path: Path) -> None:
         config = ExecutorConfig(project_root=tmp_path, review_policy="required")
+        scope = LaunchScope.of(config)
+        argv = child_argv(config, "TASK-001")
+
+        with patch("subprocess.Popen") as mock_popen:
+            result = simulate_child_config(scope, argv)
+
+        mock_popen.assert_not_called()
+        assert isinstance(result, Irreproducible)
+
+
+class TestMalformedInputsAreRefusedNotRaised:
+    """A crash while building/comparing the simulated child config would
+    defeat the whole point of checking before `Popen` -- a broken input is
+    reported as `Irreproducible` like any other mismatch, never propagates."""
+
+    def test_log_level_outside_run_parser_choices_is_refused_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        """`ExecutorConfig.log_level` is a bare `str` with no validation,
+        but `child_argv` always emits `--log-level <value>`, and the `run`
+        subparser restricts `--log-level` to a fixed `choices=[...]` --
+        parsing that argv back would otherwise raise `SystemExit`."""
+        config = ExecutorConfig(project_root=tmp_path, log_level="trace")
+        scope = LaunchScope.of(config)
+        argv = child_argv(config, "TASK-001")
+
+        with patch("subprocess.Popen") as mock_popen:
+            result = simulate_child_config(scope, argv)
+
+        mock_popen.assert_not_called()
+        assert isinstance(result, Irreproducible)
+        assert "trace" in str(result) or "argv" in str(result).lower()
+
+    def test_unreadable_yaml_is_refused_not_raised(self, tmp_path: Path) -> None:
+        """A config file that fails to parse (`ConfigError`) is reported as
+        `Irreproducible`, not left to propagate out of the MCP tool call."""
+        (tmp_path / "spec-runner.config.yaml").write_text("not: valid: yaml: [")
+        config = ExecutorConfig(project_root=tmp_path)
         scope = LaunchScope.of(config)
         argv = child_argv(config, "TASK-001")
 
