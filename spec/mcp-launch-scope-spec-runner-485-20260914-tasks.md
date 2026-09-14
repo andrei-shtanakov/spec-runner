@@ -125,7 +125,7 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Traces to:** [FR-01], [FR-02], [FR-05], [FR-06], [FR-09]
 
 ### TASK-002: Serializer effective config и проверка воспроизводимости до `Popen`
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-10, BEH-13, BEH-14 (DT-02, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-02
