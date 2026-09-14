@@ -53,8 +53,10 @@ startup-handshake до ответа `started`** — форма решения з
   целевой репо strict, и `spec_run_gate_ok` пропускает (engineer CON-03,
   RK-02). Это tacit-ловушка, а не документированное поведение.
 - **Child наследует не scope, а PATH и CWD родителя.** Spawn в `run_task`
-  переносит только `--spec-prefix`; `project_root`, `change_id`, и все поля
-  без CLI-представления (`spec_governance`, `review_policy`, `execution_mode`,
+  переносит только `--spec-prefix`; `project_root`, `change_id`, поле
+  `spec_governance` (у него есть только run-only флаги `--strict`/`--no-strict`
+  subparser-а `run`, `cli.py:1934`–`:1942`, которых `run_task` не передаёт) и
+  все поля без CLI-флага вовсе (`review_policy`, `execution_mode`,
   `harness_guard`, `commands`) child получает из того YAML, который найдёт по
   своему CWD — то есть по CWD сервера (engineer IF-02, IF-05).
 - **`started` — до lock и до ready.** Порядок в `cmd_run`: `_acquire_run_lock`
@@ -77,8 +79,10 @@ startup-handshake до ответа `started`** — форма решения з
 - **Общий парсер `common` с гвардом дрейфа.** `_COMMON_DEFAULTS` + assert
   при импорте (engineer S-04) — готовое зеркало для serializer: перечень
   представимых флагов уже существует и уже охраняется.
-- **Lock per-namespace с диагностикой.** `ExecutorLock` пишет JSON (pid,
-  started) на `<state_file>.lock`, `--force` обходит, занятый lock → exit 1
+- **Lock per-namespace с диагностикой.** `ExecutorLock` пишет две текстовые
+  строки `PID:`/`Started:` под `flock` (`config.py:188`–`:192`) в
+  `state_file.with_suffix(".lock")` (под change —
+  `spec/changes/<id>/.executor-state.lock`), `--force` обходит, занятый lock → exit 1
   с известным сообщением (engineer IF-04).
 - **Stop-marker — устоявшийся контракт.** `<spec_dir>/.executor-stop`,
   писатели `cmd_stop`/MCP `stop`/`touch`, читатель — цикл `run` между
@@ -146,8 +150,11 @@ lock, child, умерший до ready) — явный отказ до плат�
   получил executor lock, очистил только старый stop-marker и опубликовал ready;
   stop, вызванный после `started`, не может быть стёрт startup-кодом.
   *Приёмка:* E2E на настоящем дочернем CLI: run_task → started → stop → child
-  видит тот же `<external>/spec/changes/add-x/.executor-stop` и завершается,
-  не начиная следующую задачу; немедленный stop не теряется.
+  видит тот же `<external>/spec/changes/add-x/.executor-stop`, и marker,
+  записанный после `started`, не стёрт ни одной веткой child (child `run
+  --task` исполняет ровно одну задачу — «следующей» у него нет по построению,
+  единственная проверка marker-а стоит до задачи, `cli.py:1273`; наблюдаемое
+  уточняют requirements FR-05); немедленный stop не теряется.
 - **FR-06** · Must — Если child завершился, не получил lock или не достиг
   ready, run_task возвращает error, а не ложный `started`; занятый lock даёт
   ошибку запуска. *Приёмка:* при lock, удерживаемом другим процессом, run_task
@@ -254,8 +261,8 @@ lock, child, умерший до ready) — явный отказ до плат�
 
 - E2E #485 в CI: сервер с `--project-root <external> --change add-x` →
   `run_task("TASK-001")` → `started` → `stop()` → child видит
-  `<external>/spec/changes/add-x/.executor-stop` и завершается, не начиная
-  следующую задачу; state/lock/log child — под `<external>/spec/changes/add-x/`;
+  `<external>/spec/changes/add-x/.executor-stop`, и marker после `started`
+  не стёрт стартовым кодом (single-task режим, FR-05); state/lock/log child — под `<external>/spec/changes/add-x/`;
   ни одного `.executor-*` в плоском `<external>/spec/` и в CWD сервера (M-01,
   FR-01, FR-03, FR-05, NFR-01).
 - `run_task("TASK-001", spec_prefix="other-")` на сервере с `--change add-x`
@@ -310,8 +317,8 @@ lock, child, умерший до ready) — явный отказ до плат�
   project_root (противоречия нет) или отклоняется тоже? *Предложение:*
   разрешён, через тот же holder — это не противоречие scope, а его уточнение.
 - **Q-B · owner_role: architect · blocking: false** (customer Q-01, engineer
-  Q-02). Канал ready: файл `<spec_dir>/.executor-ready` или поле в JSON lock
-  через `ExecutorLock`? *Предложение:* файл в namespace — наблюдаем в E2E, не
+  Q-02). Канал ready: файл `<spec_dir>/.executor-ready` или поле в текстовом
+  lock-файле `ExecutorLock`? *Предложение:* файл в namespace — наблюдаем в E2E, не
   меняет формат lock.
 - **Q-C · owner_role: architect · blocking: false** (customer Q-02, engineer
   Q-03). Обратная сверка effective config child родителем: child записывает

@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: "3c29f5150cfca9a49122329f2314e7d3490b16db"
+  charter: "6f1a531ba84a38e5bdff539c61a0df5dcfaa59f3"
 ---
 
 # Requirements — MCP launch scope (spec-runner#485)
@@ -90,9 +90,17 @@ launch-scope holder для всех восьми tools, один serializer effe
   `--no-branch`, `--no-commit`, `--no-review`, `--integration-pr`,
   `--hitl-review`, `--budget`, `--task-budget`, `--callback-url`, `--log-level`,
   `--log-json` (engineer S-04, AP-02).
-- **Непредставимое поле** — поле effective config без CLI-флага
-  (`spec_governance`, `review_policy`, `execution_mode`, `harness_guard`,
-  `commands`, `personas`, …): child получает его только из того же YAML,
+- **Run-only представимое поле** — поле, чей флаг живёт у subparser-а `run`,
+  а не в `common`, и потому невидим для `_COMMON_DEFAULTS`: сегодня это ровно
+  `spec_governance` (`--strict`/`--no-strict`, `cli.py:1934`–`:1942`;
+  `build_config` переводит их в `spec_governance`, `config.py:1088`–`:1091`).
+  `--profile` у `run` нет (`profile_parent` подключён только к `plan`/`spec`,
+  `cli.py:1898`, `:1984`), поэтому `spec_profile` остаётся непредставимым.
+  Serializer обязан перечислять run-only поля отдельным перечнем — паритет с
+  `_COMMON_DEFAULTS` его не покрывает (ревью #490).
+- **Непредставимое поле** — поле effective config без CLI-флага у `run`
+  (`review_policy`, `execution_mode`, `harness_guard`, `commands`,
+  `spec_profile`, `personas`, …): child получает его только из того же YAML,
   прочитанного с `cwd = project_root`.
 - **Ready** — сигнал child, опубликованный после `_acquire_run_lock` и
   `clear_stop_file` (`cli.py:179`, `:831`), означающий «lock взят в заявленном
@@ -176,17 +184,20 @@ traces: [G-01, J-01, P-01, IF-01, AP-01]
 
 - **Scope.** `--project-root <project_root>` и ровно один namespace
   (`--change <id>` либо `--spec-prefix <p>`); `cwd = project_root`.
-- **Safety-настройки.** governance strictness, branch/commit/review, tests/lint,
-  integration PR, HITL — представимые через `--no-tests`, `--no-branch`,
-  `--no-commit`, `--no-review`, `--integration-pr`, `--hitl-review`;
-  непредставимые (`spec_governance`, `review_policy`, `execution_mode`,
-  `harness_guard`, `commands`) — через тот же YAML, прочитанный child с
+- **Safety-настройки.** branch/commit/review, tests/lint, integration PR,
+  HITL — представимые через `--no-tests`, `--no-branch`, `--no-commit`,
+  `--no-review`, `--integration-pr`, `--hitl-review`; governance strictness —
+  run-only флагом: `spec_governance == "strict"` → `--strict`, иначе
+  `--no-strict` (эмитируется всегда, чтобы child не зависел от своего YAML в
+  этом поле); непредставимые (`review_policy`, `execution_mode`,
+  `harness_guard`, `commands`, `spec_profile`) — через тот же YAML, прочитанный child с
   `cwd = project_root` (FR-01 гарантирует, что родитель читал тот же файл).
 - **Лимиты.** `--max-retries`, `--timeout`, `--budget`, `--task-budget`, а также
   `--callback-url`, `--log-level`, `--log-json`.
 - **Serializer.** Один типизированный serializer `ExecutorConfig → argv`
-  (engineer AP-02) перечисляет представимые поля явно и строится от того же
-  перечня, что `_COMMON_DEFAULTS`; паритет перечней охраняется тестом
+  (engineer AP-02) перечисляет представимые поля явно: `common`-часть
+  строится от того же перечня, что `_COMMON_DEFAULTS`, run-only часть — от
+  явного перечня действий subparser-а `run`; оба паритета охраняются тестом
   (engineer RK-05).
 - **Entry point.** Child запускается через entry point текущего окружения
   (`sys.executable -m spec_runner` либо console-script того же venv), а не
@@ -255,18 +266,34 @@ Stop, вызванный после ответа `started`, не может бы
 - Таймаут ожидания ready конфигурируем (дефолт — значение, достаточное для
   медленного CI; customer RK-01).
 
-**Acceptance**:
+**Acceptance** (child `run --task <id>` исполняет ровно одну задачу —
+`tasks_to_run = [task]`, `cli.py:945`–`:951`; точки «между задачами» у него нет,
+единственная проверка marker-а стоит **до** задачи, `cli.py:1273`. Поэтому
+наблюдаемое FR-05 — «marker, записанный после `started`, не стёрт стартовым
+кодом», а не «следующая задача не начата», которое для `--task` истинно всегда):
 
-- E2E на настоящем CLI entry point с fake command: `run_task("TASK-001")` →
-  `started` → немедленный `stop()` → child видит
-  `<external>/spec/changes/add-x/.executor-stop`, завершает текущую задачу и
-  выходит, не начиная следующую (в tasks.md — минимум две ready-задачи).
+- E2E на настоящем CLI entry point с fake command, который сигналит о своём
+  вызове файлом и ждёт файла-освобождения (детерминированный вариант):
+  `run_task("TASK-001")` → `started` → тест дождался сигнала (задача уже
+  идёт, проверка `:1273` пройдена) → `stop()` → освобождение → child завершает
+  `TASK-001` одной успешной попыткой и выходит с кодом 0; после выхода
+  `<external>/spec/changes/add-x/.executor-stop` **существует** — ни одна
+  ветка child после `started` его не стёрла.
+- Немедленный вариант — `stop()` сразу после `started`, без ожидания сигнала:
+  после выхода child ровно один из двух легальных исходов — (i) marker лёг до
+  проверки `:1273` и потреблён ею: файла нет, в логе child «Graceful shutdown
+  requested», у `TASK-001` ни одной попытки; (ii) marker лёг после проверки:
+  `TASK-001` выполнена, файл на месте. Запрещённый исход — потерянный stop:
+  файла нет **и** у `TASK-001` есть попытка (marker стёрт стартовым кодом —
+  дефект #485); тест красен ровно на нём.
 - Ответ `started` приходит не раньше, чем существует lock-файл
-  `<external>/spec/changes/add-x/.executor-<…>state.db.lock` с pid child и
-  опубликован ready.
+  `config.state_file.with_suffix(".lock")` (под change —
+  `<external>/spec/changes/add-x/.executor-state.lock`, `cli.py:181`,
+  `config.py:546`) с pid child и опубликован ready.
 - Stop-marker, записанный **до** `run_task`, стёрт стартовым `clear_stop_file`
-  (старое поведение сохранено); stop-marker, записанный **после** `started`, на
-  месте до момента потребления между задачами.
+  (старое поведение сохранено); stop-marker, записанный **после** `started`,
+  остаётся на месте до выхода child — в single-task режиме точки потребления
+  после задачи нет, файл стирает только следующий старт executor-а.
 - `test_mcp_v2_wire` и `TestMCPRunTask` проходят без изменения ожиданий, кроме
   прямо следующих из этого требования (ответ `started` теперь ждёт ready).
 
@@ -415,8 +442,10 @@ soak-тест под маркером `slow` повторяет E2E `run_task �
 
 **Acceptance**:
 
-- `@pytest.mark.slow` soak ×20: в каждой итерации child завершается после
-  текущей задачи, не начав следующую; ноль потерянных stop.
+- `@pytest.mark.slow` soak ×20 немедленного варианта FR-05: в каждой итерации
+  исход — (i) либо (ii), запрещённый исход «файла нет ∧ попытка есть» не
+  встретился ни разу — ноль потерянных stop; распределение (i)/(ii) печатается
+  в отчёт как evidence, не утверждается.
 - Soak не входит в обязательный CI-прогон; запускается вручную и в ночном
   профиле (если таковой есть).
 
@@ -487,7 +516,7 @@ traces: [G-02, J-03, FR-05, RK-01(customer)]
 | FR-02 | `spec_prefix="other-"` при `--change add-x` → error, `Popen` не вызван | `test_mcp_launch_scope.py::TestContradiction` |
 | FR-03 | effective config child == parent; state/lock/log под change | `test_mcp_e2e_485.py` (resolved-config compare, многословный fake), `test_mcp_serializer.py::test_parity_with_common_defaults` |
 | FR-04 | непредставимое поле → error, ни одного subprocess | `test_mcp_serializer.py::TestRefusal` |
-| FR-05 | started → stop → child видит marker, не начинает следующую | `test_mcp_e2e_485.py::test_stop_after_started_is_honoured` |
+| FR-05 | started → stop → marker после started не стёрт (детерминированный и немедленный варианты) | `test_mcp_e2e_485.py::test_stop_after_started_is_honoured` |
 | FR-06 | занятый lock → error; child без ready → error | `test_mcp_launch_scope.py::TestHandshake` (busy lock, early exit, timeout) |
 | FR-07 | `test_lazy_mcp_import` и `mcp_run_server()` без правок | `tests/test_lazy_mcp_import.py`, `tests/test_mcp.py` (существующие) |
 | FR-08 | README §MCP Server, CHANGELOG, #485 закрыт | ревью PR; ссылка в закрытии #485 |
@@ -523,7 +552,7 @@ traces: [G-02, J-03, FR-05, RK-01(customer)]
   предикат противоречия и один тест.
 - **Q-02 · owner_role: architects · blocking: false.** Канал ready
   (чартер Q-B; customer Q-01, engineer Q-02): файл `<spec_dir>/.executor-ready`
-  или поле в JSON lock через `ExecutorLock`? Предложение — файл в namespace:
+  или поле в текстовом lock-файле `ExecutorLock`? Предложение — файл в namespace:
   наблюдаем в E2E, не меняет формат lock. Сюда же — судьба child при таймауте
   ready (FR-06): завершать родителем или оставлять с pid в ответе.
 - **Q-03 · owner_role: architects · blocking: false.** Обратная сверка effective

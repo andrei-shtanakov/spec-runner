@@ -3,7 +3,7 @@ spec_stage: behaviour-spec
 status: draft
 owner_role: product
 traces_to: [requirements]
-upstream_hashes: {requirements: "7d2e095dda2274fe8abd8e47acf58f9f4789c76d"}
+upstream_hashes: {requirements: "4527197fc3891bfef202da34172fd7b683878866"}
 ---
 
 # Behaviour spec — MCP launch scope (spec-runner#485)
@@ -15,7 +15,8 @@ upstream_hashes: {requirements: "7d2e095dda2274fe8abd8e47acf58f9f4789c76d"}
 из восьми tools вызван с tool-level аргументами → config взят из launch scope
 либо вызов отклонён → `run_task` формирует и запускает child → child берёт lock,
 стирает старый stop-marker, публикует ready → родитель отвечает `started` →
-`stop` пишет marker → child его потребляет между задачами», а также поведение
+`stop` пишет marker → child его не стирает (в single-task режиме `run --task`
+потребление возможно только до задачи)», а также поведение
 поверхностей, на которых этот путь предъявляется: JSON-ответы tools, файлы в
 spec-директории namespace, лог child, programmatic-вход `mcp_run_server()`,
 README/CHANGELOG.
@@ -30,7 +31,7 @@ child начал до выхода; код выхода child и хвост ег
 агентских вызовов; время прогона базового E2E.
 
 Внутренние решения design-стадии здесь не фиксируются: канал ready — файл
-`<spec_dir>/.executor-ready` или поле в JSON lock через `ExecutorLock` (Q-02);
+`<spec_dir>/.executor-ready` или поле в текстовом lock-файле `ExecutorLock` (Q-02);
 судьба child при таймауте ready — завершение родителем или pid в ответе (Q-02);
 обратная сверка effective config child родителем (Q-03); точная форма поля
 `namespace` в ответах `status`/`task_detail` (FR-09). Сценарии написаны так,
@@ -159,8 +160,11 @@ child начал до выхода; код выхода child и хвост ег
 - **And** (в) с непустым prefix отвечает успехом в namespace `p-` внутри
   `<external>` — рабочее допущение Q-01: при плоском запуске tool-level prefix
   уточняет scope, а не противоречит ему; `project_root` при этом остаётся
-  `<external>`, как закреплено
-  `TestMCPStop::test_explicit_prefix_keeps_launch_project_root`.
+  `<external>` — это утверждает собственный contract-тест сценария в
+  `tests/test_mcp_launch_scope.py` (существующий
+  `TestMCPStop::test_explicit_prefix_keeps_launch_project_root` закрепляет
+  другой случай — (а), совпадающий prefix при launch `--spec-prefix`, и
+  свидетелем плоского запуска не является).
 - **And** если владелец решит Q-01 иначе, меняется ровно этот последний пункт —
   остальные три остаются верны.
 
@@ -207,13 +211,15 @@ child начал до выхода; код выхода child и хвост ег
 `traces: [FR-03]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_mcp_serializer.py`
-- **Given** serializer `ExecutorConfig → argv` и словарь `_COMMON_DEFAULTS`
-  (`cli.py`) — единственный источник флагов парсера `common`.
+- **Given** serializer `ExecutorConfig → argv`, словарь `_COMMON_DEFAULTS`
+  (`cli.py`) — единственный источник флагов парсера `common` — и действия
+  subparser-а `run` из `_build_parser()` (run-only флаги `--strict`/`--no-strict`).
 - **When** сравниваются множество полей, которые serializer объявляет
-  представимыми, и множество ключей `_COMMON_DEFAULTS`.
-- **Then** каждое представимое поле serializer-а имеет ключ в
-  `_COMMON_DEFAULTS` (serializer не выдумывает флагов, которых парсер не
-  примет).
+  представимыми через `common`, и множество ключей `_COMMON_DEFAULTS`; отдельно
+  — run-only перечень serializer-а и `dest`-ы действий `run`.
+- **Then** каждое представимое `common`-поле serializer-а имеет ключ в
+  `_COMMON_DEFAULTS`, а каждое run-only поле (`spec_governance`) — действие у
+  `run` (serializer не выдумывает флагов, которых парсер не примет).
 - **And** каждый ключ `_COMMON_DEFAULTS` либо объявлен serializer-ом
   представимым, либо явно перечислен как намеренно непередаваемый с причиной
   (например, `spec_prefix` и `change` передаются как единый namespace, а не как
@@ -295,8 +301,9 @@ child начал до выхода; код выхода child и хвост ег
   entry point тестового окружения, fake command.
 - **When** вызван `run_task("TASK-001")` и получен ответ `started` с `pid`.
 - **Then** в момент получения ответа lock-файл
-  `<external>/spec/changes/add-x/.executor-<…>state.db.lock` уже существует и
-  содержит pid, равный `pid` из ответа.
+  `config.state_file.with_suffix(".lock")` — под change
+  `<external>/spec/changes/add-x/.executor-state.lock` (`cli.py:181`,
+  `config.py:546`) — уже существует и содержит pid, равный `pid` из ответа.
 - **And** ready уже опубликован (файл в namespace или поле lock — по Q-02);
   тест проверяет факт публикации через тот интерфейс, который зафиксирует
   design, а не конкретный путь.
@@ -307,18 +314,28 @@ child начал до выхода; код выхода child и хвост ег
 `traces: [FR-05]`
 
 - **checked_by**: `status: planned` `kind: e2e` `owner: qa` `target: tests/test_mcp_e2e_485.py`
-- **Given** `tasks.md` change содержит минимум две ready-задачи без зависимостей
-  между ними; fake command завершает любую задачу успешно; сервер как в BEH-15.
-- **When** вызван `run_task("TASK-001")`, получен `started`, и **немедленно**
-  (без паузы) вызван `stop()`.
-- **Then** child видит `<external>/spec/changes/add-x/.executor-stop`,
-  завершает текущую задачу и выходит: state показывает `TASK-001` успешной,
-  вторая задача не начата (ни одной попытки в state, ни одного вызова fake
-  command для неё).
+- **Given** `tasks.md` change содержит ready-задачу `TASK-001`; fake command
+  при вызове создаёт файл-сигнал и ждёт файла-освобождения; сервер как в
+  BEH-15; child — `run --task TASK-001`: ровно одна задача
+  (`cli.py:945`–`:951`), точки «между задачами» нет, единственная проверка
+  marker-а стоит до задачи (`cli.py:1273`).
+- **When** вызван `run_task("TASK-001")`, получен `started`, тест дождался
+  файла-сигнала (задача уже идёт — проверка `:1273` пройдена), вызван
+  `stop()`, затем fake освобождён.
+- **Then** child завершает `TASK-001` одной успешной попыткой и выходит с
+  кодом 0; после выхода `<external>/spec/changes/add-x/.executor-stop`
+  **существует** — ни одна ветка child после `started` его не стёрла.
 - **And** ответ `stop` — `stop_requested` с `stop_file`, лежащим под
   `<external>/spec/changes/add-x/`.
-- **And** семантика stop не изменилась: child не убит, он вышел сам после
-  потребления marker-а между задачами (OUT-01).
+- **And** немедленный вариант — `stop()` сразу после `started`, без ожидания
+  сигнала — даёт после выхода child ровно один из двух легальных исходов:
+  (i) marker потреблён проверкой до задачи — файла нет, в логе child «Graceful
+  shutdown requested», у `TASK-001` ни одной попытки; (ii) marker лёг после
+  проверки — `TASK-001` выполнена, файл на месте. Исход «файла нет ∧ попытка
+  есть» — потерянный stop, дефект #485 — делает тест красным.
+- **And** семантика stop не изменилась: child не убит, три точки потребления
+  не тронуты, marker после выхода child стирает только следующий старт
+  (OUT-01).
 
 #### BEH-17: Marker до `run_task` стирается, marker после `started` — нет
 `traces: [FR-05]`
@@ -330,9 +347,9 @@ child начал до выхода; код выхода child и хвост ег
 - **Then** в (а) стартовый `clear_stop_file` child стирает старый marker, и child
   выполняет задачу как обычно — прежнее поведение сохранено; ready публикуется
   после этого стирания.
-- **And** в (б) marker остаётся на месте до момента его потребления между
-  задачами: ни одна стартовая ветка child после ready не вызывает
-  `clear_stop_file`.
+- **And** в (б) marker остаётся на месте до выхода child: ни одна ветка child
+  после ready не вызывает `clear_stop_file` (в `run --task` точки потребления
+  после задачи нет — файл стирает только следующий старт executor-а).
 - **And** три точки потребления marker-а (`run`, `watch`, `retry`) не
   изменились: существующие тесты stop-семантики проходят без правок.
 
@@ -357,11 +374,13 @@ child начал до выхода; код выхода child и хвост ег
 `traces: [FR-05]`
 
 - **checked_by**: `status: planned` `kind: e2e` `owner: qa` `target: tests/test_mcp_e2e_485.py`
-- **Given** сценарий BEH-16, обёрнутый в цикл из 20 итераций под
+- **Given** немедленный вариант BEH-16, обёрнутый в цикл из 20 итераций под
   `@pytest.mark.slow`; между итерациями namespace очищается.
 - **When** цикл прогнан.
-- **Then** во всех 20 итерациях child завершился после текущей задачи, не начав
-  следующую — ноль потерянных stop-запросов.
+- **Then** во всех 20 итерациях исход — (i) либо (ii) BEH-16; запрещённый исход
+  «файла нет ∧ попытка есть» не встретился ни разу — ноль потерянных
+  stop-запросов; распределение (i)/(ii) печатается в отчёт как evidence, не
+  утверждается.
 - **And** soak не входит в обязательный CI-прогон (`-m "not slow"`): базовый E2E
   BEH-16 в CI — одна итерация; soak запускается вручную и в ночном профиле,
   если он есть.

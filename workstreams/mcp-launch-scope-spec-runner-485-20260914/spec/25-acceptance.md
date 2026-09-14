@@ -3,7 +3,7 @@ spec_stage: acceptance
 status: draft
 owner_role: qa
 traces_to: [requirements, behaviour-spec]
-upstream_hashes: {requirements: "7d2e095dda2274fe8abd8e47acf58f9f4789c76d", behaviour-spec: "eb6f3a72f3e72a69f13189ab6ea354b318407d3f"}
+upstream_hashes: {requirements: "4527197fc3891bfef202da34172fd7b683878866", behaviour-spec: "a0320956d9a3ca4d0deba66454ab32126fcc92aa"}
 ---
 
 # Acceptance — MCP launch scope (spec-runner#485)
@@ -152,25 +152,31 @@ traces: [FR-05]
 scenarios: [BEH-15, BEH-17]
 
 Наблюдаемый знак: в момент получения ответа `started` lock-файл
-`<external>/spec/changes/add-x/.executor-<…>state.db.lock` существует и
+`config.state_file.with_suffix(".lock")` (под change —
+`<external>/spec/changes/add-x/.executor-state.lock`) существует и
 содержит pid, равный `pid` из ответа, ready уже опубликован (через интерфейс,
 зафиксированный design), а двойник child, берущий lock с задержкой, задерживает
 `started` на ту же величину. Marker, записанный `stop()` **до** `run_task`,
 стёрт стартовым `clear_stop_file`, задача выполнена как обычно; marker,
-записанный **после** `started`, остаётся на месте до потребления между
-задачами; существующие тесты stop-семантики `run`/`watch`/`retry` проходят без
+записанный **после** `started`, остаётся на месте до выхода child (в `run
+--task` точки потребления после задачи нет); существующие тесты stop-семантики `run`/`watch`/`retry` проходят без
 правок.
 
 #### AC-11: Stop сразу после `started` не теряется · verification: test
 traces: [FR-05, NFR-03]
 scenarios: [BEH-16]
 
-Наблюдаемый знак: на `tasks.md` change с двумя ready-задачами
-`run_task("TASK-001")` → `started` → немедленный `stop()` дают state, в котором
-`TASK-001` успешна, у второй задачи ни одной попытки и ни одного вызова fake
-command; ответ `stop` — `stop_requested` со `stop_file` под
-`<external>/spec/changes/add-x/`; child не убит, вышел сам после потребления
-marker-а. Это одна итерация E2E, входящая в `-m "not slow"` (M-01).
+Наблюдаемый знак (child `run --task` исполняет ровно одну задачу, единственная
+проверка marker-а — до неё, `cli.py:1273`): fake command сигналит о вызове и
+ждёт освобождения; `run_task("TASK-001")` → `started` → сигнал → `stop()` →
+освобождение дают child с одной успешной попыткой `TASK-001`, кодом выхода 0
+и **существующим** после выхода `<external>/spec/changes/add-x/.executor-stop`.
+В немедленном варианте (без ожидания сигнала) исход — ровно один из двух:
+(i) marker потреблён до задачи — файла нет, в логе «Graceful shutdown
+requested», попыток нет; (ii) задача выполнена, файл на месте; исход «файла нет
+∧ попытка есть» красен. Ответ `stop` — `stop_requested` со `stop_file` под
+`<external>/spec/changes/add-x/`; child не убит. Это одна итерация E2E,
+входящая в `-m "not slow"` (M-01).
 
 #### AC-12: Таймаут ожидания ready объявлен и конфигурируем · verification: test
 traces: [FR-05]
@@ -188,8 +194,9 @@ traces: [NFR-03, FR-05]
 scenarios: [BEH-19]
 
 Наблюдаемый знак: soak под `@pytest.mark.slow` с числом итераций, объявленным
-NFR-03, зелёный — в каждой итерации child завершился после текущей задачи, не
-начав следующую, ноль потерянных stop; тест не входит в `-m "not slow"` и
+NFR-03, зелёный — в каждой итерации немедленного варианта AC-11 исход — (i)
+либо (ii), запрещённый исход не встретился ни разу — ноль потерянных stop;
+распределение (i)/(ii) печатается как evidence; тест не входит в `-m "not slow"` и
 запускается вручную (и в ночном профиле, если он есть). Evidence — ссылка на
 прогон в PR.
 

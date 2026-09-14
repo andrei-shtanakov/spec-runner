@@ -3,7 +3,7 @@ spec_stage: design
 status: draft
 owner_role: architects
 traces_to: [requirements, behaviour-spec]
-upstream_hashes: {requirements: "7d2e095dda2274fe8abd8e47acf58f9f4789c76d", behaviour-spec: "eb6f3a72f3e72a69f13189ab6ea354b318407d3f"}
+upstream_hashes: {requirements: "4527197fc3891bfef202da34172fd7b683878866", behaviour-spec: "a0320956d9a3ca4d0deba66454ab32126fcc92aa"}
 ---
 
 # Design — MCP launch scope (spec-runner#485)
@@ -49,8 +49,10 @@ Child, не опубликовавший ready до таймаута, завер
 marker стёрт», а ready по определению §3 означает именно это; отдельный файл,
 записанный последним шагом старта, несёт ровно нужный смысл. (3) Файл лежит
 рядом со `.executor-stop`, наблюдается теми же средствами (BEH-18, третий And),
-уже покрыт glob-ом `.executor-*` в `spec/.gitignore`
-(`git_ops.py:193`) и входит в тот же инвентарь runtime-файлов (NFR-01). Это
+уже покрыт правилом `spec/` корневого `.gitignore` репо и glob-ом
+`.executor-*` из `RUNTIME_GITIGNORE_ENTRIES` (`git_ops.py:193`), которым
+spec-runner дополняет ignore-файлы spec-директорий (tracked `spec/.gitignore`
+в дереве нет) и входит в тот же инвентарь runtime-файлов (NFR-01). Это
 «существующий механизм», а не новый IPC — граница OUT (requirements §7).
 
 Судьба child при таймауте — **завершение родителем** (SIGTERM, ограниченное
@@ -183,13 +185,21 @@ store-true-negation / namespace). Serializer `child_argv(config, task_id)`
 | `task_budget_usd` | `--task-budget` | при не-`None` |
 | `callback_url` | `--callback-url` | при непустом |
 | `log_level` | `--log-level` | всегда |
+| `spec_governance` | `--strict` \| `--no-strict` (**run-only**, subparser `run`, `cli.py:1934`–`:1942`) | всегда: `"strict"` → `--strict`, иначе `--no-strict` — child не зависит от своего YAML в этом поле (FR-03 «governance strictness») |
 
 Ключи `_COMMON_DEFAULTS`, которых в таблице нет, перечислены в ней же как
 **намеренно непередаваемые с причиной** (BEH-10, второй And): `log_json` — не
 поле `ExecutorConfig`, а параметр рендерера логов процесса (`cli.py:2491`);
 на effective config не влияет, а вывод child и так уходит в файл (§3.4).
-Паритет — тест с двумя множествами: флаги таблицы ⊆ ключи `_COMMON_DEFAULTS`,
-и `REPRESENTABLE ∪ NOT_FORWARDED == set(_COMMON_DEFAULTS)`; дополнительно
+Run-only строка таблицы (`spec_governance`) невидима для `_COMMON_DEFAULTS`:
+её флаги живут у subparser-а `run` (`--profile` у `run` нет — `profile_parent`
+подключён только к `plan`/`spec`, `cli.py:1898`, `:1984`, поэтому
+`spec_profile` непредставим). В `mcp_launch.py` она лежит отдельным перечнем
+`REPRESENTABLE_RUN` и сверяется с `dest`-ами действий `run` из
+`_build_parser()` тем же тестом паритета (BEH-10, ревью #490).
+Паритет — тест с двумя множествами: `common`-флаги таблицы ⊆ ключи
+`_COMMON_DEFAULTS`, и `REPRESENTABLE ∪ NOT_FORWARDED == set(_COMMON_DEFAULTS)`;
+дополнительно
 `_build_parser()` в `cli.py:1860` уже роняет сборку парсера при расхождении
 `common` ↔ `_COMMON_DEFAULTS`, так что цепочка serializer → `_COMMON_DEFAULTS`
 → `common` замкнута с обоих концов (RK-05).
@@ -272,6 +282,18 @@ namespace с именем, начинающимся с `task_id` (чтобы с�
 `log_file`; `Irreproducible` → `fields: [...]`; `ScopeContradiction` — §1.3.
 Существующие ключи ответов (`status`, `task_id`, `pid`, `error`) сохранены.
 
+**3.5 Наблюдаемое stop в single-task режиме.** Child — `run --task <id>`:
+`tasks_to_run = [task]` (`cli.py:945`–`:951`), исполняется fixed-list ветка
+(`cli.py:1269`–`:1279`), где единственная проверка marker-а стоит **до**
+`run_with_retries` (`:1273`); цикл с проверкой «между задачами» (`:1017`,
+`:1054`) живёт только под `--all`. Handshake это не меняет (OUT-01), поэтому
+E2E FR-05 наблюдает не «следующая задача не начата» (для `--task` вакуумно),
+а «marker после `started` не стёрт»: детерминированно — fake command сигналит
+о вызове и ждёт освобождения, `stop()` пишется после сигнала, после выхода
+child файл на месте; для немедленного `stop()` — инвариант двух легальных
+исходов (потреблён до задачи ∨ пережил задачу) с запрещённым «файла нет ∧
+попытка есть» (BEH-16, BEH-19).
+
 ### 4. Формы коммитов и эвиденции
 
 Репо под governance (CON-02): `execution_mode: tdd`, `review_policy: required`,
@@ -350,7 +372,7 @@ integration PR. Отсюда формы, которые decomposition-стади
 
 | Файл / подсистема | Что меняется | Сценарии |
 |---|---|---|
-| `src/spec_runner/mcp_launch.py` (новый) | `LaunchScope`, `ScopeContradiction`, `resolve_tool_config`, `REPRESENTABLE`/`NOT_FORWARDED`, `child_argv`, `simulate_child_config`/`Irreproducible`, `child_entry`, `wait_for_ready` (+ `Ready`/`Exited`/`TimedOut`); без импорта `mcp` | BEH-05…07, 10, 13, 14, 18, 20…22 |
+| `src/spec_runner/mcp_launch.py` (новый) | `LaunchScope`, `ScopeContradiction`, `resolve_tool_config`, `REPRESENTABLE`/`REPRESENTABLE_RUN`/`NOT_FORWARDED`, `child_argv`, `simulate_child_config`/`Irreproducible`, `child_entry`, `wait_for_ready` (+ `Ready`/`Exited`/`TimedOut`); без импорта `mcp` | BEH-05…07, 10, 13, 14, 18, 20…22 |
 | `src/spec_runner/mcp_server.py` | holder `_scope` вместо `_launch_stop_config`; `_tool_config`; все 8 обёрток через него; `run_task`: гейт → argv → симуляция → `Popen` (cwd, DEVNULL, лог) → `wait_for_ready` → формы ответов; `status`/`task_detail` + `project_root`/`namespace`; `_build_config` только для `run_server(None)` и пустого holder-а | BEH-01, 03, 04, 08, 09, 11, 12, 15…17, 23, 25, 26 |
 | `src/spec_runner/__main__.py` (новый) | `python -m spec_runner` → `executor.main()` | BEH-11 |
 | `src/spec_runner/config.py` | `ready_file` property; `mcp_ready_timeout_seconds` (поле + loader); `_resolve_config_path(base)` | BEH-02, 15, 17, 18 |

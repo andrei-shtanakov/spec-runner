@@ -3,7 +3,7 @@ spec_stage: decomposition
 status: draft
 owner_role: tech-lead
 traces_to: [design, acceptance]
-upstream_hashes: {design: "05ebfe082e812a8f139b2ebf8197cb565c5723a5", acceptance: "ae154d88b50488e210efdb21337be55542fc292b"}
+upstream_hashes: {design: "361d4da37c1d685ddb03ba769a3d3b23e24b36f2", acceptance: "88ab19d8293d6049cfaeba97ba53264cbe806bb0"}
 ---
 
 # Decomposition — MCP launch scope (spec-runner#485)
@@ -168,10 +168,13 @@ lazy `__getattr__` пакета — оба утверждения уже нес�
 `tests/test_lazy_mcp_import.py`, и по букве BEH-23 он проходит **без правок**;
 «holder заполнен config-ом из CWD, все восемь tools работают в плоском
 namespace» наблюдаемо на пути `run_server(None)`, который утверждают плоские
-случаи BEH-07(в) и BEH-25 в `tests/test_mcp_launch_scope.py` и
-`TestMCPStop::test_explicit_prefix_keeps_launch_project_root` в
-`tests/test_mcp.py` — оба файла владеет DT-01, оба лежат в замыкании
-`depends_on` этой задачи, и оба объявлены группой наблюдения. Сам
+случаи BEH-07(в) и BEH-25 в `tests/test_mcp_launch_scope.py` — файл владеет
+DT-01, он лежит в замыкании `depends_on` этой задачи и объявлен группой
+наблюдения; `tests/test_mcp.py` входит в `verifies` ради BEH-28 (существующие
+ожидания после переезда на holder), а не как свидетель плоского запуска —
+`TestMCPStop::test_explicit_prefix_keeps_launch_project_root` закрепляет случай
+(а) BEH-07 (launch `--spec-prefix`, совпадающий prefix) и `run_server(config)`,
+не `run_server(None)`. Сам
 `mcp_run_server()` без аргументов живьём не вызывается — он поднимает stdio-сервер
 и не возвращается; наблюдаемое — путь `run_server(None)` под ним.
 
