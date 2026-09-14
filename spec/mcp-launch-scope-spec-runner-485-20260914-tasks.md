@@ -125,17 +125,17 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Traces to:** [FR-01], [FR-02], [FR-05], [FR-06], [FR-09]
 
 ### TASK-002: Serializer effective config и проверка воспроизводимости до `Popen`
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-10, BEH-13, BEH-14 (DT-02, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-02
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] реализовать BEH-10: Перечень serializer-а и `common`-парсера не расходятся
-- [ ] реализовать BEH-13: Override непредставимого поля — отказ до `Popen`, называющий поле
-- [ ] реализовать BEH-14: Полностью воспроизводимый config запускает child ровно один раз
-- [ ] проверка группы: tests/test_mcp_serializer.py (kind: contract) зелёные на BEH-10, BEH-13, BEH-14
+- [x] реализовать BEH-10: Перечень serializer-а и `common`-парсера не расходятся
+- [x] реализовать BEH-13: Override непредставимого поля — отказ до `Popen`, называющий поле
+- [x] реализовать BEH-14: Полностью воспроизводимый config запускает child ровно один раз
+- [x] проверка группы: tests/test_mcp_serializer.py (kind: contract) зелёные на BEH-10, BEH-13, BEH-14
 
 **Traces to:** [FR-03], [FR-04]
 
