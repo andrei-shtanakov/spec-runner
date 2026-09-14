@@ -243,11 +243,17 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     if not allowed:
         return json.dumps({"status": "error", "error": f"⛔ spec governance: {reason}"})
 
-    cmd = ["spec-runner", "run", "--task", task_id]
-    if config.change_id:
-        cmd.extend(["--change", config.change_id])
-    elif config.spec_prefix:
-        cmd.extend(["--spec-prefix", config.spec_prefix])
+    reproducibility_scope = LaunchScope.of(config)
+    argv = mcp_launch.child_argv(config, task_id)
+    simulated = mcp_launch.simulate_child_config(reproducibility_scope, argv)
+    if isinstance(simulated, mcp_launch.Irreproducible):
+        return json.dumps(simulated.to_dict())
+
+    # The SAME list the simulation just validated (mcp_launch.child_argv):
+    # scope, namespace and every representable override travel to the child
+    # (FR-03). Building a second, shorter command here made the check
+    # fail-open (review of the DT-02 integration PR).
+    cmd = ["spec-runner", *argv]
 
     mcp_launch.clear_stale_ready_file(config.ready_file)
 

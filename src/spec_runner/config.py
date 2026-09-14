@@ -1051,7 +1051,9 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         raise ConfigError(f"{config_path}: cannot be read as a config: {e}") from e
 
 
-def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
+def build_config(
+    yaml_config: dict, args: argparse.Namespace, *, detect_subdir: bool = True
+) -> ExecutorConfig:
     """Build ExecutorConfig from YAML and CLI arguments.
 
     CLI arguments override YAML config.
@@ -1059,6 +1061,12 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
     Args:
         yaml_config: Configuration loaded from YAML file.
         args: Parsed CLI arguments.
+        detect_subdir: Whether to shell out to git to detect a subdir project
+            (#63) and default `create_git_branch`/`auto_commit` off for it.
+            The result depends only on `project_root`, not on `yaml_config`/
+            `args` -- callers that already know it (or are simulating a
+            hypothetical config without wanting a real subprocess call, #485
+            §2.2) pass `False` and get the plain merge.
 
     Returns:
         ExecutorConfig instance.
@@ -1113,7 +1121,7 @@ def build_config(yaml_config: dict, args: argparse.Namespace) -> ExecutorConfig:
 
     config = ExecutorConfig(**config_kwargs)
 
-    git_root = _detect_subdir_repo(config.project_root)
+    git_root = _detect_subdir_repo(config.project_root) if detect_subdir else None
     if git_root is not None:
         flipped = []
         if not _user_set(yaml_config, args, "create_git_branch"):

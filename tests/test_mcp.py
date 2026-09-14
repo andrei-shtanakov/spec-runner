@@ -20,7 +20,6 @@ def _make_config(tmp_path: Path, **overrides) -> ExecutorConfig:
         "budget_usd": 5.0,
         "max_retries": 3,
         "max_consecutive_failures": 2,
-        "retry_delay_seconds": 0,
         "create_git_branch": False,
         "run_tests_on_done": False,
         "auto_commit": False,
