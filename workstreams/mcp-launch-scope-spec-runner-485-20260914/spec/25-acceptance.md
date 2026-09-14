@@ -1,6 +1,6 @@
 ---
 spec_stage: acceptance
-status: approval_pending
+status: approved
 owner_role: qa
 traces_to:
 - requirements
@@ -10,6 +10,8 @@ upstream_hashes:
   behaviour-spec: d45db82f813ae676057dcc2f04703680cdb95a13
 version: 2
 approved_content_hash: d6bf87dc245963fe52b6ec35a7ae039b15b73276
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T07:10:32Z'
 ---
 
 # Acceptance — MCP launch scope (spec-runner#485)
