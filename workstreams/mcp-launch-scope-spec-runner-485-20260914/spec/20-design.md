@@ -1,9 +1,15 @@
 ---
 spec_stage: design
-status: draft
+status: approval_pending
 owner_role: architects
-traces_to: [requirements, behaviour-spec]
-upstream_hashes: {requirements: "4527197fc3891bfef202da34172fd7b683878866", behaviour-spec: "a0320956d9a3ca4d0deba66454ab32126fcc92aa"}
+traces_to:
+- requirements
+- behaviour-spec
+upstream_hashes:
+  requirements: 1c93693e948d5c19d5da488f578a5968e76a4cd1
+  behaviour-spec: d45db82f813ae676057dcc2f04703680cdb95a13
+version: 2
+approved_content_hash: ff7f2f9bc10066082c61195d17bd7514e5dffd58
 ---
 
 # Design — MCP launch scope (spec-runner#485)
