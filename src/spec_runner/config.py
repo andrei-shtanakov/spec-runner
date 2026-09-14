@@ -413,6 +413,14 @@ class ExecutorConfig:
     # Separate from lint_command so TDD can keep narrowing and repairing the
     # pre-freeze RED linter. Empty preserves historical behaviour (#351).
     format_check_command: str = ""
+    # The write-mode formatter the RED pass may run on the file it is about to
+    # freeze (#507). `format_check` is read-only and judges the whole tree at
+    # completion; a red file it rejects is already byte-locked by then, so no
+    # GREEN attempt can ever repair it — every attempt fails the same gate by
+    # construction. Fail-closed like `lint_fix_command_declared`, and with NO
+    # default: a formatter writes to the tree and is never inferred.
+    format_command: str = ""
+    format_command_declared: bool = False
     lint_fix_command: str = "uv run ruff check . --fix"  # Lint auto-fix command
     # Whether the project actually declared `commands.lint_fix` (#341 Q-03).
     # Fail-closed, unlike `lint_command_declared`: the fix invocation WRITES
@@ -960,6 +968,12 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
                 f"{config_path}: commands.format_check must be a string or null, "
                 f"got {type(format_check).__name__}"
             )
+        format_fix = commands.get("format")
+        if format_fix is not None and not isinstance(format_fix, str):
+            raise ConfigError(
+                f"{config_path}: commands.format must be a string or null, "
+                f"got {type(format_fix).__name__}"
+            )
 
         return {
             "max_retries": executor_config.get("max_retries"),
@@ -997,6 +1011,10 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             # build_config rather than being dropped with the other Nones.
             "lint_command_declared": bool(commands.get("lint")),
             "format_check_command": format_check,
+            # Same shape as `lint_fix`: the value may be None (dropped by
+            # build_config), the declaration bit is always a bool (#507).
+            "format_command": format_fix,
+            "format_command_declared": bool(format_fix),
             "lint_fix_command": commands.get("lint_fix"),
             "lint_fix_command_declared": bool(commands.get("lint_fix")),
             "sync_command": commands.get("sync"),

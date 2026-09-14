@@ -511,6 +511,9 @@ commands:
                                 # pre-freeze lint is skipped rather than guessing ruff
   format_check: "uv run ruff format --check ."
                                 # optional read-only completion/review gate
+  format: "uv run ruff format ."  # write-mode formatter for the RED file (#507);
+                                # never inferred, declare it or the RED pass refuses
+                                # a red the completion gate would reject
   lint_fix: "uv run ruff check . --fix"
   sync: "mix deps.get"       # Dependency sync before each task. Empty/absent =
                              # auto: `uv sync` when pyproject.toml exists, else skip
@@ -527,6 +530,15 @@ the final pre-commit pass also covers `post_review` plugin output, and
 `commands.lint`: TDD narrows and may repair that command on the claimed RED
 file, while the format check remains a read-only full-tree gate. `preflight`
 reports the format-check runner separately when this command is configured.
+Under `execution_mode: tdd` the RED pass also runs the format check, narrowed
+to the file it is about to freeze, and repairs drift with the separately
+declared write-mode `commands.format` before the checkpoint (#507): a red the
+gate rejects is byte-locked by then, so no GREEN attempt could ever reformat
+it and every attempt would fail the same gate. With `format_check` declared
+but no runnable `commands.format`, such a red is refused before it freezes —
+naming what is missing — provided the tree-wide gate really fails on the
+current tree (a formatter that excludes the file only warns); a formatter is
+never inferred.
 The command contract is `0` for clean and `1` for measured formatting drift;
 any other exit code is an instrument failure and blocks even advisory lint.
 

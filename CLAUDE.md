@@ -267,9 +267,16 @@ guarantee). A lint failure records no checkpoint, so the gate answers
 `no confirmed red` → `HOOK_FAILURE` → fatal. Paid RED calls: the authoring
 call plus at most one BEH-07 agent round (declared fix ran and left
 findings) — up to two, both budget-gated and ledger-recorded; no retry.
-The optional read-only `commands.format_check` (#351) runs only on completed
-work and review mutations; keeping it separate prevents the full-tree format
-gate from turning pre-freeze `commands.lint` into an unrepairable composite.
+The optional read-only `commands.format_check` (#351) is the completion gate
+on completed work and review mutations; keeping it separate prevents the
+full-tree format gate from turning pre-freeze `commands.lint` into an
+unrepairable composite. Since #507 the RED pass also runs it, narrowed to the
+claimed file, right after the lint step (`tdd._format_claimed`) and repairs
+drift with the separately declared write-mode `commands.format`
+(`format_command_declared`, no default, never inferred) — a red the gate
+rejects is byte-locked once frozen, so every GREEN attempt would fail the
+same gate. Dormant when the gate is; refuses before the freeze only when the
+tree-wide gate really fails and nothing declared can cure it.
 
 ### Review policy (#157)
 

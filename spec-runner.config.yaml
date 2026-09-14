@@ -8,9 +8,14 @@ executor:
   claude_model: 'sonnet'
   commands:
     lint: uv run ruff check .
-    # Read-only full-tree format gate used only after implementation/review;
-    # pre-freeze RED keeps the narrowable lint command above (#351).
+    # Read-only full-tree format gate after implementation/review (#351); the
+    # RED pass also runs it narrowed to the claimed file before the freeze
+    # (#507) and repairs drift with `format` below.
     format_check: uv run ruff format --check .
+    # Write-mode форматтер для RED-файла (#507): post-done format_check бьёт по
+    # всему дереву, когда red уже под claim — без этого ключа дрейф red-файла
+    # проигрывает каждую green-попытку по построению.
+    format: uv run ruff format .
     # Объявленная fix-инвокация — условие получения ценности #341 (FR-05):
     # дефолт объявлением не является. Сужается до claim-путей заменой '.'.
     lint_fix: uv run ruff check . --fix
