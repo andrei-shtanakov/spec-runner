@@ -155,25 +155,25 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Traces to:** [FR-07]
 
 ### TASK-004: Child публикует ready; E2E scope, effective config, handshake и стоп на живом child; soak; документация
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-08, BEH-09, BEH-11, BEH-12, BEH-15, BEH-16, BEH-17, BEH-19, BEH-24, BEH-26, BEH-27 (DT-04, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-04
 **Depends on:** [TASK-002]
 
 **Checklist:**
-- [ ] реализовать BEH-08: Child живёт в `project_root` и ровно в одном namespace
-- [ ] реализовать BEH-09: Effective config child равен родительскому по всем представимым полям
-- [ ] реализовать BEH-11: Child запускается entry point-ом текущего окружения, а не `spec-runner` из PATH
-- [ ] реализовать BEH-12: Вывод child уходит в лог namespace, и многословный child не зависает
-- [ ] реализовать BEH-15: `started` приходит не раньше lock и ready
-- [ ] реализовать BEH-16: Stop сразу после `started` не теряется
-- [ ] реализовать BEH-17: Marker до `run_task` стирается, marker после `started` — нет
-- [ ] реализовать BEH-19: Гарантия «stop после started» держится статистически (soak ×20)
-- [ ] реализовать BEH-24: README, CHANGELOG и #485 говорят то же, что код
-- [ ] реализовать BEH-26: Ни один tool не пишет вне spec-директории launch scope, включая ошибочные ветки
-- [ ] реализовать BEH-27: Тесты не вызывают платного агента и укладываются в CI-бюджет
-- [ ] проверка группы: tests/test_mcp_e2e_485.py (kind: e2e), README.md (kind: manual) зелёные на BEH-08, BEH-09, BEH-11, BEH-12, BEH-15, BEH-16, BEH-17, BEH-19, BEH-24, BEH-26, BEH-27
+- [x] реализовать BEH-08: Child живёт в `project_root` и ровно в одном namespace
+- [x] реализовать BEH-09: Effective config child равен родительскому по всем представимым полям
+- [x] реализовать BEH-11: Child запускается entry point-ом текущего окружения, а не `spec-runner` из PATH
+- [x] реализовать BEH-12: Вывод child уходит в лог namespace, и многословный child не зависает
+- [x] реализовать BEH-15: `started` приходит не раньше lock и ready
+- [x] реализовать BEH-16: Stop сразу после `started` не теряется
+- [x] реализовать BEH-17: Marker до `run_task` стирается, marker после `started` — нет
+- [x] реализовать BEH-19: Гарантия «stop после started» держится статистически (soak ×20)
+- [x] реализовать BEH-24: README, CHANGELOG и #485 говорят то же, что код
+- [x] реализовать BEH-26: Ни один tool не пишет вне spec-директории launch scope, включая ошибочные ветки
+- [x] реализовать BEH-27: Тесты не вызывают платного агента и укладываются в CI-бюджет
+- [x] проверка группы: tests/test_mcp_e2e_485.py (kind: e2e), README.md (kind: manual) зелёные на BEH-08, BEH-09, BEH-11, BEH-12, BEH-15, BEH-16, BEH-17, BEH-19, BEH-24, BEH-26, BEH-27
 
 **Traces to:** [FR-03], [FR-05], [FR-08], [FR-01], [FR-04], [FR-06]
 

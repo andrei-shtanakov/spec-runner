@@ -6,6 +6,7 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 import contextlib
 import fcntl
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -2651,6 +2652,41 @@ def clear_stop_file(config: ExecutorConfig) -> None:
     """Remove stop file if it exists."""
     with contextlib.suppress(FileNotFoundError):
         config.stop_file.unlink()
+
+
+def publish_ready_file(config: ExecutorConfig) -> None:
+    """Publish this run's ready file (#485 §3.1): atomic (temp + `os.replace`),
+    the same ``PID:``/``Started:`` format `ExecutorLock` writes, read by the
+    MCP parent's `mcp_launch.wait_for_ready`. Called from
+    `_run_tasks_inner` right after `clear_stop_file`, before `parse_tasks` --
+    a run is not "ready" until the stale marker from a previous run is gone.
+    """
+    ready_file = config.ready_file
+    ready_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ready_file.with_name(ready_file.name + ".tmp")
+    tmp.write_text(f"PID: {os.getpid()}\nStarted: {datetime.now().isoformat()}\n")
+    os.replace(tmp, ready_file)
+
+
+def clear_ready_file(config: ExecutorConfig) -> None:
+    """Remove this run's ready file, if any (`cmd_run`'s `finally`, beside
+    `lock.release()`) -- an ordinary CLI run leaves none behind.
+
+    Only unlinks a ready file this process itself published: the on-disk
+    ``PID:`` line must match `os.getpid()`, mirroring
+    `mcp_launch._cleanup_own_ready_file`. Without this check a stray unlink
+    could remove a marker some *other* process just published at the same
+    path (#485 review).
+    """
+    ready_file = config.ready_file
+    try:
+        first_line = ready_file.read_text().splitlines()[0]
+    except (OSError, IndexError):
+        return
+    if first_line != f"PID: {os.getpid()}":
+        return
+    with contextlib.suppress(FileNotFoundError):
+        ready_file.unlink()
 
 
 def recover_stale_tasks(

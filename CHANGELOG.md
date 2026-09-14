@@ -12,6 +12,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **MCP server is bound to a launch scope, not the caller's CWD** (#485). The
+  server holds a single config + namespace for its whole lifetime, resolved
+  from `--project-root`/`--change`/`--spec-prefix` on `spec-runner mcp` (a
+  flat launch with no flags, or `mcp_run_server()` with no arguments, behaves
+  exactly as before). All eight tools now read the YAML by that
+  `project_root` and write every runtime file (state DB, lock, stop-file,
+  ready-file, logs) under that scope's `spec/` — none of them rebuild a
+  config from the server's CWD any more. A tool-level `spec_prefix` argument
+  that contradicts the launch namespace is refused by name before anything
+  runs; this is a visible contract change for callers that relied on
+  per-call `spec_prefix` to switch namespaces on a namespaced server.
+  `spec_runner_run_task` now spawns the child via the current
+  interpreter/venv (`sys.executable -m spec_runner`) rather than a
+  `spec-runner` binary resolved off `PATH`, verifies the child's effective
+  config is reproducible from the parent's config *before* spawning (refusing
+  by field name if not), and answers `"status": "started"` only once the
+  child has taken its run lock and published a ready marker — not merely
+  once the subprocess exists. A `spec_runner_stop` call issued immediately
+  after `started` is now guaranteed not to be lost: the child's stop marker
+  either blocks the task before it starts, or survives a task that already
+  ran to completion. A busy lock, an early exit, or a child that never
+  publishes ready all come back as `"status": "error"` instead of a false
+  `started`. See README.md#mcp-server for the updated contract.
+
 - **Terminal review has repository-local bundle context** (#474). The
   merge-base context pack now includes a pinned, vendored reading of the
   devtools behaviour-bundle → tasks-artifact contract plus `spec/FORMAT.md`,
