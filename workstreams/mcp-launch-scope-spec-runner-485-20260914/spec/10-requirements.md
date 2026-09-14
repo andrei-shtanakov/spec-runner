@@ -1,11 +1,13 @@
 ---
 spec_stage: requirements
-status: draft
+status: approval_pending
 owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: "6f1a531ba84a38e5bdff539c61a0df5dcfaa59f3"
+  charter: e7ce8e1028beb990b6a7ba28085bce003e860b46
+version: 2
+approved_content_hash: e0031e1f86da79b95c18a4e900c509b420c5ac7f
 ---
 
 # Requirements — MCP launch scope (spec-runner#485)
