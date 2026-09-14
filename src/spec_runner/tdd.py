@@ -1359,6 +1359,27 @@ def _format_claimed(
             detail=drift,
         )
         return None, before, False
+    # The narrowed check names the file explicitly, and a formatter may honour
+    # an explicit path its own configuration excludes (ruff does, absent
+    # `--force-exclude`). The gate this step anticipates is the tree-wide one
+    # post-done runs; when THAT passes on the current tree nothing would block,
+    # and refusing here would make pre-freeze stricter than the gate. Run it
+    # only on the refusal path — it is the whole-tree call.
+    gate = subprocess.run(
+        config.format_check_command,
+        shell=True,
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if gate.returncode == 0:
+        logger.warning(
+            "Formatting drift on the file about to be frozen, but the tree-wide "
+            "completion gate passes — the formatter excludes it; not refusing",
+            path=str(selector.path),
+            detail=drift,
+        )
+        return None, before, False
     if before is not None:
         return (
             "the declared formatter (commands.format) ran on the claimed file and "
@@ -1367,11 +1388,19 @@ def _format_claimed(
             before,
             False,
         )
+    if config.format_command_declared and config.format_command:
+        # Declared but not runnable here: telling the operator to declare it
+        # would name a key they already wrote (review of PR #518).
+        advice = (
+            "make the declared formatter narrowable — one non-composite command "
+            "whose only path is a lone `.` or which names no path of its own"
+        )
+    else:
+        advice = "declare commands.format to let the RED pass repair it"
     return (
         "the file about to be frozen fails the declared format check "
         f"(commands.format_check) and {skip_reason}; frozen as is, every GREEN "
-        "attempt would fail the completion gate against a byte-locked file — "
-        f"declare commands.format to let the RED pass repair it:\n{drift}",
+        f"attempt would fail the completion gate against a byte-locked file — {advice}:\n{drift}",
         None,
         False,
     )

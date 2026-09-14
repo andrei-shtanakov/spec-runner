@@ -535,8 +535,10 @@ to the file it is about to freeze, and repairs drift with the separately
 declared write-mode `commands.format` before the checkpoint (#507): a red the
 gate rejects is byte-locked by then, so no GREEN attempt could ever reformat
 it and every attempt would fail the same gate. With `format_check` declared
-but no `commands.format`, such a red is refused before it freezes, naming the
-missing declaration; a formatter is never inferred.
+but no runnable `commands.format`, such a red is refused before it freezes —
+naming what is missing — provided the tree-wide gate really fails on the
+current tree (a formatter that excludes the file only warns); a formatter is
+never inferred.
 The command contract is `0` for clean and `1` for measured formatting drift;
 any other exit code is an instrument failure and blocks even advisory lint.
 

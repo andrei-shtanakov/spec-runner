@@ -37,6 +37,20 @@ import sys
 from pathlib import Path
 
 Path(sys.argv[1]).write_text("ran\\n")
+# Explicit paths when narrowed; the whole tree (as post-done runs it) without.
+paths = sys.argv[2:] or [str(p) for p in Path("tests").rglob("*.py")]
+bad = any("DRIFT" in Path(p).read_text() for p in paths)
+sys.exit(1 if bad else 0)
+"""
+
+# A formatter whose own configuration excludes `tests/`: tree-wide it never
+# looks there (exit 0), yet an explicitly named file IS judged — ruff's
+# behaviour for excluded paths passed on the command line.
+_EXCLUDING_FORMAT_CHECK = """
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text("ran\\n")
 bad = any("DRIFT" in Path(p).read_text() for p in sys.argv[2:])
 sys.exit(1 if bad else 0)
 """
@@ -104,6 +118,9 @@ class _Scripts:
         self.lint_fix = self._command("lint_fix.py", _LINT_FIX)
         self.broken_format_check = self._command(
             "broken_format_check.py", _BROKEN_FORMAT_CHECK, self.format_check_marker
+        )
+        self.excluding_format_check = self._command(
+            "excluding_format_check.py", _EXCLUDING_FORMAT_CHECK, self.format_check_marker
         )
 
     def _command(self, name: str, body: str, marker: Path | None = None) -> str:
@@ -303,6 +320,49 @@ class TestWithoutADeclaredFormatterTheRedIsRefusedBeforeItFreezes:
         assert "format" in result.detail.lower()
         # The formatter was never guessed at — there is none to run.
         assert not scripts.format_fix_marker.exists()
+
+    def test_a_declared_but_unnarrowable_formatter_gets_the_right_advice(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """A formatter that names its own existing path (`ruff format src tests`)
+        cannot be narrowed to the claim and is not run; the refusal must not
+        tell the operator to declare a key they already declared."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        (root / "tests").mkdir()
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.format_check,
+            format_command=f"{scripts.format_fix} tests",
+            format_command_declared=True,
+        )
+        _agent_writing(monkeypatch, [], _RED_WITH_DRIFT)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.checkpoint is None
+        assert not scripts.format_fix_marker.exists()
+        assert "could not be narrowed" in result.detail
+        assert "narrowable" in result.detail
+        assert "declare commands.format" not in result.detail
+
+    def test_a_formatter_that_excludes_the_file_does_not_refuse(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """The narrowed check judges the explicit file; the tree-wide gate
+        post-done runs would skip it. The gate is what matters."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(root, format_check_command=scripts.excluding_format_check)
+        _agent_writing(monkeypatch, [], _RED_WITH_DRIFT)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        assert "DRIFT" in _committed(root, result.checkpoint.commit_sha)
 
     def test_a_non_blocking_gate_only_warns(self, tmp_path_factory, monkeypatch):
         root = _repo(tmp_path_factory.mktemp("proj"))
