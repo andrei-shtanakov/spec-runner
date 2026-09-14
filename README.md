@@ -358,7 +358,10 @@ All eight tools serve that scope: they read the YAML by `project_root`, never
 by the server's own CWD, and every runtime file a tool or a spawned task
 writes (state DB, lock, stop-file, ready-file, logs) lands under that scope's
 `spec/` directory — nothing appears in the server's CWD or in a sibling
-namespace. Running `spec-runner mcp` with no `--project-root`/namespace flags
+namespace. One known exception predates the namespacing and is tracked
+separately: `runner.log_progress` writes `spec/.executor-progress.txt`
+relative to the project root, so a `--change`/`--spec-prefix` child still
+leaves that one file in the flat `spec/` of the project. Running `spec-runner mcp` with no `--project-root`/namespace flags
 (or calling `spec_runner.mcp_run_server()` programmatically with no arguments)
 falls back to a flat launch scope built from the current directory, same as
 before this change.

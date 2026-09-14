@@ -13,8 +13,12 @@ ordering detail, stop-after-started, marker semantics, scope containment).
 Every scenario here spawns a REAL `spec-runner run --task ...` child
 (`sys.executable -m spec_runner`, DT-01's `child_entry()` seam) against
 `tests/fixtures/fake_claude.sh` or the specialized
-`tests/fixtures/fake_claude_signal_wait.sh` double -- never a paid CLI (the
-suite-wide belt in `conftest.py` would abort the test if one were reached).
+`tests/fixtures/fake_claude_signal_wait.sh` double -- never a paid CLI.
+The conftest belt cannot see inside a spawned child (it monkeypatches
+`subprocess` in the pytest process only), so the discipline is enforced
+here: every YAML a test writes for a child goes through
+`_assert_fixture_agent`, which refuses a `claude_command` that is not a
+script under `tests/fixtures/`.
 """
 
 import json
@@ -71,10 +75,27 @@ TASKS_MD = """\
 """
 
 
+def _assert_fixture_agent(yaml_text: str) -> str:
+    """The only guard that actually reaches a spawned child: the YAML it
+    will read must name a `claude_command` under `tests/fixtures/`. The
+    conftest belt is in-process and blind to the child (BEH-27)."""
+    commands = [
+        line.split(":", 1)[1].strip().strip("\"'")
+        for line in yaml_text.splitlines()
+        if line.strip().startswith("claude_command:")
+    ]
+    assert commands, "child YAML must declare claude_command explicitly"
+    for command in commands:
+        assert Path(command).resolve().is_relative_to(FIXTURES.resolve()), (
+            f"child YAML points claude_command outside tests/fixtures: {command!r}"
+        )
+    return yaml_text
+
+
 def _write_project(project_root: Path, *, config_yaml: str = CONFIG_YAML) -> None:
     (project_root / "spec").mkdir(parents=True, exist_ok=True)
     (project_root / "spec-runner.config.yaml").write_text(
-        config_yaml.format(fake_cli=str(FAKE_CLI))
+        _assert_fixture_agent(config_yaml.format(fake_cli=str(FAKE_CLI)))
     )
     (project_root / "spec" / "tasks.md").write_text(TASKS_MD)
 
@@ -149,7 +170,7 @@ class TestBEH08ChildScopeAndNamespace:
         external = tmp_path / "external"
         (external / "spec" / "changes" / "add-x").mkdir(parents=True)
         (external / "spec-runner.config.yaml").write_text(
-            CONFIG_YAML.format(fake_cli=str(FAKE_CLI))
+            _assert_fixture_agent(CONFIG_YAML.format(fake_cli=str(FAKE_CLI)))
         )
         (external / "spec" / "changes" / "add-x" / "tasks.md").write_text(TASKS_MD)
         _quick_success(monkeypatch)
@@ -242,7 +263,8 @@ class TestBEH09EffectiveConfigParity:
     ) -> None:
         external = tmp_path / "external"
         (external / "spec" / "changes" / "add-x").mkdir(parents=True)
-        yaml_text = """\
+        yaml_text = f"""\
+claude_command: "{FAKE_CLI}"
 review_policy: required
 execution_mode: tdd
 harness_guard: strict
@@ -251,7 +273,7 @@ commands:
   test: "pytest -k custom"
   lint: "ruff check custom"
 """
-        (external / "spec-runner.config.yaml").write_text(yaml_text)
+        (external / "spec-runner.config.yaml").write_text(_assert_fixture_agent(yaml_text))
         (external / "spec" / "changes" / "add-x" / "tasks.md").write_text(TASKS_MD)
 
         argv = [
@@ -437,7 +459,7 @@ class TestBEH16StopAfterStartedIsNotLost:
         external = tmp_path / "external"
         _write_project(external)
         (external / "spec-runner.config.yaml").write_text(
-            CONFIG_YAML.format(fake_cli=str(FAKE_CLI_SIGNAL_WAIT))
+            _assert_fixture_agent(CONFIG_YAML.format(fake_cli=str(FAKE_CLI_SIGNAL_WAIT)))
         )
 
         signal_file = tmp_path / "signal"
@@ -466,11 +488,12 @@ class TestBEH16StopAfterStartedIsNotLost:
             release_file.write_text("go")
             _wait_for_completion(config)
 
-            # Ready-shaped semantics: TASK-001 ran to completion (one task,
-            # no "between tasks" checkpoint in `run --task`), and the stop
-            # marker set *after* `started` was never consumed by any branch
-            # downstream of the handshake.
+            # Deterministic outcome (ii): the marker was written after the
+            # pre-task check had passed, so TASK-001 ran to completion (one
+            # attempt, success) and no branch downstream of the handshake
+            # consumed the marker -- it is still on disk.
             assert stop_file.exists()
+            assert _outcome_after_stop(config) == "marker_survived_task_ran"
 
         with patch.object(server.mcp_app, "run", side_effect=invoke):
             server.run_server(config)
@@ -491,7 +514,7 @@ class TestBEH16StopAfterStartedIsNotLost:
             assert stop_result["status"] == "stop_requested"
 
             _wait_for_completion(config)
-            _assert_no_forbidden_outcome(config)
+            _outcome_after_stop(config)
 
         with patch.object(server.mcp_app, "run", side_effect=invoke):
             server.run_server(config)
@@ -538,13 +561,13 @@ class TestBEH17MarkerBeforeRunTaskIsClearedAfterStartedIsNot:
         with patch.object(server.mcp_app, "run", side_effect=invoke):
             server.run_server(config)
 
-        _assert_no_forbidden_outcome(config)
+        _outcome_after_stop(config)
 
 
 @pytest.mark.slow
 class TestBEH19SoakStopAfterStartedHoldsStatistically:
     def test_stop_after_started_holds_over_20_iterations(self, tmp_path: Path, monkeypatch) -> None:
-        outcomes = {"marker_consumed_no_attempt": 0, "marker_survived_task_ran": 0}
+        outcomes = {"marker_consumed_before_task": 0, "marker_survived_task_ran": 0}
 
         for i in range(20):
             external = tmp_path / f"iter-{i}"
@@ -562,18 +585,13 @@ class TestBEH19SoakStopAfterStartedHoldsStatistically:
             with patch.object(server.mcp_app, "run", side_effect=invoke):
                 server.run_server(config)
 
-            marker_present = config.stop_file.exists()
-            state_db = config.state_file
-            task_had_an_attempt = state_db.exists() and state_db.stat().st_size > 0
-            # The forbidden outcome: marker consumed (test wrote it, so
-            # "consumed" means gone) AND the task never got an attempt.
-            assert not (not marker_present and not task_had_an_attempt), (
-                f"iteration {i}: lost stop -- marker gone and no attempt recorded"
-            )
-            if marker_present:
-                outcomes["marker_survived_task_ran"] += 1
-            else:
-                outcomes["marker_consumed_no_attempt"] += 1
+            # The helper asserts the invariant from the state ledger and names
+            # which legal outcome this iteration produced; the forbidden one
+            # ("marker gone AND an attempt was made") raises there.
+            try:
+                outcomes[_outcome_after_stop(config)] += 1
+            except AssertionError as exc:
+                raise AssertionError(f"iteration {i}: {exc}") from exc
 
         # Evidence, not an assertion: printed for the PR description (NFR-03).
         print(f"BEH-19 soak outcomes over 20 iterations: {outcomes}")
@@ -586,7 +604,7 @@ class TestBEH26NoStrayRuntimeFiles:
         external = tmp_path / "external"
         (external / "spec" / "changes" / "add-x").mkdir(parents=True)
         (external / "spec-runner.config.yaml").write_text(
-            CONFIG_YAML.format(fake_cli=str(FAKE_CLI))
+            _assert_fixture_agent(CONFIG_YAML.format(fake_cli=str(FAKE_CLI)))
         )
         (external / "spec" / "changes" / "add-x" / "tasks.md").write_text(TASKS_MD)
         _quick_success(monkeypatch)
@@ -616,13 +634,100 @@ class TestBEH26NoStrayRuntimeFiles:
         namespace_dir = external / "spec" / "changes" / "add-x"
         assert (namespace_dir / ".executor-state.db").exists()
 
+    def test_error_branches_under_a_change_launch_leave_no_stray_executor_files(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The refusal branches BEH-26 lists -- irreproducible config, early
+        child exit, busy lock, ready timeout -- each driven through a real
+        change-scoped launch, with the same containment check afterwards."""
+        from spec_runner.config import ExecutorLock
+
+        external = tmp_path / "external"
+        (external / "spec" / "changes" / "add-x").mkdir(parents=True)
+        (external / "spec-runner.config.yaml").write_text(
+            _assert_fixture_agent(CONFIG_YAML.format(fake_cli=str(FAKE_CLI)))
+        )
+        (external / "spec" / "changes" / "add-x" / "tasks.md").write_text(TASKS_MD)
+        _quick_success(monkeypatch)
+        cwd_dir = tmp_path / "server-cwd"
+        cwd_dir.mkdir()
+        monkeypatch.chdir(cwd_dir)
+        base_argv = ["run", "--project-root", str(external), "--change", "add-x"]
+
+        def contained() -> None:
+            assert _stray_flat_executor_files(external / "spec") == []
+            assert list(cwd_dir.rglob(".executor-*")) == []
+
+        # (a) irreproducible programmatic override: refused before Popen.
+        irreproducible = ExecutorConfig(
+            project_root=external, change_id="add-x", review_policy="required"
+        )
+
+        def invoke_irreproducible(*, transport: str) -> None:
+            result = json.loads(spec_runner_run_task("TASK-001"))
+            assert result["status"] == "error", result
+            assert "review_policy" in result["error"]
+
+        with patch.object(server.mcp_app, "run", side_effect=invoke_irreproducible):
+            server.run_server(irreproducible)
+        contained()
+
+        # (b) early child exit: a task id the child cannot find.
+        config = _resolved_launch_config(base_argv)
+
+        def invoke_early_exit(*, transport: str) -> None:
+            result = json.loads(spec_runner_run_task("TASK-999"))
+            assert result["status"] == "error", result
+
+        with patch.object(server.mcp_app, "run", side_effect=invoke_early_exit):
+            server.run_server(config)
+        contained()
+
+        # (c) busy lock: held in this process, the child refuses and exits.
+        lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+        assert lock.acquire()
+        try:
+
+            def invoke_busy(*, transport: str) -> None:
+                result = json.loads(spec_runner_run_task("TASK-001"))
+                assert result["status"] == "error", result
+
+            with patch.object(server.mcp_app, "run", side_effect=invoke_busy):
+                server.run_server(config)
+        finally:
+            lock.release()
+        contained()
+
+        # (d) ready timeout: the parent gives up before any child could
+        # publish, terminates it, and still leaves nothing outside the scope.
+        impatient = _resolved_launch_config(base_argv)
+        impatient.mcp_ready_timeout_seconds = 0.001
+
+        def invoke_timeout(*, transport: str) -> None:
+            result = json.loads(spec_runner_run_task("TASK-001"))
+            assert result["status"] == "error", result
+
+        with patch.object(server.mcp_app, "run", side_effect=invoke_timeout):
+            server.run_server(impatient)
+        _wait_for_completion(impatient)
+        contained()
+
 
 class TestBEH27NoPaidAgentAndBaseE2ENotSlow:
-    """The belt in `conftest.py` already refuses any real agent binary
-    process-wide; this asserts the CI-budget shape design calls for: the
-    base BEH-15/16/17 tests run under `-m "not slow"`, and only the BEH-19
-    soak is `@pytest.mark.slow`.
+    """No paid agent: the conftest belt is blind to a spawned child, so the
+    guard that counts is `_assert_fixture_agent` on every YAML a child reads
+    (checked here on the module's own template, and by construction at
+    every write site). Plus the CI-budget shape design calls for: the base
+    BEH-15/16/17 tests run under `-m "not slow"`, and only the BEH-19 soak
+    is `@pytest.mark.slow`.
     """
+
+    def test_module_yaml_template_points_claude_command_at_a_fixture(self) -> None:
+        _assert_fixture_agent(CONFIG_YAML.format(fake_cli=str(FAKE_CLI)))
+        with pytest.raises(AssertionError):
+            _assert_fixture_agent(CONFIG_YAML.format(fake_cli="/usr/local/bin/claude"))
+        with pytest.raises(AssertionError):
+            _assert_fixture_agent("review_policy: required\n")
 
     def test_base_handshake_tests_are_not_marked_slow_only_the_soak_is(self) -> None:
         base_classes = [
@@ -642,11 +747,43 @@ class TestBEH27NoPaidAgentAndBaseE2ENotSlow:
         assert any(m.name == "slow" for m in soak_marks)
 
 
-def _assert_no_forbidden_outcome(config: ExecutorConfig) -> None:
-    """BEH-16's invariant: (i) marker consumed before the task ran (no
-    attempt), or (ii) the marker survived a completed task. Never both gone.
+def _outcome_after_stop(config: ExecutorConfig) -> str:
+    """BEH-16's invariant for a `stop()` issued after `started`, read from
+    the state ledger (never from the DB file's size: the child opens
+    `ExecutorState` before its pre-task stop check, so the file is non-empty
+    on every run whether or not the task was attempted).
+
+    Legal outcomes: (i) `marker_consumed_before_task` -- the marker landed
+    before the pre-task check (cli.py, fixed-list branch), was consumed by
+    it, and TASK-001 got zero attempts; the child logged the graceful
+    shutdown. (ii) `marker_survived_task_ran` -- the marker landed after
+    that check, TASK-001 ran to one successful attempt, and no branch
+    downstream of the handshake removed the marker.
+
+    Forbidden -- the lost stop the spec names ("marker gone AND an attempt
+    was made", 15-behaviour-spec.md BEH-16): a `clear_stop_file` anywhere
+    after ready, e.g. the ready publish moved before the stale-marker
+    clear, produces exactly that pair. This helper must go red on it.
     """
     marker_present = config.stop_file.exists()
-    state_db = config.state_file
-    task_had_an_attempt = state_db.exists() and state_db.stat().st_size > 0
-    assert not (not marker_present and not task_had_an_attempt), "lost stop request"
+    with ExecutorState.for_read(config) as state:
+        ts = state.get_task_state("TASK-001")
+    attempts = ts.attempt_count if ts is not None else 0
+    status = ts.status if ts is not None else None
+    assert not (not marker_present and attempts > 0), (
+        "lost stop request: marker gone but TASK-001 was attempted "
+        f"({attempts} attempt(s), status={status!r})"
+    )
+    if marker_present:
+        assert attempts == 1 and status == "success", (
+            f"marker survived but TASK-001 did not run to one success: "
+            f"attempts={attempts}, status={status!r}"
+        )
+        return "marker_survived_task_ran"
+    assert attempts == 0, f"marker consumed yet {attempts} attempt(s) recorded"
+    logged = any(
+        "Graceful shutdown requested" in path.read_text(errors="replace")
+        for path in config.logs_dir.glob("TASK-001*")
+    )
+    assert logged, "marker consumed before the task, but the child never logged the shutdown"
+    return "marker_consumed_before_task"
