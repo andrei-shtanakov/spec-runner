@@ -37,13 +37,14 @@ from spec_runner.spec import SpecMeta, write_spec
 
 
 def _config(tmp_path: Path, **overrides) -> ExecutorConfig:
+    # `state_file`/`logs_dir` are left to `ExecutorConfig.__post_init__`'s own
+    # defaults (project_root-relative, spec_prefix/change_id-aware) rather than
+    # pinned here -- pinning a plain, prefix-unaware absolute path would make a
+    # `spec_prefix`-scoped config disagree with the same config rebuilt from
+    # its own argv (#485 §2.2, DT-02's reproducibility check).
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
-    defaults: dict = {
-        "project_root": tmp_path,
-        "state_file": spec_dir / ".executor-state.db",
-        "logs_dir": spec_dir / ".executor-logs",
-    }
+    defaults: dict = {"project_root": tmp_path}
     defaults.update(overrides)
     return ExecutorConfig(**defaults)
 
