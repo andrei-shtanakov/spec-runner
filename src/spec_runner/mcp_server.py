@@ -243,6 +243,12 @@ def spec_runner_run_task(task_id: str, spec_prefix: str = "") -> str:
     if not allowed:
         return json.dumps({"status": "error", "error": f"⛔ spec governance: {reason}"})
 
+    reproducibility_scope = LaunchScope.of(config)
+    argv = mcp_launch.child_argv(config, task_id)
+    simulated = mcp_launch.simulate_child_config(reproducibility_scope, argv)
+    if isinstance(simulated, mcp_launch.Irreproducible):
+        return json.dumps(simulated.to_dict())
+
     cmd = ["spec-runner", "run", "--task", task_id]
     if config.change_id:
         cmd.extend(["--change", config.change_id])
