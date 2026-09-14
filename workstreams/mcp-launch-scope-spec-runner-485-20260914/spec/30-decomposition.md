@@ -1,9 +1,15 @@
 ---
 spec_stage: decomposition
-status: draft
+status: approval_pending
 owner_role: tech-lead
-traces_to: [design, acceptance]
-upstream_hashes: {design: "361d4da37c1d685ddb03ba769a3d3b23e24b36f2", acceptance: "88ab19d8293d6049cfaeba97ba53264cbe806bb0"}
+traces_to:
+- design
+- acceptance
+upstream_hashes:
+  design: a4f34a4b74d5d51afeeb4406efa33f968ae1b262
+  acceptance: e088768b27dec831f3aa85487a24b5dc45fea885
+version: 2
+approved_content_hash: da435a91a03a53a8c332fd623776c0b55b4c8b59
 ---
 
 # Decomposition — MCP launch scope (spec-runner#485)
