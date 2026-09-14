@@ -147,9 +147,20 @@ def _belt_never_executes_a_paid_binary(monkeypatch):
         _refuse(argv)
         return real_run(argv, *args, **kwargs)
 
-    def _belted_popen(argv, *args, **kwargs):
-        _refuse(argv)
-        return real_popen(argv, *args, **kwargs)
+    class _belted_popen(real_popen):  # type: ignore[valid-type,misc]
+        """A *class*, not a function: `subprocess.Popen` is used as a generic
+        in annotations evaluated at import time (`subprocess.Popen[bytes]`
+        in mcp/os/win32/utilities.py), so a function in its place broke the
+        lazy `import mcp` of any test that first resolves
+        `spec_runner.mcp_run_server` under the belt (spec-runner#510). A
+        subclass keeps `__class_getitem__`, `isinstance` checks and the
+        refusal in one place; `subprocess.run` spawns through the module
+        name and is refused here too.
+        """
+
+        def __init__(self, argv, *args, **kwargs):
+            _refuse(argv)
+            super().__init__(argv, *args, **kwargs)
 
     async def _belted_exec(program, *argv, **kwargs):
         _refuse([program, *argv])
