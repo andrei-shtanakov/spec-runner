@@ -567,7 +567,7 @@ def run_red_phase(
     # ever be refused identically on every retry, with authoring skipped by
     # construction and no round to change the bytes (#366 round 5). Also
     # scoped to a clean index/tree — see `_pending_unregistered_red`.
-    adoption_repairable = bool(
+    lint_repairable = bool(
         config.lint_command
         and config.lint_command_declared
         and not is_composite_shell_command(config.lint_command)
@@ -575,6 +575,19 @@ def run_red_phase(
         and config.lint_fix_command_declared
         and not is_composite_shell_command(config.lint_fix_command)
     )
+    # #507: the format step is a second way a residue can be refused, and a
+    # declared formatter under a live completion gate is a second repair
+    # path — the one the format refusal tells the operator to declare. The
+    # cure would be a lie if adoption still keyed on lint alone (review of
+    # PR #518, round 4).
+    format_repairable = bool(
+        config.run_lint_on_done
+        and config.format_check_command
+        and config.format_command_declared
+        and config.format_command
+        and not is_composite_shell_command(config.format_command)
+    )
+    adoption_repairable = lint_repairable or format_repairable
     if adoption_repairable:
         pending = _pending_unregistered_red(config, state, task)
         if pending is not None:
@@ -604,13 +617,25 @@ def run_red_phase(
                 )
                 if str(parsed_pending.path) != str(expected_path):
                     parsed_pending = None
-                elif (
-                    _scoped_fix_command(
-                        config.lint_fix_command,
-                        [str(expected_path)],
-                        Path(config.project_root),
+                elif not (
+                    (
+                        lint_repairable
+                        and _scoped_fix_command(
+                            config.lint_fix_command,
+                            [str(expected_path)],
+                            Path(config.project_root),
+                        )
+                        is not None
                     )
-                    is None
+                    or (
+                        format_repairable
+                        and _scoped_fix_command(
+                            config.format_command,
+                            [str(expected_path)],
+                            Path(config.project_root),
+                        )
+                        is not None
+                    )
                 ):
                     # A fix invocation that cannot be narrowed never runs, so
                     # no repair path exists — same fall-through as above.
@@ -1345,14 +1370,15 @@ def _format_claimed(
 
     before: set | None = None
     if fix_command is not None:
-        before, status_error = _tree_status(config)
-        if status_error:
+        snapshot, status_error = _tree_status(config)
+        if status_error or snapshot is None:
             return (
                 f"{status_error}; refusing to run the declared formatter without a "
                 "tree snapshot to judge its footprint against",
                 None,
                 True,
             )
+        before = snapshot
         try:
             fix_result = subprocess.run(
                 fix_command,
@@ -1366,10 +1392,22 @@ def _format_claimed(
                 path=str(selector.path),
                 returncode=fix_result.returncode,
             )
+            if fix_result.returncode != 0:
+                # A formatter that did not run (127, a usage error) has said
+                # nothing about the bytes: "we could not look" earns a retry,
+                # not a verdict about the work (#245). Roll back whatever it
+                # may have half-written.
+                _rollback_fix(config, snapshot)
+                output = _tail(f"{fix_result.stdout}\n{fix_result.stderr}")
+                return (
+                    f"the declared formatter (commands.format) exited {fix_result.returncode} "
+                    f"instead of formatting the claimed file:\n{output}",
+                    None,
+                    True,
+                )
             result = _check()
         except Exception:
-            if before is not None:
-                _rollback_fix(config, before)
+            _rollback_fix(config, snapshot)
             raise
         if result.returncode == 0:
             return None, before, False
@@ -1437,7 +1475,8 @@ def _format_claimed(
     else:
         advice = (
             "declare commands.format to let the RED pass repair it — the red commit "
-            "stays at HEAD and is adopted, not re-authored, on the next run (BEH-28)"
+            "stays at HEAD and, once a formatter is declared, is adopted and repaired "
+            "on the next run instead of being re-authored (BEH-28)"
         )
     return (
         "the file about to be frozen fails the declared format check "

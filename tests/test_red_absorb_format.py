@@ -87,6 +87,11 @@ import sys
 sys.exit(2)
 """
 
+_FAILING_FORMAT_FIX = """
+import sys
+sys.exit(127)
+"""
+
 # A wrapper that takes no file argument (`make fmt-check`): any appended path
 # is a usage error (exit 2); without one it judges the tree.
 _NO_PATH_FORMAT_CHECK = """
@@ -132,6 +137,7 @@ class _Scripts:
         self.broken_format_check = self._command(
             "broken_format_check.py", _BROKEN_FORMAT_CHECK, self.format_check_marker
         )
+        self.failing_format_fix = self._command("failing_format_fix.py", _FAILING_FORMAT_FIX)
         self.no_path_format_check = self._command(
             "no_path_format_check.py", _NO_PATH_FORMAT_CHECK, self.format_check_marker
         )
@@ -467,7 +473,7 @@ class TestTheRefusedResidueOnTheNextRun:
             first = run_red_phase(_task(), cfg, state)
         assert first.outcome is RedOutcome.UNVERIFIABLE
         assert "commands.format" in first.detail
-        assert "adopted" in first.detail
+        assert "once a formatter is declared" in first.detail
         assert _git(root, "log", "-1", "--format=%s").stdout.startswith("TASK-001: red for")
 
         with ExecutorState(cfg) as state:
@@ -504,6 +510,61 @@ class TestTheRefusedResidueOnTheNextRun:
         assert calls == ["red"], "a repairable residue should not cost a second authoring call"
         assert second.outcome is RedOutcome.EXPECTED_FAIL, second.detail
         assert "DRIFT" not in _committed(root, second.checkpoint.commit_sha, self._evidential(cfg))
+
+    def test_the_cure_works_with_no_linter_declared_at_all(self, tmp_path_factory, monkeypatch):
+        """The configuration the refusal actually arises in: `format_check`
+        declared, nothing else. Adoption used to key on lint alone, so the
+        promised repair would have cost a paid authoring call and then wedged
+        on #252 D (review of PR #518, round 4)."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(root, format_check_command=scripts.format_check)
+        calls: list = []
+        _agent_writing(monkeypatch, calls, _RED_WITH_DRIFT, path=self._evidential(cfg))
+        with ExecutorState(cfg) as state:
+            assert run_red_phase(_task(), cfg, state).outcome is RedOutcome.UNVERIFIABLE
+
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.format_check,
+            format_command=scripts.format_fix,
+            format_command_declared=True,
+        )
+        with ExecutorState(cfg) as state:
+            second = run_red_phase(_task(), cfg, state)
+        assert calls == ["red"], "the residue must be adopted, not re-authored"
+        assert second.outcome is RedOutcome.EXPECTED_FAIL, second.detail
+        assert "DRIFT" not in _committed(root, second.checkpoint.commit_sha, self._evidential(cfg))
+        count = _git(root, "rev-list", "--count", "main").stdout.strip()
+        assert count == "2", "one candidate commit, amended — no chain"
+
+
+class TestAFormatterThatDoesNotRun:
+    def test_a_non_zero_exit_is_an_instrument_error_not_a_verdict(
+        self, tmp_path_factory, monkeypatch
+    ):
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(
+            root,
+            format_check_command=scripts.format_check,
+            format_command=scripts.failing_format_fix,
+            format_command_declared=True,
+        )
+        _agent_writing(monkeypatch, [], _RED_WITH_DRIFT)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+            claims = state.active_claims(resolve_namespace(cfg))
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.instrument_error is True
+        assert result.checkpoint is None
+        assert claims == []
+        assert "exited 127" in result.detail
+        assert "drift remains" not in result.detail
+        # The authored bytes are untouched: nothing was half-formatted.
+        assert "DRIFT" in (root / "tests/test_x.py").read_text()
 
 
 class TestTheCheckerItselfBreaking:
