@@ -780,6 +780,62 @@ tasks-артефакта и семь раундов подряд честно н
       подкаталога совпадает байт в байт. Доставлено PR #476 (human merge:
       трогает `.github/`).
 
+**Триаж входящих 2026-09-14** — пять inbox-issue без пункта и без ответа.
+Каждое сверено с кодом на master `07039d8`: #335 закрыт как выполненный
+(режим `verify_first` для уже реализованного поведения + `**TDD-waiver:**`
+из #429 закрывают обе формы запроса без правки state руками); четыре ниже
+приняты под запрошенными slug. Лейбл `inbox` — запрос, не план: до этого
+пункта ни один из них планом не был.
+
+- [ ] **red-absorb-format** (spec-runner#507, from devtools) @owner:github:andrei-shtanakov @id:red-absorb-format
+      Подтверждено по коду: `tdd._absorb_lint_fix` гоняет только
+      `commands.lint_fix`, форматтер — нет; post-done с #487 (#351) гоняет
+      `commands.format_check`; green-фаза red-файл трогать не вправе (claim).
+      Red-файл со строкой длиннее 100 символов ⇒ каждая green-попытка
+      проигрывает format-check по построению — живой прогон сжёг $12.99 на
+      трёх попытках. Форма фикса: после `lint_fix` гонять объявленный
+      форматтер на evidential-файле, чтобы red-коммит уже проходил
+      format-check. Регрессия: red с длинной строкой + объявленный
+      `format_check` ⇒ задача доходит до review, а не до трёх LINT_FAILURE.
+
+- [ ] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override
+      `SPEC_RUNNER_BUDGET_USD` / `SPEC_RUNNER_TASK_BUDGET_USD` перекрывают
+      конфиг (CLI-флаг > env > файл > дефолт), действующий кап и его источник
+      печатаются на старте. Ничего из этого нет: в `src/` env-переменных
+      бюджета не существует. **Дефолт — решение владельца, не часть пункта:**
+      (а) кап $30 вместо unlimited — fail-closed, breaking для конфигов без
+      бюджета; (б) unlimited остаётся, $30 — рекомендация в docs/шаблоне.
+      Смежное: единица бюджета —
+      `docs/plans/2026-09-01-token-accounting-proposals.md`.
+
+- [ ] **repo-local-stage-profiles** (spec-runner#338, from devtools) @owner:github:andrei-shtanakov @id:repo-local-stage-profiles
+      `load_profile` читает только bundled `profiles/*.yaml`, `stage_path`
+      жёстко `spec/<prefix><stage>.md`; `spec approve tasks` деривит
+      `traces_to` из вшитого lite и дописывает несуществующий `design`.
+      Нужно нативное плечо: профили из репо (`spec/profiles/*.yaml` или ключ
+      конфига) и/или переопределение upstream/пути стадии. Признак «сделано»:
+      в репо с профилем tasks←behaviour-spec approve пишет
+      `traces_to: [behaviour-spec]` и пинует `upstream_hashes` на этот файл
+      без пост-обработки. Дизайн-объём: трогает `spec.py`, `prompt.py`,
+      `validate.py` — все три читают стадии из профиля (C1).
+
+- [ ] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard
+      Минимум из запроса частично есть: `validate` сообщает о несуществующем
+      файле в группе `verify_first` (`validate.py:745`) — но как
+      **предупреждение**, а не отказ: рабочее дерево ≠ коммит, который
+      проиграет живой прогон. Остаток: baseline-evidence — цель существует
+      **и** несёт заявленные сценарии (метки BEH/traces в файле против
+      `delivers` задачи), иначе отказ на валидации с именем сценария, а не
+      сожжённый прогон. Боевой случай: 11 из 14 сценариев семи verify-задач
+      не были покрыты ничем, валидация прошла.
+
+- [ ] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver
+      Найдено при закрытии #335: `**Mode:** verify_first` и `**TDD-waiver:**`
+      не описаны ни в `spec/FORMAT.md`, ни в README — только в
+      `docs/architecture.md` / `docs/state-schema.md`. FORMAT.md теперь
+      часть base-контекста ревью (#474), и ревьюер судит по нему; поле,
+      которого там нет, для него не существует.
+
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
 Три источника: пилот **disputatio** (боевые прогоны 08-09/08-10, 26 задач),
