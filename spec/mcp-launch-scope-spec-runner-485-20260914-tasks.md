@@ -155,7 +155,7 @@ Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposit
 **Traces to:** [FR-07]
 
 ### TASK-004: Child публикует ready; E2E scope, effective config, handshake и стоп на живом child; soak; документация
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-08, BEH-09, BEH-11, BEH-12, BEH-15, BEH-16, BEH-17, BEH-19, BEH-24, BEH-26, BEH-27 (DT-04, группа core).
 Source: workstreams/mcp-launch-scope-spec-runner-485-20260914/spec/30-decomposition.md#DT-04
