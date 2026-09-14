@@ -1457,6 +1457,16 @@ def _format_claimed(
             detail=drift,
         )
         return None, before, False
+    if format_check_instrument_error(gate.returncode):
+        # The gate itself broke (#351 contract: only 1 is measured drift).
+        # Post-done would call this an instrument failure; so does this site.
+        output = _tail(f"{gate.stdout}\n{gate.stderr}")
+        return (
+            f"format check infrastructure error (exit {gate.returncode}) on the tree "
+            f"while judging the claimed file's drift:\n{output}",
+            before,
+            True,
+        )
     if before is not None:
         return (
             "the declared formatter (commands.format) ran on the claimed file and "

@@ -87,6 +87,19 @@ import sys
 sys.exit(2)
 """
 
+# Judges an explicit file honestly but crashes tree-wide (a parse error in
+# some unrelated file, say): exit 2 is outside the #351 contract.
+_TREEWIDE_CRASHING_CHECK = """
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text("ran\\n")
+if len(sys.argv) == 2:
+    sys.exit(2)
+bad = any("DRIFT" in Path(p).read_text() for p in sys.argv[2:])
+sys.exit(1 if bad else 0)
+"""
+
 _FAILING_FORMAT_FIX = """
 import sys
 sys.exit(127)
@@ -138,6 +151,9 @@ class _Scripts:
             "broken_format_check.py", _BROKEN_FORMAT_CHECK, self.format_check_marker
         )
         self.failing_format_fix = self._command("failing_format_fix.py", _FAILING_FORMAT_FIX)
+        self.treewide_crashing_check = self._command(
+            "treewide_crashing_check.py", _TREEWIDE_CRASHING_CHECK, self.format_check_marker
+        )
         self.no_path_format_check = self._command(
             "no_path_format_check.py", _NO_PATH_FORMAT_CHECK, self.format_check_marker
         )
@@ -593,6 +609,26 @@ class TestAFormatterThatDoesNotRun:
 
 
 class TestTheCheckerItselfBreaking:
+    def test_a_gate_that_crashes_tree_wide_on_the_refusal_path_is_an_instrument_error(
+        self, tmp_path_factory, monkeypatch
+    ):
+        """Narrowed: measured drift. Tree-wide (run to decide whether the gate
+        would block): exit 2. That is the gate breaking, not a verdict about
+        the red — and not a reason to tell the operator to declare a formatter."""
+        root = _repo(tmp_path_factory.mktemp("proj"))
+        scripts = _Scripts(tmp_path_factory.mktemp("scripts"))
+        cfg = _cfg(root, format_check_command=scripts.treewide_crashing_check)
+        _agent_writing(monkeypatch, [], _RED_WITH_DRIFT)
+
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.instrument_error is True
+        assert result.checkpoint is None
+        assert "declare commands.format" not in result.detail
+        assert "exit 2" in result.detail
+
     def test_an_exit_outside_the_contract_is_an_instrument_error(
         self, tmp_path_factory, monkeypatch
     ):
