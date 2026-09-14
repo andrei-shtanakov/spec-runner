@@ -1,17 +1,18 @@
 ---
-spec_stage: tasks
-status: draft
-owner_role: stream-owner
-version: 1
-generated_by: fleet-agent
-generated_at: "2026-09-14T11:23:20+04:00"
-source_prompt_version: ""
-validation: ""
-approved_by: ""
 traces_to:
 - decomposition
 upstream_hashes:
   decomposition: 8c3f26c25a1a8c6bac39ee838e86920c9df5d85c
+spec_stage: tasks
+status: approved
+version: 2
+generated_by: fleet-agent
+generated_at: '2026-09-14T11:23:20+04:00'
+source_prompt_version: ''
+validation: pass
+approved_by: andrei-shtanakov
+approved_at: '2026-09-14T07:33:04Z'
+owner_role: stream-owner
 ---
 
 ## Milestone 1: MCP launch scope (spec-runner#485)
