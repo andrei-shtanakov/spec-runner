@@ -28,14 +28,20 @@ class TestDocsAndChangelogAnnounceVerifyFirstAndItsBoundaries:
         architecture = (REPO_ROOT / "docs" / "architecture.md").read_text().lower()
         changelog_full = (REPO_ROOT / "CHANGELOG.md").read_text().lower()
 
-        # Scope the CHANGELOG checks to the `[Unreleased]` section: this task
-        # only ever writes there, and several phrases used below (e.g.
-        # "invalidat...") already exist verbatim in older, released entries
-        # (#141's `POLICY_KEYS` note). Checking the whole file would let a
-        # reverted/never-written entry hide behind that unrelated history.
-        unreleased_start = changelog_full.index("## [unreleased]")
-        next_heading = changelog_full.index("\n## [", unreleased_start + 1)
-        changelog = changelog_full[unreleased_start:next_heading]
+        # Scope the CHANGELOG checks to the ONE section that holds this task's
+        # own entry: several phrases used below (e.g. "invalidat...") already
+        # exist verbatim in older, released entries (#141's `POLICY_KEYS`
+        # note), and checking the whole file would let a reverted/never-
+        # written entry hide behind that unrelated history. The section is
+        # found by the entry's own anchor rather than assumed to be
+        # `[Unreleased]`: the task wrote there, but the release cut (v2.36.0)
+        # moves the entry into a dated section — the facts stay documented,
+        # the heading above them changes.
+        anchor = changelog_full.find("(#367). a task declares")
+        assert anchor != -1, "CHANGELOG.md: this task's own #367 entry is gone"
+        section_start = changelog_full.rfind("\n## [", 0, anchor)
+        next_heading = changelog_full.index("\n## [", anchor)
+        changelog = changelog_full[section_start:next_heading]
 
         missing: list[str] = []
 
