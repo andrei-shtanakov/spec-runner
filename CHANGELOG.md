@@ -10,6 +10,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [2.36.0] - 2026-09-15
+
+**Minor, not patch and not major.** Every contract surface moved additively:
+`--json-result` gains two optional keys (`verify_outcome`, `verify_composition`),
+the state DB gains two tables (`verify_evidence`, `waivers_applied`) and one
+widened enum value (`error_stage: verify`), and a config gains keys
+(`commands.format`, `**Mode:** verify_first`, `**TDD-waiver:**`). No existing key,
+column or exit code changes meaning, so a consumer holding the v2.35.0 schema
+still reads every row and every result this version writes. Not patch because
+the vocabulary a consumer pins on grew — a new execution mode, a new table and
+new result keys are promises, not fixes.
+
 ### Added
 
 - **MCP server is bound to a launch scope, not the caller's CWD** (#485). The
@@ -272,7 +284,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
   follows the completion gate: dormant without `format_check` or with
   `run_lint_on_done: false`; with `format_check` declared but no formatter, a
   drifting red is refused before it freezes, naming `commands.format`, when
-  the gate is blocking — and only warned about when it is not.
+  the gate is blocking — and only warned about when it is not. Refused only
+  when the drift is attributed to the claimed file and the tree-wide gate, run
+  as post-done runs it, really fails (a formatter that excludes the file only
+  warns); an out-of-contract exit from the narrowed check — a wrapper without
+  file arguments, a crashed tool, a red the formatter cannot parse — makes the
+  step stand aside for the replay, exactly as before. BEH-28 adoption counts a
+  declared formatter as a repair path, so a format-refused residue is adopted
+  and repaired once `commands.format` is declared, without a second authoring
+  call.
 
 - **The self-hosted post-done hook now catches formatting drift before push**
   (#351). The tracked config declares a separate read-only
@@ -3597,7 +3617,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...HEAD
+[2.36.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...v2.36.0
 [2.35.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...v2.35.0
 [2.34.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...v2.34.0
 [2.33.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.1...v2.33.2
