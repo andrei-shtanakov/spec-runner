@@ -85,11 +85,17 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** в каждом из тех же каналов `pipeline_id == <pid>` хранится
   отдельным полем; ни один канал не подставляет `pipeline_id` на место
   `run_id` и наоборот.
-- **And** без `ORCHESTRA_PIPELINE_ID` каналы несут только `run_id`, а поле
-  `pipeline_id` либо отсутствует, либо пусто — но `run_id` при этом тот же
-  во всех каналах.
-- **And** prompt-артефакт по-прежнему начинается блоком «prompt как отправлен»
-  (#282); `run_id` и `call_id` добавлены в заголовок, а не в тело prompt-а.
+- **And** без `ORCHESTRA_PIPELINE_ID` `run_id` по-прежнему один во всех
+  каналах, а `pipeline_id` — если он присутствует хотя бы в одном канале —
+  присутствует одним и тем же значением в каждом канале, который его несёт
+  (сегодня это ULID, который чеканит `obs.init_logging`, #482), и это
+  значение никогда не равно `run_id`; канал, где `pipeline_id` нет, несёт
+  только `run_id`, а не `run_id` под именем `pipeline_id`.
+- **And** prompt-артефакт несёт `run_id` и `call_id` в заголовке файла
+  (сегодня — первая строка `=== <SLUG> PROMPT ===`, `prompts_log.log_prompt`),
+  а тело между заголовком и терминальной секцией остаётся «prompt как
+  отправлен» (#282): для prompt-а в пределах `bound` оно байт в байт равно
+  prompt-у, переданному двойнику `Popen`; в тело ни один id не вписан.
 
 #### BEH-02: Каждый invocation чеканит новый `run_id`, `watch` — один на весь цикл
 `traces: [FR-01]`
@@ -153,9 +159,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   журнал событие `spawn(argv)` и отдающий ответ fake CLI; конфигурация,
   доводящая прогон до каждого сайта из §3 требований.
 - **When** по очереди прогнаны сайты: RED authoring, RED agent round после
-  lint-findings (в §3 требований — «BEH-07 agent round» гейта RED, #220; не
-  сценарий этого документа), GREEN, review, `review:<role>` (параллельный и
-  последовательный режим), `plan --full` (три стадии), `plan --gated`,
+  lint-findings (#220; в §3 и в приёмке FR-02 требований этот сайт носит
+  заимствованный ярлык — см. «Замечания к upstream»), GREEN, review,
+  `review:<role>`
+  (параллельный и последовательный режим), `plan --full` (три стадии),
+  `plan --gated`,
   `review-pr` verify, `review-pr` fix, `doctor`.
 - **Then** для каждого `spawn` в журнале непосредственно раньше есть
   `call_start` с ack, и у пары один `call_id`; число `spawn` равно числу
@@ -393,8 +401,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 
 - **checked_by**: `status: planned` `kind: e2e` `owner: qa` `target: tests/test_restore_drill.py`
 - **Given** прогон из BEH-16, в котором на момент checkpoint-а существовали
-  `spec/.lock` с PID живого процесса, `.executor-stop`, `.<prefix>spec.lock`,
-  worktree `spec-runner-red-*` и `.executor-progress.txt`.
+  executor lock `spec/.executor-state.lock` (`config.state_file` с суффиксом
+  `.lock`, `_acquire_run_lock`; с `--spec-prefix` —
+  `.executor-<prefix>state.lock`) с PID живого процесса, `.executor-stop`,
+  `.<prefix>spec.lock`, worktree `spec-runner-red-*` и
+  `.executor-progress.txt`.
 - **When** выполнен restore в новый каталог.
 - **Then** в новом каталоге нет ни одного из перечисленных файлов и
   worktrees; `git worktree list` показывает только основной.
@@ -520,6 +531,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   публикацию.
 - **And** число call records равно числу `spawn` двойника `Popen` во всей
   матрице.
+- **And** сайты RED authoring и RED agent round (#220) в матрицу FR-06 не
+  входят, но не остаются без record: их call-start и `call_id` в
+  `agent_calls` предъявляет BEH-05, исход каждого вызова — BEH-08 и BEH-10
+  (ровно один call-result на `call_id`), а результат RED как факт задачи —
+  строки `red_checkpoints` в экспорте BEH-23.
 
 #### BEH-23: Terminal attempt экспортирует свои строки JSONL, и только свои
 `traces: [FR-06]`
@@ -657,6 +673,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   узнаёт, — и за ним closure с kind из той же таблицы соответствия
   (BEH-32): двойник store получает пару run-start + closure с одним
   `run_id`; одиночный run-start без closure для этого пути — красный тест.
+  Три гарда старта — «lock занят» (`_acquire_run_lock`), dirty-spec
+  (`_enforce_clean_spec`) и tracked-state DB (#273) — это отказ правила, а
+  не инструмента: kind `policy_refusal`, reason называет гард, exit code 1 —
+  как у них сегодня (все три завершаются `sys.exit(1)`); `no_ready` и
+  `validation_failure` за ними не числятся.
 - **And** closure несёт `run_id`, `pipeline_id`, подкоманду, число open
   calls, `degraded`/spool status, timestamps start/end,
   `last_call_ids`/`attempt_ids`.
@@ -701,11 +722,14 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_closure_every_exit.py`
 - **Given** типизированные отказы `Refusal(kind="policy")`,
   `Refusal(kind="instrument")`, `Refusal(kind="budget")` (#230), graceful
-  SIGINT/SIGTERM (`_shutdown_requested` в `executor.py`) и stop-marker.
+  SIGINT/SIGTERM (`_shutdown_requested` в `executor.py`), stop-marker и три
+  гарда старта до attempt — «lock занят», dirty-spec, tracked-state DB
+  (BEH-29).
 - **When** каждый прерывает прогон.
 - **Then** closure kind — `policy_refusal`, `infrastructure_error`,
-  `budget_refusal`, `operator_stop`, `operator_stop` соответственно;
-  `Refusal.with_note` сохраняет kind и, значит, closure kind.
+  `budget_refusal`, `operator_stop`, `operator_stop` соответственно, а у
+  трёх гардов старта — `policy_refusal`; `Refusal.with_note` сохраняет kind
+  и, значит, closure kind.
 - **And** отображение задано одной таблицей соответствия в одном месте
   (статический тест: ни один сайт остановки не выбирает kind closure сам);
   словарь kinds пинован схемой, неизвестный kind не сериализуется.
@@ -855,6 +879,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **Then** все три отказывают, называя файл и ожидаемый/фактический digest;
   restore — до записи в каталог; `run` — до `Popen` и до
   `claims.check_claims` (двойники подтверждают 0 вызовов).
+- **And** exit code — 2 у всех трёх: недоказанная целостность — вопрос без
+  ответа, а не «нет» (как BEH-20 (2)/(7) и BEH-34); у `run` это
+  `Refusal(kind="instrument")` с closure `infrastructure_error`, у
+  `restore --json` и `evidence --json` — `reason` с именем файла и обоими
+  digest-ами.
 - **And** изменённый manifest отвергнут по digest-у верхнего уровня, даже
   если все перечисленные в нём digests сходятся.
 - **And** авто-«лечения» нет (OUT-09): ни один вариант не заканчивается
@@ -911,7 +940,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   покрыты `spec/.gitignore` (CON-04).
 - **And** единственные новые tracked-изменения — те, что делает сам harness
   сегодня (status flips `tasks.md`, коммиты задач) плюс `tdd_namespace`,
-  записанный restore-ом (BEH-20).
+  записанный restore-ом (BEH-20). Сам `spec/.gitignore` — harness-owned
+  файл (#62/#96): `git_ops.ensure_runtime_gitignore` дописывает его перед
+  каждой задачей, auto-commit его исключает, и в проекте, где его не
+  трекают, он законно стоит в `porcelain` как untracked — это не находка
+  сценария; находка — любой файл под `.executor-*` в том же выводе.
 - **And** `git_ops.tracked_state_paths` (#273) не находит tracked
   `.executor-*` файлов ни в одном проекте после прогона.
 
@@ -1100,6 +1133,28 @@ retention (BEH-42), 100 секретов (BEH-27), 20/10 прогонов drill-
 хранилище, IAM, KMS, retention-service (OUT-03); копии pushed-объектов,
 virtualenv, кэшей, образов ОС (OUT-04, OUT-05); изменение правил claims /
 TDD / waiver / remedy / budget / review (OUT-06); миграция legacy-прогонов
-(OUT-07); межпроектные отчёты и биллинг (OUT-08); авто-лечение повреждённого
-артефакта (OUT-09); обход retention и legal hold (OUT-10); правка соседних
-репозиториев — только issue/handoff (BEH-45).
+(OUT-07 брифа, в требованиях — CON-07); межпроектные отчёты и биллинг
+(OUT-08); авто-лечение повреждённого артефакта (OUT-09); обход retention и
+legal hold (OUT-10); правка соседних репозиториев — только issue/handoff
+(BEH-45).
+
+### Замечания к upstream
+
+Правка требований — вне прав этого документа (гейт doc-scope, §6 SPEC-002);
+ниже — что стоит поправить в узле требований бандла (10-requirements.md)
+при его следующей редакции, чтобы бандл читался без оговорок.
+
+- §3 «Платный subprocess» (строка перечня сайтов) и критерий приёмки
+  «Матрица сайтов» в §4 FR-02 называют сайт RED agent round (#220) ярлыком
+  в форме BEH-id с номером 07 («… agent round» / «RED, …, GREEN»). Ярлык
+  совпадает по форме с id сценариев этого документа
+  и ничем не связан с его сценарием под тем же номером (budget-отказ до
+  call-start); для читателя матрицы и для инструмента, который ищет BEH-id
+  по бандлу, это коллизия. Предложение: «RED agent round (#220)», чтобы
+  BEH-id были уникальны во всём бандле. Здесь ярлык не воспроизводится
+  (BEH-05, BEH-22).
+- OUT-07 определён в брифе бандла (00-discovery/brief.md), а в требованиях
+  присутствует только через оговорку §7 «OUT-01…OUT-10 брифа без
+  изменений»; остальные OUT-id, на которые ссылается этот документ, в
+  требованиях проговорены явно. Здесь OUT-07 цитируется вместе с CON-07,
+  который требования формулируют сами.
