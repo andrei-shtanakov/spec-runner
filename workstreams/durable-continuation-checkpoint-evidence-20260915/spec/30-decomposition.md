@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 74d920a1b5e0534730c6a383382592317e6d9dfb
-  acceptance: e4a79d0dd30ca6d98a34cbba76c61ac6d1220448
+  design: 44ef5b4a2a1b244cb37fb587c2b4fb0039ee2717
+  acceptance: 4896b4d3e59aa7dac7fd29aa6949dc6f18a091cc
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -15,7 +15,7 @@ upstream_hashes:
 Стадия `decomposition` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Режет доставку
 на задачи и объявляет граф их зависимостей поверх design (`20-design.md`, blob
-`74d920a1…`) и acceptance (`25-acceptance.md`, blob `e4a79d0d…`). Резолюции
+`44ef5b4a…`) и acceptance (`25-acceptance.md`, blob `4896b4d3…`). Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
 (локальный snapshot синхронно, один упорядоченный publisher, drain перед
@@ -29,7 +29,7 @@ targeted `get` в store; `restore` читает только store) — здес
 
 **Нарезка продиктована владением тестовыми файлами.** Единственный владелец на
 файл считается исключительно по `checked_by` сценариев (через `scenarios`), и
-behaviour-спека раздала 45 сценариев по 23 целям: 21 тестовый файл (из них
+behaviour-спека раздала 46 сценариев по 23 целям: 21 тестовый файл (из них
 четыре существующих — `tests/test_config.py`, `tests/test_state.py`,
 `tests/test_cli_info.py`, `tests/test_harness_guards.py`) и две цели `kind:
 manual` (`scripts/bench_durability.py`, `docs/architecture.md`). Два сценария
@@ -57,7 +57,7 @@ checkpoint-а (BEH-13 наблюдает, что `evidence` ничего не п
 где носитель существует в дереве и поведение уже доставлено задачами из
 `delivered_by`; мост исполняет такую задачу как verify_first — живой прогон
 объявленной группы стоит первым действием, и зелёное означает, что красный не
-покупается. В этом графе таких задач **нет**: ни один сценарий BEH-01…BEH-45
+покупается. В этом графе таких задач **нет**: ни один сценарий BEH-01…BEH-46
 сегодня не утверждён никаким файлом дерева без правок — четыре существующих
 файла-носителя получают новые утверждения (миграция столбцов, `run_id` в
 `status`, `durability:` в loader-е, пояс на `paid_call._spawn`), и правящая их
@@ -569,7 +569,7 @@ DB и в клоне на другом пути — те же три исхода
 `call_id` и provenance, имена приватных функций.
 
 #### DT-10: Closure на каждом выходе: гарды старта и сигналы в одной таблице, drain перед closure, отказные режимы, `kill -9` · type: implement · owner: dev
-scenarios: [BEH-04, BEH-29, BEH-30, BEH-31, BEH-32]
+scenarios: [BEH-04, BEH-29, BEH-30, BEH-31, BEH-32, BEH-46]
 depends_on: [DT-06]
 parallel_group: closure
 
@@ -613,7 +613,45 @@ acknowledged» и `last_checkpoint_id` предыдущего acknowledged, exit
 неизменна; closure по времени позже последнего checkpoint-ack (журнал
 двойника). Closure несёт `run_id`, `pipeline_id`, подкоманду, число open
 calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/
-`attempt_ids`. Read-only команды (`status`, `costs`, `validate`, `report`,
+`attempt_ids`. Правило вывода kind (design § 6.3) — предмет этой же задачи и живёт в одной
+функции `closure.derive(noted, outcome)`: сообщённая причина берётся из
+`CLOSURE_KINDS`, несообщённая выводится из исхода handler-а — необработанное
+исключение → `infrastructure_error`, дошедший `Refusal` → по `RefusalKind`,
+код ≥ 2 → `infrastructure_error`, код 1 → `policy_refusal`, код 0 с
+оставшимся open call или terminal attempt `failed`/`blocked` →
+`policy_refusal`, код 0 без единого платного вызова и attempt-а → `no_ready`,
+и только код 0 при выполненной работе → `completed`. Повторный `note_stop`
+первую причину не затирает. Без правила девять платящих подкоманд из десяти
+остались бы либо с дефолтным `completed`, либо без closure вовсе.
+
+**Сайты выхода девяти платящих подкоманд вне `run` — предмет этой задачи, весь
+инвентарь design § 6.3.** `note_stop` ставится в `cmd_retry` (`cli.py:1471`,
+`:1475`, `:1476`, `:1484`, `:1525`, `:1528`), `cmd_watch` (`:1547`, `:1551`,
+`:1552`, `:1563`, `:1583`, `:1585`, `:1606`, `:1616`, `:1623`), `cmd_doctor`
+(`:1679`, по коду `run_doctor` `doctor.py:389`/`:416`/`:418`/`:419`),
+`cmd_plan` (`cli_plan.py:356`, `:360`, `:362`, `:364`, `:370`, `:400`, `:506`,
+`:518`, `:589`, `:602`, `:603`, `:625`, `:675`, `:681`, `:710`, `:815`,
+`:879`, `:884`, `:888`, `:891`, `:894`), `cmd_review_pr` (`review_pr.py:1338`,
+`:1342`, `:1390`, `:1429`, `:1453`), `remedy.cmd_tdd` и его половины
+(`remedy.py:805`, `:822`, `:825`, `:857`, `:861`, `:867`, `:869`, `:895`,
+`:902`, `:909`, `_repair_exit` `:921`/`:926`), `cmd_budget`
+(`budget_cmd.py:272`, `:277`, `:307`, `:334`) и `except SpecMetaError`
+вокруг dispatch (`cli.py:2610-2611`). Сайты `restore` — DT-06 по коду, но
+их reason'ы (`restore_instrument`, `needs_human`, `completed`) названы здесь,
+потому что словарь один. Логика самих команд не меняется: добавляется
+только сообщение причины. `CLOSURE_KINDS` растёт аддитивно двенадцатью
+closure-only reason'ами (`usage_error`, `stage_generation_failed`,
+`provider_error`, `provider_timeout`, `probe_broken`, `review_fail_closed`,
+`needs_human`, `remedy_refused`, `red_not_reestablished`,
+`authorization_refused`, `restore_instrument`, `spec_meta_error`) плюс
+чеканкой правила (`unhandled_exception`, `refusal_<k>`,
+`unreported_task_not_done`, `unreported_no_work`, семейство
+`unreported_exit_<n>`); `RUN_STOP_REASONS` от этого **не** растёт — ни одна из
+девяти не вызывает `set_meta("last_run_stop_reason", …)`, и `status` их
+причин не показывает. Состав словаря идёт в
+`schemas/run-closure.schema.json` и CHANGELOG тем же коммитом, что схему.
+
+Read-only команды (`status`, `costs`, `validate`, `report`,
 `evidence`) получают `run_id` для логов, но run-start/checkpoint/closure не
 пишут; `PAYING_SUBCOMMANDS` (`run`, `retry`, `watch`, `plan`, `review-pr`,
 `doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
@@ -636,7 +674,14 @@ BEH-29 — ровно одна запись в двойнике store с kind и
 `last_run_stop_reason` там, где stop-reason персистится, включая четыре гарда
 старта, где attempt не создан и `status` причины не показывает (там reason
 называет гард); closure kind `completed` на no-ready, паузе→`q`, `--dry-run`
-или task-not-found — красный тест;
+или task-not-found — красный тест; на каждом исходе BEH-46 — closure с
+названным kind, и четыре конфигурации, где код процесса лжёт об исходе
+(`retry` с `blocked` и `watch` с `max_consecutive_failures` — код 0, `plan`
+с проглоченным таймаутом — код 0, `doctor` с отказом оператора — код 2),
+предъявляются поимённо: `completed` на любой из них и `infrastructure_error`
+у `doctor` — красный тест; двойник handler-а без `note_stop` на каждом из
+семи исходов правила вывода — kind выведен, run-start без closure не
+остаётся;
 одиночный run-start без closure для «lock занят» — красный тест; exit code
 closure равен фактическому (1 для `policy`/`budget`, 2 для `instrument`,
 #230). Не утверждать интервал/порядок drain publisher-а сверх «closure позже
@@ -803,13 +848,13 @@ design: не утверждать наличие строк README/CHANGELOG/`do
 
 ## Инварианты графа
 
-**Покрытие сценариев.** Каждый сценарий BEH-01…BEH-45 назван ровно одной
+**Покрытие сценариев.** Каждый сценарий BEH-01…BEH-46 назван ровно одной
 задачей; пропусков и дублей нет. Распределение: DT-01 → 28; DT-02 → 03, 05,
 06, 07, 24, 26, 38, 44; DT-03 → 12; DT-04 → 36, 37; DT-05 → 13, 14; DT-06 →
 16, 17, 18, 19, 20, 21, 41, 43; DT-07 → 01, 02; DT-08 → 15, 33, 34, 35;
-DT-09 → 09, 10, 11; DT-10 → 04, 29, 30, 31, 32; DT-11 → 40; DT-12 → 42;
+DT-09 → 09, 10, 11; DT-10 → 04, 29, 30, 31, 32, 46; DT-11 → 40; DT-12 → 42;
 DT-13 → 08, 22, 23, 25, 27; DT-14 → 39, 45. Итого 1 + 8 + 1 + 2 + 2 + 8 + 2 +
-4 + 3 + 5 + 1 + 1 + 5 + 2 = 45 сценариев в четырнадцати задачах.
+4 + 3 + 6 + 1 + 1 + 5 + 2 = 46 сценариев в четырнадцати задачах.
 
 **Владелец сценария — та задача, на чьей поверхности он наблюдаем.**
 `implement`-задача без `delivered_by` обязана погасить свой красный в

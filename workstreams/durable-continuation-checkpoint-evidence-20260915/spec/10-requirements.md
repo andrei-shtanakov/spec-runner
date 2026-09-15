@@ -557,7 +557,7 @@ closure трактуется как crash/unknown, никогда как пус�
   run-start и потому даёт обычную пару run-start + closure, а не одинокий
   run-start.
 - **Виды closure** (словарь пинуется схемой): `completed`, `no_ready`,
-  `validation_failure`, `budget_refusal`, `policy_refusal`,
+  `dry_run`, `validation_failure`, `budget_refusal`, `policy_refusal`,
   `session_timeout`, `idle_timeout`, `infrastructure_error`, `operator_stop`.
   Graceful SIGINT/SIGTERM (`_shutdown_requested`, `executor.py`) →
   `operator_stop`; stop-marker → `operator_stop`; `Refusal.kind` (#230)
@@ -574,13 +574,37 @@ closure трактуется как crash/unknown, никогда как пус�
   задаёт сам словарь. `idle_timeout` — orderly exit, а не разновидность
   `session_timeout`: причины остановки разные, и `status` показывает их
   раздельно.
+- **Kind closure определён и там, где причина не сообщена.** Сайты выхода
+  сообщают причину, но перечень сайтов конечен, а ветвей у десяти платящих
+  подкоманд больше, чем перечислит любой бандл, и после него их станет
+  больше. Поэтому kind выводится **правилом**, а не дефолтом: сообщённая
+  причина — по таблице соответствия; причина не сообщена — по исходу
+  handler-а (необработанное исключение, `Refusal`, exit code, наличие open
+  call или terminal attempt со статусом `failed`/`blocked`). Правило не даёт
+  `completed` ни при ненулевом коде, ни при невыполненной задаче: `completed`
+  выводится единственным сочетанием «код 0 и вся работа выполнена». Дефолт
+  `completed` при неизвестной причине и отказ сериализации, оставляющий
+  run-start без closure, запрещены оба — первый даёт пустой успех, второй
+  превращает штатный выход в неотличимый от crash.
+- **Closure-only причины в словарь `status` не кладутся.** Девять платящих
+  подкоманд вне `run` (`retry`, `watch`, `doctor`, `plan`, `review-pr`,
+  `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
+  `last_run_stop_reason` не персистят вовсе, и `status` их причин не
+  показывает. Их причины живут только в словаре closure, `RUN_STOP_REASONS`
+  от них не растёт, и требование «reason совпадает с текстом `status`» к ним
+  неприменимо по построению — проверяется, что reason называет сайт.
 - **Состав:** `run_id`, `pipeline_id`, подкоманда, kind, reason (текст
   stop-reason, как в `status`), exit code, `last_checkpoint_id`,
   `last_call_ids`/`attempt_ids`, число open calls, `degraded`/spool status,
   timestamps start/end.
 - **Пути без attempt** покрыты: `run` без ready-задач, `validate`-отказ при
   старте `run`, dirty-spec guard, tracked-state-DB guard (#273), lock
-  занят — всё это closure до создания attempt.
+  занят — всё это closure до создания attempt. Их же большинство у девяти
+  остальных платящих подкоманд: `retry` с несуществующим `--task-id`,
+  `watch` с красной pre-run validation, `doctor` при отказе оператора на
+  cost gate, `plan` с usage-ошибкой, `review-pr` на draft PR, `tdd` с
+  `RemedyError`, `budget authorize` с `AuthorizationError`, `restore` на
+  любом отказе проверок — closure есть у каждого.
 - Closure — **последняя** запись прогона: пишется после последнего
   checkpoint-ack; если ack последнего checkpoint не получен, closure несёт
   `last_checkpoint_id` предыдущего acknowledged и kind
@@ -601,6 +625,17 @@ closure трактуется как crash/unknown, никогда как пус�
   `retry`, `watch` и `run --force` (executor lock не берётся ни одной из
   трёх) → ровно один run-start и ровно одна closure; «lock занят» у обычного
   `run` → та же пара, kind `policy_refusal`, exit 1.
+- У каждой из девяти платящих подкоманд вне `run` предъявлен каждый исход
+  её инвентаря выходов → closure с kind, названным для этого исхода, и
+  `completed` не выдан ни одному исходу с невыполненной работой: `retry`,
+  чья задача осталась `blocked` (exit 0), `watch`, остановленный
+  `max_consecutive_failures` (exit 0), `doctor`, у которого оператор
+  отказался на cost gate (exit 2), и `plan`, проглотивший таймаут провайдера
+  (exit 0), — каждый даёт closure, отличную от `completed`.
+- Ветка, причину не сообщившая, предъявлена отдельно (двойник handler-а,
+  завершающийся без `note_stop` на каждом из исходов правила) → kind
+  выведен, `completed` выдан только при коде 0 и выполненной работе, и ни
+  один исход не остаётся без closure.
 - `kill -9` прогона после run-start → closure отсутствует; `evidence <run_id>`
   и `restore` классифицируют `crash/unknown`.
 - Двойник store, отказавший в ack последнего checkpoint-а → closure

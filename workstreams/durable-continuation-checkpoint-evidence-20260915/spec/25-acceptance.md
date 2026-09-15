@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 386a30741b964b27b11ce1707653a92ba7e1047a
-  behaviour-spec: 5cba9c252a6e74ccd0ea6de65fe1df9bfb0b0a25
+  requirements: 4734c31296e72fb3884728c2f0f162c01973ed17
+  behaviour-spec: 98d9f19e8f37034b6f6bb053bffbeabc12ce5474
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -16,7 +16,7 @@ upstream_hashes:
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Единственный
 источник критериев приёмки workstream-а: критерии составлены заново от
 требований (`10-requirements.md`, FR-01…FR-09, NFR-01…NFR-07) и сценариев
-поведения (`15-behaviour-spec.md`, BEH-01…BEH-45); список критериев чартера
+поведения (`15-behaviour-spec.md`, BEH-01…BEH-46); список критериев чартера
 сюда не переносится. Термины — в значении upstream'а (§3 требований):
 **`run_id`**, **`pipeline_id`**, **`call_id`**, **платный subprocess**,
 **provenance**, **policy identity**, **call-start** / **call-result** /
@@ -407,9 +407,9 @@ run-start; config с `tls: true` и managed encryption загружается.
 
 ### G. Closure на каждом штатном завершении
 
-#### AC-27: Каждый orderly exit, включая пути до attempt, оставляет ровно одну closure нужного kind из одной таблицы соответствия · verification: test
+#### AC-27: Каждый orderly exit любой платящей подкоманды оставляет ровно одну closure нужного kind из одной таблицы соответствия · verification: test
 traces: [FR-07]
-scenarios: [BEH-29, BEH-32]
+scenarios: [BEH-29, BEH-32, BEH-46]
 
 Наблюдаемый знак: для completed, `no_ready`, `task_not_found`, `dry_run`,
 `validation_failure`, governance-гейта, dirty-spec guard, tracked-state-DB
@@ -438,6 +438,26 @@ stop-marker, пауза с ответом `q`, `session_timeout` и `idle_timeou
 нет. `run --all --force` предъявляется отдельной конфигурацией: executor lock
 не берётся, run-start и closure есть, kind `completed` при всех задачах `done`
 и `operator_stop` по stop-marker.
+
+Тот же знак предъявлен у остальных девяти платящих подкоманд, и критерий
+считается выполненным только вместе с ними: `retry`, `watch`, `doctor`,
+`plan`, `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`
+и `restore` — по одному invocation на каждый исход инвентаря выходов design
+§ 6.3, у каждого ровно один run-start и ровно одна closure с названным для
+этого исхода kind и фактическим exit code. Четыре конфигурации, где код
+процесса лжёт об исходе, предъявлены прямо: `retry` с задачей `blocked` и
+`watch`, остановленный `max_consecutive_failures`, выходят с кодом 0, `plan`
+проглатывает таймаут провайдера с кодом 0, `doctor` кодирует отказ оператора
+на cost gate кодом 2 — closure `completed` на любой из четырёх и closure
+`infrastructure_error` у `doctor` на отказе оператора суть невыполненный
+критерий. Правило вывода предъявлено отдельно двойником handler-а,
+завершающимся без `note_stop` на каждом из семи исходов: kind выведен на
+всех семи, `completed` — только при коде 0 и выполненной работе, run-start
+без closure не остаётся ни на одном. Причина, сообщённая раньше, не
+затирается поздней (`review-pr` под cost guard-ом даёт `budget_refusal`, не
+`needs_human`), и ни одна из девяти не персистит `last_run_stop_reason` —
+равенство reason тексту `status` для них не требуется, требуется, чтобы
+reason называл сайт.
 
 #### AC-28: `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown · verification: test
 traces: [FR-07, FR-09]
@@ -682,7 +702,7 @@ scenarios: [BEH-19, BEH-09]
    `10-requirements.md`; новых FR/NFR здесь не вводится.
 4. **Каждый `verification: test` несёт `scenarios`** с идентификаторами только
    из `15-behaviour-spec.md`; новых BEH здесь не вводится. Обратно — каждый
-   сценарий BEH-01…BEH-45 упомянут хотя бы одним AC: BEH-01/02 → AC-01;
+   сценарий BEH-01…BEH-46 упомянут хотя бы одним AC: BEH-01/02 → AC-01;
    BEH-03 → AC-02; BEH-04 → AC-03; BEH-05 → AC-04; BEH-06 → AC-05;
    BEH-07 → AC-06; BEH-08 → AC-07; BEH-09 → AC-08, AC-44; BEH-10 → AC-09;
    BEH-11 → AC-08; BEH-12 → AC-10; BEH-13 → AC-11; BEH-14 → AC-12;
@@ -693,7 +713,8 @@ scenarios: [BEH-19, BEH-09]
    BEH-31 → AC-29; BEH-32 → AC-27; BEH-33 → AC-30; BEH-34 → AC-31;
    BEH-35 → AC-32; BEH-36 → AC-33; BEH-37 → AC-34; BEH-38 → AC-35;
    BEH-39 → AC-36; BEH-40 → AC-37; BEH-41 → AC-41, AC-42; BEH-42 → AC-38;
-   BEH-43 → AC-39; BEH-44 → AC-40; BEH-45 → AC-43. Сценарии `kind: manual`
+   BEH-43 → AC-39; BEH-44 → AC-40; BEH-45 → AC-43; BEH-46 → AC-27.
+   Сценарии `kind: manual`
    (BEH-41, BEH-45) стоят только за критериями `metric`/`manual`.
 5. **Каждый AC называет наблюдаемый знак**, а не пересказывает требование:
    значение id в канале, число вызовов `Popen` и их порядок относительно

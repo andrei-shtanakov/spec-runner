@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 386a30741b964b27b11ce1707653a92ba7e1047a
+  requirements: 4734c31296e72fb3884728c2f0f162c01973ed17
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -744,6 +744,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** closure несёт `run_id`, `pipeline_id`, подкоманду, число open
   calls, `degraded`/spool status, timestamps start/end,
   `last_call_ids`/`attempt_ids`.
+- **And** сценарий покрывает `run`; остальные девять платящих подкоманд —
+  BEH-46, и утверждение «каждый orderly exit» верно только вместе с ним:
+  `run` — одна подкоманда из десяти, а run-start пишется диспетчером всем
+  десяти.
 
 #### BEH-30: `kill -9` не оставляет closure, и читатели классифицируют прогон как crash/unknown
 `traces: [FR-07, FR-09]`
@@ -809,8 +813,67 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** отображение задано одной таблицей соответствия в одном месте
   (статический тест: ни один сайт остановки не выбирает kind closure сам);
   словарь kinds пинован схемой, неизвестный kind не сериализуется.
-- **And** exit code closure совпадает с фактическим кодом процесса (1 для
-  `policy`/`budget`, 2 для `instrument`), как задаёт #230.
+- **And** exit code closure совпадает с фактическим кодом процесса. Для
+  closure, выведенной из `Refusal`, это 1 (`policy`/`budget`) и 2
+  (`instrument`), как задаёт #230; сайты вне `Refusal` своих кодов не меняют,
+  и closure несёт их как есть — `doctor` при verdict `broken` выходит с 1 при
+  kind `infrastructure_error`, а при отказе оператора на cost gate — с 2 при
+  kind `operator_stop`. Совпадение kind с кодом не утверждается: утверждается
+  совпадение записанного кода с фактическим.
+- **And** причину сообщает сайт, но kind определён и без неё: правило вывода
+  даёт `infrastructure_error` необработанному исключению, kind по
+  `RefusalKind` — дошедшему `Refusal`, `infrastructure_error` коду ≥ 2,
+  `policy_refusal` коду 1, `policy_refusal` коду 0 при оставшемся open call
+  или terminal attempt `failed`/`blocked`, `no_ready` коду 0 без единого
+  платного вызова и attempt-а, и только коду 0 при выполненной работе —
+  `completed`. Повторный `note_stop` первую причину не затирает. Двойник
+  handler-а, завершающийся на каждом из этих исходов без `note_stop`,
+  предъявляет все семь клеток; `completed` ни на одной из первых шести —
+  красный тест.
+
+#### BEH-46: Каждая платящая подкоманда вне `run` закрывается closure своего исхода, и ни один её нулевой код не выдаёт невыполненную работу за успех
+`traces: [FR-07]`
+
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
+- **Given** девять платящих подкоманд вне `run` — `retry`, `watch`,
+  `doctor`, `plan`, `review-pr`, `tdd abandon/repair/resume/release`,
+  `budget authorize`, `restore` — и по одной конфигурации на каждый исход
+  их инвентаря выходов (design § 6.3): для `retry` — гарды старта,
+  несуществующий `--task-id`, задача `done`, задача `blocked`; для `watch` —
+  гарды старта, красная pre-run validation, stop-marker, max consecutive
+  failures, оба TUI-выхода; для `doctor` — отказ оператора на cost gate,
+  verdict `broken`, verdict `ready`; для `plan` — usage-ошибка, красная
+  `validate_generated_tasks`, ненулевой код провайдера, вывод без
+  spec-маркера, `--full` целиком, error pattern, таймаут, `KeyboardInterrupt`,
+  проглоченное исключение, обычное завершение; для `review-pr` — draft PR,
+  cost guard, остаток `uncertain`, полный успех; для `tdd` — `RemedyError`,
+  применённый remedy, повтор, repair без переустановленного red, resume с
+  разошедшимися байтами; для `budget authorize` — usage-ошибка,
+  `AuthorizationError`, записанное решение; для `restore` — instrument-отказ,
+  needs-human-отказ, успешное применение. Двойник store и двойник провайдера.
+- **When** каждая конфигурация прогнана в отдельном invocation.
+- **Then** у каждого `run_id` ровно один run-start и ровно одна closure с
+  kind, названным для этого исхода в инвентаре, фактическим exit code,
+  `run_id`, `pipeline_id` и подкомандой.
+- **And** `completed` не выдан ни одному исходу с невыполненной работой, и
+  это наблюдается прямо на четырёх конфигурациях, где код процесса лжёт об
+  исходе: `retry` с задачей `blocked` (код 0) → `policy_refusal`; `watch`,
+  остановленный `max_consecutive_failures` (код 0) → `policy_refusal`;
+  `plan`, проглотивший таймаут провайдера (код 0) → `infrastructure_error`;
+  `doctor`, у которого оператор отказался на cost gate (код 2) →
+  `operator_stop`, а не `infrastructure_error`. Closure `completed` на любой
+  из четырёх — красный тест.
+- **And** ни одна из девяти не персистит `last_run_stop_reason`
+  (`state.set_meta` с этим ключом в их коде отсутствует — статический тест),
+  поэтому равенство reason тексту `status` для них не проверяется;
+  проверяется, что reason называет сайт.
+- **And** `watch --tui` закрывается не позже выхода handler-а: остановка
+  цикла в daemon-треде сообщает причину тому же `RunContext` (один на
+  процесс), а закрытие TUI без остановки цикла даёт `operator_stop`;
+  одиночный run-start без closure у любой из девяти — красный тест.
+- **And** причина, сообщённая раньше, не затирается более поздней: у
+  `review-pr`, остановленного cost guard-ом, closure несёт
+  `budget_refusal`, а не `needs_human` общего выхода.
 
 ### H. Аварийный spool при отказе DB
 
@@ -1123,6 +1186,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 | BEH-43 | FR-03, FR-04, FR-06 |
 | BEH-44 | FR-01, FR-02 |
 | BEH-45 | FR-01, FR-05, FR-09 |
+| BEH-46 | FR-07 |
 
 Обратная трассировка по функциональным требованиям:
 
@@ -1134,7 +1198,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 | FR-04 | BEH-14, BEH-16, BEH-17, BEH-18, BEH-19, BEH-40, BEH-43 |
 | FR-05 | BEH-09, BEH-17, BEH-19, BEH-20, BEH-21, BEH-40, BEH-41, BEH-45 |
 | FR-06 | BEH-08, BEH-10, BEH-22, BEH-23, BEH-24, BEH-25, BEH-26, BEH-27, BEH-28, BEH-40, BEH-42, BEH-43 |
-| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42 |
+| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42, BEH-46 |
 | FR-08 | BEH-15, BEH-33, BEH-34, BEH-35, BEH-39 |
 | FR-09 | BEH-27, BEH-30, BEH-36, BEH-37, BEH-38, BEH-45 |
 
