@@ -1,4 +1,4 @@
-# TODO — spec-runner (план от 2026-04-16, обновлено 2026-08-14)
+# TODO — spec-runner (план от 2026-04-16, обновлено 2026-09-15)
 
 > Роль в экосистеме: единственная **работающая** кросс-проектная связка Maestro→spec-runner.
 > Стратегический контекст: `../prograph-vault/authored/notes/ecosystem-roadmap.md`
@@ -15,6 +15,25 @@
 > Отсутствующий тег означает «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
+- ✅ **v2.36.0 выпущен и отрепетирован 2026-09-15** (PR #520, тег на релизном
+  коммите `7681a07`, не на merge `90d7fe1`). **Minor:** все контрактные
+  поверхности двинулись аддитивно — `--json-result` +`verify_outcome`/
+  +`verify_composition`, state DB +`verify_evidence`/+`waivers_applied` и
+  `error_stage: verify`, конфиг +`commands.format`, режимы `verify_first` и
+  `TDD-waiver`; ни одна существующая колонка, ключ или exit-код не меняет
+  смысла (диф `schemas/`, `docs/state-schema.md`, `add_argument` против
+  v2.35.0). Поверхности: `publish.yml` (`34920785418`) success, PyPI 200 на
+  per-version endpoint и `info.version` = 2.36.0, GitHub Release из секции
+  CHANGELOG, красный `release-tag-guard` (`34920775895`) перезапущен зелёным,
+  `uv tool install --refresh --reinstall --no-cache` печатает `2.36.0`.
+  **Репетиция против колеса с PyPI — PASS:** `test_red_absorb_format` +
+  `test_json_result_contract` + `test_lifecycle_reads_the_evidence` под
+  `uv run --no-project --with spec-runner==2.36.0` (импорт сверен по
+  `spec_runner.__file__` из `archive-v0`): 52 passed; контроль против
+  `==2.35.0` — 2 errors на сборе, стенд различим. Приёмка релизного PR нашла
+  реальное: тест-артефакт TASK-013 (#367) читал CHANGELOG только в
+  `[Unreleased]` и краснел от самой нарезки — переведён на якорь своей
+  записи, негативный контроль красный.
 - ✅ **v2.35.0 выпущен и отрепетирован 2026-08-21** — одна точка расширения
   `post_review` (#307, inbox от disputatio) и больше ничего. **Minor, а не
   patch**: дифф против v2.34.0 по трём поверхностям runbook'а (`schemas/`,
