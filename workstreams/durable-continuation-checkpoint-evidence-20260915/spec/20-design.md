@@ -6,16 +6,16 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
-  behaviour-spec: 3b1da9c591992b91c4bc182dac1f7bd1ba12d67e
+  requirements: 386a30741b964b27b11ce1707653a92ba7e1047a
+  behaviour-spec: 5cba9c252a6e74ccd0ea6de65fe1df9bfb0b0a25
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
 
 Стадия `design` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Даёт
-механику тому, что requirements (`10-requirements.md`, blob `dceb052e…`) и
-behaviour-spec (`15-behaviour-spec.md`, blob `3b1da9c5…`) намеренно оставили
+механику тому, что requirements (`10-requirements.md`, blob `386a3074…`) и
+behaviour-spec (`15-behaviour-spec.md`, blob `5cba9c25…`) намеренно оставили
 открытым: какой канал вправе подтверждать call-start, где живёт единый seam
 платного вызова, как checkpoint снимается и доставляется, в чём переносится
 WIP, что входит в policy identity, чем режется секрет, кто исполняет
@@ -266,22 +266,56 @@ checkpoint-ы удаляемы: при публикации следующего
 **Обычный `run` читает open calls из локальной DB — строка `agent_calls` со
 статусом `open`; строка пишется до store-ack и закрывается после call-result.
 DB здесь — индекс, а не второй домен: сама по себе она может сказать только
-«открыт», сказать «закрыт» без store она не вправе.**
+«открыт», сказать «закрыт» без store она не вправе. Наличие индекса при этом
+не предполагается: когда его нет вовсе — свежая DB после `reset`, удаления
+файла, клона или переезда на другую машину, — `run` спрашивает store по
+индексу workstream-а и восстанавливает `open`-строки оттуда.**
 
 Второй домен (RK-03) возникает, когда два хранилища могут дать **разные
 решения**. Здесь решение одно и направлено в одну сторону: строка `open` в DB
 — повод спросить store; ответ store — истина. Процедура на старте `run`
-(после run-start и гардов старта, до выбора задачи, § Механика 2.4): для каждой `open`-строки
-namespace-а — targeted `get` двух ключей в store (call-start, call-result),
-не листинг: (а) есть call-result → строка закрывается им (процесс умер между
-`put` результата и записью в DB), задача свободна; (б) есть call-start, нет
-call-result → open call, задача `needs-human` (BEH-09); (в) нет call-start →
-процесс умер между строкой DB и `put` — spawn по построению не было, строка
-закрывается outcome `not_started`, задача свободна. Сеть — только при наличии
-`open`-строк, то есть в норме на старте её нет вовсе. `restore` DB не читает
-— только store (BEH-09: «в новом процессе и новом каталоге»), потому что
-snapshot мог быть снят раньше строки. Если DB отказала на записи `open`-строки
-— она уходит в spool (FR-08) и доигрывается на старте **до** этой процедуры.
+(после run-start и гардов старта, до выбора задачи, § Механика 2.4) имеет две
+ветки, и различает их одно наблюдение — несёт ли DB meta `last_run_id`
+(§ Механика 6.1).
+
+**(1) DB несёт `last_run_id`** — обычный случай, индекс на месте. Для каждой
+`open`-строки namespace-а — targeted `get` двух ключей в store (call-start,
+call-result), не листинг: (а) есть call-result → строка закрывается им
+(процесс умер между `put` результата и записью в DB), задача свободна;
+(б) есть call-start, нет call-result → open call, задача `needs-human`
+(BEH-09); (в) нет call-start → процесс умер между строкой DB и `put` — spawn
+по построению не было, строка закрывается outcome `not_started`, задача
+свободна. Сеть — только при наличии `open`-строк, то есть в норме на старте
+её нет вовсе.
+
+**(2) DB не несёт `last_run_id`** — индекса нет целиком: `spec-runner reset`
+(`cli_info.py:571` — `config.state_file.unlink()` без аудита и без
+`--reason`), ручное удаление файла, свежий клон, новая машина. Пустой
+`agent_calls` здесь не доказывает ничего, и ветка (1) прошла бы мимо open
+call молча — ровно тот тихий повтор, который запрещают FR-02 и M-02. Поэтому:
+один `list` индекса workstream-а (§ Механика 1.3, префикс
+`workstreams/<workstream_key>/runs/`); прогоны, у которых в индексе нет
+парного маркера `.closed`, разбираются по своим `calls/`-ключам, и каждый
+call-start без call-result становится восстановленной `open`-строкой свежей
+DB (`task_id`, attempt, `call_id`, provenance, `run_id` — из call-start),
+после чего работает ветка (б). Пустой индекс — workstream без истории,
+прогон идёт как обычно. Недоступный store на этом пути → `Refusal(kind=
+"instrument")`, exit 2: доказать отсутствие open call нечем, а платный вызов
+при недоступном store всё равно не стартует (Q-02).
+
+`reset` при этом **не** становится платящей подкомандой и evidence не пишет.
+Классифицировать его как «удаление continuation-индекса, требующее аудита»
+значило бы поставить гвард на одной команде: `rm`, свежий клон и другая
+машина — сценарий, ради которого NFR-01 и существует, — остались бы дырой
+того же размера. Инвариант держит ветка (2): после любого способа потерять
+DB open call предъявляется из store и закрывается только аудируемой дверью
+`evidence close-call --reason` (§ Механика 2.5). Цена — один `list` на первый
+`run` в каталоге без истории прогонов.
+
+`restore` DB не читает — только store (BEH-09: «в новом процессе и новом
+каталоге»), потому что snapshot мог быть снят раньше строки. Если DB отказала
+на записи `open`-строки — она уходит в spool (FR-08) и доигрывается на старте
+**до** этой процедуры.
 
 ## Механика
 
@@ -311,13 +345,31 @@ options (spec-runner проверяет только объявление, OUT-0
 одобрение владельца (CON-08), тот же протокол.
 
 **1.3 Ключи.** Одна функция `keys.py`-уровня в том же модуле:
-`runs/<run_id>/run-start.json`; `runs/<run_id>/calls/<call_id>/start.json`
-и `…/result.json`; `runs/<run_id>/checkpoints/<seq:06d>-<checkpoint_id>/
+`runs/<run_id>/run-start.json`; `runs/<run_id>/calls/<call_id>/start.json` и
+`…/result.json`; `runs/<run_id>/checkpoints/<seq:06d>-<checkpoint_id>/
 {state.db, spool.jsonl, wip.tar, manifest.json}`;
-`runs/<run_id>/attempts/<task_id>-<n>.jsonl`; `runs/<run_id>/closure.json`;
-`runs/<run_id>/deletions/<ts>.json`. Каждый ключ пишется один раз
-(`AlreadyExists` = отказ, первая запись неизменна — BEH-10, BEH-25, BEH-31);
-«исправление» — новый ключ с полем `supersedes`.
+`runs/<run_id>/attempts/<task_id>-<n>.jsonl`; `runs/<run_id>/task-history.log`
+и `runs/<run_id>/audit-log.jsonl` (§ 6.5, обе — когда источник есть);
+`runs/<run_id>/closure.json`; `runs/<run_id>/deletions/<ts>.json`. Каждый ключ
+пишется один раз (`AlreadyExists` = отказ, первая запись неизменна — BEH-10,
+BEH-25, BEH-31); «исправление» — новый ключ с полем `supersedes`.
+
+Рядом с ними — **индекс workstream-а**, единственное, что не адресуется
+`run_id`-ом: `workstreams/<workstream_key>/runs/<started_at>-<run_id>.json`
+кладётся вместе с run-start, а `…/<started_at>-<run_id>.closed` — вместе с
+closure; обе записи одноразовы, как всё в § 1.3. Он существует ради одной
+ветки — (2) процедуры Q-12, где локальной DB нет и спросить store больше не
+по чему; `evidence <run_id>` и `restore <run_id>` его не читают, их ключ
+по-прежнему `run_id` (FR-09). `workstream_key` — SHA-256 от repository
+identity (§ 4.2) и `spec_prefix`/`change_id`: путь в него не входит
+намеренно, потому что `tdd.resolve_namespace` хеширует **абсолютный путь**
+(charter, «Namespace привязан к абсолютному пути») и на другой машине дал бы
+другое имя, а найти надо тот же workstream именно после переезда. Маркер
+`.closed` — указатель, а не решение: его отсутствие заставляет процедуру
+прочитать `calls/` прогона (лишняя работа), его наличие — пропустить прогон,
+а истиной остаётся пара call-start/call-result. Потеря маркера поэтому
+безопасна в ту сторону, в которую ошибаться можно; второй домен (RK-03) из
+него не возникает.
 
 **1.4 Publisher и redactor.** `src/spec_runner/evidence.py`: `Publisher`
 — единственный владелец экземпляра `ArtifactStore`; `publish(record)`
@@ -425,7 +477,11 @@ TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
 задачу с open call с причиной, называющей `call_id` и provenance; `run
 --task` отказывает exit 1 (BEH-09). Обнаружение живёт в `paid_call.open_calls
 (config, state) → list[OpenCall]` и вызывается из `_run_tasks_inner` там же,
-где `recover_stale_tasks`.
+где `recover_stale_tasks`. Процедура двуветочная (Q-12): при наличии meta
+`last_run_id` — targeted `get` по `open`-строкам DB; без него — `list` индекса
+workstream-а (§ 1.3) и восстановление `open`-строк из store, потому что
+пустой `agent_calls` свежей DB (после `reset`, удаления файла, клона,
+переезда на другую машину) не доказывает отсутствия open call.
 
 **2.5 Операторская дверь** — `spec-runner evidence close-call <run_id>
 --call <call_id> --reason …` (Q-04): по образцу `remedy.cmd_tdd` — обязательный
@@ -590,9 +646,15 @@ executor lock не берут вовсе. Точка в lock-е оставила
 **после** run-start и потому ничего к нему не добавляет: ветка вызывает
 `run_context.note_stop("lock_busy", detail)` перед `sys.exit(1)`, а closure
 пишет общая точка § 6.3 (BEH-29: «lock занят» — обычная пара run-start +
-closure, kind `policy_refusal`, exit 1). Так же устроены два других гарда
-старта — dirty-spec (`_enforce_clean_spec`) и tracked-state DB (#273): они
-тоже стоят внутри handler-а, после run-start, и тоже только сообщают причину.
+closure, kind `policy_refusal`, exit 1). Так же устроены три других гарда
+старта — governance-гейт (`_enforce_spec_governance`, `cli.py:285-299`),
+dirty-spec (`_enforce_clean_spec`, `:729`) и tracked-state DB
+(`_enforce_untracked_state`, #273, `:779`): все три стоят внутри handler-а,
+подряд в начале `_run_tasks_inner` (`:828-830`) и в `cmd_retry` (`:1471`) /
+`cmd_watch` (`:1547`), после run-start, и все три только сообщают причину.
+Governance-гейт назван здесь наравне с остальными потому, что он такой же
+`sys.exit(1)` без записи причины (`:299`), а не потому, что он новый: пропуск
+его в перечне оставил бы четвёртый штатный отказ без closure.
 
 **6.3 Closure** — `RunContext.close(kind, reason, exit_code)` — одна точка
 записи: `main()` оборачивает dispatch в `try/except SystemExit/except
@@ -607,31 +669,79 @@ CLOSURE_KINDS` (BEH-32): ключи — `RUN_STOP_REASONS` (`cli.py:541`:
 `state_spec_mismatch`→`policy_refusal`), `RefusalKind` (`policy`→
 `policy_refusal`, `instrument`→`infrastructure_error`, `budget`→
 `budget_refusal`), сигналы и ранние остановки цикла `run` (`_shutdown_requested`
-и stop-marker→`operator_stop`; `session_timeout_minutes`→`session_timeout`;
+и stop-marker→`operator_stop`; пауза SIGQUIT с ответом `q`→`operator_stop`;
+`session_timeout_minutes`→`session_timeout`;
 `idle_timeout_minutes`→`idle_timeout`), стартовые гарды (`lock_busy`,
-`dirty_spec`, `tracked_state`→`policy_refusal`, exit 1 — как сегодня),
-`no_ready`→`no_ready`, необработанное исключение→`infrastructure_error`. Сайты
+`spec_governance`, `dirty_spec`, `tracked_state`→`policy_refusal`, exit 1 —
+как сегодня), выходы до цикла (`no_ready`→`no_ready`;
+`task_not_found`→`no_ready`; `dry_run`→`dry_run`, exit 0),
+динамическое семейство `error_<kind>` из `_stop_reason_for` (`cli.py:657`):
+`error_infrastructure`→`infrastructure_error`, прочие→`policy_refusal` —
+семейство распознаётся по префиксу и в перечислимый словарь
+`RUN_STOP_REASONS` не входит по построению (комментарий `cli.py:539-540`),
+и необработанное исключение→`infrastructure_error`. Сайты
 остановки сообщают контексту **причину**, не kind: там, где сегодня стоит
 `state.set_meta("last_run_stop_reason", …)` / `audit_logger.record(
 EVENT_RUN_ENDED, stop_reason=…)`, добавляется `run_context.note_stop(reason,
 detail)` — тот же словарь, что видит `status` (BEH-29: reason совпадает).
 
-**Три ранние остановки живут в `run`, и у них сегодня нет своей причины.**
-Все три — graceful stop по stop-marker (`cli.py:1062`), session timeout
-(`:1069`) и idle timeout (`:1080`) — стоят внутри `_run_tasks_inner`, то есть
-в цикле подкоманды `run`, а не в `watch`; в `cmd_watch` session-timeout нет
-вовсе. И все три выходят из цикла `break`-ом, не трогая `stop_reason`, чей
-дефолт — `"completed"` (`cli.py:876`) и который персистится как есть
-(`cli.py:1374`). Построить closure по такому stop-reason значило бы записать
-оборванный прогон как `completed` — «пустой успех», запрещённый инвариантом 4.
-Поэтому `RUN_STOP_REASONS` (`cli.py:536-541`) получает аддитивно три значения —
-`operator_stop`, `session_timeout`, `idle_timeout`, — каждая из трёх точек
-выставляет своё перед `break`, и `note_stop` рядом с `set_meta` передаёт то же
-значение контексту. Словарь объявлен interop-поверхностью («add freely, rename
+**Инвентарь сайтов выхода `cmd_run`/`_run_tasks_inner` — полный, и у шести из
+них сегодня нет своей причины.** Перечень построен по дереву: каждый
+`sys.exit`, `return` и `break` между началом `_run_tasks_inner` (`cli.py:822`)
+и персистом stop-reason (`:1374`).
+
+| Сайт выхода | Строка | stop-reason сегодня | stop-reason по этому дизайну |
+|---|---|---|---|
+| governance-гейт `_enforce_spec_governance` | `:828` → `:299` | нет (`sys.exit(1)`) | `spec_governance` — новое |
+| dirty-spec `_enforce_clean_spec` | `:830` | нет (`sys.exit(1)`) | `dirty_spec` — новое |
+| tracked-state DB `_enforce_untracked_state` | `:831` | нет (`sys.exit(1)`) | `tracked_state` — новое |
+| lock занят | `_acquire_run_lock` `:181` | нет (`sys.exit(1)`) | `lock_busy` — новое |
+| `validate` красный до исполнения | `:919` | `validation_failed` (только в audit-записи) | `validation_failed` |
+| `state.stop_cause()` до выбора задач | `:950` | `budget_exceeded` / `max_consecutive_failures` / … | без изменений |
+| `--task` назвал несуществующую задачу | `:958` | нет (`return`, exit 0) | `task_not_found` — новое |
+| нет ready-задач | `:1013` | `completed` (дефолт `:876`) | `no_ready` — новое |
+| `--dry-run` | `:1018` | нет (`return`, exit 0) | `dry_run` — новое |
+| пауза SIGQUIT, ответ `q` | `:1045` | `completed` (дефолт) | `operator_stop` |
+| stop-marker в обеих ветках цикла | `:1066`, `:1285` | `completed` (дефолт) | `operator_stop` |
+| session timeout | `:1077` | `completed` (дефолт) | `session_timeout` |
+| idle timeout | `:1088` | `completed` (дефолт) | `idle_timeout` |
+| `_idle_stop_verdict` в конце цикла | `:1181` | `completed` / `dependency_blocked_after_skip` | без изменений |
+| task failed под `on_task_failure: stop` | `:1254`, `:1325` | `task_failed_stop` | без изменений |
+| `state.should_stop()` после задачи | `:1276`, `:1342` | `_stop_reason_for` (`:657`): `budget_exceeded`, `error_<kind>`, `max_consecutive_failures` | без изменений |
+
+Шесть сайтов без своей причины — это шесть способов записать оборванный или
+ничего не сделавший прогон как `completed` либо не записать ничего, то есть
+«пустой успех», запрещённый инвариантом 4 и FR-07. Поэтому `RUN_STOP_REASONS`
+(`cli.py:536-541`) получает аддитивно **шесть** значений — `operator_stop`,
+`session_timeout`, `idle_timeout`, `no_ready`, `task_not_found`, `dry_run`, —
+и каждая точка выставляет своё перед `break`/`return`, а `note_stop` рядом с
+`set_meta` передаёт то же значение контексту. Четыре гарда старта
+(`lock_busy`, `spec_governance`, `dirty_spec`, `tracked_state`) причину
+контексту сообщают, но в `RUN_STOP_REASONS` не входят: они выходят
+`sys.exit(1)`-ом задолго до `set_meta`, `status` их не показывает и
+показывать не начинает — их единственный читатель closure, и требование
+BEH-29 «reason совпадает с тем, что показывает `status`» к ним по построению
+не относится.
+
+Три новых значения названы отдельно, потому что след их сайтов сегодня
+неотличим от успеха: `no_ready` (`:1013`) персистит чужой дефолт `completed`
+— прогон, не выбравший ни одной задачи, читается как успешно закончивший;
+пауза с ответом `q` (`:1045`) — оператор остановил прогон с невыполненными
+задачами, и это `operator_stop`, а не успех; `--dry-run` (`:1018`) и
+task-not-found (`:958`) уходят `return`-ом вообще без персиста. `dry_run`
+получает **собственный** kind, а не `completed`: «invocation намеренно не
+исполнял ничего» и «прогон отработал задачи» — разные факты для аудитора, и
+первый под именем второго снова даёт пустой успех. `task_not_found` кладётся
+в kind `no_ready` — invocation не выбрал ни одной задачи, — но со своим
+reason, чтобы `status` называл причину. Exit code обоих остаётся сегодняшним
+(0), и closure несёт именно его: изменение кодов возврата этих двух путей —
+не предмет этого workstream-а.
+
+Словарь объявлен interop-поверхностью («add freely, rename
 with a CHANGELOG note», комментарий `cli.py:536-540`), так что добавление —
 CHANGELOG-нота под Unreleased и строка в `docs/state-schema.md`, не breaking
 change: `status` и внешние читатели (audit-таблица Maestro) видят новые
-значения там, где раньше видели `completed`.
+значения там, где раньше видели `completed` или пустоту.
 
 `idle_timeout` получает **собственный** kind closure, а не отображается в
 `session_timeout`: это разные причины остановки, `status` показывает их
@@ -652,6 +762,31 @@ JSONL по `schemas/evidence-record.schema.json` и публикует
 `attempts/<task>-<n>.jsonl`; для `review-pr` — при завершении раунда
 (BEH-23). Публикуется через ту же очередь publisher-а; drain перед closure
 ждёт и его.
+
+**6.5 Корроборирующие логи прогона** (FR-06, SSOT #478) — инвентарь
+`docs/architecture.md:251-252` называет две строки, которые обязаны ехать с
+evidence bundle и ledger-ом не являются: task change history
+(`spec/.task-history.log` и префиксные варианты, `task.history_file_for`,
+`task.py:418`) и compliance audit-trail (`audit_log_path`, выключен по
+умолчанию, `audit_log.py:195`). Обе публикуются **срезом этого прогона**, не
+файлом целиком, и перед closure, вместе с attempt-экспортом. Срез у них
+получается по-разному, потому что по-разному устроены источники: строка
+истории задач — `<ts> | <task_id> | <change>` (`task.py:429`) и `run_id` не
+несёт, поэтому `RunContext.start()` запоминает размер файла, а publisher
+кладёт дописанный за прогон хвост как `runs/<run_id>/task-history.log`; у
+audit-log-а `run_id` есть в каждой строке (`audit_log.py:158`, после § 6.1 —
+из контекста), поэтому срез — строки своего `run_id`, ключ
+`runs/<run_id>/audit-log.jsonl`. Оба проходят тот же redactor и тот же
+`bound_evidence` (§ 1.4, NFR-06); обоих может не быть (история не заведена,
+аудит выключен) — отсутствие источника даёт отсутствие ключа, не отказ.
+Ни `evidence`, ни `restore` по ним решений не принимают: SSOT называет
+историю «corroborating history, not the authority for current status», и
+здесь она ровно этим и остаётся. Файл целиком не копируется намеренно: он
+переживает много прогонов, и копия под каждым `run_id` превратила бы
+retention по `run_id` (Q-11) в умножение одного и того же текста. Второй
+вариант SSOT для audit-trail («point it at an orchestrator-managed durable
+volume») остаётся операторским: он не заменяет срез, а решает ту же задачу
+конфигурацией, и спорить с ним дизайну не о чем.
 
 ### 7. Restore и read-surface (FR-05, FR-09)
 
@@ -804,12 +939,14 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
   `spec-runner run --task` целиком, не через вызов seam-а; open call,
   оставленный `os._exit` после ack, → `run --all` пропускает с `call_id` в
   причине, `run --task` exit 1, `restore` `needs-human` — в **новом**
-  процессе и новом каталоге, 0 `_spawn`; restore-refusals — каждое условие
+  процессе и новом каталоге, 0 `_spawn`; тот же open call после `spec-runner
+  reset`, после удаления файла DB и в клоне на другом пути — те же исходы и
+  0 `_spawn`; restore-refusals — каждое условие
   своей параметризацией и одно с двумя подменами сразу, `--into` пуст после
   отказа (listdir), `check_claims`-двойник вызван 0 раз; closure — на каждом
   исходе из BEH-29 ровно одна запись в двойнике store с kind из схемы и
-  reason == `last_run_stop_reason`, включая три гарда старта, где attempt не
-  создан; `kill -9`/`os._exit` → closure нет и `evidence` говорит
+  reason == `last_run_stop_reason` там, где stop-reason персистится, включая
+  четыре гарда старта, где attempt не создан и reason называет гард; `kill -9`/`os._exit` → closure нет и `evidence` говорит
   `crash/unknown`; integrity — параметризация по каждому файлу × {байт
   изменён, файл удалён}, все три команды отказывают с именем файла и обоими
   digest-ами, `run` — до `_spawn` и до `check_claims`; `git status
@@ -837,16 +974,16 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 
 | Файл / подсистема | Что меняется | Сценарии |
 |---|---|---|
-| `src/spec_runner/paid_call.py` (новый) | `PaidCall`, `CallOutcome`, `execute` (протокол FR-02 §2.2), `_spawn` (единственный spawn провайдера), `open_calls` (процедура Q-12) | BEH-05…11, 22, 39, 44 |
-| `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3, `LocalVolumeStore`, `open_store_readonly` | BEH-25, 28, 36, 37, 42 |
-| `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
+| `src/spec_runner/paid_call.py` (новый) | `PaidCall`, `CallOutcome`, `execute` (протокол FR-02 §2.2), `_spawn` (единственный spawn провайдера), `open_calls` (процедура Q-12, обе ветки: по `open`-строкам DB и по индексу workstream-а при отсутствующем `last_run_id`) | BEH-05…11, 22, 39, 44 |
+| `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
+| `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
 | `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий | BEH-12…15, 40 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
-| `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`note_stop`/`close`), `PAYING_SUBCOMMANDS`, `CLOSURE_KINDS` — одна таблица | BEH-01, 02, 04, 29…32 |
+| `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`note_stop`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS`, `CLOSURE_KINDS` — одна таблица, включая `dry_run` и семейство `error_<kind>` | BEH-01, 02, 04, 23, 29…32 |
 | `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), `evidence` (`collect`, `close-call`, `purge`), `retention.py` | BEH-09, 11, 19…21, 30, 36…38, 40, 42 |
-| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/finally` с closure; `_acquire_run_lock` — `note_stop("lock_busy")` перед `sys.exit(1)`, run-start не пишет; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; `note_stop` рядом с каждым `last_run_stop_reason`; три ранние остановки `run` (stop-marker `:1062`, session timeout `:1069`, idle timeout `:1080`) выставляют собственный `stop_reason` вместо дефолтного `completed`; `RUN_STOP_REASONS` (`:536-541`) — три новых значения; новые subparsers `restore`/`evidence` | BEH-02, 04, 09, 29, 32, 38 |
+| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/finally` с closure; `_acquire_run_lock` — `note_stop("lock_busy")` перед `sys.exit(1)`, run-start не пишет; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; `note_stop` рядом с каждым `last_run_stop_reason`; сайты выхода по инвентарю § 6.3 выставляют собственный `stop_reason` вместо дефолтного `completed` или его отсутствия (stop-marker `:1066`/`:1285`, session timeout `:1077`, idle timeout `:1088`, пауза→`q` `:1045`, no-ready `:1013`, `--dry-run` `:1018`, task-not-found `:958`), а четыре гарда старта (`_enforce_spec_governance` `:299`, `_enforce_clean_spec`, `_enforce_untracked_state`, lock) — `note_stop` перед `sys.exit(1)`; `RUN_STOP_REASONS` (`:536-541`) — шесть новых значений; новые subparsers `restore`/`evidence` | BEH-02, 04, 09, 29, 32, 38 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |

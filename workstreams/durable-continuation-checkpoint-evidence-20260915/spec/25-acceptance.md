@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
-  behaviour-spec: 3b1da9c591992b91c4bc182dac1f7bd1ba12d67e
+  requirements: 386a30741b964b27b11ce1707653a92ba7e1047a
+  behaviour-spec: 5cba9c252a6e74ccd0ea6de65fe1df9bfb0b0a25
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -164,7 +164,13 @@ call», и выполняет остальные; `run --task TASK-001` отка
 reason; повтор отвечает «уже закрыт» без второй записи; с
 `SPEC_RUNNER_AGENT=1` отказана guardrail-ом; после закрытия
 `run --task TASK-001` доходит до нового call-start с новым `call_id`, а сама
-команда закрытия платный вызов не запускает.
+команда закрытия платный вызов не запускает. Тот же знак предъявлен, когда
+локальной state DB между crash-ом и следующим `run` нет: после `spec-runner
+reset`, после ручного удаления файла DB и в клоне репозитория на другом пути
+`run --all` по-прежнему пропускает задачу, `run --task TASK-001` отказывает
+exit 1, двойник `Popen` не вызван, — а в каталоге без единого прошлого
+прогона `run` стартует обычным порядком. Пустой `agent_calls` свежей DB,
+принятый за «open call нет», — невыполненный критерий.
 
 #### AC-09: Один `call_id` — ровно один call-start и не более одного call-result · verification: test
 traces: [FR-02, FR-06]
@@ -336,6 +342,12 @@ scenarios: [BEH-23]
 каждая с namespace, task, attempt, `config_hash`, actor, reason, referenced
 SHA/blob, timestamp, supersession status; в экспорте TASK-001 нет строк
 TASK-002/TASK-003; `pr_*` экспортируются при завершении раунда `review-pr`.
+С bundle того же `run_id` опубликованы срез task change history за этот
+прогон и срез compliance audit-trail со строками этого `run_id` — когда
+источники есть; при выключенном аудите и отсутствующей истории их нет, и
+прогон не отказывает. Ни в одном из двух срезов нет строк чужого прогона,
+оба redacted и ограничены по размеру, и ни `evidence`, ни `restore` не
+выводят из них статус задачи.
 
 #### AC-22: Планирование получает ledger-identity и отдельную строку `planning` в `costs` · verification: test
 traces: [FR-06, FR-01]
@@ -399,28 +411,33 @@ run-start; config с `tls: true` и managed encryption загружается.
 traces: [FR-07]
 scenarios: [BEH-29, BEH-32]
 
-Наблюдаемый знак: для completed, `no_ready`, `validation_failure`,
-dirty-spec guard, tracked-state-DB guard, занятого lock, `budget_refusal`,
-`policy_refusal` под `review_policy: required`, `session_timeout`,
-`idle_timeout`, отказа ack (`infrastructure_error`), stop-marker и SIGTERM
-(`operator_stop`) у каждого `run_id` ровно одна closure с kind из словаря
+Наблюдаемый знак: для completed, `no_ready`, `task_not_found`, `dry_run`,
+`validation_failure`, governance-гейта, dirty-spec guard, tracked-state-DB
+guard, занятого lock, `budget_refusal`, `policy_refusal` под `review_policy:
+required`, `session_timeout`, `idle_timeout`, паузы с ответом `q`, отказа ack
+(`infrastructure_error`), stop-marker и SIGTERM (`operator_stop`) у каждого
+`run_id` ровно одна closure с kind из словаря
 `schemas/run-closure.schema.json`, reason, равным stop-reason из `status`,
 `last_checkpoint_id` последнего acknowledged checkpoint-а (или `null`),
-записанным фактическим exit code, `run_id`, `pipeline_id`, подкомандой,
-числом open calls, `degraded`/spool status, timestamps и
-`last_call_ids`/`attempt_ids`; три гарда старта дают `policy_refusal` с
-названием гарда и exit 1, для «lock занят» двойник получает пару
-run-start + closure под одним `run_id`; `Refusal.kind`
-`policy`/`instrument`/`budget` и сигналы остановки отображаются в kind
-closure одной таблицей (статический тест: ни один сайт остановки не
-выбирает kind сам), `Refusal.with_note` kind сохраняет, неизвестный kind не
-сериализуется, exit code closure совпадает с кодом процесса. Три ранние
-остановки цикла `run` — stop-marker, `session_timeout` и `idle_timeout` —
-дают closure своего kind и своего reason: ни одна не читается как
-`completed`, что наблюдается прямо (closure с невыполненными задачами и kind
-`completed` — невыполненный критерий). `run --all --force` предъявляется
-отдельной конфигурацией: executor lock не берётся, run-start и closure есть,
-kind `completed` при всех задачах `done` и `operator_stop` по stop-marker.
+записанным фактическим exit code, `run_id`, `pipeline_id`, подкомандой, числом
+open calls, `degraded`/spool status, timestamps и
+`last_call_ids`/`attempt_ids`; четыре гарда старта дают `policy_refusal` с
+названием гарда и exit 1, для «lock занят» двойник получает пару run-start +
+closure под одним `run_id`, и равенство reason тексту `status` для гардов не
+требуется — они выходят раньше персиста stop-reason; `Refusal.kind`
+`policy`/`instrument`/`budget` и сигналы остановки отображаются в kind closure
+одной таблицей (статический тест: ни один сайт остановки не выбирает kind
+сам), `Refusal.with_note` kind сохраняет, неизвестный kind не сериализуется,
+exit code closure совпадает с кодом процесса. Ранние остановки цикла `run` —
+stop-marker, пауза с ответом `q`, `session_timeout` и `idle_timeout` — и три
+выхода до цикла — `no_ready`, `task_not_found`, `dry_run` — дают closure
+своего kind и своего reason: ни один не читается как `completed`, что
+наблюдается прямо (closure с невыполненными задачами и kind `completed` —
+невыполненный критерий). Динамический `error_<kind>` предъявлен отдельной
+конфигурацией: closure пишется, kind берётся по префиксу, отказа сериализации
+нет. `run --all --force` предъявляется отдельной конфигурацией: executor lock
+не берётся, run-start и closure есть, kind `completed` при всех задачах `done`
+и `operator_stop` по stop-marker.
 
 #### AC-28: `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown · verification: test
 traces: [FR-07, FR-09]
@@ -451,14 +468,19 @@ traces: [FR-08, NFR-01]
 scenarios: [BEH-33]
 
 Наблюдаемый знак: для каждой mutation (`record_attempt`, claims, budget
-authorization, gate verdict, `record_verify_evidence`, RED checkpoint,
-remedy, waiver) spool в `.executor-*` поясе содержит строку с `seq`,
-`run_id`, `namespace`, `task_id`/attempt, `table`, payload и SHA-256 строки,
-записанную с `fsync`; новый `run --all` после lock и до выбора задачи
+authorization, gate verdict, `record_verify_evidence`, RED checkpoint, remedy,
+waiver) spool в `.executor-*` поясе содержит строку с `seq`, `run_id`,
+`namespace`, `task_id`/attempt, `table`, payload и SHA-256 строки, записанную
+с `fsync`; новый процесс после run-start и гардов старта, до выбора задачи
 доигрывает её в DB в порядке `seq`, `status`/`tdd status`/`costs` показывают
 mutation, следующий checkpoint содержит её в snapshot-е, spool ротирован в
 архив с пометкой в manifest; mutation, не подтверждённую ни DB, ни spool,
-никакой путь не считает записанной.
+никакой путь не считает записанной. Граница replay — run-start и гарды старта,
+а не executor lock: как AC-03 предъявляет три пути без lock-а для run-start,
+так и здесь replay предъявлен на `spec-runner retry`, `spec-runner watch` и
+`run --all --force` — ни один из трёх executor lock не берёт (`--force` даёт
+`lock = None`), и доказательство replay вызовом `_acquire_run_lock` критерий
+не выполняет.
 
 #### AC-31: Replay идемпотентен, повреждённая строка spool останавливает старт · verification: test
 traces: [FR-08]

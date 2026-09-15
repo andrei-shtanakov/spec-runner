@@ -211,11 +211,11 @@ identity/digest/namespace, повреждённый артефакт), оста�
   замена. Существующий обрезанный display-id и независимый audit-UUID
   заменяются, не дублируются. Покрывает FR-01.
 - **Write-ahead протокол публикации**: durable run-start → durable call-start
-  до каждого платного subprocess (task RED/GREEN/BEH-07 round, review и
-  review-роли, `plan --full`, gated planning, `review-pr` verify/fix,
-  `doctor`) → call-result/attempt → run-closure на каждом orderly exit. Без
-  acknowledgement call-start процесс не стартует. Покрывает FR-02, FR-06,
-  FR-07.
+  до каждого платного subprocess (task RED authoring, RED agent round (#220),
+  GREEN, review и review-роли, `plan --full`, gated planning, `review-pr`
+  verify/fix, `doctor`) → call-result/attempt → run-closure на каждом orderly
+  exit. Без acknowledgement call-start процесс не стартует. Покрывает FR-02,
+  FR-06, FR-07.
 - **Continuation checkpoint**: консистентный снимок state DB через SQLite
   backup API (или эквивалентный транзакционный snapshot, включающий
   WAL-only страницы) + версионированный manifest (repository, workstream,

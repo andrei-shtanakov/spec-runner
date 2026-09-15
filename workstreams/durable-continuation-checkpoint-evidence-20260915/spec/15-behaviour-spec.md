@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
+  requirements: 386a30741b964b27b11ce1707653a92ba7e1047a
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -166,9 +166,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   журнал событие `spawn(argv)` и отдающий ответ fake CLI; конфигурация,
   доводящая прогон до каждого сайта из §3 требований.
 - **When** по очереди прогнаны сайты: RED authoring, RED agent round после
-  lint-findings (#220; в §3 и в приёмке FR-02 требований этот сайт носит
-  заимствованный ярлык — см. «Замечания к upstream»), GREEN, review,
-  `review:<role>`
+  lint-findings (#220), GREEN, review, `review:<role>`
   (параллельный и последовательный режим), `plan --full` (три стадии),
   `plan --gated`, интерактивный `plan "<описание>"` (один круг цикла: fake CLI
   отвечает `PLAN_READY`, ответ на приглашение — отказ от записи задач, так что
@@ -267,6 +265,18 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   процесса: сценарий проходит в новом процессе и в новом каталоге.
 - **And** ни один из трёх шагов не создал второй call-start для того же
   attempt: молчаливого повтора нет.
+- **And** тот же результат — когда локальная state DB между crash-ом и
+  следующим `run` уничтожена: после `spec-runner reset` (штатная подкоманда,
+  удаляющая файл DB) и, отдельным прогоном, после удаления файла DB вручную
+  `run --all` по-прежнему пропускает задачу с той же причиной, а `run --task
+  TASK-001` отказывает с exit 1 и 0 вызовов двойника `Popen`. Пустой
+  `agent_calls` свежей DB «отсутствием open call» не считается: свидетельство
+  берётся из evidence bundle, и единственный способ закрыть open call
+  остаётся аудируемым (`evidence close-call --reason`, BEH-11).
+- **And** тот же прогон в **клоне репозитория на другом пути**, где локальной
+  DB не было вовсе, даёт то же самое: open call предъявлен, `Popen` не
+  вызван. Прогон в каталоге без единого прошлого прогона при этом стартует
+  как обычно — пустая история не отказ.
 
 #### BEH-10: Один `call_id` — ровно один call-start и не более одного call-result
 `traces: [FR-02, FR-06]`
@@ -570,6 +580,15 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** в экспорте TASK-001 нет ни одной строки TASK-002 и TASK-003.
 - **And** для `review-pr` экспорт строк `pr_*` происходит при завершении
   раунда, а не на каждом comment.
+- **And** с bundle того же `run_id` уезжают две корроборирующие записи,
+  которых требует инвентарь `docs/architecture.md`: срез task change history
+  за этот прогон (строки, дописанные в `.task-history.log` между стартом и
+  закрытием прогона) и срез compliance audit-trail (строки с этим `run_id`),
+  когда источники есть; при выключенном аудите и отсутствующей истории
+  bundle обходится без них и прогон не отказывает. Ни одна из двух записей не
+  содержит строк чужого прогона, обе проходят redaction и границы размера,
+  и ни `evidence`, ни `restore` не выводят из них статус задачи — они
+  корроборируют ledger, а не заменяют его.
 
 #### BEH-24: Планирование получает ledger-identity и отдельную строку `planning` в `costs`
 `traces: [FR-06, FR-01]`
@@ -671,13 +690,16 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
 - **Given** конфигурации, доводящие `run` до каждого исхода: все задачи
-  `done` (completed); нет ready задач (`no_ready`); `validate` красный при
-  старте (`validation_failure`); dirty-spec guard (`_enforce_clean_spec`);
+  `done` (completed); нет ready задач (`no_ready`); `--task` с именем,
+  которого нет в tasks.md (`task_not_found`); `--dry-run` (`dry_run`);
+  `validate` красный при старте (`validation_failure`); governance-гейт
+  (`_enforce_spec_governance`); dirty-spec guard (`_enforce_clean_spec`);
   tracked-state-DB guard (#273); занятый lock; budget guard перед вызовом
   (`budget_refusal`); неудовлетворённый gate под `review_policy: required`
   (`policy_refusal`); `session_timeout_minutes`, истёкший в цикле
   (`session_timeout`); `idle_timeout_minutes`, истёкший в цикле
-  (`idle_timeout`); отказ ack (`infrastructure_error`); stop-marker и SIGTERM
+  (`idle_timeout`); пауза SIGQUIT с ответом `q` при невыполненных задачах
+  (`operator_stop`); отказ ack (`infrastructure_error`); stop-marker и SIGTERM
   (`operator_stop`). Те же конфигурации «completed», «занятый lock» и
   «`operator_stop` по stop-marker» повторяются для `run --all --force`, где
   executor lock не берётся. Двойник store.
@@ -687,10 +709,16 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   показываемым `status`, `last_checkpoint_id` равен id последнего
   acknowledged checkpoint-а (или `null`, если mutation не было), exit code
   записан и равен фактическому.
-- **And** для путей до attempt (no-ready, validation failure, dirty-spec,
+- **And** для путей до attempt (no-ready, task-not-found, `--dry-run`,
+  validation failure, governance-гейт, dirty-spec,
   tracked-state, lock занят) closure существует, хотя attempt не создан;
   run-start у них записан диспетчером `main()` **до** вызова handler-а и
-  потому раньше любого из этих гардов. Для «lock занят» это означает обычную
+  потому раньше любого из этих гардов. Ни один из них не даёт closure kind
+  `completed`: `no_ready` и `task_not_found` — kind `no_ready`, `--dry-run` —
+  kind `dry_run`, четыре гарда — `policy_refusal`. Для четырёх гардов
+  требование «reason совпадает с текстом, который показывает `status`» не
+  проверяется — они выходят `sys.exit(1)`-ом раньше персиста stop-reason, и
+  `status` их не показывает; проверяется, что reason называет сам гард. Для «lock занят» это означает обычную
   пару run-start + closure с одним `run_id` у двойника store: run-start уже
   записан к моменту отказа lock-а, а сайт отказа сообщает контексту причину
   `lock_busy` перед выходом; одиночный run-start без closure и, равно,
@@ -707,12 +735,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `watch`; closure каждого несёт свой kind и свой reason, и ни один из них не
   `completed` — прогон, оборванный таймером с невыполненными задачами,
   прочитанный как `completed`, есть тот самый «пустой успех», который
-  запрещает FR-07.
-  Три гарда старта — «lock занят» (`_acquire_run_lock`), dirty-spec
-  (`_enforce_clean_spec`) и tracked-state DB (#273) — это отказ правила, а
-  не инструмента: kind `policy_refusal`, reason называет гард, exit code 1 —
-  как у них сегодня (все три завершаются `sys.exit(1)`); `no_ready` и
-  `validation_failure` за ними не числятся.
+  запрещает FR-07. Четыре гарда старта — «lock занят» (`_acquire_run_lock`),
+  governance-гейт (`_enforce_spec_governance`), dirty-spec
+  (`_enforce_clean_spec`) и tracked-state DB (#273) — это отказ правила, а не
+  инструмента: kind `policy_refusal`, reason называет гард, exit code 1 — как
+  у них сегодня (все четыре завершаются `sys.exit(1)`); `no_ready`,
+  `task_not_found`, `dry_run` и `validation_failure` за ними не числятся.
 - **And** closure несёт `run_id`, `pipeline_id`, подкоманду, число open
   calls, `degraded`/spool status, timestamps start/end,
   `last_call_ids`/`attempt_ids`.
@@ -757,21 +785,27 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_closure_every_exit.py`
 - **Given** типизированные отказы `Refusal(kind="policy")`,
   `Refusal(kind="instrument")`, `Refusal(kind="budget")` (#230), graceful
-  SIGINT/SIGTERM (`_shutdown_requested` в `executor.py`), stop-marker и три
-  гарда старта до attempt — «lock занят», dirty-spec, tracked-state DB
-  (BEH-29).
+  SIGINT/SIGTERM (`_shutdown_requested` в `executor.py`), stop-marker и четыре
+  гарда старта до attempt — «lock занят», governance-гейт, dirty-spec,
+  tracked-state DB (BEH-29).
 - **When** каждый прерывает прогон.
 - **Then** closure kind — `policy_refusal`, `infrastructure_error`,
   `budget_refusal`, `operator_stop`, `operator_stop` соответственно, а у
-  трёх гардов старта — `policy_refusal`; `Refusal.with_note` сохраняет kind
+  четырёх гардов старта — `policy_refusal`; `Refusal.with_note` сохраняет kind
   и, значит, closure kind.
-- **And** три ранние остановки цикла `run` — stop-marker, истёкший
-  `session_timeout_minutes` и истёкший `idle_timeout_minutes` — входят в ту же
-  таблицу под собственными stop-reason (`operator_stop`, `session_timeout`,
-  `idle_timeout`) и дают kind того же имени; ни одна из них не отображается в
-  `completed`. Таблица не имеет клетки «неизвестный stop-reason → `completed`»:
+- **And** ранние остановки цикла `run` — stop-marker, пауза с ответом `q`,
+  истёкший `session_timeout_minutes` и истёкший `idle_timeout_minutes` —
+  входят в ту же таблицу под собственными stop-reason (`operator_stop`,
+  `operator_stop`, `session_timeout`, `idle_timeout`) и дают kind того же
+  имени; ни одна из них не отображается в `completed`. Так же не отображаются
+  в `completed` три выхода до цикла: `no_ready`, `task_not_found` (оба — kind
+  `no_ready`) и `dry_run` (одноимённый kind). Таблица не имеет клетки
+  «неизвестный stop-reason → `completed`»:
   stop-reason вне словаря — отказ сериализации closure, а не молчаливое
-  повышение до успеха.
+  повышение до успеха; динамическое семейство `error_<kind>`, которое словарь
+  `RUN_STOP_REASONS` не перечисляет по построению, отображается по префиксу
+  (`error_infrastructure` — `infrastructure_error`, прочие —
+  `policy_refusal`) и неизвестным не считается.
 - **And** отображение задано одной таблицей соответствия в одном месте
   (статический тест: ни один сайт остановки не выбирает kind closure сам);
   словарь kinds пинован схемой, неизвестный kind не сериализуется.
@@ -1192,15 +1226,6 @@ legal hold (OUT-10); правка соседних репозиториев — 
 ниже — что стоит поправить в узле требований бандла (10-requirements.md)
 при его следующей редакции, чтобы бандл читался без оговорок.
 
-- §3 «Платный subprocess» (строка перечня сайтов) и критерий приёмки
-  «Матрица сайтов» в §4 FR-02 называют сайт RED agent round (#220) ярлыком
-  в форме BEH-id с номером 07 («… agent round» / «RED, …, GREEN»). Ярлык
-  совпадает по форме с id сценариев этого документа
-  и ничем не связан с его сценарием под тем же номером (budget-отказ до
-  call-start); для читателя матрицы и для инструмента, который ищет BEH-id
-  по бандлу, это коллизия. Предложение: «RED agent round (#220)», чтобы
-  BEH-id были уникальны во всём бандле. Здесь ярлык не воспроизводится
-  (BEH-05, BEH-22).
 - OUT-07 определён в брифе бандла (00-discovery/brief.md), а в требованиях
   присутствует только через оговорку §7 «OUT-01…OUT-10 брифа без
   изменений»; остальные OUT-id, на которые ссылается этот документ, в

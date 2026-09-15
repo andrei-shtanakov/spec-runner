@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - charter
 upstream_hashes:
-  charter: 71ed9d4869c5335d41715cad9d0732710a9bf946
+  charter: 54de41d055b252400d8bf0c4622e427eccf84998
 ---
 
 # Requirements — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -101,8 +101,8 @@ remedies, waivers, budget authorizations, review-loop state, стоимость 
 - **`call_id`** — full UUIDv4 на каждый платный subprocess; уникален внутри
   прогона и между прогонами.
 - **Платный subprocess (paid call)** — запуск CLI провайдера с prompt-ом.
-  Полный перечень сайтов: RED authoring, BEH-07 agent round, GREEN, review,
-  review-роли, `plan --full` (каждый вызов стадии), `plan --gated`,
+  Полный перечень сайтов: RED authoring, RED agent round (#220), GREEN,
+  review, review-роли, `plan --full` (каждый вызов стадии), `plan --gated`,
   `plan "<описание>"` (интерактивный цикл, **каждый круг** — отдельный
   платный вызов), `review-pr` verify и fix, `doctor`. Бриф в FR-06 называет
   минимум (task execution, review, `plan --full`, gated planning); чартер
@@ -294,10 +294,10 @@ call-start с `run_id`, `call_id`, provenance, policy identity, optional
   результата», 1000 повторений (`slow`): 0 платных вызовов без call-start,
   0 автоматических повторов open call; restore после падения между spawn и
   результатом выдаёт `needs-human` **до** любого subprocess.
-- Матрица сайтов (RED, BEH-07, GREEN, review, review:<role>, `plan --full`,
-  `plan --gated`, интерактивный `plan`, `review-pr verify`, `review-pr fix`,
-  `doctor`): у каждого сайта call-start предшествует `Popen` (порядок
-  наблюдается двойником).
+- Матрица сайтов (RED authoring, RED agent round (#220), GREEN, review,
+  review:<role>, `plan --full`, `plan --gated`, интерактивный `plan`,
+  `review-pr verify`, `review-pr fix`, `doctor`): у каждого сайта call-start
+  предшествует `Popen` (порядок наблюдается двойником).
 - Budget-отказ перед вызовом → нет call-start; prompt-артефакт заканчивается
   `=== NOT STARTED: … ===` как сегодня.
 - Повторный call-result для того же `call_id` → отказ записи, первая запись
@@ -1044,7 +1044,7 @@ drill-ом с записью результата, restore-drill (M-01) и open-
 
 ## Источники
 
-- `00-charter.md` (blob `71ed9d48…`) — цель, объём, инварианты 1–13,
+- `00-charter.md` (blob `54de41d0…`) — цель, объём, инварианты 1–13,
   критерии приёмки, риски RK-01…RK-07, вопросы Q-A…Q-D.
 - `00-discovery/brief.md` (customer-фрейм, blob `3f6e9807…`) —
   G/P/J/FR/NFR/CON/M/OUT; источник требований, ID неизменны.
