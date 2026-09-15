@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 1927c8fd14f74c1c1c5d55c14054d99c4cee1975
-  behaviour-spec: 5440bc080e0a3aa85e2df75dcdcea3cc5c24a5c4
+  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
+  behaviour-spec: 3baea4f3531e31b50634928f6e1cfcdc73ffe633
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -125,8 +125,9 @@ scenarios: [BEH-06]
 `execution_mode: tdd` завершается exit 2 при 0 вызовах двойника `Popen`;
 статус задачи не `done`, attempt несёт `error_code = INFRASTRUCTURE`; stderr
 называет `Refusal(kind="instrument")` — не «tests/lint check» и не трейсбек;
-closure записана с kind `infrastructure_error` и reason
-`call_start_not_acknowledged` (или stderr называет и отказ её записи).
+closure записана с kind `failed` и exit code 2 (`error_kind` attempt-а —
+`instrument`, вне отказного подмножества `ERROR_KINDS`), либо stderr называет
+отказ её записи.
 Таймаут ack — конфигурируемый ключ, превышение ведёт к тому же исходу, а не к
 ожиданию без предела.
 
@@ -137,8 +138,8 @@ scenarios: [BEH-07]
 Наблюдаемый знак: при исчерпанном `task_budget` и отказе budget guard перед
 GREEN двойник store не получил call-start, двойник `Popen` не вызван, строки в
 `agent_calls` нет, prompt-артефакт GREEN заканчивается
-`=== NOT STARTED: … ===`, attempt несёт `error_code = BUDGET_EXCEEDED`, closure
-прогона — kind `budget_refusal`.
+`=== NOT STARTED: … ===`, attempt несёт `error_code = BUDGET_EXCEEDED` и
+`error_kind = budget`, closure прогона — kind `refused`.
 
 #### AC-07: Timeout, пустой ответ, `is_error` при exit 0 и crash провайдера — call-result, не open call · verification: test
 traces: [FR-02, FR-06]
@@ -169,8 +170,10 @@ reason; повтор отвечает «уже закрыт» без второ�
 `run --task TASK-001` доходит до нового call-start с новым `call_id`, а сама
 команда закрытия платный вызов не запускает. У каждого из четырёх её
 invocation-ов двойник store получает ровно один run-start и ровно одну
-closure (`close_call_refused` на отказах, `completed` на закрытии и
-идемпотентном повторе, `store_unavailable` с exit 2 при недоступном store), а
+closure, kind которой выводит диспетчер по коду выхода (`completed` на
+закрытии и идемпотентном повторе, `failed` под guardrail-ом и при недоступном
+store с exit 2); попытка без `--reason` отказана argparse-ом до `start()` и
+потому не имеет ни run-start, ни closure, а
 checkpoint закрытия строки опубликован под тем же `run_id`: checkpoint под
 `run_id` без run-start — невыполненный критерий. Тот же знак предъявлен, когда
 локальной state DB между crash-ом и следующим `run` нет: после `spec-runner
@@ -428,64 +431,58 @@ run-start; config с `tls: true` и managed encryption загружается.
 
 ### G. Closure на каждом штатном завершении
 
-#### AC-27: Каждый orderly exit любой платящей подкоманды оставляет ровно одну closure нужного kind из одной таблицы соответствия · verification: test
+#### AC-27: Каждый orderly exit любой платящей подкоманды оставляет ровно одну closure, kind которой выведен одним правилом · verification: test
 traces: [FR-07]
 scenarios: [BEH-29, BEH-32, BEH-46]
 
-Наблюдаемый знак: для completed, `no_ready`, `task_not_found`, `dry_run`,
-`validation_failure`, governance-гейта, dirty-spec guard, tracked-state-DB
-guard, занятого lock, `budget_refusal`, `policy_refusal` под `review_policy:
-required`, `session_timeout`, `idle_timeout`, паузы с ответом `q`, отказа ack
-(`infrastructure_error`), stop-marker и SIGTERM (`operator_stop`) у каждого
-`run_id` ровно одна closure с kind из словаря
-`schemas/run-closure.schema.json`, reason, равным stop-reason из `status`,
-`last_checkpoint_id` последнего acknowledged checkpoint-а (или `null`),
-записанным фактическим exit code, `run_id`, `pipeline_id`, подкомандой, числом
-open calls, `degraded`/spool status, timestamps и
-`last_call_ids`/`attempt_ids`; четыре гарда старта дают `policy_refusal` с
-названием гарда и exit 1, для «lock занят» двойник получает пару run-start +
-closure под одним `run_id`, и равенство reason тексту `status` для гардов не
-требуется — они выходят раньше персиста stop-reason; `Refusal.kind`
-`policy`/`instrument`/`budget` и сигналы остановки отображаются в kind closure
-одной таблицей (статический тест: ни один сайт остановки не выбирает kind
-сам), `Refusal.with_note` kind сохраняет, неизвестный kind не сериализуется,
-exit code closure совпадает с кодом процесса. Ранние остановки цикла `run` —
-stop-marker, пауза с ответом `q`, `session_timeout` и `idle_timeout` — и три
-выхода до цикла — `no_ready`, `task_not_found`, `dry_run` — дают closure
-своего kind и своего reason: ни один не читается как `completed`, что
-наблюдается прямо (closure с невыполненными задачами и kind `completed` —
-невыполненный критерий). Динамический `error_<kind>` предъявлен отдельной
-конфигурацией: closure пишется, kind берётся по префиксу, отказа сериализации
-нет. `run --all --force` предъявляется отдельной конфигурацией: executor lock
-не берётся, run-start и closure есть, kind `completed` при всех задачах `done`
-и `operator_stop` по stop-marker.
+Наблюдаемый знак: у каждой конфигурации `run` — все задачи `done`, нет
+ready-задач, `--dry-run`, несуществующий `--task`, красный `validate`,
+governance-гейт, dirty-spec guard, tracked-state-DB guard, занятый lock,
+budget guard перед вызовом, неудовлетворённый gate под `review_policy:
+required`, отказ ack, истёкший session-таймер при невыполненных задачах,
+SIGTERM и неперехваченное исключение — ровно одна closure с kind из пяти
+словаря `schemas/run-closure.schema.json`, `last_checkpoint_id` последнего
+acknowledged checkpoint-а (или `null`), записанным фактическим exit code,
+`run_id`, `pipeline_id`, подкомандой, числом open calls, `degraded`/spool
+status, timestamps и `last_call_ids`/`attempt_ids`. Kind отвечает правилу:
+`completed` — только при коде 0 и отсутствии невыполненной работы; `refused`
+— при ненулевом коде с отказным `error_kind` последнего неуспешного
+attempt-а (`hook_failure` у gate-отказа, `budget` у budget guard-а); `failed`
+— на прочих ненулевых кодах и на коде 0 с невыполненной работой;
+`interrupted` — на SIGTERM; `crashed` — на неперехваченном исключении.
+Closure с невыполненными задачами и kind `completed` — невыполненный
+критерий, и это предъявляется прямо на конфигурации «неудовлетворённый gate»,
+где персистированный `last_run_stop_reason` остался дефолтным `completed`, а
+`run` вышел с кодом 1: closure `last_run_stop_reason` не читает.
+Четыре гарда старта дают `failed` с exit 1, для «lock занят» двойник
+получает пару run-start + closure под одним `run_id`, и равенство reason
+какому-либо словарю не требуется — reason свободная строка и может быть
+пустым. `run --all --force` предъявляется отдельной конфигурацией: executor
+lock не берётся, run-start и closure есть.
 
-Тот же знак предъявлен у остальных девяти платящих подкоманд, и критерий
-считается выполненным только вместе с ними: `retry`, `watch`, `doctor`,
-`plan`, `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`
-и `restore` — по одному invocation на каждый исход инвентаря выходов design
-§ 6.3, у каждого ровно
-один run-start и ровно одна closure с названным для этого исхода kind и
-фактическим exit code. Отказ правила не записывается поломкой инструмента:
-`plan --gated` с неодобренным upstream-ом выходит с кодом 2 без единого
-вызова CLI и даёт `policy_refusal`, а интерактивный `--gated`, прервавшийся
-без единой записанной стадии, — `no_ready`; `infrastructure_error` на первой
-и `completed` на второй суть невыполненный критерий. Четыре конфигурации,
-где код процесса лжёт об исходе, предъявлены прямо: `retry` с задачей `blocked` и
-`watch`, остановленный `max_consecutive_failures`, выходят с кодом 0, `plan`
-проглатывает таймаут провайдера с кодом 0, `doctor` кодирует отказ оператора
-на cost gate кодом 2 — closure `completed` на любой из четырёх и closure
-`infrastructure_error` у `doctor` на отказе оператора суть невыполненный
-критерий. Правило вывода предъявлено отдельно двойником handler-а,
-завершающимся без `note_stop` на каждом из семи исходов: kind выведен на
-всех семи, `completed` — только при коде 0 и выполненной работе, run-start
-без closure не остаётся ни на одном. Причина, сообщённая раньше, не
-затирается поздней (`review-pr` под cost guard-ом даёт `budget_refusal`, не
-`needs_human`), и ни одна из девяти не персистит `last_run_stop_reason` —
-равенство reason тексту `status` для них не требуется, требуется, чтобы
-reason называл сайт. Две оставшиеся платящие формы — `evidence close-call` и
-`evidence purge` — в этот критерий не входят: их исходы предъявлены в AC-08
-и AC-38, и инвентарь § 6.3 закрыт только тремя критериями вместе.
+Тот же знак предъявлен у восьми платящих подкоманд вне `run` — `retry`,
+`watch`, `doctor`, `plan`, `review-pr`, `tdd
+abandon/repair/resume/release`, `budget authorize`, `restore`, — и критерий
+считается выполненным только вместе с ними: у каждой по одному invocation на
+каждую достижимую строку правила, ровно один run-start и ровно одна closure
+с выведенным kind и фактическим exit code. Две конфигурации, где код процесса
+лжёт об исходе, предъявлены прямо: `retry` с задачей `blocked` и `watch`,
+остановленный `max_consecutive_failures`, выходят с кодом 0 и дают `failed`,
+потому что задача, по которой invocation записал attempt, не в статусе
+`success`; closure `completed` на любой из двух — невыполненный критерий.
+Правило предъявлено отдельно двойником handler-а, завершающимся каждым из
+шести способов (исключение, сигнал, ненулевой код с отказным attempt-ом,
+прочий ненулевой код, код 0 с невыполненной работой, код 0 без неё): kind
+выведен на всех шести, `completed` — только на последнем, run-start без
+closure не остаётся ни на одном. Статический тест подтверждает, что ни один
+сайт выхода kind не выбирает: `note_stop`, таблиц причин по подкомандам и
+новых значений `RUN_STOP_REASONS` в дереве нет. Различение «отказ правила» и
+«поломка инструмента» у подкоманд без attempt-ов не требуется и требованием
+не является: `plan --gated` с неодобренным upstream-ом даёт `failed`, и
+требование `refused` на нём — невыполненный критерий. Две оставшиеся платящие
+формы — `evidence close-call` и `evidence purge` — в этот критерий не входят:
+их исходы предъявлены в AC-08 и AC-38, и все одиннадцать позиций перечня
+FR-01 закрыты только тремя критериями вместе.
 
 #### AC-28: `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown · verification: test
 traces: [FR-07, FR-09]
@@ -503,8 +500,7 @@ traces: [FR-07, FR-03]
 scenarios: [BEH-31]
 
 Наблюдаемый знак: при неподтверждённом последнем checkpoint-е closure несёт
-kind `infrastructure_error`, причину «last checkpoint not acknowledged» и
-`last_checkpoint_id` предыдущего acknowledged, exit 2; при отказе записи
+kind `failed`, `last_checkpoint_id` предыдущего acknowledged и exit 2; при отказе записи
 closure stderr называет причину и exit code не становится 0; повторная
 closure отвергнута, первая неизменна; журнал двойника не содержит
 публикации checkpoint-а после closure.
@@ -537,7 +533,7 @@ scenarios: [BEH-34]
 Наблюдаемый знак: после двух replay число строк в DB равно числу после
 первого; с изменённым байтом payload replay отказывает, называя `seq` и
 ожидаемый/фактический SHA-256, прогон не стартует — `Refusal(kind=
-"instrument")`, exit 2, 0 `Popen`, closure `infrastructure_error`;
+"instrument")`, exit 2, 0 `Popen`, closure `failed`;
 статический тест находит единственного читателя spool — replay.
 
 #### AC-32: Одновременный отказ DB и spool останавливает исполнение до следующего платного вызова · verification: test
@@ -545,8 +541,8 @@ traces: [FR-08, FR-07, NFR-01]
 scenarios: [BEH-35]
 
 Наблюдаемый знак: после двойного отказа на записи attempt TASK-001 двойник
-`Popen` не вызван для TASK-002, exit 2, closure `infrastructure_error` с
-причиной, называющей обе неудачи; при недоступном store stderr называет
+`Popen` не вызван для TASK-002, exit 2, closure `failed` с причиной,
+называющей обе неудачи; при недоступном store stderr называет
 причину и exit остаётся 2; `status` в следующем процессе показывает TASK-001
 незакрытой, а не `done`.
 
@@ -609,8 +605,7 @@ spool, каждый call record, attempt export, closure) в режимах «б
 и «обязательный файл удалён» `restore`, следующий `run` в namespace и
 `evidence` отказывают с именем файла и ожидаемым/фактическим digest, exit 2
 у всех трёх; restore — до записи в каталог, `run` — до `Popen` и
-`claims.check_claims` (двойники подтверждают 0 вызовов) с closure
-`infrastructure_error`; изменённый manifest отвергнут по digest-у верхнего
+`claims.check_claims` (двойники подтверждают 0 вызовов) с closure `failed`; изменённый manifest отвергнут по digest-у верхнего
 уровня при сходящихся внутренних digests; ни один вариант не заканчивается
 успешным restore с предупреждением.
 
@@ -625,9 +620,10 @@ scenarios: [BEH-42]
 reason и временем без payload; при отказе store в удалении команда сообщает
 отказ, не удаляет локальную копию и не пишет audit-запись об удалении. У
 каждого invocation `evidence purge` двойник store получает ровно один
-run-start и ровно одну closure — `no_ready` без истёкших объектов,
-`purge_refused` при отказе store, `completed` после удаления, — и open call
-прежнего прогона после неё предъявляется как раньше.
+run-start и ровно одну closure, kind которой выводит диспетчер по коду
+выхода: `completed` без истёкших объектов и после удаления, `failed` при
+отказе store в `delete` и при недоступном store, — и open call прежнего
+прогона после неё предъявляется как раньше.
 
 #### AC-39: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E · verification: test
 traces: [FR-03, FR-04, FR-06]

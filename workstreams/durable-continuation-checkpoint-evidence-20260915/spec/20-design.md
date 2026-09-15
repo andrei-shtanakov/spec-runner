@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 1927c8fd14f74c1c1c5d55c14054d99c4cee1975
-  behaviour-spec: 5440bc080e0a3aa85e2df75dcdcea3cc5c24a5c4
+  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
+  behaviour-spec: 3baea4f3531e31b50634928f6e1cfcdc73ffe633
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -125,7 +125,7 @@ NFR-02 (60 s) на critical path каждой из ~десяти mutation одн
 acknowledged checkpoint-ом никогда нет неподтверждённой mutation, и durable
 boundary совпадает с границей «до платного вызова»; (б) перед closure — так
 closure всегда несёт acknowledged id (BEH-31). Таймаут в (а) — отказ до
-spawn (`instrument`), в (б) — closure `infrastructure_error` с id
+spawn (`instrument`), в (б) — closure kind `failed`, exit 2, с id
 предыдущего acknowledged. Между точками drain процесс делает то, что делал
 (тесты, lint, git, сборка prompt-а) — это и есть выигрыш от асинхронности.
 Порядок файлов внутри одного checkpoint-а: DB snapshot, spool, WIP, затем
@@ -225,7 +225,7 @@ manifest-е (RK-06): сравнивается не способ получени
 identity: потолок — это **state** (`budget_authorizations` едут в snapshot-е),
 а config-значение сравнивать бессмысленно — guard #213 пересчитает его перед
 следующим вызовом, и ниже потолок на новой машине даст честный
-`budget_refusal`, а не молчаливый повтор. CLI/модель — косметика по критерию:
+отказ по бюджету, а не молчаливый повтор. CLI/модель — косметика по критерию:
 задачу законно доигрывают другим агентом, и ни claims, ни red, ни waiver от
 этого не меняются; они пишутся в run-start/manifest как факты для аудитора
 (`evidence` их показывает) и в `costs`. Версия spec-runner — так же факт;
@@ -494,7 +494,7 @@ identity (§ 4.2) и `spec_prefix`/`change_id`: путь в него не вхо
    (шаг 8), а publisher ставит запись в очередь повторной доставки; drain
    перед следующим call-start и перед closure ждёт и её — так до следующей
    траты и до закрытия прогона result либо в store, либо прогон остановлен
-   `infrastructure_error`.
+   отказом инструмента.
 8. Закрытие строки ledger-а (`record_agent_call` в его сегодняшней
    сигнатуре, дополненной `call_id` — становится шагом «close»), затем
    возврат `CallOutcome` сайту. `record_attempt` и checkpoint — по-прежнему
@@ -730,10 +730,11 @@ continuation-state»: `close-call` возвращает задачу в выби
 разблокировавшее задачу, — единственное в перечне без своей closure.
 Read-only остаётся `evidence <run_id>`, а не подкоманда `evidence` целиком.
 `watch` — один `start()` на invocation, потому что invocation один, а не
-потому, что lock берётся один раз. Исходы каждой из двенадцати и то, какой
-reason сообщает каждый её сайт выхода, — § 6.3: перечень платящих подкоманд
-без перечня их выходов оставил бы одиннадцать из двенадцати без
-определённого kind closure.
+потому, что lock берётся один раз. Позиций в перечне одиннадцать: `run` и
+десять вне его — восемь самостоятельных команд (`retry`, `watch`, `plan`,
+`review-pr`, `doctor`, `tdd abandon/repair/resume/release`, `budget
+authorize`, `restore`) и две формы `evidence`. Исход каждой закрывает одно
+правило § 6.3, одинаковое для всех одиннадцати.
 
 Executor lock носителем run-start быть не может, и это не деталь реализации, а
 свойство дерева: `_acquire_run_lock` (`cli.py:181`) вызывается **только** из
@@ -747,318 +748,156 @@ executor lock не берут вовсе. Точка в lock-е оставила
 при этом остаётся обычным платящим прогоном контракта: `--force` отключает
 проверку lock-а, а не участие в evidence.
 
-Отказ lock-а («lock занят», `sys.exit(1)`-ветка `_acquire_run_lock`) наступает
-**после** run-start и потому ничего к нему не добавляет: ветка вызывает
-`run_context.note_stop("lock_busy", detail)` перед `sys.exit(1)`, а closure
-пишет общая точка § 6.3 (BEH-29: «lock занят» — обычная пара run-start +
-closure, kind `policy_refusal`, exit 1). Так же устроены три других гарда
-старта — governance-гейт (`_enforce_spec_governance`, `cli.py:285-299`),
-dirty-spec (`_enforce_clean_spec`, `:729`) и tracked-state DB
+Отказ lock-а («lock занят», `sys.exit(1)`-ветка `_acquire_run_lock`)
+наступает **после** run-start и потому даёт обычную пару run-start + closure,
+а не одинокий run-start: `sys.exit(1)` доходит до `finally` диспетчера, и
+closure пишет общая точка § 6.3 — kind по коду выхода, никакой правки самой
+ветки. Так же устроены три других гарда старта — governance-гейт
+(`_enforce_spec_governance`, `cli.py:285-299`), dirty-spec
+(`_enforce_clean_spec`, `:729`) и tracked-state DB
 (`_enforce_untracked_state`, #273, `:779`): все три стоят внутри handler-а,
 подряд в начале `_run_tasks_inner` (`:828-830`) и в `cmd_retry` (`:1471`) /
-`cmd_watch` (`:1547`), после run-start, и все три только сообщают причину.
-Governance-гейт назван здесь наравне с остальными потому, что он такой же
-`sys.exit(1)` без записи причины (`:299`), а не потому, что он новый: пропуск
-его в перечне оставил бы четвёртый штатный отказ без closure.
+`cmd_watch` (`:1547`), то есть после run-start. Ни один из четырёх не
+правится этим дизайном.
 
-**6.3 Closure** — `RunContext.close(kind, reason, exit_code)` — одна точка
-записи: `main()` оборачивает dispatch в `try/except SystemExit/except
-BaseException/finally`; на выходе, если `start()` был вызван и closure ещё
-нет: `drain(timeout)` publisher-а → closure с `last_checkpoint_id =
-last_acknowledged()` (при таймауте drain — `infrastructure_error` с
-предыдущим id, exit 2, BEH-31). Kind — из **одной таблицы** `closure.py:
-CLOSURE_KINDS` (BEH-32): ключи — `RUN_STOP_REASONS` (`cli.py:541`:
-`completed`→`completed`, `validation_failed`→`validation_failure`,
-`budget_exceeded`→`budget_refusal`, `task_failed_stop` /
-`max_consecutive_failures` / `dependency_blocked_after_skip` /
-`state_spec_mismatch`→`policy_refusal`), `RefusalKind` (`policy`→
-`policy_refusal`, `instrument`→`infrastructure_error`, `budget`→
-`budget_refusal`), сигналы и ранние остановки цикла `run` (`_shutdown_requested`
-и stop-marker→`operator_stop`; пауза SIGQUIT с ответом `q`→`operator_stop`;
-`session_timeout_minutes`→`session_timeout`;
-`idle_timeout_minutes`→`idle_timeout`), стартовые гарды (`lock_busy`,
-`spec_governance`, `dirty_spec`, `tracked_state`→`policy_refusal`, exit 1 —
-как сегодня), выходы до цикла (`no_ready`→`no_ready`;
-`task_not_found`→`no_ready`; `dry_run`→`dry_run`, exit 0),
-динамическое семейство `error_<kind>` из `_stop_reason_for` (`cli.py:657`):
-`error_infrastructure`→`infrastructure_error`, прочие→`policy_refusal` —
-семейство распознаётся по префиксу и в перечислимый словарь
-`RUN_STOP_REASONS` не входит по построению (комментарий `cli.py:539-540`),
-closure-only причины остальных одиннадцати платящих подкоманд (инвентарь ниже)
-и необработанное исключение→`infrastructure_error`. Сайты
-остановки сообщают контексту **причину**, не kind: в `run` — там, где сегодня
-стоит `state.set_meta("last_run_stop_reason", …)` / `audit_logger.record(
-EVENT_RUN_ENDED, stop_reason=…)`, добавляется `run_context.note_stop(reason,
-detail)` — тот же словарь, что видит `status` (BEH-29: reason совпадает); в
-остальных одиннадцати подкомандах `set_meta("last_run_stop_reason", …)` не
-вызывается ни разу, и `note_stop` ставится по инвентарю ниже, сайт за сайтом.
-Сайт, причину не сообщивший, kind всё равно получает — по правилу вывода
-ниже, и `completed` это правило ему не даёт.
+**6.3 Closure** — `RunContext.close(exit_code)` — одна точка записи, и она
+там же, где run-start: `main()` оборачивает вызов handler-а в `try/except
+SystemExit/except BaseException/finally`; на выходе, если `start()` был
+вызван и closure ещё нет: `drain(timeout)` publisher-а → closure с
+`last_checkpoint_id = last_acknowledged()`. Таймаут drain — единственный
+случай, когда `close()` перекрывает выведенный kind: она пишет `failed` с
+exit 2 и reason, называющим неподтверждённый checkpoint (BEH-31). Это её
+собственное наблюдение о неполноте записи, а не сообщение сайта. Сайты
+выхода подкоманд контексту не сообщают ничего: ни `note_stop`, ни обязанности
+«поставить причину вот здесь» в дизайне больше нет. Kind выводит одна функция
+`closure.derive(outcome)` из **двух** фактов, которые диспетчер наблюдает сам,
+одинаково для каждой подкоманды из `PAYING_SUBCOMMANDS`.
 
-**Инвентарь сайтов выхода `run` — полный, и у шести из них сегодня нет своей
-причины.** Перечень построен по дереву: каждый `sys.exit`, `return` и `break`
-на пути invocation-а `run` — в `cmd_run` (`cli.py:202-263`), в обёртке
-`_run_tasks` (`:352-367`) и в `_run_tasks_inner` от его начала (`:822`) через
-персист stop-reason (`:1374`) до итогового `sys.exit(exit_code)` (`:1464`).
-Границы именно такие, а не «между `:822` и `:1374`»: два сайта выхода `run`
-лежат снаружи этого отрезка — перенос кода прогона через границу
-daemon-треда под `--tui` (`:256-257`) и `finally` обёртки `_run_tasks`
-(`:361-367`), — и оба в таблице.
+**Факт первый — как handler ушёл:** необработанное исключение (не
+`SystemExit`), сигнал или `KeyboardInterrupt`, либо код выхода
+(`SystemExit.code` или код, возвращённый handler-ом).
 
-| Сайт выхода | Строка | stop-reason сегодня | stop-reason по этому дизайну |
-|---|---|---|---|
-| governance-гейт `_enforce_spec_governance` | `:828` → `:299` | нет (`sys.exit(1)`) | `spec_governance` — новое |
-| dirty-spec `_enforce_clean_spec` | `:830` | нет (`sys.exit(1)`) | `dirty_spec` — новое |
-| tracked-state DB `_enforce_untracked_state` | `:831` | нет (`sys.exit(1)`) | `tracked_state` — новое |
-| lock занят | `_acquire_run_lock` `:181` | нет (`sys.exit(1)`) | `lock_busy` — новое |
-| `validate` красный до исполнения | `:919` | `validation_failed` (только в audit-записи) | `validation_failed` |
-| `state.stop_cause()` до выбора задач | `:950` | `budget_exceeded` / `max_consecutive_failures` / … | без изменений |
-| `--task` назвал несуществующую задачу | `:958` | нет (`return`, exit 0) | `task_not_found` — новое |
-| нет ready-задач | `:1013` | `completed` (дефолт `:876`) | `no_ready` — новое |
-| `--dry-run` | `:1018` | нет (`return`, exit 0) | `dry_run` — новое |
-| пауза SIGQUIT, ответ `q` | `:1045` | `completed` (дефолт) | `operator_stop` |
-| stop-marker в обеих ветках цикла | `:1066`, `:1285` | `completed` (дефолт) | `operator_stop` |
-| session timeout | `:1077` | `completed` (дефолт) | `session_timeout` |
-| idle timeout | `:1088` | `completed` (дефолт) | `idle_timeout` |
-| `_idle_stop_verdict` в конце цикла | `:1181` | `completed` / `dependency_blocked_after_skip` | без изменений |
-| task failed под `on_task_failure: stop` | `:1254`, `:1325` | `task_failed_stop` | без изменений |
-| `state.should_stop()` после задачи | `:1276`, `:1342` | `_stop_reason_for` (`:657`): `budget_exceeded`, `error_<kind>`, `max_consecutive_failures` | без изменений |
-| итоговый `sys.exit(exit_code)` после персиста | `:1464` | персистён на `:1374` | без изменений |
-| `--tui`: код прогона перенесён через границу треда | `:256-257` | тот, что выставил прогон в треде | своей не заводит: `RunContext` — один на процесс (`run_context.current()`, § 6.1), и `note_stop` из daemon-треда доходит до диспетчера |
-| `finally` обёртки `_run_tasks`: исключение в `finalize_integration_branch` / `_post_pr_review_stage` | `:361-367` | нет | своей не заводит: причина, сообщённая прогоном, сохраняется (правило вывода, п. 1), exit code в closure — фактический |
+**Факт второй — исход работы:** есть ли задача, по которой **этот**
+invocation записал attempt и которая на момент выхода не в статусе `success`
+(`state.py:2211-2217`), либо остался open call. Attempt-ы invocation-а
+закрепляет столбец `run_id` (§ 2.3), число open calls closure и так несёт. У
+подкоманд, attempt-ов не пишущих, множество пусто: для них второй факт всегда
+«невыполненной работы нет», и kind решает код выхода.
 
-Шесть сайтов без своей причины — это шесть способов записать оборванный или
-ничего не сделавший прогон как `completed` либо не записать ничего, то есть
-«пустой успех», запрещённый инвариантом 4 и FR-07. Поэтому `RUN_STOP_REASONS`
-(`cli.py:536-541`) получает аддитивно **шесть** значений — `operator_stop`,
-`session_timeout`, `idle_timeout`, `no_ready`, `task_not_found`, `dry_run`, —
-и каждая точка выставляет своё перед `break`/`return`, а `note_stop` рядом с
-`set_meta` передаёт то же значение контексту. Четыре гарда старта
-(`lock_busy`, `spec_governance`, `dirty_spec`, `tracked_state`) причину
-контексту сообщают, но в `RUN_STOP_REASONS` не входят: они выходят
-`sys.exit(1)`-ом задолго до `set_meta`, `status` их не показывает и
-показывать не начинает — их единственный читатель closure, и требование
-BEH-29 «reason совпадает с тем, что показывает `status`» к ним по построению
-не относится.
+**Kind — малое закрытое множество из пяти**, и `run-closure.schema.json`
+пинует ровно их. Строки читаются сверху вниз, первая подошедшая выигрывает:
 
-Три новых значения названы отдельно, потому что след их сайтов сегодня
-неотличим от успеха: `no_ready` (`:1013`) персистит чужой дефолт `completed`
-— прогон, не выбравший ни одной задачи, читается как успешно закончивший;
-пауза с ответом `q` (`:1045`) — оператор остановил прогон с невыполненными
-задачами, и это `operator_stop`, а не успех; `--dry-run` (`:1018`) и
-task-not-found (`:958`) уходят `return`-ом вообще без персиста. `dry_run`
-получает **собственный** kind, а не `completed`: «invocation намеренно не
-исполнял ничего» и «прогон отработал задачи» — разные факты для аудитора, и
-первый под именем второго снова даёт пустой успех. `task_not_found` кладётся
-в kind `no_ready` — invocation не выбрал ни одной задачи, — но со своим
-reason, чтобы `status` называл причину. Exit code обоих остаётся сегодняшним
-(0), и closure несёт именно его: изменение кодов возврата этих двух путей —
-не предмет этого workstream-а.
-
-Словарь объявлен interop-поверхностью («add freely, rename
-with a CHANGELOG note», комментарий `cli.py:536-540`), так что добавление —
-CHANGELOG-нота под Unreleased и строка в `docs/state-schema.md`, не breaking
-change: `status` и внешние читатели (audit-таблица Maestro) видят новые
-значения там, где раньше видели `completed` или пустоту.
-
-**Правило вывода kind из исхода handler-а — общее; инвентарь его не
-заменяет.** Инвентарь перечисляет сайты, которые причину сообщают, но kind
-closure обязан определяться и тогда, когда причина не сообщена: иначе каждая
-ветка, не попавшая в перечень, и каждая ветка, добавленная после этого
-бандла, дефолтила бы в `completed` — пустой успех, запрещённый инвариантом 4
-чартера и FR-07, — либо не сериализовалась бы вовсе, оставив run-start без
-closure, то есть прогон, который `evidence` и `restore` обязаны прочитать
-как crash (BEH-04, BEH-30). Правило живёт в одной функции
-(`closure.derive(noted, outcome)`) и читает два входа: сообщённую причину и
-исход handler-а, наблюдаемый диспетчером. Новых входов оно не заводит —
-исход это `exit_code`, число open calls и `attempt_ids`, которые closure и
-так несёт.
-
-1. **Причина сообщена.** `note_stop(reason, detail)` записывает причину один
-   раз за invocation: повторный вызов первую **не** затирает, потому что
-   ближайшая к остановке точнее поздней. Так `review-pr`, остановленный
-   cost guard-ом (`review_pr.py:1390`), доходит до общего выхода `:1429` с
-   уже сообщённым `budget_exceeded`, а не с выведенным там `needs_human`.
-   Kind = `CLOSURE_KINDS[reason]`; reason вне словаря и вне динамических
-   семейств — отказ сериализации closure (BEH-32), не повышение до успеха.
-2. **Причина не сообщена.** Kind выводится из исхода — первая подходящая
-   строка таблицы:
-
-| Исход handler-а | kind | reason |
+| Как ушёл handler | Невыполненная работа | kind |
 |---|---|---|
-| необработанное исключение (не `SystemExit`) | `infrastructure_error` | `unhandled_exception` |
-| `Refusal(kind=k)`, дошедший до диспетчера | по `RefusalKind` | `refusal_<k>` |
-| exit code ≥ 2 | `infrastructure_error` | `unreported_exit_<n>` |
-| exit code == 1 | `policy_refusal` | `unreported_exit_1` |
-| exit code == 0, но остался open call либо terminal attempt со статусом `failed`/`blocked` | `policy_refusal` | `unreported_task_not_done` |
-| exit code == 0, платных вызовов и attempt-ов за invocation не было | `no_ready` | `unreported_no_work` |
-| exit code == 0, работа была, все terminal attempt — `success` | `completed` | `completed` |
+| необработанное исключение (не `SystemExit`) | любая | `crashed` |
+| сигнал или `KeyboardInterrupt` | любая | `interrupted` |
+| код ≠ 0, `error_kind` последнего неуспешного attempt-а — отказ правила | любая | `refused` |
+| код ≠ 0 | любая | `failed` |
+| код 0 | есть | `failed` |
+| код 0 | нет | `completed` |
 
-Последняя строка — **единственная** клетка правила, дающая `completed`, и
-единственный путь к `completed` помимо явно сообщённого `completed`. Ни
-ненулевой exit code, ни невыполненная задача его не дают ни на одной
-клетке; клетки «причина не сообщена → `completed`» без обоих условий сразу в
-таблице нет — ровно как в `CLOSURE_KINDS` нет клетки «неизвестный
-stop-reason → `completed`».
+«Отказ правила» — закрытое подмножество словаря дерева `ERROR_KINDS`
+(`errors.py:101-121`): `policy`, `budget`, `blocked`, `hook_failure`,
+`harness_guard`. Остальные его значения (`instrument`, `timeout`, `network`,
+`rate_limit`, `auth`, `api_error`, `cli_error`, `internal_error`,
+`interrupted`, `unknown`) означают «инструмент не смог ответить» и дают
+`failed`. Значение `interrupted` словаря `ERROR_KINDS` совпадает по имени с
+kind-ом closure, но им не становится: сигнал ловит вторая строка правила
+раньше, чем дело доходит до attempt-ов. Подмножество берётся из словаря дерева, а не заводится заново:
+второй словарь для тех же состояний — это ровно #230.
 
-Правило — пояс, а не замена перечня: сайт, чей исход правило классифицирует
-грубее, чем он различим на месте, сообщает причину явно, и такие сайты
-перечислены ниже все. Показательный случай — `doctor`: его exit 2 означает
-«оператор отказался на cost gate» (`doctor.py:389`), а не инструментальный
-отказ, и без явного `note_stop("operator_stop")` правило записало бы решение
-оператора поломкой инструмента.
+**`completed` даёт единственная клетка** — код 0 при отсутствии невыполненной
+работы. Ни ненулевой код, ни невыполненная задача не дают его ни на одной
+строке; клетки «причина неизвестна → `completed`» в правиле нет, потому что
+последняя строка не дефолт, а конъюнкция двух проверенных условий. Этим и
+держится инвариант 4 чартера и FR-07.
 
-**Инвентарь сайтов выхода остальных одиннадцати платящих подкоманд — полный.**
-Перечень построен по дереву: каждый `return`, `sys.exit`, `raise SystemExit`
-и `break`, через который проходит выход invocation-а, в handler-е и в
-функциях, чей код возврата handler отдаёт наружу. Восемь подкоманд взяты из
-дерева; `restore`, `evidence close-call` и `evidence purge` — новые
-подкоманды этого бандла, их исходы взяты из § 2.5, § 7.2–7.3 и Q-11. Исключения, проходящие сквозь handler, отдельными строками не
-перечисляются: их закрывает первая строка правила вывода.
+**Правило не читает `last_run_stop_reason` — и в этом его смысл.** Дефолт
+`stop_reason = "completed"` (`cli.py:876`) персистится на `cli.py:1374` и
+тогда, когда прогон не выполнил ни одной задачи: цикл single-mode меняет его
+лишь на двух сайтах (`:1318`, `:1333`), и gate-отказ под `review_policy:
+required` до них не доходит — `HOOK_FAILURE` фатален (`execution.py:1284`,
+`:1522`), одна неудача не трипует `max_consecutive_failures`
+(`config.py:292`). Closure, ключуемая на этом значении, назвала бы такой
+прогон успехом; правило смотрит на код выхода, а он здесь 1. Свой исход `run`
+уже считает сам: `considered = touched | tasks_to_run`, и каждая задача
+оттуда не в статусе `success` увеличивает счётчик неуспехов —
+включая выбранную задачу вообще без attempt-ов (`cli.py:1344-1371`). Поэтому
+для `run` «не доделал выбранное» закодировано кодом выхода, а второй факт
+нужен там, где код лжёт: `retry`, чья задача закончила `blocked`
+(`cli.py:1528`, exit 0), и `watch`, остановленный `max_consecutive_failures`
+(`:1623`, exit 0).
 
-| Подкоманда | Сайт выхода | Строка | Исход | reason |
-|---|---|---|---|---|
-| `retry` | governance-гейт | `cli.py:1471` → `:299` | `sys.exit(1)` | `spec_governance` |
-| `retry` | dirty-spec | `:1475` → `:729` | `sys.exit(1)` | `dirty_spec` |
-| `retry` | tracked-state DB | `:1476` → `:779` | `sys.exit(1)` | `tracked_state` |
-| `retry` | `--task-id` назвал несуществующую задачу | `:1484` | `return`, exit 0, работы нет | `task_not_found` → kind `no_ready` |
-| `retry` | задача закончила `done` | `:1525` | exit 0, задача выполнена | `completed` |
-| `retry` | задача закончила `blocked` | `:1528` | exit 0, задача **не** выполнена | `task_failed_stop` → `policy_refusal` |
-| `watch` | governance-гейт | `:1547` → `:299` | `sys.exit(1)` | `spec_governance` |
-| `watch` | dirty-spec | `:1551` → `:729` | `sys.exit(1)` | `dirty_spec` |
-| `watch` | tracked-state DB | `:1552` → `:779` | `sys.exit(1)` | `tracked_state` |
-| `watch` | pre-run validation красная | `:1563` | `return`, exit 0, работы нет | `validation_failed` → `validation_failure` |
-| `watch --tui` | stop-marker в цикле треда | `:1583` | `break` треда; handler выходит на `:1606` | `operator_stop` |
-| `watch --tui` | max consecutive failures в цикле треда | `:1585` | `break` треда; handler выходит на `:1606` | `max_consecutive_failures` → `policy_refusal` |
-| `watch --tui` | оператор закрыл TUI, цикл не останавливался | `:1606` | `return`, exit 0 | `operator_stop` |
-| `watch` | stop-marker | `:1616` | `break` → exit 0 | `operator_stop` |
-| `watch` | max consecutive failures | `:1623` | `break` → exit 0 | `max_consecutive_failures` → `policy_refusal` |
-| `doctor` | оператор отказался на cost gate | `doctor.py:389` → `cli.py:1679` | exit 2, 0 платных вызовов | `operator_stop` |
-| `doctor` | verdict `broken`, либо `degraded` под `--strict` | `doctor.py:416`, `:418` → `:1679` | exit 1, probe отработал | `probe_broken` → `infrastructure_error` |
-| `doctor` | verdict `ready`/`degraded` | `doctor.py:419` → `:1679` | exit 0 | `completed` |
-| `plan` | `--from-file` нечитаем / не UTF-8 / пуст; описания нет вовсе | `cli_plan.py:356`, `:360`, `:362`, `:364`, `:370` | `SystemExit(str)`, exit 1, до работы | `usage_error` → `policy_refusal` |
-| `plan --gated` | первая стадия цепи без описания | `:400` | `SystemExit(str)`, exit 1 | `usage_error` |
-| `plan --gated --stage` | upstream-гейт: прямой upstream не APPROVED | `:589` ← `cli_plan.py:126-128` | `SystemExit(2)`, вызовов CLI ноль | `spec_governance` → `policy_refusal` |
-| `plan --gated --stage` | генерация упала: ненулевой код провайдера, нет spec-маркера, красная валидация | `:589` | `SystemExit(1)`, вызов оплачен | `stage_generation_failed` → `infrastructure_error` |
-| `plan --gated --stage` | стадия записана | `:589` | `SystemExit(0)` | `completed` |
-| `plan --gated` неинтерактивно | гейт на терминальном действии (`stop`/`await`/`stale`/`done`) | `:602` | `return`, exit 0, генерации не было | `no_ready` |
-| `plan --gated` неинтерактивно | код стадии | `:603` | `SystemExit(rc)` | по rc, как три строки `:589` |
-| `plan --gated` интерактивно | цикл прервался терминальным действием, не сгенерировав ни одной стадии | `:625` | `return`, exit 0 | `no_ready` |
-| `plan --gated` интерактивно | цикл прервался терминальным действием после ≥ 1 записанной стадии | `:625` | `return`, exit 0 | `completed` |
-| `plan --gated` интерактивно | цикл прервался ненулевым rc стадии | `:625` | `return`, exit 0 | rc 2 → `spec_governance`; rc 1 → `stage_generation_failed` |
-| `plan` | `validate_generated_tasks` красная | `:506`, `:518` | `sys.exit(1)` | `validation_failed` → `validation_failure` |
-| `plan --full` | провайдер вернул ненулевой код | `:675` | `sys.exit(1)`, вызов оплачен | `stage_generation_failed` → `infrastructure_error` |
-| `plan --full` | в выводе нет spec-маркера | `:681` | `sys.exit(1)`, вызов оплачен | `stage_generation_failed` |
-| `plan --full` | все три стадии записаны | `:710` | `return`, exit 0 | `completed` |
-| `plan` интерактивный | error pattern в выводе провайдера | `:815` | `return`, exit 0, вызов оплачен | `provider_error` → `infrastructure_error` |
-| `plan` интерактивный | задачи предъявлены, ответ оператора применён | `:879` | `return`, exit 0 | `completed` |
-| `plan` интерактивный | распознанного сигнала нет, вывод показан | `:884` | `return`, exit 0 | `completed` |
-| `plan` интерактивный | таймаут провайдера | `:888` | `return`, exit 0 | `provider_timeout` → `infrastructure_error` |
-| `plan` интерактивный | `KeyboardInterrupt` | `:891` | `return`, exit 0 | `operator_stop` |
-| `plan` интерактивный | прочее исключение, проглоченное `except Exception` | `:894` | `return`, exit 0 | `unhandled_exception` → `infrastructure_error` |
-| `review-pr` | PR draft / PR не `open` / `ReviewPrError` | `review_pr.py:1338`, `:1342`, `:1453` → `_fail_closed` `:163-182` | exit 1 | `review_fail_closed` → `policy_refusal` |
-| `review-pr` | cost guard остановил верификацию | `:1390` | `break`, выход на `:1429` | `budget_exceeded` → `budget_refusal` |
-| `review-pr` | остались `uncertain`/`unverified`/незакрытые строки | `:1429` | exit 2 | `needs_human` → `policy_refusal` |
-| `review-pr` | всё проверено и закрыто | `:1429` | exit 0 | `completed` |
-| `tdd abandon`/`repair` | `RemedyError` | `remedy.py:805` | `return 1` | `remedy_refused` → `policy_refusal` |
-| `tdd abandon` | применён или повтор | `:822`, `:825` | `return 0` | `completed` |
-| `tdd repair` | red переустановлен на новой линии | `_repair_exit` `:921` (из `:821`, `:831`, `:834`) | `return 0` | `completed` |
-| `tdd repair` | red **не** переустановлен | `_repair_exit` `:926` | `return 2` | `red_not_reestablished` → `policy_refusal` |
-| `tdd release` | `RemedyError` | `:857` | `return 1` | `remedy_refused` |
-| `tdd release` | повтор / нечего освобождать / освобождено | `:861`, `:867`, `:869` | `return 0` | `completed` |
-| `tdd resume` | `RemedyError` | `:895` | `return 1` | `remedy_refused` |
-| `tdd resume` | восстановлен, конфликтов байтов нет | `:902` | `return 0` | `completed` |
-| `tdd resume` | claimed-байты разошлись с HEAD | `:909` | `return 2` | `red_not_reestablished` |
-| `budget` | подкоманда не `authorize` | `budget_cmd.py:272` | `return 1` | `usage_error` |
-| `budget authorize` | `--reserve` не разобран | `:277` | `return 1` | `usage_error` |
-| `budget authorize` | `AuthorizationError` | `:307` | `return 1` | `authorization_refused` → `policy_refusal` |
-| `budget authorize` | решение записано | `:334` | `return 0` | `completed` |
-| `restore` | отказ instrument-класса: `contract_version`, digests + `manifest_sha256`, spool | § 7.2 | exit 2 | `restore_instrument` → `infrastructure_error` |
-| `restore` | отказ needs-human: repository/policy identity, namespace, open calls, legacy, без `--experimental`, непустой `--into` | § 7.2 | exit 1 | `needs_human` → `policy_refusal` |
-| `restore` | применён, следующий шаг напечатан | § 7.3 | exit 0 | `completed` |
-| `evidence close-call` | обязательный `--call`/`--reason` не передан | argparse | exit 2 | ни run-start, ни closure: argparse отказывает до `start()`, как две строки ниже |
-| `evidence close-call` | `SPEC_RUNNER_AGENT` guardrail либо занятый PID-checked lock | § 2.5 | exit 1, записи нет | `close_call_refused` → `policy_refusal` |
-| `evidence close-call` | call уже закрыт — идемпотентный повтор | § 2.5 | exit 0, второй записи нет | `completed` |
-| `evidence close-call` | записан `resolved_unknown`, строка DB закрыта | § 2.5 | exit 0 | `completed` |
-| `evidence close-call`, `evidence purge` | store недоступен | § 2.5, Q-11 | exit 2, изменений нет | `store_unavailable` → `infrastructure_error` |
-| `evidence purge` | истёкших объектов нет | Q-11 | exit 0, удалено 0 | `no_ready` |
-| `evidence purge` | store отказал в `delete` (legal hold, OUT-10) | Q-11 | exit 1, не удалено ничего | `purge_refused` → `policy_refusal` |
-| `evidence purge` | удалено, `deletions/<ts>.json` записан | Q-11 | exit 0 | `completed` |
-| любая платящая | `SpecMetaError` вокруг dispatch | `cli.py:2610-2611` | `SystemExit(str)`, exit 1 | `spec_meta_error` → `policy_refusal` |
-| любая платящая | ошибка config / профиля / `review_policy: required` без ревью | `cli.py:2460`, `:2478`, `:2485` | `SystemExit(str)`, exit 1 | ни run-start, ни closure: эти выходы **предшествуют** `start()` (§ 6.2); это не пробел, а BEH-04 |
+Откуда берётся исход работы — по перечню платящих подкоманд FR-01
+(одиннадцать позиций):
 
-Пять классов строк таблицы стоят особняком, потому что без них правило
-вывода дало бы неверный ответ, а не грубый. `retry`, чья задача закончила `blocked`
-(`cli.py:1528`), выходит с кодом 0: пометь его исход правилом — и невыполненная
-задача прочиталась бы успехом, если бы attempt не был записан (при
-`HOOK_ERROR` терминального attempt-а может не быть). `watch`, остановленный
-`max_consecutive_failures` (`:1623`), тоже выходит с кодом 0. `doctor`
-кодирует отказ оператора кодом 2, который правило иначе прочтёт
-инструментальным. `plan`, упавший по таймауту или исключению провайдера
-(`:888`, `:894`), выходит с кодом 0, проглотив ошибку. Пятый такой случай —
-`plan --gated` с rc 2: код 2 здесь означает upstream-гейт
-(`cli_plan.py:126-128` — прямой upstream не APPROVED), и `run_gated_stage`
-отдаёт его наружу неизменным (`:284-286`), не сделав ни одного вызова CLI.
-Правило прочитало бы код 2 инструментальным отказом, а прежняя строка
-инвентаря — `stage_generation_failed`, то есть тоже
-`infrastructure_error`: и то и другое записало бы governance-решение
-поломкой инструмента — ровно то, что дизайн отвергает для `doctor` и что
-его собственный критерий называет отказом правила. Отсюда разделение строк
-`:589`/`:603`/`:625` по rc, а имя reason берётся готовое —
-`spec_governance` гарда старта `run`: класс отказа тот же, новой строки в
-`CLOSURE_KINDS` не нужно.
+| Подкоманда | Исход работы |
+|---|---|
+| `run` | attempt-ы invocation-а и статусы их задач в DB |
+| `retry` | то же |
+| `watch` | то же |
+| `plan` | attempt-ов нет — только код выхода |
+| `review-pr` | attempt-ов нет — только код выхода |
+| `doctor` | attempt-ов нет — только код выхода |
+| `tdd abandon/repair/resume/release` | attempt-ов нет — только код выхода |
+| `budget authorize` | attempt-ов нет — только код выхода |
+| `restore` | attempt-ов нет — только код выхода |
+| `evidence close-call` | attempt-ов нет — только код выхода |
+| `evidence purge` | attempt-ов нет — только код выхода |
 
-Интерактивный цикл `plan --gated` (`:613-625`) исправлен в другую сторону:
-здесь ошибался **инвентарь**, а не правило. `break` на первой же итерации
-(`resolve_next_stage` вернул `stop`/`await`/`stale`/`done`) означает, что не
-сгенерировано ничего, — и правило вывода для кода 0 без работы даёт
-`no_ready` (`unreported_no_work`), тогда как строка инвентаря называла тот же
-выход `completed`. Пустой успех запрещён инвариантом 4 независимо от того,
-какой из двух источников его произвёл, поэтому `completed` цикл получает
-только после хотя бы одной записанной стадии. Различитель — счётчик
-успешных `run_gated_stage` в кадре цикла; сегодня его там нет, и это одна
-строка. Изменение кодов
-возврата ни одного из этих путей — не предмет этого workstream-а: closure
-несёт фактический код и правильный kind, а код процесса остаётся сегодняшним.
+Инвентаря сайтов выхода в этом дизайне нет — ни по `run`, ни по десяти
+остальным. Единая точка делает его ненужным: любая ветка любого handler-а —
+существующая сегодня и добавленная после этого бандла — проходит через
+`finally` диспетчера и получает kind по тем же двум фактам. Перечень сайтов,
+наоборот, обязан был бы догонять дерево.
 
-**Словари: `RUN_STOP_REASONS` не растёт, `CLOSURE_KINDS` растёт.** Ни одна
-подкоманда вне `run` не персистит `last_run_stop_reason` — `set_meta` с этим
-ключом стоит только в `_run_tasks_inner` (`cli.py:1374`) и в
-`_exit_on_state_spec_mismatch` (`:699`), — и `status` их причин не
-показывает. Поэтому reason'ы таблицы выше в interop-словарь
-`RUN_STOP_REASONS` (`cli.py:536-541`) **не** добавляются: словарь описывает
-то, что читают `status` и внешние читатели (audit-таблица Maestro), и
-значение, которого там никогда не будет, обещало бы читателю несуществующую
-строку. Растёт `CLOSURE_KINDS` (`closure.py`) — аддитивно, пятнадцатью
-closure-only reason'ами сверх четырёх гардов старта: `usage_error`,
-`stage_generation_failed`, `provider_error`, `provider_timeout`,
-`probe_broken`, `review_fail_closed`, `needs_human`, `remedy_refused`,
-`red_not_reestablished`, `authorization_refused`, `restore_instrument`,
-`spec_meta_error`, `close_call_refused`, `purge_refused`,
-`store_unavailable`, — плюс то, что чеканит правило вывода:
-`unhandled_exception`, `refusal_<k>`, `unreported_task_not_done`,
-`unreported_no_work` и семейство `unreported_exit_<n>` (по префиксу, как
-`error_<kind>`). Состав идёт в `schemas/run-closure.schema.json` и в
-CHANGELOG под Unreleased тем же коммитом, что схему (§ 8): enum пинует
-**kinds**, reason остаётся строкой, иначе два динамических семейства в схему
-не уложить.
+**`reason` — свободная строка, не словарь.** Схема пинует kinds; reason не
+перечисляется и не валидируется, «неизвестного» reason не бывает, и отказа
+сериализации по reason нет. Диспетчер собирает его по kind-у: для `crashed` —
+тип и сообщение исключения; для `interrupted` — имя сигнала или
+`KeyboardInterrupt`; для `refused` и `failed` — `error_kind` и `error`
+последнего неуспешного attempt-а, если он есть, иначе строковый аргумент
+`SystemExit`, если это строка, иначе пусто; для `completed` —
+персистированный `last_run_stop_reason`, если invocation его писал (ровно то,
+что показывает `status`), иначе пусто. Исключение — таймаут drain: там
+reason называет неподтверждённый checkpoint, потому что это факт самой
+`close()`. Пусто — допустимое значение: смысл несёт kind, reason помогает
+человеку.
 
-Требование BEH-29 «reason совпадает с тем, что показывает `status`»
-относится ровно к тем сайтам, чей reason персистится, — то есть к `run` за
-вычетом четырёх гардов старта. Для гардов (они выходят раньше `set_meta`) и
-для всех одиннадцати остальных подкоманд (они `set_meta` не вызывают вовсе)
-оно неприменимо по построению; проверяется другое — что reason называет сайт.
+**`RUN_STOP_REASONS` не растёт и ключом closure не является.** Словарь
+(`cli.py:536-541`) описывает то, что показывает `status` и читают внешние
+потребители (audit-таблица Maestro); closure его не читает и не расширяет.
+Следствие названо прямо: `status` по-прежнему покажет `completed` прогону,
+оборванному таймером или stop-marker-ом, — это сегодняшнее поведение дерева,
+и его исправление не предмет этого workstream-а (§ «Вне объёма»). Closure
+такого прогона строится по своим двум фактам, а не по тому, что показывает
+`status`.
 
-`idle_timeout` получает **собственный** kind closure, а не отображается в
-`session_timeout`: это разные причины остановки, `status` показывает их
-раздельно, и closure, называющая idle-выход session-таймаутом, отправила бы
-оператора искать несуществующий предел сессии. Словарь kinds (§ FR-07
-требований, `schemas/run-closure.schema.json`) пинован схемой, и в нём нет
-клетки «неизвестный stop-reason → `completed`»: stop-reason вне словаря — отказ
-сериализации closure (BEH-32), а не молчаливое повышение до успеха.
-Повторная closure — `AlreadyExists` от store (§ 1.3) → отказ, первая
-неизменна. Отказ записи closure — stderr + exit code не улучшается.
-`kill -9` — closure нет по построению (BEH-30).
+**Чего правило не различает — названо здесь, а не оставлено читателю.**
+(1) Отказ правила от поломки инструмента у подкоманд без attempt-ов:
+`plan --gated` с неодобренным upstream-ом (`cli_plan.py:126-128`, exit 2, ни
+одного вызова CLI) и `doctor`, у которого оператор отказался на cost gate
+(`doctor.py:389`, exit 2), дают `failed` наравне с настоящим отказом
+инструмента. (2) Код 1 «работа плоха» от кода 2 «инструмент не смог» — оба
+`failed`; различитель остаётся в поле `exit_code`, которое closure несёт.
+(3) Прогон, остановленный таймером или оператором, от прогона, которому
+нечего было делать, — когда обе конфигурации дают код 0 и невыполненной
+работы нет. Каждое из трёх восстановимо только своим словарём причин по
+сайтам, а он и есть то, что этот дизайн снял; `exit_code`, `attempt_ids` и
+число open calls, которые closure несёт, дают читателю ту же информацию, не
+требуя, чтобы словарь догонял дерево. По той же причине `completed` с пустым
+`attempt_ids` и нулём вызовов — это «делать было нечего», и read-surface
+(FR-09) показывает его как есть: отдельный kind для «ничего не делал» был бы
+шестым на пустом месте.
+
+**Отказные режимы.** Повторная closure — `AlreadyExists` от store (§ 1.3) →
+отказ, первая неизменна. Отказ записи closure — stderr + exit code не
+улучшается. `kill -9` — closure нет по построению (BEH-30). Состав записи:
+`run_id`, `pipeline_id`, подкоманда, kind, reason, exit code,
+`last_checkpoint_id`, `last_call_ids`/`attempt_ids`, число open calls,
+`degraded`/spool status, timestamps start/end. Состав kinds идёт в
+`schemas/run-closure.schema.json` и в CHANGELOG под Unreleased тем же
+коммитом, что схему (§ 8).
 
 **6.4 Attempt evidence** (FR-06) — при terminal `record_attempt`
 (`success` / `failed` / `blocked`) `evidence.export_attempt(state, task_id,
@@ -1291,7 +1130,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 аддитивны).
 - MUST verify live: двойник store, отказывающий в `put` call-start → 0
   вызовов двойника `_spawn`, attempt с `error_code=INFRASTRUCTURE`, exit 2,
-  closure `infrastructure_error` с reason `call_start_not_acknowledged` — через
+  closure kind `failed` — через
   `spec-runner run --task` целиком, не через вызов seam-а; open call,
   оставленный `os._exit` после ack, → `run --all` пропускает с `call_id` в
   причине, `run --task` exit 1, `restore` `needs-human` — в **новом**
@@ -1337,10 +1176,10 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий | BEH-12…15, 40 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
-| `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`note_stop`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS`, `CLOSURE_KINDS` — одна таблица, включая `dry_run`, семейство `error_<kind>` и пятнадцать closure-only reason'ов подкоманд вне `run` (§ 6.3); `PAYING_SUBCOMMANDS` включает `evidence close-call` и `evidence purge` (§ 6.2); `derive(noted, outcome)` — правило вывода kind, когда причина не сообщена | BEH-01, 02, 04, 23, 29…32, 46 |
-| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`; `restore` сообщает closure-причину на каждом из трёх своих исходов (§ 6.3: `restore_instrument`, `needs_human`, `completed`), `close-call`/`purge` — на своих (`close_call_refused`, `purge_refused`, `store_unavailable`, `no_ready`, `completed`) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
-| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/finally` с closure; `_acquire_run_lock` — `note_stop("lock_busy")` перед `sys.exit(1)`, run-start не пишет; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; `note_stop` рядом с каждым `last_run_stop_reason`; сайты выхода по инвентарю § 6.3 выставляют собственный `stop_reason` вместо дефолтного `completed` или его отсутствия (stop-marker `:1066`/`:1285`, session timeout `:1077`, idle timeout `:1088`, пауза→`q` `:1045`, no-ready `:1013`, `--dry-run` `:1018`, task-not-found `:958`), а четыре гарда старта (`_enforce_spec_governance` `:299`, `_enforce_clean_spec`, `_enforce_untracked_state`, lock) — `note_stop` перед `sys.exit(1)`; `RUN_STOP_REASONS` (`:536-541`) — шесть новых значений и больше ни одного (reason'ы подкоманд вне `run` туда не кладутся: `set_meta("last_run_stop_reason")` вне `_run_tasks_inner` `:1374` и `_exit_on_state_spec_mismatch` `:699` не вызывается); `note_stop` по инвентарю § 6.3 в `cmd_retry` (`:1471`, `:1475`, `:1476`, `:1484`, `:1525`, `:1528`), `cmd_watch` (`:1547`, `:1551`, `:1552`, `:1563`, `:1583`, `:1585`, `:1606`, `:1616`, `:1623`) и `cmd_doctor` (`:1679`, по коду `run_doctor`); `except SpecMetaError` (`:2610-2611`) — `spec_meta_error`; новые subparsers `restore`/`evidence` | BEH-02, 04, 09, 29, 32, 38, 46 |
-| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `note_stop` по инвентарю § 6.3 на сайтах выхода `cmd_plan` (`cli_plan.py:356`…`:894`) и `cmd_review_pr` (`review_pr.py:1338`, `:1342`, `:1390`, `:1429`, `:1453`) | BEH-05, 07, 08, 22…24, 46 |
+| `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
+| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
+| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; новые subparsers `restore`/`evidence`. Сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе: kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
+| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
@@ -1349,7 +1188,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl` | BEH-28, 42 |
 | `src/spec_runner/git_ops.py` | `runtime_state_paths` + checkpoint-каталог и spool; `repository_identity`; helpers для bundle/published-base | BEH-14, 16, 43 |
 | `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning», `repo_total_cost` | BEH-24, 38 |
-| `src/spec_runner/remedy.py`, `budget_cmd.py`, `doctor.py` | только `note_stop` на сайтах выхода по инвентарю § 6.3: `remedy.py:805`, `:822`, `:825`, `:857`, `:861`, `:867`, `:869`, `:895`, `:902`, `:909`, `_repair_exit` `:921`/`:926`; `budget_cmd.py:272`, `:277`, `:307`, `:334`; `doctor.run_doctor` `:389`, `:416`, `:418`, `:419`. Логика этих команд не меняется | BEH-46 |
+| `src/spec_runner/remedy.py`, `budget_cmd.py`, `doctor.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3) | BEH-46 |
 | `schemas/` | новые `checkpoint-manifest`, `evidence-record`, `run-closure`, `restore-result`, `evidence-view`; аддитивно `executor-state`, `json-result`, `status`, `costs` | BEH-03, 14, 21, 23, 29, 36, 38 |
 | `docs/state-schema.md`, `docs/architecture.md`, `CHANGELOG.md`, `README.md` | minor bump, контракт checkpoint/evidence/closure, «operational minimum», статус experimental, `durability:` | BEH-45 |
 | `tests/conftest.py`, `tests/test_harness_guards.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv (Q-06); `test_harness_guards.py` переписывается тем же коммитом; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |
@@ -1383,5 +1222,10 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
   WIP → restore → evidence read-surface → retention.
 - Второй адаптер store и его расходы — отдельное одобрение владельца
   (CON-08); дизайн фиксирует только контракт.
+- Правдивость `status` на ранних остановках: `last_run_stop_reason` остаётся
+  таким, каким его пишет дерево сегодня (дефолт `completed` на stop-marker,
+  таймерах, паузе→`q`, no-ready), `RUN_STOP_REASONS` не растёт. Closure этим
+  словарём не ключуется (§ 6.3) и потому от его дефекта не зависит; починка
+  самого `status` — отдельная работа.
 - Вырезание FR-09 при сокращении объёма — решение владельца; `evidence
   close-call` при этом остаётся (это дверь FR-02, не read-surface).

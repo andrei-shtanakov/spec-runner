@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 1927c8fd14f74c1c1c5d55c14054d99c4cee1975
+  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -224,8 +224,9 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** stderr называет отказ типизированно (`Refusal(kind="instrument")`,
   #230) — не «tests/lint check», не трейсбек.
 - **And** closure прогона записана (в store, если он принимает closure; иначе
-  stderr называет и это) с kind `infrastructure_error` и reason
-  `call_start_not_acknowledged`.
+  stderr называет и это) с kind `failed` и exit code 2: `error_kind` attempt-а
+  — `instrument`, а он не входит в отказное подмножество `ERROR_KINDS`,
+  поэтому правило даёт `failed`, а не `refused` (design § 6.3).
 - **And** таймаут ack конфигурируем; при превышении поведение то же, что при
   явном отказе: ожидание без предела невозможно.
 
@@ -241,8 +242,9 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `Popen` не вызван; в `agent_calls` строки нет («a refusal is no row»).
 - **And** prompt-артефакт GREEN заканчивается `=== NOT STARTED: … ===`
   (#296) — как сегодня.
-- **And** отказ виден в attempt (`error_code = BUDGET_EXCEEDED`) и в closure
-  прогона (kind `budget_refusal`).
+- **And** отказ виден в attempt (`error_code = BUDGET_EXCEEDED`,
+  `error_kind = budget`) и в closure прогона: `budget` входит в отказное
+  подмножество `ERROR_KINDS`, поэтому kind — `refused`.
 
 #### BEH-08: Timeout, пустой ответ, `is_error` при exit 0 и crash провайдера — это call-result, не open call
 `traces: [FR-02, FR-06]`
@@ -349,10 +351,16 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** команда не запускает платный вызов и не решает, повторять ли его:
   повтор — отдельный `run`, инициированный оператором.
 - **And** платного вызова нет, но continuation-state меняется — задача снова
-  выбираема, — поэтому у каждого из четырёх invocation-ов двойник store
-  получает ровно один run-start и ровно одну closure: `close_call_refused`
-  на первом и четвёртом, `completed` на втором и третьем; при недоступном
-  store — `store_unavailable` и exit 2. Закрытие строки ledger-а — mutation,
+  выбираема, — поэтому команда пишет свою пару run-start + closure. Первая
+  попытка отказана argparse-ом (`--reason` объявлен `required=True` по
+  образцу `tdd abandon`, `cli.py:2211`), то есть **до** вызова handler-а и до
+  `start()`: у неё нет ни run-start, ни closure, и это BEH-04, а не пробел.
+  У трёх остальных invocation-ов двойник store получает ровно один run-start
+  и ровно одну closure: `completed` на записи `resolved_unknown` и на
+  идемпотентном повторе (код 0, невыполненной работы нет), `failed` на
+  отказе guardrail-а `SPEC_RUNNER_AGENT` (код 1); при недоступном store —
+  `failed` и exit 2. Kind выводит диспетчер по коду выхода, своих сайтов
+  closure у команды нет (design § 6.3). Закрытие строки ledger-а — mutation,
   и её checkpoint опубликован под тем же `run_id`, у которого run-start
   есть; checkpoint под `run_id` без run-start — красный тест.
 
@@ -736,69 +744,65 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 
 ### G. Closure на каждом штатном завершении
 
-#### BEH-29: Каждый orderly exit, включая пути до attempt, оставляет ровно одну closure нужного kind
+#### BEH-29: Каждый orderly exit `run`, включая пути до attempt, оставляет ровно одну closure, и её kind выведен из кода выхода и исхода работы
 `traces: [FR-07]`
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
-- **Given** конфигурации, доводящие `run` до каждого исхода: все задачи
-  `done` (completed); нет ready задач (`no_ready`); `--task` с именем,
-  которого нет в tasks.md (`task_not_found`); `--dry-run` (`dry_run`);
-  `validate` красный при старте (`validation_failure`); governance-гейт
-  (`_enforce_spec_governance`); dirty-spec guard (`_enforce_clean_spec`);
-  tracked-state-DB guard (#273); занятый lock; budget guard перед вызовом
-  (`budget_refusal`); неудовлетворённый gate под `review_policy: required`
-  (`policy_refusal`); `session_timeout_minutes`, истёкший в цикле
-  (`session_timeout`); `idle_timeout_minutes`, истёкший в цикле
-  (`idle_timeout`); пауза SIGQUIT с ответом `q` при невыполненных задачах
-  (`operator_stop`); отказ ack (`infrastructure_error`); stop-marker и SIGTERM
-  (`operator_stop`). Те же конфигурации «completed», «занятый lock» и
-  «`operator_stop` по stop-marker» повторяются для `run --all --force`, где
-  executor lock не берётся. Двойник store.
+- **Given** конфигурации `run`, покрывающие каждую строку правила вывода
+  (design § 6.3): все задачи `done`; нет ready-задач; `--dry-run`; `--task` с
+  именем, которого нет в tasks.md; `validate` красный при старте;
+  governance-гейт (`_enforce_spec_governance`); dirty-spec guard
+  (`_enforce_clean_spec`); tracked-state-DB guard (#273); занятый lock;
+  budget guard перед вызовом; неудовлетворённый gate под `review_policy:
+  required`; отказ ack call-start двойником store; `session_timeout_minutes`,
+  истёкший в цикле при невыполненных задачах; SIGTERM в цикле; исключение,
+  поднятое двойником и не перехваченное handler-ом. Те же конфигурации «все
+  задачи `done`», «занятый lock» и «SIGTERM» повторяются для `run --all
+  --force`, где executor lock не берётся. Двойник store.
 - **When** каждая конфигурация прогнана в отдельном invocation.
-- **Then** у каждого `run_id` ровно одна closure, kind из словаря схемы
-  `schemas/run-closure.schema.json`, reason совпадает с текстом stop-reason,
-  показываемым `status`, `last_checkpoint_id` равен id последнего
-  acknowledged checkpoint-а (или `null`, если mutation не было), exit code
-  записан и равен фактическому.
+- **Then** у каждого `run_id` ровно одна closure, kind — один из пяти
+  словаря `schemas/run-closure.schema.json` (`completed`, `refused`,
+  `failed`, `interrupted`, `crashed`), `last_checkpoint_id` равен id
+  последнего acknowledged checkpoint-а (или `null`, если mutation не было),
+  exit code записан и равен фактическому.
+- **And** kind соответствует правилу: `completed` — на конфигурациях с кодом
+  0 и без невыполненной работы (все задачи `done`, нет ready-задач,
+  `--dry-run`, несуществующий `--task`); `refused` — там, где ненулевой код
+  сопровождается отказом правила в последнем неуспешном attempt-е
+  (неудовлетворённый gate даёт `error_kind` `hook_failure`, budget guard —
+  `budget`); `failed` — на красном `validate`, четырёх гардах старта, отказе
+  ack (`error_kind` `instrument`, exit 2) и на истёкшем session-таймере,
+  оставившем выбранную задачу невыполненной; `interrupted` — на SIGTERM;
+  `crashed` — на неперехваченном исключении.
+- **And** `completed` не выдан ни одному прогону с невыполненной работой:
+  конфигурация «неудовлетворённый gate под `review_policy: required`»
+  предъявляется прямо — `run` выходит с кодом 1, потому что считает свой
+  исход сам (`cli.py:1344-1371`), хотя персистированный
+  `last_run_stop_reason` остался дефолтным `completed`; closure `completed`
+  на ней — красный тест. Closure `last_run_stop_reason` не читает, и это
+  наблюдается: `status` на этой конфигурации показывает `completed`, closure
+  — нет.
 - **And** для путей до attempt (no-ready, task-not-found, `--dry-run`,
-  validation failure, governance-гейт, dirty-spec,
-  tracked-state, lock занят) closure существует, хотя attempt не создан;
-  run-start у них записан диспетчером `main()` **до** вызова handler-а и
-  потому раньше любого из этих гардов. Ни один из них не даёт closure kind
-  `completed`: `no_ready` и `task_not_found` — kind `no_ready`, `--dry-run` —
-  kind `dry_run`, четыре гарда — `policy_refusal`. Для четырёх гардов
-  требование «reason совпадает с текстом, который показывает `status`» не
-  проверяется — они выходят `sys.exit(1)`-ом раньше персиста stop-reason, и
-  `status` их не показывает; проверяется, что reason называет сам гард. Для «lock занят» это означает обычную
-  пару run-start + closure с одним `run_id` у двойника store: run-start уже
-  записан к моменту отказа lock-а, а сайт отказа сообщает контексту причину
-  `lock_busy` перед выходом; одиночный run-start без closure и, равно,
+  validation failure, governance-гейт, dirty-spec, tracked-state, lock занят)
+  closure существует, хотя attempt не создан; run-start у них записан
+  диспетчером `main()` **до** вызова handler-а и потому раньше любого из этих
+  гардов. Для «lock занят» это означает обычную пару run-start + closure с
+  одним `run_id` у двойника store; одиночный run-start без closure и, равно,
   отсутствие run-start для этого пути — красный тест.
 - **And** `run --all --force`, который executor lock не берёт вовсе, даёт ту
-  же пару run-start + closure на каждой из своих конфигураций: kind
-  `completed` при всех задачах `done`, `operator_stop` по stop-marker.
-  Конфигурация «занятый lock» под `--force` closure `policy_refusal` **не**
-  даёт — lock не проверяется, прогон идёт, — и это наблюдается: `--force`
-  остаётся обычным платящим прогоном с run-start, а не путём в обход
-  контракта.
-- **And** `session_timeout` и `idle_timeout` наблюдаются на `run`: оба таймера
-  живут в цикле исполнения задач `run` (`cli.py:1069` и `:1080`), а не в
-  `watch`; closure каждого несёт свой kind и свой reason, и ни один из них не
-  `completed` — прогон, оборванный таймером с невыполненными задачами,
-  прочитанный как `completed`, есть тот самый «пустой успех», который
-  запрещает FR-07. Четыре гарда старта — «lock занят» (`_acquire_run_lock`),
-  governance-гейт (`_enforce_spec_governance`), dirty-spec
-  (`_enforce_clean_spec`) и tracked-state DB (#273) — это отказ правила, а не
-  инструмента: kind `policy_refusal`, reason называет гард, exit code 1 — как
-  у них сегодня (все четыре завершаются `sys.exit(1)`); `no_ready`,
-  `task_not_found`, `dry_run` и `validation_failure` за ними не числятся.
-- **And** closure несёт `run_id`, `pipeline_id`, подкоманду, число open
-  calls, `degraded`/spool status, timestamps start/end,
-  `last_call_ids`/`attempt_ids`.
-- **And** сценарий покрывает `run`; девять остальных подкоманд — BEH-46,
-  две платящие формы `evidence` — BEH-11 и BEH-42, и утверждение «каждый
-  orderly exit» верно только вместе с ними: `run` — одна подкоманда из
-  двенадцати, а run-start пишется диспетчером всем двенадцати.
+  же пару run-start + closure на каждой из своих конфигураций. Конфигурация
+  «занятый lock» под `--force` closure не даёт вовсе — lock не проверяется,
+  прогон идёт, — и это наблюдается: `--force` остаётся обычным платящим
+  прогоном с run-start, а не путём в обход контракта.
+- **And** closure несёт `run_id`, `pipeline_id`, подкоманду, kind, reason,
+  exit code, число open calls, `degraded`/spool status, timestamps start/end,
+  `last_call_ids`/`attempt_ids`. `reason` не сверяется ни с каким словарём:
+  проверяется только, что поле есть и что пустое значение допустимо.
+- **And** сценарий покрывает `run`; десять платящих подкоманд вне его —
+  BEH-46 (восемь самостоятельных) и BEH-11/BEH-42 (две формы `evidence`), и
+  утверждение «каждый orderly exit» верно только вместе с ними: `run` — одна
+  подкоманда из одиннадцати, а run-start и closure диспетчер пишет всем
+  одиннадцати одинаково.
 
 #### BEH-30: `kill -9` не оставляет closure, и читатели классифицируют прогон как crash/unknown
 `traces: [FR-07, FR-09]`
@@ -824,9 +828,9 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   второй двойник, отказывающий в записи closure; третий — исправный.
 - **When** прогон завершён штатно с каждым двойником; с третьим тест затем
   пытается записать вторую closure для того же `run_id`.
-- **Then** с первым closure записана с kind `infrastructure_error`, причиной
-  «last checkpoint not acknowledged» и `last_checkpoint_id` предыдущего
-  acknowledged; exit code прогона 2.
+- **Then** с первым closure записана с kind `failed`, `last_checkpoint_id`
+  предыдущего acknowledged и exit code прогона 2; reason называет
+  неподтверждённый checkpoint, но ни с каким словарём не сверяется.
 - **And** со вторым stderr называет причину отказа записи closure; exit code
   прогона не улучшается из-за неё (остаётся кодом фактического исхода или
   становится 2, но не 0 при незаписанной closure).
@@ -834,111 +838,96 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** closure по времени позже последнего checkpoint-ack: журнал
   двойника не содержит публикации checkpoint-а после closure.
 
-#### BEH-32: `Refusal.kind` и сигналы остановки отображаются в kind closure одной таблицей
+#### BEH-32: Kind closure выводит одна функция из кода выхода и исхода работы; ни один сайт выхода kind не выбирает
 `traces: [FR-07]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_closure_every_exit.py`
-- **Given** типизированные отказы `Refusal(kind="policy")`,
-  `Refusal(kind="instrument")`, `Refusal(kind="budget")` (#230), graceful
-  SIGINT/SIGTERM (`_shutdown_requested` в `executor.py`), stop-marker и четыре
-  гарда старта до attempt — «lock занят», governance-гейт, dirty-spec,
-  tracked-state DB (BEH-29).
-- **When** каждый прерывает прогон.
-- **Then** closure kind — `policy_refusal`, `infrastructure_error`,
-  `budget_refusal`, `operator_stop`, `operator_stop` соответственно, а у
-  четырёх гардов старта — `policy_refusal`; `Refusal.with_note` сохраняет kind
-  и, значит, closure kind.
-- **And** ранние остановки цикла `run` — stop-marker, пауза с ответом `q`,
-  истёкший `session_timeout_minutes` и истёкший `idle_timeout_minutes` —
-  входят в ту же таблицу под собственными stop-reason (`operator_stop`,
-  `operator_stop`, `session_timeout`, `idle_timeout`) и дают kind того же
-  имени; ни одна из них не отображается в `completed`. Так же не отображаются
-  в `completed` три выхода до цикла: `no_ready`, `task_not_found` (оба — kind
-  `no_ready`) и `dry_run` (одноимённый kind). Таблица не имеет клетки
-  «неизвестный stop-reason → `completed`»:
-  stop-reason вне словаря — отказ сериализации closure, а не молчаливое
-  повышение до успеха; динамическое семейство `error_<kind>`, которое словарь
-  `RUN_STOP_REASONS` не перечисляет по построению, отображается по префиксу
-  (`error_infrastructure` — `infrastructure_error`, прочие —
-  `policy_refusal`) и неизвестным не считается.
-- **And** отображение задано одной таблицей соответствия в одном месте
-  (статический тест: ни один сайт остановки не выбирает kind closure сам);
-  словарь kinds пинован схемой, неизвестный kind не сериализуется.
-- **And** exit code closure совпадает с фактическим кодом процесса. Для
-  closure, выведенной из `Refusal`, это 1 (`policy`/`budget`) и 2
-  (`instrument`), как задаёт #230; сайты вне `Refusal` своих кодов не меняют,
-  и closure несёт их как есть — `doctor` при verdict `broken` выходит с 1 при
-  kind `infrastructure_error`, а при отказе оператора на cost gate — с 2 при
-  kind `operator_stop`. Совпадение kind с кодом не утверждается: утверждается
-  совпадение записанного кода с фактическим.
-- **And** причину сообщает сайт, но kind определён и без неё: правило вывода
-  даёт `infrastructure_error` необработанному исключению, kind по
-  `RefusalKind` — дошедшему `Refusal`, `infrastructure_error` коду ≥ 2,
-  `policy_refusal` коду 1, `policy_refusal` коду 0 при оставшемся open call
-  или terminal attempt `failed`/`blocked`, `no_ready` коду 0 без единого
-  платного вызова и attempt-а, и только коду 0 при выполненной работе —
-  `completed`. Повторный `note_stop` первую причину не затирает. Двойник
-  handler-а, завершающийся на каждом из этих исходов без `note_stop`,
-  предъявляет все семь клеток; `completed` ни на одной из первых шести —
-  красный тест.
+- **Given** двойник handler-а, завершающийся каждым из шести способов
+  правила вывода (design § 6.3): необработанным исключением; сигналом
+  (SIGINT/SIGTERM) и `KeyboardInterrupt`; ненулевым кодом при последнем
+  неуспешном attempt-е с `error_kind` из отказного подмножества `ERROR_KINDS`
+  (`policy`, `budget`, `blocked`, `hook_failure`, `harness_guard`); ненулевым
+  кодом без такого attempt-а и с `error_kind` инструментального класса
+  (`instrument`, `timeout`, `network`, `rate_limit`, `auth`, `api_error`,
+  `cli_error`, `internal_error`, `interrupted`, `unknown`); кодом 0 при
+  задаче этого invocation не в статусе `success` либо оставшемся open call;
+  кодом 0 без невыполненной работы.
+- **When** каждый способ прогнан в отдельном invocation.
+- **Then** kinds — `crashed`, `interrupted`, `refused`, `failed`, `failed`,
+  `completed` соответственно; строки правила применяются сверху вниз, первая
+  подошедшая выигрывает, и `completed` не выдан ни на одной из первых пяти —
+  красный тест на любой из них.
+- **And** словарь kinds закрыт пятью значениями и пинован
+  `schemas/run-closure.schema.json`: шестое значение не сериализуется.
+- **And** правило живёт в одной функции, и ни один сайт выхода kind не
+  выбирает: статический тест утверждает, что в `src/spec_runner/` нет
+  `note_stop`, нет таблиц «подкоманда/сайт → причина closure», а
+  `RUN_STOP_REASONS` (`cli.py:536-541`) содержит те же семь значений, что и
+  до бандла.
+- **And** `reason` словарём не является: closure с `reason`, которого нет ни
+  в одном перечне, и closure с пустым `reason` обе валидны по схеме — отказ
+  сериализации по reason есть красный тест.
+- **And** exit code closure совпадает с фактическим кодом процесса; kind с
+  ним не отождествляется. Различитель «работа плоха» (код 1) и «инструмент
+  не смог» (код 2) остаётся в поле `exit_code`: оба дают kind `failed`, и
+  требование разных kind-ов для них — красный тест.
 
 #### BEH-46: Каждая платящая подкоманда вне `run` закрывается closure своего исхода, и ни один её нулевой код не выдаёт невыполненную работу за успех
 `traces: [FR-07]`
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
-- **Given** девять платящих подкоманд вне `run`, доставляемых как
+- **Given** восемь платящих подкоманд вне `run`, доставляемых как
   самостоятельные команды, — `retry`, `watch`, `doctor`, `plan`,
   `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`,
-  `restore` — и по одной конфигурации на каждый исход их инвентаря выходов
-  (design § 6.3): для `retry` — гарды старта,
-  несуществующий `--task-id`, задача `done`, задача `blocked`; для `watch` —
-  гарды старта, красная pre-run validation, stop-marker, max consecutive
-  failures, оба TUI-выхода; для `doctor` — отказ оператора на cost gate,
-  verdict `broken`, verdict `ready`; для `plan` — usage-ошибка, красная
-  `validate_generated_tasks`, ненулевой код провайдера, вывод без
-  spec-маркера, `--full` целиком, error pattern, таймаут, `KeyboardInterrupt`,
-  проглоченное исключение, обычное завершение, а также три конфигурации
-  `--gated`: upstream не APPROVED (rc 2, вызовов CLI ноль), интерактивный
-  цикл, прервавшийся на первой же итерации без единой записанной стадии, и
-  он же после одной записанной стадии; для `review-pr` — draft PR,
-  cost guard, остаток `uncertain`, полный успех; для `tdd` — `RemedyError`,
-  применённый remedy, повтор, repair без переустановленного red, resume с
-  разошедшимися байтами; для `budget authorize` — usage-ошибка,
-  `AuthorizationError`, записанное решение; для `restore` — instrument-отказ,
-  needs-human-отказ, успешное применение. Двойник store и двойник
-  провайдера.
+  `restore` — и по одной конфигурации на каждую строку правила вывода,
+  достижимую у этой подкоманды: `retry` с задачей, закончившей `done`
+  (код 0, работа выполнена), и `retry` с задачей, закончившей `blocked`
+  (код 0, работа не выполнена); `watch`, остановленный
+  `max_consecutive_failures` (код 0, работа не выполнена), и `watch` с
+  красной pre-run validation; `doctor` с verdict `ready` (код 0) и с verdict
+  `broken` (код 1); `plan` с usage-ошибкой (код 1), `plan --gated` с
+  неодобренным upstream-ом (код 2, вызовов CLI ноль) и `plan`, у которого
+  двойник провайдера поднял исключение сквозь handler; `review-pr` на draft
+  PR (код 1) и с полным успехом (код 0); `tdd repair` без переустановленного
+  red (код 2) и `tdd release` на повторе (код 0); `budget authorize` с
+  `AuthorizationError` (код 1) и с записанным решением (код 0); `restore` на
+  отказе проверок (код 1 и код 2) и на успешном применении (код 0); плюс
+  SIGTERM, посланный `watch` в цикле. Двойник store и двойник провайдера.
 - **When** каждая конфигурация прогнана в отдельном invocation.
 - **Then** у каждого `run_id` ровно один run-start и ровно одна closure с
-  kind, названным для этого исхода в инвентаре, фактическим exit code,
-  `run_id`, `pipeline_id` и подкомандой.
-- **And** отказ правила не записан поломкой инструмента: `plan --gated` с
-  неодобренным upstream-ом выходит с кодом 2, не сделав ни одного вызова
-  CLI, и его closure — `policy_refusal`, а не `infrastructure_error`;
-  `infrastructure_error` на этой конфигурации — красный тест. Симметрично
-  интерактивный `--gated`, прервавшийся без единой записанной стадии, даёт
-  `no_ready`, а `completed` — только после хотя бы одной стадии.
+  kind по правилу, фактическим exit code, `run_id`, `pipeline_id` и
+  подкомандой.
 - **And** `completed` не выдан ни одному исходу с невыполненной работой, и
-  это наблюдается прямо на четырёх конфигурациях, где код процесса лжёт об
-  исходе: `retry` с задачей `blocked` (код 0) → `policy_refusal`; `watch`,
-  остановленный `max_consecutive_failures` (код 0) → `policy_refusal`;
-  `plan`, проглотивший таймаут провайдера (код 0) → `infrastructure_error`;
-  `doctor`, у которого оператор отказался на cost gate (код 2) →
-  `operator_stop`, а не `infrastructure_error`. Closure `completed` на любой
-  из четырёх — красный тест.
-- **And** ни одна из девяти не персистит `last_run_stop_reason`
+  это наблюдается прямо на двух конфигурациях, где код процесса лжёт:
+  `retry` с задачей `blocked` (код 0) и `watch`, остановленный
+  `max_consecutive_failures` (код 0), дают `failed`, потому что задача, по
+  которой invocation записал attempt, не в статусе `success`. Closure
+  `completed` на любой из двух — красный тест.
+- **And** `completed` выдан ровно тем конфигурациям, у которых код 0 и
+  невыполненной работы нет (`retry` с задачей `done`, `doctor` с verdict
+  `ready`, `review-pr` с полным успехом, `tdd release` на повторе, `budget
+  authorize` с записанным решением, `restore` на успешном применении).
+- **And** ненулевой код без attempt-ов даёт `failed`, а не `refused`:
+  `plan --gated` с неодобренным upstream-ом и `restore` на отказе
+  needs-human обе закрываются `failed`, и различение «отказ правила» и
+  «поломка инструмента» на них не утверждается — у этих подкоманд нет
+  attempt-а, по которому диспетчер мог бы его увидеть (design § 6.3, «чего
+  правило не различает»). Требование `refused` на любой из них — красный
+  тест.
+- **And** исключение, дошедшее сквозь handler `plan`, даёт `crashed`, а
+  SIGTERM у `watch` — `interrupted`; ни та ни другая конфигурация не
+  оставляет run-start без closure.
+- **And** ни одна из восьми не персистит `last_run_stop_reason`
   (`state.set_meta` с этим ключом в их коде отсутствует — статический тест),
-  поэтому равенство reason тексту `status` для них не проверяется;
-  проверяется, что reason называет сайт.
+  и closure от него не зависит: reason этих подкоманд — свободная строка,
+  которая может быть пустой.
 - **And** `watch --tui` закрывается не позже выхода handler-а: остановка
-  цикла в daemon-треде сообщает причину тому же `RunContext` (один на
-  процесс), а закрытие TUI без остановки цикла даёт `operator_stop`;
-  одиночный run-start без closure у любой из девяти — красный тест.
-- **And** причина, сообщённая раньше, не затирается более поздней: у
-  `review-pr`, остановленного cost guard-ом, closure несёт
-  `budget_refusal`, а не `needs_human` общего выхода.
+  цикла в daemon-треде выхода handler-а не переживает, `RunContext` один на
+  процесс, и одиночный run-start без closure у любой из восьми — красный
+  тест.
 - **And** оставшиеся две платящие формы — `evidence close-call` и `evidence
   purge` — сюда не входят и предъявлены там, где живут сами команды: BEH-11
-  и BEH-42. Инвентарь выходов design § 6.3 закрыт только всеми тремя
+  и BEH-42. Все одиннадцать позиций перечня FR-01 закрыты только тремя
   сценариями вместе.
 
 ### H. Аварийный spool при отказе DB
@@ -974,7 +963,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   дублей нет.
 - **And** с повреждённой строкой replay отказывает, называя `seq` и
   ожидаемый/фактический SHA-256; прогон не стартует: `Refusal(kind=
-  "instrument")`, exit 2, 0 `Popen`, closure `infrastructure_error`.
+  "instrument")`, exit 2, 0 `Popen`, closure `failed`.
 - **And** решения принимаются по DB, не по spool (RK-03): пока replay не
   завершён, ни `get_next_tasks`, ни claims gate, ни budget guard не читают
   spool напрямую (статический тест: единственный читатель spool — replay).
@@ -988,7 +977,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   исправен; двойник `Popen`.
 - **When** выполнен `spec-runner run --all`.
 - **Then** после отказа двойник `Popen` не вызван ни разу (TASK-002 не
-  начата); exit 2; closure kind `infrastructure_error` с причиной,
+  начата); exit 2; closure kind `failed` с причиной,
   называющей обе неудачи.
 - **And** если и store недоступен, stderr называет причину и exit code
   остаётся 2 — тихого продолжения нет.
@@ -1086,7 +1075,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `claims.check_claims` (двойники подтверждают 0 вызовов).
 - **And** exit code — 2 у всех трёх: недоказанная целостность — вопрос без
   ответа, а не «нет» (как BEH-20 (2)/(7) и BEH-34); у `run` это
-  `Refusal(kind="instrument")` с closure `infrastructure_error`, у
+  `Refusal(kind="instrument")` с closure `failed`, у
   `restore --json` и `evidence --json` — `reason` с именем файла и обоими
   digest-ами.
 - **And** изменённый manifest отвергнут по digest-у верхнего уровня, даже
@@ -1132,11 +1121,14 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   отказе store в удалении команда сообщает отказ, не удаляет локальную
   копию и не пишет audit-запись об удалении.
 - **And** `evidence purge` меняет опубликованное состояние и потому — как и
-  `evidence close-call` (BEH-11) — оставляет свою пару run-start + closure
-  на каждом из трёх исходов: `no_ready`, когда истёкших объектов нет,
-  `purge_refused` при отказе store в `delete`, `completed` после удаления и
-  записи `deletions/<ts>.json`; open call она при этом не закрывает — после
-  неё open call прежнего прогона предъявляется как раньше.
+  `evidence close-call` (BEH-11) — оставляет свою пару run-start + closure на
+  каждом из трёх исходов, и kind выводит диспетчер по коду выхода:
+  `completed`, когда истёкших объектов нет (код 0, работы не было) и после
+  удаления с записью `deletions/<ts>.json` (код 0); `failed` при отказе store
+  в `delete` (код 1) и при недоступном store (код 2). Различие «удалять было
+  нечего» и «удалено» читается по полям записи, а не по kind-у. Open call
+  она при этом не закрывает — после неё open call прежнего прогона
+  предъявляется как раньше.
 
 #### BEH-43: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E
 `traces: [FR-03, FR-04, FR-06]`

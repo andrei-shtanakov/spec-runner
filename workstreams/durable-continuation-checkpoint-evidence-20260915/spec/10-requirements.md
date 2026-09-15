@@ -576,10 +576,11 @@ traces: [G-02, J-03, P-02, P-03, M-03, M-06, CON-04, CON-08]
 
 **Priority**: Must
 
-Completed, no-ready, validation failure, budget или policy refusal, session
-timeout, idle timeout, infrastructure error и operator stop создают closure с
-причиной и ids последних acknowledged checkpoint/evidence. Run-start без
-closure трактуется как crash/unknown, никогда как пустой успех.
+Каждый orderly exit платящей подкоманды — успешное завершение, ранняя
+остановка, отказ правила, поломка инструмента, сигнал и необработанное
+исключение — создаёт closure с kind, причиной и ids последних acknowledged
+checkpoint/evidence. Run-start без closure трактуется как crash/unknown,
+никогда как пустой успех.
 
 Уточнения:
 
@@ -590,61 +591,59 @@ closure трактуется как crash/unknown, никогда как пус�
   повторная отклоняется. Отказ executor lock («lock занят») наступает **после**
   run-start и потому даёт обычную пару run-start + closure, а не одинокий
   run-start.
-- **Виды closure** (словарь пинуется схемой): `completed`, `no_ready`,
-  `dry_run`, `validation_failure`, `budget_refusal`, `policy_refusal`,
-  `session_timeout`, `idle_timeout`, `infrastructure_error`, `operator_stop`.
-  Graceful SIGINT/SIGTERM (`_shutdown_requested`, `executor.py`) →
-  `operator_stop`; stop-marker → `operator_stop`; `Refusal.kind` (#230)
-  отображается в `policy_refusal` / `infrastructure_error` /
-  `budget_refusal` — одна таблица соответствия, не по месту.
-- **Ранние остановки нуждаются в собственных stop-reason.** Сегодня выходы
-  «stop-marker», «session timeout» и «idle timeout» оставляют дефолтный
-  `last_run_stop_reason = "completed"` — closure, построенная по этому
-  словарю, назвала бы прерванный прогон завершённым, что запрещает инвариант
-  «никогда как пустой успех». Поэтому словарь stop-reason (`RUN_STOP_REASONS`,
-  interop-поверхность `status` и внешних читателей) получает аддитивно
-  `operator_stop`, `session_timeout` и `idle_timeout`, каждый со своим kind
-  closure того же имени; добавление словарного значения — CHANGELOG-нота, как
-  задаёт сам словарь. `idle_timeout` — orderly exit, а не разновидность
-  `session_timeout`: причины остановки разные, и `status` показывает их
-  раздельно.
-- **Kind closure определён и там, где причина не сообщена.** Сайты выхода
-  сообщают причину, но перечень сайтов конечен, а ветвей у двенадцати платящих
-  подкоманд больше, чем перечислит любой бандл, и после него их станет
-  больше. Поэтому kind выводится **правилом**, а не дефолтом: сообщённая
-  причина — по таблице соответствия; причина не сообщена — по исходу
-  handler-а (необработанное исключение, `Refusal`, exit code, наличие open
-  call или terminal attempt со статусом `failed`/`blocked`). Правило не даёт
-  `completed` ни при ненулевом коде, ни при невыполненной задаче: `completed`
-  выводится единственным сочетанием «код 0 и вся работа выполнена». Дефолт
-  `completed` при неизвестной причине и отказ сериализации, оставляющий
-  run-start без closure, запрещены оба — первый даёт пустой успех, второй
-  превращает штатный выход в неотличимый от crash.
-- **Closure-only причины в словарь `status` не кладутся.** Одиннадцать
-  платящих подкоманд вне `run` (`retry`, `watch`, `doctor`, `plan`,
-  `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`,
-  `restore`, `evidence close-call`, `evidence purge`)
-  `last_run_stop_reason` не персистят вовсе, и `status` их причин не
-  показывает. Их причины живут только в словаре closure, `RUN_STOP_REASONS`
-  от них не растёт, и требование «reason совпадает с текстом `status`» к ним
-  неприменимо по построению — проверяется, что reason называет сайт.
-- **Состав:** `run_id`, `pipeline_id`, подкоманда, kind, reason (текст
-  stop-reason, как в `status`), exit code, `last_checkpoint_id`,
-  `last_call_ids`/`attempt_ids`, число open calls, `degraded`/spool status,
-  timestamps start/end.
-- **Пути без attempt** покрыты: `run` без ready-задач, `validate`-отказ при
-  старте `run`, dirty-spec guard, tracked-state-DB guard (#273), lock
-  занят — всё это closure до создания attempt. Их же большинство у
-  одиннадцати остальных платящих подкоманд: `retry` с несуществующим `--task-id`,
-  `watch` с красной pre-run validation, `doctor` при отказе оператора на
-  cost gate, `plan` с usage-ошибкой, `review-pr` на draft PR, `tdd` с
-  `RemedyError`, `budget authorize` с `AuthorizationError`, `restore` на
-  любом отказе проверок, `evidence close-call` под guardrail-ом, `evidence
-  purge` без истёкших объектов — closure есть у каждого.
+- **Kind выводится механически, а не назначается сайтом.** Closure пишет одна
+  точка — `finally` диспетчера вокруг handler-а, — и kind она выводит из двух
+  фактов, наблюдаемых ею самой: как handler ушёл (необработанное исключение,
+  сигнал, код выхода) и осталась ли невыполненная работа (задача, по которой
+  этот invocation записал attempt и которая не в статусе `success`, либо
+  открытый call). Ни один сайт выхода kind не выбирает и причину контексту не
+  сообщает; перечня сайтов требование не заводит.
+- **Виды closure — пять, и словарь пинуется схемой**: `completed`, `refused`,
+  `failed`, `interrupted`, `crashed`. `completed` выводится единственным
+  сочетанием «код 0 и невыполненной работы нет»; `refused` — ненулевой код,
+  когда отказ правила виден по `error_kind` последнего неуспешного attempt-а
+  в словаре дерева `ERROR_KINDS`; `failed` — всякий иной ненулевой код и код
+  0 при невыполненной работе; `interrupted` — сигнал или `KeyboardInterrupt`;
+  `crashed` — необработанное исключение. Дефолт «причина неизвестна →
+  `completed`» и отказ сериализации, оставляющий run-start без closure,
+  запрещены оба — первый даёт пустой успех, второй превращает штатный выход в
+  неотличимый от crash.
+- **Различения, которых правило не делает, названы прямо**: отказ правила от
+  поломки инструмента у подкоманд, attempt-ов не пишущих; код 1 «работа
+  плоха» от кода 2 «инструмент не смог» (оба `failed`, различитель — поле
+  `exit_code`); остановка таймером или оператором от «делать было нечего»,
+  когда обе дают код 0 без невыполненной работы. Требование их и не
+  утверждает: платой за них был бы словарь причин по сайтам, который обязан
+  догонять дерево.
+- **`reason` — свободная строка, не словарь.** Схема пинует kinds; reason не
+  перечисляется, не валидируется и может быть пустым. Диспетчер берёт его из
+  исключения, имени сигнала, `error_kind` последнего неуспешного attempt-а,
+  строкового аргумента `SystemExit` или персистированного
+  `last_run_stop_reason` — что из этого есть. Требования «reason совпадает с
+  текстом `status`» нет.
+- **`RUN_STOP_REASONS` не растёт и ключом closure не является.** Словарь
+  `status` и внешних читателей (audit-таблица Maestro) остаётся сегодняшним,
+  включая его дефолт `completed` на ранних остановках; closure его не читает
+  и потому от этого дефекта не зависит. Правдивость самого `status` — вне
+  объёма этого требования.
+- **Состав:** `run_id`, `pipeline_id`, подкоманда, kind, reason, exit code,
+  `last_checkpoint_id`, `last_call_ids`/`attempt_ids`, число open calls,
+  `degraded`/spool status, timestamps start/end. `completed` с пустым
+  `attempt_ids` и нулём вызовов читается как «делать было нечего» — по этим
+  полям, а не отдельным kind-ом.
+- **Пути без attempt** покрыты по построению: run-start пишет диспетчер до
+  handler-а, closure — его же `finally`, поэтому `run` без ready-задач,
+  `validate`-отказ при старте, dirty-spec guard, tracked-state-DB guard
+  (#273), занятый lock, `retry` с несуществующим `--task-id`, `doctor` при
+  отказе оператора на cost gate, `plan` с usage-ошибкой, `review-pr` на draft
+  PR, `tdd` с `RemedyError`, `budget authorize` с `AuthorizationError`,
+  `restore` на любом отказе проверок и `evidence purge` без истёкших
+  объектов закрываются, не создав ни одного attempt-а. Выходы, предшествующие
+  `start()` (ошибка config/профиля, отказ argparse на обязательном флаге),
+  run-start не пишут и потому closure не имеют — это BEH-04, а не пробел.
 - Closure — **последняя** запись прогона: пишется после последнего
   checkpoint-ack; если ack последнего checkpoint не получен, closure несёт
-  `last_checkpoint_id` предыдущего acknowledged и kind
-  `infrastructure_error` с причиной.
+  `last_checkpoint_id` предыдущего acknowledged, kind `failed` и exit 2.
 - SIGKILL/OOM/потеря машины closure не оставляют — по построению; read-surface
   (FR-09) и restore (FR-05) читают такой прогон как `crash/unknown`.
 - Отказ записи closure — не тихий: stderr называет причину; exit code
@@ -652,31 +651,27 @@ closure трактуется как crash/unknown, никогда как пус�
 
 **Acceptance**:
 
-- Матрица: completed / no-ready / validation failure / budget refusal /
-  policy refusal / session timeout / idle timeout / infrastructure error /
-  operator stop (stop-marker и SIGTERM), включая пути до attempt → у каждой
-  ровно одна closure нужного kind с reason и `last_checkpoint_id` последнего
-  acknowledged checkpoint-а.
-- Каждая платящая подкоманда перечня FR-01 в отдельном invocation, включая
-  `retry`, `watch` и `run --force` (executor lock не берётся ни одной из
-  трёх) → ровно один run-start и ровно одна closure; «lock занят» у обычного
-  `run` → та же пара, kind `policy_refusal`, exit 1.
-- У каждой из одиннадцати платящих подкоманд вне `run` предъявлен каждый
-  исход её инвентаря выходов (девять самостоятельных команд — одним
-  критерием, две формы `evidence` — вместе с самими командами) → closure с kind, названным для этого исхода, и
-  `completed` не выдан ни одному исходу с невыполненной работой: `retry`,
-  чья задача осталась `blocked` (exit 0), `watch`, остановленный
-  `max_consecutive_failures` (exit 0), `doctor`, у которого оператор
-  отказался на cost gate (exit 2), и `plan`, проглотивший таймаут провайдера
-  (exit 0), — каждый даёт closure, отличную от `completed`.
-- Ветка, причину не сообщившая, предъявлена отдельно (двойник handler-а,
-  завершающийся без `note_stop` на каждом из исходов правила) → kind
-  выведен, `completed` выдан только при коде 0 и выполненной работе, и ни
-  один исход не остаётся без closure.
+- Матрица по шести строкам правила вывода — необработанное исключение,
+  сигнал, ненулевой код с отказом правила в последнем attempt-е, прочий
+  ненулевой код, код 0 с невыполненной работой, код 0 без неё → у каждой
+  ровно одна closure соответствующего kind с `last_checkpoint_id` последнего
+  acknowledged checkpoint-а, и `completed` только на последней.
+- Каждая платящая подкоманда перечня FR-01 (одиннадцать позиций: `run` и
+  десять вне его — восемь самостоятельных команд и две формы `evidence`) в
+  отдельном invocation, включая `retry`, `watch` и `run --force` (executor
+  lock не берётся ни одной из трёх) → ровно один run-start и ровно одна
+  closure; «lock занят» у обычного `run` → та же пара, exit 1.
+- `completed` не выдан ни одному исходу с невыполненной работой, и это
+  предъявлено там, где код процесса лжёт: `retry`, чья задача осталась
+  `blocked` (exit 0), и `watch`, остановленный `max_consecutive_failures`
+  (exit 0), дают `failed`.
+- Ни один сайт выхода не выбирает kind сам: в дереве нет ни `note_stop`, ни
+  таблиц причин по подкомандам, ни новых значений `RUN_STOP_REASONS`
+  (статический тест).
 - `kill -9` прогона после run-start → closure отсутствует; `evidence <run_id>`
   и `restore` классифицируют `crash/unknown`.
-- Двойник store, отказавший в ack последнего checkpoint-а → closure
-  `infrastructure_error` с id предыдущего.
+- Двойник store, отказавший в ack последнего checkpoint-а → closure `failed`
+  с id предыдущего и exit 2.
 - Повторная closure для того же `run_id` → отказ записи.
 - Closure валидна по `schemas/run-closure.schema.json`.
 
@@ -709,9 +704,8 @@ ordering/join keys в spool, независимый от DB; новый проц
   ротируется в архив с пометкой в checkpoint. Отказ replay → прогон не
   стартует (`INFRASTRUCTURE`, exit 2).
 - **Оба отказали:** ни DB, ни spool не подтвердили → `Refusal(kind=
-  "instrument")`, следующий платный вызов не стартует, closure
-  `infrastructure_error` (по возможности — в store; если и он недоступен,
-  stderr + exit 2).
+  "instrument")`, следующий платный вызов не стартует, closure `failed` с
+  exit 2 (по возможности — в store; если и он недоступен, stderr + exit 2).
 - Spool не является вторым источником истины (RK-03): читатели принимают
   решения по DB; spool только доигрывается в неё.
 
@@ -723,7 +717,7 @@ ordering/join keys в spool, независимый от DB; новый проц
 - Тот же сценарий на `record_claims`, `record_authorization`,
   `record_verdict`, `record_verify_evidence` — каждая mutation из §3.
 - Двойник, роняющий DB и spool одновременно → 0 последующих `Popen`,
-  exit 2, closure `infrastructure_error`.
+  exit 2, closure `failed`.
 - Replay дважды → строки не дублируются; изменённый байт в spool-строке →
   replay отказывает, прогон не стартует.
 - Fault-injection на границе «после attempt до checkpoint» ×1000 (`slow`):
