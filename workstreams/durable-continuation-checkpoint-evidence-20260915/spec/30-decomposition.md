@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 9245d4926e18f802525f43f7d3a03b629d78bf28
-  acceptance: a81c88c06a9ca0abe27c288635772b022f3869b9
+  design: 91af07e512e9ae001169277a9499bf9abe081be7
+  acceptance: a172ac760bbe172c085d6542a5065dce08614515
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -15,7 +15,7 @@ upstream_hashes:
 Стадия `decomposition` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Режет доставку
 на задачи и объявляет граф их зависимостей поверх design (`20-design.md`, blob
-`9245d492…`) и acceptance (`25-acceptance.md`, blob `a81c88c0…`). Резолюции
+`91af07e5…`) и acceptance (`25-acceptance.md`, blob `a172ac76…`). Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
 (локальный snapshot синхронно, один упорядоченный publisher, drain перед
@@ -128,9 +128,12 @@ parallel_group: core
 столбцы §2.3. Три новых модуля: `run_context.py` (`RunContext` — full UUIDv4
 `run_id`, `pipeline_id` из structlog contextvars после `setup_logging`,
 `subcommand`, `started_at`, `Publisher`, `policy`; создаётся в `cli.main()`
-вместо `bind_contextvars(run_id=uuid4().hex[:8])`, `cli.py:2504`; `start()` из
-`_acquire_run_lock` сразу после `acquire()` и из диспетчера по множеству
-`PAYING_SUBCOMMANDS`; `note_stop(reason, detail)` рядом с каждым сегодняшним
+вместо `bind_contextvars(run_id=uuid4().hex[:8])`, `cli.py:2504`; `start()` —
+**одна** точка: диспетчер `main()` перед вызовом handler-а по множеству
+`PAYING_SUBCOMMANDS`, так что `retry`, `watch` и `run --force`, не берущие
+executor lock, получают run-start наравне с обычным `run`; `_acquire_run_lock`
+run-start **не** пишет — его `sys.exit(1)`-ветка только сообщает причину
+`lock_busy` (DT-10); `note_stop(reason, detail)` рядом с каждым сегодняшним
 `set_meta("last_run_stop_reason", …)`; `close()` из `try/except/finally`
 вокруг dispatch; meta `last_run_id`/`last_pipeline_id`), `closure.py`
 (`CLOSURE_KINDS` — одна таблица: `RUN_STOP_REASONS`, `RefusalKind`,
@@ -147,14 +150,33 @@ placeholder `[REDACTED:kind:hash8]`, общий словарь имён с
 checkpoint-ов — врезает DT-03, когда checkpoint-ы появятся), `_spawn` —
 единственная функция репо, передающая argv провайдера в `subprocess.run`;
 conftest-guard `_no_real_agent_calls` получает третье имя `paid_call._spawn`
-рядом с двумя существующими. Все сайты §2.4 переводятся на `execute`:
+рядом с двумя существующими. `call_id` чеканит **сайт** — до `log_prompt` и
+до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
+проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
+что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
+`PaidCall` не переписывается в DT-07. Второй, асинхронный путь к бинарю
+провайдера снимается здесь же: `runner.run_claude_async` удаляется вместе с
+публичным экспортом (`__init__.py:58`, `__all__:156`) — в дереве у него нет
+продуктовых вызывающих, — CHANGELOG под Unreleased называет удаление, а
+`docs/architecture.md` и `CLAUDE.md` правятся в тех же коммитах; после этого
+«`_spawn` — единственный spawn» истинно по построению дерева, и статический
+тест BEH-44 утверждает, что `asyncio.create_subprocess_exec` не вызывается ни
+из одного модуля `src/spec_runner/`. Все сайты §2.4 переводятся на `execute`:
 `tdd._run_agent` (`red`, `red:fix`), `execution._run_agent_process`
 (`green`), `review._run_reviewer` (`_record_call` — шаг close),
 `review_pr.verify_comment`/`run_fix_agent` (`_record_pr_call` — шаг close,
-`CostGuard` до `execute`), `cli_plan.py:163`/`:653` (`build_cli_command` →
-`build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>`,
-`task_id=None`; `costs` — строка «planning» по образцу `pr_cost_rows`,
-`repo_total_cost` включает её), `doctor` — через `execute_task` без правок.
+`CostGuard` до `execute`), **все три** платных сайта `cli_plan.py` —
+`:170` (`_generate_stage_draft`, gated; параметр `invoke=subprocess.run`
+`:94` снимается), `:660` (`--full`, каждая стадия) и `:797`
+(интерактивный цикл `cmd_plan`, каждый круг; `cmd = [claude_command, "-p",
+prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
+`build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` для
+первых двух и `plan:interactive` для третьего, `task_id=None`; `costs` —
+строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
+`doctor` — через `execute_task` без правок. Третий сайт назван здесь
+поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
+флагов и, оставшись непереведённым, дал бы платный вызов без call-start в
+обход FR-02.
 Budget guard (#213) и `log_prompt` (#282) остаются на сайтах **до**
 `execute` — «a refusal is no row» буквально (BEH-07). Столбцы — аддитивно в
 `_migrate` по образцу #218: `agent_calls`/`pr_agent_calls` — `run_id`,
@@ -170,8 +192,10 @@ state-schema.md` и `schemas/executor-state.schema.json`, `json-result`,
 
 Границы. Здесь closure знает kinds `RUN_STOP_REASONS` и `RefusalKind` и
 пишется на штатном выходе `run`/`retry`/`watch`/платящих подкоманд; ветка
-`sys.exit(1)` в `_acquire_run_lock`, три гарда старта, сигналы, stop-marker,
-`session_timeout`, drain перед closure и отказные режимы записи closure —
+`sys.exit(1)` в `_acquire_run_lock` (`note_stop("lock_busy")` перед выходом),
+три гарда старта, сигналы, stop-marker, три ранние остановки цикла `run`
+(stop-marker, `session_timeout`, `idle_timeout`) с их новыми значениями
+`RUN_STOP_REASONS`, drain перед closure и отказные режимы записи closure —
 DT-10 (файл `tests/test_closure_every_exit.py` его). Детекция `open`-строк на
 старте `run` (процедура Q-12) и дверь `evidence close-call` — DT-09: между
 DT-02 и DT-09 `open`-строка после crash-а на старте следующего `run` **не**
@@ -185,8 +209,10 @@ test_bounded_evidence_logs.py` (новый), `tests/test_state.py` (сущест
 правка по предмету BEH-03), `tests/test_cli_info.py` (существующий, по
 предмету BEH-38), `tests/test_harness_guards.py` (существующий, по предмету
 BEH-44 — пояс на третьем имени). `tests/conftest.py` правится по предмету
-guard-а и общих фикстур (двойники store/`_spawn`, `RunContext`), но носителем
-сценария не является и никем другим не заявлен; `tests/
+guard-а и общих фикстур (двойники store/`_spawn`, `RunContext`), а
+`tests/test_runner.py` и `tests/test_events.py` — по предмету удаления
+`run_claude_async` (снятие осиротевших тестов стримингового пути); ни один из
+трёх носителем сценария не является и никем другим не заявлен; `tests/
 test_json_result_contract.py`, `tests/test_costs.py`, schema-тесты — зелёные
 без изменения ожиданий, кроме аддитивных ключей (BEH-44), любое иное — находка
 ревью.
@@ -456,7 +482,8 @@ mode — тем же путём; отказ spool-а → `Refusal(kind="instrume
 с причиной, называющей обе неудачи, а при недоступном ещё и store — stderr с
 причиной и тот же exit 2; `state_degraded`-уведомление — один раз, как
 сегодня. `spool.replay(state)` (DT-06) вызывается на старте `run`/`retry`/
-`watch` после lock и до выбора задачи, из `tdd`/`budget`-команд и из `restore`
+`watch` после run-start и гардов старта, до выбора задачи, из
+`tdd`/`budget`-команд и из `restore`
 (там уже стоит); повреждённая строка на старте — отказ с `seq` и обоими
 digest-ами, прогон не стартует, 0 `Popen`, closure `infrastructure_error`;
 после replay файл ротируется в `.executor-spool.<ts>.jsonl.done`, ссылка —
@@ -488,7 +515,7 @@ parallel_group: door
 `paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12,
 вызывается из `_run_tasks_inner` там же, где `recover_stale_tasks`, после
 replay spool (DT-08 подключает replay раньше неё; до DT-08 процедура идёт
-сразу после lock): для каждой `open`-строки namespace-а — targeted `get` двух
+сразу после гардов старта): для каждой `open`-строки namespace-а — targeted `get` двух
 ключей в store, не листинг; (а) есть call-result → строка закрывается им,
 задача свободна; (б) есть call-start, нет call-result → open call: `run --all`
 пропускает задачу с причиной, называющей `call_id`, provenance и «open call»,
@@ -526,14 +553,24 @@ depends_on: [DT-06]
 parallel_group: closure
 
 Предмет — остаток design §6.2–6.3 за пределами рабочей формы DT-02.
-Run-start в `sys.exit(1)`-ветке `_acquire_run_lock` — перед выходом, так что
-«lock занят» оставляет пару run-start + closure с одним `run_id`; три гарда
-старта (`lock_busy`, `dirty_spec`, `tracked_state`) → `policy_refusal`, reason
-называет гард, exit 1 — как сегодня; `no_ready` → `no_ready`,
-`validation_failed` → `validation_failure` — за гардами не числятся;
-`_shutdown_requested` и stop-marker → `operator_stop`; `session_timeout_minutes`
-в `watch` (`cli.py:1069`) → `session_timeout` через `note_stop`; необработанное
-исключение → `infrastructure_error`; `Refusal.with_note` сохраняет kind и,
+`note_stop("lock_busy", …)` в `sys.exit(1)`-ветке `_acquire_run_lock` — перед
+выходом; run-start там **не** пишется, он уже сделан диспетчером (DT-02), так
+что «lock занят» оставляет обычную пару run-start + closure с одним `run_id`;
+три гарда старта (`lock_busy`, `dirty_spec`, `tracked_state`) →
+`policy_refusal`, reason называет гард, exit 1 — как сегодня; `no_ready` →
+`no_ready`, `validation_failed` → `validation_failure` — за гардами не
+числятся; `_shutdown_requested` → `operator_stop`. Три ранние остановки цикла
+`run` — stop-marker (`cli.py:1062`), истёкший `session_timeout_minutes`
+(`:1069`) и истёкший `idle_timeout_minutes` (`:1080`) — сегодня выходят
+`break`-ом, не трогая `stop_reason`, чей дефолт `"completed"` (`:876`)
+персистится как есть (`:1374`); здесь каждая выставляет собственное значение
+и сообщает его `note_stop`, а `RUN_STOP_REASONS` (`:536-541`) получает
+аддитивно `operator_stop`, `session_timeout` и `idle_timeout` (CHANGELOG-нота
+по комментарию словаря) с kind closure того же имени. Все три таймера и
+stop-marker живут в `_run_tasks_inner`, то есть в `run`, а не в `watch`:
+в `cmd_watch` session-timeout нет. `idle_timeout` — самостоятельный kind, не
+разновидность `session_timeout`; необработанное исключение →
+`infrastructure_error`; `Refusal.with_note` сохраняет kind и,
 значит, closure kind. Сайты остановки сообщают контексту **причину**, не kind —
 статический тест: ни один сайт не выбирает kind сам, словарь пинован схемой,
 неизвестный kind не сериализуется. Drain перед closure: таймаут ack последнего
@@ -548,7 +585,12 @@ calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/
 `evidence`) получают `run_id` для логов, но run-start/checkpoint/closure не
 пишут; `PAYING_SUBCOMMANDS` (`run`, `retry`, `watch`, `plan`, `review-pr`,
 `doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
-— ровно один run-start и ровно одна closure на invocation. `kill -9`/`os._exit`
+— ровно один run-start и ровно одна closure на invocation, и три пути,
+executor lock не берущие (`retry`, `watch`, `run --all --force`),
+предъявляются отдельно: доказывать их run-start вызовом `_acquire_run_lock`
+нельзя, они его не проходят. `run --force` остаётся обычным платящим
+прогоном контракта — `--force` снимает проверку lock-а, не участие в
+evidence. `kill -9`/`os._exit`
 после run-start и первого acknowledged checkpoint-а — closure нет по
 построению; `evidence` — `crash/unknown`, `restore` восстанавливает с
 последнего acknowledged checkpoint-а и печатает следующий шаг только без open
@@ -578,8 +620,8 @@ manifest, WIP artifact, spool, каждый call record, экспорт attempt-
 × {один байт изменён; обязательный файл удалён — DB snapshot, manifest, WIP
 при `wip != none`, closure при `closed`}; изменённый manifest отвергается по
 `manifest_sha256`, даже если все перечисленные в нём digests сходятся. `run`
-(и `retry`/`watch`) на старте — после lock, до `Popen` и до
-`claims.check_claims` — проверяет целостность bundle-а, от которого namespace
+(и `retry`/`watch`) на старте — после run-start и гардов старта, до `Popen` и
+до `claims.check_claims` — проверяет целостность bundle-а, от которого namespace
 продолжается (источник его `run_id` — реализатору: последний run-start
 namespace-а в `executor_meta`, снапшот которого лежит в DB), и отказывает
 `Refusal(kind="instrument")`, exit 2, closure `infrastructure_error`.
@@ -632,7 +674,8 @@ parallel_group: matrix
 Предмет — FR-06 как измерение по всей поверхности, которую DT-02…DT-09
 построили, и три вещи, которых там ещё нет. (1) Матрица outcome {success,
 `TASK_FAILED`, blocked, timeout, infrastructure error} × site {GREEN, review,
-`review:<role>`, `plan --full`, `plan --gated`, `review-pr fix`, `doctor`}:
+`review:<role>`, `plan --full`, `plan --gated`, интерактивный `plan`,
+`review-pr fix`, `doctor`}:
 каждая клетка — call record, адресуемый `run_id/call_id`, с provenance,
 outcome, стоимостью (число или `null`, никогда `0.0` за неизвестную),
 bounded/redacted prompt и result с SHA-256 и размером; клетки `TASK_BLOCKED`,

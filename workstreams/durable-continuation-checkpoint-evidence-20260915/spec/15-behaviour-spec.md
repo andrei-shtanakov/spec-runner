@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 458f32b770c1aeeffa20015b61aad429a6af2565
+  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -147,6 +147,13 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** каждая из команд `run`, `retry`, `watch`, `plan`, `review-pr`,
   `doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`
   (fake CLI, где нужен) оставляет ровно один run-start и ровно одну closure.
+- **And** три платящих пути, не берущие executor lock, — `retry TASK-001`,
+  `watch` (один круг до stop-marker) и `run --all --force` — оставляют ту же
+  пару run-start + closure, что и обычный `run`: двойник store получает по
+  одному run-start на invocation, и ни один call-start этих прогонов не
+  ссылается на `run_id` без run-start. Отсутствие run-start у любого из трёх —
+  красный тест; тест не вправе доказывать run-start вызовом
+  `_acquire_run_lock`, потому что ни один из трёх путей его не проходит.
 
 ### B. Запись раньше траты
 
@@ -163,23 +170,28 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   заимствованный ярлык — см. «Замечания к upstream»), GREEN, review,
   `review:<role>`
   (параллельный и последовательный режим), `plan --full` (три стадии),
-  `plan --gated`,
+  `plan --gated`, интерактивный `plan "<описание>"` (один круг цикла: fake CLI
+  отвечает `PLAN_READY`, ответ на приглашение — отказ от записи задач, так что
+  цикл завершается после одного платного вызова),
   `review-pr` verify, `review-pr` fix, `doctor`.
 - **Then** для каждого `spawn` в журнале непосредственно раньше есть
   `call_start` с ack, и у пары один `call_id`; число `spawn` равно числу
   call-start-ов с ack.
 - **And** call-start каждого сайта содержит `run_id`, `call_id`, provenance
   из одного словаря (`red`, `green`, `review`, `review:<role>`,
-  `plan:<stage>`, `review-pr:verify`, `review-pr:fix`, `doctor`), policy
-  identity, digest redacted prompt-а, timestamp, а для task-сайтов —
-  `task_id` и номер attempt.
+  `plan:<stage>`, `plan:interactive`, `review-pr:verify`, `review-pr:fix`,
+  `doctor`), policy identity, digest redacted prompt-а, timestamp, а для
+  task-сайтов — `task_id` и номер attempt.
 - **And** тот же `call_id` записан в строке `agent_calls` /
   `pr_agent_calls` рядом с `provenance`, так что ledger стоимости и evidence
   соединяются одним ключом.
 - **And** статический тест по образцу пояса `PaidBinaryReached`
   (`tests/test_harness_guards.py`): любой путь к бинарю провайдера проходит
   через один seam call-start; обходной вызов `subprocess.run`/`Popen` с
-  argv провайдера — красный тест.
+  argv провайдера — красный тест. В `cli_plan.py` таких путей **три**, и все
+  три прогоняются выше: gated (`_generate_stage_draft`), `--full`
+  (трёхстадийный цикл) и интерактивный цикл `cmd_plan`; тест, доказавший seam
+  на двух из трёх, оставляет достижимый из CLI платный вызов без call-start.
 
 #### BEH-06: Без acknowledgement процесс не стартует; отказ — до траты, exit 2, closure с причиной
 `traces: [FR-02, FR-07]`
@@ -519,7 +531,8 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **Given** fake CLI, параметризованный по исходу {success, `TASK_FAILED`,
   blocked (`TASK_BLOCKED`), timeout, infrastructure error}, и конфигурации,
   доводящие прогон до сайтов {GREEN, review, `review:<role>`, `plan
-  --full`, `plan --gated`, `review-pr fix`, `doctor`}; двойник store.
+  --full`, `plan --gated`, `plan` интерактивный, `review-pr fix`, `doctor`};
+  двойник store.
 - **When** прогнана каждая клетка матрицы.
 - **Then** в store есть call record, адресуемый `run_id/call_id`, с
   provenance сайта, outcome клетки, стоимостью (число или `null`, никогда
@@ -571,6 +584,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `plan:requirements`, `plan:design`, `plan:tasks` и `task_id = NULL`;
   `plan --gated` — один с `plan:requirements`; у каждого `run_id` своего
   invocation и свой `call_id`.
+- **And** интерактивный `spec-runner plan "…"`, прогнанный тем же fake CLI на
+  один круг, оставил свой call record с provenance `plan:interactive` и
+  `task_id = NULL`: третий платный путь `cli_plan.py` получает ledger-identity
+  наравне с двумя флаговыми, а не остаётся вне ledger-а.
 - **And** `costs` показывает их суммой отдельной строкой «planning», по
   образцу `pr_cost_rows` (#218); `task_cost` выполненной задачи не
   изменился; `repo_total_cost` включает planning.
@@ -658,8 +675,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   старте (`validation_failure`); dirty-spec guard (`_enforce_clean_spec`);
   tracked-state-DB guard (#273); занятый lock; budget guard перед вызовом
   (`budget_refusal`); неудовлетворённый gate под `review_policy: required`
-  (`policy_refusal`); `session_timeout`; отказ ack (`infrastructure_error`);
-  stop-marker и SIGTERM (`operator_stop`). Двойник store.
+  (`policy_refusal`); `session_timeout_minutes`, истёкший в цикле
+  (`session_timeout`); `idle_timeout_minutes`, истёкший в цикле
+  (`idle_timeout`); отказ ack (`infrastructure_error`); stop-marker и SIGTERM
+  (`operator_stop`). Те же конфигурации «completed», «занятый lock» и
+  «`operator_stop` по stop-marker» повторяются для `run --all --force`, где
+  executor lock не берётся. Двойник store.
 - **When** каждая конфигурация прогнана в отдельном invocation.
 - **Then** у каждого `run_id` ровно одна closure, kind из словаря схемы
   `schemas/run-closure.schema.json`, reason совпадает с текстом stop-reason,
@@ -668,11 +689,25 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   записан и равен фактическому.
 - **And** для путей до attempt (no-ready, validation failure, dirty-spec,
   tracked-state, lock занят) closure существует, хотя attempt не создан;
-  run-start у них записан сразу после lock. Для «lock занят» run-start
-  пишется в момент отказа lock-а — первый факт, который invocation
-  узнаёт, — и за ним closure с kind из той же таблицы соответствия
-  (BEH-32): двойник store получает пару run-start + closure с одним
-  `run_id`; одиночный run-start без closure для этого пути — красный тест.
+  run-start у них записан диспетчером `main()` **до** вызова handler-а и
+  потому раньше любого из этих гардов. Для «lock занят» это означает обычную
+  пару run-start + closure с одним `run_id` у двойника store: run-start уже
+  записан к моменту отказа lock-а, а сайт отказа сообщает контексту причину
+  `lock_busy` перед выходом; одиночный run-start без closure и, равно,
+  отсутствие run-start для этого пути — красный тест.
+- **And** `run --all --force`, который executor lock не берёт вовсе, даёт ту
+  же пару run-start + closure на каждой из своих конфигураций: kind
+  `completed` при всех задачах `done`, `operator_stop` по stop-marker.
+  Конфигурация «занятый lock» под `--force` closure `policy_refusal` **не**
+  даёт — lock не проверяется, прогон идёт, — и это наблюдается: `--force`
+  остаётся обычным платящим прогоном с run-start, а не путём в обход
+  контракта.
+- **And** `session_timeout` и `idle_timeout` наблюдаются на `run`: оба таймера
+  живут в цикле исполнения задач `run` (`cli.py:1069` и `:1080`), а не в
+  `watch`; closure каждого несёт свой kind и свой reason, и ни один из них не
+  `completed` — прогон, оборванный таймером с невыполненными задачами,
+  прочитанный как `completed`, есть тот самый «пустой успех», который
+  запрещает FR-07.
   Три гарда старта — «lock занят» (`_acquire_run_lock`), dirty-spec
   (`_enforce_clean_spec`) и tracked-state DB (#273) — это отказ правила, а
   не инструмента: kind `policy_refusal`, reason называет гард, exit code 1 —
@@ -730,6 +765,13 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `budget_refusal`, `operator_stop`, `operator_stop` соответственно, а у
   трёх гардов старта — `policy_refusal`; `Refusal.with_note` сохраняет kind
   и, значит, closure kind.
+- **And** три ранние остановки цикла `run` — stop-marker, истёкший
+  `session_timeout_minutes` и истёкший `idle_timeout_minutes` — входят в ту же
+  таблицу под собственными stop-reason (`operator_stop`, `session_timeout`,
+  `idle_timeout`) и дают kind того же имени; ни одна из них не отображается в
+  `completed`. Таблица не имеет клетки «неизвестный stop-reason → `completed`»:
+  stop-reason вне словаря — отказ сериализации closure, а не молчаливое
+  повышение до успеха.
 - **And** отображение задано одной таблицей соответствия в одном месте
   (статический тест: ни один сайт остановки не выбирает kind closure сам);
   словарь kinds пинован схемой, неизвестный kind не сериализуется.
@@ -750,8 +792,8 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **Then** spool содержит строку с `seq`, `run_id`, `namespace`,
   `task_id`/attempt, `table`, payload и SHA-256 строки, записанную с
   `fsync`; файл лежит в `.executor-*` поясе рядом с DB.
-- **And** новый процесс после lock и до выбора задачи доигрывает spool в DB
-  в порядке `seq`; `spec-runner status` / `tdd status` / `costs` показывают
+- **And** новый процесс после run-start и гардов старта, до выбора задачи,
+  доигрывает spool в DB в порядке `seq`; `spec-runner status` / `tdd status` / `costs` показывают
   mutation; следующий checkpoint содержит её в DB snapshot; spool
   ротирован в архив с пометкой в manifest.
 - **And** прежнее поведение «жить в памяти процесса» отсутствует:
@@ -966,6 +1008,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   находка ревью.
 - **And** seam call-start не создал второго пути к бинарю провайдера: пояс
   `PaidBinaryReached` продолжает ловить каждый сайт (BEH-05).
+- **And** в дереве не осталось и **прежнего** второго пути: статический тест
+  утверждает, что `asyncio.create_subprocess_exec` не вызывается ни из одного
+  модуля `src/spec_runner/`, а `run_claude_async` отсутствует и в
+  `runner.py`, и в `__all__` пакета. Пояс продолжает перечислять
+  `asyncio.create_subprocess_exec` среди перехватываемых точек — он ловит
+  будущий регресс, а не сегодняшний код.
 
 #### BEH-45: Документация, схемы и статус experimental говорят то же, что код; соседям объявлен контракт
 `traces: [FR-01, FR-05, FR-09]`

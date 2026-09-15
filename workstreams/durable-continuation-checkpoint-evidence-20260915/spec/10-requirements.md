@@ -103,12 +103,20 @@ remedies, waivers, budget authorizations, review-loop state, стоимость 
 - **Платный subprocess (paid call)** — запуск CLI провайдера с prompt-ом.
   Полный перечень сайтов: RED authoring, BEH-07 agent round, GREEN, review,
   review-роли, `plan --full` (каждый вызов стадии), `plan --gated`,
-  `review-pr` verify и fix, `doctor`. Бриф в FR-06 называет минимум (task
-  execution, review, `plan --full`, gated planning); чартер расширяет до всех
-  сайтов — требования принимают полный перечень.
+  `plan "<описание>"` (интерактивный цикл, **каждый круг** — отдельный
+  платный вызов), `review-pr` verify и fix, `doctor`. Бриф в FR-06 называет
+  минимум (task execution, review, `plan --full`, gated planning); чартер
+  расширяет до всех сайтов — требования принимают полный перечень.
+  Интерактивный `plan` назван здесь отдельно, потому что это третий,
+  самостоятельный путь к бинарю провайдера в `cli_plan.py` (не `--full` и не
+  `--gated`), достижимый любым `spec-runner plan "<описание>"` без флагов;
+  умолчание «раз это `plan`, значит он покрыт строкой `plan --full`» — ровно
+  тот обход seam-а, который запрещает FR-02.
 - **Provenance / stage** — существующее поле `provenance` (`red`, `green`,
-  `review`, `review:<role>`), расширенное значениями для планирования,
-  `review-pr` и `doctor`. Одно поле, один словарь.
+  `review`, `review:<role>`), расширенное значениями для планирования
+  (`plan:<stage>` для `plan --full` и `plan --gated`, `plan:interactive` для
+  интерактивного цикла), `review-pr` (`review-pr:verify`, `review-pr:fix`) и
+  `doctor`. Одно поле, один словарь.
 - **Policy identity** — то, что делает call-start сравнимым при restore:
   `config_hash` над `gates.POLICY_KEYS`, effective TDD namespace и версия
   контракта артефактов. Точный состав — вход design (Q-07).
@@ -126,7 +134,8 @@ remedies, waivers, budget authorizations, review-loop state, стоимость 
   сохранена. Какой канал имеет право подтверждать call-start — вход design
   (Q-02); требование — без ack процесс не стартует.
 - **Run-start** — durable-запись начала прогона (`run_id`, `pipeline_id`,
-  подкоманда, policy identity, версия контракта, repository identity).
+  подкоманда, policy identity, версия контракта, repository identity),
+  выполняемая в `main()` до диспетчеризации handler-а платящей подкоманды.
 - **Run-closure** — отдельная immutable запись штатного завершения прогона
   (§FR-07). Run-start без closure = crash/unknown.
 - **Continuation-relevant mutation** — запись, без которой следующий шаг
@@ -197,6 +206,15 @@ manifest, evidence bundle и run-closure. `pipeline_id` хранится отд�
   `tdd abandon/repair/resume/release`, `budget authorize`, `restore`.
   Read-only команды (`status`, `costs`, `validate`, `report`, `evidence`)
   run-start не пишут.
+- **Носитель run-start — диспетчер, не lock.** Признак «подкоманда платит или
+  меняет continuation-state» принадлежит перечню выше, а не тому, берёт ли
+  подкоманда executor lock: `retry` и `watch` его не берут вовсе, а `run
+  --force` намеренно его пропускает. Поэтому run-start пишется **одной**
+  точкой в `main()` до вызова handler-а — для всех подкоманд перечня без
+  исключений, включая `run --force`. Привязка run-start к lock оставила бы
+  три платящих пути (`retry`, `watch`, `run --force`) без run-start и, по
+  FR-07, без closure — то есть с call-start-ами под `run_id`, для которого
+  прогона «не было», и с прочтением такого прогона как legacy.
 - `watch` — один invocation, один `run_id` на все задачи цикла.
 - Prompt-артефакт (`prompts_log`) несёт `run_id` и `call_id` в заголовке
   файла, оставаясь «prompt как отправлен» (#282).
@@ -277,8 +295,9 @@ call-start с `run_id`, `call_id`, provenance, policy identity, optional
   0 автоматических повторов open call; restore после падения между spawn и
   результатом выдаёт `needs-human` **до** любого subprocess.
 - Матрица сайтов (RED, BEH-07, GREEN, review, review:<role>, `plan --full`,
-  `plan --gated`, `review-pr verify`, `review-pr fix`, `doctor`): у каждого
-  сайта call-start предшествует `Popen` (порядок наблюдается двойником).
+  `plan --gated`, интерактивный `plan`, `review-pr verify`, `review-pr fix`,
+  `doctor`): у каждого сайта call-start предшествует `Popen` (порядок
+  наблюдается двойником).
 - Budget-отказ перед вызовом → нет call-start; prompt-артефакт заканчивается
   `=== NOT STARTED: … ===` как сегодня.
 - Повторный call-result для того же `call_id` → отказ записи, первая запись
@@ -484,7 +503,8 @@ bounded/redacted prompt и result либо их digests. Terminal task attempt
   referenced SHA/blob, timestamp, supersession status (#478). `pr_*` — при
   завершении раунда `review-pr`.
 - **Планирование** получает ledger-identity: `plan --full` и `plan --gated`
-  пишут call records с provenance `plan:<stage>` и `task_id = NULL`;
+  пишут call records с provenance `plan:<stage>`, интерактивный `plan` — с
+  `plan:interactive`, все с `task_id = NULL`;
   `costs` показывает их отдельной строкой «planning», не смешивая с task
   cost (по образцу `pr_cost_rows`, #218).
 - **Immutable:** запись после публикации не переписывается; исправление —
@@ -499,15 +519,18 @@ bounded/redacted prompt и result либо их digests. Terminal task attempt
 
 - Матрица outcome × site: {success, `TASK_FAILED`, blocked, timeout,
   infrastructure error} × {GREEN, review, review:<role>, `plan --full`,
-  `plan --gated`, `review-pr fix`, `doctor`} — каждая клетка оставляет call
+  `plan --gated`, интерактивный `plan`, `review-pr fix`, `doctor`} — каждая
+  клетка оставляет call
   record с `run_id`, `call_id`, provenance, стоимостью или `null`, bounded
   prompt/result, SHA-256 и размером полного содержимого.
 - Terminal attempt (`done`, `failed`, `blocked`) → JSONL-экспорт строк,
   валидный по `schemas/evidence-record.schema.json`; строки другой задачи
   отсутствуют.
 - `plan --full` с fake CLI → три call records (`plan:requirements`,
-  `plan:design`, `plan:tasks`), `costs` показывает их суммой «planning»,
-  `task_cost` любой задачи не изменился.
+  `plan:design`, `plan:tasks`); интерактивный `plan "<описание>"` с тем же
+  fake CLI → по одному call record (`plan:interactive`) на круг цикла;
+  `costs` показывает их суммой «planning», `task_cost` любой задачи не
+  изменился.
 - Попытка перезаписать опубликованную запись → отказ; чтение возвращает
   первую.
 - Secret-корпус (NFR-05) в prompt и result → 0 секретов в bundle, digests
@@ -520,21 +543,37 @@ traces: [G-02, J-03, P-02, P-03, M-03, M-06, CON-04, CON-08]
 **Priority**: Must
 
 Completed, no-ready, validation failure, budget или policy refusal, session
-timeout, infrastructure error и operator stop создают closure с причиной и
-ids последних acknowledged checkpoint/evidence. Run-start без closure
-трактуется как crash/unknown, никогда как пустой успех.
+timeout, idle timeout, infrastructure error и operator stop создают closure с
+причиной и ids последних acknowledged checkpoint/evidence. Run-start без
+closure трактуется как crash/unknown, никогда как пустой успех.
 
 Уточнения:
 
-- **Run-start** пишется до первой работы, сразу после lock (§FR-01, перечень
-  подкоманд). Closure — ровно одна на run-start; повторная отклоняется.
+- **Run-start** пишется до первой работы — в `main()` до диспетчеризации
+  handler-а платящей подкоманды (§FR-01, «носитель run-start — диспетчер, не
+  lock»), поэтому `retry`, `watch` и `run --force`, не берущие executor lock,
+  получают его на общих основаниях. Closure — ровно одна на run-start;
+  повторная отклоняется. Отказ executor lock («lock занят») наступает **после**
+  run-start и потому даёт обычную пару run-start + closure, а не одинокий
+  run-start.
 - **Виды closure** (словарь пинуется схемой): `completed`, `no_ready`,
   `validation_failure`, `budget_refusal`, `policy_refusal`,
-  `session_timeout`, `infrastructure_error`, `operator_stop`. Graceful
-  SIGINT/SIGTERM (`_shutdown_requested`, `executor.py`) → `operator_stop`;
-  stop-marker → `operator_stop`; `Refusal.kind` (#230) отображается в
-  `policy_refusal` / `infrastructure_error` / `budget_refusal` — одна таблица
-  соответствия, не по месту.
+  `session_timeout`, `idle_timeout`, `infrastructure_error`, `operator_stop`.
+  Graceful SIGINT/SIGTERM (`_shutdown_requested`, `executor.py`) →
+  `operator_stop`; stop-marker → `operator_stop`; `Refusal.kind` (#230)
+  отображается в `policy_refusal` / `infrastructure_error` /
+  `budget_refusal` — одна таблица соответствия, не по месту.
+- **Ранние остановки нуждаются в собственных stop-reason.** Сегодня выходы
+  «stop-marker», «session timeout» и «idle timeout» оставляют дефолтный
+  `last_run_stop_reason = "completed"` — closure, построенная по этому
+  словарю, назвала бы прерванный прогон завершённым, что запрещает инвариант
+  «никогда как пустой успех». Поэтому словарь stop-reason (`RUN_STOP_REASONS`,
+  interop-поверхность `status` и внешних читателей) получает аддитивно
+  `operator_stop`, `session_timeout` и `idle_timeout`, каждый со своим kind
+  closure того же имени; добавление словарного значения — CHANGELOG-нота, как
+  задаёт сам словарь. `idle_timeout` — orderly exit, а не разновидность
+  `session_timeout`: причины остановки разные, и `status` показывает их
+  раздельно.
 - **Состав:** `run_id`, `pipeline_id`, подкоманда, kind, reason (текст
   stop-reason, как в `status`), exit code, `last_checkpoint_id`,
   `last_call_ids`/`attempt_ids`, число open calls, `degraded`/spool status,
@@ -554,10 +593,14 @@ ids последних acknowledged checkpoint/evidence. Run-start без closur
 **Acceptance**:
 
 - Матрица: completed / no-ready / validation failure / budget refusal /
-  policy refusal / session timeout / infrastructure error / operator stop
-  (stop-marker и SIGTERM), включая пути до attempt → у каждой ровно одна
-  closure нужного kind с reason и `last_checkpoint_id` последнего
+  policy refusal / session timeout / idle timeout / infrastructure error /
+  operator stop (stop-marker и SIGTERM), включая пути до attempt → у каждой
+  ровно одна closure нужного kind с reason и `last_checkpoint_id` последнего
   acknowledged checkpoint-а.
+- Каждая платящая подкоманда перечня FR-01 в отдельном invocation, включая
+  `retry`, `watch` и `run --force` (executor lock не берётся ни одной из
+  трёх) → ровно один run-start и ровно одна closure; «lock занят» у обычного
+  `run` → та же пара, kind `policy_refusal`, exit 1.
 - `kill -9` прогона после run-start → closure отсутствует; `evidence <run_id>`
   и `restore` классифицируют `crash/unknown`.
 - Двойник store, отказавший в ack последнего checkpoint-а → closure
@@ -587,8 +630,9 @@ ordering/join keys в spool, независимый от DB; новый проц
   жить в памяти» заменяется: mutation либо подтверждена DB, либо
   подтверждена spool-ом, либо прогон останавливается на текущей границе
   (инвариант 5). `state_degraded` уведомление остаётся.
-- **Кто читает:** старт любого процесса на этом namespace (после lock, до
-  выбора задачи) и `restore`: replay в DB в порядке `seq`, идемпотентно
+- **Кто читает:** старт любого процесса на этом namespace (после run-start и
+  гардов старта, до выбора задачи; executor lock этой границы не задаёт —
+  `retry` и `watch` его не берут, `run --force` пропускает) и `restore`: replay в DB в порядке `seq`, идемпотентно
   (повторный replay не дублирует строк); после успешного replay spool
   ротируется в архив с пометкой в checkpoint. Отказ replay → прогон не
   стартует (`INFRASTRUCTURE`, exit 2).

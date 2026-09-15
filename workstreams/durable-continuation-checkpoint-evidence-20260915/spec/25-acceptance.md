@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 458f32b770c1aeeffa20015b61aad429a6af2565
-  behaviour-spec: 5cb4398372028daa2c0d9f0823f06c09b84e0c9c
+  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
+  behaviour-spec: 3b1da9c591992b91c4bc182dac1f7bd1ba12d67e
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -84,7 +84,11 @@ scenarios: [BEH-04]
 `run_id`, а двойник store не получил от них ни run-start, ни checkpoint-а, ни
 closure; каждая из `run`, `retry`, `watch`, `plan`, `review-pr`, `doctor`,
 `tdd abandon/repair/resume/release`, `budget authorize`, `restore` оставляет
-у двойника ровно один run-start и ровно одну closure.
+у двойника ровно один run-start и ровно одну closure. Три пути, не берущие
+executor lock, — `retry`, `watch` и `run --all --force` — предъявляются
+отдельно и дают ту же пару: run-start приходит от диспетчера `main()` по
+перечню платящих подкоманд, а не от `_acquire_run_lock`, которого эти пути не
+проходят; отсутствие run-start у любого из трёх — невыполненный критерий.
 
 ### B. Запись раньше траты
 
@@ -95,13 +99,17 @@ scenarios: [BEH-05]
 Наблюдаемый знак: в общем журнале двойников для каждого `spawn` (RED
 authoring, RED agent round (#220), GREEN, review, `review:<role>` в
 параллельном и последовательном режиме, три стадии `plan --full`,
-`plan --gated`, `review-pr` verify и fix, `doctor`) непосредственно раньше
+`plan --gated`, интерактивный `plan "<описание>"` на один круг цикла,
+`review-pr` verify и fix, `doctor`) непосредственно раньше
 стоит `call_start` с ack и тем же `call_id`, число `spawn` равно числу
 acknowledged call-start-ов; call-start несёт `run_id`, `call_id`, provenance
 из одного словаря (`red`, `green`, `review`, `review:<role>`, `plan:<stage>`,
-`review-pr:verify`, `review-pr:fix`, `doctor`), policy identity, digest
-redacted prompt-а, timestamp и для task-сайтов `task_id`/номер attempt; тот же
-`call_id` стоит в строке `agent_calls`/`pr_agent_calls` рядом с `provenance`.
+`plan:interactive`, `review-pr:verify`, `review-pr:fix`, `doctor`), policy
+identity, digest redacted prompt-а, timestamp и для task-сайтов
+`task_id`/номер attempt; тот же `call_id` стоит в строке
+`agent_calls`/`pr_agent_calls` рядом с `provenance`. Все три платных пути
+`cli_plan.py` — gated, `--full` и интерактивный — предъявлены в журнале:
+критерий не считается выполненным, если seam доказан на двух из трёх.
 Статический тест по образцу `PaidBinaryReached` красный на любом
 `subprocess.run`/`Popen` с argv провайдера в обход seam-а.
 
@@ -308,7 +316,8 @@ scenarios: [BEH-22]
 
 Наблюдаемый знак: для {success, `TASK_FAILED`, blocked, timeout,
 infrastructure error} × {GREEN, review, `review:<role>`, `plan --full`,
-`plan --gated`, `review-pr fix`, `doctor`} в store есть record по
+`plan --gated`, интерактивный `plan`, `review-pr fix`, `doctor`} в store есть
+record по
 `run_id/call_id` с provenance сайта, outcome клетки, стоимостью-числом или
 `null` (никогда `0.0` за неизвестную), bounded/redacted prompt и result с
 SHA-256 и размером полного содержимого; клетки `TASK_BLOCKED`, timeout,
@@ -337,8 +346,10 @@ scenarios: [BEH-24]
 `plan --gated --stage requirements` — один, каждый с `run_id` своего
 invocation и своим `call_id`; `costs` и `costs --json` показывают их суммой
 строкой «planning», `task_cost` выполненной задачи не изменился,
-`repo_total_cost` включает planning; путь планирования проходит через тот же
-seam, что task-сайты.
+`repo_total_cost` включает planning; интерактивный `plan "<описание>"`,
+прогнанный на один круг, оставляет свой record с provenance `plan:interactive`
+и `task_id = NULL`; все три пути планирования проходят через тот же seam, что
+task-сайты.
 
 #### AC-23: Опубликованная запись не переписывается; исправление — новая запись со ссылкой · verification: test
 traces: [FR-06]
@@ -390,9 +401,9 @@ scenarios: [BEH-29, BEH-32]
 
 Наблюдаемый знак: для completed, `no_ready`, `validation_failure`,
 dirty-spec guard, tracked-state-DB guard, занятого lock, `budget_refusal`,
-`policy_refusal` под `review_policy: required`, `session_timeout`, отказа
-ack (`infrastructure_error`), stop-marker и SIGTERM (`operator_stop`) у
-каждого `run_id` ровно одна closure с kind из словаря
+`policy_refusal` под `review_policy: required`, `session_timeout`,
+`idle_timeout`, отказа ack (`infrastructure_error`), stop-marker и SIGTERM
+(`operator_stop`) у каждого `run_id` ровно одна closure с kind из словаря
 `schemas/run-closure.schema.json`, reason, равным stop-reason из `status`,
 `last_checkpoint_id` последнего acknowledged checkpoint-а (или `null`),
 записанным фактическим exit code, `run_id`, `pipeline_id`, подкомандой,
@@ -403,7 +414,13 @@ run-start + closure под одним `run_id`; `Refusal.kind`
 `policy`/`instrument`/`budget` и сигналы остановки отображаются в kind
 closure одной таблицей (статический тест: ни один сайт остановки не
 выбирает kind сам), `Refusal.with_note` kind сохраняет, неизвестный kind не
-сериализуется, exit code closure совпадает с кодом процесса.
+сериализуется, exit code closure совпадает с кодом процесса. Три ранние
+остановки цикла `run` — stop-marker, `session_timeout` и `idle_timeout` —
+дают closure своего kind и своего reason: ни одна не читается как
+`completed`, что наблюдается прямо (closure с невыполненными задачами и kind
+`completed` — невыполненный критерий). `run --all --force` предъявляется
+отдельной конфигурацией: executor lock не берётся, run-start и closure есть,
+kind `completed` при всех задачах `done` и `operator_stop` по stop-marker.
 
 #### AC-28: `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown · verification: test
 traces: [FR-07, FR-09]
@@ -560,7 +577,12 @@ scenarios: [BEH-44]
 `test_state.py`, `test_costs.py` зелёные без изменения ожиданий, кроме
 аддитивных `run_id`/`call_id`/`pipeline_id` — любое иное изменённое
 ожидание существующего теста является находкой ревью PR; пояс
-`PaidBinaryReached` продолжает ловить каждый сайт через seam.
+`PaidBinaryReached` продолжает ловить каждый сайт через seam. Второй путь к
+бинарю провайдера снят, а не только обойдён: `asyncio.create_subprocess_exec`
+не вызывается ни из одного модуля `src/spec_runner/`, `run_claude_async`
+отсутствует в `runner.py` и в `__all__` пакета, CHANGELOG под Unreleased
+называет удаление публичного экспорта, а пояс продолжает перечислять
+`asyncio.create_subprocess_exec` как перехватываемую точку.
 
 #### AC-41: Acknowledgement call-start и доступность checkpoint-а укладываются в бюджет NFR-02 · verification: metric
 traces: [NFR-02, FR-02]

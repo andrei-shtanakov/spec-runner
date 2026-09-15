@@ -6,16 +6,16 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 458f32b770c1aeeffa20015b61aad429a6af2565
-  behaviour-spec: 5cb4398372028daa2c0d9f0823f06c09b84e0c9c
+  requirements: dceb052e56c57148a819ecae07228dd6d465aaef
+  behaviour-spec: 3b1da9c591992b91c4bc182dac1f7bd1ba12d67e
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
 
 Стадия `design` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Даёт
-механику тому, что requirements (`10-requirements.md`, blob `458f32b7…`) и
-behaviour-spec (`15-behaviour-spec.md`, blob `5cb43983…`) намеренно оставили
+механику тому, что requirements (`10-requirements.md`, blob `dceb052e…`) и
+behaviour-spec (`15-behaviour-spec.md`, blob `3b1da9c5…`) намеренно оставили
 открытым: какой канал вправе подтверждать call-start, где живёт единый seam
 платного вызова, как checkpoint снимается и доставляется, в чём переносится
 WIP, что входит в policy identity, чем режется секрет, кто исполняет
@@ -135,23 +135,45 @@ manifest — checkpoint без acknowledged manifest-а для читателе�
 #### Q-06 · owner_role: architects · resolution: resolved
 
 **Seam — новый модуль `src/spec_runner/paid_call.py` с одной функцией
-исполнения платного вызова и одной функцией spawn; пять существующих сайтов
+исполнения платного вызова и одной функцией spawn; все существующие сайты
 становятся её вызывающими, `cli_plan.py` переводится с `build_cli_command` на
-`build_cli_invocation` + тот же seam, `doctor` покрыт через `execute_task`.**
+`build_cli_invocation` + тот же seam на всех трёх своих сайтах, `doctor`
+покрыт через `execute_task`, а второй, асинхронный spawn провайдера —
+`runner.run_claude_async` — удаляется.**
 
-Ни `runner.py`, ни `prompts_log` не подходят: `runner.py` строит argv и
-разбирает результат, но процесс не запускает — сегодня `subprocess.run` живёт
-на каждом сайте отдельно (`execution.py:524`, `tdd.py:1935`, `review.py:466`,
-`review_pr.py:687`/`:878`, `cli_plan.py:660`/`:797`); `prompts_log` — писатель
-артефакта, у которого «никогда не проваливать задачу» — принципиальная
-позиция (#282), противоположная fail-closed call-start. Нужен модуль, у
-которого есть право отказать до spawn и который знает про store, DB и spool
-разом. Он один и — по образцу `_belt_never_executes_a_paid_binary` — доказуем
-поясом: `paid_call._spawn` становится **единственной** функцией, которой
-разрешено передать argv провайдера в `subprocess`; тест BEH-05 подменяет
-`_spawn` двойником и гоняет матрицу сайтов с настоящим именем `claude` в
-`claude_command` — любой обходной путь упирается в существующий пояс
-`PaidBinaryReached` (`tests/conftest.py:118`) и красит тест. Существующие
+Ни `runner.py`, ни `prompts_log` не подходят на роль seam-а, но по разным
+причинам, и первую нужно назвать точно. `runner.py` — сборщик argv и
+разборщик результата, и синхронный spawn действительно живёт на каждом сайте
+отдельно (`execution.py:524`, `tdd.py:1935`, `review.py:466`,
+`review_pr.py:687`/`:878`, `cli_plan.py:170`/`:660`/`:797`). Но утверждение
+«`runner.py` процесс не запускает» ложно: `run_claude_async`
+(`runner.py:557-587`) вызывает `asyncio.create_subprocess_exec` с argv
+провайдера и экспортирован из пакета (`__init__.py:58`, `__all__:156`) —
+второй, публичный путь к бинарю, о котором знает даже пояс conftest
+(«runner.py's streaming path», `tests/conftest.py:125`). Сделать его
+вызывающим seam-а нельзя дёшево: seam синхронен и fail-closed, а этот путь
+асинхронен и стримит stdout в `EventBus`. Решение — **удалить** его: в дереве
+у него нет ни одного продуктового вызывающего (единственные ссылки —
+`tests/test_runner.py` и `tests/test_events.py`, плюс диаграммы
+`docs/architecture.md` и строка `CLAUDE.md`), так что это снятие мёртвого
+публичного экспорта, а не изъятие работающей возможности; CHANGELOG под
+Unreleased называет удаление `spec_runner.run_claude_async` из публичного API,
+осиротевшие тесты снимаются вместе с ним, `docs/architecture.md` и `CLAUDE.md`
+правятся в тех же PR. Если стриминг понадобится TUI снова, он возвращается
+асинхронным вариантом **внутри** `paid_call`, а не вторым spawn-ом рядом с
+ним. `prompts_log` не подходит иначе: это писатель артефакта, у которого
+«никогда не проваливать задачу» — принципиальная позиция (#282),
+противоположная fail-closed call-start. Нужен модуль, у которого есть право
+отказать до spawn и который знает про store, DB и spool разом. Он один и — по
+образцу `_belt_never_executes_a_paid_binary` — доказуем поясом:
+`paid_call._spawn` становится **единственной** функцией, которой разрешено
+передать argv провайдера в `subprocess`, и после удаления `run_claude_async`
+это утверждение истинно по построению дерева, а не по умолчанию; тест BEH-05
+подменяет `_spawn` двойником и гоняет матрицу сайтов с настоящим именем
+`claude` в `claude_command` — любой обходной путь упирается в существующий
+пояс `PaidBinaryReached` (`tests/conftest.py:118`) и красит тест. Статический
+тест BEH-44 добавляет вторую половину: `asyncio.create_subprocess_exec` не
+вызывается ни из одного модуля `src/spec_runner/`. Существующие
 имена `execution._run_agent_process` и `tdd._run_agent` **сохраняются** как
 вызывающие seam-а: их патчат десятки тестов и conftest-guard
 (`conftest.py:271`), и патч на этом уровне по-прежнему означает «вызова не
@@ -249,7 +271,7 @@ DB здесь — индекс, а не второй домен: сама по �
 Второй домен (RK-03) возникает, когда два хранилища могут дать **разные
 решения**. Здесь решение одно и направлено в одну сторону: строка `open` в DB
 — повод спросить store; ответ store — истина. Процедура на старте `run`
-(после lock, до выбора задачи, § Механика 2.4): для каждой `open`-строки
+(после run-start и гардов старта, до выбора задачи, § Механика 2.4): для каждой `open`-строки
 namespace-а — targeted `get` двух ключей в store (call-start, call-result),
 не листинг: (а) есть call-result → строка закрывается им (процесс умер между
 `put` результата и записью в DB), задача свободна; (б) есть call-start, нет
@@ -326,16 +348,26 @@ options (spec-runner проверяет только объявление, OUT-0
   функция репо, которой разрешено передать argv провайдера в
   `subprocess.run`. Тест BEH-05 подменяет её; conftest-guard
   `_no_real_agent_calls` получает третье имя — `paid_call._spawn` — рядом с
-  двумя существующими.
+  двумя существующими. Единственность буквальна: асинхронный spawn
+  `runner.run_claude_async` удаляется (Q-06), и после этого в
+  `src/spec_runner/` нет ни `asyncio.create_subprocess_exec`, ни
+  `subprocess.Popen`/`subprocess.run` с argv провайдера вне `_spawn`.
 
 **2.2 Порядок внутри `execute`** — ровно тот, что зафиксирован в FR-02, с
 одним уточнением из Q-12 (строка-индекс):
 
 1. `checkpoint.drain(timeout)` — все ранее снятые checkpoint-ы acknowledged
    (Q-05 (а)); таймаут → `Refusal(kind="instrument")`, вызова нет.
-2. `call_id = uuid4()`; `CallStart` = `run_id`, `pipeline_id`, `call_id`,
-   provenance, policy identity (§ 3.4), `task_id`/attempt, `prompt_sha256`
-   (по redacted prompt-у), bounded redacted prompt, `timestamp`.
+2. `CallStart` собирается — **не** чеканится: `call_id` уже создан сайтом и
+   пришёл полем `PaidCall` (§ 6.1). `CallStart` = `run_id`, `pipeline_id`,
+   `call.call_id`, provenance, policy identity (§ 3.4), `task_id`/attempt,
+   `prompt_sha256` (по redacted prompt-у), bounded redacted prompt,
+   `timestamp`. Чеканка `call_id` внутри `execute` невозможна по построению
+   FR-02: `log_prompt` пишет `call_id` в заголовок prompt-артефакта (BEH-01) и
+   стоит на сайте **до** `execute`, так что id, созданный здесь, никогда не
+   совпал бы с id в заголовке. `execute` вместо этого **проверяет**, что
+   `call.call_id` — валидный UUIDv4 и что тот же id передан `log_prompt`;
+   несовпадение — `Refusal(kind="instrument")` до записи call-start.
 3. Строка `agent_calls`/`pr_agent_calls` со `status='open'` (§ 2.3) — через
    DB, при отказе — через spool (§ 5); оба отказали → `instrument`, вызова нет.
 4. `Publisher.publish(CallStart)` с таймаутом `ack_timeout_seconds`; отказ
@@ -381,10 +413,14 @@ TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
 | GREEN | `execution._run_agent_process` | `green` | тело → `execute`; `TimeoutExpired`-ветка сайта читает `timed_out` |
 | review, `review:<role>` | `review._run_reviewer` | как сегодня | `_record_call` становится шагом close seam-а; последовательность ролей под бюджетом сохраняется |
 | `review-pr` verify / fix | `review_pr.verify_comment`, `run_fix_agent` | `review-pr:verify`, `review-pr:fix` | `_record_pr_call` — шаг close; `CostGuard` остаётся до `execute` |
-| `plan --full`, `plan --gated` | `cli_plan.py:660`, `:797` | `plan:<stage>` | `build_cli_command` → `build_cli_invocation` (+`parse_cli_result` — planning впервые получает стоимость), `task_id=None`; `costs` — строка «planning» по образцу `pr_cost_rows` (BEH-24) |
+| `plan --gated` (каждая стадия) | `cli_plan._generate_stage_draft`, `cli_plan.py:170` | `plan:<stage>` | `build_cli_command` → `build_cli_invocation` (+`parse_cli_result` — planning впервые получает стоимость), `task_id=None`; параметр `invoke=subprocess.run` (`:94`) снимается — подмена делается двойником `_spawn`, как у остальных сайтов |
+| `plan --full` (каждая стадия) | `cli_plan.py:660` | `plan:<stage>` | то же; `costs` — строка «planning» по образцу `pr_cost_rows` (BEH-24) |
+| `plan "<описание>"` (интерактивный цикл, каждый круг) | `cli_plan.cmd_plan`, `cli_plan.py:797` | `plan:interactive` | то же; `cmd = [claude_command, "-p", prompt]` (`:791`) заменяется на `build_cli_invocation`; каждый круг цикла — свой `call_id` и своя пара call-start/call-result |
 | `doctor` | через `execute_task` | как у сайта | без правок; run-start/closure — § 6 |
 
-Старт `run`/`retry`/`watch` (после lock, до выбора задачи): replay spool
+Старт `run`/`retry`/`watch` (после run-start § 6.2 и гардов старта, до
+выбора задачи — эта граница одна для всех трёх, и executor lock её не задаёт:
+`retry` и `watch` его не берут, `run --force` пропускает): replay spool
 (§ 5) → процедура open calls Q-12 → как сегодня. `run --all` пропускает
 задачу с open call с причиной, называющей `call_id` и provenance; `run
 --task` отказывает exit 1 (BEH-09). Обнаружение живёт в `paid_call.open_calls
@@ -498,7 +534,8 @@ sha256}` (sha256 — над каноническим JSON остальных п�
 "instrument")` наверх (BEH-35), `state_degraded`-уведомление — как сегодня,
 один раз. `_save()` (`state.py:948`) в degraded mode пишет через тот же
 путь. **Читает** — только `spool.replay(state)`: на старте `run`/`retry`/
-`watch` (после lock, до Q-12-процедуры и до выбора задачи), из
+`watch` (после run-start и гардов старта, до Q-12-процедуры и до выбора
+задачи), из
 `tdd`/`budget`-команд (они пишут authority mutations и обязаны видеть DB
 полной) и из `restore`. Replay идемпотентен: `spool_replays` (новая
 таблица) хранит `(run_id, seq)` доигранных строк; повреждённый sha256 → отказ
@@ -529,14 +566,33 @@ contextvars после `setup_logging` → `obs.init_logging`, `obs.py:250`),
 
 **6.2 Run-start** — `RunContext.start()`: пишется в store как
 `run-start.json` (`run_id`, `pipeline_id`, subcommand, policy, facts,
-repository, `contract_version`, `ack_channel`). Точка вызова — **одна**:
-`_acquire_run_lock` (`cli.py:181`) сразу после `acquire()`, и в его
-`sys.exit(1)`-ветке — перед выходом (BEH-29: «lock занят» — пара
-run-start + closure); для подкоманд без executor lock (`plan`, `review-pr`,
-`doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
-— из диспетчера `main()` перед вызовом handler-а, по множеству
-`PAYING_SUBCOMMANDS`; read-only команды его не пишут (BEH-04). `watch` —
-один `start()` на invocation (lock берётся один раз).
+repository, `contract_version`, `ack_channel`). Точка вызова — **одна, и она
+в диспетчере**: `cli.main()` вызывает `start()` перед вызовом handler-а, если
+подкоманда принадлежит множеству `PAYING_SUBCOMMANDS` (`run`, `retry`,
+`watch`, `plan`, `review-pr`, `doctor`, `tdd abandon/repair/resume/release`,
+`budget authorize`, `restore`); read-only команды его не пишут (BEH-04).
+`watch` — один `start()` на invocation, потому что invocation один, а не
+потому, что lock берётся один раз.
+
+Executor lock носителем run-start быть не может, и это не деталь реализации, а
+свойство дерева: `_acquire_run_lock` (`cli.py:181`) вызывается **только** из
+`cmd_run` и **только** без `--force` (`cli.py:213-217`: при `--force`
+`lock = None`); `cmd_retry` (`cli.py:1467`) и `cmd_watch` (`cli.py:1541`)
+executor lock не берут вовсе. Точка в lock-е оставила бы три платящих пути —
+`retry`, `watch` и `run --force` — без run-start, а значит (по § 6.3, «если
+`start()` был вызван») и без closure: их call-start-ы публиковались бы под
+`run_id`, для которого нет `run-start.json`, и `evidence`/`restore` (§ 7.2,
+7.4) читали бы такой прогон как legacy «нет evidence-контракта». `run --force`
+при этом остаётся обычным платящим прогоном контракта: `--force` отключает
+проверку lock-а, а не участие в evidence.
+
+Отказ lock-а («lock занят», `sys.exit(1)`-ветка `_acquire_run_lock`) наступает
+**после** run-start и потому ничего к нему не добавляет: ветка вызывает
+`run_context.note_stop("lock_busy", detail)` перед `sys.exit(1)`, а closure
+пишет общая точка § 6.3 (BEH-29: «lock занят» — обычная пара run-start +
+closure, kind `policy_refusal`, exit 1). Так же устроены два других гарда
+старта — dirty-spec (`_enforce_clean_spec`) и tracked-state DB (#273): они
+тоже стоят внутри handler-а, после run-start, и тоже только сообщают причину.
 
 **6.3 Closure** — `RunContext.close(kind, reason, exit_code)` — одна точка
 записи: `main()` оборачивает dispatch в `try/except SystemExit/except
@@ -550,15 +606,40 @@ CLOSURE_KINDS` (BEH-32): ключи — `RUN_STOP_REASONS` (`cli.py:541`:
 `max_consecutive_failures` / `dependency_blocked_after_skip` /
 `state_spec_mismatch`→`policy_refusal`), `RefusalKind` (`policy`→
 `policy_refusal`, `instrument`→`infrastructure_error`, `budget`→
-`budget_refusal`), сигналы (`_shutdown_requested`, stop-marker→
-`operator_stop`; `session_timeout_minutes` в `watch`, `cli.py:1069`→
-`session_timeout`), стартовые гарды (`lock_busy`, `dirty_spec`,
-`tracked_state`→`policy_refusal`, exit 1 — как сегодня), `no_ready`→
-`no_ready`, необработанное исключение→`infrastructure_error`. Сайты
+`budget_refusal`), сигналы и ранние остановки цикла `run` (`_shutdown_requested`
+и stop-marker→`operator_stop`; `session_timeout_minutes`→`session_timeout`;
+`idle_timeout_minutes`→`idle_timeout`), стартовые гарды (`lock_busy`,
+`dirty_spec`, `tracked_state`→`policy_refusal`, exit 1 — как сегодня),
+`no_ready`→`no_ready`, необработанное исключение→`infrastructure_error`. Сайты
 остановки сообщают контексту **причину**, не kind: там, где сегодня стоит
 `state.set_meta("last_run_stop_reason", …)` / `audit_logger.record(
 EVENT_RUN_ENDED, stop_reason=…)`, добавляется `run_context.note_stop(reason,
 detail)` — тот же словарь, что видит `status` (BEH-29: reason совпадает).
+
+**Три ранние остановки живут в `run`, и у них сегодня нет своей причины.**
+Все три — graceful stop по stop-marker (`cli.py:1062`), session timeout
+(`:1069`) и idle timeout (`:1080`) — стоят внутри `_run_tasks_inner`, то есть
+в цикле подкоманды `run`, а не в `watch`; в `cmd_watch` session-timeout нет
+вовсе. И все три выходят из цикла `break`-ом, не трогая `stop_reason`, чей
+дефолт — `"completed"` (`cli.py:876`) и который персистится как есть
+(`cli.py:1374`). Построить closure по такому stop-reason значило бы записать
+оборванный прогон как `completed` — «пустой успех», запрещённый инвариантом 4.
+Поэтому `RUN_STOP_REASONS` (`cli.py:536-541`) получает аддитивно три значения —
+`operator_stop`, `session_timeout`, `idle_timeout`, — каждая из трёх точек
+выставляет своё перед `break`, и `note_stop` рядом с `set_meta` передаёт то же
+значение контексту. Словарь объявлен interop-поверхностью («add freely, rename
+with a CHANGELOG note», комментарий `cli.py:536-540`), так что добавление —
+CHANGELOG-нота под Unreleased и строка в `docs/state-schema.md`, не breaking
+change: `status` и внешние читатели (audit-таблица Maestro) видят новые
+значения там, где раньше видели `completed`.
+
+`idle_timeout` получает **собственный** kind closure, а не отображается в
+`session_timeout`: это разные причины остановки, `status` показывает их
+раздельно, и closure, называющая idle-выход session-таймаутом, отправила бы
+оператора искать несуществующий предел сессии. Словарь kinds (§ FR-07
+требований, `schemas/run-closure.schema.json`) пинован схемой, и в нём нет
+клетки «неизвестный stop-reason → `completed`»: stop-reason вне словаря — отказ
+сериализации closure (BEH-32), а не молчаливое повышение до успеха.
 Повторная closure — `AlreadyExists` от store (§ 1.3) → отказ, первая
 неизменна. Отказ записи closure — stderr + exit code не улучшается.
 `kill -9` — closure нет по построению (BEH-30).
@@ -765,8 +846,9 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`note_stop`/`close`), `PAYING_SUBCOMMANDS`, `CLOSURE_KINDS` — одна таблица | BEH-01, 02, 04, 29…32 |
 | `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), `evidence` (`collect`, `close-call`, `purge`), `retention.py` | BEH-09, 11, 19…21, 30, 36…38, 40, 42 |
-| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, dispatch в `try/finally` с closure; `_acquire_run_lock` пишет run-start (обе ветки); `_run_tasks_inner`: replay spool + `open_calls` после lock; `note_stop` рядом с каждым `last_run_stop_reason`; `watch` — `session_timeout` в `note_stop`; новые subparsers `restore`/`evidence` | BEH-02, 04, 09, 29, 32, 38 |
-| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>`; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24 |
+| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/finally` с closure; `_acquire_run_lock` — `note_stop("lock_busy")` перед `sys.exit(1)`, run-start не пишет; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; `note_stop` рядом с каждым `last_run_stop_reason`; три ранние остановки `run` (stop-marker `:1062`, session timeout `:1069`, idle timeout `:1080`) выставляют собственный `stop_reason` вместо дефолтного `completed`; `RUN_STOP_REASONS` (`:536-541`) — три новых значения; новые subparsers `restore`/`evidence` | BEH-02, 04, 09, 29, 32, 38 |
+| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24 |
+| `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
 | `src/spec_runner/audit_log.py`, `logging.py`/`obs.py` | `run_id` обязательным параметром `AuditLogger`, из контекста; `run_id` в contextvars рядом с `pipeline_id` | BEH-01, 02 |
