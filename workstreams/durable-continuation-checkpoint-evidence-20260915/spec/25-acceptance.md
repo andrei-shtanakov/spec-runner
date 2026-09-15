@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 4734c31296e72fb3884728c2f0f162c01973ed17
-  behaviour-spec: 98d9f19e8f37034b6f6bb053bffbeabc12ce5474
+  requirements: 1927c8fd14f74c1c1c5d55c14054d99c4cee1975
+  behaviour-spec: 5440bc080e0a3aa85e2df75dcdcea3cc5c24a5c4
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -84,7 +84,10 @@ scenarios: [BEH-04]
 `run_id`, а двойник store не получил от них ни run-start, ни checkpoint-а, ни
 closure; каждая из `run`, `retry`, `watch`, `plan`, `review-pr`, `doctor`,
 `tdd abandon/repair/resume/release`, `budget authorize`, `restore` оставляет
-у двойника ровно один run-start и ровно одну closure. Три пути, не берущие
+у двойника ровно один run-start и ровно одну closure. Read-only считается
+только форма `evidence <run_id>`: формы `close-call` и `purge` платного
+вызова не делают, но меняют continuation-state, поэтому пишут ту же пару, и
+их знак предъявлен в AC-08 и AC-38 — там, где живут сами команды. Три пути, не берущие
 executor lock, — `retry`, `watch` и `run --all --force` — предъявляются
 отдельно и дают ту же пару: run-start приходит от диспетчера `main()` по
 перечню платящих подкоманд, а не от `_acquire_run_lock`, которого эти пути не
@@ -164,13 +167,29 @@ call», и выполняет остальные; `run --task TASK-001` отка
 reason; повтор отвечает «уже закрыт» без второй записи; с
 `SPEC_RUNNER_AGENT=1` отказана guardrail-ом; после закрытия
 `run --task TASK-001` доходит до нового call-start с новым `call_id`, а сама
-команда закрытия платный вызов не запускает. Тот же знак предъявлен, когда
+команда закрытия платный вызов не запускает. У каждого из четырёх её
+invocation-ов двойник store получает ровно один run-start и ровно одну
+closure (`close_call_refused` на отказах, `completed` на закрытии и
+идемпотентном повторе, `store_unavailable` с exit 2 при недоступном store), а
+checkpoint закрытия строки опубликован под тем же `run_id`: checkpoint под
+`run_id` без run-start — невыполненный критерий. Тот же знак предъявлен, когда
 локальной state DB между crash-ом и следующим `run` нет: после `spec-runner
 reset`, после ручного удаления файла DB и в клоне репозитория на другом пути
 `run --all` по-прежнему пропускает задачу, `run --task TASK-001` отказывает
 exit 1, двойник `Popen` не вызван, — а в каталоге без единого прошлого
 прогона `run` стартует обычным порядком. Пустой `agent_calls` свежей DB,
-принятый за «open call нет», — невыполненный критерий.
+принятый за «open call нет», — невыполненный критерий. Тот же знак
+предъявлен там, где «по `run_id`» и «namespace-wide» расходятся: прогон A
+закрыт, более поздний прогон C того же namespace оставил open call X,
+`restore <run_id-A>` отказывает `needs-human` с `run_id` прогона C,
+`call_id` X и его provenance, `--into` остаётся пустым и `Popen` не вызван;
+после закрытия X дверью restore применяется, и первый `run` в
+восстановленном каталоге предъявляет open call ещё более позднего прогона,
+обратившись к индексу workstream-а, а не к `open`-строкам snapshot-а;
+`restore` более раннего `run_id` при более позднем закрытом прогоне того же
+workstream-а тоже отказывает `needs-human` с именем последнего `run_id`.
+Применённый snapshot A в любой из этих конфигураций — невыполненный
+критерий.
 
 #### AC-09: Один `call_id` — ровно один call-start и не более одного call-result · verification: test
 traces: [FR-02, FR-06]
@@ -204,7 +223,9 @@ waiver, remedy, `budget authorize` отдельным invocation, строка `
 harness status flip — двойник store получил ровно один новый checkpoint с
 UUIDv4 `checkpoint_id`, строго возрастающим `sequence` внутри `run_id` и
 `supersedes` на предыдущий; после `status`, `costs`, `validate`, `report`,
-`evidence` — ничего; checkpoint после `budget authorize` содержит
+`evidence <run_id>` — ничего (read-only здесь именует форму `evidence
+<run_id>`, а не подкоманду целиком: checkpoint формы `close-call` —
+знак AC-08); checkpoint после `budget authorize` содержит
 authorization в DB snapshot без attempt; статический тест находит ровно один
 seam «после mutation», через который проходят все перечисленные сайты записи.
 
@@ -443,9 +464,14 @@ stop-marker, пауза с ответом `q`, `session_timeout` и `idle_timeou
 считается выполненным только вместе с ними: `retry`, `watch`, `doctor`,
 `plan`, `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`
 и `restore` — по одному invocation на каждый исход инвентаря выходов design
-§ 6.3, у каждого ровно один run-start и ровно одна closure с названным для
-этого исхода kind и фактическим exit code. Четыре конфигурации, где код
-процесса лжёт об исходе, предъявлены прямо: `retry` с задачей `blocked` и
+§ 6.3, у каждого ровно
+один run-start и ровно одна closure с названным для этого исхода kind и
+фактическим exit code. Отказ правила не записывается поломкой инструмента:
+`plan --gated` с неодобренным upstream-ом выходит с кодом 2 без единого
+вызова CLI и даёт `policy_refusal`, а интерактивный `--gated`, прервавшийся
+без единой записанной стадии, — `no_ready`; `infrastructure_error` на первой
+и `completed` на второй суть невыполненный критерий. Четыре конфигурации,
+где код процесса лжёт об исходе, предъявлены прямо: `retry` с задачей `blocked` и
 `watch`, остановленный `max_consecutive_failures`, выходят с кодом 0, `plan`
 проглатывает таймаут провайдера с кодом 0, `doctor` кодирует отказ оператора
 на cost gate кодом 2 — closure `completed` на любой из четырёх и closure
@@ -457,7 +483,9 @@ stop-marker, пауза с ответом `q`, `session_timeout` и `idle_timeou
 затирается поздней (`review-pr` под cost guard-ом даёт `budget_refusal`, не
 `needs_human`), и ни одна из девяти не персистит `last_run_stop_reason` —
 равенство reason тексту `status` для них не требуется, требуется, чтобы
-reason называл сайт.
+reason называл сайт. Две оставшиеся платящие формы — `evidence close-call` и
+`evidence purge` — в этот критерий не входят: их исходы предъявлены в AC-08
+и AC-38, и инвентарь § 6.3 закрыт только тремя критериями вместе.
 
 #### AC-28: `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown · verification: test
 traces: [FR-07, FR-09]
@@ -595,7 +623,11 @@ scenarios: [BEH-42]
 после удаления промежуточных checkpoint-ов 1–2 restore из checkpoint-а 3
 проходит, удалённые записи заменены audit-записью с `run_id`, ids, actor,
 reason и временем без payload; при отказе store в удалении команда сообщает
-отказ, не удаляет локальную копию и не пишет audit-запись об удалении.
+отказ, не удаляет локальную копию и не пишет audit-запись об удалении. У
+каждого invocation `evidence purge` двойник store получает ровно один
+run-start и ровно одну closure — `no_ready` без истёкших объектов,
+`purge_refused` при отказе store, `completed` после удаления, — и open call
+прежнего прогона после неё предъявляется как раньше.
 
 #### AC-39: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E · verification: test
 traces: [FR-03, FR-04, FR-06]

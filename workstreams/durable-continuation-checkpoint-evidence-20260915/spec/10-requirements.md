@@ -203,9 +203,14 @@ manifest, evidence bundle и run-closure. `pipeline_id` хранится отд�
 - `run_id` есть у **каждой** подкоманды (для логов), но run-start/closure
   (FR-07) пишут только подкоманды, способные платить или менять
   continuation-state: `run`, `retry`, `watch`, `plan`, `review-pr`, `doctor`,
-  `tdd abandon/repair/resume/release`, `budget authorize`, `restore`.
-  Read-only команды (`status`, `costs`, `validate`, `report`, `evidence`)
-  run-start не пишут.
+  `tdd abandon/repair/resume/release`, `budget authorize`, `restore`,
+  `evidence close-call`, `evidence purge`. Read-only команды (`status`,
+  `costs`, `validate`, `report`, `evidence <run_id>`) run-start не пишут.
+  Две последние платного вызова не делают и попадают сюда по второй половине
+  критерия: `close-call` возвращает задачу в выбираемые, `purge` удаляет
+  опубликованные объекты — тот же класс, что уже привёл в перечень
+  неплатящие `tdd abandon/…` и `budget authorize`. Read-only — подкоманда
+  `evidence <run_id>`, а не группа `evidence` целиком.
 - **Носитель run-start — диспетчер, не lock.** Признак «подкоманда платит или
   меняет continuation-state» принадлежит перечню выше, а не тому, берёт ли
   подкоманда executor lock: `retry` и `watch` его не берут вовсе, а `run
@@ -272,6 +277,23 @@ call-start с `run_id`, `call_id`, provenance, policy identity, optional
   `needs-human` до платного вызова; `run --all` пропускает её с причиной,
   `run --task` отказывает. Обнаружение — по evidence bundle/checkpoint, а
   не по памяти процесса.
+- **Правило namespace-wide, а не по `run_id`.** Решение про open calls
+  принимает namespace целиком, а не ключ одного прогона: `restore <run_id>`
+  отказывает `needs-human`, если open call остался у **любого** прогона того
+  же workstream-а, в том числе начатого позже восстанавливаемого, и первый
+  `run` после restore задаёт тот же вопрос заново, а не доверяет индексу,
+  приехавшему внутри snapshot-а. Конфигурация, в которой «по `run_id`» и
+  «namespace-wide» расходятся, одна и предъявляется прямо: прогон A закрыт,
+  более поздний прогон C того же namespace оставил open call, восстановлен
+  A — повтор C обязан быть предъявлен, а не сделан молча. Перечень путей,
+  читающих или решающих open calls, и механизм namespace-wide для каждого —
+  предмет design, и он обязан быть полным.
+- **Ограничение названо, а не умолчано.** Namespace в дереве привязан к
+  абсолютному пути, поэтому два одновременно живых рабочих каталога с одним
+  объявленным namespace и одним workstream (например, restore выполнен, пока
+  исходная машина жива) этим требованием не покрыты: обнаружение потребовало
+  бы листать индекс на каждом старте и держать над ним lease, а ни того, ни
+  другого этот workstream не вводит.
 - **Операторская дверь.** Open call закрывается только аудируемой командой
   с обязательным `--reason` и записанным actor (по образцу `tdd abandon`,
   `budget authorize`): исход `resolved_unknown` (человек решил, повторять
@@ -434,7 +456,14 @@ claims gate.
   (instrument). `--json` даёт машинный отчёт (`schemas/restore-result.schema.json`).
 - **Порядок проверок (все — до записи в каталог):** contract version →
   digests всех файлов (NFR-04) → repository identity → policy identity
-  (`config_hash`) → effective namespace → open calls → spool.
+  (`config_hash`) → effective namespace → open calls **всего workstream-а**
+  (FR-02: правило namespace-wide, а не по восстанавливаемому `run_id`) →
+  spool. Прогон того же workstream-а, начатый позже восстанавливаемого, —
+  тоже отказ `needs-human`: его изменения (authorizations, claims, remedy)
+  живут под собственными `run_id` и в этот snapshot не попали, а продолжение
+  с него потеряло бы их молча. Откат на ранний checkpoint workstream-а с
+  более поздними прогонами эта команда как операцию не предлагает; отказ
+  называет последний `run_id` workstream-а как выход.
 - **Namespace:** manifest хранит effective value и `namespace_source`. Если
   активный config объявляет `tdd_namespace`, равный записанному, — ок. Если
   объявляет другой — отказ с обоими значениями и способом получения. Если
@@ -471,6 +500,11 @@ claims gate.
 - Repository mismatch (другой root commit) и policy mismatch (другой
   `review_policy`) → отказ до записи в каталог.
 - Open call в bundle → `needs-human` с `call_id`, provenance и задачей.
+- Open call **другого** прогона того же workstream-а (прогон A закрыт,
+  более поздний C оставил open call, восстанавливается A) → `needs-human` с
+  `run_id` прогона C, `call_id` и provenance, 0 `Popen`; первый `run` в
+  восстановленном каталоге предъявляет тот же open call, а не повторяет
+  его.
 - Legacy run → fail-closed с перечнем «нет run-start», «нет manifest»,
   «нет call records».
 - Без `--experimental` до снятия статуса → отказ с текстом CON-01.
@@ -575,7 +609,7 @@ closure трактуется как crash/unknown, никогда как пус�
   `session_timeout`: причины остановки разные, и `status` показывает их
   раздельно.
 - **Kind closure определён и там, где причина не сообщена.** Сайты выхода
-  сообщают причину, но перечень сайтов конечен, а ветвей у десяти платящих
+  сообщают причину, но перечень сайтов конечен, а ветвей у двенадцати платящих
   подкоманд больше, чем перечислит любой бандл, и после него их станет
   больше. Поэтому kind выводится **правилом**, а не дефолтом: сообщённая
   причина — по таблице соответствия; причина не сообщена — по исходу
@@ -586,9 +620,10 @@ closure трактуется как crash/unknown, никогда как пус�
   `completed` при неизвестной причине и отказ сериализации, оставляющий
   run-start без closure, запрещены оба — первый даёт пустой успех, второй
   превращает штатный выход в неотличимый от crash.
-- **Closure-only причины в словарь `status` не кладутся.** Девять платящих
-  подкоманд вне `run` (`retry`, `watch`, `doctor`, `plan`, `review-pr`,
-  `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
+- **Closure-only причины в словарь `status` не кладутся.** Одиннадцать
+  платящих подкоманд вне `run` (`retry`, `watch`, `doctor`, `plan`,
+  `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`,
+  `restore`, `evidence close-call`, `evidence purge`)
   `last_run_stop_reason` не персистят вовсе, и `status` их причин не
   показывает. Их причины живут только в словаре closure, `RUN_STOP_REASONS`
   от них не растёт, и требование «reason совпадает с текстом `status`» к ним
@@ -599,12 +634,13 @@ closure трактуется как crash/unknown, никогда как пус�
   timestamps start/end.
 - **Пути без attempt** покрыты: `run` без ready-задач, `validate`-отказ при
   старте `run`, dirty-spec guard, tracked-state-DB guard (#273), lock
-  занят — всё это closure до создания attempt. Их же большинство у девяти
-  остальных платящих подкоманд: `retry` с несуществующим `--task-id`,
+  занят — всё это closure до создания attempt. Их же большинство у
+  одиннадцати остальных платящих подкоманд: `retry` с несуществующим `--task-id`,
   `watch` с красной pre-run validation, `doctor` при отказе оператора на
   cost gate, `plan` с usage-ошибкой, `review-pr` на draft PR, `tdd` с
   `RemedyError`, `budget authorize` с `AuthorizationError`, `restore` на
-  любом отказе проверок — closure есть у каждого.
+  любом отказе проверок, `evidence close-call` под guardrail-ом, `evidence
+  purge` без истёкших объектов — closure есть у каждого.
 - Closure — **последняя** запись прогона: пишется после последнего
   checkpoint-ack; если ack последнего checkpoint не получен, closure несёт
   `last_checkpoint_id` предыдущего acknowledged и kind
@@ -625,8 +661,9 @@ closure трактуется как crash/unknown, никогда как пус�
   `retry`, `watch` и `run --force` (executor lock не берётся ни одной из
   трёх) → ровно один run-start и ровно одна closure; «lock занят» у обычного
   `run` → та же пара, kind `policy_refusal`, exit 1.
-- У каждой из девяти платящих подкоманд вне `run` предъявлен каждый исход
-  её инвентаря выходов → closure с kind, названным для этого исхода, и
+- У каждой из одиннадцати платящих подкоманд вне `run` предъявлен каждый
+  исход её инвентаря выходов (девять самостоятельных команд — одним
+  критерием, две формы `evidence` — вместе с самими командами) → closure с kind, названным для этого исхода, и
   `completed` не выдан ни одному исходу с невыполненной работой: `retry`,
   чья задача осталась `blocked` (exit 0), `watch`, остановленный
   `max_consecutive_failures` (exit 0), `doctor`, у которого оператор

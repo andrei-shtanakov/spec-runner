@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 4734c31296e72fb3884728c2f0f162c01973ed17
+  requirements: 1927c8fd14f74c1c1c5d55c14054d99c4cee1975
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -139,7 +139,9 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
 - **Given** проект с DB и двойником store, записывающим каждую публикацию.
 - **When** выполнены `spec-runner status`, `costs`, `validate`, `report`,
-  `evidence <run_id>` (по прогону из BEH-01).
+  `evidence <run_id>` (по прогону из BEH-01). Подкоманда `evidence` здесь
+  read-only ровно в форме `evidence <run_id>`: её формы `close-call` и
+  `purge` — писатели и предъявляются ниже.
 - **Then** structlog каждой команды содержит `run_id` (full UUIDv4), и он у
   каждой команды свой.
 - **And** двойник store не получил ни одного run-start, checkpoint-а или
@@ -147,6 +149,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** каждая из команд `run`, `retry`, `watch`, `plan`, `review-pr`,
   `doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`
   (fake CLI, где нужен) оставляет ровно один run-start и ровно одну closure.
+- **And** формы `evidence close-call` и `evidence purge` платного вызова не
+  делают, но меняют continuation-state и потому тоже пишут свою пару
+  run-start + closure; здесь это не наблюдается, а предъявляется там, где
+  живут сами команды, — BEH-11 и BEH-42. Read-only в этом сценарии
+  наблюдается ровно для формы `evidence <run_id>`: run-start у неё — красный
+  тест.
 - **And** три платящих пути, не берущие executor lock, — `retry TASK-001`,
   `watch` (один круг до stop-marker) и `run --all --force` — оставляют ту же
   пару run-start + closure, что и обычный `run`: двойник store получает по
@@ -183,6 +191,17 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** тот же `call_id` записан в строке `agent_calls` /
   `pr_agent_calls` рядом с `provenance`, так что ledger стоимости и evidence
   соединяются одним ключом.
+- **And** матрица гоняется с настоящим именем `claude` в `claude_command`,
+  и это исполнимо только потому, что autouse-гвард `_no_real_agent_calls`
+  переключён на одно имя `paid_call._spawn`, а два его патча швов
+  (`tdd._run_agent`, `execution._run_agent_process`) сняты тем же коммитом:
+  до перевода они поднимают отказ на внешнем шве раньше, чем управление
+  дошло бы до `_spawn`, и рецепт не доходит до журнала. Двойник `_spawn`
+  самого сценария заменяет собой патч гварда — документированное свойство
+  гварда, а не обход; пояс `PaidBinaryReached` остаётся линией под ним и
+  красит любой путь к бинарю мимо `_spawn`. `tests/test_harness_guards.py`
+  предъявляет гвард на новом имени в том же коммите: окна, в котором швы уже
+  не патчатся, а `_spawn` ещё не проверен, быть не должно.
 - **And** статический тест по образцу пояса `PaidBinaryReached`
   (`tests/test_harness_guards.py`): любой путь к бинарю провайдера проходит
   через один seam call-start; обходной вызов `subprocess.run`/`Popen` с
@@ -277,6 +296,24 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   DB не было вовсе, даёт то же самое: open call предъявлен, `Popen` не
   вызван. Прогон в каталоге без единого прошлого прогона при этом стартует
   как обычно — пустая история не отказ.
+- **And** решение принимается по namespace целиком, а не по одному `run_id`,
+  и это предъявлено конфигурацией, где эти два ответа расходятся: в том же
+  namespace прогон A закрыт штатно, более поздний прогон C оставил open call
+  X, и оператор выполняет `restore <run_id-A> --into <dir> --experimental`.
+  Restore отказывает `needs-human` с `run_id` прогона C, `call_id` X и его
+  provenance — а не применяет snapshot A на том основании, что у самого A
+  open call нет; 0 `Popen`, `--into` остаётся пустым. Применённый snapshot A
+  здесь — красный тест.
+- **And** первый `run` в восстановленном каталоге спрашивает заново, а не
+  доверяет индексу из snapshot-а: в том же сценарии с закрытым X (после
+  `evidence close-call`) restore применяется, и следующий `run --all`
+  предъявляет open call, оставленный ещё более поздним прогоном D, вместо
+  того чтобы пройти по `open`-строкам snapshot-а мимо него. Наблюдаемый
+  признак — обращение к индексу workstream-а на этом старте.
+- **And** `restore` более раннего `run_id` workstream-а, у которого есть
+  более поздний **закрытый** прогон без open calls, тоже отказывает
+  `needs-human`: его изменения в snapshot A не попали, и отказ называет
+  последний `run_id` workstream-а.
 
 #### BEH-10: Один `call_id` — ровно один call-start и не более одного call-result
 `traces: [FR-02, FR-06]`
@@ -311,6 +348,13 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   показывает 0 open calls и запись `resolved_unknown` с actor.
 - **And** команда не запускает платный вызов и не решает, повторять ли его:
   повтор — отдельный `run`, инициированный оператором.
+- **And** платного вызова нет, но continuation-state меняется — задача снова
+  выбираема, — поэтому у каждого из четырёх invocation-ов двойник store
+  получает ровно один run-start и ровно одну closure: `close_call_refused`
+  на первом и четвёртом, `completed` на втором и третьем; при недоступном
+  store — `store_unavailable` и exit 2. Закрытие строки ledger-а — mutation,
+  и её checkpoint опубликован под тем же `run_id`, у которого run-start
+  есть; checkpoint под `run_id` без run-start — красный тест.
 
 ### C. Checkpoint после каждой continuation-relevant mutation
 
@@ -345,8 +389,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **Then** после каждой mutation двойник получил ровно один новый checkpoint;
   `sequence` строго возрастает внутри `run_id`; `checkpoint_id` — UUIDv4;
   manifest каждого следующего указывает предыдущий в `supersedes`.
-- **And** после `status`, `costs`, `validate`, `report`, `evidence` двойник не
-  получил ничего.
+- **And** после `status`, `costs`, `validate`, `report`, `evidence <run_id>`
+  двойник не получил ничего. Перечень read-only именует форму `evidence
+  <run_id>`, а не подкоманду `evidence` целиком: её формы `close-call` и
+  `purge` — mutation, и checkpoint первой предъявляет BEH-11.
 - **And** checkpoint после `budget authorize` содержит эту authorization в
   DB snapshot — authority mutations публикуются даже без attempt.
 - **And** все точки публикации вызывают одну функцию «после mutation» (по
@@ -504,6 +550,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   по порядку contract version → digests → repository identity → policy
   identity → namespace → open calls → spool; порядок предъявлен тестом с
   двумя подменами сразу.
+- **And** проверка (6) читает open calls всего workstream-а, а не только
+  ключи восстанавливаемого `run_id`: условие (6) предъявляется в двух формах
+  — open call внутри самого bundle и open call более позднего прогона того
+  же workstream-а (BEH-09), — и обе дают `needs-human` на одном и том же
+  месте порядка.
 - **And** если активный config `tdd_namespace` не объявляет, restore
   записывает восстановленное effective value как `tdd_namespace` в config
   нового каталога и печатает diff этой правки (рабочее допущение Q-09);
@@ -744,10 +795,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** closure несёт `run_id`, `pipeline_id`, подкоманду, число open
   calls, `degraded`/spool status, timestamps start/end,
   `last_call_ids`/`attempt_ids`.
-- **And** сценарий покрывает `run`; остальные девять платящих подкоманд —
-  BEH-46, и утверждение «каждый orderly exit» верно только вместе с ним:
-  `run` — одна подкоманда из десяти, а run-start пишется диспетчером всем
-  десяти.
+- **And** сценарий покрывает `run`; девять остальных подкоманд — BEH-46,
+  две платящие формы `evidence` — BEH-11 и BEH-42, и утверждение «каждый
+  orderly exit» верно только вместе с ними: `run` — одна подкоманда из
+  двенадцати, а run-start пишется диспетчером всем двенадцати.
 
 #### BEH-30: `kill -9` не оставляет closure, и читатели классифицируют прогон как crash/unknown
 `traces: [FR-07, FR-09]`
@@ -835,26 +886,37 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 `traces: [FR-07]`
 
 - **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_closure_every_exit.py`
-- **Given** девять платящих подкоманд вне `run` — `retry`, `watch`,
-  `doctor`, `plan`, `review-pr`, `tdd abandon/repair/resume/release`,
-  `budget authorize`, `restore` — и по одной конфигурации на каждый исход
-  их инвентаря выходов (design § 6.3): для `retry` — гарды старта,
+- **Given** девять платящих подкоманд вне `run`, доставляемых как
+  самостоятельные команды, — `retry`, `watch`, `doctor`, `plan`,
+  `review-pr`, `tdd abandon/repair/resume/release`, `budget authorize`,
+  `restore` — и по одной конфигурации на каждый исход их инвентаря выходов
+  (design § 6.3): для `retry` — гарды старта,
   несуществующий `--task-id`, задача `done`, задача `blocked`; для `watch` —
   гарды старта, красная pre-run validation, stop-marker, max consecutive
   failures, оба TUI-выхода; для `doctor` — отказ оператора на cost gate,
   verdict `broken`, verdict `ready`; для `plan` — usage-ошибка, красная
   `validate_generated_tasks`, ненулевой код провайдера, вывод без
   spec-маркера, `--full` целиком, error pattern, таймаут, `KeyboardInterrupt`,
-  проглоченное исключение, обычное завершение; для `review-pr` — draft PR,
+  проглоченное исключение, обычное завершение, а также три конфигурации
+  `--gated`: upstream не APPROVED (rc 2, вызовов CLI ноль), интерактивный
+  цикл, прервавшийся на первой же итерации без единой записанной стадии, и
+  он же после одной записанной стадии; для `review-pr` — draft PR,
   cost guard, остаток `uncertain`, полный успех; для `tdd` — `RemedyError`,
   применённый remedy, повтор, repair без переустановленного red, resume с
   разошедшимися байтами; для `budget authorize` — usage-ошибка,
   `AuthorizationError`, записанное решение; для `restore` — instrument-отказ,
-  needs-human-отказ, успешное применение. Двойник store и двойник провайдера.
+  needs-human-отказ, успешное применение. Двойник store и двойник
+  провайдера.
 - **When** каждая конфигурация прогнана в отдельном invocation.
 - **Then** у каждого `run_id` ровно один run-start и ровно одна closure с
   kind, названным для этого исхода в инвентаре, фактическим exit code,
   `run_id`, `pipeline_id` и подкомандой.
+- **And** отказ правила не записан поломкой инструмента: `plan --gated` с
+  неодобренным upstream-ом выходит с кодом 2, не сделав ни одного вызова
+  CLI, и его closure — `policy_refusal`, а не `infrastructure_error`;
+  `infrastructure_error` на этой конфигурации — красный тест. Симметрично
+  интерактивный `--gated`, прервавшийся без единой записанной стадии, даёт
+  `no_ready`, а `completed` — только после хотя бы одной стадии.
 - **And** `completed` не выдан ни одному исходу с невыполненной работой, и
   это наблюдается прямо на четырёх конфигурациях, где код процесса лжёт об
   исходе: `retry` с задачей `blocked` (код 0) → `policy_refusal`; `watch`,
@@ -874,6 +936,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** причина, сообщённая раньше, не затирается более поздней: у
   `review-pr`, остановленного cost guard-ом, closure несёт
   `budget_refusal`, а не `needs_human` общего выхода.
+- **And** оставшиеся две платящие формы — `evidence close-call` и `evidence
+  purge` — сюда не входят и предъявлены там, где живут сами команды: BEH-11
+  и BEH-42. Инвентарь выходов design § 6.3 закрыт только всеми тремя
+  сценариями вместе.
 
 ### H. Аварийный spool при отказе DB
 
@@ -1065,6 +1131,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** legal hold и правила удаления store не обходятся (OUT-10): при
   отказе store в удалении команда сообщает отказ, не удаляет локальную
   копию и не пишет audit-запись об удалении.
+- **And** `evidence purge` меняет опубликованное состояние и потому — как и
+  `evidence close-call` (BEH-11) — оставляет свою пару run-start + closure
+  на каждом из трёх исходов: `no_ready`, когда истёкших объектов нет,
+  `purge_refused` при отказе store в `delete`, `completed` после удаления и
+  записи `deletions/<ts>.json`; open call она при этом не закрывает — после
+  неё open call прежнего прогона предъявляется как раньше.
 
 #### BEH-43: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E
 `traces: [FR-03, FR-04, FR-06]`

@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 44ef5b4a2a1b244cb37fb587c2b4fb0039ee2717
-  acceptance: 4896b4d3e59aa7dac7fd29aa6949dc6f18a091cc
+  design: 2172d6a61e0450fdab901773f9e7665aa13acdda
+  acceptance: d096aa44b46bba71cfaed60a514698b29c13f0c8
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -15,7 +15,7 @@ upstream_hashes:
 Стадия `decomposition` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Режет доставку
 на задачи и объявляет граф их зависимостей поверх design (`20-design.md`, blob
-`44ef5b4a…`) и acceptance (`25-acceptance.md`, blob `4896b4d3…`). Резолюции
+`2172d6a6…`) и acceptance (`25-acceptance.md`, blob `d096aa44…`). Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
 (локальный snapshot синхронно, один упорядоченный publisher, drain перед
@@ -48,7 +48,7 @@ upstream'а, не этого документа (см. «Вне объёма»).
 closure → seam + столбцы → checkpoint + spool → WIP → restore → evidence
 read-surface → retention) разумной, но изменяемой — здесь она изменена в двух
 местах, и оба названы: read-surface `evidence` поднят раньше полного
-checkpoint-а (BEH-13 наблюдает, что `evidence` ничего не публикует, — команда
+checkpoint-а (BEH-13 наблюдает, что `evidence <run_id>` ничего не публикует, — команда
 должна существовать), а spool разрезан по чтению и записи (restore обязан
 проверить и доиграть spool по BEH-19/BEH-20 (7) раньше, чем degraded mode
 начнёт его писать по BEH-33).
@@ -138,7 +138,8 @@ executor lock, получают run-start наравне с обычным `run`
 run-start **не** пишет — его `sys.exit(1)`-ветка только сообщает причину
 `lock_busy` (DT-10); `note_stop(reason, detail)` рядом с каждым сегодняшним
 `set_meta("last_run_stop_reason", …)`; `close()` из `try/except/finally`
-вокруг dispatch; meta `last_run_id`/`last_pipeline_id`), `closure.py`
+вокруг dispatch; meta `last_run_id`/`last_pipeline_id`/`continuation_index:
+local` — маркер ветки (1) Q-12, читатель один и он в DT-09), `closure.py`
 (`CLOSURE_KINDS` — одна таблица: `RUN_STOP_REASONS`, `RefusalKind`,
 необработанное исключение; `run-closure.schema.json` с пинованным словарём
 kinds) и `evidence.py` (`Publisher` — единственный владелец экземпляра
@@ -152,8 +153,17 @@ placeholder `[REDACTED:kind:hash8]`, общий словарь имён с
 `execute(config, state, call)` в порядке §2.2 шаги 2–8 (шаг 1 — drain
 checkpoint-ов — врезает DT-03, когда checkpoint-ы появятся), `_spawn` —
 единственная функция репо, передающая argv провайдера в `subprocess.run`;
-conftest-guard `_no_real_agent_calls` получает третье имя `paid_call._spawn`
-рядом с двумя существующими. `call_id` чеканит **сайт** — до `log_prompt` и
+autouse-guard `_no_real_agent_calls` переключается на **одно** имя
+`paid_call._spawn`, а два его патча швов (`tdd._run_agent`,
+`execution._run_agent_process`) снимаются — тем же коммитом, что переводит
+последний сайт на seam, и тем же, что переписывает
+`tests/test_harness_guards.py` на новое имя: окна, где швы уже не патчатся,
+а `_spawn` ещё не проверен, быть не должно. Иначе рецепт BEH-05 неисполним
+— `_refuse_tdd` (`tests/conftest.py:296-299`) и `_refuse_execution`
+(`:316-323`) поднимают отказ на настоящем имени `claude` раньше, чем
+управление дошло бы до `_spawn` (design Q-06). Ключ гварда — argv, как уже
+у `_refuse_execution`; сообщение отказа называет сайт по `provenance` из
+`PaidCall`; пояс `_belt_never_executes_a_paid_binary` не трогается. `call_id` чеканит **сайт** — до `log_prompt` и
 до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
 проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
 что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
@@ -212,7 +222,8 @@ test_planning_has_ledger_identity.py` (новый), `tests/
 test_bounded_evidence_logs.py` (новый), `tests/test_state.py` (существующий,
 правка по предмету BEH-03), `tests/test_cli_info.py` (существующий, по
 предмету BEH-38), `tests/test_harness_guards.py` (существующий, по предмету
-BEH-44 — пояс на третьем имени). `tests/conftest.py` правится по предмету
+BEH-44 и BEH-05 — гвард переписан на `paid_call._spawn`, пояс без
+изменений). `tests/conftest.py` правится по предмету
 guard-а и общих фикстур (двойники store/`_spawn`, `RunContext`), а
 `tests/test_runner.py` и `tests/test_events.py` — по предмету удаления
 `run_claude_async` (снятие осиротевших тестов стримингового пути); ни один из
@@ -230,9 +241,13 @@ Red-рамки по design («задачи-измерения» и «задач�
 `infrastructure_error` с reason `call_start_not_acknowledged` — через
 `spec-runner run --task` целиком; BEH-03 — старая DB-фикстура открывается,
 старые строки читаются с `run_id IS NULL`, `costs` даёт прежнюю сумму; BEH-26
-— `full_sha256` равен digest-у исходника при усечённом теле. Не утверждать:
-`grep` по исходнику на `subprocess.run` (пояс `PaidBinaryReached` ловит обход
-живьём, grep красен от комментария), имена приватных функций seam-а, порядок
+— `full_sha256` равен digest-у исходника при усечённом теле. Красная половина рецепта BEH-05 — матрица сайтов с настоящим именем
+`claude` в `claude_command` и двойником `_spawn`: двойник теста заменяет
+патч гварда (документированное свойство гварда), пояс остаётся под ним, и
+единственный наблюдаемый признак — журнал `call_start`/`spawn`. Не
+утверждать: `grep` по исходнику на `subprocess.run` (пояс `PaidBinaryReached`
+ловит обход живьём, grep красен от комментария), имена приватных функций
+seam-а, порядок
 внутренних шагов сверх «call-start acked → spawn → result», число строк
 `state.py`, конкретные regex redactor-а.
 
@@ -361,8 +376,8 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 вызванной через её **штатный сайт** (`tdd abandon`, `budget authorize`
 отдельным invocation без attempt, раунд `review-pr` с fake gh,
 `commit_status_flip`…), и ноль — после `status`/`costs`/`validate`/`report`/
-`evidence`; статический тест по образцу `run_plugin_hooks_for` находит ровно
-один seam; manifest после настоящей mutation валиден по схеме, а `grep` по
+`evidence <run_id>`; статический тест по образцу `run_plugin_hooks_for`
+находит ровно один seam; manifest после настоящей mutation валиден по схеме, а `grep` по
 байтам всех файлов checkpoint-а не находит `str(project_root)`, `os.getpid()`
 и имени активного `spec-runner-red-*` worktree; повторный прогон с объявленным
 `tdd_namespace` даёт `namespace_source: declared`. Не утверждать число
@@ -382,8 +397,8 @@ parallel_group: core
 acknowledged checkpoint-а + `manifest_sha256` → repository identity (root
 commit клона против manifest) → policy identity (`config_hash` активного
 config, ключ и оба значения в сообщении) → namespace (оба значения и оба
-источника `declared`/`computed`) → open calls (store: call-start без
-call-result) → spool (sha256 каждой строки); первое несовпадение — отказ,
+источника `declared`/`computed`) → open calls **всего workstream-а** →
+spool (sha256 каждой строки); первое несовпадение — отказ,
 instrument-класс (1), (2), (7) — exit 2, остальные — `needs-human`, exit 1;
 legacy — fail-closed с перечнем недостающего (классификация DT-04) и ссылкой
 на «operational minimum» `docs/architecture.md`; без `--experimental` — отказ
@@ -395,8 +410,11 @@ bare-репо в тесте), `wip.apply` — `git bundle verify` → `git fetch
 проверкой per-file SHA-256 → `git stash store -m <label> <sha>`; ref,
 объявленный опубликованным, которого forge не отдаёт → `needs-human` с именем
 и SHA до распаковки, реконструкции нет (OUT-09); `state.db` из snapshot-а на
-место `config.state_file`; replay spool; lock/stop/ready/worktrees просто не
-создаются. Namespace по Q-09: config не объявляет `tdd_namespace` →
+место `config.state_file` **и сразу правка одного ключа meta в нём** —
+`continuation_index` = `restored` (`set_meta`, не `record_*`, так что
+`after_mutation` не вызывается): без неё восстановленный snapshot нёс бы
+`last_run_id` и первый `run` после restore пошёл бы по ветке (1) Q-12, мимо
+индекса; replay spool; lock/stop/ready/worktrees просто не создаются. Namespace по Q-09: config не объявляет `tdd_namespace` →
 `tdd_namespace: <value>` дописывается shape-preserving merge-ом по образцу
 `preset_cmd.apply_to_config --apply` с `.bak`, diff печатается, файл виден в
 `git status`. Следующий шаг — из DB: open call → `needs-human` (уже отказано
@@ -418,6 +436,20 @@ E2E под git automation `git status --porcelain` продуктового ре
 путей под `.executor-*` и `tracked_state_paths` пуст — так E2E, авторуемые
 DT-08…DT-14, попадают под тот же sweep без правки этого файла; `spec/
 .gitignore` untracked — не находка.
+
+Проверка (6) — namespace-wide, и это предмет именно этой задачи (design
+§ 7.2, перечень путей § 2.6): `workstream_key` берётся из run-start
+восстанавливаемого прогона, один `list` индекса
+`workstreams/<workstream_key>/runs/` DT-01, разбираются прогоны без парного
+`.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
+call-result где угодно в workstream-е — `needs-human` с `run_id` того
+прогона, `call_id`, provenance и `task_id`; более поздний прогон без open
+calls — тоже `needs-human`, с именем последнего `run_id` workstream-а как
+выходом; недоступный store или индекс — instrument, exit 2. `--json` несёт
+исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
+ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
+более поздний C оставил open call, восстанавливается A» — та, на которой
+`run_id`-scope и namespace-scope расходятся (BEH-09, BEH-20).
 
 Границы: детекция open calls на старте `run` и дверь `close-call` — DT-09
 (BEH-09 наблюдает `restore` → `needs-human` вместе с `run`); degraded mode и
@@ -522,16 +554,19 @@ parallel_group: door
 `paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12,
 вызывается из `_run_tasks_inner` там же, где `recover_stale_tasks`, после
 replay spool (DT-08 подключает replay раньше неё; до DT-08 процедура идёт
-сразу после гардов старта). Веток две, и различает их meta `last_run_id`.
-**(1) `last_run_id` есть:** для каждой `open`-строки namespace-а — targeted
+сразу после гардов старта). Веток две, и различает их meta
+`continuation_index`: значение `local` пишет `RunContext.start()` (DT-02),
+значение `restored` — `restore.apply` (DT-06), отсутствие маркера — свежая
+DB. **(1) маркер `local`:** для каждой `open`-строки namespace-а — targeted
 `get` двух ключей в store, не листинг; (а) есть call-result → строка
 закрывается им, задача свободна; (б) есть call-start, нет call-result → open
 call: `run --all` пропускает задачу с причиной, называющей `call_id`,
 provenance и «open call», и выполняет остальные ready; `run --task` отказывает
 той же причиной, exit 1; (в) нет call-start → строка закрывается outcome
-`not_started`, задача свободна. **(2) `last_run_id` нет** — DB создана заново
+`not_started`, задача свободна. **(2) маркера нет или он `restored`** — DB создана заново
 (`spec-runner reset` `cli_info.py:571` удаляет файл без аудита и без
-`--reason`; ручное удаление; свежий клон; другая машина): один `list` индекса
+`--reason`; ручное удаление; свежий клон; другая машина) либо приехала из
+snapshot-а: один `list` индекса
 workstream-а DT-01, прогоны без парного `.closed` разбираются по своим
 `calls/`-ключам, каждый call-start без call-result восстанавливается как
 `open`-строка свежей DB (`task_id`, attempt, `call_id`, provenance, `run_id` —
@@ -547,7 +582,15 @@ store, проверенному **до** записи; пишет
 `CallResult(outcome="resolved_unknown", supersedes=<start key>)` в store и
 закрывает строку DB того namespace-а, если DB доступна (иначе — процедура Q-12
 закроет её на следующем старте по store); платного вызова не делает и не
-решает, повторять ли его. Контракт `call_id` (BEH-10): второй call-result и
+решает, повторять ли его. Платящей подкомандой при этом является по второй
+половине критерия FR-01 — она меняет continuation-state: `evidence
+close-call` входит в `PAYING_SUBCOMMANDS` (DT-02 заводит множество, эта
+задача добавляет в него строку) и пишет свою пару run-start + closure
+(`close_call_refused` под guardrail-ом или занятым lock-ом,
+`store_unavailable` при недоступном store, `completed` на закрытии и на
+идемпотентном повторе — design § 6.3); закрытие строки идёт шагом «close»
+`record_agent_call`, то есть через `after_mutation`, и checkpoint публикуется
+под `run_id`, у которого run-start есть. Контракт `call_id` (BEH-10): второй call-result и
 второй call-start под тем же id отвергнуты с именем `call_id`, первая запись
 неизменна, отказ не «улучшает» исход задачи — семантика `AlreadyExists` DT-01
 и seam-а DT-02, предъявляемая здесь живьём вместе с дверью.
@@ -564,8 +607,9 @@ call, оставленный `os._exit` двойника seam-а после ack 
 DB и в клоне на другом пути — те же три исхода и 0 `_spawn` (пустой
 `agent_calls`, принятый за «open call нет», — красный тест), а в каталоге без
 прошлых прогонов `run` стартует обычным порядком; четыре вызова `close-call` по очереди (без `--reason`, с ним,
-повторно, под `SPEC_RUNNER_AGENT=1`) и после второго `run --task TASK-001`
-доходит до **нового** call-start. Не утверждать точный текст отказов сверх
+повторно, под `SPEC_RUNNER_AGENT=1`), у каждого из которых двойник store
+получает ровно один run-start и ровно одну closure своего исхода, а после
+второго `run --task TASK-001` доходит до **нового** call-start. Не утверждать точный текст отказов сверх
 `call_id` и provenance, имена приватных функций.
 
 #### DT-10: Closure на каждом выходе: гарды старта и сигналы в одной таблице, drain перед closure, отказные режимы, `kill -9` · type: implement · owner: dev
@@ -621,11 +665,13 @@ calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/
 оставшимся open call или terminal attempt `failed`/`blocked` →
 `policy_refusal`, код 0 без единого платного вызова и attempt-а → `no_ready`,
 и только код 0 при выполненной работе → `completed`. Повторный `note_stop`
-первую причину не затирает. Без правила девять платящих подкоманд из десяти
+первую причину не затирает. Без правила одиннадцать платящих подкоманд из двенадцати
 остались бы либо с дефолтным `completed`, либо без closure вовсе.
 
-**Сайты выхода девяти платящих подкоманд вне `run` — предмет этой задачи, весь
-инвентарь design § 6.3.** `note_stop` ставится в `cmd_retry` (`cli.py:1471`,
+**Сайты выхода одиннадцати платящих подкоманд вне `run` — весь инвентарь
+design § 6.3; `note_stop` ставит эта задача везде, кроме трёх команд, чей
+код доставляют другие (`restore` — DT-06, `evidence close-call` — DT-09,
+`evidence purge` — DT-12).** `note_stop` ставится в `cmd_retry` (`cli.py:1471`,
 `:1475`, `:1476`, `:1484`, `:1525`, `:1528`), `cmd_watch` (`:1547`, `:1551`,
 `:1552`, `:1563`, `:1583`, `:1585`, `:1606`, `:1616`, `:1623`), `cmd_doctor`
 (`:1679`, по коду `run_doctor` `doctor.py:389`/`:416`/`:418`/`:419`),
@@ -636,25 +682,34 @@ calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/
 (`remedy.py:805`, `:822`, `:825`, `:857`, `:861`, `:867`, `:869`, `:895`,
 `:902`, `:909`, `_repair_exit` `:921`/`:926`), `cmd_budget`
 (`budget_cmd.py:272`, `:277`, `:307`, `:334`) и `except SpecMetaError`
-вокруг dispatch (`cli.py:2610-2611`). Сайты `restore` — DT-06 по коду, но
-их reason'ы (`restore_instrument`, `needs_human`, `completed`) названы здесь,
-потому что словарь один. Логика самих команд не меняется: добавляется
-только сообщение причины. `CLOSURE_KINDS` растёт аддитивно двенадцатью
+вокруг dispatch (`cli.py:2610-2611`). Сайты `restore`, `evidence close-call` и `evidence purge` — DT-06, DT-09 и
+DT-12 по коду, но их reason'ы (`restore_instrument`, `needs_human`,
+`close_call_refused`, `purge_refused`, `store_unavailable`, `no_ready`,
+`completed`) названы здесь, потому что словарь один. Сайты `plan --gated`
+разделены по коду возврата: `:589`/`:603`/`:625` при rc 2 — upstream-гейт
+(`cli_plan.py:126-128`, платного вызова нет) → `spec_governance` (имя уже
+есть у гарда старта `run`, новой строки словаря не нужно), при rc 1 →
+`stage_generation_failed`; интерактивный выход `:625` без единой записанной
+стадии → `no_ready`, `completed` — только после ≥ 1 стадии (различитель —
+локальный счётчик успешных `run_gated_stage`). Логика самих команд не меняется: добавляется
+только сообщение причины. `CLOSURE_KINDS` растёт аддитивно пятнадцатью
 closure-only reason'ами (`usage_error`, `stage_generation_failed`,
 `provider_error`, `provider_timeout`, `probe_broken`, `review_fail_closed`,
 `needs_human`, `remedy_refused`, `red_not_reestablished`,
-`authorization_refused`, `restore_instrument`, `spec_meta_error`) плюс
+`authorization_refused`, `restore_instrument`, `spec_meta_error`,
+`close_call_refused`, `purge_refused`, `store_unavailable`) плюс
 чеканкой правила (`unhandled_exception`, `refusal_<k>`,
 `unreported_task_not_done`, `unreported_no_work`, семейство
 `unreported_exit_<n>`); `RUN_STOP_REASONS` от этого **не** растёт — ни одна из
-девяти не вызывает `set_meta("last_run_stop_reason", …)`, и `status` их
+одиннадцати не вызывает `set_meta("last_run_stop_reason", …)`, и `status` их
 причин не показывает. Состав словаря идёт в
 `schemas/run-closure.schema.json` и CHANGELOG тем же коммитом, что схему.
 
 Read-only команды (`status`, `costs`, `validate`, `report`,
-`evidence`) получают `run_id` для логов, но run-start/checkpoint/closure не
-пишут; `PAYING_SUBCOMMANDS` (`run`, `retry`, `watch`, `plan`, `review-pr`,
-`doctor`, `tdd abandon/repair/resume/release`, `budget authorize`, `restore`)
+`evidence <run_id>`) получают `run_id` для логов, но
+run-start/checkpoint/closure не пишут; `PAYING_SUBCOMMANDS` (`run`, `retry`,
+`watch`, `plan`, `review-pr`, `doctor`, `tdd abandon/repair/resume/release`,
+`budget authorize`, `restore`, `evidence close-call`, `evidence purge`)
 — ровно один run-start и ровно одна closure на invocation, и три пути,
 executor lock не берущие (`retry`, `watch`, `run --all --force`),
 предъявляются отдельно: доказывать их run-start вызовом `_acquire_run_lock`
@@ -733,7 +788,15 @@ guardrail — по образцу `close-call` DT-09) считает по тем
 `delete` пишет `deletions/<ts>.json` (`run_id`, ids, actor, reason, время —
 без payload); отказ store (legal hold, OUT-10) оставляет всё как есть, включая
 локальную копию, и audit-записи не пишет; `AuditLogger`, когда включён,
-получает копию записи. `retention_days` вне 7–365 — `ConfigError` при
+получает копию записи. `evidence purge` — платящая подкоманда по критерию
+FR-01 (меняет continuation-state, удаляя опубликованные объекты): эта задача
+добавляет её в `PAYING_SUBCOMMANDS` и сообщает closure-причину на каждом из
+своих исходов — `no_ready` (истёкших объектов нет), `purge_refused` (store
+отказал в `delete`), `store_unavailable` (store недоступен), `completed`
+(удалено и записано); словарь — design § 6.3, DT-10. Open call она при этом
+не закрывает по построению: удаляются только истёкшие checkpoint-ы с
+acknowledged преемником, call records и run-start живут до своего retention
+(перечень путей — design § 2.6). `retention_days` вне 7–365 — `ConfigError` при
 загрузке и ошибка `validate` (loader DT-01, здесь наблюдается вместе с
 удалением).
 
