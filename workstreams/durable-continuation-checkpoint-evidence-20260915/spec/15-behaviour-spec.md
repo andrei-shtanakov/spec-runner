@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
+  requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -769,10 +769,13 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   0 и без невыполненной работы (все задачи `done`, нет ready-задач,
   `--dry-run`, несуществующий `--task`); `refused` — там, где ненулевой код
   сопровождается отказом правила в последнем неуспешном attempt-е
-  (неудовлетворённый gate даёт `error_kind` `hook_failure`, budget guard —
+  (неудовлетворённый gate даёт `error_kind` `policy` — типизированный
+  `Refusal` гейта, `gates.py:695`, `execution.py:289-290`; budget guard —
   `budget`); `failed` — на красном `validate`, четырёх гардах старта, отказе
   ack (`error_kind` `instrument`, exit 2) и на истёкшем session-таймере,
-  оставившем выбранную задачу невыполненной; `interrupted` — на SIGTERM;
+  оставившем выбранную задачу невыполненной; `interrupted` — на SIGTERM,
+  который диспетчер видит по флагу `executor._shutdown_requested` (design
+  § 6.3), хотя цикл `run` на нём делает `break` и выходит штатным кодом;
   `crashed` — на неперехваченном исключении.
 - **And** `completed` не выдан ни одному прогону с невыполненной работой:
   конфигурация «неудовлетворённый gate под `review_policy: required`»
@@ -843,10 +846,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_closure_every_exit.py`
 - **Given** двойник handler-а, завершающийся каждым из шести способов
-  правила вывода (design § 6.3): необработанным исключением; сигналом
-  (SIGINT/SIGTERM) и `KeyboardInterrupt`; ненулевым кодом при последнем
-  неуспешном attempt-е с `error_kind` из отказного подмножества `ERROR_KINDS`
-  (`policy`, `budget`, `blocked`, `hook_failure`, `harness_guard`); ненулевым
+  правила вывода (design § 6.3): необработанным исключением; поднятым
+  флагом сигнала `executor._shutdown_requested` (так его ставит
+  `_signal_handler` на SIGINT/SIGTERM) и `KeyboardInterrupt`; ненулевым
+  кодом при последнем неуспешном attempt-е с `error_kind` из отказного
+  подмножества `ERROR_KINDS` (`policy`, `budget`, `blocked`, `hook_failure`,
+  `harness_guard`); ненулевым
   кодом без такого attempt-а и с `error_kind` инструментального класса
   (`instrument`, `timeout`, `network`, `rate_limit`, `auth`, `api_error`,
   `cli_error`, `internal_error`, `interrupted`, `unknown`); кодом 0 при
@@ -904,9 +909,11 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   которой invocation записал attempt, не в статусе `success`. Closure
   `completed` на любой из двух — красный тест.
 - **And** `completed` выдан ровно тем конфигурациям, у которых код 0 и
-  невыполненной работы нет (`retry` с задачей `done`, `doctor` с verdict
-  `ready`, `review-pr` с полным успехом, `tdd release` на повторе, `budget
-  authorize` с записанным решением, `restore` на успешном применении).
+  невыполненной работы нет (`retry` с задачей `done`, `watch` с красной
+  pre-run validation — `return` до цикла, код 0, attempt-ов нет
+  (`cli.py:1560-1563`), `doctor` с verdict `ready`, `review-pr` с полным
+  успехом, `tdd release` на повторе, `budget authorize` с записанным
+  решением, `restore` на успешном применении).
 - **And** ненулевой код без attempt-ов даёт `failed`, а не `refused`:
   `plan --gated` с неодобренным upstream-ом и `restore` на отказе
   needs-human обе закрываются `failed`, и различение «отказ правила» и
@@ -915,8 +922,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   правило не различает»). Требование `refused` на любой из них — красный
   тест.
 - **And** исключение, дошедшее сквозь handler `plan`, даёт `crashed`, а
-  SIGTERM у `watch` — `interrupted`; ни та ни другая конфигурация не
-  оставляет run-start без closure.
+  SIGTERM у `watch` — `interrupted` по флагу `executor._shutdown_requested`
+  (цикл `watch` на нём делает `break` и возвращается с кодом 0,
+  `cli.py:1613-1616`; kind даёт флаг, не код); ни та ни другая
+  конфигурация не оставляет run-start без closure.
 - **And** ни одна из восьми не персистит `last_run_stop_reason`
   (`state.set_meta` с этим ключом в их коде отсутствует — статический тест),
   и closure от него не зависит: reason этих подкоманд — свободная строка,

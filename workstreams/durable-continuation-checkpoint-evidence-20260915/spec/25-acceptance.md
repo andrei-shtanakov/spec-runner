@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
-  behaviour-spec: 3baea4f3531e31b50634928f6e1cfcdc73ffe633
+  requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
+  behaviour-spec: 323e4cbda58853bb1ea378e3c9d35af662395f01
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -447,9 +447,12 @@ acknowledged checkpoint-а (или `null`), записанным фактиче�
 status, timestamps и `last_call_ids`/`attempt_ids`. Kind отвечает правилу:
 `completed` — только при коде 0 и отсутствии невыполненной работы; `refused`
 — при ненулевом коде с отказным `error_kind` последнего неуспешного
-attempt-а (`hook_failure` у gate-отказа, `budget` у budget guard-а); `failed`
+attempt-а (`policy` у gate-отказа — типизированный `Refusal` гейта, `budget`
+у budget guard-а); `failed`
 — на прочих ненулевых кодах и на коде 0 с невыполненной работой;
-`interrupted` — на SIGTERM; `crashed` — на неперехваченном исключении.
+`interrupted` — на SIGTERM, который диспетчер видит по флагу
+`executor._shutdown_requested` (design § 6.3), при штатном коде выхода
+цикла; `crashed` — на неперехваченном исключении.
 Closure с невыполненными задачами и kind `completed` — невыполненный
 критерий, и это предъявляется прямо на конфигурации «неудовлетворённый gate»,
 где персистированный `last_run_stop_reason` остался дефолтным `completed`, а

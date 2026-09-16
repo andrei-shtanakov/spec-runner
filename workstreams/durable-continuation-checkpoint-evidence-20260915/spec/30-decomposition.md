@@ -6,16 +6,17 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 897e27a5a990ec48040cc1c995ecdbd0576cd15b
-  acceptance: c5e7327dd0da6a0a27ddde6741e27397383a37de
+  design: 6cbf0213ed7b658db6cbd7b4dde5211f94e7ed35
+  acceptance: a18888b681d74a22f3930d655f98ac2c1db37c49
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
 
 Стадия `decomposition` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Режет доставку
-на задачи и объявляет граф их зависимостей поверх design (`20-design.md`, blob
-`2172d6a6…`) и acceptance (`25-acceptance.md`, blob `d096aa44…`). Резолюции
+на задачи и объявляет граф их зависимостей поверх design (`20-design.md`) и
+acceptance (`25-acceptance.md`); их ревизии пинованы в frontmatter
+`upstream_hashes` этого узла. Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
 (локальный snapshot синхронно, один упорядоченный publisher, drain перед
@@ -626,7 +627,10 @@ parallel_group: closure
 сайт выхода ни одной подкоманды этой задачей не правится.
 
 `derive` читает два факта. Первый — как handler ушёл: неперехваченное
-исключение (не `SystemExit`), сигнал или `KeyboardInterrupt`, код выхода.
+исключение (не `SystemExit`), сигнал — поднятый флаг
+`executor._shutdown_requested`, который диспетчер читает перед closure
+(`_signal_handler` не правится; stop-marker флаг не поднимает) — или
+`KeyboardInterrupt`, код выхода.
 Второй — исход работы: есть ли задача, по которой этот invocation записал
 attempt (столбец `run_id`, DT-02) и которая не в статусе `success`
 (`state.py:2211-2217`), либо остался open call. Строки применяются сверху
@@ -646,7 +650,7 @@ closure его не читает, и ни одного нового значен
 `review_policy: required` есть `refused` при `status`, показывающем
 `completed`.
 
-`reason` — свободная строка: исключение, имя сигнала, `error_kind`/`error`
+`reason` — свободная строка: исключение, флаг сигнала, `error_kind`/`error`
 последнего неуспешного attempt-а, строковый аргумент `SystemExit` или
 персистированный `last_run_stop_reason`, что из этого есть; пустое значение
 допустимо и валидно по схеме. Словаря reason-ов нет, отказа сериализации по

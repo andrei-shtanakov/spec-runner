@@ -6,27 +6,27 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: e489c781f08cf7c4b78858b3be9061255e8fabba
-  behaviour-spec: 3baea4f3531e31b50634928f6e1cfcdc73ffe633
+  requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
+  behaviour-spec: 323e4cbda58853bb1ea378e3c9d35af662395f01
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
 
 Стадия `design` governance-бандла
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Даёт
-механику тому, что requirements (`10-requirements.md`, blob `1927c8fd…`) и
-behaviour-spec (`15-behaviour-spec.md`, blob `5440bc08…`) намеренно оставили
-открытым: какой канал вправе подтверждать call-start, где живёт единый seam
-платного вызова, как checkpoint снимается и доставляется, в чём переносится
-WIP, что входит в policy identity, чем режется секрет, кто исполняет
-retention и откуда обычный `run` узнаёт об open call. Продуктовые решения
-upstream'а — один `run_id` на invocation (FR-01), «запись раньше траты» с
-fail-closed до spawn (FR-02), checkpoint после каждой continuation-relevant
-mutation (FR-03), Git-материал и WIP в checkpoint-е (FR-04), конечный
-`restore` без платного вызова (FR-05), evidence на каждом исходе (FR-06),
-одна closure на run-start (FR-07), spool при отказе DB (FR-08), read-surface
-по `run_id` (FR-09) — здесь не пересматриваются; каждое решение ниже
-ссылается на них как на границу.
+механику тому, что requirements (`10-requirements.md`) и behaviour-spec
+(`15-behaviour-spec.md`) — ревизии пинованы в frontmatter `upstream_hashes`
+этого узла — намеренно оставили открытым: какой канал вправе подтверждать
+call-start, где живёт единый seam платного вызова, как checkpoint снимается и
+доставляется, в чём переносится WIP, что входит в policy identity, чем режется
+секрет, кто исполняет retention и откуда обычный `run` узнаёт об open call.
+Продуктовые решения upstream'а — один `run_id` на invocation (FR-01), «запись
+раньше траты» с fail-closed до spawn (FR-02), checkpoint после каждой
+continuation-relevant mutation (FR-03), Git-материал и WIP в checkpoint-е
+(FR-04), конечный `restore` без платного вызова (FR-05), evidence на каждом
+исходе (FR-06), одна closure на run-start (FR-07), spool при отказе DB
+(FR-08), read-surface по `run_id` (FR-09) — здесь не пересматриваются; каждое
+решение ниже ссылается на них как на границу.
 
 Термины — в значении §3 требований: **`run_id`**, **`pipeline_id`**,
 **`call_id`**, **платный subprocess**, **provenance**, **policy identity**,
@@ -775,7 +775,21 @@ exit 2 и reason, называющим неподтверждённый checkpoi
 
 **Факт первый — как handler ушёл:** необработанное исключение (не
 `SystemExit`), сигнал или `KeyboardInterrupt`, либо код выхода
-(`SystemExit.code` или код, возвращённый handler-ом).
+(`SystemExit.code` или код, возвращённый handler-ом). Сигнал диспетчер
+наблюдает не по способу ухода, а по флагу: `main()` вешает
+`executor._signal_handler` на SIGINT и SIGTERM до dispatch-а
+(`cli.py:2519-2520`), handler лишь поднимает `_shutdown_requested`
+(`executor.py:18-21`), процесс не завершается и `KeyboardInterrupt` не
+поднимается — циклы `run` и `watch` видят `check_stop_requested` и делают
+`break`, выходя штатным кодом (`cli.py:1281-1285`, `:1613-1616`). Поэтому
+`close()` читает `executor._shutdown_requested` при сборке `outcome`, и
+поднятый флаг есть «сигнал» второй строки правила, какой бы код handler ни
+вернул; `_signal_handler` и флаг не правятся, диспетчер их только читает.
+Оговорка: stop-marker (`config.stop_file`) флаг не поднимает —
+`check_stop_requested` (`state.py:2644-2648`) читает его отдельно, — так
+что остановка stop-marker-ом остаётся кодом выхода, не сигналом.
+`KeyboardInterrupt` в строке — на случай, если исключение всё же дойдёт до
+диспетчера; в этом дереве живой путь сигнала — флаг.
 
 **Факт второй — исход работы:** есть ли задача, по которой **этот**
 invocation записал attempt и которая на момент выхода не в статусе `success`
@@ -790,7 +804,7 @@ invocation записал attempt и которая на момент выход
 | Как ушёл handler | Невыполненная работа | kind |
 |---|---|---|
 | необработанное исключение (не `SystemExit`) | любая | `crashed` |
-| сигнал или `KeyboardInterrupt` | любая | `interrupted` |
+| сигнал (флаг `executor._shutdown_requested` поднят) или `KeyboardInterrupt` | любая | `interrupted` |
 | код ≠ 0, `error_kind` последнего неуспешного attempt-а — отказ правила | любая | `refused` |
 | код ≠ 0 | любая | `failed` |
 | код 0 | есть | `failed` |
@@ -854,12 +868,12 @@ required` до них не доходит — `HOOK_FAILURE` фатален (`ex
 **`reason` — свободная строка, не словарь.** Схема пинует kinds; reason не
 перечисляется и не валидируется, «неизвестного» reason не бывает, и отказа
 сериализации по reason нет. Диспетчер собирает его по kind-у: для `crashed` —
-тип и сообщение исключения; для `interrupted` — имя сигнала или
-`KeyboardInterrupt`; для `refused` и `failed` — `error_kind` и `error`
-последнего неуспешного attempt-а, если он есть, иначе строковый аргумент
-`SystemExit`, если это строка, иначе пусто; для `completed` —
-персистированный `last_run_stop_reason`, если invocation его писал (ровно то,
-что показывает `status`), иначе пусто. Исключение — таймаут drain: там
+тип и сообщение исключения; для `interrupted` — `shutdown_requested` (флаг
+имени сигнала не хранит) или `KeyboardInterrupt`; для `refused` и `failed` —
+`error_kind` и `error` последнего неуспешного attempt-а, если он есть, иначе
+строковый аргумент `SystemExit`, если это строка, иначе пусто; для `completed`
+— персистированный `last_run_stop_reason`, если invocation его писал (ровно
+то, что показывает `status`), иначе пусто. Исключение — таймаут drain: там
 reason называет неподтверждённый checkpoint, потому что это факт самой
 `close()`. Пусто — допустимое значение: смысл несёт kind, reason помогает
 человеку.
@@ -880,9 +894,10 @@ reason называет неподтверждённый checkpoint, потом�
 (`doctor.py:389`, exit 2), дают `failed` наравне с настоящим отказом
 инструмента. (2) Код 1 «работа плоха» от кода 2 «инструмент не смог» — оба
 `failed`; различитель остаётся в поле `exit_code`, которое closure несёт.
-(3) Прогон, остановленный таймером или оператором, от прогона, которому
+(3) Прогон, остановленный таймером или stop-marker-ом, от прогона, которому
 нечего было делать, — когда обе конфигурации дают код 0 и невыполненной
-работы нет. Каждое из трёх восстановимо только своим словарём причин по
+работы нет; сигнал сюда не входит — его диспетчер видит по флагу (факт
+первый). Каждое из трёх восстановимо только своим словарём причин по
 сайтам, а он и есть то, что этот дизайн снял; `exit_code`, `attempt_ids` и
 число open calls, которые closure несёт, дают читателю ту же информацию, не
 требуя, чтобы словарь догонял дерево. По той же причине `completed` с пустым
@@ -1178,7 +1193,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
 | `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
-| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure; `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; новые subparsers `restore`/`evidence`. Сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе: kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
+| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; новые subparsers `restore`/`evidence`. Сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе: kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
