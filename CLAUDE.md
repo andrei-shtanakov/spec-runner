@@ -349,12 +349,21 @@ Tests use pytest. Test files: `test_adopt_gate.py` (`spec adopt` validate-first 
   явная просьба владельца; на «Copilot encountered an error» НЕ перезапрашивать —
   троттлинг у кромки бюджета, перезапрос платный). Умолчание ревью с гейтом
   codex-review — терминальный цикл (решение владельца 2026-08-28): итерировать
-  локально `sh scripts/review/local.sh` до чистого вердикта (подписочный codex,
-  $0 API) → пушить **драфтом** (CI отвечает deferred) → приёмочное ревью
+  локально `sh scripts/review/local-claude.sh` до чистого вердикта (harness-claude,
+  тот же харнесс, что и приёмка — см. ниже) → пушить **драфтом** (CI отвечает deferred) → приёмочное ревью
   `sh ../devtools/review-pr.sh <repo> <pr> --dry-run`, затем без `--dry-run` —
   вердикт публикуется PR-ревью от **ai-prosto**; CI-прогон после снятия драфта —
   advisory-фолбэк, его красноту/зависание не перегонять (SSOT:
   `../prograph-vault/authored/rules/git-workflow.md`).
+  **Харнесс — claude, не codex** (переведено 2026-09-17 вслед за приёмкой:
+  профиль ai-prosto, `~/.config/ai-prosto/harness.env`, ушёл на claude
+  2026-09-03 из-за лимитов codex). `local-claude.sh` — обычный
+  невендоренный сосед `scripts/review/local.sh` (не в PIN кита), просто
+  экспортирует `REVIEW_HARNESS=claude`/`REVIEW_MODEL=claude-opus-5` перед
+  вызовом. Голый `sh scripts/review/local.sh` без этих переменных по-прежнему
+  дефолтит на codex кита — не использовать, пока лимиты не разморозят: на PR
+  #522 круге 8 расхождение харнессов (локально codex, приёмка claude) дало
+  разные находки на одном диффе и сожгло лимит codex впустую.
 - **Мерж — агент по умолчанию** (ADR-ECO-011 «DarkFactory», ратифицирован 2026-08-30):
   при approve ревью-контура и зелёных обязательных проверках PR мержит агент и сам
   выполняет хвост чистки ниже. Мерж — **только от профиля ai-prosto**:
