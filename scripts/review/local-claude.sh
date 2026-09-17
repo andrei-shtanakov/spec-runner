@@ -31,5 +31,8 @@
 set -eu
 unset REVIEW_CMD || true
 export REVIEW_HARNESS=claude
-export REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-5}"
+# `-`, не `:-`: пустая-но-объявленная REVIEW_MODEL обязана дойти до local.sh
+# пустой, чтобы сработал его собственный отказ кодом 2 (D6, local.sh:41) —
+# `:-` подставил бы дефолт и на пустое значение тоже, глуша тот отказ.
+export REVIEW_MODEL="${REVIEW_MODEL-claude-opus-5}"
 exec sh "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/local.sh" "$@"
