@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: 323e4cbda58853bb1ea378e3c9d35af662395f01
+  behaviour-spec: 43d66eb8f98b758eab3007f80781a934f61f1f4f
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -26,7 +26,7 @@ upstream_hashes:
 **artifact store**, **durable boundary**, **legacy run**, **restore**.
 «Двойник store» и «двойник `Popen`» — в значении «Области поведения»
 behaviour-спеки. Сайт RED agent round (#220) называется здесь только так —
-без ярлыка в форме BEH-id (замечание behaviour-спеки к upstream).
+без ярлыка в форме BEH-id.
 
 Входной набор Must-требований: FR-01, FR-02, FR-03, FR-04, FR-05, FR-06,
 FR-07, FR-08, NFR-01, NFR-04, NFR-05, NFR-06, NFR-07. Should-требования
@@ -163,7 +163,13 @@ call», и выполняет остальные; `run --task TASK-001` отка
 причиной, exit 1; `restore` печатает `needs-human: open call <call_id>
 (<provenance>, TASK-001)` и завершается exit 1 — двойник `Popen` для задачи
 вызван 0 раз во всех трёх шагах, второй call-start для того же attempt не
-создан. `evidence close-call` без `--reason` отказана до записи; с `--reason`
+создан. Граница детекции — гарды старта, а не executor lock, и предъявлена
+она на всех путях, которые lock не берут (как AC-03 для run-start и AC-30
+для replay): `retry TASK-001` отказывает той же причиной с exit 1, `watch`, остановленный stop-файлом после первого круга,
+предъявляет тот же open call на старте invocation и задачу не берёт, `run --all --force` её пропускает — 0 вызовов двойника `Popen` во
+всех трёх. Детекция, доказанная вызовом `_acquire_run_lock`, критерий не
+выполняет; `retry` или `watch`, дошедший до нового call-start для того же
+attempt, — невыполненный критерий. `evidence close-call` без `--reason` отказана до записи; с `--reason`
 пишет call-result `resolved_unknown` со ссылкой на open call, actor и
 reason; повтор отвечает «уже закрыт» без второй записи; с
 `SPEC_RUNNER_AGENT=1` отказана guardrail-ом; после закрытия

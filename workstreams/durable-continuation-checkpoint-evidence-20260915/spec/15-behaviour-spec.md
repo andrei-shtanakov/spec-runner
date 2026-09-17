@@ -274,8 +274,9 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   возврата `Popen` до записи call-result (граница «после spawn до
   результата»); в store остался call-start без call-result.
 - **When** в том же namespace выполнены `spec-runner run --all`, затем
-  `spec-runner run --task TASK-001`, затем `spec-runner restore <run_id>
-  --into <new-dir>`.
+  `spec-runner run --task TASK-001`, затем `spec-runner retry TASK-001`,
+  `spec-runner watch`, `spec-runner run --all --force`, затем `spec-runner
+  restore <run_id> --into <new-dir>`.
 - **Then** `run --all` пропускает задачу с причиной, называющей `call_id`,
   provenance и «open call», и выполняет остальные ready задачи; `run --task
   TASK-001` отказывает с той же причиной, exit 1; двойник `Popen` для этой
@@ -312,6 +313,14 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   предъявляет open call, оставленный ещё более поздним прогоном D, вместо
   того чтобы пройти по `open`-строкам snapshot-а мимо него. Наблюдаемый
   признак — обращение к индексу workstream-а на этом старте.
+- **And** тот же знак предъявлен на путях, которые не проходят через
+  исполнение `run`: при том же open call `spec-runner retry TASK-001`
+  отказывает с той же причиной и exit 1; `spec-runner watch` (остановленный stop-файлом
+  после первого круга) предъявляет тот же open call на старте invocation и
+  задачу к исполнению не берёт; `run --all --force` пропускает её с той же причиной. Двойник
+  `Popen` для этой задачи вызван 0 раз во всех трёх. Ни один из трёх не
+  берёт executor lock, поэтому доказательство детекции вызовом
+  `_acquire_run_lock` этот And не выполняет.
 - **And** `restore` более раннего `run_id` workstream-а, у которого есть
   более поздний **закрытый** прогон без open calls, тоже отказывает
   `needs-human`: его изменения в snapshot A не попали, и отказ называет

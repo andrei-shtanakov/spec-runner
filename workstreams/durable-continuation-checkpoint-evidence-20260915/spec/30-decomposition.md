@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 6cbf0213ed7b658db6cbd7b4dde5211f94e7ed35
-  acceptance: a18888b681d74a22f3930d655f98ac2c1db37c49
+  design: 1b4a1313eafb93e62bd4be9f3d858aa5c4244a2d
+  acceptance: b9620703f53aa71182bce5270e902539b6c78834
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -139,8 +139,10 @@ executor lock, получают run-start наравне с обычным `run`
 run-start **не** пишет и вообще не правится — его `sys.exit(1)` доходит до
 `finally` диспетчера; `close(exit_code)` из `try/except SystemExit/except
 BaseException/finally` вокруг dispatch; meta
-`last_run_id`/`last_pipeline_id`/`continuation_index: local` — маркер ветки
-(1) Q-12, читатель один и он в DT-09), `closure.py` (`CLOSURE_KINDS` — пять
+`last_run_id`/`last_pipeline_id` — и только их: маркер `continuation_index`
+`start()` **не** пишет, его писатель и читатель один и тот же и он в DT-09,
+иначе запись из диспетчера до handler-а перекрыла бы `restored` и отсутствие
+маркера прежде их чтения — design § 6.2, § 7.4, Q-12), `closure.py` (`CLOSURE_KINDS` — пять
 значений `completed`/`refused`/`failed`/`interrupted`/`crashed`;
 `run-closure.schema.json` с пинованным словарём kinds) и `evidence.py` (`Publisher` — единственный владелец экземпляра
 `ArtifactStore` и единственный импортёр `_open_store`; `publish(record)` через
@@ -553,13 +555,20 @@ depends_on: [DT-06]
 parallel_group: door
 
 Предмет — design §2.4 (абзац про старт `run`) и §2.5.
-`paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12,
-вызывается из `_run_tasks_inner` там же, где `recover_stale_tasks`, после
-replay spool (DT-08 подключает replay раньше неё; до DT-08 процедура идёт
-сразу после гардов старта). Веток две, и различает их meta
-`continuation_index`: значение `local` пишет `RunContext.start()` (DT-02),
-значение `restored` — `restore.apply` (DT-06), отсутствие маркера — свежая
-DB. **(1) маркер `local`:** для каждой `open`-строки namespace-а — targeted
+`paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12.
+Эта задача заводит общий рубеж старта `cli._run_start_gate(args, config,
+state)` и вызывает его из **трёх** handler-ов сразу после гардов старта:
+`_run_tasks_inner` там же, где `recover_stale_tasks` (`cli.py:861`),
+`cmd_retry` (в его `with ExecutorState`, `:1480`, до `execute_task`) и
+`cmd_watch` (один раз на invocation, под собственный `with ExecutorState`, до
+первого круга цикла). Ни `cmd_retry`, ни `cmd_watch` через `_run_tasks_inner`
+не проходят, поэтому единственный сайт оставил бы оба пути без детекции —
+красный BEH-09. DT-08 подключает replay spool в тот же рубеж перед
+процедурой; до DT-08 рубеж состоит из одной процедуры. Веток две, и
+различает их meta `continuation_index`: значение `restored` пишет
+`restore.apply` (DT-06), отсутствие маркера — свежая DB, значение `local` —
+сама эта процедура, успешно завершив ветку (2) (`RunContext.start()` маркера
+не пишет, DT-02). **(1) маркер `local`:** для каждой `open`-строки namespace-а — targeted
 `get` двух ключей в store, не листинг; (а) есть call-result → строка
 закрывается им, задача свободна; (б) есть call-start, нет call-result → open
 call: `run --all` пропускает задачу с причиной, называющей `call_id`,
@@ -573,7 +582,9 @@ workstream-а DT-01, прогоны без парного `.closed` разбир
 `calls/`-ключам, каждый call-start без call-result восстанавливается как
 `open`-строка свежей DB (`task_id`, attempt, `call_id`, provenance, `run_id` —
 из call-start), дальше работает ветка (б); пустой индекс — прогон идёт как
-обычно; недоступный store на этом пути — `Refusal(kind="instrument")`, exit 2.
+обычно; успешно пройденная ветка последним шагом ставит `set_meta
+continuation_index=local` (в том числе на пустом индексе); недоступный store
+на этом пути — `Refusal(kind="instrument")`, exit 2, маркер не ставится.
 `reset` сам по себе задачей не правится и платящей подкомандой не становится —
 инвариант держит ветка (2), а не гвард на одной команде. Ни один путь не
 создаёт второй call-start для того же attempt. Дверь — `spec-runner evidence
@@ -985,9 +996,11 @@ DT-04 → DT-05 → DT-06: каналам `run_id` не нужны ни `evidenc
 правит свою поверхность (`state.py`/`spool.py`; `paid_call.open_calls` и
 `evidence close-call`; `run_context`/`closure`; читатели bundle-а;
 `retention.py`/`evidence purge`), общие точки — subparser `evidence` DT-04 и
-старт `_run_tasks_inner` (replay spool DT-08, процедура open calls DT-09,
-целостность DT-11 — три вставки в объявленном порядке: replay → целостность →
-open calls; каждая задача вставляет свою, не переставляя чужие). Конфликты
+рубеж старта `_run_start_gate` — его вместе с тремя сайтами (`_run_tasks_inner`,
+`cmd_retry`, `cmd_watch`) заводит DT-09, а замену в него кладут три задачи в
+объявленном порядке: replay spool DT-08 → целостность DT-11 → процедура open
+calls DT-09; каждая задача вставляет свою, не переставляя чужие, и `retry`/
+`watch` получают все три разом, потому что рубеж один. Конфликты
 слияния между ними — по строкам одного файла, не по семантике; порядок
 слияния в integration branch произвольный.
 

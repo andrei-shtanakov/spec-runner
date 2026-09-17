@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: 323e4cbda58853bb1ea378e3c9d35af662395f01
+  behaviour-spec: 43d66eb8f98b758eab3007f80781a934f61f1f4f
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -304,7 +304,14 @@ DB здесь — индекс, а не второй домен: сама по �
 (после run-start и гардов старта, до выбора задачи, § Механика 2.4) имеет две
 ветки, и различает их одно наблюдение — объявляет ли DB себя индексом
 **этого** workstream-а: meta `continuation_index` со значением `local`,
-которую `RunContext.start()` пишет рядом с `last_run_id` (§ Механика 6.1).
+которую пишет сама эта процедура, завершив ветку (2) (§ Механика 2.4).
+Писатель маркера и есть его единственный читатель — и только так порядок
+записи и чтения вообще определён: `set_meta` — upsert (`state.py:2547`), а
+`RunContext.start()` вызывается в диспетчере **до** handler-а (§ 6.2), тогда
+как процедура стоит внутри него; запись `local` из `start()` перекрывала бы
+и `restored`, и отсутствие маркера прежде, чем их кто-либо прочтёт, делая
+ветку (2) недостижимой и после `restore`, и после `reset`. Поэтому
+`start()` маркера не касается вовсе.
 `local` означает ровно одно проверяемое утверждение: каждый прогон этого
 workstream-а, начатый с момента появления этой DB, записан в неё же.
 Свежая DB маркера не несёт вовсе, восстановленная `restore`-ом несёт
@@ -327,7 +334,8 @@ workstream целиком: `spec-runner reset` (`cli_info.py:571` —
 файла, свежий клон, новая машина, а также DB, приехавшая из snapshot-а
 (§ 7.3: `restore` ставит `restored` именно ради этой ветки — иначе первый
 `run` после restore пошёл бы по (1) со stale `last_run_id` и прошёл бы мимо
-open call более позднего прогона). Пустой
+open call более позднего прогона; snapshot мог приехать и с `local` внутри,
+поэтому `apply` пишет значение, а не удаляет ключ). Пустой
 `agent_calls` здесь не доказывает ничего, и ветка (1) прошла бы мимо open
 call молча — ровно тот тихий повтор, который запрещают FR-02 и M-02. Поэтому:
 один `list` индекса workstream-а (§ Механика 1.3, префикс
@@ -336,9 +344,14 @@ call молча — ровно тот тихий повтор, который з
 call-start без call-result становится восстановленной `open`-строкой свежей
 DB (`task_id`, attempt, `call_id`, provenance, `run_id` — из call-start),
 после чего работает ветка (б). Пустой индекс — workstream без истории,
-прогон идёт как обычно. Недоступный store на этом пути → `Refusal(kind=
-"instrument")`, exit 2: доказать отсутствие open call нечем, а платный вызов
-при недоступном store всё равно не стартует (Q-02).
+прогон идёт как обычно. Ветка, дошедшая до конца — `list` выполнен,
+`open`-строки восстановлены (в том числе ни одной), — последним шагом ставит
+тем же `set_meta` маркер `continuation_index: local`: с этого момента DB и
+есть индекс workstream-а, и следующий старт идёт по ветке (1). Недоступный
+store на этом пути → `Refusal(kind="instrument")`, exit 2: доказать
+отсутствие open call нечем, маркер не ставится — следующий старт снова идёт
+по ветке (2), — а платный вызов при недоступном store всё равно не стартует
+(Q-02).
 
 `reset` при этом **не** становится платящей подкомандой и evidence не пишет.
 Классифицировать его как «удаление continuation-индекса, требующее аудита»
@@ -533,14 +546,29 @@ TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
 `retry` и `watch` его не берут, `run --force` пропускает): replay spool
 (§ 5) → процедура open calls Q-12 → как сегодня. `run --all` пропускает
 задачу с open call с причиной, называющей `call_id` и provenance; `run
---task` отказывает exit 1 (BEH-09). Обнаружение живёт в `paid_call.open_calls
-(config, state) → list[OpenCall]` и вызывается из `_run_tasks_inner` там же,
-где `recover_stale_tasks`. Процедура двуветочная (Q-12): при meta
+--task` отказывает exit 1 (BEH-09). Обнаружение живёт в
+`paid_call.open_calls(config, state) → list[OpenCall]`, а рубеж один на три
+пути и назван поимённо для каждого: общая функция
+`cli._run_start_gate(args, config, state)` — replay spool (§ 5) → процедура
+open calls, — вызываемая из всех трёх handler-ов сразу после гардов старта и
+до выбора задачи: в `_run_tasks_inner` там же, где `recover_stale_tasks`
+(`cli.py:861`, внутри уже открытого `with ExecutorState` `:843`); в
+`cmd_retry` — в его `with ExecutorState` (`:1480`), до правки `task_state` и
+до `execute_task`; в `cmd_watch` — один раз на invocation до первого круга
+цикла, под собственный `with ExecutorState` (круги открывают свои позже,
+`:1593`, `:1637`, `:1643`). Единственный сайт в `_run_tasks_inner` оставил бы
+«ту же процедуру» утверждением без механизма: ни `cmd_retry` (`cli.py:1467` —
+гарды → `execute_task` напрямую), ни `cmd_watch` (`:1541` — гарды →
+собственный цикл с `run_with_retries`) через `_run_tasks_inner` не проходят.
+`run --force` идёт тем же рубежом внутри `_run_tasks_inner`: `--force`
+снимает lock, а не гейт. Процедура двуветочная (Q-12): при meta
 `continuation_index: local` — targeted `get` по `open`-строкам DB; при её
 отсутствии или значении `restored` — `list` индекса workstream-а (§ 1.3) и
 восстановление `open`-строк из store, потому что пустой `agent_calls` свежей
 или восстановленной DB (после `reset`, удаления файла, клона, переезда на
-другую машину, `restore`) не доказывает отсутствия open call. Кто ещё
+другую машину, `restore`) не доказывает отсутствия open call. Успешно
+пройденная ветка (2) сама ставит `continuation_index: local` (Q-12) — писать
+маркер до того, как его прочтут, в этом порядке некому. Кто ещё
 читает и меняет open calls — § 2.6, одной таблицей.
 
 **2.5 Операторская дверь** — `spec-runner evidence close-call <run_id>
@@ -570,8 +598,8 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 | Путь | Что он решает про open calls / continuation-state | Чем обеспечено namespace-wide правило |
 |---|---|---|
 | `run --all` / `run --task` — старт | выбирать ли задачу | процедура Q-12 § 2.4 после run-start и гардов, до выбора задачи |
-| `retry <task>` — старт | та же задача | та же процедура, та же точка (`retry` executor lock не берёт) |
-| `watch` — старт invocation | задачи всех кругов цикла | та же процедура, один раз на invocation; open calls своих кругов закрывает seam того же процесса |
+| `retry <task>` — старт | та же задача | та же процедура, тот же рубеж: `_run_start_gate` в `cmd_retry` сразу после гардов (§ 2.4; `retry` executor lock не берёт) |
+| `watch` — старт invocation | задачи всех кругов цикла | та же процедура, тот же рубеж: `_run_start_gate` в `cmd_watch` один раз на invocation до первого круга (§ 2.4); open calls своих кругов закрывает seam того же процесса |
 | `run --force` | то же, что `run` | процедура стоит вне lock-а: `--force` отключает lock, а не её |
 | первый `run`/`retry`/`watch` после `restore` | выбирать ли задачу | восстановленная DB несёт `continuation_index: restored` (§ 7.3) ⇒ ветка (2) Q-12: `list` индекса workstream-а, а не `open`-строки snapshot-а |
 | `run` после `reset` / удаления файла DB / в свежем клоне / на новой машине | то же | маркера нет ⇒ ветка (2) Q-12 |
@@ -1019,8 +1047,9 @@ CHANGELOG-запись (BEH-21 (б) параметризует оба значе
 `state.db` из snapshot-а на место `config.state_file` нового каталога,
 replay spool (§ 5), удаление ничего — lock/stop/ready/worktrees просто не
 создаются (BEH-17). Сразу после укладки DB `apply` правит в ней один ключ
-meta: `continuation_index` = `restored` (§ 6.1 пишет `local` только из
-`RunContext.start()`). Без этой строки восстановленный snapshot нёс бы
+meta: `continuation_index` = `restored` (`local` ставит только сама
+процедура open calls, завершив ветку (2) — § 2.4, Q-12; диспетчер маркера не
+пишет, поэтому `restored` доживает до своего читателя). Без этой строки восстановленный snapshot нёс бы
 `last_run_id` прогона A, первый `run` после restore пошёл бы по ветке (1)
 Q-12 — по `open`-строкам DB, снятым в момент snapshot-а, — и индекс
 workstream-а не прочитал бы никто: проверка § 7.2 осталась бы одноразовой,
@@ -1054,9 +1083,10 @@ BEH-37);
 exit 2 (BEH-37). Локальный `status` показывает `run_id`/`pipeline_id`
 последнего run-start namespace-а — из `executor_meta`
 (`last_run_id`, `last_pipeline_id`, пишутся `RunContext.start()` когда DB
-доступна; иначе поле `null`, BEH-38). Тем же `set_meta` и в той же точке
-пишется `continuation_index: local` — маркер ветки (1) Q-12; `status` его не
-показывает, его единственный читатель — процедура open calls § 2.4.
+доступна; иначе поле `null`, BEH-38). Маркер `continuation_index: local` в
+эту точку **не** входит: его пишет тем же `set_meta`, но по завершении своей
+ветки (2), сама процедура open calls § 2.4 — она же его единственный
+читатель (Q-12); `status` маркера не показывает.
 
 ### 8. Формы коммитов и эвиденции
 
@@ -1184,7 +1214,9 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 
 | Файл / подсистема | Что меняется | Сценарии |
 |---|---|---|
-| `src/spec_runner/paid_call.py` (новый) | `PaidCall`, `CallOutcome`, `execute` (протокол FR-02 §2.2), `_spawn` (единственный spawn провайдера), `open_calls` (процедура Q-12, обе ветки: по `open`-строкам DB при `continuation_index: local` и по индексу workstream-а, когда маркера нет или он `restored`) | BEH-05…11, 22, 39, 44 |
+| `src/spec_runner/paid_call.py` (новый) | `PaidCall`, `CallOutcome`, `execute` (протокол FR-02 §2.2), `_spawn` (единственный spawn провайдера), `open_calls` (процедура Q-12, обе ветки: по `open`-строкам DB при `continuation_index: local` и по индексу workstream-а, когда маркера нет или он `restored`; по
+завершении второй ветки — запись маркера `local`), `_run_start_gate` зовёт
+её из трёх сайтов (§ 2.4) | BEH-05…11, 22, 39, 44 |
 | `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
 | `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
@@ -1193,7 +1225,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
 | `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
-| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_tasks_inner`: replay spool + `open_calls` на старте прогона; новые subparsers `restore`/`evidence`. Сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе: kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
+| `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
