@@ -296,7 +296,9 @@ codex-review-кита из steward (независимое ревью дифа �
 в CI (чекер исполняется извлечённым из base), дрейф от продюсера ловит
 вахта `review-kit-drift.yml`. `review-prompt.md` — данные этого репо (вне
 integrity), generated-файлы объявляются в `.gitattributes`
-(`linguist-generated`). Локальный прогон: `sh scripts/review/local.sh`.
+(`linguist-generated`). Локальный прогон: `sh scripts/review/local-claude.sh`
+(невендоренная обёртка, форсирует harness-claude — тот же харнесс, что и
+приёмочный профиль ai-prosto; голый `local.sh` без неё дефолтит на codex).
 Ре-вендор — рецепт в комментарии PIN; смена состава кита — двухшаговая
 дисциплина из шапки `checksum.sh`.
 
