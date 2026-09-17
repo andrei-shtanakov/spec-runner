@@ -770,6 +770,50 @@ runtime-state по инварианту конвейера «нужное для
       восстанавливает очередь, но не claims, authority decisions, стоимость и
       результаты неуспешных вызовов; planning вообще не имеет task-attempt
       ledger, а success-only `post_review` оба разрыва не закрывает.
+
+**Бандл `workstreams/durable-continuation-checkpoint-evidence-20260915/`
+(design/behaviour-spec/acceptance для #480) влит PR #522 (`973081b`,
+2026-09-17, человеческий мерж) с тремя открытыми находками терминального
+ревью (harness-claude, круг 8, `--dry-run` — вердикт нигде не опубликован,
+GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все три — в самом
+бандле (design/behaviour-spec), не в коде: код по этому workstream ещё не
+писался, decomposition остаётся `status: draft`.**
+
+- [ ] **restore-step5-excludes-only-doors** (spec-runner#480, из ревью PR #522) @owner:TBD @id:restore-step5-excludes-only-doors
+      Шаг 5 проверки (6) в `20-design.md` (§7.2) исключает из правила «более
+      поздний прогон без open calls блокирует restore» только
+      `evidence close-call`/`evidence purge` — но `restore` тоже входит в
+      `PAYING_SUBCOMMANDS` и пишет свой run-start/индексную запись **до**
+      собственных проверок. Значит первая же попытка `restore` (в т.ч.
+      отказавшая, например на namespace mismatch) сама становится «более
+      поздним прогоном без open calls» и навсегда блокирует последующее
+      восстановление того же или более раннего прогона. Нужно
+      переформулировать исключение через свойство («прогон, не записавший
+      continuation-relevant mutation», а не перечисление двух команд) — это
+      покрывает и `restore`, — и привести § 2.6 (`design.md:606`, сформулирован
+      без исключений) в соответствие.
+- [ ] **beh-09-close-call-scenario-unreachable** (spec-runner#480, из ревью PR #522) @owner:TBD @id:beh-09-close-call-scenario-unreachable
+      Сценарий BEH-09 (`15-behaviour-spec.md`) утверждает, что после закрытия
+      open call дверью `evidence close-call` restore прогона A **применяется**
+      — но в том же сценарии прогон C (обычный платящий `run`, оставивший
+      open call) сам остаётся «более поздним прогоном без open calls» после
+      закрытия X и не входит в узкое исключение шага 5, так что restore
+      всё равно откажет. Зависит от предыдущего пункта: либо расширить
+      исключение свойством, которое покрывает и C, либо переписать сценарий
+      на конфигурацию, где A — последний прогон workstream-а до самого
+      краша (после close-call более поздних не-дверных прогонов не
+      остаётся).
+- [ ] **watch-red-prerun-completed-misclassified** (spec-runner#480, из ревью PR #522) @owner:TBD @id:watch-red-prerun-completed-misclassified
+      Не связано с предыдущими двумя. `cmd_watch`, остановленный красной
+      pre-run validation, делает `print` + `return` с кодом выхода 0 без
+      единого attempt (`cli.py:1560`) — диспетчер по правилу §6.3 закрывает
+      такой прогон `kind: completed` с пустым reason, что дизайн сам
+      определяет как «делать было нечего». `run` в той же ситуации честно
+      выходит `sys.exit(1)` (`cli.py:919`, с комментарием про этот же класс
+      дефекта H-1: «a silent return here exited 0 and orchestrators read that
+      as workstream success»). BEH-46/AC-27 фиксируют это поведение `watch`
+      как правильное — противоречит FR-07 (Must: каждый orderly stop несёт
+      kind и причину, не читается как пустой успех).
 - [x] **mcp-stop-shared-marker** (spec-runner#481) @owner:github:andrei-shtanakov @id:mcp-stop-shared-marker
       MCP пишет ровно `config.stop_file`; ответ возвращает тот же путь, а
       `check_stop_requested` подтверждает marker для default, prefixed,
