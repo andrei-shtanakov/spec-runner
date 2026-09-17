@@ -16,13 +16,20 @@
 #
 # Использование: sh scripts/review/local-claude.sh [флаги local.sh]
 #
-# Форсирует харнесс безусловно, а не только когда он не задан: местный
+# Форсирует ХАРНЕСС безусловно, а не только когда он не задан: местный
 # REVIEW_CMD-оверрайд (например, унаследованный из старого профиля шелла)
 # обходит резолв харнесса в local.sh целиком (local.sh:52) и молча вернул бы
 # codex — ровно та гарантия, ради которой скрипт написан. `unset` перед
-# экспортом REVIEW_HARNESS/REVIEW_MODEL закрывает и этот путь.
+# экспортом REVIEW_HARNESS закрывает и этот путь. МОДЕЛЬ, в отличие от
+# харнесса, — осознанный выбор вызывающего (тот же принцип, каким сам кит
+# трактует REVIEW_MODEL, local.sh:41): уважаем уже заданную, дефолт только
+# когда не задана вовсе.
+#
+# Вызов local.sh — через `sh`, а не прямым exec бинаря: контракт PIN требует
+# бита исполнения только у harness-claude, у local.sh его вендоринг не
+# гарантирует, и `sh` не зависит от режима файла.
 set -eu
 unset REVIEW_CMD || true
 export REVIEW_HARNESS=claude
-export REVIEW_MODEL=claude-opus-5
-exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/local.sh" "$@"
+export REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-5}"
+exec sh "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/local.sh" "$@"
