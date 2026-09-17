@@ -196,9 +196,12 @@ exit 1, двойник `Popen` не вызван, — а в каталоге б�
 восстановленном каталоге предъявляет open call ещё более позднего прогона,
 обратившись к индексу workstream-а, а не к `open`-строкам snapshot-а;
 `restore` более раннего `run_id` при более позднем закрытом прогоне того же
-workstream-а тоже отказывает `needs-human` с именем последнего `run_id`.
-Применённый snapshot A в любой из этих конфигураций — невыполненный
-критерий.
+workstream-а — обычном `run`/`retry`/`watch`, `budget authorize` или `tdd
+abandon|repair|resume|release`, но не при самой аудируемой двери `evidence
+close-call`/`evidence purge` (та не пишет task-/budget-/tdd-состояние и
+потому не в счёт — иначе у сценария выше не было бы достижимого исхода) —
+тоже отказывает `needs-human` с именем последнего `run_id`. Применённый
+snapshot A в любой из этих конфигураций — невыполненный критерий.
 
 #### AC-09: Один `call_id` — ровно один call-start и не более одного call-result · verification: test
 traces: [FR-02, FR-06]

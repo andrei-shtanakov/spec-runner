@@ -322,9 +322,15 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   берёт executor lock, поэтому доказательство детекции вызовом
   `_acquire_run_lock` этот And не выполняет.
 - **And** `restore` более раннего `run_id` workstream-а, у которого есть
-  более поздний **закрытый** прогон без open calls, тоже отказывает
-  `needs-human`: его изменения в snapshot A не попали, и отказ называет
-  последний `run_id` workstream-а.
+  более поздний **закрытый** прогон без open calls — обычный
+  `run`/`retry`/`watch`, `budget authorize` или
+  `tdd abandon|repair|resume|release` — тоже отказывает `needs-human`: его
+  изменения в snapshot A не попали, и отказ называет последний `run_id`
+  workstream-а. Единственное исключение — прогон-дверь `evidence
+  close-call`/`evidence purge` из предыдущего And: обе двери не пишут ни
+  task-, ни budget-, ни tdd-состояние, поэтому не в счёт наравне с
+  остальными — иначе у восстановления A из этого же сценария не было бы ни
+  одного достижимого исхода.
 
 #### BEH-10: Один `call_id` — ровно один call-start и не более одного call-result
 `traces: [FR-02, FR-06]`
