@@ -15,7 +15,14 @@
 # чтобы вердикты не расходились по инструменту.
 #
 # Использование: sh scripts/review/local-claude.sh [флаги local.sh]
+#
+# Форсирует харнесс безусловно, а не только когда он не задан: местный
+# REVIEW_CMD-оверрайд (например, унаследованный из старого профиля шелла)
+# обходит резолв харнесса в local.sh целиком (local.sh:52) и молча вернул бы
+# codex — ровно та гарантия, ради которой скрипт написан. `unset` перед
+# экспортом REVIEW_HARNESS/REVIEW_MODEL закрывает и этот путь.
 set -eu
-export REVIEW_HARNESS="${REVIEW_HARNESS:-claude}"
-export REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-5}"
+unset REVIEW_CMD || true
+export REVIEW_HARNESS=claude
+export REVIEW_MODEL=claude-opus-5
 exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/local.sh" "$@"
