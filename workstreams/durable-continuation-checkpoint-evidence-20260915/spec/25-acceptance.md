@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 78670fce6b3a4668a7f3c7c0dda06b17b0ce173f
-  behaviour-spec: 4e298ea33efeb464c3220c71c7249af79f162048
+  requirements: 92422653813943a24d779f0191c65b3c689a1943
+  behaviour-spec: ff0705d9bb3ef9538b7bc941765ec97ebb86d780
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -208,9 +208,9 @@ checkpoint**, — предъявлено как минимум на `review-pr` 
 acknowledged checkpoint-ом, после которого нет ни одного блокирующего
 прогона. Знак берётся исполнением: `restore` напечатанного `run_id` в новый
 пустой `--into` применяет snapshot; его отказ — невыполненный критерий. В
-конфигурации A → B (`plan`, checkpoint) → C (`budget authorize` без closure)
-выход не печатается вовсе, отказ называет `run_id` C; напечатанные здесь B
-или сам восстанавливаемый `run_id` — невыполненный критерий. Более поздний
+конфигурации A → B (`plan`, checkpoint) → C (`review-pr`, checkpoint)
+выходом обязан быть C; напечатанные здесь B или сам восстанавливаемый
+`run_id` — невыполненный критерий. Более поздний
 **холостой** прогон из той же половины отказа не даёт: `run --all`, которому
 нечего делать, и `run --all`, чей старт отказан занятым executor lock-ом
 после run-start, — оба закрылись, оба позже A, checkpoint-ов нет ни у одного,
