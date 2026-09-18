@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 3085b4571df4c0c134cec1872196c57cab4c1cf1
-  acceptance: 82e5701d846551c46b29957c609c22bb3f972a06
+  design: 004ba8022a6883fde567c518120be105a91532ee
+  acceptance: 4af69a968093bcaf850988c45baa42600ea25db1
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -433,17 +433,25 @@ parallel_group: core
 соединение к `state_file`); `mark_running`, `set_meta` и `phase_results` seam
 не вызывают (§3 требований). Строку `checkpoint_outbox` (таблица и
 резервирование `sequence` — DT-03) вставляет **та же транзакция**, что сама
-mutation, у каждого из этих сайтов: `after_mutation` получает уже
-зафиксированное обязательство и лишь исполняет его, ack строку удаляет
-(design §3.1, Q-05). Отсюда — оба сценария этой задачи сверх BEH-13/14.
-BEH-48 (spec-runner#527) наблюдает третью точку drain и outbox на настоящих
+mutation, у каждого сайта, который **является** транзакцией state DB:
+`after_mutation` получает уже зафиксированное обязательство и лишь исполняет
+его, ack строку удаляет (design §3.1, Q-05). Исключение одно и названо в
+дизайне: `bookkeeping.commit_status_flip` — правка `tasks.md` плюс git-коммит
+без соединения к DB, там строка пишется отдельной транзакцией сразу после
+коммита, и окно между ними ничего не теряет (флип идемпотентен по дифу и
+восстанавливается `recover_interrupted_flip`, #192). Отсюда — оба сценария этой задачи сверх BEH-13/14.
+BEH-48 (spec-runner#527) наблюдает третью точку drain и позднюю доставку на
+настоящих
 подкомандах: у `budget authorize` и `tdd release` ack mutation-checkpoint-а
 стоит раньше строки успеха; при отклонённом ack — exit 2, stderr с
-недоставленным `sequence`/`checkpoint_id`, mutation в DB и строка outbox-а
-рядом с ней; после `kill -9` в окне между commit-ом и ack следующий
-invocation в каталоге доставляет checkpoint прежде любой другой работы, с
-тем же `checkpoint_id` и идемпотентно, и после этого шаг 5 restore (DT-06)
-на нём отказывает — то есть правка, терявшаяся в окне, предъявлена, а
+недоставленным `sequence`/`checkpoint_id` и mutation в DB; после `kill -9` в
+окне между commit-ом и ack следующий прогон в каталоге отправляет чужой
+checkpoint раньше своих записей — предъявлено тремя прогонами, каждый
+накрывает своё из трёх событий (`run --all` — раньше `spawn` и раньше взятой
+задачи, второй `budget authorize` — раньше своего нулевого кода, `plan
+--gated` — раньше траты), — с тем же `checkpoint_id` и идемпотентно, и после
+этого шаг 5 restore (DT-06)
+на нём отказывает: правка, терявшаяся в окне, предъявлена, а
 предикат шага 5 не менялся. BEH-47 (spec-runner#525) наблюдает область
 пробы целиком, потому что только здесь собраны все её половины: поля и
 provenance-карта из DT-02, выход `after_mutation` из DT-03, молчание
@@ -489,14 +497,12 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 клоне; ключи на месте при относительном `root` в config-е; два платных
 вызова и под проектом `execution_mode: tdd`; тот же набор при verdict
 `broken`. Для BEH-48 — порядок в общем журнале, exit 2 на отклонённом ack и
-поздняя доставка после `kill -9` — на канонной последовательности
-«`evidence close-call` → `restore`», а не только через `run`, — плюс
-контроль на `run --task`: при пустом
-на старте outbox-е число
-синхронных ожиданий ack равно числу точек drain перед платными вызовами
-плюс одна перед closure (ожидание на каждую mutation — красный тест,
-RK-01), а непустой даёт ровно одно ожидание-ремонт до выбора задачи и только
-один раз на строку. Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
+поздняя доставка после `kill -9` — тремя прогонами на три события, а не
+только через `run` (доставка через дверь `close-call` — знак BEH-11 в
+DT-09), — плюс контроль на `run --task`: в каталоге без недоставленных
+правок число и место обращений к двойнику store те же, что до бандла
+(ожидание на каждую mutation — красный тест, RK-01); цену третьей точки
+drain меряет бенчмарк BEH-41, не этот тест. Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
 test_mutation_checkpoint_ack.py` (оба новые). Не утверждать число
 вызовов `after_mutation` в `state.py`, формат `wip.tar` внутри, нормализацию
 URL за пределами `host/owner/repo`, имена полей области пробы
@@ -760,7 +766,11 @@ mutation, а первое за процесс `after_mutation` доставля�
 строки, оставалась бы незамеченной, хотя оператор в каталоге как раз
 работал. Ни один путь не
 создаёт второй call-start для того же attempt. Дверь — `spec-runner evidence
-close-call <run_id> --call <call_id> --reason …` по образцу `remedy.cmd_tdd`:
+close-call <run_id> --call <call_id> --reason …` по образцу `remedy.cmd_tdd`,
+и закрывает она строку ledger-а **того семейства**, которому принадлежит
+вызов (`agent_calls` / `pr_agent_calls` / `plan_agent_calls`, design §2.3;
+семейство известно из call-start — открытый вызов планирования дверь
+закрывает так же, как вызов задачи):
 обязательный `--reason`, записанный actor, `SPEC_RUNNER_AGENT` guardrail,
 отказ под PID-checked lock; идемпотентность — по наличию `result.json` в
 store, проверенному **до** записи; пишет
