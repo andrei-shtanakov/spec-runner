@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 0bb6256e674e356025a8fc80a1afa9890c2228d7
-  acceptance: 3749740e5bf5cab87f859fcc933ece0aecc229df
+  design: bf79743617b3f07e8ae8912187efef1e36532a78
+  acceptance: 96dd510eace0b26ff4a9d20a5068c48a50053806
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -168,11 +168,15 @@ autouse-guard `_no_real_agent_calls` переключается на **одно*
 `PaidCall`; тип отказа — **от `BaseException`** (design Q-06,
 пункт (4) цены): `RealAgentCallRefused` не годится, это `AssertionError`
 (`execution.py:504`), и `except Exception` у `run_code_review`
-(`review.py:776`) и интерактивного `plan` (`cli_plan.py:892`) проглотили бы
-его — verdict `error` и exit 0 вместо красноты. Пояс
-`_belt_never_executes_a_paid_binary` не трогается и страховкой здесь не
-работает: процесс в этом отказе не создаётся. Тест пинует свойство **вне**
-`execute_task`. `call_id` чеканит **сайт** — до `log_prompt` и
+(`review.py:776`), интерактивного `plan` (`cli_plan.py:892`) и post-PR
+стадии, зовущей `review-pr` (`cli.py:440`), проглотили бы его — verdict
+`error` и exit 0 вместо красноты. Тем же коммитом: `RealAgentCallRefused` и
+ветка `except RealAgentCallRefused: raise` удаляются (поднимать их больше
+некому), а `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py:79`, чей
+`pytest.raises(AssertionError)` ключуется на старом типе, переписывается на
+новый. Пояс `_belt_never_executes_a_paid_binary` не трогается и страховкой
+здесь не работает: процесс в этом отказе не создаётся. Тест пинует свойство
+**вне** `execute_task`. `call_id` чеканит **сайт** — до `log_prompt` и
 до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
 проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
 что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
@@ -455,17 +459,20 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
 прогона, `call_id`, provenance и `task_id`; более поздний прогон,
-**оставивший изменения, которых snapshot не несёт** (`run`/`retry`/`watch`,
+****добавивший в namespace то, чего snapshot не несёт** (`run`/`retry`/`watch`,
 `budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
-`pr_*` continuation-relevant по § 3 требований, — `plan`, дописывающий задачи
-в `tasks.md`, и `doctor`, чья проба гоняет `execute_task` с его
-`record_attempt`), — тоже `needs-human`, с именем последнего `run_id`
-workstream-а как выходом; прогон, ничего такого не оставивший (`evidence
-close-call`/`purge` — их шаг close пишет `agent_calls`, которой в перечне
-§ 3 требований нет, — и сам `restore`, чей run-start диспетчер кладёт в
-индекс до этой проверки), на этом шаге не в счёт. Ключ критерия — свойство
-по перечню § 3 требований, не перечень имён и не факт checkpoint-а (design
-§ 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
+раунд пишет `pr_review_comments` из перечня § 3 требований — и `plan`,
+дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем последнего
+`run_id` workstream-а как выходом; прогон, ничего не добавивший, на этом
+шаге не в счёт: `evidence close-call` (её запись — шаг close уже
+существующего вызова, в какой бы ledger-таблице тот ни жил — `agent_calls`
+или `pr_agent_calls`; `pr_review_comments` дверь не пишет), `evidence purge`
+(удаляет объекты store, open call не закрывает — design § 2.5), `doctor`
+(проба пишет в scratch-DB под временным корнем, `doctor.py:290-295`, которая
+удаляется вместе с каталогом; § 6.3 design: «attempt-ов нет») и сам
+`restore`, чей run-start диспетчер кладёт в индекс до этой проверки. Ключ
+критерия — свойство, не перечень имён и не факт checkpoint-а (design § 7.2
+шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой
