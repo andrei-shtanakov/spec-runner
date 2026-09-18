@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: df771cbb9c685f08548ac0d7acf5b0611e8b9e96
-  behaviour-spec: b54b5f6c74e824ef62008b95358917add0efc1de
+  requirements: f28f31152d727aae93884a6aaf432bcdd76aaa18
+  behaviour-spec: b09b19a4f84d0cd4d444da6d0ce17808ae1ef9d0
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
