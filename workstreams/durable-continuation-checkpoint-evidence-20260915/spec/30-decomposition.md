@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 86e04c5e82ca2fdd75e2214f92d90287ad178188
-  acceptance: e020ed1d3da429e956a5e2678bc08c0173b23df4
+  design: 561fdb94715c138cae8bdebe9dd98f14181b7eb2
+  acceptance: 90c6ee68aadf3f050a38344ac7e3f6c7325d9e4c
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -468,9 +468,14 @@ design § 7.2 шаг 5). Блокируют `run`/`retry`/`watch`, `plan`, `revi
 блокируют `evidence close-call`, `evidence purge`, `doctor`, `restore`
 (причина у каждого своя — там же). Обе половины объявляются рядом с
 `PAYING_SUBCOMMANDS` в `run_context.py` (DT-02), и полнота держится тестом
-`set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING` при пустом пересечении:
-приёмка теста — подсадка неклассифицированной подкоманды, на которой он
-обязан покраснеть. Недоступный store или индекс — instrument, exit 2; недоступный store или индекс — instrument, exit 2. `--json` несёт
+`set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING` при пустом пересечении
+(предмет BEH-20, последние And; файл — `tests/test_restore_refusals.py`
+этой задачи). Половины объявляются над тем, что лежит в
+`PAYING_SUBCOMMANDS` на момент этой задачи; растящие множество DT-09 и DT-12
+дописывают свою подкоманду в `NON_BLOCKING` той же строкой, поэтому
+равенство держится на каждой границе, а не только в конце.
+Приёмка самого теста — подсадка неклассифицированной подкоманды, на которой
+он обязан покраснеть. Недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой
@@ -619,7 +624,12 @@ store, проверенному **до** записи; пишет
 решает, повторять ли его. Платящей подкомандой при этом является по второй
 половине критерия FR-01 — она меняет continuation-state: `evidence
 close-call` входит в `PAYING_SUBCOMMANDS` (DT-02 заводит множество, эта
-задача добавляет в него строку) и пишет свою пару run-start + closure. Kind
+задача добавляет в него строку) и пишет свою пару run-start + closure. Той
+же строкой она относит подкоманду к `NON_BLOCKING` шага 5 § 7.2 (дверь
+восстановлению не мешает — design там же): множество и половины растут
+одним изменением, иначе тест полноты
+`set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING`, доставленный DT-06,
+краснеет на границе этой задачи. Kind
 выводит диспетчер по коду выхода (design § 6.3): `completed` на закрытии и
 на идемпотентном повторе (код 0), `failed` под guardrail-ом или занятым
 lock-ом (код 1) и при недоступном store (код 2). Своих сайтов closure у
@@ -778,7 +788,10 @@ guardrail — по образцу `close-call` DT-09) считает по тем
 локальную копию, и audit-записи не пишет; `AuditLogger`, когда включён,
 получает копию записи. `evidence purge` — платящая подкоманда по критерию
 FR-01 (меняет continuation-state, удаляя опубликованные объекты): эта задача
-добавляет её в `PAYING_SUBCOMMANDS`, а kind её closure выводит диспетчер по
+добавляет её в `PAYING_SUBCOMMANDS` и той же строкой — в `NON_BLOCKING`
+шага 5 § 7.2 (open call он не закрывает, а `deletions/<ts>.json` — аудит
+собственного удаления; множество и половины растут одним изменением, иначе
+тест полноты из DT-06 краснеет на границе задачи), а kind её closure выводит диспетчер по
 коду выхода (design § 6.3) — `completed` при коде 0 (истёкших объектов нет;
 удалено и записано), `failed` при коде 1 (store отказал в `delete`) и коде 2
 (store недоступен). Своих сайтов closure у команды нет, словаря причин она не
