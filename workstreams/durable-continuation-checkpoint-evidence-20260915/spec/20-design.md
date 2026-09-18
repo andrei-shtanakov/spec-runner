@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 0dd4f069dfe5c060bd060f457dea76ff1b656716
-  behaviour-spec: 356f42762c242ee643b305e3facd32d2497b4664
+  requirements: 3c5853947d51bb29e519b975d2fe850406e7f6a3
+  behaviour-spec: 5c8bc4fd5776f2705b46a0df6bf070fdf0615bcd
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
