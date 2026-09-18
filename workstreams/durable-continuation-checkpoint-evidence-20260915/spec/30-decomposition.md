@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 46b04ca440aa9ed7ed000d1743c0a11b8f1ba72b
-  acceptance: 3d4bc3c241d56821b7aef143b3b8cf12810a15eb
+  design: 869aabdcc05028baf6dd2be0b50161f2679b09f4
+  acceptance: 6119c348d93b9eded0610bba1f39acac98f55390
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -19,8 +19,10 @@ acceptance (`25-acceptance.md`); их ревизии пинованы в frontma
 `upstream_hashes` этого узла. Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
-(локальный snapshot синхронно, один упорядоченный publisher, drain перед
-call-start и перед closure, manifest последним), Q-06 (seam в `paid_call.py`,
+(локальный snapshot синхронно, один упорядоченный publisher, **три** точки
+drain — перед call-start, перед closure и сразу после mutation у подкоманд
+без платного вызова, — обязательство опубликовать в транзакции самой
+mutation (pending-outbox), manifest последним), Q-06 (seam в `paid_call.py`,
 `_spawn` — единственный spawn провайдера), Q-07 (состав `PolicyIdentity`), Q-08
 (движок redaction), Q-11 (retention считает spec-runner, удаляет адаптер,
 audit-запись в store), Q-12 (open calls на старте `run` — из `open`-строк DB с
@@ -548,11 +550,16 @@ bare-репо в тесте), `wip.apply` — `git bundle verify` → `git fetch
 проверкой per-file SHA-256 → `git stash store -m <label> <sha>`; ref,
 объявленный опубликованным, которого forge не отдаёт → `needs-human` с именем
 и SHA до распаковки, реконструкции нет (OUT-09); `state.db` из snapshot-а на
-место `config.state_file` **и сразу правка одного ключа meta в нём** —
-`continuation_index` = `restored` (`set_meta`, не `record_*`, так что
-`after_mutation` не вызывается): без неё восстановленный snapshot нёс бы
-`last_run_id` и первый `run` после restore пошёл бы по ветке (1) Q-12, мимо
-индекса; replay spool; lock/stop/ready/worktrees просто не создаются. Namespace по Q-09: config не объявляет `tdd_namespace` →
+место `config.state_file` **и сразу две правки в нём** (обе — не `record_*`,
+так что `after_mutation` не вызывается): (1) таблица `checkpoint_outbox`
+очищается — snapshot снимается раньше ack своего же checkpoint-а и потому
+несёт незакрытую строку, а локальных копий checkpoint-ов в новом каталоге
+нет по построению, так что без очистки первый же `run` отказал бы
+`instrument`/exit 2, требуя доставить отсутствующие байты (восстанавливаемся
+из **acknowledged** checkpoint-а — всё, на что строки указывают, доставлено);
+(2) ключ meta `continuation_index` = `restored`: без неё восстановленный
+snapshot нёс бы `last_run_id` и первый `run` после restore пошёл бы по
+ветке (1) Q-12, мимо индекса; replay spool; lock/stop/ready/worktrees просто не создаются. Namespace по Q-09: config не объявляет `tdd_namespace` →
 `tdd_namespace: <value>` дописывается shape-preserving merge-ом по образцу
 `preset_cmd.apply_to_config --apply` с `.bak`, diff печатается, файл виден в
 `git status`. Следующий шаг — из DB: open call → `needs-human` (уже отказано
@@ -646,7 +653,9 @@ test_restore_drill.py` (новый), `tests/test_restore_refusals.py` (новы�
 BEH-19 — `tdd status` с тем же blob SHA и RED checkpoint, `costs` с
 authorization, `budget.effective_limits` с поднятым потолком, следующий `run`
 начинает с GREEN; BEH-17 — `git worktree list` только основной, `status` не
-видит stale lock чужого PID. Не утверждать точный текст отказов сверх
+видит stale lock чужого PID, а `run --task` в восстановленном каталоге
+доходит до call-start вместо отказа `instrument` (унаследованный
+outbox очищен). Не утверждать точный текст отказов сверх
 обязательного (оба root commit, ключ и оба значения policy, оба namespace и
 источники, имя ref и SHA), формат `wip.tar`, wall-clock p95/p99 внутри
 CI-теста, что 1 GiB drill выполнен (ручной, отчёт в условии завершения M-01).

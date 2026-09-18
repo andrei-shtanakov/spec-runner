@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: f28f31152d727aae93884a6aaf432bcdd76aaa18
-  behaviour-spec: b09b19a4f84d0cd4d444da6d0ce17808ae1ef9d0
+  behaviour-spec: 70f54941e27e8e8e0e4782963e4f659ee0ab392b
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -111,7 +111,8 @@ acknowledged call-start-ов; call-start несёт `run_id`, `call_id`, provena
 `plan:<stage>`, `plan:interactive`, `review-pr:verify`, `review-pr:fix`,
 `doctor:execute`, `doctor:review`), policy
 identity, digest redacted prompt-а, timestamp и для task-сайтов
-`task_id`/номер attempt; значение словаря, которого не производит ни один
+`task_id`/номер attempt — **кроме** двух сайтов эфемерной пробы, чьи записи
+задачи не несут (AC-45); значение словаря, которого не производит ни один
 сайт журнала, — невыполненный критерий; тот же `call_id` стоит рядом с
 `provenance` в строке ledger-а своего семейства (`agent_calls` — сайты
 задачи, `pr_agent_calls` — `review-pr`, `plan_agent_calls` — планирование;
@@ -390,7 +391,11 @@ scenarios: [BEH-17]
 `.executor-progress.txt` и worktree `spec-runner-red-*`; `git worktree list`
 показывает только основной; `spec-runner status` не сообщает о stale lock
 чужого PID, следующий `run` создаёт lock живым процессом; virtualenv и tool
-caches не восстановлены и не числятся в manifest обязательными.
+caches не восстановлены и не числятся в manifest обязательными. Следующий
+`run --task` в восстановленном каталоге доходит до своей работы (двойник
+store получает его call-start), а не отказывает exit 2 с недоставленным
+`sequence`: унаследованное из snapshot-а обязательство опубликовать
+checkpoint, байтов которого в новом каталоге нет, критерий не выполняет.
 
 #### AC-16: Пустой WIP — явная запись; недостижимый published ref — `needs-human` с именем ref и SHA · verification: test
 traces: [FR-04]
