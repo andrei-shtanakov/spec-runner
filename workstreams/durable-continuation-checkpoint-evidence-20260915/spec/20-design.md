@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: 095556d72300152bd24f64da8d1608f1ece08b10
-  behaviour-spec: c83a8616c8440b1f2b56c5592326578673480852
+  behaviour-spec: 3361c500e179ae93eb99292843074ec8b386e7df
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -716,7 +716,7 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 
 **2.7 Область пробы `doctor`.** `doctor` — единственная подкоманда, чей
 платный вызов исполняется не в проекте, а в эфемерном scratch-проекте
-(`doctor.build_scratch`, `doctor.py:271-317`), который она сама и удаляет
+(`doctor.build_scratch`, `doctor.py:271-318`), который она сама и удаляет
 (`:408`). Поэтому у неё две области, и они разделены явно; «как у сайта, без
 правок» было неверно, потому что сайт публикует под identity вызывающего то,
 что живёт только внутри scratch.

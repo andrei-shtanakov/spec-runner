@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 7fd75d7ab4be2a7cfb829c601aaa3b686190e893
-  acceptance: cf5946ad01fdbbc75c64b730e617716bba6c9b9b
+  design: 8f0a84fe5e1c1e476fa95ec55ae060af8808e1a5
+  acceptance: 6d4efa08cade4b69682c34ece60a8b45fe56b83d
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
