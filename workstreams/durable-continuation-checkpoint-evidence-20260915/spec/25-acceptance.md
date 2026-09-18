@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 3c5853947d51bb29e519b975d2fe850406e7f6a3
-  behaviour-spec: 5c8bc4fd5776f2705b46a0df6bf070fdf0615bcd
+  requirements: 3988bb155aa000b21abf06092be1fb61c95705e9
+  behaviour-spec: 0aa6f4b1cb7cc257501fc7180ead6733db64a36e
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -370,8 +370,12 @@ mutation и ack недоставленный checkpoint доезжает: сле
 (`run --all`, второй `budget authorize`, `plan --gated`), и отдельно на
 канонной последовательности FR-05 «`evidence close-call` → `restore`»
 (AC-08); read-only команды (`status`, `costs`, `validate`, `report`,
-`evidence <run_id>`) не доставляют ничего (иначе ложным становится
-AC-03/AC-11) и не мешают доставке следующим прогоном. После доставки
+`evidence <run_id>`) не доставляют ничего, потому что канала публикации не
+открывают (иначе ложным становится AC-03/AC-11), и не мешают доставке
+следующим прогоном; недоставка **чужой** правки при этом ни одну команду
+неуспешной не делает — exit 2 требуется за свой недоставленный checkpoint,
+и прогон с чужой недоехавшей строкой, завершившийся своим исходом,
+критерий выполняет. После доставки
 `restore` более раннего прогона того же workstream-а отказывает
 `needs-human` шагом 5 — то есть правка,
 терявшаяся в окне, предъявлена, а предикат шага 5 не менялся (AC-08 в полном
@@ -406,11 +410,15 @@ scenarios: [BEH-17]
 `.executor-progress.txt` и worktree `spec-runner-red-*`; `git worktree list`
 показывает только основной; `spec-runner status` не сообщает о stale lock
 чужого PID, следующий `run` создаёт lock живым процессом; virtualenv и tool
-caches не восстановлены и не числятся в manifest обязательными. Следующий
-`run --task` в восстановленном каталоге доходит до своей работы (двойник
-store получает его call-start), а не отказывает exit 2 с недоставленным
-`sequence`: унаследованное из snapshot-а обязательство опубликовать
-checkpoint, байтов которого в новом каталоге нет, критерий не выполняет.
+caches не восстановлены и не числятся в manifest обязательными. После
+restore и первого `run --task` в восстановленном каталоге под `run_id`
+восстановленного прогона нет ни одного нового ключа checkpoint, а сам
+прогон доходит до своей работы (двойник store получает его call-start):
+унаследованное из snapshot-а обязательство опубликовать checkpoint, байтов
+для которого в новом каталоге нет, не должно превратиться в пересъёмку,
+назвавшую чужой `sequence` (иначе `restore` того же прогона становится
+невозможен из-за уже выполненного восстановления). Знак «прогон не
+отказал» критерий не выполняет — он истинен и без очистки.
 
 #### AC-16: Пустой WIP — явная запись; недостижимый published ref — `needs-human` с именем ref и SHA · verification: test
 traces: [FR-04]

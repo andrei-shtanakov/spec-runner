@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 3e328aa84ea81e97492a019d3044e3204d577dc7
-  acceptance: 8d9a830603fd336439f76f3a8fed26d82bcff02a
+  design: 3fcfed7d97f90032043f7ea3becd3a6414f460c5
+  acceptance: db9fd2f15d69bd2ffb41ecf2505a98b9e3f036c1
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -666,9 +666,10 @@ test_restore_drill.py` (новый), `tests/test_restore_refusals.py` (новы�
 BEH-19 — `tdd status` с тем же blob SHA и RED checkpoint, `costs` с
 authorization, `budget.effective_limits` с поднятым потолком, следующий `run`
 начинает с GREEN; BEH-17 — `git worktree list` только основной, `status` не
-видит stale lock чужого PID, а `run --task` в восстановленном каталоге
-доходит до call-start вместо отказа `instrument` (унаследованный
-outbox очищен). Не утверждать точный текст отказов сверх
+видит stale lock чужого PID, а после restore и первого `run --task` под
+`run_id` восстановленного прогона нет ни одного нового ключа checkpoint
+(унаследованные обязательства очищены; «прогон не отказал» знаком не
+считается — он истинен и без очистки, design §7.3). Не утверждать точный текст отказов сверх
 обязательного (оба root commit, ключ и оба значения policy, оба namespace и
 источники, имя ref и SHA), формат `wip.tar`, wall-clock p95/p99 внутри
 CI-теста, что 1 GiB drill выполнен (ручной, отчёт в условии завершения M-01).
