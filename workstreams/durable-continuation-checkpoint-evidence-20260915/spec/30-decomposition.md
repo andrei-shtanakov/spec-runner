@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: bf79743617b3f07e8ae8912187efef1e36532a78
-  acceptance: 96dd510eace0b26ff4a9d20a5068c48a50053806
+  design: 72f00a3445ccd79ca55d867167307c950541b05b
+  acceptance: 863a41f5d954982a238ad41465307ddbfdbc1026
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -459,7 +459,7 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
 прогона, `call_id`, provenance и `task_id`; более поздний прогон,
-****добавивший в namespace то, чего snapshot не несёт** (`run`/`retry`/`watch`,
+**добавивший в namespace то, чего snapshot не несёт** (`run`/`retry`/`watch`,
 `budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
 раунд пишет `pr_review_comments` из перечня § 3 требований — и `plan`,
 дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем последнего
