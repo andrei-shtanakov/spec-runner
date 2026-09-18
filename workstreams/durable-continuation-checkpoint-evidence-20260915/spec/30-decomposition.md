@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: b718278fe0ce22613fbf631a9597afaa766327ec
-  acceptance: 969eeb2ee2e9e8393784225bc708b0a504dc2c33
+  design: 0bb6256e674e356025a8fc80a1afa9890c2228d7
+  acceptance: 3749740e5bf5cab87f859fcc933ece0aecc229df
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -199,18 +199,7 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` для
 первых двух и `plan:interactive` для третьего, `task_id=None`; `costs` —
 строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
-`doctor` — через `execute_task` без правки сайта, но с двумя оговорками про
-запись, потому что проба исполняет чужой путь в чужом каталоге при
-унаследованном durability-конфиге (`doctor.py:282-295`, `copy.deepcopy`):
-provenance `doctor` (иначе значение словаря требований не производится
-никем), `task_id=None` (`TASK-001` пробы — не задача проекта; иначе ветка (2)
-Q-12 восстановит `open`-строку на одноимённую реальную задачу) и абсолютный
-`durability.store.options.root` из § 1.1 (иначе он резолвится внутри
-scratch-каталога — `os.chdir` `doctor.py:338` — и уезжает в `rmtree`, оставив
-платный вызов без durable-записи). Все три — design § 2.4 и § 1.1. Сюда же
-неаддитивная часть миграции § 2.3: `task_id` в `agent_calls`/`pr_agent_calls`
-перестаёт быть `NOT NULL` (перестройка таблицы, не `ADD COLUMN`), иначе
-строка сайта без задачи не вставляется вовсе. Третий сайт назван здесь
+`doctor` — через `execute_task` без правок. Третий сайт назван здесь
 поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
 флагов и, оставшись непереведённым, дал бы платный вызов без call-start в
 обход FR-02.
@@ -468,14 +457,15 @@ call-result где угодно в workstream-е — `needs-human` с `run_id` �
 прогона, `call_id`, provenance и `task_id`; более поздний прогон,
 **оставивший изменения, которых snapshot не несёт** (`run`/`retry`/`watch`,
 `budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
-`pr_*` continuation-relevant по § 3 требований и checkpoint-ится по § 3.1, —
-и `plan`, дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем
-последнего `run_id` workstream-а как выходом; прогон, ничего такого не
-оставивший (`evidence close-call`/`purge`, `doctor`, чьи строки живут в
-удаляемой scratch-DB, и сам `restore`, чей run-start диспетчер кладёт в
-индекс до этой проверки), на этом шаге не в счёт — ключ критерия свойство, а
-спорная подкоманда разбирается по § 3 требований и § 3.1, не по интуиции про
-имя (design § 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
+`pr_*` continuation-relevant по § 3 требований, — `plan`, дописывающий задачи
+в `tasks.md`, и `doctor`, чья проба гоняет `execute_task` с его
+`record_attempt`), — тоже `needs-human`, с именем последнего `run_id`
+workstream-а как выходом; прогон, ничего такого не оставивший (`evidence
+close-call`/`purge` — их шаг close пишет `agent_calls`, которой в перечне
+§ 3 требований нет, — и сам `restore`, чей run-start диспетчер кладёт в
+индекс до этой проверки), на этом шаге не в счёт. Ключ критерия — свойство
+по перечню § 3 требований, не перечень имён и не факт checkpoint-а (design
+§ 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой

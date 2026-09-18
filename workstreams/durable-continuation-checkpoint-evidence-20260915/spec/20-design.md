@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: 55a2d94c897f8d1cad43eba7bc7193cd920bc682
+  behaviour-spec: 0023349e5db82a0d7a3a739a7ed01e765d08bf37
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -412,13 +412,7 @@ options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`,
 `KNOWN_EXECUTOR_KEYS`), и **на загрузке** отказывает `ConfigError`, если
 адаптер объявил `tls: false`, не объявил `encryption_at_rest` или
 `immutable_put` (BEH-28), или `retention_days` вне 7–365 (BEH-42);
-`validate.py` повторяет те же проверки в своём отчёте. Путеподобные
-`options` (у управляемого тома — `root`) загрузчик резолвит **в абсолютные**
-относительно `project_root` прямо там же: store, найденный по относительному
-пути, менял бы адрес вместе с текущим каталогом процесса, а такой процесс в
-дереве есть — проба `doctor` делает `os.chdir` в свой временный каталог
-(`doctor.py:336-338`) и удаляет его (`:408`), унеся туда же call-start
-платного вызова (§ 2.4).
+`validate.py` повторяет те же проверки в своём отчёте.
 
 **1.2 Первый адаптер — управляемый том** (рабочее допущение Q-01):
 `LocalVolumeStore(root)`. `put` = запись во временный файл рядом,
@@ -541,15 +535,7 @@ Budget guard (#213) и `log_prompt` (#282) остаются **на сайтах,
 NULL`, `status TEXT NULL` (`open` / `closed` / `not_started`), `started_at
 TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
 Миграция — `ALTER TABLE … ADD COLUMN` в `_migrate` по образцу #218 stage 2;
-старые строки `NULL` (BEH-03). Одна правка здесь **не** аддитивна и потому
-названа отдельно: `task_id` в `agent_calls`/`pr_agent_calls` сегодня
-`TEXT NOT NULL` (`state.py:485-497`), а сайты без задачи — планирование
-(`task_id=None`, § 2.4) и проба `doctor` — обязаны писать строку с `NULL`, и
-на неё же опирается ветка (2) процедуры, восстанавливающая `open`-строку из
-call-start. `ADD COLUMN` ограничение не снимает; нужна перестройка таблицы
-(`CREATE … AS SELECT` + `DROP`/`RENAME` в той же транзакции `_migrate`), тем
-же minor bump. Без неё шаг 3 § 2.2 упирается в integrity error, а по своему
-же правилу «оба отказали → instrument» не делает вызов вовсе. `docs/state-schema.md` и
+старые строки `NULL` (BEH-03). `docs/state-schema.md` и
 `schemas/executor-state.schema.json` — minor bump. `--json-result`
 (`build_task_json_result`) и `status --json` — аддитивные `run_id`,
 `pipeline_id` (BEH-03, BEH-38); golden-фикстуры `tests/fixtures/maestro-interop/`
@@ -567,38 +553,7 @@ call-start. `ADD COLUMN` ограничение не снимает; нужна 
 | `plan --gated` (каждая стадия) | `cli_plan._generate_stage_draft`, `cli_plan.py:170` | `plan:<stage>` | `build_cli_command` → `build_cli_invocation` (+`parse_cli_result` — planning впервые получает стоимость), `task_id=None`; параметр `invoke=subprocess.run` (`:94`) снимается — подмена делается двойником `_spawn`, как у остальных сайтов |
 | `plan --full` (каждая стадия) | `cli_plan.py:660` | `plan:<stage>` | то же; `costs` — строка «planning» по образцу `pr_cost_rows` (BEH-24) |
 | `plan "<описание>"` (интерактивный цикл, каждый круг) | `cli_plan.cmd_plan`, `cli_plan.py:797` | `plan:interactive` | то же; `cmd = [claude_command, "-p", prompt]` (`:791`) заменяется на `build_cli_invocation`; каждый круг цикла — свой `call_id` и своя пара call-start/call-result |
-| `doctor` | через `execute_task` | `doctor` | сайт не правится, но проба — чужой каталог: `provenance='doctor'`, `task_id=None`, абсолютный store-root (ниже); run-start/closure — § 6 |
-
-`doctor` — единственный сайт, который исполняет чужой путь в чужом каталоге, и
-потому единственный с оговоркой. `build_scratch` (`doctor.py:282-295`) делает
-временный `project_root` со своим `state_file`, прогоняет канонную задачу
-`TASK-001` пробы (`doctor.py:255-263`) через `execute_task` (`:341`) и удаляет
-каталог (`:408`); при этом `copy.deepcopy(base)` оставляет пробе
-durability-конфиг вызывающего, а ключи § 1.3 адресуются `run_id`-ом. Значит
-call-start и call-result пробы ложатся в store вызывающего под тем `run_id`,
-чью индексную строку диспетчер уже написал (§ 6.2), тогда как attempts,
-checkpoint и строка `agent_calls` остаются в удаляемой scratch-DB. «Store
-вызывающего» здесь — требование, а не наблюдение: `run_probe` делает
-`os.chdir` в scratch-root (`doctor.py:336-338`), а `build_scratch`
-переуказывает только `state_file`/`logs_dir`/`plugins_dir`, так что
-относительный `durability.store.options.root` разрешился бы **внутри**
-scratch-каталога и уехал бы вместе с ним в `shutil.rmtree` (`:408`) — платный
-вызов без единой durable-записи, ровно та дыра FR-02/FR-06, которую бандл
-закрывает. Отсюда три требования к этому сайту, все — про запись, не про
-исполнение: call-start несёт provenance `doctor` (значение словаря требований,
-`10-requirements.md:115-119`: при «как у сайта» оно не производится ни одним
-сайтом вовсе) и `task_id = None` (`TASK-001` пробы — идентификатор канонной
-задачи doctor-а, а не задачи проекта). Третье живёт не здесь, а в § 1.1, где
-ему место: загрузчик резолвит путеподобные `options` store-а в абсолютные, и
-только поэтому deepcopy продолжает указывать на store вызывающего, а не на
-каталог, которого через секунду не будет. Без второго ветка (2) процедуры
-Q-12, листая индекс workstream-а после `reset`, в свежем клоне или после
-restore, восстановила бы `open`-строку на **одноимённую реальную** `TASK-001`
-проекта и заблокировала бы её до аудируемой двери — задача, которой платный
-вызов никогда не касался. Сам open call упавшего `doctor` при этом не исчезает
-и предъявляется как любой другой (provenance `doctor`, `task_id` пуст):
-платный вызов действительно был начат и не закрыт, снимается он той же дверью
-§ 2.5.
+| `doctor` | через `execute_task` | как у сайта | без правок; run-start/closure — § 6 |
 
 Старт `run`/`retry`/`watch` (после run-start § 6.2 и гардов старта, до
 выбора задачи — эта граница одна для всех трёх, и executor lock её не задаёт:
@@ -662,7 +617,7 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 | `run --force` | то же, что `run` | процедура стоит вне lock-а: `--force` отключает lock, а не её |
 | первый `run`/`retry`/`watch` после `restore` | выбирать ли задачу | восстановленная DB несёт `continuation_index: restored` (§ 7.3) ⇒ ветка (2) Q-12: `list` индекса workstream-а, а не `open`-строки snapshot-а |
 | `run` после `reset` / удаления файла DB / в свежем клоне / на новой машине | то же | маркера нет ⇒ ветка (2) Q-12 |
-| `restore <run_id>` | применять ли snapshot | проверка (6) § 7.2 читает индекс workstream-а: любой прогон того же `workstream_key` с call-start без call-result и любой прогон, начатый позже восстанавливаемого, — отказ `needs-human` |
+| `restore <run_id>` | применять ли snapshot | проверка (6) § 7.2 читает индекс workstream-а: любой прогон того же `workstream_key` с call-start без call-result — отказ `needs-human`; более поздний прогон — по шагу 5 § 7.2 (свойство «оставил изменения, которых snapshot не несёт»), не пересказывается здесь |
 | `evidence close-call` | закрывает open call | единственная аудируемая дверь (§ 2.5); истина — call-result в store, строка DB лишь следствие; своя пара run-start + closure |
 | `evidence purge` | удаляет объекты store | open call не закрывает по построению: удаляются только истёкшие checkpoint-ы с acknowledged преемником (Q-11), call records и run-start живут до своего retention; своя пара run-start + closure и запись `deletions/<ts>.json` |
 | `evidence <run_id>` | ничего не решает | read-only: показывает open calls своего `run_id` и не читает индекс (§ 1.3) |
@@ -1087,9 +1042,11 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    `tdd abandon|release|resume` живут под собственными `run_id` и в
    snapshot A не попали), и продолжать с него значило бы потерять их молча.
    Критерий — **свойство прогона, а не его имя**. Блокирует прогон,
-   оставивший под своим `run_id` либо continuation-relevant mutation по § 3
-   требований (эквивалентно: вызов `after_mutation` по § 3.1), либо
-   материал, которого восстановленный каталог не несёт. Под первое подходят
+   оставивший под своим `run_id` либо continuation-relevant mutation в
+   смысле § 3 требований (именно тот перечень таблиц; строка `agent_calls`
+   в него не входит, поэтому шаг close и закрытие call-строки сюда не
+   попадают, хотя checkpoint публикуют), либо материал, которого
+   восстановленный каталог не несёт. Под первое подходят
    `run`/`retry`/`watch`, `budget authorize`, `tdd abandon|repair|resume|
    release` и — это важно, потому что имя обманчиво, — `review-pr`: `pr_*`
    названы continuation-relevant прямо в § 3 требований, а `ReviewPrState`
@@ -1097,19 +1054,24 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    так что snapshot старше его раунда потерял бы `pr_review_comments` и
    заставил бы следующий `review-pr` переплатить за те же комментарии. Под
    второе — `plan`: он дописывает задачи в `tasks.md` (`cli_plan.py:878`)
-   вне всякого checkpoint-а. Не в счёт на этом шаге прогон, не оставивший ни
-   того, ни другого: `evidence close-call` и `evidence purge` (§ 2.5, § 6.2 —
-   `close-call` лишь возвращает задачу в выбираемые, `purge` лишь удаляет
-   объекты store), `doctor` (строки пробы живут в удаляемой scratch-DB,
-   § 2.4 — в namespace вызывающего проба continuation-state не пишет) и
+   вне всякого checkpoint-а. Туда же **`doctor`**, и это решение
+   fail-closed, а не вывод: его проба гоняет `execute_task`, чьи
+   `record_attempt` пишут таблицу из перечня § 3, и до тех пор, пока не
+   решено, в чьей DB эта строка оседает (проба работает в удаляемом
+   scratch-каталоге при унаследованном durability-конфиге — вопрос открыт),
+   проверка ошибается в безопасную сторону и отказывает.
+   Не в счёт на этом шаге прогон, не оставивший ни того, ни другого:
+   `evidence close-call` и `evidence purge` (§ 2.5, § 6.2 — `close-call`
+   лишь возвращает задачу в выбираемые и закрывает call-строку, `purge` лишь
+   удаляет объекты store; ни одна таблица § 3 требований ими не пишется) и
    **сам `restore`**: он входит в `PAYING_SUBCOMMANDS` (§ 6.2), поэтому
    диспетчер кладёт его run-start и индексную строку **до** вызова handler-а
    и до этой проверки, и правило, ключующееся на «любой более поздний
    прогон», отказывало бы первому же `restore` от его собственной записи.
    Перечень здесь — разбор по критерию, а не сам критерий: подкоманда,
    попавшая в `PAYING_SUBCOMMANDS` позже, ложится в ту или другую сторону по
-   тому же свойству, без правки этого списка, а спорная — по § 3 требований
-   и § 3.1, а не по интуиции про её имя (BEH-09, последние And). Без этого вывода у FR-05 не остаётся ни одного достижимого пути:
+   тому же свойству, без правки этого списка, а спорная — по перечню § 3
+   требований, а не по интуиции про её имя (BEH-09, последние And). Без этого вывода у FR-05 не остаётся ни одного достижимого пути:
    и аудируемая дверь, закрывающая open call ради восстановления, и само
    восстановление становились бы более поздним прогоном, который это
    восстановление тут же блокирует. Выход оператора назван в самом отказе: восстановить
