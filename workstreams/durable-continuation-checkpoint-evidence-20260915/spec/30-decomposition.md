@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 6b98148d23f0862754ee7aa4620066f809b5ff08
-  acceptance: 4e6dd73c459d1f7029f64aebfb1378e91b62e4de
+  design: fe8d4d44cbb579a423ecb0cfaf0afded2498e407
+  acceptance: 1da2d944102bccf7f5bc225cd029327da348b85d
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -219,7 +219,9 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 spec-runner#525): `doctor.build_scratch` объявляет область пробы на своём
 scratch-конфиге — одно поле `probe_provenance: "doctor"` (его наличие и
 есть объявление «это проба», оно же даёт префикс), пин
-`execution_mode = "standard"`, обнуление `review_parallel`/`review_roles`, —
+`execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` и
+`audit_log_path` (design §6.5: с абсолютным путём проба писала бы
+audit-строки в срез вызывающего), —
 а seam отображает provenance сайта по закрытой карте
 `{green: "<probe>:execute", review: "<probe>:review"}`, подставляя значение
 поля вместо `<probe>` (имени `doctor` в seam-е нет), и публикует её записи с
@@ -484,9 +486,9 @@ closure меряет бенчмарк BEH-41, не этот тест. Владе
 test_mutation_checkpoint_ack.py` (оба новые). Не утверждать число
 вызовов `after_mutation` в `state.py`, формат `wip.tar` внутри, нормализацию
 URL за пределами `host/owner/repo`, имена полей области пробы
-(`probe_provenance`), имя и схему таблицы
-wall-clock цену гейта перед closure внутри CI-теста
-(её меряет бенчмарк BEH-41).
+(`probe_provenance`), имя и схему таблицы `plan_agent_calls` (её вводит
+DT-02) и wall-clock цену гейта перед closure внутри CI-теста (её меряет
+бенчмарк BEH-41).
 
 #### DT-06: Restore по `run_id`: `plan`/`apply`, порядок проверок, WIP apply, чтение и replay spool, следующий шаг, `--experimental`, `--json`, бенчмарк · type: implement · owner: dev
 scenarios: [BEH-16, BEH-17, BEH-18, BEH-19, BEH-20, BEH-21, BEH-41, BEH-43]

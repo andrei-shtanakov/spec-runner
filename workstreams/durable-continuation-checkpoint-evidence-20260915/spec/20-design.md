@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: f9f76a9958cbd54c1b65c8cc33365c418b5bf1c5
-  behaviour-spec: d41e22eaf179285ac86435d8a46234544c567533
+  requirements: a62fb486dc8ecf5a4766eddf7f7fea364fd4165d
+  behaviour-spec: e50c397bfd3a4162cd17e3a7a23d571e3f69dd5c
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -785,7 +785,9 @@ seam (§ 2.2, шаг 2 — сборка `CallStart`) при заполненно
 записи call-start, а не молчаливый `doctor:<что-то>`. Роли review (`review:<role>`) проба не
 запускает: `run_review` в scratch-конфиге включается одним флагом
 (`doctor.py:305-315`), `review_parallel`/`review_roles` наследуются от
-вызывающего и обнуляются здесь же — иначе у пробы было бы столько платных
+вызывающего и обнуляются здесь же — как и `audit_log_path` (§ 6.5: с
+абсолютным путём проба писала бы audit-строки в файл вызывающего под его же
+`run_id`, и его срез назвал бы канонную задачу пробы) — иначе у пробы было бы столько платных
 вызовов, сколько ролей у проекта, при cost gate, объявившем два.
 
 **Сайтов ровно два, и это обеспечено.** `build_scratch` пинует
@@ -1217,12 +1219,19 @@ audit-log-а `run_id` есть в каждой строке (`audit_log.py:158`,
 `runs/<run_id>/audit-log.jsonl`. Оба проходят тот же redactor и тот же
 `bound_evidence` (§ 1.4, NFR-06); обоих может не быть (история не заведена,
 аудит выключен) — отсутствие источника даёт отсутствие ключа, не отказ.
-Проба `doctor` в оба среза не попадает, и отдельного правила для неё не
-нужно: она пишет историю задач в свой scratch (`history_file_for` — от
-`project_root` scratch-конфига), а размер файла вызывающего `start()`
-запомнил до её запуска, так что хвост за прогон пуст; audit-log среза — по
-своему `run_id`, и строки пробы, если аудит включён, принадлежат тому же
-invocation и остаются его срезом честно.
+Проба `doctor` в оба среза не попадает, и для одного из них это следует из
+дерева, а для второго объявлено. История задач — из дерева: проба пишет её в
+свой scratch (`history_file_for` — от `project_root` scratch-конфига), а
+размер файла вызывающего `start()` запомнил до её запуска, так что хвост за
+прогон пуст. Audit-log — объявлено: `build_scratch` обнуляет
+`audit_log_path` (§ 2.7, там же, где `review_roles`), потому что иначе
+конфигурация с **абсолютным** путём (та самая «orchestrator-managed
+volume» ниже) писала бы строки пробы в файл вызывающего под `run_id` этого
+invocation-а — и срез `runs/<run_id>/audit-log.jsonl` назвал бы канонную
+`TASK-001` пробы и её scratch-namespace, то есть ровно то, что § 2.7
+объявляет невозможным. При относительном пути следы уехали бы в scratch и
+исчезли с ним, так что обнуление — единственная форма, дающая один и тот же
+ответ в обеих конфигурациях.
 Ни `evidence`, ни `restore` по ним решений не принимают: SSOT называет
 историю «corroborating history, not the authority for current status», и
 здесь она ровно этим и остаётся. Файл целиком не копируется намеренно: он
@@ -1657,7 +1666,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/git_ops.py` | `runtime_state_paths` + checkpoint-каталог и spool; `repository_identity`; helpers для bundle/published-base | BEH-14, 16, 43 |
 | `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning» из `plan_agent_calls` (§ 2.3), три ledger-а врозь и сумма только в `repo_total_cost` | BEH-24, 38 |
 | `src/spec_runner/remedy.py`, `budget_cmd.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3), и тот же диспетчер ждёт ack их mutation-checkpoint-а на точке (б) — гейт перед closure, а не сайт ожидания внутри handler-а (§ 3.1, Q-05: третьей точки нет, иначе `Refusal` рвал бы многошаговый `remedy.py` посередине) | BEH-46, 48 |
-| `src/spec_runner/doctor.py` | правится в одном — `build_scratch` объявляет область пробы: `probe_provenance: "doctor"`, пин `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` (§ 2.7). Сайты пробы — те же, что у проекта, через `execute_task`; `run_probe`, `extract`, вердикт и cost gate не меняются; своих записей evidence `doctor.py` не делает — их пишет диспетчер и seam | BEH-47 |
+| `src/spec_runner/doctor.py` | правится в одном — `build_scratch` объявляет область пробы: `probe_provenance: "doctor"`, пин `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` и `audit_log_path` (§ 2.7, § 6.5). Сайты пробы — те же, что у проекта, через `execute_task`; `run_probe`, `extract`, вердикт и cost gate не меняются; своих записей evidence `doctor.py` не делает — их пишет диспетчер и seam | BEH-47 |
 | `schemas/` | новые `checkpoint-manifest`, `evidence-record`, `run-closure`, `restore-result`, `evidence-view`; аддитивно `executor-state`, `json-result`, `status`, `costs` | BEH-03, 14, 21, 23, 29, 36, 38 |
 | `docs/state-schema.md`, `docs/architecture.md`, `CHANGELOG.md`, `README.md` | minor bump, контракт checkpoint/evidence/closure, «operational minimum», статус experimental, `durability:` | BEH-45 |
 | `tests/conftest.py`, `tests/test_harness_guards.py`, `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv, тип отказа — от `BaseException` (Q-06); `test_harness_guards.py` переписывается тем же коммитом, и тем же — `test_task_015_…_red.py:79`, чей `pytest.raises(AssertionError)` ключуется на старом типе; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |

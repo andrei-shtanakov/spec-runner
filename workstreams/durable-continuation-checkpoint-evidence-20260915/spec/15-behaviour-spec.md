@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: f9f76a9958cbd54c1b65c8cc33365c418b5bf1c5
+  requirements: a62fb486dc8ecf5a4766eddf7f7fea364fd4165d
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -522,6 +522,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** платных вызовов ровно два и у проекта под `execution_mode: tdd`:
   проба идёт под `standard`, третьего вызова (RED authoring) нет, и число
   совпадает с тем, что cost gate объявил оператору перед подтверждением.
+- **And** опубликованные срезы прогона `doctor` следов пробы не содержат, и
+  предъявлено это на конфигурации, где ошибиться легче всего, — включённый
+  аудит с **абсолютным** `audit_log_path`: срез `runs/<run_id>/audit-log.jsonl`
+  (если он есть вовсе) не называет ни канонной задачи пробы, ни её
+  namespace, а хвост task-history за прогон пуст. Строка пробы в срезе
+  вызывающего — красный тест.
 - **And** ни один из этих знаков не зависит от вердикта `doctor`: тот же
   набор ключей предъявлен и когда fake CLI отвечает маркером провала, то
   есть на verdict `broken` (BROKEN — исход пробы, а не отказ записи).
