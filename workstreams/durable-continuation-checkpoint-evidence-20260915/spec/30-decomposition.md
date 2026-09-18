@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 8bbe3bd33a1d408ac4ddeba4fe4c521784176d6f
-  acceptance: 64ed513430d454bcee12f0048bffb7283e95a58c
+  design: f6186b9b7abd619c11a1357e5413f2a60c070b49
+  acceptance: c380f4b4e44f26311c385338b9a8686f80edb308
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -466,7 +466,10 @@ run-start в блокирующей половине закрытого пере
 пара «нет ни одного ключа `runs/<run_id>/checkpoints/…` **и** есть closure,
 не называющая неподтверждённого checkpoint-а»: публикация асинхронна
 (Q-05), поэтому пустота без closure значит «неизвестно», а не «ничего».
-Отказ — `needs-human` с именем последнего `run_id` workstream-а как выходом.
+Отказ — `needs-human`, и выход в нём исполним: печатается последний прогон
+workstream-а с acknowledged checkpoint-ом, без собственной записи текущего
+invocation и без прогонов, у которых checkpoint-а нет; если такого прогона
+нет — отказ говорит это прямо и выхода не предлагает.
 Холостой прогон из той же половины, закрывшийся штатно (нечего делать; старт
 отказан гвардом или занятым lock-ом после run-start), checkpoint-а не
 публикует и восстановлению не мешает — иначе оператор остаётся без пути,

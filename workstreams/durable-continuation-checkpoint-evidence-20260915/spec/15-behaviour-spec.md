@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 82c74cc4be31b74b138fcf338296460616483824
+  requirements: 6fe3d12ac30d2c59339606243765baff520161c8
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -334,8 +334,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** `restore` более раннего `run_id` workstream-а, у которого есть
   более поздний **закрытый** прогон из блокирующей половины перечня,
   **опубликовавший хотя бы один checkpoint**, — отказывает `needs-human`:
-  изменения такого прогона в snapshot A не попали, и отказ называет
-  последний `run_id` workstream-а. Предъявлено как минимум на `review-pr`
+  изменения такого прогона в snapshot A не попали, и отказ называет как выход
+  последний прогон workstream-а **с acknowledged checkpoint-ом** — не
+  последний по времени: последним в индексе лежит run-start самого текущего
+  `restore`, а перед ним может стоять холостой прогон, и восстановить нечем
+  ни того, ни другого. Напечатанный в отказе `run_id`, чей `restore`
+  заведомо откажет, — красный тест. Предъявлено как минимум на `review-pr`
   (его раунд пишет `pr_review_comments`) и на `plan` (дописывает задачи в
   `tasks.md` после платного вызова): неотказ на любом из двух — красный
   тест, потому что «платит, но задач не выбирает» не то же самое, что
