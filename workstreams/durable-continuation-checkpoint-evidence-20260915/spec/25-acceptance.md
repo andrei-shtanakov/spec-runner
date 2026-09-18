@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: bd9597063f6323d7891afbc633ef63c981cee774
+  behaviour-spec: 55a2d94c897f8d1cad43eba7bc7193cd920bc682
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -115,11 +115,12 @@ identity, digest redacted prompt-а, timestamp и для task-сайтов
 критерий не считается выполненным, если seam доказан на двух из трёх.
 Статический тест по образцу `PaidBinaryReached` красный на любом
 `subprocess.run`/`Popen` с argv провайдера в обход seam-а. Отказ
-autouse-гварда на `_spawn` наблюдается как падение теста с вердиктом гварда,
-а не как обычный неудачный attempt: тест, ожидавший неуспеха задачи и
-позеленевший на сайте GREEN с настоящим именем `claude`, — невыполненный
-критерий (отказ проглочен `except Exception` в `execute_task`, и пояс здесь
-не срабатывает, потому что процесс не создавался). Call-start сайта `doctor`
+autouse-гварда на `_spawn` наблюдается как падение теста с вердиктом гварда
+на сайте **вне** `execute_task` — на review и на интерактивном `plan`, с
+настоящим именем `claude`: прогон, получивший вместо этого
+`ReviewVerdict.ERROR` или exit 0, — невыполненный критерий (отказ проглочен
+их собственным `except Exception`; пояс не срабатывает, потому что процесс не
+создавался, — значит тип отказа обязан быть от `BaseException`). Call-start сайта `doctor`
 несёт provenance `doctor` и пустой `task_id`: после падения пробы между ack
 call-start и записью результата `run --all` в проекте с собственной
 `TASK-001` (после `spec-runner reset`) выбирает и исполняет реальную
@@ -206,10 +207,12 @@ exit 1, двойник `Popen` не вызван, — а в каталоге б�
 восстановленном каталоге предъявляет open call ещё более позднего прогона,
 обратившись к индексу workstream-а, а не к `open`-строкам snapshot-а;
 `restore` более раннего `run_id` при более позднем закрытом прогоне того же
-workstream-а, **изменившем continuation-state**, — `run`/`retry`/`watch`,
-`budget authorize` или `tdd abandon|repair|resume|release` — тоже отказывает
-`needs-human` с именем последнего `run_id`; более поздний прогон, не
-менявший continuation-state, отказа не даёт, и это предъявлено на трёх,
+workstream-а, **оставившем изменения, которых snapshot не несёт**, —
+`run`/`retry`/`watch`, `budget authorize`, `tdd abandon|repair|resume|release`,
+`review-pr` (его `pr_*` continuation-relevant по § 3 требований) и `plan`
+(дописывает задачи в `tasks.md`) — тоже отказывает `needs-human` с именем
+последнего `run_id`; более поздний прогон, ничего такого не оставивший,
+отказа не даёт, и это предъявлено на трёх,
 каждый из которых оставляет свою строку в индексе workstream-а: аудируемая
 дверь `evidence close-call`, прошедший между ними `spec-runner doctor` и сам
 `restore`, выполненный дважды подряд (его собственный run-start ложится в

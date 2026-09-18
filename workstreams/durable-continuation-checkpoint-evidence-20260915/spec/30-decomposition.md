@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: e864d6ebaa17a15bff0b6dd48cb09bed0c5b2f9f
-  acceptance: b70b0b0f105e86048d0947fb38d1de33a28ce93a
+  design: b718278fe0ce22613fbf631a9597afaa766327ec
+  acceptance: 969eeb2ee2e9e8393784225bc708b0a504dc2c33
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -165,12 +165,14 @@ autouse-guard `_no_real_agent_calls` переключается на **одно*
 (`:316-323`) поднимают отказ на настоящем имени `claude` раньше, чем
 управление дошло бы до `_spawn` (design Q-06). Ключ гварда — argv, как уже
 у `_refuse_execution`; сообщение отказа называет сайт по `provenance` из
-`PaidCall`; тип отказа переживает `except Exception` в `execute_task`
-(`execution.py:1263`) — `RealAgentCallRefused` либо класс от `BaseException`,
-иначе гвард молча превращается в неудачный attempt и его вердикт исчезает
-(design Q-06, пункт (4) цены); пояс `_belt_never_executes_a_paid_binary` не
-трогается — процесс в этом отказе не создаётся, и страховкой он здесь не
-работает. `call_id` чеканит **сайт** — до `log_prompt` и
+`PaidCall`; тип отказа — **от `BaseException`** (design Q-06,
+пункт (4) цены): `RealAgentCallRefused` не годится, это `AssertionError`
+(`execution.py:504`), и `except Exception` у `run_code_review`
+(`review.py:776`) и интерактивного `plan` (`cli_plan.py:892`) проглотили бы
+его — verdict `error` и exit 0 вместо красноты. Пояс
+`_belt_never_executes_a_paid_binary` не трогается и страховкой здесь не
+работает: процесс в этом отказе не создаётся. Тест пинует свойство **вне**
+`execute_task`. `call_id` чеканит **сайт** — до `log_prompt` и
 до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
 проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
 что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
@@ -201,9 +203,14 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 запись, потому что проба исполняет чужой путь в чужом каталоге при
 унаследованном durability-конфиге (`doctor.py:282-295`, `copy.deepcopy`):
 provenance `doctor` (иначе значение словаря требований не производится
-никем) и `task_id=None` (`TASK-001` пробы — не задача проекта; иначе ветка
-(2) Q-12 восстановит `open`-строку на одноимённую реальную задачу, design
-§ 2.4). Третий сайт назван здесь
+никем), `task_id=None` (`TASK-001` пробы — не задача проекта; иначе ветка (2)
+Q-12 восстановит `open`-строку на одноимённую реальную задачу) и абсолютный
+`durability.store.options.root` из § 1.1 (иначе он резолвится внутри
+scratch-каталога — `os.chdir` `doctor.py:338` — и уезжает в `rmtree`, оставив
+платный вызов без durable-записи). Все три — design § 2.4 и § 1.1. Сюда же
+неаддитивная часть миграции § 2.3: `task_id` в `agent_calls`/`pr_agent_calls`
+перестаёт быть `NOT NULL` (перестройка таблицы, не `ADD COLUMN`), иначе
+строка сайта без задачи не вставляется вовсе. Третий сайт назван здесь
 поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
 флагов и, оставшись непереведённым, дал бы платный вызов без call-start в
 обход FR-02.
@@ -459,13 +466,16 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
 прогона, `call_id`, provenance и `task_id`; более поздний прогон,
-**изменивший continuation-state** (`run`/`retry`/`watch`, `budget authorize`,
-`tdd abandon|repair|resume|release`), — тоже `needs-human`, с именем
-последнего `run_id` workstream-а как выходом, а прогон, его не менявший
-(`evidence close-call`/`purge`, `plan`, `review-pr`, `doctor` и сам
-`restore`, чей run-start диспетчер кладёт в индекс до этой проверки), на
-этом шаге не в счёт — ключ критерия свойство, не перечень имён (design
-§ 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
+**оставивший изменения, которых snapshot не несёт** (`run`/`retry`/`watch`,
+`budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
+`pr_*` continuation-relevant по § 3 требований и checkpoint-ится по § 3.1, —
+и `plan`, дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем
+последнего `run_id` workstream-а как выходом; прогон, ничего такого не
+оставивший (`evidence close-call`/`purge`, `doctor`, чьи строки живут в
+удаляемой scratch-DB, и сам `restore`, чей run-start диспетчер кладёт в
+индекс до этой проверки), на этом шаге не в счёт — ключ критерия свойство, а
+спорная подкоманда разбирается по § 3 требований и § 3.1, не по интуиции про
+имя (design § 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой
