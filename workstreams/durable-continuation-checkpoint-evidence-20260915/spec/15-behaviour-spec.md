@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 095556d72300152bd24f64da8d1608f1ece08b10
+  requirements: da30032f1940d42ed0d8357854e2681596e697fa
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -190,7 +190,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `call_start` с ack, и у пары один `call_id`; число `spawn` равно числу
   call-start-ов с ack.
 - **And** call-start каждого сайта содержит `run_id`, `call_id`, provenance
-  из одного словаря (`red`, `green`, `review`, `review:<role>`,
+  из одного словаря (`red`, `red:fix`, `green`, `review`, `review:<role>`,
   `plan:<stage>`, `plan:interactive`, `review-pr:verify`, `review-pr:fix`,
   `doctor:execute`, `doctor:review`), policy identity, digest redacted
   prompt-а, timestamp, а для task-сайтов — `task_id` и номер attempt. Ни
@@ -435,6 +435,15 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   closure у команды нет (design § 6.3). Закрытие строки ledger-а — mutation,
   и её checkpoint опубликован под тем же `run_id`, у которого run-start
   есть; checkpoint под `run_id` без run-start — красный тест.
+- **And** дверь доставляет **чужой** недоставленный checkpoint до своей
+  работы, и именно это делает исполнимой канонную последовательность FR-05:
+  в том же каталоге ранее убитый `budget authorize` оставил незакрытую
+  строку `checkpoint_outbox` (BEH-48), оператор выполняет `close-call
+  --reason …`, и двойник store получает сперва тот checkpoint, затем записи
+  самой двери; последующий `restore` более раннего прогона отказывает
+  `needs-human` шагом 5, назвав прогон `budget authorize`. Дверь, прошедшая
+  мимо строки outbox-а, — красный тест: путь «дверь → restore» тогда
+  применяет snapshot старше чужого решения молча.
 
 ### C. Checkpoint после каждой continuation-relevant mutation
 
@@ -539,10 +548,23 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   записанная **той же транзакцией**, что mutation. Отсутствие такой записи
   при наличии mutation — красный тест.
 - **And** после `kill -9` в окне между commit-ом mutation и ack (двойник
-  вешает ack, тест убивает процесс) следующий invocation в том же каталоге
-  доставляет недоставленный checkpoint **прежде** любой другой работы и
-  только потом делает своё дело; `checkpoint_id` тот же, повторная доставка
-  идемпотентна, второго checkpoint-а на ту же mutation двойник не получает.
+  вешает ack, тест убивает процесс) следующая платящая подкоманда в том же
+  каталоге доставляет недоставленный checkpoint **прежде** любой другой
+  работы и только потом делает своё дело; `checkpoint_id` тот же, повторная
+  доставка идемпотентна, второго checkpoint-а на ту же mutation двойник не
+  получает.
+- **And** доставляет не только `run`, и это предъявлено дважды: тем же
+  `run --all` и — в отдельном прогоне того же состояния — **вторым**
+  `spec-runner budget authorize`, который доставляет чужую незакрытую строку
+  до собственной mutation. Свойство, доказанное только на `run`, этот And не
+  выполняет: подкоманда без платного вызова — как раз тот случай, ради
+  которого outbox существует. Доставка дверью `evidence close-call` — тот же
+  механизм на канонной последовательности FR-05, и она предъявлена там, где
+  дверь живёт (BEH-11).
+- **And** read-only команды не доставляют: `status`, `costs`, `validate`,
+  `report`, `evidence <run_id>` в том же каталоге с непустым outbox-ом не
+  отправляют двойнику ничего (BEH-04, BEH-13 остаются истинными), и строка
+  outbox-а после них на месте.
 - **And** restore более раннего прогона того же workstream-а после такой
   доставки отказывает `needs-human` шагом 5 — правка, терявшаяся в окне,
   теперь предъявлена; сам предикат шага 5 при этом не менялся, и знак его
@@ -819,13 +841,20 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   --gated --stage requirements "…"`, затем `spec-runner costs` и `costs
   --json`.
 - **Then** `plan --full` оставил три call records с provenance
-  `plan:requirements`, `plan:design`, `plan:tasks` и `task_id = NULL`;
+  `plan:requirements`, `plan:design`, `plan:tasks` и **без задачи**;
   `plan --gated` — один с `plan:requirements`; у каждого `run_id` своего
   invocation и свой `call_id`.
 - **And** интерактивный `spec-runner plan "…"`, прогнанный тем же fake CLI на
   один круг, оставил свой call record с provenance `plan:interactive` и
-  `task_id = NULL`: третий платный путь `cli_plan.py` получает ledger-identity
+  тоже без задачи: третий платный путь `cli_plan.py` получает ledger-identity
   наравне с двумя флаговыми, а не остаётся вне ledger-а.
+- **And** «без задачи» наблюдается как **отсутствие задачи у строки**, а не
+  как `NULL` в `agent_calls`: ни одна строка `agent_calls` после этих
+  прогонов не добавилась, `task_cost` любой задачи не изменился, а строки
+  планирования читаются своим ledger-ом (как `pr_agent_calls` у `review-pr`).
+  Прогон, потребовавший `NULL` в `agent_calls.task_id`, — красный: столбец
+  `NOT NULL`, и вставка исчезла бы warning-ом, оставив планирование вообще
+  без записи.
 - **And** `costs` показывает их суммой отдельной строкой «planning», по
   образцу `pr_cost_rows` (#218); `task_cost` выполненной задачи не
   изменился; `repo_total_cost` включает planning.
@@ -1428,12 +1457,12 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 | Requirement | Behaviours |
 |---|---|
 | FR-01 | BEH-01, BEH-02, BEH-03, BEH-04, BEH-24, BEH-38, BEH-44, BEH-45 |
-| FR-02 | BEH-05, BEH-06, BEH-07, BEH-08, BEH-09, BEH-10, BEH-11, BEH-22, BEH-39, BEH-41, BEH-44 |
-| FR-03 | BEH-12, BEH-13, BEH-14, BEH-15, BEH-31, BEH-39, BEH-40, BEH-42, BEH-43 |
+| FR-02 | BEH-05, BEH-06, BEH-07, BEH-08, BEH-09, BEH-10, BEH-11, BEH-22, BEH-39, BEH-41, BEH-44, BEH-47 |
+| FR-03 | BEH-12, BEH-13, BEH-14, BEH-15, BEH-31, BEH-39, BEH-40, BEH-42, BEH-43, BEH-47, BEH-48 |
 | FR-04 | BEH-14, BEH-16, BEH-17, BEH-18, BEH-19, BEH-40, BEH-43 |
-| FR-05 | BEH-09, BEH-17, BEH-19, BEH-20, BEH-21, BEH-40, BEH-41, BEH-45 |
-| FR-06 | BEH-08, BEH-10, BEH-22, BEH-23, BEH-24, BEH-25, BEH-26, BEH-27, BEH-28, BEH-40, BEH-42, BEH-43 |
-| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42, BEH-46 |
+| FR-05 | BEH-09, BEH-17, BEH-19, BEH-20, BEH-21, BEH-40, BEH-41, BEH-45, BEH-48 |
+| FR-06 | BEH-08, BEH-10, BEH-22, BEH-23, BEH-24, BEH-25, BEH-26, BEH-27, BEH-28, BEH-40, BEH-42, BEH-43, BEH-47 |
+| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42, BEH-46, BEH-48 |
 | FR-08 | BEH-15, BEH-33, BEH-34, BEH-35, BEH-39 |
 | FR-09 | BEH-27, BEH-30, BEH-36, BEH-37, BEH-38, BEH-45 |
 

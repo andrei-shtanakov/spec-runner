@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 095556d72300152bd24f64da8d1608f1ece08b10
-  behaviour-spec: 3361c500e179ae93eb99292843074ec8b386e7df
+  requirements: da30032f1940d42ed0d8357854e2681596e697fa
+  behaviour-spec: 1b589bb09f5ba52fff51f52d3a05568b4c5310a6
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -107,9 +107,9 @@ authoring, RED agent round (#220), GREEN, review, `review:<role>` в
 непосредственно раньше
 стоит `call_start` с ack и тем же `call_id`, число `spawn` равно числу
 acknowledged call-start-ов; call-start несёт `run_id`, `call_id`, provenance
-из одного словаря (`red`, `green`, `review`, `review:<role>`, `plan:<stage>`,
-`plan:interactive`, `review-pr:verify`, `review-pr:fix`, `doctor:execute`,
-`doctor:review`), policy
+из одного словаря (`red`, `red:fix`, `green`, `review`, `review:<role>`,
+`plan:<stage>`, `plan:interactive`, `review-pr:verify`, `review-pr:fix`,
+`doctor:execute`, `doctor:review`), policy
 identity, digest redacted prompt-а, timestamp и для task-сайтов
 `task_id`/номер attempt; значение словаря, которого не производит ни один
 сайт журнала, — невыполненный критерий; тот же `call_id` стоит в строке
@@ -228,7 +228,13 @@ checkpoint она публикует, и он не должен ничего м�
 отработавший между A и восстановлением, и чужой, более ранний `restore` —
 наблюдается при восстановлении A второй раз в новый пустой `--into`
 (повторный запуск в занятый каталог отказывает раньше, на проверке
-каталога). Отказ на любом из трёх — невыполненный критерий. Четвёртый —
+каталога). Отказ на любом из трёх — невыполненный критерий. Дверь при этом доставляет **чужой** недоставленный checkpoint до своей
+работы: строка `checkpoint_outbox`, оставленная ранее убитым `budget
+authorize` (AC-46), уходит в store на вызове `close-call`, и последующий
+`restore` более раннего прогона отказывает `needs-human` шагом 5 — дверь,
+прошедшая мимо строки, невыполненный критерий, потому что тогда канонная
+последовательность «дверь → restore» применяет snapshot старше чужого
+решения молча. Четвёртый —
 `doctor`, и знак у него другой: не строка перечня, а отсутствие второго
 условия ключа вовсе, потому что acknowledged checkpoint-ов у него нет ни
 одного (AC-45); `doctor --with-review --yes`, отработавший между A и
@@ -339,10 +345,14 @@ mutation-checkpoint-а стоит в журнале раньше строки у
 из двух — невыполненный критерий. Mutation при этом в DB есть, и рядом с ней
 — запись pending-outbox, сделанная той же транзакцией; mutation без такой
 записи — невыполненный критерий. После `kill -9` в окне между commit-ом
-mutation и ack следующий invocation в том же каталоге доставляет
+mutation и ack следующая платящая подкоманда в том же каталоге доставляет
 недоставленный checkpoint прежде любой другой работы, с тем же
-`checkpoint_id` и идемпотентно, после чего `restore` более раннего прогона
-того же workstream-а отказывает `needs-human` шагом 5 — то есть правка,
+`checkpoint_id` и идемпотентно — и это предъявлено на канонной
+последовательности FR-05 «`evidence close-call` → `restore`», а не только на
+`run`; read-only команды (`status`, `costs`, `validate`, `report`,
+`evidence <run_id>`) не доставляют ничего и оставляют строку outbox-а на
+месте (иначе ложным становится AC-03/AC-11). После доставки `restore` более
+раннего прогона того же workstream-а отказывает `needs-human` шагом 5 — то есть правка,
 терявшаяся в окне, предъявлена, а предикат шага 5 не менялся (AC-08 в полном
 объёме). Число синхронных ожиданий ack в `run --task` при пустом на старте
 outbox-е равно числу точек drain
@@ -477,14 +487,19 @@ traces: [FR-06, FR-01]
 scenarios: [BEH-24]
 
 Наблюдаемый знак: `plan --full` оставляет три call records
-(`plan:requirements`, `plan:design`, `plan:tasks`, `task_id = NULL`),
+(`plan:requirements`, `plan:design`, `plan:tasks`) **без задачи**,
 `plan --gated --stage requirements` — один, каждый с `run_id` своего
 invocation и своим `call_id`; `costs` и `costs --json` показывают их суммой
 строкой «planning», `task_cost` выполненной задачи не изменился,
 `repo_total_cost` включает planning; интерактивный `plan "<описание>"`,
-прогнанный на один круг, оставляет свой record с provenance `plan:interactive`
-и `task_id = NULL`; все три пути планирования проходят через тот же seam, что
-task-сайты.
+прогнанный на один круг, оставляет свой record с provenance
+`plan:interactive` и тоже без задачи; все три пути планирования проходят
+через тот же seam, что task-сайты. «Без задачи» предъявляется как
+отсутствие задачи у строки, а не как `NULL` в `agent_calls`: число строк
+`agent_calls` после этих прогонов не изменилось, а записи планирования
+читаются своим ledger-ом семьи. Критерий, выполненный `NULL`-ом в
+`agent_calls.task_id`, не выполнен: столбец `NOT NULL`, вставка исчезает
+warning-ом, и планирование остаётся без записи вовсе.
 
 #### AC-23: Опубликованная запись не переписывается; исправление — новая запись со ссылкой · verification: test
 traces: [FR-06]

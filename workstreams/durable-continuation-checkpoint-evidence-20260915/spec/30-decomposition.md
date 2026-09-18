@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 8f0a84fe5e1c1e476fa95ec55ae060af8808e1a5
-  acceptance: 6d4efa08cade4b69682c34ece60a8b45fe56b83d
+  design: 4f3a2257ec1109bd8e82162d9f05d9b5f17b8032
+  acceptance: 35a79dacd4e648a68435689f2349a7503b966b37
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -209,7 +209,10 @@ autouse-guard `_no_real_agent_calls` переключается на **одно*
 (интерактивный цикл `cmd_plan`, каждый круг; `cmd = [claude_command, "-p",
 prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` для
-первых двух и `plan:interactive` для третьего, `task_id=None`; `costs` —
+первых двух и `plan:interactive` для третьего, ledger — **новая**
+`plan_agent_calls` (design §2.3: третья таблица семьи по образцу
+`pr_agent_calls`/#218, без столбца `task_id` вовсе — `agent_calls.task_id`
+остаётся `NOT NULL`, и смены типа столбца задача не делает); `costs` —
 строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
 `doctor` — через `execute_task`, и **с правкой** (design §2.7,
 spec-runner#525): `doctor.build_scratch` объявляет область пробы на своём
@@ -237,7 +240,7 @@ Budget guard (#213) и `log_prompt` (#282) остаются на сайтах **
 `execute` — «a refusal is no row» буквально (BEH-07). Столбцы — аддитивно в
 `_migrate` по образцу #218: `agent_calls`/`pr_agent_calls` — `run_id`,
 `call_id`, `status` (`open`/`closed`/`not_started`), `started_at`; `attempts`
-— `run_id`; строка `open` пишется до store-ack и закрывается после
+— `run_id`; плюс `CREATE TABLE IF NOT EXISTS plan_agent_calls` там же; строка `open` пишется до store-ack и закрывается после
 call-result (§2.3, Q-12). `--json-result` (`build_task_json_result`) и
 `status --json` — аддитивные `run_id`/`pipeline_id`; `status` — строка с
 `run_id` последнего run-start namespace-а из `executor_meta`, `null`/
@@ -326,10 +329,19 @@ checkpoint-а; **три** точки drain (Q-05): перед call-start — ш�
 которому kind closure выводит диспетчер). Таймаут здесь → `Refusal(kind=
 "instrument")` наружу, то есть exit 2 и closure `failed` по общему правилу:
 успех такая подкоманда не печатает. Здесь же — `checkpoint_outbox`
-(таблица, резервирование `sequence` и **доставка незакрытых строк на старте
-invocation** в порядке `sequence`, идемпотентно по `checkpoint_id`:
+(таблица, резервирование `sequence` и **доставка незакрытых строк** в
+порядке `sequence`, идемпотентно по `checkpoint_id`:
 `AlreadyExists` от store читается как «доставлено»; ротация локальных копий
-не удаляет копию, на которую ссылается строка outbox-а). Вставку строки
+не удаляет копию, на которую ссылается строка outbox-а). Доставляет всякий
+invocation, который открывает DB каталога **и** входит в
+`PAYING_SUBCOMMANDS` (design §3.5): `run`/`retry`/`watch` — на рубеже
+`_run_start_gate`, подкоманды точки (в) — перед своей mutation, `evidence
+close-call`/`purge`, `plan`, `review-pr` — на входе; read-only команды не
+доставляют (иначе BEH-04/BEH-13 «двойник не получил ничего» становятся
+ложными), а `restore` исходную DB не открывает вовсе и потому назван входом
+остатка. В этой задаче сайт один — `record_attempt` и старт `run`;
+`close-call`/`purge` получают свой вызов в DT-09/DT-12 той же строкой, что
+добавляет их в `PAYING_SUBCOMMANDS`. Вставку строки
 outbox-а **в транзакцию** каждой mutation делает DT-05 вместе с остальными
 сайтами; здесь она есть у одного — `record_attempt`.
 Ещё одно решение `after_mutation` — выход без публикации при поднятом
@@ -473,7 +485,9 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 клоне; ключи на месте при относительном `root` в config-е; два платных
 вызова и под проектом `execution_mode: tdd`; тот же набор при verdict
 `broken`. Для BEH-48 — порядок в общем журнале, exit 2 на отклонённом ack и
-поздняя доставка после `kill -9`, плюс контроль на `run --task`: при пустом
+поздняя доставка после `kill -9` — на канонной последовательности
+«`evidence close-call` → `restore`», а не только через `run`, — плюс
+контроль на `run --task`: при пустом
 на старте outbox-е число
 синхронных ожиданий ack равно числу точек drain перед платными вызовами
 плюс одна перед closure (ожидание на каждую mutation — красный тест,
@@ -690,7 +704,7 @@ BEH-35 — двойник `Popen` не вызван после отказа, TAS
 не `done`. Не утверждать имя таблицы `spool_replays`, литерал
 `.executor-spool.jsonl`, интервал ожидания publisher-а.
 
-#### DT-09: Open call: детекция на старте `run` (Q-12) и операторская дверь `evidence close-call` · type: implement · owner: dev
+#### DT-09: Open call: детекция на старте `run` (Q-12), операторская дверь `evidence close-call` и её сайт доставки outbox-а · type: implement · owner: dev
 scenarios: [BEH-09, BEH-10, BEH-11]
 depends_on: [DT-06]
 parallel_group: door
@@ -720,14 +734,25 @@ provenance и «open call», и выполняет остальные ready; `ru
 `--reason`; ручное удаление; свежий клон; другая машина) либо приехала из
 snapshot-а: один `list` индекса
 workstream-а DT-01, прогоны без парного `.closed` разбираются по своим
-`calls/`-ключам, каждый call-start без call-result восстанавливается как
+`calls/`-ключам, каждый call-start без call-result, **несущий `task_id`**,
+восстанавливается как
 `open`-строка свежей DB (`task_id`, attempt, `call_id`, provenance, `run_id` —
-из call-start), дальше работает ветка (б); пустой индекс — прогон идёт как
+из call-start), дальше работает ветка (б); call-start без `task_id` (сайты
+планирования, `review-pr`, проба `doctor` — design §2.4, §2.7) строкой не
+становится: адресовать ею нечего, `agent_calls.task_id` — `NOT NULL`, а
+истиной остаётся пара ключей в store, которую читают `evidence <run_id>` и
+проверка (6) `restore`; пустой индекс — прогон идёт как
 обычно; успешно пройденная ветка последним шагом ставит `set_meta
 continuation_index=local` (в том числе на пустом индексе); недоступный store
 на этом пути — `Refusal(kind="instrument")`, exit 2, маркер не ставится.
 `reset` сам по себе задачей не правится и платящей подкомандой не становится —
-инвариант держит ветка (2), а не гвард на одной команде. Ни один путь не
+инвариант держит ветка (2), а не гвард на одной команде. Здесь же — **сайт
+доставки `checkpoint_outbox` у двери и у `evidence purge`**: обе входят в
+`PAYING_SUBCOMMANDS` этой задачей (и DT-12), обе открывают DB, поэтому по
+design §3.5 доставляют незакрытые строки до своей работы. Без этого сайта
+канонная последовательность FR-05 «дверь → restore» недоставленного
+checkpoint-а не доставляла бы вовсе, хотя оператор в каталоге как раз
+работал (последний And BEH-11). Ни один путь не
 создаёт второй call-start для того же attempt. Дверь — `spec-runner evidence
 close-call <run_id> --call <call_id> --reason …` по образцу `remedy.cmd_tdd`:
 обязательный `--reason`, записанный actor, `SPEC_RUNNER_AGENT` guardrail,
