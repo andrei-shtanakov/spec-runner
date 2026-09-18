@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 19dae5530071b69dd4718e6c40196cbf2b32672a
-  acceptance: ccd3760c651bd0b9940f86bfbe98b5d1bae6ff70
+  design: e864d6ebaa17a15bff0b6dd48cb09bed0c5b2f9f
+  acceptance: b70b0b0f105e86048d0947fb38d1de33a28ce93a
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -165,7 +165,12 @@ autouse-guard `_no_real_agent_calls` переключается на **одно*
 (`:316-323`) поднимают отказ на настоящем имени `claude` раньше, чем
 управление дошло бы до `_spawn` (design Q-06). Ключ гварда — argv, как уже
 у `_refuse_execution`; сообщение отказа называет сайт по `provenance` из
-`PaidCall`; пояс `_belt_never_executes_a_paid_binary` не трогается. `call_id` чеканит **сайт** — до `log_prompt` и
+`PaidCall`; тип отказа переживает `except Exception` в `execute_task`
+(`execution.py:1263`) — `RealAgentCallRefused` либо класс от `BaseException`,
+иначе гвард молча превращается в неудачный attempt и его вердикт исчезает
+(design Q-06, пункт (4) цены); пояс `_belt_never_executes_a_paid_binary` не
+трогается — процесс в этом отказе не создаётся, и страховкой он здесь не
+работает. `call_id` чеканит **сайт** — до `log_prompt` и
 до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
 проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
 что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
@@ -192,7 +197,13 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` для
 первых двух и `plan:interactive` для третьего, `task_id=None`; `costs` —
 строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
-`doctor` — через `execute_task` без правок. Третий сайт назван здесь
+`doctor` — через `execute_task` без правки сайта, но с двумя оговорками про
+запись, потому что проба исполняет чужой путь в чужом каталоге при
+унаследованном durability-конфиге (`doctor.py:282-295`, `copy.deepcopy`):
+provenance `doctor` (иначе значение словаря требований не производится
+никем) и `task_id=None` (`TASK-001` пробы — не задача проекта; иначе ветка
+(2) Q-12 восстановит `open`-строку на одноимённую реальную задачу, design
+§ 2.4). Третий сайт назван здесь
 поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
 флагов и, оставшись непереведённым, дал бы платный вызов без call-start в
 обход FR-02.
@@ -447,9 +458,14 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `workstreams/<workstream_key>/runs/` DT-01, разбираются прогоны без парного
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
-прогона, `call_id`, provenance и `task_id`; более поздний прогон без open
-calls — тоже `needs-human`, с именем последнего `run_id` workstream-а как
-выходом; недоступный store или индекс — instrument, exit 2. `--json` несёт
+прогона, `call_id`, provenance и `task_id`; более поздний прогон,
+**изменивший continuation-state** (`run`/`retry`/`watch`, `budget authorize`,
+`tdd abandon|repair|resume|release`), — тоже `needs-human`, с именем
+последнего `run_id` workstream-а как выходом, а прогон, его не менявший
+(`evidence close-call`/`purge`, `plan`, `review-pr`, `doctor` и сам
+`restore`, чей run-start диспетчер кладёт в индекс до этой проверки), на
+этом шаге не в счёт — ключ критерия свойство, не перечень имён (design
+§ 7.2 шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой
