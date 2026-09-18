@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: 92422653813943a24d779f0191c65b3c689a1943
+  requirements: a522673c78f49561083278ea553be66e12f31816
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -333,7 +333,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `_acquire_run_lock` этот And не выполняет.
 - **And** `restore` более раннего `run_id` workstream-а, у которого есть
   более поздний **закрытый** прогон из блокирующей половины перечня,
-  **опубликовавший хотя бы один checkpoint**, — отказывает `needs-human`:
+  **несущий хотя бы один acknowledged checkpoint**, — отказывает `needs-human`:
   изменения такого прогона в snapshot A не попали, и отказ называет как выход
   прогон, чей `restore` исполним: последний с acknowledged checkpoint-ом,
   после которого нет ни одного блокирующего прогона. Знак проверяется
@@ -353,7 +353,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   после закрытия A выполняется `run --all`, которому нечего делать (готовых
   задач нет), и, отдельным прогоном, `run --all`, чей старт отказан занятым
   executor lock-ом уже после run-start. Оба закрылись, оба лежат в индексе
-  позже A, ни один не опубликовал checkpoint: `restore <run_id-A>` применяет
+  позже A, acknowledged checkpoint-а нет ни у одного: `restore <run_id-A>` применяет
   snapshot. Отказ здесь — красный тест, и не только по букве: он оставляет
   оператора без единого пути, потому что восстановить названный выходом
   холостой прогон нельзя — digests берутся из последнего acknowledged

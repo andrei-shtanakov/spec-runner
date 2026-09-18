@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: cce8f731a6c5494ffc3b6e045143479bd1da2d7d
-  acceptance: 0b657d5f15e5e42aa306e802a0197bc98a4ae189
+  design: 145e15366ea00111467ce5c4f17a02053c34ea09
+  acceptance: b91e31bff8cbdbe39b2b4bec2f34cb67dc69e2c3
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -462,13 +462,16 @@ call-result где угодно в workstream-е — `needs-human` с `run_id` �
 блокирует восстановление, когда сошлись два условия: его `subcommand` из
 run-start в блокирующей половине закрытого перечня — `run`/`retry`/`watch`,
 `plan`, `review-pr`, `budget authorize`, `tdd abandon|repair|resume|release`
-— **и** под его `run_id` опубликован хотя бы один ключ
-`runs/<run_id>/checkpoints/…`. Отказ — `needs-human`, и выход в нём
+— **и** под его `run_id` есть хотя бы один **acknowledged**
+checkpoint — не просто ключ под `runs/<run_id>/checkpoints/…`: manifest
+кладётся последним, и checkpoint без него для читателей не существует
+(design § 1.1, § 3.5). Проверка — по acknowledged-признаку checkpoint-а, а
+не `list` префикса. Отказ — `needs-human`, и выход в нём
 исполним: печатается последний прогон workstream-а с acknowledged
 checkpoint-ом, **после которого нет ни одного блокирующего прогона**
 (собственная запись текущего invocation не в счёт; прогон с checkpoint-ом,
 но заблокированный более поздним, — петля, не выход). Кандидат существует
-всегда, когда шаг 5 сработал, — блокирующий прогон сам несёт checkpoint, а
+всегда, когда шаг 5 сработал, — блокирующий прогон сам несёт acknowledged checkpoint, а
 самый поздний из блокирующих не имеет блокирующих после себя; ветки
 «восстановимого прогона нет» поэтому не существует, она была бы
 недостижимым кодом. Отказ называет и
@@ -478,8 +481,8 @@ checkpoint-ом, **после которого нет ни одного блок
 занятым lock-ом после run-start) checkpoint-а не публикует и восстановлению
 не мешает — иначе оператор остаётся без пути, потому что восстановить его
 самого нечем. Известный пробел, принятый владельцем: прогон, убитый в окне
-между mutation и доставкой checkpoint-а, checkpoint-ов в store не имеет и
-тоже не блокирует — его правка теряется молча (design § 7.2 шаг 5, абзац
+между mutation и доставкой checkpoint-а, acknowledged checkpoint-а не имеет
+и тоже не блокирует — его правка теряется молча (design § 7.2 шаг 5, абзац
 про пробел); fail-closed здесь невозможен, он сделал бы недостижимым путь
 «дверь `close-call` → restore».
 Неблокирующая половина — `evidence close-call`, `evidence purge`, `doctor`,
