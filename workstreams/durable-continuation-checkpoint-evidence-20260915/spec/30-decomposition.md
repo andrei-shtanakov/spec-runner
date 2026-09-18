@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 7b471aebe4f46771421e4342596c8254b8649f06
-  acceptance: b9cd6059b6940ec14d60561063772e375eebbae2
+  design: 8bbe3bd33a1d408ac4ddeba4fe4c521784176d6f
+  acceptance: 64ed513430d454bcee12f0048bffb7283e95a58c
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -462,12 +462,17 @@ call-result где угодно в workstream-е — `needs-human` с `run_id` �
 блокирует восстановление, когда сошлись два условия: его `subcommand` из
 run-start в блокирующей половине закрытого перечня — `run`/`retry`/`watch`,
 `plan`, `review-pr`, `budget authorize`, `tdd abandon|repair|resume|release`
-— **и** под его `run_id` есть хотя бы один ключ
-`runs/<run_id>/checkpoints/…`. Тогда отказ `needs-human` с именем
-последнего `run_id` workstream-а как выходом. Холостой прогон из той же
-половины (нечего делать; старт отказан гвардом или занятым lock-ом после
-run-start) checkpoint-а не публикует и восстановлению не мешает — иначе
-оператор остаётся без пути, потому что восстановить его самого нечем.
+— **и** не доказано, что он ничего не сделал. Доказательство —
+пара «нет ни одного ключа `runs/<run_id>/checkpoints/…` **и** есть closure,
+не называющая неподтверждённого checkpoint-а»: публикация асинхронна
+(Q-05), поэтому пустота без closure значит «неизвестно», а не «ничего».
+Отказ — `needs-human` с именем последнего `run_id` workstream-а как выходом.
+Холостой прогон из той же половины, закрывшийся штатно (нечего делать; старт
+отказан гвардом или занятым lock-ом после run-start), checkpoint-а не
+публикует и восстановлению не мешает — иначе оператор остаётся без пути,
+потому что восстановить его самого нечем. Прогон без closure (crash/unknown,
+BEH-30) и прогон, чья closure называет неподтверждённый checkpoint (BEH-31),
+блокируют: fail-closed по неизвестности.
 Неблокирующая половина — `evidence close-call`, `evidence purge`, `doctor`,
 `restore` — не блокирует независимо от checkpoint-ов (причина у каждого
 своя, design § 7.2 шаг 5; у двери checkpoint есть, и он ничего не меняет). Обе половины объявляются рядом с
