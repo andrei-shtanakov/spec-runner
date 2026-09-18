@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: a522673c78f49561083278ea553be66e12f31816
-  behaviour-spec: 97e6a3af296c559fdfc9ebf6ecf5914e93ea07cc
+  requirements: 095556d72300152bd24f64da8d1608f1ece08b10
+  behaviour-spec: a8f46f45f411cfc907b50d82644c518bb1b6eda6
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -103,13 +103,16 @@ scenarios: [BEH-05]
 authoring, RED agent round (#220), GREEN, review, `review:<role>` в
 параллельном и последовательном режиме, три стадии `plan --full`,
 `plan --gated`, интерактивный `plan "<описание>"` на один круг цикла,
-`review-pr` verify и fix, `doctor`) непосредственно раньше
+`review-pr` verify и fix, оба сайта пробы `doctor --with-review`)
+непосредственно раньше
 стоит `call_start` с ack и тем же `call_id`, число `spawn` равно числу
 acknowledged call-start-ов; call-start несёт `run_id`, `call_id`, provenance
 из одного словаря (`red`, `green`, `review`, `review:<role>`, `plan:<stage>`,
-`plan:interactive`, `review-pr:verify`, `review-pr:fix`, `doctor`), policy
+`plan:interactive`, `review-pr:verify`, `review-pr:fix`, `doctor:execute`,
+`doctor:review`), policy
 identity, digest redacted prompt-а, timestamp и для task-сайтов
-`task_id`/номер attempt; тот же `call_id` стоит в строке
+`task_id`/номер attempt; значение словаря, которого не производит ни один
+сайт журнала, — невыполненный критерий; тот же `call_id` стоит в строке
 `agent_calls`/`pr_agent_calls` рядом с `provenance`. Все три платных пути
 `cli_plan.py` — gated, `--full` и интерактивный — предъявлены в журнале:
 критерий не считается выполненным, если seam доказан на двух из трёх.
@@ -225,7 +228,13 @@ checkpoint она публикует, и он не должен ничего м�
 отработавший между A и восстановлением, и чужой, более ранний `restore` —
 наблюдается при восстановлении A второй раз в новый пустой `--into`
 (повторный запуск в занятый каталог отказывает раньше, на проверке
-каталога). Отказ на любом из трёх — невыполненный критерий. Применённый
+каталога). Отказ на любом из трёх — невыполненный критерий. Четвёртый —
+`doctor`, и знак у него другой: не строка перечня, а отсутствие второго
+условия ключа вовсе, потому что acknowledged checkpoint-ов у него нет ни
+одного (AC-45); `doctor --with-review --yes`, отработавший между A и
+восстановлением, отказа не даёт, и он же не назван выходом ни в одной
+конфигурации — напечатанный выходом `doctor` невыполненный критерий, его
+собственный `restore` упёрся бы в отсутствие digests. Применённый
 snapshot A в конфигурациях с open call и с блокирующим более поздним
 прогоном, несущим acknowledged checkpoint, — невыполненный критерий.
 
@@ -265,7 +274,9 @@ UUIDv4 `checkpoint_id`, строго возрастающим `sequence` вну�
 <run_id>`, а не подкоманду целиком: checkpoint формы `close-call` —
 знак AC-08); checkpoint после `budget authorize` содержит
 authorization в DB snapshot без attempt; статический тест находит ровно один
-seam «после mutation», через который проходят все перечисленные сайты записи.
+seam «после mutation», через который проходят все перечисленные сайты записи;
+mutation эфемерной пробы через тот же seam checkpoint-а не даёт — полный знак
+области пробы — AC-45.
 
 #### AC-12: Manifest валиден по схеме, полон и не содержит локальных фактов · verification: test
 traces: [FR-03, FR-04, NFR-04]
@@ -292,6 +303,50 @@ store получает checkpoint с `degraded: true` в manifest, spool-фай�
 mutation и DB snapshot-ом последнего успешного состояния; `state_degraded`
 уведомлён один раз; restore из этого checkpoint-а доигрывает spool и
 показывает attempt.
+
+#### AC-45: Проба `doctor` не оставляет следа в учёте проекта, а её платные вызовы — оставляют полный · verification: test
+traces: [FR-02, FR-03, FR-06]
+scenarios: [BEH-47]
+
+Наблюдаемый знак: после `spec-runner doctor --with-review --yes` с fake CLI
+двойник store имеет от этого invocation run-start, две пары
+call-start/call-result с provenance `doctor:execute` и `doctor:review` и одну
+closure — и ни одного checkpoint-а, ни одного attempt-экспорта; любой
+checkpoint под этим `run_id` — невыполненный критерий. Ни одна
+опубликованная запись пробы не несёт `task_id`, а столбец
+`agent_calls.task_id` остаётся `NOT NULL` и миграции не требует. Следующий
+`run --all` в том же каталоге берёт собственную `TASK-001` проекта и доходит
+до её платного вызова — в том числе после `spec-runner reset` и в свежем
+клоне, где `open`-строки восстанавливаются из store: заблокированная
+одноимённой канонной задачей пробы задача проекта — невыполненный критерий.
+Все ключи лежат в store вызывающего при **относительном** пути в настройках
+адаптера: путеподобная настройка разрешена в абсолютную до смены рабочего
+каталога пробой, и 0 ключей после `doctor` (адрес уехал в scratch и удалён с
+ним) — невыполненный критерий, потому что вызов при этом состоялся и деньги
+потрачены. Платных вызовов ровно два и у проекта под `execution_mode: tdd`
+(проба идёт под `standard`, третьего вызова нет), и тот же набор ключей
+предъявлен при verdict `broken`.
+
+#### AC-46: Подкоманда без платного вызова не сообщает об успехе раньше ack своего checkpoint-а · verification: test
+traces: [FR-03, FR-05, FR-07]
+scenarios: [BEH-48]
+
+Наблюдаемый знак: в `spec-runner budget authorize … --reason …` и
+`spec-runner tdd release … --reason …` с исправным двойником store ack
+mutation-checkpoint-а стоит в журнале раньше строки успеха и раньше выхода с
+кодом 0; с двойником, отклоняющим ack, обе завершаются exit 2, stderr
+называет недоставленный `sequence` и `checkpoint_id`, и нулевой код у любой
+из двух — невыполненный критерий. Mutation при этом в DB есть, и рядом с ней
+— запись pending-outbox, сделанная той же транзакцией; mutation без такой
+записи — невыполненный критерий. После `kill -9` в окне между commit-ом
+mutation и ack следующий invocation в том же каталоге доставляет
+недоставленный checkpoint прежде любой другой работы, с тем же
+`checkpoint_id` и идемпотентно, после чего `restore` более раннего прогона
+того же workstream-а отказывает `needs-human` шагом 5 — то есть правка,
+терявшаяся в окне, предъявлена, а предикат шага 5 не менялся (AC-08 в полном
+объёме). Число синхронных ожиданий ack в `run --task` равно числу точек drain
+перед платными вызовами плюс одна перед closure; выросшее ожидание на горячем
+пути `run` — невыполненный критерий (RK-01).
 
 ### D. Git-материал и незавершённая работа
 
@@ -759,12 +814,14 @@ scenarios: [BEH-19, BEH-09]
 
 1. **Каждое Must-требование покрыто ≥ 1 AC.** FR-01 → AC-01, AC-02, AC-03,
    AC-22, AC-35, AC-40, AC-43; FR-02 → AC-04, AC-05, AC-06, AC-07, AC-08,
-   AC-09, AC-20, AC-36, AC-40, AC-41, AC-44; FR-03 → AC-10, AC-11, AC-12,
-   AC-13, AC-29, AC-36, AC-37, AC-38, AC-39; FR-04 → AC-12, AC-14, AC-15,
+   AC-09, AC-20, AC-36, AC-40, AC-41, AC-44, AC-45; FR-03 → AC-10, AC-11,
+   AC-12, AC-13, AC-29, AC-36, AC-37, AC-38, AC-39, AC-45, AC-46;
+   FR-04 → AC-12, AC-14, AC-15,
    AC-16, AC-17, AC-37, AC-39; FR-05 → AC-08, AC-15, AC-17, AC-18, AC-19,
-   AC-37, AC-42, AC-43, AC-44; FR-06 → AC-07, AC-09, AC-20, AC-21, AC-22,
-   AC-23, AC-24, AC-25, AC-37, AC-38, AC-39; FR-07 → AC-03, AC-05, AC-27,
-   AC-28, AC-29, AC-32, AC-34, AC-37, AC-38; FR-08 → AC-13, AC-30, AC-31,
+   AC-37, AC-42, AC-43, AC-44, AC-46; FR-06 → AC-07, AC-09, AC-20, AC-21,
+   AC-22, AC-23, AC-24, AC-25, AC-37, AC-38, AC-39, AC-45;
+   FR-07 → AC-03, AC-05, AC-27,
+   AC-28, AC-29, AC-32, AC-34, AC-37, AC-38, AC-46; FR-08 → AC-13, AC-30, AC-31,
    AC-32, AC-36; NFR-01 → AC-05, AC-30, AC-32, AC-36; NFR-04 → AC-12, AC-18,
    AC-37; NFR-05 → AC-25, AC-26; NFR-06 → AC-24; NFR-07 → AC-38.
 2. **Should-требования покрыты по усмотрению qa, все три.** FR-09 → AC-28,
@@ -774,7 +831,7 @@ scenarios: [BEH-19, BEH-09]
    `10-requirements.md`; новых FR/NFR здесь не вводится.
 4. **Каждый `verification: test` несёт `scenarios`** с идентификаторами только
    из `15-behaviour-spec.md`; новых BEH здесь не вводится. Обратно — каждый
-   сценарий BEH-01…BEH-46 упомянут хотя бы одним AC: BEH-01/02 → AC-01;
+   сценарий BEH-01…BEH-48 упомянут хотя бы одним AC: BEH-01/02 → AC-01;
    BEH-03 → AC-02; BEH-04 → AC-03; BEH-05 → AC-04; BEH-06 → AC-05;
    BEH-07 → AC-06; BEH-08 → AC-07; BEH-09 → AC-08, AC-44; BEH-10 → AC-09;
    BEH-11 → AC-08; BEH-12 → AC-10; BEH-13 → AC-11; BEH-14 → AC-12;
@@ -785,7 +842,8 @@ scenarios: [BEH-19, BEH-09]
    BEH-31 → AC-29; BEH-32 → AC-27; BEH-33 → AC-30; BEH-34 → AC-31;
    BEH-35 → AC-32; BEH-36 → AC-33; BEH-37 → AC-34; BEH-38 → AC-35;
    BEH-39 → AC-36; BEH-40 → AC-37; BEH-41 → AC-41, AC-42; BEH-42 → AC-38;
-   BEH-43 → AC-39; BEH-44 → AC-40; BEH-45 → AC-43; BEH-46 → AC-27.
+   BEH-43 → AC-39; BEH-44 → AC-40; BEH-45 → AC-43; BEH-46 → AC-27;
+   BEH-47 → AC-45; BEH-48 → AC-46.
    Сценарии `kind: manual`
    (BEH-41, BEH-45) стоят только за критериями `metric`/`manual`.
 5. **Каждый AC называет наблюдаемый знак**, а не пересказывает требование:
@@ -812,10 +870,12 @@ scenarios: [BEH-19, BEH-09]
    local-режим нет намеренно — его отказная форма та же, что у legacy в
    AC-19 и AC-34. Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked)
    — AC-14 проверяет восстановление через `git`, не формат. Q-05
-   (локальный snapshot синхронно, publisher с drain перед call-start и перед
-   closure, manifest кладётся последним) — AC-11 считает checkpoint
+   (локальный snapshot синхронно, publisher с drain перед call-start, перед
+   closure и — у подкоманд без платного вызова — сразу после mutation,
+   manifest кладётся последним) — AC-11 считает checkpoint
    полученным по ack двойника, AC-29 фиксирует лишь acknowledged id в
-   closure. Q-06/Q-08 (место seam-а, движок redaction) — AC-04, AC-25
+   closure, AC-46 — что третья точка наступает раньше сообщения об успехе.
+   Q-06/Q-08 (место seam-а, движок redaction) — AC-04, AC-25
    проверяют единственность пути статически, где бы он ни жил. Q-07
    (состав policy identity) — AC-18 подменяет `review_policy` как заведомо
    policy-relevant ключ. Q-11/Q-12 (исполнитель retention, источник open
@@ -835,7 +895,7 @@ Workstream объявляется delivered, когда одновременно
   AC-04, AC-05, AC-06, AC-07, AC-08, AC-09, AC-10, AC-11, AC-12, AC-13,
   AC-14, AC-15, AC-16, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23,
   AC-24, AC-25, AC-26, AC-27, AC-28, AC-29, AC-30, AC-31, AC-32, AC-37,
-  AC-38, AC-39, AC-40.
+  AC-38, AC-39, AC-40, AC-45, AC-46.
 - **AC-36** (fault-injection, `slow`) пройден хотя бы один раз до снятия
   статуса experimental; ссылка на прогон приложена к PR (условие §11
   требований).
@@ -857,6 +917,11 @@ Workstream объявляется delivered, когда одновременно
 событие: оно допустимо только когда все критерии, трассирующие FR-01–FR-08,
 зелёные, AC-36 прогнан, AC-44 выполнен, и CHANGELOG несёт запись о снятии
 (AC-19 фиксирует оба состояния флага как параметр, AC-43 — запись).
+**AC-46 входит в этот набор особо** (решение владельца 2026-09-18): пока
+подкоманда без платного вызова вправе сообщить об успехе до ack своего
+checkpoint-а, restore штатно применяет snapshot старше чужого потерянного
+решения — и делает это молча. Красный AC-46 держит статус experimental даже
+при всех остальных зелёных.
 
 Любой красный критерий из перечисленных, красный обязательный CI-чек или
 неприбывшее ревью держат workstream в состоянии «не delivered»; частичная

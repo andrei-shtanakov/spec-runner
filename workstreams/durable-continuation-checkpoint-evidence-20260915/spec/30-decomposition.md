@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 145e15366ea00111467ce5c4f17a02053c34ea09
-  acceptance: b91e31bff8cbdbe39b2b4bec2f34cb67dc69e2c3
+  design: ed0e9dd7e4bbf70eaecf7505229397f8aee40f8c
+  acceptance: b3645d636995ba2bd6acf2c46852f1ebb2343c34
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -107,6 +107,14 @@ encryption_at_rest, immutable_put, lifecycle)`, функцией ключей §
 тем самым в `KNOWN_EXECUTOR_KEYS`; **на загрузке** `ConfigError`, если адаптер
 объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, или
 `retention_days` вне 7–365; `validate.py` повторяет те же проверки в отчёте.
+Путеподобные `store.options` (у первого адаптера — `root`) резолвятся **на
+загрузке** в абсолютные против `project_root`, а не лениво при первом `put`
+и не против CWD (design §1.1): процесс вправе сменить рабочий каталог внутри
+себя, и относительный адрес, разрешённый после `os.chdir` пробы `doctor`
+(`doctor.py:338`), указал бы внутрь каталога, который тут же удаляется
+(`:408`) — платный вызов без единой durable-записи. Наблюдаемое —
+последний And BEH-47 (ключи на месте после `doctor` при относительном
+`root` в config-е), красный до этой строки.
 Свойства путей `.executor-checkpoints`/`.executor-spool.jsonl` (с
 `spec_prefix`/`change_id` как у `state_file`) и их включение в
 `git_ops.runtime_state_paths` — здесь же, чтобы каждая следующая задача брала
@@ -203,7 +211,22 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` для
 первых двух и `plan:interactive` для третьего, `task_id=None`; `costs` —
 строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
-`doctor` — через `execute_task` без правок. Третий сайт назван здесь
+`doctor` — через `execute_task`, и **с правкой** (design §2.7,
+spec-runner#525): `doctor.build_scratch` объявляет область пробы на своём
+scratch-конфиге — `probe_scratch`, `probe_provenance: "doctor"`, пин
+`execution_mode = "standard"`, обнуление `review_parallel`/`review_roles`, —
+а seam отображает provenance сайта в provenance пробы по закрытой карте
+`{green: doctor:execute, review: doctor:review}` и публикует её записи с
+`task_id = null`. Поля — в `config.py` (DT-01 их не знает), карта — рядом с
+`PaidCall`, значение вне карты при поднятом флаге — `Refusal(kind=
+"instrument")` до записи call-start. Без этой правки значения словаря
+`doctor:execute`/`doctor:review` не производил бы ни один сайт (их требует
+FR-02 и пинует BEH-05), проба под проектом `tdd` делала бы третий платный
+вызов вопреки своему cost gate, а опубликованный `task_id` канонной
+`TASK-001` блокировал бы **одноимённую реальную** задачу проекта после
+ветки (2) Q-12. Читатели `probe_scratch` — `after_mutation` (DT-03) и
+`export_attempt` (DT-04); полный знак области — BEH-47 в DT-05. Третий сайт
+`cli_plan.py` назван здесь
 поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
 флагов и, оставшись непереведённым, дал бы платный вызов без call-start в
 обход FR-02.
@@ -288,16 +311,36 @@ run-start, call-start и manifest-а, `facts` рядом, не в identity; mani
 `manifest_sha256` — repository/workstream/`refs[]`/`excluded` и WIP заполняет
 DT-05. `Publisher` получает очередь по `sequence`, `drain(timeout)` и
 `last_acknowledged()`; manifest кладётся последним, ack manifest-а = ack
-checkpoint-а; обе точки drain (Q-05): перед call-start — шаг 1 `execute`
+checkpoint-а; **три** точки drain (Q-05): перед call-start — шаг 1 `execute`
 (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind="instrument")`,
-вызова нет) и перед closure (`last_checkpoint_id = last_acknowledged()`).
+вызова нет), перед closure (`last_checkpoint_id = last_acknowledged()`) и —
+третья, spec-runner#527 — **сразу после mutation** у подкоманд, у которых
+платного вызова нет вовсе и первая точка потому не наступает никогда
+(`budget authorize`, `tdd abandon|repair|resume|release`): решение принимает
+сама `after_mutation` по `run_context.current().subcommand`, а не сайт
+подкоманды, — иначе у каждой был бы свой сайт ожидания и подкоманда,
+добавленная после бандла, тихо осталась бы без него (тот же довод, по
+которому kind closure выводит диспетчер). Таймаут здесь → `Refusal(kind=
+"instrument")` наружу, то есть exit 2 и closure `failed` по общему правилу:
+успех такая подкоманда не печатает. Здесь же — `checkpoint_outbox`
+(таблица, резервирование `sequence` и **доставка незакрытых строк на старте
+invocation** в порядке `sequence`, идемпотентно по `checkpoint_id`:
+`AlreadyExists` от store читается как «доставлено»; ротация локальных копий
+не удаляет копию, на которую ссылается строка outbox-а). Вставку строки
+outbox-а **в транзакцию** каждой mutation делает DT-05 вместе с остальными
+сайтами; здесь она есть у одного — `record_attempt`.
+Ещё одно решение `after_mutation` — выход без публикации при поднятом
+`config.probe_scratch` (design §2.7, поле ставит DT-02): mutation эфемерной
+пробы `doctor` не continuation-relevant, её DB удаляется вместе с каталогом.
 Сайт записи в этой задаче один — `record_attempt`; остальные сайты §3.1
 подключает DT-05.
 
 Границы: WIP (`wip.py`), `repository_identity`, `refs[]` с reachability и
 `excluded` — DT-05; spool в checkpoint-е и `degraded: true` — DT-08; отказные
 режимы drain перед closure (таймаут → closure `failed` с предыдущим id,
-BEH-31) — DT-10; целостность при чтении — DT-11. Владеет `tests/
+BEH-31) — DT-10; целостность при чтении — DT-11; наблюдаемое поведение
+третьей точки drain и outbox-а на настоящих подкомандах (BEH-48) и области
+пробы (BEH-47) — DT-05, где есть все их сайты записи. Владеет `tests/
 test_checkpoint_is_a_snapshot.py` (новый). Red-рамки: attempt под `PRAGMA
 wal_autocheckpoint=0`, seam вызван через `record_attempt`, snapshot открыт в
 новом каталоге и видит attempt, контрольный вариант с `shutil.copy` — не
@@ -333,7 +376,13 @@ terminal `record_attempt` (`success`/`failed`/`blocked`)
 `evidence.export_attempt(state, task_id, n)` собирает строки этой задачи/
 attempt-а из таблиц §6.4 в JSONL по `schemas/evidence-record.schema.json` и
 публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а — это и
-есть источник «attempts» для `collect()`.
+есть источник «attempts» для `collect()`. Второй читатель
+`config.probe_scratch` (design §2.7, поле ставит DT-02) — здесь: при
+поднятом флаге `export_attempt` не публикует ничего, потому что экспорт
+назвал бы задачу, которой в workstream-е нет, и корроборировал бы
+checkpoint, которого нет; стоимость пробы при этом остаётся в её
+call-result. Знак — BEH-47 (пустой префикс `attempts/` под `run_id`
+прогона `doctor`), предъявляется в DT-05.
 
 Границы: экспорт `pr_*` при завершении раунда `review-pr`, доказательство
 «только свои строки» и матрица outcome × site — DT-13 (файл `tests/
@@ -348,8 +397,8 @@ seam-е для crash/unknown и open call (двойник, а не `sleep`-го�
 рекомендации сверх пометки «не доказуемо», порядок полей записи, имена
 приватных функций.
 
-#### DT-05: Checkpoint после каждой mutation: все сайты записи, полный manifest, repository identity, WIP collect · type: implement · owner: dev
-scenarios: [BEH-13, BEH-14]
+#### DT-05: Checkpoint после каждой mutation: все сайты записи, полный manifest, repository identity, WIP collect, область пробы и синхронный ack · type: implement · owner: dev
+scenarios: [BEH-13, BEH-14, BEH-47, BEH-48]
 depends_on: [DT-04]
 parallel_group: core
 
@@ -363,7 +412,23 @@ parallel_group: core
 раунда (`review_pr.py:282`, своё соединение — передаётся в `conn`),
 `bookkeeping.commit_status_flip` (`conn=None` — checkpointer сам открывает
 соединение к `state_file`); `mark_running`, `set_meta` и `phase_results` seam
-не вызывают (§3 требований). Manifest дополняется до §3.3: `repository`
+не вызывают (§3 требований). Строку `checkpoint_outbox` (таблица и
+резервирование `sequence` — DT-03) вставляет **та же транзакция**, что сама
+mutation, у каждого из этих сайтов: `after_mutation` получает уже
+зафиксированное обязательство и лишь исполняет его, ack строку удаляет
+(design §3.1, Q-05). Отсюда — оба сценария этой задачи сверх BEH-13/14.
+BEH-48 (spec-runner#527) наблюдает третью точку drain и outbox на настоящих
+подкомандах: у `budget authorize` и `tdd release` ack mutation-checkpoint-а
+стоит раньше строки успеха; при отклонённом ack — exit 2, stderr с
+недоставленным `sequence`/`checkpoint_id`, mutation в DB и строка outbox-а
+рядом с ней; после `kill -9` в окне между commit-ом и ack следующий
+invocation в каталоге доставляет checkpoint прежде любой другой работы, с
+тем же `checkpoint_id` и идемпотентно, и после этого шаг 5 restore (DT-06)
+на нём отказывает — то есть правка, терявшаяся в окне, предъявлена, а
+предикат шага 5 не менялся. BEH-47 (spec-runner#525) наблюдает область
+пробы целиком, потому что только здесь собраны все её половины: поля и
+provenance-карта из DT-02, выход `after_mutation` из DT-03, молчание
+`export_attempt` из DT-04. Manifest дополняется до §3.3: `repository`
 (`git_ops.repository_identity` — remote URL, нормализованный до
 `host/owner/repo` без учётных данных и `.git`, плюс root commit по `git
 rev-list --max-parents=0 HEAD`, все корни перечислены), `workstream`
@@ -395,9 +460,26 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 находит ровно один seam; manifest после настоящей mutation валиден по схеме, а `grep` по
 байтам всех файлов checkpoint-а не находит `str(project_root)`, `os.getpid()`
 и имени активного `spec-runner-red-*` worktree; повторный прогон с объявленным
-`tdd_namespace` даёт `namespace_source: declared`. Не утверждать число
+`tdd_namespace` даёт `namespace_source: declared`. Для BEH-47 — один
+настоящий прогон `spec-runner doctor --with-review --yes` с fake CLI: у
+двойника store run-start, две пары call-start/call-result с provenance
+`doctor:execute`/`doctor:review`, одна closure и **пустые** префиксы
+`checkpoints/` и `attempts/` под тем же `run_id`; ни одна опубликованная
+запись не несёт `task_id`; следующий `run --all` доходит до платного вызова
+собственной `TASK-001` проекта — в том числе после `reset` и в свежем
+клоне; ключи на месте при относительном `root` в config-е; два платных
+вызова и под проектом `execution_mode: tdd`; тот же набор при verdict
+`broken`. Для BEH-48 — порядок в общем журнале, exit 2 на отклонённом ack и
+поздняя доставка после `kill -9`, плюс контроль на `run --task`: число
+синхронных ожиданий ack равно числу точек drain перед платными вызовами
+плюс одна перед closure (выросшее ожидание на горячем пути — красный тест,
+RK-01). Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
+test_mutation_checkpoint_ack.py` (оба новые). Не утверждать число
 вызовов `after_mutation` в `state.py`, формат `wip.tar` внутри, нормализацию
-URL за пределами `host/owner/repo`.
+URL за пределами `host/owner/repo`, имена полей области пробы
+(`probe_scratch`/`probe_provenance`), имя и схему таблицы
+`checkpoint_outbox`, wall-clock цену третьей точки drain внутри CI-теста
+(её меряет бенчмарк BEH-41).
 
 #### DT-06: Restore по `run_id`: `plan`/`apply`, порядок проверок, WIP apply, чтение и replay spool, следующий шаг, `--experimental`, `--json`, бенчмарк · type: implement · owner: dev
 scenarios: [BEH-16, BEH-17, BEH-18, BEH-19, BEH-20, BEH-21, BEH-41, BEH-43]
@@ -484,10 +566,17 @@ checkpoint-ом, **после которого нет ни одного блок
 между mutation и доставкой checkpoint-а, acknowledged checkpoint-а не имеет
 и тоже не блокирует — его правка теряется молча (design § 7.2 шаг 5, абзац
 про пробел); fail-closed здесь невозможен, он сделал бы недостижимым путь
-«дверь `close-call` → restore».
+«дверь `close-call` → restore». Предикат этого шага поэтому и не менялся, а
+окно сузили третья точка drain и `checkpoint_outbox` (DT-03, DT-05): на
+живой машине потеря превращается в позднюю доставку, которую этот шаг
+видит как всякий другой checkpoint, и знак этого — последние And BEH-48,
+предъявляемые **через** отказ этого шага.
 Неблокирующая половина — `evidence close-call`, `evidence purge`, `doctor`,
 `restore` — не блокирует независимо от checkpoint-ов (причина у каждого
-своя, design § 7.2 шаг 5; у двери checkpoint есть, и он ничего не меняет). Обе половины объявляются рядом с
+своя, design § 7.2 шаг 5; у двери checkpoint есть, и он ничего не меняет; у
+`doctor` его нет вовсе — design §2.7, так что его строка здесь фиксирует
+свойство, а не решает за него, и кандидатом на выход он не бывает по тому
+же основанию). Обе половины объявляются рядом с
 `PAYING_SUBCOMMANDS` в `run_context.py` (DT-02), и полнота держится тестом
 `set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING` при пустом пересечении
 (предмет BEH-20, последние And; файл — `tests/test_restore_refusals.py`
@@ -938,13 +1027,14 @@ design: не утверждать наличие строк README/CHANGELOG/`do
 
 ## Инварианты графа
 
-**Покрытие сценариев.** Каждый сценарий BEH-01…BEH-46 назван ровно одной
+**Покрытие сценариев.** Каждый сценарий BEH-01…BEH-48 назван ровно одной
 задачей; пропусков и дублей нет. Распределение: DT-01 → 28; DT-02 → 03, 05,
-06, 07, 24, 26, 38, 44; DT-03 → 12; DT-04 → 36, 37; DT-05 → 13, 14; DT-06 →
+06, 07, 24, 26, 38, 44; DT-03 → 12; DT-04 → 36, 37; DT-05 → 13, 14, 47, 48;
+DT-06 →
 16, 17, 18, 19, 20, 21, 41, 43; DT-07 → 01, 02; DT-08 → 15, 33, 34, 35;
 DT-09 → 09, 10, 11; DT-10 → 04, 29, 30, 31, 32, 46; DT-11 → 40; DT-12 → 42;
-DT-13 → 08, 22, 23, 25, 27; DT-14 → 39, 45. Итого 1 + 8 + 1 + 2 + 2 + 8 + 2 +
-4 + 3 + 6 + 1 + 1 + 5 + 2 = 46 сценариев в четырнадцати задачах.
+DT-13 → 08, 22, 23, 25, 27; DT-14 → 39, 45. Итого 1 + 8 + 1 + 2 + 4 + 8 + 2 +
+4 + 3 + 6 + 1 + 1 + 5 + 2 = 48 сценариев в четырнадцати задачах.
 
 **Владелец сценария — та задача, на чьей поверхности он наблюдаем.**
 `implement`-задача без `delivered_by` обязана погасить свой красный в
@@ -956,7 +1046,11 @@ DT-13 → 08, 22, 23, 25, 27; DT-14 → 39, 45. Итого 1 + 8 + 1 + 2 + 2 + 8
 последний And наблюдает `restore` DT-06; BEH-41 — на DT-06, потому что его
 CI-половина живёт в `tests/test_restore_drill.py`; BEH-43 — на DT-06 по
 `checked_by`, а сам sweep — autouse-фикстура conftest, под которую попадают и
-E2E последующих задач.
+E2E последующих задач; BEH-47 и BEH-48 — на DT-05, а не на DT-02/DT-03,
+которые кладут их половины (поля области пробы и provenance-карта; выход
+`after_mutation`, третья точка drain и таблица outbox-а): наблюдаемы они
+только там, где у mutation есть все штатные сайты записи, а у пробы — и
+`export_attempt` DT-04. Обе задачи-донора называют это своей границей.
 
 **Один владелец на файл.** Владение = право править файл; цели задач попарно
 не пересекаются.
@@ -967,7 +1061,7 @@ E2E последующих задач.
 | DT-02 | `tests/test_call_start_before_spawn.py`; `tests/test_planning_has_ledger_identity.py`; `tests/test_bounded_evidence_logs.py`; `tests/test_state.py`; `tests/test_cli_info.py`; `tests/test_harness_guards.py` | три новых; три существующих, правка по предмету BEH-03 / BEH-38 / BEH-44 |
 | DT-03 | `tests/test_checkpoint_is_a_snapshot.py` | новый |
 | DT-04 | `tests/test_evidence_read_surface.py` | новый |
-| DT-05 | `tests/test_checkpoint_after_every_mutation.py` | новый |
+| DT-05 | `tests/test_checkpoint_after_every_mutation.py`; `tests/test_doctor_probe_scope.py`; `tests/test_mutation_checkpoint_ack.py` | новые |
 | DT-06 | `tests/test_restore_drill.py`; `tests/test_restore_refusals.py`; `scripts/bench_durability.py` (`kind: manual`) | новые |
 | DT-07 | `tests/test_run_identity.py` | новый |
 | DT-08 | `tests/test_emergency_spool.py` | новый |
@@ -1041,7 +1135,10 @@ DT-06.** Шесть задач строго последовательно, и �
 параллелить внутри группы нечего. DT-02 и DT-06 — самые крупные (по восемь
 сценариев), и обе на критическом пути: это следствие того, что BEH-05 требует
 seam на всех сайтах разом, а `tests/test_restore_drill.py` несёт Git-материал,
-restore и sweep вместе.
+restore и sweep вместе. DT-05 выросла до четырёх сценариев по той же
+причине, по которой выросли те две: BEH-47 и BEH-48 наблюдаемы только при
+полном наборе сайтов записи, и разнести их по задачам-донорам значило бы
+предъявить половину знака.
 
 **DT-07 (`identity`) стартует сразу после DT-03** и идёт параллельно
 DT-04 → DT-05 → DT-06: каналам `run_id` не нужны ни `evidence`, ни `restore`.
@@ -1068,7 +1165,15 @@ calls DT-09; каждая задача вставляет свою, не пер�
 распознаётся — молчаливый повтор возможен; между DT-02 и DT-10 closure
 пишется без правила вывода, поэтому сигналы и неперехваченные исключения
 kind-а не получают, а отказ ack последнего checkpoint-а в closure не
-отражается; между DT-02 и DT-14 диаграммы `docs/architecture.md` и `CLAUDE.md`
+отражается; между DT-03 и DT-05 синхронную точку drain (Q-05 (в)) и строку
+outbox-а имеет один сайт — `record_attempt`, — а `budget authorize` и `tdd
+release` своего `after_mutation` ещё не зовут вовсе, поэтому окно потери у
+них остаётся прежним, добандловым, и правило шага 5 restore на них не
+опирается; область пробы `doctor` промежуточного состояния, наоборот, не
+создаёт: каждая её половина ложится в ту же задачу, что заводит
+соответствующий путь публикации (checkpoint — DT-03, attempt-экспорт —
+DT-04, provenance и `task_id` — DT-02), так что окна, в котором проба уже
+может публиковать и ещё не погашена, в цепи нет; между DT-02 и DT-14 диаграммы `docs/architecture.md` и `CLAUDE.md`
 называют уже удалённый `runner.run_claude_async`; между DT-03 и DT-08 degraded mode DB
 по-прежнему «живёт в памяти»; между DT-06 и DT-11 `run` не проверяет
 целостность bundle-а. Ни одно из этих состояний не годится для реального

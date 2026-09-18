@@ -803,6 +803,54 @@ GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все �
       на конфигурацию, где A — последний прогон workstream-а до самого
       краша (после close-call более поздних не-дверных прогонов не
       остаётся).
+**Приняты 2026-09-18: #525 и #527** (inbox, from devtools — выносы из PR #524
+и #526). Оба — решения в самом бандле #480, не в коде: кода по этому
+workstream всё ещё нет. Решения владельца зафиксированы в бандле тем же
+PR-ом, что этот пункт; реализация придёт с DT-02/DT-03/DT-05.
+
+- [ ] **bundle-480-doctor-site-scope** (spec-runner#525, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-doctor-site-scope
+      P0, блокер DT-02: `doctor` был объявлен покрытым seam-ом «без правок»,
+      хотя его платный вызов исполняется в эфемерном scratch, а следы уходили
+      в учёт вызывающего. Решение владельца — разделить две области
+      (design §2.7): внешний invocation владеет `run_id`, стоимостью,
+      call-start/result и closure; внутренняя проба живёт только в scratch и
+      проектных checkpoint-ов с attempt-экспортом не публикует. Provenance
+      разделён на `doctor:execute` / `doctor:review` (карта в seam-е,
+      значения производятся конфигом пробы); `task_id` опубликованной записи
+      — `null`, поэтому `agent_calls.task_id` остаётся `NOT NULL` и миграции
+      не требует, а ветка (2) Q-12 строку из такой записи не создаёт;
+      `execution_mode` пробы пинуется в `standard` (иначе проект под `tdd`
+      дал бы третий платный вызов при cost gate, объявившем два), а
+      `review_parallel`/`review_roles` обнуляются; путеподобные
+      `durability.store.options` резолвятся в абсолютные **на загрузке**, до
+      `os.chdir` пробы. `doctor` остаётся в неблокирующей половине шага 5
+      restore и кандидатом на выход не бывает — теперь как следствие
+      (acknowledged checkpoint-ов у него нет), а не как строка перечня.
+      Наблюдаемое — BEH-47/AC-45, владелец знака — DT-05. **Не закрыт:**
+      решение зафиксировано в бандле этим PR-ом, код — в общей реализации
+      #480 (`runtime-state-artifact-export`), DT-02/DT-03/DT-04/DT-05.
+
+- [ ] **bundle-480-narrow-checkpoint-delivery-window** (spec-runner#527, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-narrow-checkpoint-delivery-window
+      P1, release-блокер снятия experimental-статуса `restore`. Предикат шага
+      5 проверки (6) не меняется (fail-closed сделал бы недостижимым путь
+      «дверь `close-call` → restore»); сужается **окно**: у подкоманд без
+      платного вызова (`budget authorize`, `tdd abandon|repair|resume|release`)
+      появляется третья точка drain (Q-05 (в)) — синхронный ack
+      mutation-checkpoint-а **до** сообщения об успехе, таймаут → exit 2, а не
+      ложный успех; решение принимает `after_mutation` по подкоманде
+      invocation-а, а не сайт подкоманды. Плюс transactional pending-outbox:
+      строка `checkpoint_outbox` пишется той же транзакцией, что mutation, и
+      следующий invocation в каталоге доставляет недоставленное прежде любой
+      другой работы — на живой машине потеря становится поздней доставкой.
+      Необслуживаемый остаток назван прямо: восстановление начато раньше,
+      чем в исходном каталоге снова что-либо запустили (в пределе — каталога
+      и машины больше нет).
+      Наблюдаемое — BEH-48/AC-46 (AC-46 держит статус experimental отдельной
+      строкой порога), владелец знака — DT-05. **Не закрыт:** решение
+      зафиксировано в бандле этим PR-ом, код — DT-03 (точка drain, таблица и
+      доставка на старте) и DT-05 (вставка строки outbox-а в транзакцию
+      каждой mutation).
+
 - [ ] **watch-red-prerun-completed-misclassified** (spec-runner#480, из ревью PR #522) @owner:TBD @id:watch-red-prerun-completed-misclassified
       Не связано с предыдущими двумя. `cmd_watch`, остановленный красной
       pre-run validation, делает `print` + `return` с кодом выхода 0 без
