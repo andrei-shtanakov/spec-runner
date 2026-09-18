@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: da30032f1940d42ed0d8357854e2681596e697fa
-  behaviour-spec: 1b589bb09f5ba52fff51f52d3a05568b4c5310a6
+  requirements: d6000d7524816328b8499c8c9b29aebf572019e8
+  behaviour-spec: cebb8dc92c3f4bb552c7b6e22b63d809b813a40e
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -16,7 +16,7 @@ upstream_hashes:
 `workstreams/durable-continuation-checkpoint-evidence-20260915/`. Единственный
 источник критериев приёмки workstream-а: критерии составлены заново от
 требований (`10-requirements.md`, FR-01…FR-09, NFR-01…NFR-07) и сценариев
-поведения (`15-behaviour-spec.md`, BEH-01…BEH-46); список критериев чартера
+поведения (`15-behaviour-spec.md`, BEH-01…BEH-48); список критериев чартера
 сюда не переносится. Термины — в значении upstream'а (§3 требований):
 **`run_id`**, **`pipeline_id`**, **`call_id`**, **платный subprocess**,
 **provenance**, **policy identity**, **call-start** / **call-result** /
@@ -112,8 +112,10 @@ acknowledged call-start-ов; call-start несёт `run_id`, `call_id`, provena
 `doctor:execute`, `doctor:review`), policy
 identity, digest redacted prompt-а, timestamp и для task-сайтов
 `task_id`/номер attempt; значение словаря, которого не производит ни один
-сайт журнала, — невыполненный критерий; тот же `call_id` стоит в строке
-`agent_calls`/`pr_agent_calls` рядом с `provenance`. Все три платных пути
+сайт журнала, — невыполненный критерий; тот же `call_id` стоит рядом с
+`provenance` в строке ledger-а своего семейства (`agent_calls` — сайты
+задачи, `pr_agent_calls` — `review-pr`, `plan_agent_calls` — планирование;
+строка планирования в `agent_calls` критерий не выполняет, см. AC-22). Все три платных пути
 `cli_plan.py` — gated, `--full` и интерактивный — предъявлены в журнале:
 критерий не считается выполненным, если seam доказан на двух из трёх.
 Статический тест по образцу `PaidBinaryReached` красный на любом

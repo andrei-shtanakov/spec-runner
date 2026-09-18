@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: da30032f1940d42ed0d8357854e2681596e697fa
-  behaviour-spec: 1b589bb09f5ba52fff51f52d3a05568b4c5310a6
+  requirements: d6000d7524816328b8499c8c9b29aebf572019e8
+  behaviour-spec: cebb8dc92c3f4bb552c7b6e22b63d809b813a40e
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -826,7 +826,8 @@ checkpoint). Ни то, ни другое больше не держится н�
 `reinstate_checkpoint_with_claims`, `record_tdd_phase`,
 `record_verify_evidence`, `record_gate_verdict`, `record_waiver`,
 `record_waiver_applied`, `record_remedy`, `record_budget_authorization`,
-`record_agent_call` — шаг close, § 2.2), `claims.release_claims`,
+`record_agent_call` и писатель `plan_agent_calls` — оба как шаг close,
+§ 2.2), `claims.release_claims`,
 `ReviewPrState` при завершении раунда (`review_pr.py:282`; у него своё
 соединение — он передаёт его в `conn`), `bookkeeping.commit_status_flip`
 (`conn=None`: checkpointer сам открывает соединение к `state_file` для
@@ -898,25 +899,33 @@ project-relative; тест `grep`-ает `str(project_root)` и `os.getpid()`.
 доставка того же `checkpoint_id` идемпотентна — `AlreadyExists` от store
 (§ 1.3) читается как «доставлено», и строка удаляется.
 
-**Кто доставляет — выводится из двух свойств, а не перечисляется.**
-Доставляет всякий invocation, который (1) открывает DB этого каталога и
-(2) вправе публиковать, то есть принадлежит `PAYING_SUBCOMMANDS` (§ 6.2).
-Второе свойство обязательно: read-only команды (`status`, `costs`,
-`validate`, `report`, `evidence <run_id>`) DB тоже открывают, но BEH-04 и
-BEH-13 требуют, чтобы они не отправили в store **ничего** — доставка из них
-сделала бы это утверждение ложным. Отсюда конкретные сайты: у
-`run`/`retry`/`watch` — тот же рубеж, что у replay spool
-(`cli._run_start_gate` до процедуры Q-12, § 2.4); у подкоманд точки (в) —
-непосредственно перед своей mutation; у **`evidence close-call` и `evidence
-purge`** — на входе, до своей работы (они платящие по критерию FR-01 и DB
-открывают; без них канонная последовательность FR-05 «дверь → restore»
-доставки не производила бы вовсе, хотя оператор в каталоге как раз
-работал); у `plan` и `review-pr` — так же на входе. Не доставляет
-`restore`: он исходную DB не открывает по построению (§ 7.2 читает store и
-`--into`-клон), и это прямо названный вход остатка (§ 7.2, FR-05), а не
-упущение. Ожидание на любом из этих сайтов — ремонт, а не цена каждой
-mutation: пустой outbox (норма) не ждёт ничего, непустой ждёт один раз на
-строку и больше к ней не возвращается. Локальная копия checkpoint-а для этого обязана дожить
+**Мест доставки — два, и ни одно не принадлежит подкоманде.** Перечислять
+сайты по подкомандам пришлось бы догонять дерево (и первая же редакция
+этого дизайна уже забыла дверь § 2.5), поэтому доставка живёт там же, где
+всё остальное про checkpoint-ы: (1) рубеж старта `cli._run_start_gate` у
+`run`/`retry`/`watch` — потому что процедура Q-12 обязана читать уже
+доставленное состояние, как и доигранный spool (§ 2.4); (2) **первое** за
+процесс обращение к `after_mutation` — она доставляет незакрытые строки
+прежде, чем опубликует свою. Второе место и покрывает всё остальное:
+`budget authorize` и `tdd abandon|repair|resume|release` (точка (в)),
+`evidence close-call` и `evidence purge` (их шаг close — mutation, § 2.5),
+`plan` и `review-pr` (шаг close своего ledger-а, § 2.2 шаг 8). Никакой
+подкоманде для этого не нужен собственный сайт ожидания, и `remedy.py`,
+`budget_cmd.py`, `evidence_cmd.py`, `cli_plan.py`, `review_pr.py` этим
+дизайном под доставку не правятся.
+
+Из «двух мест» следуют два свойства, и оба намеренные. **Read-only команды
+не доставляют:** `status`, `costs`, `validate`, `report`, `evidence
+<run_id>` DB открывают, но ни рубежа старта, ни mutation у них нет, — а
+BEH-04 и BEH-13 требуют, чтобы они не отправили в store **ничего**.
+**Платящая подкоманда, не сделавшая ни одной mutation, тоже не доставляет:**
+`restore` (исходную DB не открывает вовсе — § 7.2 читает store и
+`--into`-клон), `doctor` (её `after_mutation` выходит по
+`probe_provenance` — § 2.7, и outbox проекта она не видит: у пробы своя DB),
+`plan`, отказавший до платного вызова. Это и есть названный вход остатка
+(§ 7.2, FR-05), а не упущение. Ожидание в любом из двух мест — ремонт, а не
+цена каждой mutation: пустой outbox (норма) не ждёт ничего, непустой ждёт
+один раз на строку и больше к ней не возвращается. Локальная копия checkpoint-а для этого обязана дожить
 до доставки: ротация «последние две» (§ 3.2) не удаляет копию, на которую
 ссылается строка outbox-а.
 
@@ -1343,16 +1352,17 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    потери равным одному ack вместо хвоста handler-а, а `checkpoint_outbox`
    (§ 3.1, § 3.5) — записанное той же транзакцией, что mutation,
    обязательство опубликовать — превращает смерть внутри этого интервала на
-   живой машине в **позднюю доставку**: следующая платящая подкоманда в
-   исходном каталоге (§ 3.5 — перечень выводится из «открывает DB» ∧
-   «вправе публиковать») доставит checkpoint прежде любой работы, и этот шаг
-   увидит его как всякий другой. Необслуживаемым остаётся один вход: в
-   исходном каталоге после смерти прогона не отработала ни одна такая
-   подкоманда — потому что каталога больше нет (машина потеряна вместе с
-   outbox-ом), потому что там ничего не запускали, или потому что
-   запускали только read-only команды и сам `restore`, которые по § 3.5 не
-   доставляют. Он назван здесь и в FR-05, и fail-closed
-   по-прежнему не читается — по той же причине, что выше.
+   живой машине в **позднюю доставку**: следующий прогон в исходном каталоге,
+   дошедший до одного из двух мест доставки (§ 3.5 — рубеж старта
+   `run`/`retry`/`watch` либо первое `after_mutation` процесса), отправит
+   checkpoint прежде своей работы, и этот шаг увидит его как всякий другой.
+   Необслуживаемым остаётся один вход: в исходном каталоге после смерти
+   прогона ни одно из двух мест не наступило — потому что каталога больше
+   нет (машина потеряна вместе с outbox-ом), потому что там ничего не
+   запускали, или потому что запускали только то, у чего нет ни рубежа
+   старта, ни mutation: read-only команды и сам `restore`. Он назван здесь и
+   в FR-05, и fail-closed по-прежнему не читается — по той же причине, что
+   выше.
 
    **Блокирующая половина:** `run`, `retry`, `watch`, `plan`, `review-pr`,
    `budget authorize`, `tdd abandon|repair|resume|release`. Прогон из неё с
@@ -1659,7 +1669,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
-| `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; новые таблицы `plan_agent_calls` (§ 2.3 — ledger вызовов без задачи; `agent_calls.task_id` не меняется) и `checkpoint_outbox` и вставка её строки **в транзакции** `record_*` (§ 3.1); `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>`. Столбец `agent_calls.task_id` остаётся `NOT NULL` — § 2.7 | BEH-03, 13, 15, 33, 35, 38, 48 |
+| `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; новые таблицы `plan_agent_calls` (§ 2.3 — ledger вызовов без задачи; её писатель зовёт `after_mutation` шагом close наравне с `record_agent_call`, § 3.1; `agent_calls.task_id` не меняется) и `checkpoint_outbox` и вставка её строки **в транзакции** `record_*` (§ 3.1); `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>`. Столбец `agent_calls.task_id` остаётся `NOT NULL` — § 2.7 | BEH-03, 13, 15, 33, 35, 38, 48 |
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
 | `src/spec_runner/audit_log.py`, `logging.py`/`obs.py` | `run_id` обязательным параметром `AuditLogger`, из контекста; `run_id` в contextvars рядом с `pipeline_id` | BEH-01, 02 |
 | `src/spec_runner/prompts_log.py` | `run_id`/`call_id` в заголовке; тело неизменно | BEH-01 |

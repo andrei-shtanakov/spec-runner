@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: da30032f1940d42ed0d8357854e2681596e697fa
+  requirements: d6000d7524816328b8499c8c9b29aebf572019e8
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -197,9 +197,13 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   одно значение словаря не остаётся без сайта в этом журнале: значение,
   которого не производит ни один прогон матрицы, — красный результат этого
   And.
-- **And** тот же `call_id` записан в строке `agent_calls` /
-  `pr_agent_calls` рядом с `provenance`, так что ledger стоимости и evidence
-  соединяются одним ключом.
+- **And** тот же `call_id` записан рядом с `provenance` в строке ledger-а
+  **своего семейства** — `agent_calls` для сайтов задачи, `pr_agent_calls`
+  для `review-pr`, `plan_agent_calls` для трёх сайтов планирования, — так
+  что ledger стоимости и evidence соединяются одним ключом на каждом сайте.
+  Требование строки в `agent_calls` от сайта планирования этот And не
+  выполняет: у той таблицы `task_id` — `NOT NULL`, задачи у планирования
+  нет, и BEH-24 предъявляет ровно обратное.
 - **And** матрица гоняется с настоящим именем `claude` в `claude_command`,
   и это исполнимо только потому, что autouse-гвард `_no_real_agent_calls`
   переключён на одно имя `paid_call._spawn`, а два его патча швов
@@ -435,15 +439,18 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   closure у команды нет (design § 6.3). Закрытие строки ledger-а — mutation,
   и её checkpoint опубликован под тем же `run_id`, у которого run-start
   есть; checkpoint под `run_id` без run-start — красный тест.
-- **And** дверь доставляет **чужой** недоставленный checkpoint до своей
-  работы, и именно это делает исполнимой канонную последовательность FR-05:
-  в том же каталоге ранее убитый `budget authorize` оставил незакрытую
-  строку `checkpoint_outbox` (BEH-48), оператор выполняет `close-call
-  --reason …`, и двойник store получает сперва тот checkpoint, затем записи
-  самой двери; последующий `restore` более раннего прогона отказывает
-  `needs-human` шагом 5, назвав прогон `budget authorize`. Дверь, прошедшая
-  мимо строки outbox-а, — красный тест: путь «дверь → restore» тогда
-  применяет snapshot старше чужого решения молча.
+- **And** дверь доставляет **чужой** недоставленный checkpoint, и именно
+  это делает исполнимой канонную последовательность FR-05: в том же каталоге
+  ранее убитый `budget authorize` оставил незакрытую строку
+  `checkpoint_outbox` (BEH-48), оператор выполняет `close-call --reason …`,
+  и двойник store получает тот checkpoint **раньше** checkpoint-а самой
+  двери и раньше её нулевого кода выхода; последующий `restore` более
+  раннего прогона отказывает `needs-human` шагом 5, назвав прогон `budget
+  authorize`. Дверь, завершившаяся с чужой строкой outbox-а на месте, —
+  красный тест: путь «дверь → restore» тогда применяет snapshot старше
+  чужого решения молча. Своего сайта ожидания у двери при этом нет —
+  доставка приходит из того же места, что у любой mutation (design § 3.5),
+  и тест не проверяет, где именно она вызвана.
 
 ### C. Checkpoint после каждой continuation-relevant mutation
 
