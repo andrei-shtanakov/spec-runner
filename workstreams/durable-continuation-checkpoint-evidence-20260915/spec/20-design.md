@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: 095556d72300152bd24f64da8d1608f1ece08b10
-  behaviour-spec: a8f46f45f411cfc907b50d82644c518bb1b6eda6
+  behaviour-spec: c83a8616c8440b1f2b56c5592326578673480852
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -732,23 +732,29 @@ attempt, статусы и `tasks.md` лежат в удаляемой DB. Conti
 mutation (§ 3 требований) это не является — продолжать снимок удалённого
 каталога нечего, — поэтому `after_mutation` на её mutation checkpoint-а не
 производит (§ 3.1) и `export_attempt` её attempt не публикует (§ 6.4).
-Механизм — один флаг на конфиге, а не проверка «а не в temp ли мы»:
-`build_scratch` объявляет scratch-конфиг пробой (`probe_scratch: True`, поле
-`ExecutorConfig`), а `after_mutation` и `export_attempt` — единственные его
-читатели. Флаг на конфиге, потому что именно конфиг у обеих функций уже
-есть в руках (`after_mutation(config, …)`), и потому что он ставится ровно
-там, где scratch создаётся.
+Механизм — **одно** поле на конфиге, а не проверка «а не в temp ли мы»:
+`ExecutorConfig.probe_provenance: str | None` (дефолт `None`), которое
+ставит только `doctor.build_scratch` и только значением `"doctor"`. Его
+наличие **и есть** объявление «этот конфиг — эфемерная проба», оно же даёт
+префикс provenance (ниже). Одно поле, а не пара «флаг + префикс»,
+намеренно: два знака могли бы разойтись — конфиг, объявивший префикс и не
+объявивший себя пробой, публиковал бы checkpoint-ы под именем пробы, и это
+состояние пришлось бы чем-то запрещать. Поле на конфиге, потому что именно
+конфиг уже в руках у обоих читателей (`after_mutation(config, …)`,
+`export_attempt` через `state.config`), и потому что ставится оно ровно там,
+где scratch создаётся.
 
 **Provenance производится конфигом, а не сайтом.** Значения словаря
 `doctor:execute` и `doctor:review` не производил ни один сайт, пока
 provenance приходил от GREEN (`green`) и review (`review`) — то есть
 значение существовало в требованиях и не существовало в дереве. Теперь
-scratch-конфиг несёт `probe_provenance: "doctor"`, а seam (§ 2.2, шаг 2 —
-сборка `CallStart`) отображает provenance сайта в provenance пробы по
-закрытой карте `{green: doctor:execute, review: doctor:review}`; карта живёт
-рядом с `PaidCall`, у неё ровно два входа, и значение вне карты при
-поднятом флаге — `Refusal(kind="instrument")` до записи call-start, а не
-молчаливый `doctor:<что-то>`. Роли review (`review:<role>`) проба не
+seam (§ 2.2, шаг 2 — сборка `CallStart`) при заполненном
+`config.probe_provenance` отображает provenance сайта по закрытой карте
+`{green: "<probe>:execute", review: "<probe>:review"}`, подставляя значение
+поля вместо `<probe>`: имени `doctor` в seam-е нет, оно приходит из конфига
+пробы. Карта живёт рядом с `PaidCall`, у неё ровно два входа, и provenance
+сайта вне карты при заполненном поле — `Refusal(kind="instrument")` до
+записи call-start, а не молчаливый `doctor:<что-то>`. Роли review (`review:<role>`) проба не
 запускает: `run_review` в scratch-конфиге включается одним флагом
 (`doctor.py:305-315`), `review_parallel`/`review_roles` наследуются от
 вызывающего и обнуляются здесь же — иначе у пробы было бы столько платных
@@ -809,9 +815,9 @@ backup). `mark_running` и `set_meta` — не continuation-relevant по §3
 требований и seam не вызывают; `phase_results` (best-effort, #164) — тоже.
 
 **Три решения принимает сама `after_mutation`, и все три — по тому, что у
-неё уже в руках.** (1) `config.probe_scratch` поднят (§ 2.7) — выход сразу,
+неё уже в руках.** (1) `config.probe_provenance` заполнен (§ 2.7) — выход сразу,
 checkpoint-а нет: mutation эфемерной пробы `doctor` не continuation-relevant,
-её DB удаляется вместе с каталогом. Это единственный читатель флага помимо
+её DB удаляется вместе с каталогом. Это единственный читатель поля помимо
 `export_attempt` (§ 6.4), и это единственное место, где «не публиковать»
 решается, — сайты записи о пробе не знают. (2) Подкоманда текущего
 invocation (`run_context.current().subcommand`) — из множества без платного
@@ -875,7 +881,9 @@ DB доступна, publisher сначала доставляет незакр�
 (§ 1.3) читается как «доставлено», и строка удаляется. Точка вызова — тот
 же рубеж, что у replay spool: `cli._run_start_gate` до процедуры Q-12
 (§ 2.4) у `run`/`retry`/`watch`, и непосредственно перед своей mutation у
-подкоманд точки (в). Локальная копия checkpoint-а для этого обязана дожить
+подкоманд точки (в). Ожидание на этом рубеже — ремонт, а не цена каждой
+mutation: пустой outbox (норма) не ждёт ничего, непустой ждёт один раз на
+строку и больше к ней не возвращается. Локальная копия checkpoint-а для этого обязана дожить
 до доставки: ротация «последние две» (§ 3.2) не удаляет копию, на которую
 ссылается строка outbox-а.
 
@@ -1164,7 +1172,7 @@ JSONL по `schemas/evidence-record.schema.json` и публикует
 `attempts/<task>-<n>.jsonl`; для `review-pr` — при завершении раунда
 (BEH-23). Публикуется через ту же очередь publisher-а; drain перед closure
 ждёт и его. Исключение одно и то же, что у checkpoint-а: при поднятом
-`config.probe_scratch` (§ 2.7) `export_attempt` не публикует ничего —
+`config.probe_provenance` (§ 2.7) `export_attempt` не публикует ничего —
 экспорт назвал бы задачу, которой в workstream-е нет, и корроборировал бы
 checkpoint, которого нет. Стоимость пробы при этом не теряется: она в
 call-result каждого её вызова.
@@ -1523,7 +1531,7 @@ BEH-48 синхронный ack mutation-checkpoint-а).
   щедрым запасом); имена приватных функций seam-а; порядок внутренних шагов
   seam-а сверх наблюдаемого «call-start acked → spawn → result»; число строк
   или число `after_mutation`-вызовов в `state.py`; имена полей области пробы
-  (`probe_scratch`/`probe_provenance`) и имя таблицы `checkpoint_outbox` —
+  (`probe_provenance`) и имя таблицы `checkpoint_outbox` —
   наблюдаемое в BEH-47/48 это отсутствие ключей, значение provenance в
   опубликованной записи и поздняя доставка, а не поля конфига и не схема
   служебной таблицы; wall-clock цены точки drain (в) внутри CI-теста — её
@@ -1606,7 +1614,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
 | `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
-| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при `config.probe_scratch`, синхронный drain у подкоманд без платного вызова — § 3.1), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий (копию, на которую ссылается `checkpoint_outbox`, не удаляет), доставка outbox-а на старте | BEH-12…15, 40, 47, 48 |
+| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`, синхронный drain у подкоманд без платного вызова — § 3.1), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий (копию, на которую ссылается `checkpoint_outbox`, не удаляет), доставка outbox-а на старте | BEH-12…15, 40, 47, 48 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
@@ -1618,11 +1626,11 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
 | `src/spec_runner/audit_log.py`, `logging.py`/`obs.py` | `run_id` обязательным параметром `AuditLogger`, из контекста; `run_id` в contextvars рядом с `pipeline_id` | BEH-01, 02 |
 | `src/spec_runner/prompts_log.py` | `run_id`/`call_id` в заголовке; тело неизменно | BEH-01 |
-| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; путеподобные `store.options` резолвятся в абсолютные **на загрузке**, против `project_root` (§ 1.1); `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl`; поля области пробы `probe_scratch`/`probe_provenance` (§ 2.7, ставит только `doctor.build_scratch`) | BEH-28, 42, 47 |
+| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; путеподобные `store.options` резолвятся в абсолютные **на загрузке**, против `project_root` (§ 1.1); `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl`; поле области пробы `probe_provenance` (§ 2.7, ставит только `doctor.build_scratch`, значением `"doctor"`) | BEH-28, 42, 47 |
 | `src/spec_runner/git_ops.py` | `runtime_state_paths` + checkpoint-каталог и spool; `repository_identity`; helpers для bundle/published-base | BEH-14, 16, 43 |
 | `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning», `repo_total_cost` | BEH-24, 38 |
 | `src/spec_runner/remedy.py`, `budget_cmd.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3), а синхронный ack их mutation-checkpoint-а — `after_mutation` по подкоманде invocation-а (§ 3.1, Q-05 (в)), не их собственный сайт ожидания | BEH-46, 48 |
-| `src/spec_runner/doctor.py` | правится в одном — `build_scratch` объявляет область пробы: `probe_scratch`, `probe_provenance: "doctor"`, пин `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` (§ 2.7). Сайты пробы — те же, что у проекта, через `execute_task`; `run_probe`, `extract`, вердикт и cost gate не меняются; своих записей evidence `doctor.py` не делает — их пишет диспетчер и seam | BEH-47 |
+| `src/spec_runner/doctor.py` | правится в одном — `build_scratch` объявляет область пробы: `probe_provenance: "doctor"`, пин `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` (§ 2.7). Сайты пробы — те же, что у проекта, через `execute_task`; `run_probe`, `extract`, вердикт и cost gate не меняются; своих записей evidence `doctor.py` не делает — их пишет диспетчер и seam | BEH-47 |
 | `schemas/` | новые `checkpoint-manifest`, `evidence-record`, `run-closure`, `restore-result`, `evidence-view`; аддитивно `executor-state`, `json-result`, `status`, `costs` | BEH-03, 14, 21, 23, 29, 36, 38 |
 | `docs/state-schema.md`, `docs/architecture.md`, `CHANGELOG.md`, `README.md` | minor bump, контракт checkpoint/evidence/closure, «operational minimum», статус experimental, `durability:` | BEH-45 |
 | `tests/conftest.py`, `tests/test_harness_guards.py`, `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv, тип отказа — от `BaseException` (Q-06); `test_harness_guards.py` переписывается тем же коммитом, и тем же — `test_task_015_…_red.py:79`, чей `pytest.raises(AssertionError)` ключуется на старом типе; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |

@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: ed0e9dd7e4bbf70eaecf7505229397f8aee40f8c
-  acceptance: b3645d636995ba2bd6acf2c46852f1ebb2343c34
+  design: 7fd75d7ab4be2a7cfb829c601aaa3b686190e893
+  acceptance: cf5946ad01fdbbc75c64b730e617716bba6c9b9b
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -213,18 +213,21 @@ prompt]` `:791` → `build_cli_invocation`) — с `build_cli_command` →
 строка «planning» по образцу `pr_cost_rows`, `repo_total_cost` включает её;
 `doctor` — через `execute_task`, и **с правкой** (design §2.7,
 spec-runner#525): `doctor.build_scratch` объявляет область пробы на своём
-scratch-конфиге — `probe_scratch`, `probe_provenance: "doctor"`, пин
+scratch-конфиге — одно поле `probe_provenance: "doctor"` (его наличие и
+есть объявление «это проба», оно же даёт префикс), пин
 `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles`, —
-а seam отображает provenance сайта в provenance пробы по закрытой карте
-`{green: doctor:execute, review: doctor:review}` и публикует её записи с
-`task_id = null`. Поля — в `config.py` (DT-01 их не знает), карта — рядом с
-`PaidCall`, значение вне карты при поднятом флаге — `Refusal(kind=
-"instrument")` до записи call-start. Без этой правки значения словаря
+а seam отображает provenance сайта по закрытой карте
+`{green: "<probe>:execute", review: "<probe>:review"}`, подставляя значение
+поля вместо `<probe>` (имени `doctor` в seam-е нет), и публикует её записи с
+`task_id = null`. Карта — рядом с
+`PaidCall`, provenance сайта вне карты при заполненном поле —
+`Refusal(kind="instrument")` до записи call-start. Без этой правки значения словаря
 `doctor:execute`/`doctor:review` не производил бы ни один сайт (их требует
 FR-02 и пинует BEH-05), проба под проектом `tdd` делала бы третий платный
 вызов вопреки своему cost gate, а опубликованный `task_id` канонной
 `TASK-001` блокировал бы **одноимённую реальную** задачу проекта после
-ветки (2) Q-12. Читатели `probe_scratch` — `after_mutation` (DT-03) и
+ветки (2) Q-12. Поле — в `config.py` (DT-01 его не знает), читатели —
+`after_mutation` (DT-03) и
 `export_attempt` (DT-04); полный знак области — BEH-47 в DT-05. Третий сайт
 `cli_plan.py` назван здесь
 поимённо, потому что он достижим любым `spec-runner plan "<описание>"` без
@@ -330,7 +333,7 @@ invocation** в порядке `sequence`, идемпотентно по `checkp
 outbox-а **в транзакцию** каждой mutation делает DT-05 вместе с остальными
 сайтами; здесь она есть у одного — `record_attempt`.
 Ещё одно решение `after_mutation` — выход без публикации при поднятом
-`config.probe_scratch` (design §2.7, поле ставит DT-02): mutation эфемерной
+`config.probe_provenance` (design §2.7, поле ставит DT-02): mutation эфемерной
 пробы `doctor` не continuation-relevant, её DB удаляется вместе с каталогом.
 Сайт записи в этой задаче один — `record_attempt`; остальные сайты §3.1
 подключает DT-05.
@@ -377,7 +380,7 @@ terminal `record_attempt` (`success`/`failed`/`blocked`)
 attempt-а из таблиц §6.4 в JSONL по `schemas/evidence-record.schema.json` и
 публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а — это и
 есть источник «attempts» для `collect()`. Второй читатель
-`config.probe_scratch` (design §2.7, поле ставит DT-02) — здесь: при
+`config.probe_provenance` (design §2.7, поле ставит DT-02) — здесь: при
 поднятом флаге `export_attempt` не публикует ничего, потому что экспорт
 назвал бы задачу, которой в workstream-е нет, и корроборировал бы
 checkpoint, которого нет; стоимость пробы при этом остаётся в её
@@ -470,14 +473,16 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 клоне; ключи на месте при относительном `root` в config-е; два платных
 вызова и под проектом `execution_mode: tdd`; тот же набор при verdict
 `broken`. Для BEH-48 — порядок в общем журнале, exit 2 на отклонённом ack и
-поздняя доставка после `kill -9`, плюс контроль на `run --task`: число
+поздняя доставка после `kill -9`, плюс контроль на `run --task`: при пустом
+на старте outbox-е число
 синхронных ожиданий ack равно числу точек drain перед платными вызовами
-плюс одна перед closure (выросшее ожидание на горячем пути — красный тест,
-RK-01). Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
+плюс одна перед closure (ожидание на каждую mutation — красный тест,
+RK-01), а непустой даёт ровно одно ожидание-ремонт до выбора задачи и только
+один раз на строку. Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
 test_mutation_checkpoint_ack.py` (оба новые). Не утверждать число
 вызовов `after_mutation` в `state.py`, формат `wip.tar` внутри, нормализацию
 URL за пределами `host/owner/repo`, имена полей области пробы
-(`probe_scratch`/`probe_provenance`), имя и схему таблицы
+(`probe_provenance`), имя и схему таблицы
 `checkpoint_outbox`, wall-clock цену третьей точки drain внутри CI-теста
 (её меряет бенчмарк BEH-41).
 
