@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: a522673c78f49561083278ea553be66e12f31816
+  requirements: ffbd991ff6f3fa6d2fe0297307c7ee1cbb8af041
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -43,7 +43,12 @@ closure; наличие closure после `kill -9`; текст и exit code о
 Внутренние решения design-стадии здесь не фиксируются: какой канал вправе
 подтверждать call-start — внешний store или локальный spool (Q-02); формат
 WIP artifact (Q-03); синхронная или асинхронная доставка checkpoint-а и
-что значит «доступен» (Q-05); где живёт единый seam call-start/call-result
+что значит «доступен» (Q-05) — с одной оговоркой: **один** факт порядка
+требования фиксируют сами (FR-03: подкоманда без платного вызова не
+завершается успешно до ack своего mutation-checkpoint-а), и BEH-48
+предъявляет ровно его — порядок двух наблюдаемых событий, а не устройство
+доставки, очередь или число ожиданий; где живёт единый seam
+call-start/call-result
 (Q-06); точный состав policy identity (Q-07); движок redaction (Q-08);
 исполнитель retention (Q-11); откуда `run` читает open calls при старте
 (Q-12). Сценарии проверяют предъявленный факт — запись существует раньше
@@ -179,18 +184,30 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `plan --gated`, интерактивный `plan "<описание>"` (один круг цикла: fake CLI
   отвечает `PLAN_READY`, ответ на приглашение — отказ от записи задач, так что
   цикл завершается после одного платного вызова),
-  `review-pr` verify, `review-pr` fix, `doctor`.
+  `review-pr` verify, `review-pr` fix, оба сайта пробы `doctor --with-review`
+  (исполнение канонной задачи и её review).
 - **Then** для каждого `spawn` в журнале непосредственно раньше есть
   `call_start` с ack, и у пары один `call_id`; число `spawn` равно числу
   call-start-ов с ack.
 - **And** call-start каждого сайта содержит `run_id`, `call_id`, provenance
-  из одного словаря (`red`, `green`, `review`, `review:<role>`,
+  из одного словаря (`red`, `red:fix`, `green`, `review`, `review:<role>`,
   `plan:<stage>`, `plan:interactive`, `review-pr:verify`, `review-pr:fix`,
-  `doctor`), policy identity, digest redacted prompt-а, timestamp, а для
-  task-сайтов — `task_id` и номер attempt.
-- **And** тот же `call_id` записан в строке `agent_calls` /
-  `pr_agent_calls` рядом с `provenance`, так что ledger стоимости и evidence
-  соединяются одним ключом.
+  `doctor:execute`, `doctor:review`), policy identity, digest redacted
+  prompt-а, timestamp, а для task-сайтов — `task_id` и номер attempt.
+  Исключение — оба сайта **эфемерной пробы**: по функции это те же GREEN и
+  review, но их опубликованные записи задачи не несут, потому что канонная
+  задача пробы адресуема только внутри её scratch (BEH-47); требование
+  `task_id` от них этот And не выполняет. Ни
+  одно значение словаря не остаётся без сайта в этом журнале: значение,
+  которого не производит ни один прогон матрицы, — красный результат этого
+  And.
+- **And** тот же `call_id` записан рядом с `provenance` в строке ledger-а
+  **своего семейства** — `agent_calls` для сайтов задачи, `pr_agent_calls`
+  для `review-pr`, `plan_agent_calls` для трёх сайтов планирования, — так
+  что ledger стоимости и evidence соединяются одним ключом на каждом сайте.
+  Требование строки в `agent_calls` от сайта планирования этот And не
+  выполняет: у той таблицы `task_id` — `NOT NULL`, задачи у планирования
+  нет, и BEH-24 предъявляет ровно обратное.
 - **And** матрица гоняется с настоящим именем `claude` в `claude_command`,
   и это исполнимо только потому, что autouse-гвард `_no_real_agent_calls`
   переключён на одно имя `paid_call._spawn`, а два его патча швов
@@ -370,6 +387,15 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   в новый пустой `--into` (повторный запуск в уже занятый каталог отказывает
   раньше, на проверке каталога, и шага 5 не наблюдает). Во всех трёх
   snapshot A применяется; отказ на любом из трёх — красный тест.
+- **And** четвёртый неблокирующий — `doctor`, и его знак другой, чем у
+  первых трёх: он не «в перечне», а не имеет второго условия ключа вовсе.
+  `doctor --with-review --yes` с fake CLI, отработавший между A и
+  восстановлением, оставляет в индексе workstream-а свою строку и **ни
+  одного** acknowledged checkpoint-а (BEH-47), поэтому snapshot A
+  применяется; и он не называется выходом в отказе шага 5 ни в одной
+  конфигурации — выход обязан нести acknowledged checkpoint, а у `doctor`
+  его нет. Напечатанный как выход `doctor` — красный тест: его `restore`
+  упёрся бы в отсутствие digests.
 
 #### BEH-10: Один `call_id` — ровно один call-start и не более одного call-result
 `traces: [FR-02, FR-06]`
@@ -460,6 +486,91 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** все точки публикации вызывают одну функцию «после mutation» (по
   образцу `run_plugin_hooks_for`, #307): статический тест находит ровно один
   seam, через который проходят перечисленные сайты записи.
+- **And** mutation эфемерной пробы через этот seam checkpoint-а не даёт:
+  `doctor` записывает attempt в state DB своего scratch-каталога, и двойник
+  не получает ни одного checkpoint-а (полный знак — BEH-47).
+
+#### BEH-47: Проба `doctor` не оставляет следа в учёте проекта, а её платные вызовы оставляют полный
+`traces: [FR-02, FR-03, FR-06]`
+
+- **checked_by**: `status: planned` `kind: e2e` `owner: qa` `target: tests/test_doctor_probe_scope.py`
+- **Given** проект под контрактом с двойником store, собственной задачей
+  `TASK-001` в `tasks.md` и **относительным** путём в настройках адаптера
+  store; fake CLI, отвечающий и на исполнение, и на review.
+- **When** выполнен `spec-runner doctor --with-review --yes`, а затем в том же
+  каталоге `spec-runner run --all`.
+- **Then** двойник получил от invocation-а `doctor`: run-start, две пары
+  call-start/call-result с provenance `doctor:execute` и `doctor:review`,
+  одну closure — и **ни одного** checkpoint-а, ни одного attempt-экспорта.
+  Любой checkpoint под этим `run_id` — красный тест: его DB snapshot был бы
+  снимком удалённого каталога, а manifest нёс бы identity scratch-а.
+- **And** ни одна опубликованная запись пробы не несёт `task_id`:
+  восстановить из неё `open`-строку на какую бы то ни было задачу проекта
+  нечем, и столбец `agent_calls.task_id` при этом остаётся `NOT NULL` —
+  строку самой пробы приняла scratch-DB, где канонная задача настоящая.
+- **And** последующий `run --all` берёт **собственную** `TASK-001` проекта и
+  доходит до её платного вызова. Задача проекта, одноимённая канонной задаче
+  пробы, заблокированной не оказывается — блокировка здесь красный тест, в
+  том числе после `spec-runner reset` и в свежем клоне (ветка процедуры
+  старта, восстанавливающая `open`-строки из store, BEH-09).
+- **And** записи легли в store **вызывающего**, а не внутрь удалённого
+  scratch: относительный путь адаптера разрешён в абсолютный до того, как
+  проба сменила рабочий каталог, и после `doctor` все перечисленные ключи
+  читаются на месте. Прогон, оставивший 0 ключей (адрес уехал вместе со
+  scratch и удалён с ним), — красный тест, и это единственный наблюдаемый
+  признак: платный вызов при этом состоялся и деньги потрачены.
+- **And** платных вызовов ровно два и у проекта под `execution_mode: tdd`:
+  проба идёт под `standard`, третьего вызова (RED authoring) нет, и число
+  совпадает с тем, что cost gate объявил оператору перед подтверждением.
+- **And** опубликованные срезы прогона `doctor` следов пробы не содержат, и
+  предъявлено это на конфигурации, где ошибиться легче всего, — включённый
+  аудит с **абсолютным** `audit_log_path`: срез `runs/<run_id>/audit-log.jsonl`
+  (если он есть вовсе) не называет ни канонной задачи пробы, ни её
+  namespace, а хвост task-history за прогон пуст. Строка пробы в срезе
+  вызывающего — красный тест.
+- **And** ни один из этих знаков не зависит от вердикта `doctor`: тот же
+  набор ключей предъявлен и когда fake CLI отвечает маркером провала, то
+  есть на verdict `broken` (BROKEN — исход пробы, а не отказ записи).
+
+#### BEH-48: Подкоманда без платного вызова не завершается успешно, пока её checkpoint не acknowledged
+`traces: [FR-03, FR-05, FR-07]`
+
+- **checked_by**: `status: planned` `kind: integration` `owner: qa` `target: tests/test_mutation_checkpoint_ack.py`
+- **Given** двойник store, умеющий по команде теста задержать или отклонить
+  ack checkpoint-а; проект с записанной задачей, активным бюджетом,
+  завершённой задачей под claims и активным RED-checkpoint-ом под claims.
+- **When** выполнены `spec-runner budget authorize … --reason …` (одна
+  mutation), `spec-runner tdd release TASK-001 --reason …` (две) и
+  `spec-runner tdd abandon TASK-002 --checkpoint <id> --reason …`
+  (многошаговая) — каждая сначала с исправным двойником, затем с
+  отклоняющим ack.
+- **Then** с исправным двойником ack mutation-checkpoint-а в общем журнале
+  стоит **раньше** выхода с кодом 0 у каждой из трёх.
+- **And** с отклоняющим все три завершаются exit 2, stderr называет
+  недоставленный `sequence` и `checkpoint_id`; нулевого кода не получает ни
+  одна — ложный успех есть красный тест. Строка успеха, напечатанная
+  handler-ом раньше отказа, успехом не считается: авторитетны код выхода и
+  closure, и stderr дополнительно говорит, что решение записано локально, но
+  не доставлено.
+- **And** отказ ack **не рвёт** многошаговую подкоманду посередине: у `tdd
+  abandon` под отклоняющим двойником в DB есть и retirement claims, и строка
+  `tdd_remedies` с actor и reason — то есть все её записи, а не первые из
+  них. Состояние «red помечен abandoned, claims сняты, audit-строки нет» —
+  красный тест: ожидание живёт на выходе invocation-а, а не между записями
+  handler-а.
+- **And** mutation при этом не откатывается и не теряется: строки в DB есть,
+  потому что были закоммичены раньше. Наблюдаемое здесь — сами mutation и
+  порядок ack относительно выхода; **что** остаётся не закрытым этим
+  сценарием, названо прямо: убитый в окне между записью mutation и ack
+  прогон правку теряет, и это принятый пробел (FR-05), а не дефект —
+  транзакционное обязательство публикации бандл не вводит (spec-runner#528).
+- **And** горячий путь `run` не получает ни одного нового синхронного
+  ожидания: прогон `run --task` ведёт себя как до бандла по числу и месту
+  обращений к двойнику store, и ожидание на каждую mutation задачи —
+  красный тест. Цену гейта перед closure у подкоманд без платного вызова
+  меряет бенчмарк (BEH-41), а не этот сценарий (RK-01): ожиданий у
+  invocation-а по-прежнему столько, сколько точек drain, и число mutation
+  подкоманды его не увеличивает.
 
 #### BEH-14: Manifest валиден, полон и не содержит локальных фактов
 `traces: [FR-03, FR-04]`
@@ -663,8 +774,8 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **Given** fake CLI, параметризованный по исходу {success, `TASK_FAILED`,
   blocked (`TASK_BLOCKED`), timeout, infrastructure error}, и конфигурации,
   доводящие прогон до сайтов {GREEN, review, `review:<role>`, `plan
-  --full`, `plan --gated`, `plan` интерактивный, `review-pr fix`, `doctor`};
-  двойник store.
+  --full`, `plan --gated`, `plan` интерактивный, `review-pr fix`, `doctor`
+  (исполнение пробы, provenance `doctor:execute`)}; двойник store.
 - **When** прогнана каждая клетка матрицы.
 - **Then** в store есть call record, адресуемый `run_id/call_id`, с
   provenance сайта, outcome клетки, стоимостью (число или `null`, никогда
@@ -722,13 +833,20 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   --gated --stage requirements "…"`, затем `spec-runner costs` и `costs
   --json`.
 - **Then** `plan --full` оставил три call records с provenance
-  `plan:requirements`, `plan:design`, `plan:tasks` и `task_id = NULL`;
+  `plan:requirements`, `plan:design`, `plan:tasks` и **без задачи**;
   `plan --gated` — один с `plan:requirements`; у каждого `run_id` своего
   invocation и свой `call_id`.
 - **And** интерактивный `spec-runner plan "…"`, прогнанный тем же fake CLI на
   один круг, оставил свой call record с provenance `plan:interactive` и
-  `task_id = NULL`: третий платный путь `cli_plan.py` получает ledger-identity
+  тоже без задачи: третий платный путь `cli_plan.py` получает ledger-identity
   наравне с двумя флаговыми, а не остаётся вне ledger-а.
+- **And** «без задачи» наблюдается как **отсутствие задачи у строки**, а не
+  как `NULL` в `agent_calls`: ни одна строка `agent_calls` после этих
+  прогонов не добавилась, `task_cost` любой задачи не изменился, а строки
+  планирования читаются своим ledger-ом (как `pr_agent_calls` у `review-pr`).
+  Прогон, потребовавший `NULL` в `agent_calls.task_id`, — красный: столбец
+  `NOT NULL`, и вставка исчезла бы warning-ом, оставив планирование вообще
+  без записи.
 - **And** `costs` показывает их суммой отдельной строкой «planning», по
   образцу `pr_cost_rows` (#218); `task_cost` выполненной задачи не
   изменился; `repo_total_cost` включает planning.
@@ -1323,18 +1441,20 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 | BEH-44 | FR-01, FR-02 |
 | BEH-45 | FR-01, FR-05, FR-09 |
 | BEH-46 | FR-07 |
+| BEH-47 | FR-02, FR-03, FR-06 |
+| BEH-48 | FR-03, FR-05, FR-07 |
 
 Обратная трассировка по функциональным требованиям:
 
 | Requirement | Behaviours |
 |---|---|
 | FR-01 | BEH-01, BEH-02, BEH-03, BEH-04, BEH-24, BEH-38, BEH-44, BEH-45 |
-| FR-02 | BEH-05, BEH-06, BEH-07, BEH-08, BEH-09, BEH-10, BEH-11, BEH-22, BEH-39, BEH-41, BEH-44 |
-| FR-03 | BEH-12, BEH-13, BEH-14, BEH-15, BEH-31, BEH-39, BEH-40, BEH-42, BEH-43 |
+| FR-02 | BEH-05, BEH-06, BEH-07, BEH-08, BEH-09, BEH-10, BEH-11, BEH-22, BEH-39, BEH-41, BEH-44, BEH-47 |
+| FR-03 | BEH-12, BEH-13, BEH-14, BEH-15, BEH-31, BEH-39, BEH-40, BEH-42, BEH-43, BEH-47, BEH-48 |
 | FR-04 | BEH-14, BEH-16, BEH-17, BEH-18, BEH-19, BEH-40, BEH-43 |
-| FR-05 | BEH-09, BEH-17, BEH-19, BEH-20, BEH-21, BEH-40, BEH-41, BEH-45 |
-| FR-06 | BEH-08, BEH-10, BEH-22, BEH-23, BEH-24, BEH-25, BEH-26, BEH-27, BEH-28, BEH-40, BEH-42, BEH-43 |
-| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42, BEH-46 |
+| FR-05 | BEH-09, BEH-17, BEH-19, BEH-20, BEH-21, BEH-40, BEH-41, BEH-45, BEH-48 |
+| FR-06 | BEH-08, BEH-10, BEH-22, BEH-23, BEH-24, BEH-25, BEH-26, BEH-27, BEH-28, BEH-40, BEH-42, BEH-43, BEH-47 |
+| FR-07 | BEH-04, BEH-06, BEH-29, BEH-30, BEH-31, BEH-32, BEH-35, BEH-37, BEH-40, BEH-42, BEH-46, BEH-48 |
 | FR-08 | BEH-15, BEH-33, BEH-34, BEH-35, BEH-39 |
 | FR-09 | BEH-27, BEH-30, BEH-36, BEH-37, BEH-38, BEH-45 |
 

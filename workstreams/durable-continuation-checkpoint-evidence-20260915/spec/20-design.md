@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: a522673c78f49561083278ea553be66e12f31816
-  behaviour-spec: 97e6a3af296c559fdfc9ebf6ecf5914e93ea07cc
+  requirements: ffbd991ff6f3fa6d2fe0297307c7ee1cbb8af041
+  behaviour-spec: c53b871d785d4837b8c73199451f1a98c3c2b5a2
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -109,6 +109,8 @@ store -m <label> <sha>` — та же метка `spec-runner rescue: <task> …
 
 **Snapshot — синхронно в точке mutation; публикация — одним упорядоченным
 publisher-ом с двумя точками drain: перед каждым call-start и перед closure.
+Перед closure это **гейт**, а не best-effort: недоставленный checkpoint даёт
+exit 2, и подкоманда без платного вызова успешной не завершается.
 «Доступен вне машины» = store подтвердил `put` manifest-а, который кладётся
 последним.**
 
@@ -125,9 +127,65 @@ NFR-02 (60 s) на critical path каждой из ~десяти mutation одн
 acknowledged checkpoint-ом никогда нет неподтверждённой mutation, и durable
 boundary совпадает с границей «до платного вызова»; (б) перед closure — так
 closure всегда несёт acknowledged id (BEH-31). Таймаут в (а) — отказ до
-spawn (`instrument`), в (б) — closure kind `failed`, exit 2, с id
-предыдущего acknowledged. Между точками drain процесс делает то, что делал
-(тесты, lint, git, сборка prompt-а) — это и есть выигрыш от асинхронности.
+spawn (`instrument`); в (б) — closure kind `failed`, exit 2, с id
+предыдущего acknowledged. Между точками drain процесс делает то,
+что делал (тесты, lint, git, сборка prompt-а) — это и есть выигрыш от
+асинхронности.
+
+**Третьей точки нет, и это решение, а не пропуск (spec-runner#527).**
+Требование #527 — «один синхронный drain перед успешным завершением
+команды, таймаут → exit 2, а не ложный успех» — выполняет точка (б): она
+стоит в `finally` диспетчера, то есть сразу после handler-а, и по правилу
+§ 6.3 её таймаут **перекрывает** выведенный kind — closure `failed`, exit 2.
+Окно между последней mutation подкоманды и (б) — это хвост handler-а, у
+`budget authorize` и `tdd …` печать результата и возврат, а не работа.
+Отдельная точка «сразу после mutation» его не сужает заметно и стоит дорого:
+решение о ней принимала бы `after_mutation`, то есть ожидание наступало бы на
+**каждой** mutation invocation-а (у `tdd repair` их четыре — `supersede_claims`,
+`record_claims`, `record_red_checkpoint`, `record_remedy`), а её таймаут
+поднимал бы `Refusal` **из середины** handler-а — прямо между записями,
+порядок которых `remedy.py` выбрал так, чтобы обрыв не оставил запрещённого
+состояния («claims before the checkpoint», `remedy.py:333-335`). Это
+разрушительная половина решения, применённая и не зафиксированная в
+`tdd_remedies`, — цена выше, чем сужение, которое такая точка покупает.
+Поэтому ожидание одно на invocation, и оно там, где уже было.
+
+Что остаётся от #527 и почему этого достаточно: (1) drain перед closure
+назван **гейтом** — успешного завершения у подкоманды без платного вызова
+не бывает, пока её checkpoint не acknowledged, и это теперь требование
+(FR-03), а не деталь closure; (2) строка успеха, напечатанная handler-ом
+раньше отказа, не делает его успехом: авторитетны код выхода и closure, а
+диспетчер добавляет в stderr строку «решение записано локально, но не
+доставлено», чтобы человек не читал stdout как результат.
+
+**Чего гейт не устраняет, и почему это принято.** `kill -9` между commit-ом
+mutation и точкой (б) по-прежнему теряет правку: гейт сужает окно до хвоста
+handler-а (печать и возврат), но не закрывает его. Третье, что просила
+заявка #527, — «полезное усиление, transactional pending-outbox в SQLite», —
+этот бандл **не вводит**: обязательство публикации, записанное транзакцией
+mutation, трогает manifest, шаг 5 проверки (6), `restore.apply` и область
+эфемерной пробы, а в канонной последовательности «crash → restore» не
+достигает цели без ещё одной точки ожидания — `restore` читает store в
+проверке (6) раньше своей единственной точки drain. Объём этих следствий
+вынесен отдельной задачей (spec-runner#528), где записано всё, что о нём
+установлено. Пробел в § 7.2 остаётся тем, чем был объявлен, — **принятым**.
+
+**Кому гейт перед closure меняет исход, а кому нет.** Точка (б) стоит у
+всех, но значение «недоставленный checkpoint = не успех» различается по
+тому же критерию, что и сам пробел: «потеря checkpoint-а теряет решение».
+`budget authorize` и `tdd abandon|repair|resume|release` пишут решение
+**только** в DB (`budget_authorizations`, `tdd_remedies`, `red_checkpoints`,
+`tdd_claims`), и вне машины его не существует до доставки checkpoint-а —
+для них exit 2 при недоставке и есть содержание #527.
+`evidence close-call` и `evidence purge` тоже не платят и тоже мутируют, но
+их истина уже в store, положенная синхронно самой подкомандой:
+`CallResult(outcome="resolved_unknown")` (§ 2.5) и `deletions/<ts>.json`
+(Q-11). Их checkpoint — производная запись, и её потеря не теряет ничего:
+процедура Q-12 закроет строку DB по store на следующем старте. Разного
+поведения на этом различии дизайн не вводит (гейт один для всех — так его не
+придётся догонять при новой подкоманде), но знак предъявляется на тех, у
+кого он что-то меняет.
+
 Порядок файлов внутри одного checkpoint-а: DB snapshot, spool, WIP, затем
 manifest — checkpoint без acknowledged manifest-а для читателей не существует
 (NFR-04: неполный набор = отказ).
@@ -138,6 +196,8 @@ manifest — checkpoint без acknowledged manifest-а для читателе�
 исполнения платного вызова и одной функцией spawn; все существующие сайты
 становятся её вызывающими, `cli_plan.py` переводится с `build_cli_command` на
 `build_cli_invocation` + тот же seam на всех трёх своих сайтах, `doctor`
+правится в одном: его scratch-конфиг объявляет область пробы (§ 2.7), а
+платные вызовы идут тем же seam-ом через `execute_task`, и `doctor`
 покрыт через `execute_task`, а второй, асинхронный spawn провайдера —
 `runner.run_claude_async` — удаляется.**
 
@@ -366,9 +426,19 @@ call молча — ровно тот тихий повтор, который з
 один `list` индекса workstream-а (§ Механика 1.3, префикс
 `workstreams/<workstream_key>/runs/`); прогоны, у которых в индексе нет
 парного маркера `.closed`, разбираются по своим `calls/`-ключам, и каждый
-call-start без call-result становится восстановленной `open`-строкой свежей
-DB (`task_id`, attempt, `call_id`, provenance, `run_id` — из call-start),
-после чего работает ветка (б). Пустой индекс — workstream без истории,
+call-start без call-result, **несущий `task_id`**, становится
+восстановленной `open`-строкой свежей DB (`task_id`, attempt, `call_id`,
+provenance, `run_id` — из call-start), после чего работает ветка (б).
+Call-start **без** `task_id` — сайты планирования, `review-pr` и проба
+`doctor` (§ 2.4, § 2.7) — строкой не становится: адресовать ею нечего
+(`agent_calls.task_id` — `NOT NULL`, `state.py:485-497`, и §2.3 миграцию
+типа не объявляет), задачи она не блокирует и повторить её этим прогоном
+нельзя — ни одна задача ledger-а ей не соответствует. Невидимой она при
+этом не делается: истина — пара ключей в store, её читают `evidence
+<run_id>` (§ 7.4) и проверка (6) `restore` (§ 7.2, шаг 4 — namespace-wide и
+без исключений), а закрывается она той же аудируемой дверью § 2.5. То есть
+нулевое различие в доказательстве и полное — в том, какую строку DB процедура
+вправе создать. Пустой индекс — workstream без истории,
 прогон идёт как обычно. Ветка, дошедшая до конца — `list` выполнен,
 `open`-строки восстановлены (в том числе ни одной), — последним шагом ставит
 тем же `set_meta` маркер `continuation_index: local`: с этого момента DB и
@@ -424,6 +494,16 @@ options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`,
 адаптер объявил `tls: false`, не объявил `encryption_at_rest` или
 `immutable_put` (BEH-28), или `retention_days` вне 7–365 (BEH-42);
 `validate.py` повторяет те же проверки в своём отчёте.
+**Путеподобные `options` разрешаются в абсолютные пути там же, на
+загрузке** — один раз и относительно `project_root`, а не относительно CWD и
+не лениво при первом `put`. Причина в дереве: процесс вправе сменить рабочий каталог внутри себя
+(`doctor.run_probe` уходит `os.chdir` в scratch, `doctor.py:338`, и
+`shutil.rmtree` удаляет его, `:408`), и относительный `root`, разрешённый
+после этого, указал бы внутрь каталога, который сейчас удалят: платный
+вызов состоялся бы, а durable-записи о нём уехали бы вместе со scratch.
+Абсолютный путь этой ошибки не допускает по построению, и повторный
+`__post_init__` (его зовёт `doctor.build_scratch`, `doctor.py:295`) его не
+двигает.
 
 **1.2 Первый адаптер — управляемый том** (рабочее допущение Q-01):
 `LocalVolumeStore(root)`. `put` = запись во временный файл рядом,
@@ -516,8 +596,10 @@ identity (§ 4.2) и `spec_prefix`/`change_id`: путь в него не вхо
    совпал бы с id в заголовке. `execute` вместо этого **проверяет**, что
    `call.call_id` — валидный UUIDv4 и что тот же id передан `log_prompt`;
    несовпадение — `Refusal(kind="instrument")` до записи call-start.
-3. Строка `agent_calls`/`pr_agent_calls` со `status='open'` (§ 2.3) — через
-   DB, при отказе — через spool (§ 5); оба отказали → `instrument`, вызова нет.
+3. Строка ledger-а **того семейства, к которому относится вызов**, со
+   `status='open'` (§ 2.3): вызов задачи — `agent_calls`, вызов `review-pr` —
+   `pr_agent_calls`, вызов планирования — `plan_agent_calls`. Через DB, при
+   отказе — через spool (§ 5); оба отказали → `instrument`, вызова нет.
 4. `Publisher.publish(CallStart)` с таймаутом `ack_timeout_seconds`; отказ
    или таймаут → строка закрывается outcome `not_started`, prompt-артефакт
    получает `append_not_started` (#296), возвращается
@@ -533,8 +615,10 @@ identity (§ 4.2) и `spec_prefix`/`change_id`: путь в него не вхо
    перед следующим call-start и перед closure ждёт и её — так до следующей
    траты и до закрытия прогона result либо в store, либо прогон остановлен
    отказом инструмента.
-8. Закрытие строки ledger-а (`record_agent_call` в его сегодняшней
-   сигнатуре, дополненной `call_id` — становится шагом «close»), затем
+8. Закрытие строки ledger-а **своего семейства** шагом «close»:
+   `record_agent_call` в его сегодняшней сигнатуре, дополненной `call_id`
+   (вызовы задачи), `_record_pr_call` (`review-pr`), писатель
+   `plan_agent_calls` (планирование, § 2.3) — три писателя, один шаг; затем
    возврат `CallOutcome` сайту. `record_attempt` и checkpoint — по-прежнему
    дело сайта (FR-02: «→ `record_agent_call` / `record_attempt` → checkpoint»).
 
@@ -542,9 +626,23 @@ Budget guard (#213) и `log_prompt` (#282) остаются **на сайтах,
 `execute` — так «a refusal is no row» сохраняется буквально (BEH-07): до шага
 3 не доходит ничего.
 
-**2.3 Аддитивные столбцы.** `agent_calls`: `run_id TEXT NULL`, `call_id TEXT
-NULL`, `status TEXT NULL` (`open` / `closed` / `not_started`), `started_at
-TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
+**2.3 Аддитивные столбцы и третий ledger семьи.** `agent_calls`: `run_id
+TEXT NULL`, `call_id TEXT NULL`, `status TEXT NULL` (`open` / `closed` /
+`not_started`), `started_at TEXT NULL`; `pr_agent_calls` — те же;
+`attempts`: `run_id TEXT NULL`. Плюс **новая** таблица `plan_agent_calls`
+для платных вызовов планирования: без столбца `task_id` вовсе, с
+`provenance`, `run_id`, `call_id`, `status`, `started_at`, токенами,
+`cost_usd` и `timestamp`. Она заводится по той же причине и тем же образцом,
+что `pr_agent_calls` в #218 — «третья таблица вместо nullable `task_id`»
+(`docs/state-schema.md`): `agent_calls.task_id` — `NOT NULL`
+(`state.py:485-497`), `costs` группирует task-ledger по задаче, и строку без
+задачи пришлось бы особить каждому читателю той поверхности; а сменить тип
+существующего столбца значило бы, вопреки §2.3, не аддитивную миграцию и
+поломку пинованной копии `executor-state.schema.json` у потребителя
+(Maestro). Так «call record планирования существует» (FR-06, AC-22, BEH-24)
+и «`task_id` — `NOT NULL`» перестают исключать друг друга: строка есть, а
+задачи у неё нет по устройству таблицы. `costs` читает три ledger-а и
+по-прежнему держит их врозь, суммируя только в `repo_total_cost` (#218).
 Миграция — `ALTER TABLE … ADD COLUMN` в `_migrate` по образцу #218 stage 2;
 старые строки `NULL` (BEH-03). `docs/state-schema.md` и
 `schemas/executor-state.schema.json` — minor bump. `--json-result`
@@ -561,10 +659,11 @@ TEXT NULL`; `pr_agent_calls` — те же; `attempts`: `run_id TEXT NULL`.
 | GREEN | `execution._run_agent_process` | `green` | тело → `execute`; `TimeoutExpired`-ветка сайта читает `timed_out` |
 | review, `review:<role>` | `review._run_reviewer` | как сегодня | `_record_call` становится шагом close seam-а; последовательность ролей под бюджетом сохраняется |
 | `review-pr` verify / fix | `review_pr.verify_comment`, `run_fix_agent` | `review-pr:verify`, `review-pr:fix` | `_record_pr_call` — шаг close; `CostGuard` остаётся до `execute` |
-| `plan --gated` (каждая стадия) | `cli_plan._generate_stage_draft`, `cli_plan.py:170` | `plan:<stage>` | `build_cli_command` → `build_cli_invocation` (+`parse_cli_result` — planning впервые получает стоимость), `task_id=None`; параметр `invoke=subprocess.run` (`:94`) снимается — подмена делается двойником `_spawn`, как у остальных сайтов |
+| `plan --gated` (каждая стадия) | `cli_plan._generate_stage_draft`, `cli_plan.py:170` | `plan:<stage>` | `build_cli_command` → `build_cli_invocation` (+`parse_cli_result` — planning впервые получает стоимость), ledger — `plan_agent_calls` (§ 2.3), задачи у строки нет; параметр `invoke=subprocess.run` (`:94`) снимается — подмена делается двойником `_spawn`, как у остальных сайтов |
 | `plan --full` (каждая стадия) | `cli_plan.py:660` | `plan:<stage>` | то же; `costs` — строка «planning» по образцу `pr_cost_rows` (BEH-24) |
 | `plan "<описание>"` (интерактивный цикл, каждый круг) | `cli_plan.cmd_plan`, `cli_plan.py:797` | `plan:interactive` | то же; `cmd = [claude_command, "-p", prompt]` (`:791`) заменяется на `build_cli_invocation`; каждый круг цикла — свой `call_id` и своя пара call-start/call-result |
-| `doctor` | через `execute_task` | как у сайта | без правок; run-start/closure — § 6 |
+| `doctor` — исполнение пробы | через `execute_task` → `execution._run_agent_process` | `doctor:execute` | provenance приходит из scratch-конфига (§ 2.7), а не от сайта; `task_id` опубликованной записи — `null`; run-start/closure — § 6 |
+| `doctor --with-review` — review пробы | через `execute_task` → `review._run_reviewer` | `doctor:review` | то же; второй и последний платный вызов пробы (`execution_mode: standard` пинуется в § 2.7) |
 
 Старт `run`/`retry`/`watch` (после run-start § 6.2 и гардов старта, до
 выбора задачи — эта граница одна для всех трёх, и executor lock её не задаёт:
@@ -601,15 +700,18 @@ open calls, — вызываемая из всех трёх handler-ов сра�
 `--reason`, actor, `SPEC_RUNNER_AGENT` guardrail, отказ под PID-checked lock;
 идемпотентность — по наличию `result.json` в store (проверяется **до**
 записи); пишет `CallResult(outcome="resolved_unknown", supersedes=<start
-key>)` в store и закрывает строку DB того namespace-а, если DB доступна
+key>)` в store и закрывает строку DB того namespace-а — в ledger-е **того
+семейства, которому принадлежит закрываемый вызов** (`agent_calls`,
+`pr_agent_calls` или `plan_agent_calls`, § 2.3; семейство известно из
+call-start), — если DB доступна
 (иначе — процедура Q-12 закроет её на следующем старте по store). Платного
 вызова не делает (BEH-11), но **платящей подкомандой по критерию FR-01
 является**: она меняет continuation-state — задача после неё снова
 выбираема. Отсюда три следствия, и все три намеренные: `evidence close-call`
 и `evidence purge` входят в `PAYING_SUBCOMMANDS` (§ 6.2) и пишут свою пару
 run-start + closure; закрытие строки DB идёт тем же шагом «close»
-`record_agent_call`, что и у seam-а, а значит через `after_mutation` (§ 3.1)
-и checkpoint — под `run_id`, у которого run-start есть, так что аномалии
+своего семейства, что и у seam-а (§ 2.2 шаг 8), а значит через
+`after_mutation` (§ 3.1) и checkpoint — под `run_id`, у которого run-start есть, так что аномалии
 «checkpoint под `run_id` без run-start» (§ 6.2) здесь не возникает; read-only
 остаётся `evidence <run_id>`, и именно он назван read-only в BEH-04/BEH-13,
 а не подкоманда `evidence` целиком.
@@ -634,10 +736,99 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 | `evidence <run_id>` | ничего не решает | read-only: показывает open calls своего `run_id` и не читает индекс (§ 1.3) |
 | seam `paid_call.execute` внутри любого прогона | открывает и закрывает call | пара call-start/call-result в store под своим `run_id`; строка DB — индекс, а не второй домен (Q-12) |
 | replay spool на старте | доигрывает mutation, не решает про calls | идёт **до** процедуры Q-12 (§ 2.4), чтобы процедура читала уже доигранную DB |
-| `plan`, `review-pr`, `doctor` | платят, но задач ledger-а не выбирают | свои calls закрывает seam того же invocation; чужой open call им нечего повторить — задачу они не берут |
+| `plan`, `review-pr` | платят, но задач ledger-а не выбирают | свои calls закрывает seam того же invocation; чужой open call им нечего повторить — задачу они не берут |
+| `doctor` | то же, и его записи не адресуют ни одну задачу workstream-а | опубликованные call records пробы `task_id` не несут (§ 2.7), поэтому ветка (2) Q-12 не восстанавливает из них `open`-строку ни на какую задачу проекта; open call самой пробы виден `evidence`/`restore` как open call без задачи и закрывается той же дверью § 2.5 |
 | `tdd abandon/repair/resume/release`, `budget authorize` | меняют continuation-state, open calls не читают | mutation ⇒ checkpoint (§ 3.1) и своя пара run-start + closure; open call закрывается только дверью § 2.5 |
 | `status`, `costs`, `validate`, `report` | ничего не решают и ничего не меняют | run-start не пишут (BEH-04), store не трогают |
 | два одновременно живых каталога с одним `workstream_key` | — | **не покрыто**: ветка (1) видит только свою DB, а lease над индексом бандл не вводит (Q-12, последний абзац); ограничение названо в FR-02 |
+
+**2.7 Область пробы `doctor`.** `doctor` — единственная подкоманда, чей
+платный вызов исполняется не в проекте, а в эфемерном scratch-проекте
+(`doctor.build_scratch`, `doctor.py:271-318`), который она сама и удаляет
+(`:408`). Поэтому у неё две области, и они разделены явно; «как у сайта, без
+правок» было неверно, потому что сайт публикует под identity вызывающего то,
+что живёт только внутри scratch.
+
+**Внешний invocation владеет всем, что обязано пережить прогон:** `run_id`
+(диспетчер, § 6.1), run-start (§ 6.2, `doctor` в `PAYING_SUBCOMMANDS`),
+пара call-start/call-result каждого платного вызова пробы со стоимостью
+(§ 2.2) и closure (§ 6.3, строка «attempt-ов нет — только код выхода»).
+Деньги настоящие, и запись о них эфемерной быть не вправе.
+
+**Внутренняя проба владеет только своим scratch:** её `agent_calls`-строки,
+attempt, статусы и `tasks.md` лежат в удаляемой DB. Continuation-relevant
+mutation (§ 3 требований) это не является — продолжать снимок удалённого
+каталога нечего, — поэтому `after_mutation` на её mutation checkpoint-а не
+производит (§ 3.1) и `export_attempt` её attempt не публикует (§ 6.4).
+Механизм — **одно** поле на конфиге, а не проверка «а не в temp ли мы»:
+`ExecutorConfig.probe_provenance: str | None` (дефолт `None`), которое
+ставит только `doctor.build_scratch` и только значением `"doctor"`. Его
+наличие **и есть** объявление «этот конфиг — эфемерная проба», оно же даёт
+префикс provenance (ниже). Одно поле, а не пара «флаг + префикс»,
+намеренно: два знака могли бы разойтись — конфиг, объявивший префикс и не
+объявивший себя пробой, публиковал бы checkpoint-ы под именем пробы, и это
+состояние пришлось бы чем-то запрещать. Поле на конфиге, потому что именно
+конфиг уже в руках у обоих читателей (`after_mutation(config, …)`,
+`export_attempt` через `state.config`), и потому что ставится оно ровно там,
+где scratch создаётся.
+
+**Provenance производится конфигом, а не сайтом.** Значения словаря
+`doctor:execute` и `doctor:review` не производил ни один сайт, пока
+provenance приходил от GREEN (`green`) и review (`review`) — то есть
+значение существовало в требованиях и не существовало в дереве. Теперь
+seam (§ 2.2, шаг 2 — сборка `CallStart`) при заполненном
+`config.probe_provenance` отображает provenance сайта по закрытой карте
+`{green: "<probe>:execute", review: "<probe>:review"}`, подставляя значение
+поля вместо `<probe>`: имени `doctor` в seam-е нет, оно приходит из конфига
+пробы. Карта живёт рядом с `PaidCall`, у неё ровно два входа, и provenance
+сайта вне карты при заполненном поле — `Refusal(kind="instrument")` до
+записи call-start, а не молчаливый `doctor:<что-то>`. Роли review (`review:<role>`) проба не
+запускает: `run_review` в scratch-конфиге включается одним флагом
+(`doctor.py:305-315`), `review_parallel`/`review_roles` наследуются от
+вызывающего и обнуляются здесь же — как и `audit_log_path` (§ 6.5: с
+абсолютным путём проба писала бы audit-строки в файл вызывающего под его же
+`run_id`, и его срез назвал бы канонную задачу пробы) — иначе у пробы было бы столько платных
+вызовов, сколько ролей у проекта, при cost gate, объявившем два.
+
+**Сайтов ровно два, и это обеспечено.** `build_scratch` пинует
+`execution_mode = "standard"`. Без этого проект под `tdd` дал бы пробе
+третий платный вызов — RED authoring (`resolve_execution_mode` читает
+конфиг, `config.py:633-650`, а канонная задача пробы режима не объявляет), —
+то есть больше вызовов, чем `_confirm` объявил оператору
+(`doctor.py:353-363`: «This makes {1 или 2} real, billable model call(s)»),
+и четвёртое значение в словаре provenance. Пин делает объявление cost gate
+истинным и словарь закрытым.
+
+**`task_id` опубликованной записи — `null`.** Канонная `TASK-001` пробы
+адресуема только внутри scratch. Опубликуй её как `task_id`, и ветка (2)
+процедуры Q-12 восстановила бы `open`-строку на **одноимённую реальную**
+задачу проекта — заблокировав её до аудируемой двери § 2.5 за вызов,
+который к ней не относился. Нижний предел цены этой ошибки — рабочий день
+оператора на задаче, которую никто не запускал. Вопрос nullability столбца
+у пробы при этом **не возникает вовсе**, и это не обход, а разные области:
+её ledger-строку принимает scratch-DB, где канонная `TASK-001` — настоящая
+локальная задача, так что `agent_calls.task_id` (`NOT NULL`,
+`state.py:485-497`) выполняется буквально; `null` нужен только
+**опубликованной** записи, чью схему вводит этот бандл
+(`evidence-record`), и ветка (2) Q-12 такую запись строкой DB не делает.
+Тот же вопрос у сайтов **без** задачи — планирования — решён не здесь и
+иначе: своим ledger-ом семьи (`plan_agent_calls`, § 2.3), а не nullable
+столбцом.
+
+**Что остаётся наблюдаемым.** Проба, убитая между ack call-start и
+call-result, оставляет в workstream-е open call без задачи: `evidence
+<run_id>` показывает его, проверка (6) `restore` (шаг 4) на нём отказывает
+namespace-wide, и закрывает его та же дверь § 2.5 с `--reason`. Это не
+избыточная строгость, а буквальный смысл open call: деньги могли быть
+потрачены. Автоматически такой вызов не повторяется и повторён быть не может
+— следующий `doctor` создаёт новый scratch и новый `call_id`.
+
+**Строка неблокирующей половины шага 5 (§ 7.2) становится следствием.**
+Прогон `doctor` не публикует ни одного checkpoint-а, поэтому второе условие
+ключа шага 5 на нём не выполняется никогда: он не блокирует восстановление
+и не может быть назван выходом в отказе (выход обязан нести acknowledged
+checkpoint). Ни то, ни другое больше не держится на строке перечня — перечень
+это лишь фиксирует.
 
 ### 3. Checkpoint: seam «после mutation», snapshot, manifest (FR-03)
 
@@ -649,12 +840,31 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 `reinstate_checkpoint_with_claims`, `record_tdd_phase`,
 `record_verify_evidence`, `record_gate_verdict`, `record_waiver`,
 `record_waiver_applied`, `record_remedy`, `record_budget_authorization`,
-`record_agent_call` — шаг close, § 2.2), `claims.release_claims`,
+`record_agent_call` и писатель `plan_agent_calls` — оба как шаг close,
+§ 2.2), `claims.release_claims`,
 `ReviewPrState` при завершении раунда (`review_pr.py:282`; у него своё
 соединение — он передаёт его в `conn`), `bookkeeping.commit_status_flip`
 (`conn=None`: checkpointer сам открывает соединение к `state_file` для
 backup). `mark_running` и `set_meta` — не continuation-relevant по §3
 требований и seam не вызывают; `phase_results` (best-effort, #164) — тоже.
+
+**Три решения принимает сама `after_mutation`, и все три — по тому, что у
+неё уже в руках.** (1) `config.probe_provenance` заполнен (§ 2.7) — выход сразу,
+checkpoint-а нет: mutation эфемерной пробы `doctor` не continuation-relevant,
+её DB удаляется вместе с каталогом. Это единственный читатель поля помимо
+`export_attempt` (§ 6.4), и это единственное место, где «не публиковать»
+решается, — сайты записи о пробе не знают. (2) Ждать ack
+`after_mutation` **не** ждёт ни у одной подкоманды: синхронного drain внутри
+неё нет (Q-05, «третьей точки нет»). Ожидание перед успешным завершением
+даёт точка (б) в `finally` диспетчера — одно на invocation, там же, где
+выводится kind closure, и потому одинаково для подкоманды, добавленной
+после бандла. Ожидание внутри `after_mutation` подняло бы `Refusal` из
+середины многошагового handler-а — между записями, порядок которых
+`remedy.py` выбрал так, чтобы обрыв не оставил запрещённого состояния.
+Обязательства публикации, записанного вместе с mutation, дизайн не вводит
+вовсе — это усиление #527, вынесенное в spec-runner#528 (Q-05), и потому
+`after_mutation` остаётся тем, чем была: снять snapshot и поставить его в
+очередь publisher-а.
 
 **3.2 Snapshot.** `sqlite3.Connection.backup(target)` с живого соединения в
 `<state_dir>/.executor-checkpoints/<seq:06d>-<checkpoint_id>/state.db` —
@@ -692,9 +902,16 @@ project-relative; тест `grep`-ает `str(project_root)` и `os.getpid()`.
 `review_command`, модели ролей, `spec_runner_version`.
 
 **3.5 Publisher checkpoint-ов** — тот же `Publisher` (§ 1.4), очередь
-упорядочена по `sequence`; `drain(timeout)` — две точки (Q-05); manifest
+упорядочена по `sequence`; `drain(timeout)` — две точки (Q-05, вторая —
+гейт успешного завершения); manifest
 кладётся последним, ack manifest-а = ack checkpoint-а; `last_acknowledged()`
 — то, на что ссылается closure. Один поток, одна очередь, никакого пула.
+Точек drain две (Q-05), и вторая — **гейт**: недоставленный checkpoint даёт
+closure `failed` и exit 2, поэтому подкоманда без платного вызова успешной не
+завершается (§ 6.3, FR-03). Ожидания у invocation-а столько, сколько точек
+drain, — число mutation подкоманды его не увеличивает: решение ждать
+принимает диспетчер на выходе, а не `after_mutation` на каждой записи
+(Q-05, «третьей точки нет»).
 
 ### 4. Git-материал и WIP (FR-04)
 
@@ -911,7 +1128,7 @@ required` до них не доходит — `HOOK_FAILURE` фатален (`ex
 | `watch` | то же |
 | `plan` | attempt-ов нет — только код выхода |
 | `review-pr` | attempt-ов нет — только код выхода |
-| `doctor` | attempt-ов нет — только код выхода |
+| `doctor` | attempt-ов нет — только код выхода (attempt пробы лежит в удаляемой scratch-DB и в DB проекта не появляется, § 2.7) |
 | `tdd abandon/repair/resume/release` | attempt-ов нет — только код выхода |
 | `budget authorize` | attempt-ов нет — только код выхода |
 | `restore` | attempt-ов нет — только код выхода |
@@ -980,7 +1197,11 @@ n)` собирает строки этой задачи/attempt-а из пере
 JSONL по `schemas/evidence-record.schema.json` и публикует
 `attempts/<task>-<n>.jsonl`; для `review-pr` — при завершении раунда
 (BEH-23). Публикуется через ту же очередь publisher-а; drain перед closure
-ждёт и его.
+ждёт и его. Исключение одно и то же, что у checkpoint-а: при поднятом
+`config.probe_provenance` (§ 2.7) `export_attempt` не публикует ничего —
+экспорт назвал бы задачу, которой в workstream-е нет, и корроборировал бы
+checkpoint, которого нет. Стоимость пробы при этом не теряется: она в
+call-result каждого её вызова.
 
 **6.5 Корроборирующие логи прогона** (FR-06, SSOT #478) — инвентарь
 `docs/architecture.md:251-252` называет две строки, которые обязаны ехать с
@@ -998,6 +1219,19 @@ audit-log-а `run_id` есть в каждой строке (`audit_log.py:158`,
 `runs/<run_id>/audit-log.jsonl`. Оба проходят тот же redactor и тот же
 `bound_evidence` (§ 1.4, NFR-06); обоих может не быть (история не заведена,
 аудит выключен) — отсутствие источника даёт отсутствие ключа, не отказ.
+Проба `doctor` в оба среза не попадает, и для одного из них это следует из
+дерева, а для второго объявлено. История задач — из дерева: проба пишет её в
+свой scratch (`history_file_for` — от `project_root` scratch-конфига), а
+размер файла вызывающего `start()` запомнил до её запуска, так что хвост за
+прогон пуст. Audit-log — объявлено: `build_scratch` обнуляет
+`audit_log_path` (§ 2.7, там же, где `review_roles`), потому что иначе
+конфигурация с **абсолютным** путём (та самая «orchestrator-managed
+volume» ниже) писала бы строки пробы в файл вызывающего под `run_id` этого
+invocation-а — и срез `runs/<run_id>/audit-log.jsonl` назвал бы канонную
+`TASK-001` пробы и её scratch-namespace, то есть ровно то, что § 2.7
+объявляет невозможным. При относительном пути следы уехали бы в scratch и
+исчезли с ним, так что обнуление — единственная форма, дающая один и тот же
+ответ в обеих конфигурациях.
 Ни `evidence`, ни `restore` по ним решений не принимают: SSOT называет
 историю «corroborating history, not the authority for current status», и
 здесь она ровно этим и остаётся. Файл целиком не копируется намеренно: он
@@ -1086,11 +1320,14 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    обойтись нечем: перечень отвечает, **какая работа** считается, checkpoint
    — **была ли** работа вообще.
 
-   **Известный пробел, принятый осознанно (решение владельца 2026-09-18).**
-   Публикация асинхронна: процесс ждёт publisher только перед call-start и
-   перед closure (Q-05). Прогон из блокирующей половины, убитый в окне между
-   записью mutation в DB и доставкой checkpoint-а в store — например
-   `budget authorize` под `kill -9`, — acknowledged checkpoint-а не имеет (ни
+   **Известный пробел, принятый осознанно (решение владельца 2026-09-18), и
+   чем он сужен.** Публикация асинхронна: процесс ждёт publisher перед
+   call-start и перед closure (Q-05, точки (а) и (б); вторая — гейт:
+   недоставленный checkpoint даёт exit 2, и у подкоманды без платного
+   вызова это её единственное ожидание). Прогон из блокирующей
+   половины, убитый в окне между записью mutation в DB и доставкой
+   checkpoint-а в store — например `budget authorize` под `kill -9`, —
+   acknowledged checkpoint-а не имеет (ни
    одного вовсе либо только частично доставленный набор ключей без
    manifest-а), и потому этим шагом **не** блокирует: restore более раннего прогона
    применяется, а его правка `budget_authorizations` теряется молча, без
@@ -1101,12 +1338,21 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    прогон (маркер `.closed` кладётся только вместе с closure, § 1.3), — то
    есть при fail-closed такой прогон блокировал бы вечно, и путь «дверь →
    restore», ради достижимости которого и существует неблокирующая
-   половина, не работал бы ни разу. Из двух зол выбрано узкое: потеря в окне
-   доставки у подкоманд без платного вызова (`budget authorize`,
-   `tdd release`) против недостижимости FR-05 во всех конфигурациях с
-   упавшим прогоном. Закрывается это не здесь, а сужением самого окна
-   (синхронный ack mutation-checkpoint-а для таких подкоманд) — отдельной
-   задачей.
+   половина, не работал бы ни разу. Поэтому **предикат этого шага не
+   меняется, а окно сужается** — настолько, насколько его сужает гейт
+   (решение владельца 2026-09-18, вторая половина): успешного завершения у
+   подкоманды без платного вызова не бывает, пока её checkpoint не
+   acknowledged (Q-05, точка (б)), и окно потери сводится к хвосту handler-а
+   — печати результата и возврату — вместо всего времени до closure.
+   Устранить окно совсем гейт не может: `kill -9` внутри него по-прежнему
+   теряет правку, и этот вход остаётся **принятым** пробелом, как и был.
+   Обязательство публикации, записанное транзакцией mutation («полезное
+   усиление» заявки #527), бандл не вводит: его следствия вынесены в
+   spec-runner#528 — вместе с главным, из-за которого оно не закрывает и
+   канонную последовательность «crash → restore», а именно что доставка
+   обязана случиться раньше, чем **эта** проверка читает store, тогда как
+   единственная точка drain прогона `restore` стоит позже. Fail-closed
+   по-прежнему не читается — по той же причине, что выше.
 
    **Блокирующая половина:** `run`, `retry`, `watch`, `plan`, `review-pr`,
    `budget authorize`, `tdd abandon|repair|resume|release`. Прогон из неё с
@@ -1126,22 +1372,28 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    `review-pr` переплатить за те же комментарии. `plan` — не по § 3, а
    потому, что дописывает задачи в `tasks.md` (`cli_plan.py:878`): этого
    материала восстановленный каталог не несёт. Checkpoint у такого прогона
-   есть — задачи он дописывает после платного вызова, а тот закрывает
-   ledger-строку через `record_agent_call` (§ 2.2 шаг 8), — так что второе
-   условие ключа на нём выполняется.
+   есть — задачи он дописывает после платного вызова, а тот закрывает свою
+   ledger-строку шагом close (§ 2.2 шаг 8; у планирования это
+   `plan_agent_calls`, § 2.3), — так что второе условие ключа на нём
+   выполняется.
    `evidence close-call` — её запись есть шаг close уже существующего
-   вызова, пометка «этот call закрыт», и **какую** ledger-таблицу она
-   трогает, `agent_calls` или `pr_agent_calls`, значения не имеет: нового
-   continuation-state ни та, ни другая пометка не создаёт, а
+   вызова, пометка «этот call закрыт», и **какой** ledger семьи она
+   трогает — `agent_calls`, `pr_agent_calls` или `plan_agent_calls` (§ 2.3) —
+   значения не имеет: нового
+   continuation-state ни одна из трёх пометок не создаёт, а
    `pr_review_comments` дверь не пишет вовсе (поэтому `pr_*` из § 3 нельзя
    читать здесь как «любая таблица с этим префиксом» — иначе дверь,
    закрывающая pr-вызов, блокировала бы восстановление, ради которого её и
    открыли). `evidence purge` — по своей причине: open call он не закрывает
    **по построению** (§ 2.6), а его `deletions/<ts>.json` — аудит
-   собственного удаления, не рабочий материал. `doctor` — его проба гоняет
-   `execute_task` под scratch-конфигом, чей `state_file` лежит во временном
-   каталоге (`doctor.py:290-295`) и удаляется вместе с ним (`:408`); § 6.3
-   этого же дизайна говорит про него «attempt-ов нет — только код выхода».
+   собственного удаления, не рабочий материал. `doctor` — не по строке перечня, а потому, что
+   второе условие ключа на нём не выполняется **никогда**: его проба гоняет
+   `execute_task` под scratch-конфигом, объявленным пробой (§ 2.7), и ни
+   одного checkpoint-а такой прогон не публикует — ни acknowledged, ни
+   частично доставленного, — так что классификация его в неблокирующую
+   половину лишь фиксирует свойство, а не решает за него. То же свойство
+   исключает его из кандидатов на выход (ниже): выход обязан нести
+   acknowledged checkpoint.
    `restore` — он пишет только в свой новый пустой `--into` и в namespace
    восстанавливаемого прогона не добавляет ничего; это и делает
    неблокирующим **чужой**, более ранний `restore`, лежащий в индексе.
@@ -1177,7 +1429,8 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    путь. Кандидатом здесь становится C: после него блокирующих нет.
    Собственная запись текущего invocation (§ 6.2 кладёт её в индекс до
    handler-а) из выбора исключена всегда; прогоны без acknowledged
-   checkpoint-а — тоже, потому что восстанавливать у них нечего (порядок
+   checkpoint-а — тоже (а значит и всякий `doctor`, § 2.7), потому что
+   восстанавливать у них нечего (порядок
    проверок § 7.2 начинается с digests последнего acknowledged
    checkpoint-а, а его нет; отдельной ветки отказа для такого `run_id`
    бандл не вводит, и это его известный пробел).
@@ -1288,7 +1541,8 @@ integration PR). Отсюда формы, которые decomposition-стад�
 
 **Задачи-измерения** (BEH-05 «call-start раньше spawn на каждом сайте»,
 BEH-13 «checkpoint после каждой mutation», BEH-39 fault-injection ×1000,
-BEH-41 бенчмарк, BEH-22 матрица outcome × site).
+BEH-41 бенчмарк, BEH-22 матрица outcome × site, BEH-47 область пробы,
+BEH-48 синхронный ack mutation-checkpoint-а).
 - MUST verify live: общий журнал двойников store и `_spawn`, в котором для
   каждого `spawn` непосредственно раньше стоит `call_start` с тем же
   `call_id` — по **настоящему** прогону каждого сайта с fake CLI, не по
@@ -1300,14 +1554,24 @@ BEH-41 бенчмарк, BEH-22 матрица outcome × site).
   `os._exit` из двойника seam-а в параметризованной точке, новый процесс,
   сверка «подтверждено ∧ отсутствует после рестарта == ∅», детерминированный
   seed; для BEH-22 — record в двойнике store на каждую клетку, с `null`
-  вместо `0.0` там, где fake CLI стоимости не сообщил.
+  вместо `0.0` там, где fake CLI стоимости не сообщил; для BEH-47 — полный
+  набор ключей одного настоящего прогона `doctor --with-review --yes` с fake
+  CLI (run-start, две пары call-start/call-result, closure) и **пустые**
+  префиксы `checkpoints/` и `attempts/` под тем же `run_id`, плюс
+  последующий `run --all`, доходящий до платного вызова своей `TASK-001`;
+  для BEH-48 — порядок в общем журнале (ack mutation-checkpoint-а раньше
+  строки успеха) и exit 2 на отклонённом ack, наблюдаемые у двойника store.
 - MUST NOT assert: результат `grep` по исходнику на `subprocess.run`
   (обход ловит пояс `PaidBinaryReached` при живом прогоне, а grep красен от
   комментария и слеп к `getattr`); wall-clock p95/p99 внутри CI-теста
   (BEH-41 — `manual`; в CI только ≤ 60 s валидации на reference-наборе с
   щедрым запасом); имена приватных функций seam-а; порядок внутренних шагов
   seam-а сверх наблюдаемого «call-start acked → spawn → result»; число строк
-  или число `after_mutation`-вызовов в `state.py`.
+  или число `after_mutation`-вызовов в `state.py`; имена полей области пробы
+  (`probe_provenance`) — наблюдаемое в BEH-47/48 это отсутствие ключей,
+  значение provenance в опубликованной записи и порядок ack относительно
+  выхода, а не поля конфига; wall-clock цены гейта перед closure внутри CI-теста — её
+  меряет бенчмарк BEH-41.
 
 **Задачи-артефакты** (схемы `checkpoint-manifest` / `evidence-record` /
 `run-closure` / `restore-result` / `evidence-view`, столбцы `run_id`/`call_id`,
@@ -1386,7 +1650,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
 | `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
-| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий | BEH-12…15, 40 |
+| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`; ack **не ждёт** ни у одной подкоманды — § 3.1, Q-05: ожидание внутри неё рвало бы многошаговый handler), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий, `drain` и его отказный режим перед closure (гейт: exit 2) | BEH-12…15, 40, 47, 48 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
@@ -1394,14 +1658,15 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
-| `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
+| `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; новая таблица `plan_agent_calls` (§ 2.3 — ledger вызовов без задачи; её писатель зовёт `after_mutation` шагом close наравне с `record_agent_call`, § 3.1; `agent_calls.task_id` не меняется); `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>`. Столбец `agent_calls.task_id` остаётся `NOT NULL` — § 2.7 | BEH-03, 13, 15, 33, 35, 38, 48 |
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
 | `src/spec_runner/audit_log.py`, `logging.py`/`obs.py` | `run_id` обязательным параметром `AuditLogger`, из контекста; `run_id` в contextvars рядом с `pipeline_id` | BEH-01, 02 |
 | `src/spec_runner/prompts_log.py` | `run_id`/`call_id` в заголовке; тело неизменно | BEH-01 |
-| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl` | BEH-28, 42 |
+| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; путеподобные `store.options` разрешаются в абсолютные пути **на загрузке**, относительно `project_root` (§ 1.1); `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl`; поле области пробы `probe_provenance` (§ 2.7, ставит только `doctor.build_scratch`, значением `"doctor"`) | BEH-28, 42, 47 |
 | `src/spec_runner/git_ops.py` | `runtime_state_paths` + checkpoint-каталог и spool; `repository_identity`; helpers для bundle/published-base | BEH-14, 16, 43 |
-| `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning», `repo_total_cost` | BEH-24, 38 |
-| `src/spec_runner/remedy.py`, `budget_cmd.py`, `doctor.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3) | BEH-46 |
+| `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning» из `plan_agent_calls` (§ 2.3), три ledger-а врозь и сумма только в `repo_total_cost` | BEH-24, 38 |
+| `src/spec_runner/remedy.py`, `budget_cmd.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3), и тот же диспетчер ждёт ack их mutation-checkpoint-а на точке (б) — гейт перед closure, а не сайт ожидания внутри handler-а (§ 3.1, Q-05: третьей точки нет, иначе `Refusal` рвал бы многошаговый `remedy.py` посередине) | BEH-46, 48 |
+| `src/spec_runner/doctor.py` | правится в одном — `build_scratch` объявляет область пробы: `probe_provenance: "doctor"`, пин `execution_mode = "standard"`, обнуление `review_parallel`/`review_roles` и `audit_log_path` (§ 2.7, § 6.5). Сайты пробы — те же, что у проекта, через `execute_task`; `run_probe`, `extract`, вердикт и cost gate не меняются; своих записей evidence `doctor.py` не делает — их пишет диспетчер и seam | BEH-47 |
 | `schemas/` | новые `checkpoint-manifest`, `evidence-record`, `run-closure`, `restore-result`, `evidence-view`; аддитивно `executor-state`, `json-result`, `status`, `costs` | BEH-03, 14, 21, 23, 29, 36, 38 |
 | `docs/state-schema.md`, `docs/architecture.md`, `CHANGELOG.md`, `README.md` | minor bump, контракт checkpoint/evidence/closure, «operational minimum», статус experimental, `durability:` | BEH-45 |
 | `tests/conftest.py`, `tests/test_harness_guards.py`, `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv, тип отказа — от `BaseException` (Q-06); `test_harness_guards.py` переписывается тем же коммитом, и тем же — `test_task_015_…_red.py:79`, чей `pytest.raises(AssertionError)` ключуется на старом типе; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |
