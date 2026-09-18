@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 561fdb94715c138cae8bdebe9dd98f14181b7eb2
-  acceptance: 90c6ee68aadf3f050a38344ac7e3f6c7325d9e4c
+  design: 7b471aebe4f46771421e4342596c8254b8649f06
+  acceptance: b9cd6059b6940ec14d60561063772e375eebbae2
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -459,14 +459,18 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
 прогона, `call_id`, provenance и `task_id`; более поздний прогон
-блокирует восстановление или нет — по **закрытому перечню подкоманд**
-(`subcommand` из его run-start; свойства «что прогон изменил» ни run-start,
-ни индекс не несут, а checkpoint и `attempts/` инвертированы в обе стороны —
-design § 7.2 шаг 5). Блокируют `run`/`retry`/`watch`, `plan`, `review-pr`,
-`budget authorize`, `tdd abandon|repair|resume|release` — отказ
-`needs-human` с именем последнего `run_id` workstream-а как выходом; не
-блокируют `evidence close-call`, `evidence purge`, `doctor`, `restore`
-(причина у каждого своя — там же). Обе половины объявляются рядом с
+блокирует восстановление, когда сошлись два условия: его `subcommand` из
+run-start в блокирующей половине закрытого перечня — `run`/`retry`/`watch`,
+`plan`, `review-pr`, `budget authorize`, `tdd abandon|repair|resume|release`
+— **и** под его `run_id` есть хотя бы один ключ
+`runs/<run_id>/checkpoints/…`. Тогда отказ `needs-human` с именем
+последнего `run_id` workstream-а как выходом. Холостой прогон из той же
+половины (нечего делать; старт отказан гвардом или занятым lock-ом после
+run-start) checkpoint-а не публикует и восстановлению не мешает — иначе
+оператор остаётся без пути, потому что восстановить его самого нечем.
+Неблокирующая половина — `evidence close-call`, `evidence purge`, `doctor`,
+`restore` — не блокирует независимо от checkpoint-ов (причина у каждого
+своя, design § 7.2 шаг 5; у двери checkpoint есть, и он ничего не меняет). Обе половины объявляются рядом с
 `PAYING_SUBCOMMANDS` в `run_context.py` (DT-02), и полнота держится тестом
 `set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING` при пустом пересечении
 (предмет BEH-20, последние And; файл — `tests/test_restore_refusals.py`
