@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 869aabdcc05028baf6dd2be0b50161f2679b09f4
-  acceptance: 6119c348d93b9eded0610bba1f39acac98f55390
+  design: 125da52b15ecd2ea32c33714447020e0ff1d8d6e
+  acceptance: 18f4b701afac89e6889a8ca413cf7c32197892c3
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -460,10 +460,10 @@ BEH-48 (spec-runner#527) наблюдает третью точку drain и п�
 стоит раньше строки успеха; при отклонённом ack — exit 2, stderr с
 недоставленным `sequence`/`checkpoint_id` и mutation в DB; после `kill -9` в
 окне между commit-ом и ack следующий прогон в каталоге отправляет чужой
-checkpoint раньше своих записей — предъявлено тремя прогонами, каждый
-накрывает своё из трёх событий (`run --all` — раньше `spawn` и раньше взятой
-задачи, второй `budget authorize` — раньше своего нулевого кода, `plan
---gated` — раньше траты), — с тем же `checkpoint_id` и идемпотентно, и после
+checkpoint раньше своих записей — предъявлено тремя прогонами на два события
+(`run --all` — раньше `spawn`, второй `budget authorize` — раньше своего
+нулевого кода, `plan --gated` — раньше траты; доставки раньше **выбора**
+задачи ни один не требует), — с тем же `checkpoint_id` и идемпотентно, и после
 этого шаг 5 restore (DT-06)
 на нём отказывает: правка, терявшаяся в окне, предъявлена, а
 предикат шага 5 не менялся. BEH-47 (spec-runner#525) наблюдает область
