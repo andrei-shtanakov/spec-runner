@@ -845,12 +845,14 @@ PR-ом, что этот пункт; реализация придёт с DT-02/
 - [ ] **bundle-480-narrow-checkpoint-delivery-window** (spec-runner#527, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-narrow-checkpoint-delivery-window
       P1, release-блокер снятия experimental-статуса `restore`. Предикат шага
       5 проверки (6) не меняется (fail-closed сделал бы недостижимым путь
-      «дверь `close-call` → restore»); сужается **окно**: у подкоманд без
-      платного вызова (`budget authorize`, `tdd abandon|repair|resume|release`)
-      появляется третья точка drain (Q-05 (в)) — синхронный ack
-      mutation-checkpoint-а **до** сообщения об успехе, таймаут → exit 2, а не
-      ложный успех; решение принимает `after_mutation` по подкоманде
-      invocation-а, а не сайт подкоманды. Плюс transactional pending-outbox:
+      «дверь `close-call` → restore»); сужается **окно**: drain перед closure
+      объявлен **гейтом** — подкоманда без платного вызова не завершается
+      успешно, пока её mutation-checkpoint не acknowledged, таймаут → exit 2,
+      а не ложный успех (строка, напечатанная handler-ом раньше отказа,
+      успехом не считается). Ожидание одно на invocation и на его выходе:
+      третью точку «сразу после mutation» дизайн рассмотрел и отверг — её
+      отказ рвал бы многошаговый `tdd abandon`/`repair` между записями,
+      оставляя решение применённым наполовину и без audit-строки. Плюс transactional pending-outbox:
       строка `checkpoint_outbox` пишется той же транзакцией, что mutation, и
       следующий прогон в каталоге доставляет недоставленное раньше
       собственных записей — то есть раньше своего платного вызова и раньше

@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 125da52b15ecd2ea32c33714447020e0ff1d8d6e
-  acceptance: 18f4b701afac89e6889a8ca413cf7c32197892c3
+  design: 1a64846cc92e647878b8181905fb95b0db2a2f9b
+  acceptance: fb1bcf4beff923195545077745b3a60bb0ef96e0
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -19,9 +19,9 @@ acceptance (`25-acceptance.md`); их ревизии пинованы в frontma
 `upstream_hashes` этого узла. Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
-(локальный snapshot синхронно, один упорядоченный publisher, **три** точки
-drain — перед call-start, перед closure и сразу после mutation у подкоманд
-без платного вызова, — обязательство опубликовать в транзакции самой
+(локальный snapshot синхронно, один упорядоченный publisher, **две** точки
+drain — перед call-start и перед closure, причём вторая — гейт: недоставленный
+checkpoint даёт exit 2, — обязательство опубликовать в транзакции самой
 mutation (pending-outbox), manifest последним), Q-06 (seam в `paid_call.py`,
 `_spawn` — единственный spawn провайдера), Q-07 (состав `PolicyIdentity`), Q-08
 (движок redaction), Q-11 (retention считает spec-runner, удаляет адаптер,
@@ -324,18 +324,17 @@ run-start, call-start и manifest-а, `facts` рядом, не в identity; mani
 `manifest_sha256` — repository/workstream/`refs[]`/`excluded` и WIP заполняет
 DT-05. `Publisher` получает очередь по `sequence`, `drain(timeout)` и
 `last_acknowledged()`; manifest кладётся последним, ack manifest-а = ack
-checkpoint-а; **три** точки drain (Q-05): перед call-start — шаг 1 `execute`
+checkpoint-а; обе точки drain (Q-05): перед call-start — шаг 1 `execute`
 (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind="instrument")`,
-вызова нет), перед closure (`last_checkpoint_id = last_acknowledged()`) и —
-третья, spec-runner#527 — **сразу после mutation** у подкоманд, у которых
-платного вызова нет вовсе и первая точка потому не наступает никогда
-(`budget authorize`, `tdd abandon|repair|resume|release`): решение принимает
-сама `after_mutation` по `run_context.current().subcommand`, а не сайт
-подкоманды, — иначе у каждой был бы свой сайт ожидания и подкоманда,
-добавленная после бандла, тихо осталась бы без него (тот же довод, по
-которому kind closure выводит диспетчер). Таймаут здесь → `Refusal(kind=
-"instrument")` наружу, то есть exit 2 и closure `failed` по общему правилу:
-успех такая подкоманда не печатает. Здесь же — `checkpoint_outbox`
+вызова нет) и перед closure (`last_checkpoint_id = last_acknowledged()`),
+причём вторая — **гейт** (spec-runner#527): недоставленный checkpoint даёт
+closure `failed` и exit 2, так что подкоманда без платного вызова успешной
+не завершается, а диспетчер добавляет в stderr строку «решение записано
+локально, но не доставлено». Синхронного ожидания **внутри**
+`after_mutation` нет ни у одной подкоманды: оно поднимало бы `Refusal` из
+середины многошагового handler-а (`remedy.py` упорядочил записи так, чтобы
+обрыв не оставил запрещённого состояния) и стоило бы одного ожидания на
+каждую mutation, а не на invocation. Здесь же — `checkpoint_outbox`
 (таблица, резервирование `sequence` и **доставка незакрытых строк** в
 порядке `sequence`, идемпотентно по `checkpoint_id`:
 `AlreadyExists` от store читается как «доставлено»; ротация локальных копий
@@ -345,7 +344,7 @@ checkpoint-а; **три** точки drain (Q-05): перед call-start — ш�
 `_spawn`, то есть после траты). Триггер один: незакрытые строки outbox-а
 **ставятся в очередь publisher-а при первом за процесс открытии state DB**,
 в порядке `sequence` и **впереди** всего, что процесс опубликует сам;
-ждут их те же три точки drain. Отсюда — то, что эта задача обязана
+ждут их те же две точки drain. Отсюда — то, что эта задача обязана
 обеспечить: (1) выборка строк — часть открытия DB, а не отдельный вызов в
 handler-е; (2) очередь одна и FIFO, и `Publisher.publish(CallStart)` (§2.2
 шаг 4) встаёт в неё позади чужих строк, поэтому ack call-start-а не может
@@ -372,7 +371,7 @@ outbox-а **в транзакцию** каждой mutation делает DT-05 �
 `excluded` — DT-05; spool в checkpoint-е и `degraded: true` — DT-08; отказные
 режимы drain перед closure (таймаут → closure `failed` с предыдущим id,
 BEH-31) — DT-10; целостность при чтении — DT-11; наблюдаемое поведение
-третьей точки drain и outbox-а на настоящих подкомандах (BEH-48) и области
+гейта перед closure и outbox-а на настоящих подкомандах (BEH-48) и области
 пробы (BEH-47) — DT-05, где есть все их сайты записи. Владеет `tests/
 test_checkpoint_is_a_snapshot.py` (новый). Red-рамки: attempt под `PRAGMA
 wal_autocheckpoint=0`, seam вызван через `record_attempt`, snapshot открыт в
@@ -515,13 +514,13 @@ test_checkpoint_after_every_mutation.py` (новый). Red-рамки: двой�
 только через `run` (доставка через дверь `close-call` — знак BEH-11 в
 DT-09), — плюс контроль на `run --task`: в каталоге без недоставленных
 правок число и место обращений к двойнику store те же, что до бандла
-(ожидание на каждую mutation — красный тест, RK-01); цену третьей точки
-drain меряет бенчмарк BEH-41, не этот тест. Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
+(ожидание на каждую mutation — красный тест, RK-01); цену гейта перед
+closure меряет бенчмарк BEH-41, не этот тест. Владеет ещё `tests/test_doctor_probe_scope.py` и `tests/
 test_mutation_checkpoint_ack.py` (оба новые). Не утверждать число
 вызовов `after_mutation` в `state.py`, формат `wip.tar` внутри, нормализацию
 URL за пределами `host/owner/repo`, имена полей области пробы
 (`probe_provenance`), имя и схему таблицы
-`checkpoint_outbox`, wall-clock цену третьей точки drain внутри CI-теста
+`checkpoint_outbox`, wall-clock цену гейта перед closure внутри CI-теста
 (её меряет бенчмарк BEH-41).
 
 #### DT-06: Restore по `run_id`: `plan`/`apply`, порядок проверок, WIP apply, чтение и replay spool, следующий шаг, `--experimental`, `--json`, бенчмарк · type: implement · owner: dev
@@ -550,8 +549,11 @@ bare-репо в тесте), `wip.apply` — `git bundle verify` → `git fetch
 проверкой per-file SHA-256 → `git stash store -m <label> <sha>`; ref,
 объявленный опубликованным, которого forge не отдаёт → `needs-human` с именем
 и SHA до распаковки, реконструкции нет (OUT-09); `state.db` из snapshot-а на
-место `config.state_file` **и сразу две правки в нём** (обе — не `record_*`,
-так что `after_mutation` не вызывается): (1) таблица `checkpoint_outbox`
+место `config.state_file` **и сразу две правки в нём** — своим соединением,
+до того как DB откроется общим путём, который ставит незакрытые строки в
+очередь publisher-а (design §3.5: иначе первая же точка drain самого
+`restore` упёрлась бы в доставку унаследованных строк); обе — не `record_*`,
+так что `after_mutation` не вызывается: (1) таблица `checkpoint_outbox`
 очищается — snapshot снимается раньше ack своего же checkpoint-а и потому
 несёт незакрытую строку, а локальных копий checkpoint-ов в новом каталоге
 нет по построению, так что без очистки первый же `run` отказал бы
@@ -615,7 +617,7 @@ checkpoint-ом, **после которого нет ни одного блок
 и тоже не блокирует — его правка теряется молча (design § 7.2 шаг 5, абзац
 про пробел); fail-closed здесь невозможен, он сделал бы недостижимым путь
 «дверь `close-call` → restore». Предикат этого шага поэтому и не менялся, а
-окно сузили третья точка drain и `checkpoint_outbox` (DT-03, DT-05): на
+окно сузили гейт на точке (б) и `checkpoint_outbox` (DT-03, DT-05): на
 живой машине потеря превращается в позднюю доставку, которую этот шаг
 видит как всякий другой checkpoint, и знак этого — последние And BEH-48,
 предъявляемые **через** отказ этого шага.
@@ -1115,7 +1117,7 @@ CI-половина живёт в `tests/test_restore_drill.py`; BEH-43 — на
 `checked_by`, а сам sweep — autouse-фикстура conftest, под которую попадают и
 E2E последующих задач; BEH-47 и BEH-48 — на DT-05, а не на DT-02/DT-03,
 которые кладут их половины (поля области пробы и provenance-карта; выход
-`after_mutation`, третья точка drain и таблица outbox-а): наблюдаемы они
+`after_mutation`, гейт перед closure и таблица outbox-а): наблюдаемы они
 только там, где у mutation есть все штатные сайты записи, а у пробы — и
 `export_attempt` DT-04. Обе задачи-донора называют это своей границей.
 
@@ -1232,11 +1234,10 @@ calls DT-09; каждая задача вставляет свою, не пер�
 распознаётся — молчаливый повтор возможен; между DT-02 и DT-10 closure
 пишется без правила вывода, поэтому сигналы и неперехваченные исключения
 kind-а не получают, а отказ ack последнего checkpoint-а в closure не
-отражается; между DT-03 и DT-05 синхронную точку drain (Q-05 (в)) и строку
-outbox-а имеет один сайт — `record_attempt`, — а `budget authorize` и `tdd
-release` своего `after_mutation` ещё не зовут вовсе, поэтому окно потери у
-них остаётся прежним, добандловым, и правило шага 5 restore на них не
-опирается; область пробы `doctor` промежуточного состояния, наоборот, не
+отражается; между DT-03 и DT-05 строку outbox-а пишет один сайт —
+`record_attempt`, — а `budget authorize` и `tdd release` своего
+`after_mutation` ещё не зовут вовсе, поэтому окно потери у них остаётся
+прежним, добандловым, и правило шага 5 restore на них не опирается; область пробы `doctor` промежуточного состояния, наоборот, не
 создаёт: каждая её половина ложится в ту же задачу, что заводит
 соответствующий путь публикации (checkpoint — DT-03, attempt-экспорт —
 DT-04, provenance и `task_id` — DT-02), так что окна, в котором проба уже
