@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: a62fb486dc8ecf5a4766eddf7f7fea364fd4165d
-  behaviour-spec: e50c397bfd3a4162cd17e3a7a23d571e3f69dd5c
+  requirements: ffbd991ff6f3fa6d2fe0297307c7ee1cbb8af041
+  behaviour-spec: c53b871d785d4837b8c73199451f1a98c3c2b5a2
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -494,9 +494,9 @@ options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`,
 адаптер объявил `tls: false`, не объявил `encryption_at_rest` или
 `immutable_put` (BEH-28), или `retention_days` вне 7–365 (BEH-42);
 `validate.py` повторяет те же проверки в своём отчёте.
-**Путеподобные `options` резолвятся в абсолютные там же, на загрузке** —
-один раз, против `project_root`, а не против CWD и не лениво при первом
-`put`. Причина в дереве: процесс вправе сменить рабочий каталог внутри себя
+**Путеподобные `options` разрешаются в абсолютные пути там же, на
+загрузке** — один раз и относительно `project_root`, а не относительно CWD и
+не лениво при первом `put`. Причина в дереве: процесс вправе сменить рабочий каталог внутри себя
 (`doctor.run_probe` уходит `os.chdir` в scratch, `doctor.py:338`, и
 `shutil.rmtree` удаляет его, `:408`), и относительный `root`, разрешённый
 после этого, указал бы внутрь каталога, который сейчас удалят: платный
@@ -1662,7 +1662,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
 | `src/spec_runner/audit_log.py`, `logging.py`/`obs.py` | `run_id` обязательным параметром `AuditLogger`, из контекста; `run_id` в contextvars рядом с `pipeline_id` | BEH-01, 02 |
 | `src/spec_runner/prompts_log.py` | `run_id`/`call_id` в заголовке; тело неизменно | BEH-01 |
-| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; путеподобные `store.options` резолвятся в абсолютные **на загрузке**, против `project_root` (§ 1.1); `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl`; поле области пробы `probe_provenance` (§ 2.7, ставит только `doctor.build_scratch`, значением `"doctor"`) | BEH-28, 42, 47 |
+| `src/spec_runner/config.py`, `validate.py` | блок `durability:` → поля; путеподобные `store.options` разрешаются в абсолютные пути **на загрузке**, относительно `project_root` (§ 1.1); `ConfigError` на `tls`/шифровании/`retention_days`; свойства путей `.executor-checkpoints`/`.executor-spool.jsonl`; поле области пробы `probe_provenance` (§ 2.7, ставит только `doctor.build_scratch`, значением `"doctor"`) | BEH-28, 42, 47 |
 | `src/spec_runner/git_ops.py` | `runtime_state_paths` + checkpoint-каталог и spool; `repository_identity`; helpers для bundle/published-base | BEH-14, 16, 43 |
 | `src/spec_runner/cli_info.py` | `status`: `run_id`/`pipeline_id`; `costs`: строка «planning» из `plan_agent_calls` (§ 2.3), три ledger-а врозь и сумма только в `repo_total_cost` | BEH-24, 38 |
 | `src/spec_runner/remedy.py`, `budget_cmd.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3), и тот же диспетчер ждёт ack их mutation-checkpoint-а на точке (б) — гейт перед closure, а не сайт ожидания внутри handler-а (§ 3.1, Q-05: третьей точки нет, иначе `Refusal` рвал бы многошаговый `remedy.py` посередине) | BEH-46, 48 |

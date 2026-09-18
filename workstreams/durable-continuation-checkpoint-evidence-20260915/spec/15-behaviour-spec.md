@@ -5,7 +5,7 @@ owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: a62fb486dc8ecf5a4766eddf7f7fea364fd4165d
+  requirements: ffbd991ff6f3fa6d2fe0297307c7ee1cbb8af041
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)

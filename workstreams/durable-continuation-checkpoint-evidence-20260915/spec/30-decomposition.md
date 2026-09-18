@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: fe8d4d44cbb579a423ecb0cfaf0afded2498e407
-  acceptance: 1da2d944102bccf7f5bc225cd029327da348b85d
+  design: 5a0bf8040a61eed7715cee687ef41b376ac88e0a
+  acceptance: aee289ca092cbcb9d42a734e9a0a101bb8767c61
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -108,9 +108,9 @@ encryption_at_rest, immutable_put, lifecycle)`, функцией ключей §
 тем самым в `KNOWN_EXECUTOR_KEYS`; **на загрузке** `ConfigError`, если адаптер
 объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, или
 `retention_days` вне 7–365; `validate.py` повторяет те же проверки в отчёте.
-Путеподобные `store.options` (у первого адаптера — `root`) резолвятся **на
-загрузке** в абсолютные против `project_root`, а не лениво при первом `put`
-и не против CWD (design §1.1): процесс вправе сменить рабочий каталог внутри
+Путеподобные `store.options` (у первого адаптера — `root`) разрешаются **на
+загрузке** в абсолютные пути относительно `project_root`, а не лениво при
+первом `put` и не относительно CWD (design §1.1): процесс вправе сменить рабочий каталог внутри
 себя, и относительный адрес, разрешённый после `os.chdir` пробы `doctor`
 (`doctor.py:338`), указал бы внутрь каталога, который тут же удаляется
 (`:408`) — платный вызов без единой durable-записи. Наблюдаемое —
