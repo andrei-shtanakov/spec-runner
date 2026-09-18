@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: 6fe3d12ac30d2c59339606243765baff520161c8
-  behaviour-spec: c29029a6ac51f1ded05fbf72657fc98d761f1720
+  requirements: 14685685789eed6064d20b03c217c9630f422cc9
+  behaviour-spec: 94ef55ca22af33cf1f88b1fea6300ed843e10b8a
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -205,9 +205,12 @@ exit 1, двойник `Popen` не вызван, — а в каталоге б�
 workstream-а **из блокирующей половины перечня, опубликовавшем хотя бы один
 checkpoint**, — предъявлено как минимум на `review-pr` и на `plan` —
 отказывает `needs-human`, называя выходом последний прогон workstream-а с
-acknowledged checkpoint-ом; напечатанный `run_id` без checkpoint-а (в том
-числе собственная запись текущего `restore` или холостой прогон) —
-невыполненный критерий, потому что его `restore` заведомо откажет. Более поздний
+acknowledged checkpoint-ом, после которого нет ни одного блокирующего
+прогона. Знак берётся исполнением: `restore` напечатанного `run_id` в новый
+пустой `--into` применяет snapshot; его отказ — невыполненный критерий. В
+конфигурации A → B (`plan`, checkpoint) → C (`budget authorize` без closure)
+выход не печатается вовсе, отказ называет `run_id` C; напечатанные здесь B
+или сам восстанавливаемый `run_id` — невыполненный критерий. Более поздний
 **холостой** прогон из той же половины отказа не даёт: `run --all`, которому
 нечего делать, и `run --all`, чей старт отказан занятым executor lock-ом
 после run-start, — оба закрылись штатно (closure есть и неподтверждённого
