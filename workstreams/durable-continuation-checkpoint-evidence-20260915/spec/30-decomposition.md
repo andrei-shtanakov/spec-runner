@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 19dae5530071b69dd4718e6c40196cbf2b32672a
-  acceptance: ccd3760c651bd0b9940f86bfbe98b5d1bae6ff70
+  design: 72f00a3445ccd79ca55d867167307c950541b05b
+  acceptance: 863a41f5d954982a238ad41465307ddbfdbc1026
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -165,7 +165,18 @@ autouse-guard `_no_real_agent_calls` переключается на **одно*
 (`:316-323`) поднимают отказ на настоящем имени `claude` раньше, чем
 управление дошло бы до `_spawn` (design Q-06). Ключ гварда — argv, как уже
 у `_refuse_execution`; сообщение отказа называет сайт по `provenance` из
-`PaidCall`; пояс `_belt_never_executes_a_paid_binary` не трогается. `call_id` чеканит **сайт** — до `log_prompt` и
+`PaidCall`; тип отказа — **от `BaseException`** (design Q-06,
+пункт (4) цены): `RealAgentCallRefused` не годится, это `AssertionError`
+(`execution.py:504`), и `except Exception` у `run_code_review`
+(`review.py:776`), интерактивного `plan` (`cli_plan.py:892`) и post-PR
+стадии, зовущей `review-pr` (`cli.py:440`), проглотили бы его — verdict
+`error` и exit 0 вместо красноты. Тем же коммитом: `RealAgentCallRefused` и
+ветка `except RealAgentCallRefused: raise` удаляются (поднимать их больше
+некому), а `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py:79`, чей
+`pytest.raises(AssertionError)` ключуется на старом типе, переписывается на
+новый. Пояс `_belt_never_executes_a_paid_binary` не трогается и страховкой
+здесь не работает: процесс в этом отказе не создаётся. Тест пинует свойство
+**вне** `execute_task`. `call_id` чеканит **сайт** — до `log_prompt` и
 до `execute`, — и передаёт его полем `PaidCall`; `execute` его не создаёт, а
 проверяет (шаг 2 §2.2 — сборка `CallStart` из пришедшего id, не чеканка), так
 что заголовок prompt-артефакта и call-start несут одно значение и сигнатура
@@ -447,9 +458,21 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `workstreams/<workstream_key>/runs/` DT-01, разбираются прогоны без парного
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
-прогона, `call_id`, provenance и `task_id`; более поздний прогон без open
-calls — тоже `needs-human`, с именем последнего `run_id` workstream-а как
-выходом; недоступный store или индекс — instrument, exit 2. `--json` несёт
+прогона, `call_id`, provenance и `task_id`; более поздний прогон,
+**добавивший в namespace то, чего snapshot не несёт** (`run`/`retry`/`watch`,
+`budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
+раунд пишет `pr_review_comments` из перечня § 3 требований — и `plan`,
+дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем последнего
+`run_id` workstream-а как выходом; прогон, ничего не добавивший, на этом
+шаге не в счёт: `evidence close-call` (её запись — шаг close уже
+существующего вызова, в какой бы ledger-таблице тот ни жил — `agent_calls`
+или `pr_agent_calls`; `pr_review_comments` дверь не пишет), `evidence purge`
+(удаляет объекты store, open call не закрывает — design § 2.5), `doctor`
+(проба пишет в scratch-DB под временным корнем, `doctor.py:290-295`, которая
+удаляется вместе с каталогом; § 6.3 design: «attempt-ов нет») и сам
+`restore`, чей run-start диспетчер кладёт в индекс до этой проверки. Ключ
+критерия — свойство, не перечень имён и не факт checkpoint-а (design § 7.2
+шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой

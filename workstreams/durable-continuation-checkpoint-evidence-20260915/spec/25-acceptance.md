@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: e9464581a3d40f6614ad2ea6f3c7076ee86a172d
+  behaviour-spec: 37bcad76037cf9931c8c450554810828a1df64c4
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -114,7 +114,13 @@ identity, digest redacted prompt-а, timestamp и для task-сайтов
 `cli_plan.py` — gated, `--full` и интерактивный — предъявлены в журнале:
 критерий не считается выполненным, если seam доказан на двух из трёх.
 Статический тест по образцу `PaidBinaryReached` красный на любом
-`subprocess.run`/`Popen` с argv провайдера в обход seam-а.
+`subprocess.run`/`Popen` с argv провайдера в обход seam-а. Отказ
+autouse-гварда на `_spawn` наблюдается как падение теста с вердиктом гварда
+на сайте **вне** `execute_task` — на review и на интерактивном `plan`, с
+настоящим именем `claude`: прогон, получивший вместо этого
+`ReviewVerdict.ERROR` или exit 0, — невыполненный критерий (отказ проглочен
+их собственным `except Exception`; пояс не срабатывает, потому что процесс не
+создавался, — значит тип отказа обязан быть от `BaseException`).
 
 #### AC-05: Без acknowledgement процесс не стартует — отказ до траты, exit 2, closure с причиной · verification: test
 traces: [FR-02, FR-07, NFR-01]
@@ -196,11 +202,23 @@ exit 1, двойник `Popen` не вызван, — а в каталоге б�
 восстановленном каталоге предъявляет open call ещё более позднего прогона,
 обратившись к индексу workstream-а, а не к `open`-строкам snapshot-а;
 `restore` более раннего `run_id` при более позднем закрытом прогоне того же
-workstream-а — обычном `run`/`retry`/`watch`, `budget authorize` или `tdd
-abandon|repair|resume|release`, но не при самой аудируемой двери `evidence
-close-call`/`evidence purge` (та не пишет task-/budget-/tdd-состояние и
-потому не в счёт — иначе у сценария выше не было бы достижимого исхода) —
-тоже отказывает `needs-human` с именем последнего `run_id`. Применённый
+workstream-а, **оставившем изменения, которых snapshot не несёт**, —
+`run`/`retry`/`watch`, `budget authorize`, `tdd abandon|repair|resume|release`,
+`review-pr` (его раунд пишет `pr_review_comments` — таблицу из перечня § 3
+требований) и `plan` (дописывает задачи в `tasks.md`) — тоже отказывает
+`needs-human` с именем последнего `run_id`; более поздний прогон, ничего в
+namespace не добавивший, отказа не даёт, и это предъявлено на трёх, каждый
+из которых оставляет свою строку в индексе workstream-а: аудируемая дверь
+`evidence close-call` (её запись — шаг close уже существующего вызова, и
+неотказ предъявлен в обеих конфигурациях — где вызов жил в `agent_calls` и
+где в `pr_agent_calls`), `evidence purge`, отработавший между A и
+восстановлением (open call он не закрывает, а `deletions/<ts>.json` — аудит
+собственного удаления), и сам `restore`, выполненный второй раз в новый
+пустой `--into` (повторный запуск в занятый каталог отказывает раньше, на
+проверке каталога). Отказ на любом из трёх — невыполненный критерий: он
+означает, что проверка ключуется на перечне имён подкоманд или на факте
+checkpoint-а, а не на свойстве «добавил в namespace то, чего snapshot не
+несёт». Применённый
 snapshot A в любой из этих конфигураций — невыполненный критерий.
 
 #### AC-09: Один `call_id` — ровно один call-start и не более одного call-result · verification: test

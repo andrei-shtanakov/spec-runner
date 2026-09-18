@@ -7,7 +7,7 @@ traces_to:
 - behaviour-spec
 upstream_hashes:
   requirements: e859a9d8130848ad5d1a50071816a8bd828ae9a1
-  behaviour-spec: e9464581a3d40f6614ad2ea6f3c7076ee86a172d
+  behaviour-spec: 37bcad76037cf9931c8c450554810828a1df64c4
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -192,7 +192,32 @@ Unreleased называет удаление `spec_runner.run_claude_async` из
 который пинует гвард на двух швах, переписывается на `_spawn` **тем же
 коммитом**, иначе между снятием патчей и новым тестом остаётся окно без
 гварда; (3) сообщение отказа называет сайт по `provenance` из `PaidCall`,
-чтобы читаемость «какой шов» не потерялась вместе с именем шва. Двойник
+чтобы читаемость «какой шов» не потерялась вместе с именем шва; (4) отказ
+гварда поднимается типом **от `BaseException`**, по тому же доводу, по
+которому им сделан пояс (`tests/conftest.py:21-30`). `RealAgentCallRefused`
+на новом месте **не годится**: это `AssertionError` (`execution.py:504`), то
+есть `Exception`. Внутри `execute_task` его хватало, потому что `except
+RealAgentCallRefused: raise` стоит выше `except Exception` (`:1255-1263`), —
+но перенесённый гвард отказывает на всех пяти сайтах, и на пути к ним стоят
+чужие `except Exception`: `run_code_review` превращает отказ в
+`ReviewVerdict.ERROR` (`review.py:776`), интерактивный `plan` печатает его и
+возвращается с кодом 0 (`cli_plan.py:892-894`), а вызов `review-pr` из
+post-PR стадии `run` глушится там (`cli.py:440`, «the stage must never break
+a finished run») — сам `review_pr.py` широкого `except Exception` не имеет,
+и прямой `spec-runner review-pr` отказ пропустил бы наружу. Пояс здесь не
+подстраховывает по построению: он цепляется за создание процесса
+(`conftest.py:191-193`), а отказ происходит раньше. Без (4) в этом виде
+перенос не «расширяет», а глушит гвард там, где сегодня громким был хотя бы
+пояс. Цена самой смены типа — тем же коммитом: `RealAgentCallRefused` и
+ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`,
+`:1255-1261`) остаются без единого источника и удаляются, а живой тест,
+ключующийся на старом типе, —
+`tests/test_task_015_c560727b864370c7_1eb83bfd_red.py:79`
+(`pytest.raises(AssertionError, match="would call the real agent")` вокруг
+`execute_task`) — переписывается на новый; без этого прогон краснеет вне
+объёма задачи. Свойство пинует `tests/test_harness_guards.py`, и
+предъявляется оно **вне** `execute_task` — на review или интерактивном
+`plan`. Двойник
 `_spawn` самого BEH-05 заменяет собой патч гварда — это документированное
 свойство гварда, а не обход («тест, подменивший шов сам, этот патч не
 видит», `conftest.py:290-292`); последней линией под ним остаётся пояс
@@ -603,7 +628,7 @@ namespace-wide. Таблица — здесь, одним местом; § 7.2, 
 | `run --force` | то же, что `run` | процедура стоит вне lock-а: `--force` отключает lock, а не её |
 | первый `run`/`retry`/`watch` после `restore` | выбирать ли задачу | восстановленная DB несёт `continuation_index: restored` (§ 7.3) ⇒ ветка (2) Q-12: `list` индекса workstream-а, а не `open`-строки snapshot-а |
 | `run` после `reset` / удаления файла DB / в свежем клоне / на новой машине | то же | маркера нет ⇒ ветка (2) Q-12 |
-| `restore <run_id>` | применять ли snapshot | проверка (6) § 7.2 читает индекс workstream-а: любой прогон того же `workstream_key` с call-start без call-result и любой прогон, начатый позже восстанавливаемого, — отказ `needs-human` |
+| `restore <run_id>` | применять ли snapshot | проверка (6) § 7.2 читает индекс workstream-а: любой прогон того же `workstream_key` с call-start без call-result — отказ `needs-human`; более поздний прогон — по шагу 5 § 7.2 (свойство «оставил изменения, которых snapshot не несёт»), не пересказывается здесь |
 | `evidence close-call` | закрывает open call | единственная аудируемая дверь (§ 2.5); истина — call-result в store, строка DB лишь следствие; своя пара run-start + closure |
 | `evidence purge` | удаляет объекты store | open call не закрывает по построению: удаляются только истёкшие checkpoint-ы с acknowledged преемником (Q-11), call records и run-start живут до своего retention; своя пара run-start + closure и запись `deletions/<ts>.json` |
 | `evidence <run_id>` | ничего не решает | read-only: показывает open calls своего `run_id` и не читает индекс (§ 1.3) |
@@ -792,7 +817,13 @@ closure пишет общая точка § 6.3 — kind по коду выхо�
 там же, где run-start: `main()` оборачивает вызов handler-а в `try/except
 SystemExit/except BaseException/finally`; на выходе, если `start()` был
 вызван и closure ещё нет: `drain(timeout)` publisher-а → closure с
-`last_checkpoint_id = last_acknowledged()`. Таймаут drain — единственный
+`last_checkpoint_id = last_acknowledged()`. Ветка `except BaseException`
+**перевозбуждает** после записи closure — она пятая в перечне, на который
+опирается пояс (`tests/conftest.py:24-30`: «the four handlers that name it …
+re-raise after cleanup»), и глотающей ей быть нельзя: иначе `crashed`
+означал бы не «необработанное исключение», а проглоченное, а отказ гварда
+(Q-06, пункт (4)) стал бы наблюдаем только по коду выхода — ровно то, что
+пункт (4) запрещает. Таймаут drain — единственный
 случай, когда `close()` перекрывает выведенный kind: она пишет `failed` с
 exit 2 и reason, называющим неподтверждённый checkpoint (BEH-31). Это её
 собственное наблюдение о неполноте записи, а не сообщение сайта. Сайты
@@ -1022,21 +1053,53 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    отказ `needs-human`, exit 1; сообщение называет `run_id` этого прогона,
    `call_id`, provenance и `task_id`, то есть не «у A open call нет», а «в
    этом workstream open call есть, и вот где».
-5. Более поздний прогон **без** open calls — тоже отказ `needs-human`, но с
-   другим сообщением: восстановленное состояние старше его изменений
-   (`budget authorize`, `tdd abandon|release|resume` живут под собственными
-   `run_id` и в snapshot A не попали), и продолжать с него значило бы
-   потерять их молча. **Исключение** — прогон, чей единственный сайт
-   `evidence close-call` или `evidence purge` (§ 2.5, § 6.2): обе двери не
-   пишут ни task-, ни budget-, ни tdd-состояние (`close-call` лишь
-   возвращает задачу в выбираемые, `purge` лишь удаляет объекты store), и
-   потому не в счёт на этом шаге — иначе у FR-05 не было бы ни одного
-   достижимого пути (BEH-09, последние And): сама аудируемая дверь,
-   закрывающая open call ради восстановления, становилась бы более поздним
-   прогоном, который это восстановление тут же блокирует. Любой другой
-   более поздний прогон без open calls — обычный `run`/`retry`/`watch`,
-   `budget authorize`, `tdd abandon|repair|resume|release` — отказывает по
-   общему правилу этого шага. Выход оператора назван в самом отказе: восстановить
+5. Более поздний прогон, **оставивший в namespace изменения, которых
+   snapshot не несёт**, — тоже отказ `needs-human`, но с другим сообщением:
+   восстановленное состояние старше этих изменений (`budget authorize`,
+   `tdd abandon|release|resume` живут под собственными `run_id` и в
+   snapshot A не попали), и продолжать с него значило бы потерять их молча.
+   Критерий — **свойство прогона, а не его имя**. Блокирует прогон,
+   **добавивший** в namespace continuation-state, которого в snapshot-е нет,
+   либо материал, которого восстановленный каталог не несёт. Под первое
+   подходят `run`/`retry`/`watch`, `budget authorize`,
+   `tdd abandon|repair|resume|release` и — это важно, потому что имя
+   обманчиво, — `review-pr`: его раунд пишет `pr_review_comments`, а эта
+   таблица названа continuation-relevant в § 3 требований и
+   checkpoint-ится (`ReviewPrState` при завершении раунда — вызывающий
+   `after_mutation`, § 3.1), так что snapshot старше раунда потерял бы её и
+   заставил следующий `review-pr` переплатить за те же комментарии. Под
+   второе — `plan`: он дописывает задачи в `tasks.md` (`cli_plan.py:878`)
+   вне всякого checkpoint-а.
+   Не в счёт на этом шаге прогон, ничего в namespace не добавивший.
+   Таких четыре, и причина у каждого своя — общей формулировки «обе двери»
+   здесь нет, потому что двери устроены по-разному. `evidence close-call`
+   (§ 2.5): её запись — шаг close уже существующего вызова, пометка «этот
+   call закрыт», и **какую** ledger-таблицу она трогает — `agent_calls` или
+   `pr_agent_calls` — значения не имеет: нового continuation-state ни та, ни
+   другая пометка не создаёт, а `pr_review_comments` дверь не пишет вовсе.
+   Это и есть причина, по которой `pr_*` из § 3 нельзя читать здесь как
+   «любая таблица с этим префиксом»: иначе дверь, закрывающая pr-вызов,
+   блокировала бы восстановление, ради которого её и открыли.
+   `evidence purge` — по другой причине: open call он не закрывает **по
+   построению** (§ 2.6), а удаляет истёкшие объекты store и пишет
+   `deletions/<ts>.json`. Эта запись — аудит собственного действия, а не
+   рабочий материал, который восстановленный каталог обязан нести, поэтому
+   под вторую половину критерия она не подпадает: «материал» там — продукт
+   работы вроде дописанных в `tasks.md` задач, а не журнал того, что было
+   удалено. `doctor` (§ 6.3, строка таблицы: «attempt-ов нет — только код
+   выхода»): его проба гоняет `execute_task` под scratch-конфигом, чей
+   `state_file` лежит во временном каталоге (`doctor.py:290-295`) и
+   удаляется вместе с ним (`:408`), — в DB оператора она не пишет ничего. И
+   **сам `restore`**: он входит в `PAYING_SUBCOMMANDS` (§ 6.2), поэтому
+   диспетчер кладёт его run-start и индексную строку **до** вызова handler-а
+   и до этой проверки, и правило, ключующееся на «любой более поздний
+   прогон», отказывало бы первому же `restore` от его собственной записи.
+   Перечень здесь — разбор по критерию, а не сам критерий: подкоманда,
+   попавшая в `PAYING_SUBCOMMANDS` позже, ложится в ту или другую сторону
+   по тому же свойству, без правки этого списка (BEH-09, последние And). Без этого вывода у FR-05 не остаётся ни одного достижимого пути:
+   и аудируемая дверь, закрывающая open call ради восстановления, и само
+   восстановление становились бы более поздним прогоном, который это
+   восстановление тут же блокирует. Выход оператора назван в самом отказе: восстановить
    последний `run_id` workstream-а (он печатается) либо, если нужен именно
    ранний, решить это явно. Откат на ранний checkpoint workstream-а, у
    которого есть более поздние прогоны, этот бандл как операцию **не
@@ -1236,7 +1299,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
 | `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
-| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close | BEH-05, 07, 08, 22…24, 46 |
+| `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
 | `src/spec_runner/state.py` | миграция столбцов `run_id`/`call_id`/`status`/`started_at`; `record_agent_call` open/close; вызовы `after_mutation` из каждого `record_*`/`supersede`/`reinstate`; `_enter_degraded_mode` → spool или `Refusal`; `spool_replays`; meta `last_run_id`/`continuation_index`/`checkpoint_seq:<run_id>` | BEH-03, 13, 15, 33, 35, 38 |
 | `src/spec_runner/claims.py`, `bookkeeping.py`, `lifecycle.py` | `release_claims`, `commit_status_flip`, `advance` вызывают `after_mutation` | BEH-13 |
@@ -1248,7 +1311,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/remedy.py`, `budget_cmd.py`, `doctor.py` | не правятся этим дизайном: их closure пишет диспетчер по коду выхода (§ 6.3) | BEH-46 |
 | `schemas/` | новые `checkpoint-manifest`, `evidence-record`, `run-closure`, `restore-result`, `evidence-view`; аддитивно `executor-state`, `json-result`, `status`, `costs` | BEH-03, 14, 21, 23, 29, 36, 38 |
 | `docs/state-schema.md`, `docs/architecture.md`, `CHANGELOG.md`, `README.md` | minor bump, контракт checkpoint/evidence/closure, «operational minimum», статус experimental, `durability:` | BEH-45 |
-| `tests/conftest.py`, `tests/test_harness_guards.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv (Q-06); `test_harness_guards.py` переписывается тем же коммитом; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |
+| `tests/conftest.py`, `tests/test_harness_guards.py`, `tests/test_task_015_c560727b864370c7_1eb83bfd_red.py` | `_no_real_agent_calls` переключается на одно имя `paid_call._spawn`, два патча швов снимаются, ключ — argv, тип отказа — от `BaseException` (Q-06); `test_harness_guards.py` переписывается тем же коммитом, и тем же — `test_task_015_…_red.py:79`, чей `pytest.raises(AssertionError)` ключуется на старом типе; пояс `_belt_never_executes_a_paid_binary` не меняется; фикстуры двойников store/`_spawn`/spool, `RunContext` | BEH-05, 44 |
 | `tests/test_*` из §9 требований, `tests/fixtures/secrets-corpus/`, `scripts/bench_durability.py` | новые тесты по матрице behaviour-spec; имена — ожидание, не предписание | по матрице |
 | Соседи (devtools, Maestro) | только issue/handoff с контрактом `run_id`/`pipeline_id` | BEH-45 |
 
