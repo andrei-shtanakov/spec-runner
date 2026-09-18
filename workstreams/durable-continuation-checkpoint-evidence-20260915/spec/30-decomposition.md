@@ -6,8 +6,8 @@ traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 72f00a3445ccd79ca55d867167307c950541b05b
-  acceptance: 863a41f5d954982a238ad41465307ddbfdbc1026
+  design: 145e15366ea00111467ce5c4f17a02053c34ea09
+  acceptance: b91e31bff8cbdbe39b2b4bec2f34cb67dc69e2c3
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -134,7 +134,7 @@ parallel_group: core
 `subcommand`, `started_at`, `Publisher`, `policy`; создаётся в `cli.main()`
 вместо `bind_contextvars(run_id=uuid4().hex[:8])`, `cli.py:2504`; `start()` —
 **одна** точка: диспетчер `main()` перед вызовом handler-а по множеству
-`PAYING_SUBCOMMANDS`, так что `retry`, `watch` и `run --force`, не берущие
+`PAYING_SUBCOMMANDS` (рядом с ним — `BLOCKING`/`NON_BLOCKING` шага 5 § 7.2 и тест их полноты, предмет DT-06), так что `retry`, `watch` и `run --force`, не берущие
 executor lock, получают run-start наравне с обычным `run`; `_acquire_run_lock`
 run-start **не** пишет и вообще не правится — его `sys.exit(1)` доходит до
 `finally` диспетчера; `close(exit_code)` из `try/except SystemExit/except
@@ -458,21 +458,45 @@ DT-08…DT-14, попадают под тот же sweep без правки э�
 `workstreams/<workstream_key>/runs/` DT-01, разбираются прогоны без парного
 `.closed` **и** все, начатые позже восстанавливаемого; любой call-start без
 call-result где угодно в workstream-е — `needs-human` с `run_id` того
-прогона, `call_id`, provenance и `task_id`; более поздний прогон,
-**добавивший в namespace то, чего snapshot не несёт** (`run`/`retry`/`watch`,
-`budget authorize`, `tdd abandon|repair|resume|release`, `review-pr` — его
-раунд пишет `pr_review_comments` из перечня § 3 требований — и `plan`,
-дописывающий задачи в `tasks.md`), — тоже `needs-human`, с именем последнего
-`run_id` workstream-а как выходом; прогон, ничего не добавивший, на этом
-шаге не в счёт: `evidence close-call` (её запись — шаг close уже
-существующего вызова, в какой бы ledger-таблице тот ни жил — `agent_calls`
-или `pr_agent_calls`; `pr_review_comments` дверь не пишет), `evidence purge`
-(удаляет объекты store, open call не закрывает — design § 2.5), `doctor`
-(проба пишет в scratch-DB под временным корнем, `doctor.py:290-295`, которая
-удаляется вместе с каталогом; § 6.3 design: «attempt-ов нет») и сам
-`restore`, чей run-start диспетчер кладёт в индекс до этой проверки. Ключ
-критерия — свойство, не перечень имён и не факт checkpoint-а (design § 7.2
-шаг 5); недоступный store или индекс — instrument, exit 2. `--json` несёт
+прогона, `call_id`, provenance и `task_id`; более поздний прогон
+блокирует восстановление, когда сошлись два условия: его `subcommand` из
+run-start в блокирующей половине закрытого перечня — `run`/`retry`/`watch`,
+`plan`, `review-pr`, `budget authorize`, `tdd abandon|repair|resume|release`
+— **и** под его `run_id` есть хотя бы один **acknowledged**
+checkpoint — не просто ключ под `runs/<run_id>/checkpoints/…`: manifest
+кладётся последним, и checkpoint без него для читателей не существует
+(design § 1.1, § 3.5). Проверка — по acknowledged-признаку checkpoint-а, а
+не `list` префикса. Отказ — `needs-human`, и выход в нём
+исполним: печатается последний прогон workstream-а с acknowledged
+checkpoint-ом, **после которого нет ни одного блокирующего прогона**
+(собственная запись текущего invocation не в счёт; прогон с checkpoint-ом,
+но заблокированный более поздним, — петля, не выход). Кандидат существует
+всегда, когда шаг 5 сработал, — блокирующий прогон сам несёт acknowledged checkpoint, а
+самый поздний из блокирующих не имеет блокирующих после себя; ветки
+«восстановимого прогона нет» поэтому не существует, она была бы
+недостижимым кодом. Отказ называет и
+то, чего checkpoint выхода может не нести: материал, записанный после его
+последнего checkpoint-а (у `plan` — `tasks.md`).
+Холостой прогон из той же половины (нечего делать; старт отказан гвардом или
+занятым lock-ом после run-start) checkpoint-а не публикует и восстановлению
+не мешает — иначе оператор остаётся без пути, потому что восстановить его
+самого нечем. Известный пробел, принятый владельцем: прогон, убитый в окне
+между mutation и доставкой checkpoint-а, acknowledged checkpoint-а не имеет
+и тоже не блокирует — его правка теряется молча (design § 7.2 шаг 5, абзац
+про пробел); fail-closed здесь невозможен, он сделал бы недостижимым путь
+«дверь `close-call` → restore».
+Неблокирующая половина — `evidence close-call`, `evidence purge`, `doctor`,
+`restore` — не блокирует независимо от checkpoint-ов (причина у каждого
+своя, design § 7.2 шаг 5; у двери checkpoint есть, и он ничего не меняет). Обе половины объявляются рядом с
+`PAYING_SUBCOMMANDS` в `run_context.py` (DT-02), и полнота держится тестом
+`set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING` при пустом пересечении
+(предмет BEH-20, последние And; файл — `tests/test_restore_refusals.py`
+этой задачи). Половины объявляются над тем, что лежит в
+`PAYING_SUBCOMMANDS` на момент этой задачи; растящие множество DT-09 и DT-12
+дописывают свою подкоманду в `NON_BLOCKING` той же строкой, поэтому
+равенство держится на каждой границе, а не только в конце.
+Приёмка самого теста — подсадка неклассифицированной подкоманды, на которой
+он обязан покраснеть. Недоступный store или индекс — instrument, exit 2. `--json` несёт
 исход полем `workstream` (`later_runs[]`, `open_calls[]`). Проверка по
 ключам одного `runs/<run_id>/calls/` красна: конфигурация «прогон A закрыт,
 более поздний C оставил open call, восстанавливается A» — та, на которой
@@ -621,7 +645,12 @@ store, проверенному **до** записи; пишет
 решает, повторять ли его. Платящей подкомандой при этом является по второй
 половине критерия FR-01 — она меняет continuation-state: `evidence
 close-call` входит в `PAYING_SUBCOMMANDS` (DT-02 заводит множество, эта
-задача добавляет в него строку) и пишет свою пару run-start + closure. Kind
+задача добавляет в него строку) и пишет свою пару run-start + closure. Той
+же строкой она относит подкоманду к `NON_BLOCKING` шага 5 § 7.2 (дверь
+восстановлению не мешает — design там же): множество и половины растут
+одним изменением, иначе тест полноты
+`set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING`, доставленный DT-06,
+краснеет на границе этой задачи. Kind
 выводит диспетчер по коду выхода (design § 6.3): `completed` на закрытии и
 на идемпотентном повторе (код 0), `failed` под guardrail-ом или занятым
 lock-ом (код 1) и при недоступном store (код 2). Своих сайтов closure у
@@ -780,7 +809,10 @@ guardrail — по образцу `close-call` DT-09) считает по тем
 локальную копию, и audit-записи не пишет; `AuditLogger`, когда включён,
 получает копию записи. `evidence purge` — платящая подкоманда по критерию
 FR-01 (меняет continuation-state, удаляя опубликованные объекты): эта задача
-добавляет её в `PAYING_SUBCOMMANDS`, а kind её closure выводит диспетчер по
+добавляет её в `PAYING_SUBCOMMANDS` и той же строкой — в `NON_BLOCKING`
+шага 5 § 7.2 (open call он не закрывает, а `deletions/<ts>.json` — аудит
+собственного удаления; множество и половины растут одним изменением, иначе
+тест полноты из DT-06 краснеет на границе задачи), а kind её closure выводит диспетчер по
 коду выхода (design § 6.3) — `completed` при коде 0 (истёкших объектов нет;
 удалено и записано), `failed` при коде 1 (store отказал в `delete`) и коде 2
 (store недоступен). Своих сайтов closure у команды нет, словаря причин она не
