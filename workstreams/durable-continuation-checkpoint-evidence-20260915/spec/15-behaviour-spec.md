@@ -1,11 +1,13 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approval_pending
 owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
-  requirements: ffbd991ff6f3fa6d2fe0297307c7ee1cbb8af041
+  requirements: fb522d701c91d39841c8187ceefa65da522139e9
+version: 2
+approved_content_hash: e445bcc1faefa3b09792373a742adb029a83f457
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
