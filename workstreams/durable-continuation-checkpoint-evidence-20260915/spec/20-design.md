@@ -1054,7 +1054,7 @@ exit 2 и reason, называющим неподтверждённый checkpoi
 (`SystemExit.code` или код, возвращённый handler-ом). Сигнал диспетчер
 наблюдает не по способу ухода, а по флагу: `main()` вешает
 `executor._signal_handler` на SIGINT и SIGTERM до dispatch-а
-(`cli.py:2523-2524`), handler лишь поднимает `_shutdown_requested`
+(`cli.py:2524-2525`), handler лишь поднимает `_shutdown_requested`
 (`executor.py:18-21`), процесс не завершается и `KeyboardInterrupt` не
 поднимается — циклы `run` и `watch` видят `check_stop_requested` и делают
 `break`, выходя штатным кодом (`cli.py:1281-1285`, `:1617-1620`). Поэтому
