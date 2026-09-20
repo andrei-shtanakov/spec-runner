@@ -257,6 +257,76 @@ class TestDurabilityStoreConfig:
         )
         assert config.durability_store_adapter == "local_volume"
 
+    def test_secure_adapter_with_no_options_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] == "local_volume"
+        assert result["durability_store_options"] is None
+
+    def test_all_three_properties_missing_names_all_three(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(tmp_path, "      adapter: local_volume\n")
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        message = str(exc.value)
+        assert "tls" in message
+        assert "encryption_at_rest" in message
+        assert "immutable_put" in message
+
+    def test_retention_days_out_of_range_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        text = (
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 400\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(text)
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "retention_days" in str(exc.value)
+
+    def test_retention_days_within_range_loads(self, tmp_path):
+        text = (
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 90\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(text)
+        result = load_config_from_yaml(cfg)
+        assert result["durability_retention_days"] == 90
+
+    def test_executor_config_direct_construction_rejects_retention_days_out_of_range(self):
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="retention_days"):
+            ExecutorConfig(
+                durability_store_adapter="local_volume",
+                durability_store_tls=True,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+                durability_retention_days=5,
+            )
+
 
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:

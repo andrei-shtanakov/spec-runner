@@ -390,6 +390,37 @@ class TestValidateDurabilityStore:
         result = validate_config(config_file)
         assert result.ok
 
+    def test_retention_days_out_of_range_is_reported(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 1\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        result = validate_config(config_file)
+        assert not result.ok
+        assert any("retention_days" in e for e in result.errors)
+
+    def test_retention_days_within_range_is_not_reported(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 30\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        result = validate_config(config_file)
+        assert result.ok
+
 
 class TestValidateAll:
     """Tests for validate_all orchestrator function."""

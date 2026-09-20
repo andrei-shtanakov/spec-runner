@@ -8,9 +8,12 @@ from pathlib import Path
 import yaml
 
 from spec_runner.config import (
+    DURABILITY_RETENTION_DAYS_MAX,
+    DURABILITY_RETENTION_DAYS_MIN,
     KNOWN_EXECUTOR_KEYS,
     ConfigError,
     ExecutorConfig,
+    durability_retention_days_out_of_range,
     durability_store_missing_properties,
     mixed_shape_error,
 )
@@ -493,6 +496,15 @@ def _validate_durability_store(section: dict, result: "ValidationResult") -> Non
         result.errors.append(
             f"durability.store adapter {adapter!r} is missing required "
             f"security properties: {', '.join(missing)}"
+        )
+    retention_days = durability.get("retention_days")
+    if retention_days is not None and durability_retention_days_out_of_range(
+        int(retention_days)
+    ):
+        result.errors.append(
+            "durability.retention_days must be between "
+            f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+            f"got {retention_days}"
         )
 
 

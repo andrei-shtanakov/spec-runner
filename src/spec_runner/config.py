@@ -297,6 +297,19 @@ def durability_store_missing_properties(
     return missing
 
 
+#: BEH-28/BEH-42's bound on `durability.retention_days` -- outside this range
+#: is a separate `ConfigError`, alongside the missing-properties check.
+DURABILITY_RETENTION_DAYS_MIN = 7
+DURABILITY_RETENTION_DAYS_MAX = 365
+
+
+def durability_retention_days_out_of_range(retention_days: int) -> bool:
+    """True when `retention_days` falls outside BEH-42's 7-365 bound."""
+    return not (
+        DURABILITY_RETENTION_DAYS_MIN <= retention_days <= DURABILITY_RETENTION_DAYS_MAX
+    )
+
+
 # === ExecutorConfig ===
 
 
@@ -591,6 +604,12 @@ class ExecutorConfig:
                     f"is missing required security properties: {', '.join(missing)} "
                     "-- spec-runner checks the declaration only (OUT-03); declare "
                     "tls: true, encryption_at_rest: true and immutable_put: true"
+                )
+            if durability_retention_days_out_of_range(self.durability_retention_days):
+                raise ConfigError(
+                    "durability.retention_days must be between "
+                    f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+                    f"got {self.durability_retention_days}"
                 )
 
         if self.change_id:
@@ -1049,6 +1068,15 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
                     f"properties: {', '.join(missing)} -- spec-runner checks the "
                     "declaration only (OUT-03); declare tls: true, "
                     "encryption_at_rest: true and immutable_put: true"
+                )
+            durability_retention_days = durability.get("retention_days")
+            if durability_retention_days is not None and durability_retention_days_out_of_range(
+                int(durability_retention_days)
+            ):
+                raise ConfigError(
+                    f"{config_path}: durability.retention_days must be between "
+                    f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+                    f"got {durability_retention_days}"
                 )
         format_check = commands.get("format_check")
         if format_check is not None and not isinstance(format_check, str):
