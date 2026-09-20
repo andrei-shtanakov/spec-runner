@@ -1,0 +1,9 @@
+{"kind": "header", "schema_version": "1", "source_commit": "ae0ed9e862d367a903667a184fd2478f9d6c8738", "dirty": false, "generated_at": "2026-09-17T18:53:30.045166+00:00", "profile": "team-exp", "bundle": "workstreams/durable-continuation-checkpoint-evidence-20260915/spec"}
+{"kind": "artifact", "path": "00-charter.md", "node_id": "charter", "status": "draft", "owner_roles": ["product"], "prev_hash": "476e4a45e2832ed397528581d8358fa6ac64e2018f8169e2c5c87fb5ea63ae12"}
+{"kind": "artifact", "path": "00-discovery/brief.md", "node_id": null, "status": "draft", "owner_roles": [], "prev_hash": "0264092b3889702fcbfe9828d0342937c585a0f3e9fdfc0405edc27017163e95"}
+{"kind": "artifact", "path": "10-requirements.md", "node_id": "requirements", "status": "draft", "owner_roles": ["product"], "prev_hash": "5dd3e17c6b028e807c68f4bf8ac26f25106c9563bf37bb127cb8f3be89a1bcf0"}
+{"kind": "artifact", "path": "15-behaviour-spec.md", "node_id": "behaviour-spec", "status": "draft", "owner_roles": ["product"], "prev_hash": "b9bf6e456f8616a633a39dc917ecf6f232d41a7791fc4b44d078833e1e56e433"}
+{"kind": "artifact", "path": "20-design.md", "node_id": "design", "status": "draft", "owner_roles": ["architects"], "prev_hash": "25ecd5d7c2378004e493404779f9c3dede55c7dac631320ca4953a018be71b3e"}
+{"kind": "artifact", "path": "25-acceptance.md", "node_id": "acceptance", "status": "draft", "owner_roles": ["qa"], "prev_hash": "c8412be69a718576958d9879ec0ec457f5e8859442daef90bc5b04f860616d21"}
+{"kind": "artifact", "path": "30-decomposition.md", "node_id": "decomposition", "status": "draft", "owner_roles": ["tech-lead"], "prev_hash": "8eb7671bc4486af2a3c4b45656e4761d988d10c1daf8ec01a023449ed5ba34a8"}
+{"kind": "finding", "gate_id": "GC-STAGE", "obligation": "quality", "verdict": "warn", "artifact": "00-discovery/brief.md", "message": "spec_stage 'discovery' is not a node of profile 'team-exp'", "prev_hash": "581b052435bc2d6bd8385d34b8515623763293938be368cdec8d561aef5c680e"}
