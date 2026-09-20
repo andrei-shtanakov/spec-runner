@@ -1,6 +1,6 @@
 ---
 spec_stage: design
-status: approval_pending
+status: approved
 owner_role: architects
 traces_to:
 - requirements
@@ -10,6 +10,8 @@ upstream_hashes:
   behaviour-spec: 32587a27ccba928218823ff6fba608c147d72e3e
 version: 2
 approved_content_hash: 0ac758b0a1aa0889233cb428aa046631dda336b0
+approved_by: andrei-shtanakov
+approved_at: '2026-09-20T15:40:07Z'
 ---
 
 # Design — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
