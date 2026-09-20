@@ -10,6 +10,23 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
+  from the terminal review of PR #522). Both subcommands run the same
+  `validate_all` before their loop; `run` refuses with exit 1 and the H-1
+  comment that says why — "a silent `return` here exited 0 and orchestrators
+  (Maestro) read that as workstream success" — while `watch` did exactly that
+  silent `return`. One unparseable spec therefore had two answers, and the
+  one an orchestrator got from `watch` was "there was nothing to do".
+
+  **Visible contract change for callers of `watch`:** an invocation stopped
+  by a red spec now exits 1 where it exited 0. Nothing else moves — the
+  diagnostics keep going to stdout in the same format, as `run`'s do, and a
+  green validation is untouched. Parity is pinned by execution rather than by
+  a rule: `tests/test_exit_contract.py::TestRedPreRunValidationExit` drives
+  both subcommands over one red spec and requires exit 1 from each.
+
 ## [2.36.0] - 2026-09-15
 
 **Minor, not patch and not major.** Every contract surface moved additively:

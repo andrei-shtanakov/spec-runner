@@ -226,7 +226,16 @@ class TestCmdWatch:
         mock_run,
         tmp_path: Path,
     ) -> None:
-        """Validation failure prevents entering the watch loop."""
+        """Validation failure prevents entering the watch loop — and says so
+        with a non-zero code.
+
+        The expectation is rewritten, not repaired silently: it used to call
+        `cmd_watch` bare, which passed only because the refusal was a `return`
+        (exit 0). That is the H-1 defect class in the other subcommand
+        (spec-runner#480, terminal review of PR #522), so the property under
+        test grows one assertion rather than losing one — the parity with
+        `run` itself is declared in `tests/test_exit_contract.py`.
+        """
         config = _make_config(tmp_path)
         _write_tasks(
             config.tasks_file,
@@ -235,7 +244,9 @@ class TestCmdWatch:
         mock_validate.return_value = MagicMock(ok=False, errors=["bad task"])
         mock_time.sleep = MagicMock()
 
-        cmd_watch(_make_args(), config)
+        with pytest.raises(SystemExit) as exc:
+            cmd_watch(_make_args(), config)
+        assert exc.value.code == 1
 
         mock_run.assert_not_called()
 
@@ -317,9 +328,13 @@ class TestWatchGovernanceGate:
         """Default governance ('off') is a no-op: watch proceeds to validation."""
         config = _make_config(tmp_path, spec_governance="off")
         write_spec(config.tasks_file, SpecMeta("tasks", "draft"), "# Tasks\n")
+        # A red verdict is only this test's stop sign — it reaches validation,
+        # which is the subject. Since spec-runner#480 that stop exits 1 like
+        # `run`'s, so the call raises; the two assertions below are unchanged.
         mock_validate.return_value = MagicMock(ok=False, errors=["stop here"])
 
-        cmd_watch(_make_args(), config)
+        with pytest.raises(SystemExit):
+            cmd_watch(_make_args(), config)
 
         mock_validate.assert_called_once()
         mock_run.assert_not_called()

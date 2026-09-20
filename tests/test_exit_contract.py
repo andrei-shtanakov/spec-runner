@@ -461,6 +461,62 @@ class TestBudgetPathStatusWrite:
 
 
 # --------------------------------------------------------------------------
+# #480 (terminal review of PR #522) — a red pre-run validation is not an
+# empty success, and `watch` is not exempt from H-1
+# --------------------------------------------------------------------------
+
+
+class TestRedPreRunValidationExit:
+    """`run` answers a red pre-run validation with exit 1 and the H-1 comment
+    that says why (`cli.py`): "a silent `return` here exited 0 and
+    orchestrators (Maestro) read that as workstream success". `watch` ran the
+    same check and did the bare `return` the comment describes — so one
+    unparseable spec had two answers depending on which subcommand started
+    the workstream, and the cheaper-looking one said "nothing to do".
+
+    The declaration is parametrized over both entry points on purpose: the
+    property is parity, not a second exit code. A future third caller of
+    `validate_all` before its loop belongs in this list.
+    """
+
+    def _red_cfg(self, tmp_path):
+        # A real validation error, not a mocked verdict: two blocks share an
+        # id, which `validate_all` reports as "duplicate task ID".
+        _write_tasks(
+            tmp_path,
+            _task_block("TASK-001", "root"),
+            _task_block("TASK-001", "same id again"),
+        )
+        return _cfg(tmp_path)
+
+    @pytest.mark.parametrize("command", ["run", "watch"])
+    def test_red_validation_exits_non_zero(self, tmp_path, command, capsys):
+        from spec_runner import cli
+        from spec_runner.validate import validate_all
+
+        cfg = self._red_cfg(tmp_path)
+        assert not validate_all(
+            tasks_file=cfg.tasks_file, config_file=None, project_root=cfg.project_root
+        ).ok, "setup: validation must be red for this test to mean anything"
+
+        fn = {"run": cli.cmd_run, "watch": cli.cmd_watch}[command]
+        args = _run_args(command=command, allow_dirty_spec=True)
+
+        with (
+            patch("spec_runner.cli.run_with_retries") as executed,
+            pytest.raises(SystemExit) as exc,
+        ):
+            fn(args, cfg)
+
+        assert exc.value.code == 1, (
+            f"{command} refused to start on a red spec but exited "
+            f"{exc.value.code!r} — an orchestrator reads that as success"
+        )
+        executed.assert_not_called()
+        assert "duplicate task ID" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
 # Regression guard for the reason vocabulary consumers key off
 # --------------------------------------------------------------------------
 

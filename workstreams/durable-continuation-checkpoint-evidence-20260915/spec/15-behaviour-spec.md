@@ -1070,7 +1070,8 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   (код 0, работа выполнена), и `retry` с задачей, закончившей `blocked`
   (код 0, работа не выполнена); `watch`, остановленный
   `max_consecutive_failures` (код 0, работа не выполнена), и `watch` с
-  красной pre-run validation; `doctor` с verdict `ready` (код 0) и с verdict
+  красной pre-run validation (код 1, работа не выполнена); `doctor` с
+  verdict `ready` (код 0) и с verdict
   `broken` (код 1); `plan` с usage-ошибкой (код 1), `plan --gated` с
   неодобренным upstream-ом (код 2, вызовов CLI ноль) и `plan`, у которого
   двойник провайдера поднял исключение сквозь handler; `review-pr` на draft
@@ -1090,11 +1091,23 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   которой invocation записал attempt, не в статусе `success`. Closure
   `completed` на любой из двух — красный тест.
 - **And** `completed` выдан ровно тем конфигурациям, у которых код 0 и
-  невыполненной работы нет (`retry` с задачей `done`, `watch` с красной
-  pre-run validation — `return` до цикла, код 0, attempt-ов нет
-  (`cli.py:1560-1563`), `doctor` с verdict `ready`, `review-pr` с полным
-  успехом, `tdd release` на повторе, `budget authorize` с записанным
-  решением, `restore` на успешном применении).
+  невыполненной работы нет (`retry` с задачей `done`, `doctor` с verdict
+  `ready`, `review-pr` с полным успехом, `tdd release` на повторе, `budget
+  authorize` с записанным решением, `restore` на успешном применении).
+- **And** `watch` с красной pre-run validation закрывается `failed` с кодом
+  1 — тем же ответом, что `run` на том же дефекте спеки, и по той же
+  причине: H-1 (`cli.py:905-919`) — «a silent `return` here exited 0 and
+  orchestrators (Maestro) read that as workstream success». Прежняя
+  редакция этого сценария классифицировала конфигурацию как `completed`,
+  опираясь на код 0, который `cmd_watch` тогда и возвращал (`return` до
+  цикла, attempt-ов нет): признак «делать было нечего» выдавался за
+  прогон, который даже не начинался, и сценарий узаконивал в `watch`
+  дефект, в `run` уже признанный дефектом. Это противоречило FR-07, а не
+  только правилу § 6.3. Код 0 или kind `completed` на этой конфигурации —
+  красный тест. Паритет предъявлен исполнением: обе подкоманды прогнаны
+  на одной и той же красной спеке и обе обязаны выйти 1
+  (`cli.py:1560-1567`; доставлено до этого бандла —
+  `tests/test_exit_contract.py::TestRedPreRunValidationExit`).
 - **And** ненулевой код без attempt-ов даёт `failed`, а не `refused`:
   `plan --gated` с неодобренным upstream-ом и `restore` на отказе
   needs-human обе закрываются `failed`, и различение «отказ правила» и
@@ -1105,7 +1118,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** исключение, дошедшее сквозь handler `plan`, даёт `crashed`, а
   SIGTERM у `watch` — `interrupted` по флагу `executor._shutdown_requested`
   (цикл `watch` на нём делает `break` и возвращается с кодом 0,
-  `cli.py:1613-1616`; kind даёт флаг, не код); ни та ни другая
+  `cli.py:1617-1620`; kind даёт флаг, не код); ни та ни другая
   конфигурация не оставляет run-start без closure.
 - **And** ни одна из восьми не персистит `last_run_stop_reason`
   (`state.set_meta` с этим ключом в их коде отсутствует — статический тест),

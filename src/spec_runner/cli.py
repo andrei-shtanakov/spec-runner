@@ -1558,9 +1558,13 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
         project_root=config.project_root,
     )
     if not pre_result.ok:
+        # Same answer as `run` (H-1, above): a bare `return` here exited 0,
+        # and an orchestrator that starts a workstream with `watch` read an
+        # unparseable spec as "there was nothing to do". The stream stays
+        # stdout, as `run`'s does — only the code the caller reads changes.
         logger.error("Validation failed before watch")
         print(format_results(pre_result))
-        return
+        sys.exit(1)
 
     # TUI mode
     if getattr(args, "tui", False):
