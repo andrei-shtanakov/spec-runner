@@ -328,8 +328,10 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   как обычно — пустая история не отказ.
 - **And** решение принимается по namespace целиком, а не по одному `run_id`,
   и это предъявлено конфигурацией, где эти два ответа расходятся: в том же
-  namespace прогон A закрыт штатно, более поздний прогон C оставил open call
-  X, и оператор выполняет `restore <run_id-A> --into <dir> --experimental`.
+  namespace прогон A закрыт штатно, более поздний прогон C — **`spec-runner
+  plan`**, убитый двойником seam сразу после ack call-start, — оставил open
+  call X в `plan_agent_calls`, и оператор выполняет `restore <run_id-A>
+  --into <dir> --experimental`.
   Restore отказывает `needs-human` с `run_id` прогона C, `call_id` X и его
   provenance — а не применяет snapshot A на том основании, что у самого A
   open call нет; 0 `Popen`, `--into` остаётся пустым. Применённый snapshot A
@@ -350,33 +352,25 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   как утверждала исходная находка. Этот же порядок и делает знак
   наблюдаемым: D лежит в индексе workstream-а и не лежит в snapshot-е,
   так что пройти по `open`-строкам snapshot-а мимо него — красный тест.
-  Шаг 5 снимается вторым и только прогоном C — и снимается **фактом
-  конфигурации, а не выводом из границы краша**: под `run_id` прогона C
-  нет ни одного acknowledged checkpoint-а. Это часть Given, наравне с
-  моментом `os._exit`, и проверяется у двойника store прямо: ключей
-  `runs/<run_id-C>/checkpoints/…` с доставленным manifest-ом нет. Выводить
-  это из границ краша нельзя, и соседняя конфигурация показывает, почему:
-  `run --all`, успевший закрыть задачу до краша, несёт строку `attempts` с
-  доставленным checkpoint-ом и блокирует восстановление шагом 5 совершенно
-  правильно — граница `os._exit` у обоих одна и та же, а ответы разные.
-  Дверь здесь ни при чём: она закрывает **call**, не прогон.
-- **Открытый вопрос, от которого зависит ДОСТИЖИМОСТЬ конфигурации C**
-  (не её вердикт): публикует ли checkpoint флип `tasks.md` в
-  `in_progress`. §3 требований числит «harness-written status flips
-  `tasks.md` (#192)» среди continuation-relevant mutation, и при широком
-  прочтении любой `run`, дошедший до ack call-start, к этому моменту уже
-  несёт доставленный checkpoint (ожидание publisher-а стоит перед
-  call-start, Q-05 точка (а)) — тогда конфигурации «C без acknowledged
-  checkpoint-а» для подкоманды `run` не существует вовсе, и ветка «restore
-  применяется» недостижима ровно по исходной находке. §3.1 дизайна и
-  перечень сайтов BEH-13 читают уже: публикуют только флипы, идущие через
-  `bookkeeping.commit_status_flip`, а `update_task_status(...,
-  "in_progress")` (`execution.py:646`) через него не идёт — в дереве
-  `commit_status_flip` зовётся лишь на blocked-пути (`hooks.py:724`) и
-  `commit_status_flip_quietly` на терминальных отказах
-  (`execution.py:1392`, `:1438`). Сценарий написан против узкого
-  прочтения. Пока §3 не сужен явно, этот And читать как условие, а не как
-  утверждение о коде.
+  Шаг 5 снимается вторым и только прогоном C — и снимается **выбором
+  подкоманды**, а не границей краша: C это `plan`, чей единственный
+  платный вызов предшествует любой его continuation-relevant mutation
+  (задачи дописываются в `tasks.md` после вызова, `cli_plan.py:878`),
+  поэтому acknowledged checkpoint-а под его `run_id` нет ни одного. При
+  этом `plan` — из **блокирующей** половины перечня, то есть снимается
+  именно второе условие ключа, а не первое: конфигурация проверяет ключ,
+  а не обходит его.
+- **And** подкоманда здесь — не деталь, и обратный случай предъявлен
+  рядом: тот же сценарий с C = `run`, убитым на той же границе, обязан
+  дать **отказ** шагом 5. Флип `tasks.md` в `in_progress` —
+  continuation-relevant mutation по §3 (решение владельца 2026-09-20,
+  широкое прочтение), он стоит до первого платного вызова
+  (`execution.py:646` против `:690-801`), а ожидание publisher-а — перед
+  call-start, поэтому любой `run`/`retry`/`watch`, дошедший до ack
+  call-start, к этому моменту уже несёт acknowledged checkpoint.
+  Прогона этих трёх подкоманд с open call и без checkpoint-а не
+  существует, и красным тестом здесь будет **применённый** snapshot.
+  Дверь на оба ответа не влияет: она закрывает **call**, не прогон.
 - **And** та же конфигурация с одним изменённым фактом даёт противоположный
   ответ, и это предъявлено: если C успел записать continuation-relevant
   mutation и доставить её checkpoint (acknowledged), то после закрытия X
@@ -519,11 +513,21 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
   `verify_evidence`; gate verdict; waiver (`phase_waivers` /
   `waivers_applied`); remedy (`tdd abandon`); budget authorization
   (`budget authorize` отдельным invocation, без attempt); строка `pr_*`
-  (раунд `review-pr` с fake gh); harness status flip
-  (`bookkeeping.commit_status_flip`, #192).
+  (раунд `review-pr` с fake gh); harness status flip — **обе его формы**:
+  коммитящая (`bookkeeping.commit_status_flip`, #192) и та, что пишет флип
+  в `tasks.md` без коммита (`task.update_task_status` из `execute_task`,
+  флип в `in_progress` до первого платного вызова). Вторая — решение
+  владельца 2026-09-20 о широком прочтении §3: перечень сайтов §3.1
+  описывал лишь часть доставленных путей и требование §3 не сужал.
 - **Then** после каждой mutation двойник получил ровно один новый checkpoint;
   `sequence` строго возрастает внутри `run_id`; `checkpoint_id` — UUIDv4;
   manifest каждого следующего указывает предыдущий в `supersedes`.
+- **And** флип `in_progress`, записанный `execute_task` до первого платного
+  вызова, публикует checkpoint **до** call-start, а не после: двойник
+  получает его раньше, чем двойник провайдера — первый вызов. Это и есть
+  наблюдаемое следствие широкого прочтения, на которое опирается BEH-09
+  («прогона `run`/`retry`/`watch` с open call и без acknowledged
+  checkpoint-а не существует»).
 - **And** после `status`, `costs`, `validate`, `report`, `evidence <run_id>`
   двойник не получил ничего. Перечень read-only именует форму `evidence
   <run_id>`, а не подкоманду `evidence` целиком: её формы `close-call` и

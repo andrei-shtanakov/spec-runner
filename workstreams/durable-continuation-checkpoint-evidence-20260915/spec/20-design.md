@@ -845,8 +845,36 @@ checkpoint). Ни то, ни другое больше не держится н�
 `ReviewPrState` при завершении раунда (`review_pr.py:282`; у него своё
 соединение — он передаёт его в `conn`), `bookkeeping.commit_status_flip`
 (`conn=None`: checkpointer сам открывает соединение к `state_file` для
-backup). `mark_running` и `set_meta` — не continuation-relevant по §3
-требований и seam не вызывают; `phase_results` (best-effort, #164) — тоже.
+backup) — и **`task.update_task_status`, вызванный harness-ом** (решение
+владельца 2026-09-20).
+
+Последнее — прочтение §3 требований, а не новый сайт: §3 числит
+continuation-relevant «harness-written status flips `tasks.md` (#192)» по
+свойству «без этой записи следующий шаг повторяет работу или теряет
+ограничение», и флип в `in_progress` этим свойством обладает —
+возобновление читает его. Перечень сайтов §3.1 перечислял лишь часть
+доставленных путей и требование §3 не сужает: `commit_status_flip` —
+половина **коммита** флипа, а не граница его публикации, и флип
+`execution.py:646` через неё не идёт (в дереве `commit_status_flip`
+зовётся только на blocked-пути, `hooks.py:724`, а
+`commit_status_flip_quietly` — на терминальных отказах,
+`execution.py:1392`, `:1438`).
+
+Наблюдаемое следствие, на которое опираются BEH-09 и §7.2: любой
+`run`/`retry`/`watch`, дошедший до ack call-start, к этому моменту уже
+несёт **acknowledged** checkpoint — флип стоит до первого платного вызова
+(`execution.py:646` против `:690-801`), а ожидание publisher-а — перед
+call-start (Q-05, точка (а)). Прогона этих трёх подкоманд с open call и
+без acknowledged checkpoint-а не существует. У `plan` порядок обратный:
+задачи дописываются в `tasks.md` **после** платного вызова
+(`cli_plan.py:878`), поэтому его прогон, убитый на call-start, не несёт
+ни одной continuation-relevant mutation.
+
+`mark_running` и `set_meta` — не continuation-relevant по §3 требований и
+seam не вызывают (они пишут статус в state DB, а §3 говорит о `tasks.md`);
+`phase_results` (best-effort, #164) — тоже. Операторские флипы
+(`spec-runner task start|done|block`, `task_commands.py`) под «harness-written»
+не подпадают — отдельный вопрос, этим решением не закрытый.
 
 **Три решения принимает сама `after_mutation`, и все три — по тому, что у
 неё уже в руках.** (1) `config.probe_provenance` заполнен (§ 2.7) — выход сразу,
