@@ -845,8 +845,14 @@ checkpoint). Ни то, ни другое больше не держится н�
 `ReviewPrState` при завершении раунда (`review_pr.py:282`; у него своё
 соединение — он передаёт его в `conn`), `bookkeeping.commit_status_flip`
 (`conn=None`: checkpointer сам открывает соединение к `state_file` для
-backup) — и **`task.update_task_status`, вызванный harness-ом** (решение
-владельца 2026-09-20).
+backup) — и **harness-написанные флипы `tasks.md`**, то есть конкретные
+сайты записи, а не функция `task.update_task_status` целиком (решение
+владельца 2026-09-20): флип `in_progress` и возвраты в `todo` в
+`execute_task` (`execution.py:646`, `:668`, `:687`), флипы `blocked` на
+терминальных отказах (`execution.py:1391`, `:1437`), `done`/`blocked` в
+`cmd_retry` (`cli.py:1525`, `:1528`), `done` в `post_done_hook`
+(`hooks.py:1597`) и возврат stale-задач в `todo` внутри `run`
+(`state.py:2742`).
 
 Последнее — прочтение §3 требований, а не новый сайт: §3 числит
 continuation-relevant «harness-written status flips `tasks.md` (#192)» по
@@ -865,16 +871,30 @@ continuation-relevant «harness-written status flips `tasks.md` (#192)» по
 несёт **acknowledged** checkpoint — флип стоит до первого платного вызова
 (`execution.py:646` против `:690-801`), а ожидание publisher-а — перед
 call-start (Q-05, точка (а)). Прогона этих трёх подкоманд с open call и
-без acknowledged checkpoint-а не существует. У `plan` порядок обратный:
-задачи дописываются в `tasks.md` **после** платного вызова
-(`cli_plan.py:878`), поэтому его прогон, убитый на call-start, не несёт
-ни одной continuation-relevant mutation.
+без acknowledged checkpoint-а не существует. У `plan` в его **интерактивной**
+форме порядок обратный: до подтверждения оператором он не пишет ничего, а
+задачи дописываются в `tasks.md` уже после последнего платного вызова
+(`cli_plan.py:878`), поэтому такой прогон, убитый на любом call-start, не
+несёт ни одной continuation-relevant mutation — сколько бы кругов Q&A
+(`cli_plan.py:850`) он ни сделал. Форма здесь существенна: `plan --full`
+пишет артефакт стадии сразу после её вызова (`cli_plan.py:694`), то есть
+call-start следующей стадии уже идёт после записи.
 
 `mark_running` и `set_meta` — не continuation-relevant по §3 требований и
 seam не вызывают (они пишут статус в state DB, а §3 говорит о `tasks.md`);
-`phase_results` (best-effort, #164) — тоже. Операторские флипы
-(`spec-runner task start|done|block`, `task_commands.py`) под «harness-written»
-не подпадают — отдельный вопрос, этим решением не закрытый.
+`phase_results` (best-effort, #164) — тоже.
+
+Почему сайты, а не функция: у `task.update_task_status` (`task.py:438`)
+есть вызывающие вне harness-а — `task_commands.py:136/157/179`
+(`spec-runner task start|done|block`) и `github_sync.py:166`
+(`spec-runner sync`). Обе подкоманды в перечне платящих FR-01 (§6.2) не
+состоят, run-start под ними диспетчер не кладёт, а `sequence` checkpoint-а
+ключуется `checkpoint_seq:<run_id>` — публиковать оттуда было бы не из
+чего. Seam зовёт сайт записи, не сама функция; статический тест BEH-13
+(«ровно один seam») это допускает — он требует единственности точки
+публикации, а не единственности вызывающего. Операторские флипы под
+«harness-written» не подпадают, и это следствие правила, а не исключение
+из него.
 
 **Три решения принимает сама `after_mutation`, и все три — по тому, что у
 неё уже в руках.** (1) `config.probe_provenance` заполнен (§ 2.7) — выход сразу,
