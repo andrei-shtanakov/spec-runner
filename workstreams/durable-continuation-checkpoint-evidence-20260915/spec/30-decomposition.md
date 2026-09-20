@@ -323,10 +323,13 @@ run-start, call-start и manifest-а, `facts` рядом, не в identity; mani
 `manifest_sha256` — repository/workstream/`refs[]`/`excluded` и WIP заполняет
 DT-05. `Publisher` получает очередь по `sequence`, `drain(timeout)` и
 `last_acknowledged()`; manifest кладётся последним, ack manifest-а = ack
-checkpoint-а; обе точки drain (Q-05): перед call-start — шаг 1 `execute`
-(таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind="instrument")`,
-вызова нет) и перед closure (`last_checkpoint_id = last_acknowledged()`),
-причём вторая — **гейт** (spec-runner#527): недоставленный checkpoint даёт
+checkpoint-а; все три сайта правила Q-05: перед call-start — шаг 1
+`execute` (таймаут `checkpoint_ack_timeout_seconds` →
+`Refusal(kind="instrument")`, вызова нет), перед closure
+(`last_checkpoint_id = last_acknowledged()`) и перед чтением store у
+`restore` — шаг 0 порядка проверки (6), тот же таймаут, `--into` остаётся
+пустым (решение владельца 2026-09-20), причём сайт перед closure —
+**гейт** (spec-runner#527): недоставленный checkpoint даёт
 closure `failed` и exit 2, так что подкоманда без платного вызова успешной
 не завершается, а диспетчер добавляет в stderr строку «решение записано
 локально, но не доставлено». Синхронного ожидания **внутри**
