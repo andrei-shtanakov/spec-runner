@@ -137,7 +137,10 @@ acknowledged id (BEH-31). Таймаут — closure kind `failed`, exit 2, с i
 предыдущего acknowledged.
 
 (в) **не решает по store** — перед проверками `restore` (§7.2, раньше
-первой из семи и раньше выбора материала). Это забор на ЧТЕНИЕ, и в этом он отличается от двух
+первой из семи и раньше выбора материала). Правило и место — решение
+этого бандла; вызов и его наблюдаемое приезжают с механизмом обязательств
+(spec-runner#528), потому что до него очередь `restore` пуста по
+построению и предъявлять забор не на чем. Это забор на ЧТЕНИЕ, и в этом он отличается от двух
 первых: (а) и (б) не дают совершить необратимую запись, а здесь дренаж
 после чтения бесполезен — вердикт уже посчитан по устаревшему store, и
 `restore` молча применил бы snapshot, не знающий о mutation унаследованного
@@ -1374,7 +1377,12 @@ read-only, статический пояс это допускает по име
 `restore.plan(run_id) → RestorePlan | RestoreRefusal`.
 
 Первым — **drain, сайт (в) правила Q-05**, и до него не читается ничего: ни
-одна из семи проверок, ни выбор материала. Обязательства здесь как правило
+одна из семи проверок, ни выбор материала. Сам вызов приезжает вместе с
+механизмом обязательств (spec-runner#528): пока его нет, очередь этого
+процесса пуста по построению, ждать нечего, и порядок наблюдаемо не
+меняется. Место забора — решение **этого** бандла (владелец, 2026-09-20),
+и записано оно здесь именно потому, что механизм без него цели не
+достигает; строит их одна задача. Обязательства здесь как правило
 **унаследованные**: прогон, убитый между commit-ом своей mutation и
 доставкой её checkpoint-а, оставил их в локальной DB, и очередь publisher-а
 получает их при первом за процесс открытии этой DB (впереди собственных
@@ -1796,11 +1804,11 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
 | `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
-| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`; ack **не ждёт** ни у одной подкоманды — § 3.1, Q-05: ожидание внутри неё рвало бы многошаговый handler), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий, `drain` и его отказные режимы на обоих сайтах, где он зовётся: перед closure — гейт (closure `failed`, exit 2), перед чтением store у `restore` — `instrument`, exit 2 до применения snapshot-а (§ Q-05, сайты (б) и (в)) | BEH-12…15, 40, 47, 48 |
+| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`; ack **не ждёт** ни у одной подкоманды — § 3.1, Q-05: ожидание внутри неё рвало бы многошаговый handler), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий, `drain` и его отказные режимы на двух сайтах из трёх — (а) перед call-start (`instrument`, вызова нет; сам вызов ставит DT-02, § 2.2 шаг 1) и (б) перед closure (гейт: closure `failed`, exit 2). Сайт (в) — забор на чтение у `restore` — правилом Q-05 объявлен, но строится вместе с механизмом обязательств (spec-runner#528): на пустой очереди ему нечего ждать | BEH-12…15, 40, 47, 48 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
-| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), **drain перед первой проверкой** (сайт (в) правила Q-05; таймаут → `instrument`, exit 2, `--into` остаётся пустым), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46, 48 |
+| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2); **drain перед первой проверкой** (сайт (в) правила Q-05) объявлен там же, но приезжает с механизмом обязательств (spec-runner#528) — до него очередь этого процесса пуста по построению и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
