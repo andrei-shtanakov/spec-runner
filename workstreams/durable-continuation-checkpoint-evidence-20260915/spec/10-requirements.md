@@ -1,6 +1,6 @@
 ---
 spec_stage: requirements
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - charter
@@ -8,6 +8,8 @@ upstream_hashes:
   charter: edf0edd15fb495997d891eed2250ff6fbd72cfc7
 version: 2
 approved_content_hash: a1aa6aa04dd63c569c094e90497b6756c079c0b1
+approved_by: andrei-shtanakov
+approved_at: '2026-09-20T15:06:47Z'
 ---
 
 # Requirements — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
