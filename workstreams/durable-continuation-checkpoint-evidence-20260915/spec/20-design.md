@@ -136,8 +136,8 @@ mutation, и durable boundary совпадает с границей «до пл
 acknowledged id (BEH-31). Таймаут — closure kind `failed`, exit 2, с id
 предыдущего acknowledged.
 
-(в) **не решает по store** — перед проверками `restore` (§7.2, шаг 0
-порядка проверки (6)). Это забор на ЧТЕНИЕ, и в этом он отличается от двух
+(в) **не решает по store** — перед проверками `restore` (§7.2, раньше
+первой из семи и раньше выбора материала). Это забор на ЧТЕНИЕ, и в этом он отличается от двух
 первых: (а) и (б) не дают совершить необратимую запись, а здесь дренаж
 после чтения бесполезен — вердикт уже посчитан по устаревшему store, и
 `restore` молча применил бы snapshot, не знающий о mutation унаследованного
@@ -166,7 +166,8 @@ store, а не «локально это или нет».** «Решается �
   одним `list` индекса workstream-а и по направлению ошибки близка к
   первой; но обязательств у процесса в ней нет по построению — DB свежая,
   удалённая или приехавшая из snapshot-а, а унаследованные снимает сам
-  `restore` (§ 7.2, шаг 0 и правило их снятия, spec-runner#528). Сайт
+  `restore` (§ 7.2, забор перед проверками и правило их снятия,
+  spec-runner#528). Сайт
   (в) там формально есть, ожидания нет, потому что ждать нечего.
 
 Между сайтами процесс делает то, что делал (тесты, lint, git, сборка
@@ -221,7 +222,7 @@ mutation, трогает manifest, шаг 5 проверки (6), `restore.apply
 которая делала механизм бесполезным даже в канонной последовательности
 «crash → restore» — `restore` читал store раньше своей единственной точки
 drain, — снята решением владельца 2026-09-20: правило Q-05 переписано
-свойством, и забор на чтение стоит шагом 0 порядка проверки (6). Пробел в
+свойством, и забор на чтение стоит раньше любой проверки `restore`. Пробел в
 § 7.2 остаётся тем, чем был объявлен, — **принятым**.
 
 **Кому гейт перед closure меняет исход, а кому нет.** Точка (б) стоит у
@@ -1368,19 +1369,32 @@ read-only, статический пояс это допускает по име
 пишут свою пару run-start + closure (§ 2.5, § 6.2).
 
 **7.2 Порядок проверок restore** — до записи в `--into` (BEH-20), функция
-`restore.plan(run_id) → RestorePlan | RestoreRefusal`:
-`contract_version` (manifest ≤ поддерживаемой) → digests всех файлов
+`restore.plan(run_id) → RestorePlan | RestoreRefusal`.
+
+Первым — **drain, сайт (в) правила Q-05**, и до него не читается ничего: ни
+одна из семи проверок, ни выбор материала. Обязательства здесь как правило
+**унаследованные**: прогон, убитый между commit-ом своей mutation и
+доставкой её checkpoint-а, оставил их в локальной DB, и очередь publisher-а
+получает их при первом за процесс открытии этой DB (впереди собственных
+записей). Место выбрано по тому, что забор защищает: устаревший store
+искажает не только вердикт проверки (6), но и **сам выбор материала** —
+первая проверка берёт digests *последнего acknowledged* checkpoint-а, и без
+доставки последним считался бы не тот. Дренаж после любого из этих чтений
+бесполезен: и выбранный snapshot, и вердикт уже посчитаны. Таймаут —
+`instrument`, exit 2, `--into` остаётся пустым: отказ здесь дешевле
+молчаливой потери.
+
+Дальше по порядку: `contract_version` (manifest ≤ поддерживаемой) → digests всех файлов
 последнего acknowledged checkpoint-а + `manifest_sha256` (NFR-04) →
 repository identity (root commit `--into`-клона против manifest) → policy
 identity (`config_hash` активного config против manifest, ключ и оба
 значения в сообщении) → namespace (§ 7.3) → open calls **всего workstream-а** (ниже) →
 spool (sha256 каждой строки). Первое несовпадение — отказ;
 instrument-класс ((1), (2), (7)) — exit 2, остальные — `needs-human`,
-exit 1; исключение — (6), у которой instrument-исходов два, и оба по одной
-причине «недоказуемо, а не доказано отсутствие»: недоступный store или
-индекс (отсутствие open call тогда не доказано) и таймаут drain на шаге 0
-(недоставленное обязательство означает, что индекс мог бы читаться иным —
-см. порядок ниже). Оба — exit 2, а не `needs-human`.
+exit 1; исключение — (6) при недоступном store или индексе: отсутствие
+open call тогда не доказано, и это instrument, exit 2, а не `needs-human`.
+Второй instrument-исход пути `restore` — таймаут drain — ни одной из семи
+проверок не принадлежит: он стоит раньше перечня, до первого чтения (ниже).
 
 Проверка (6) — namespace-wide, а не по восстанавливаемому `run_id`, и это
 единственный способ выполнить FR-02 на пути restore. `run_id` — ключ
@@ -1391,16 +1405,6 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
 применяется, и первый же `run` повторяет X — молча, то есть ровно тот запрет,
 который FR-02 и M-02 формулируют буквально. Поэтому порядок проверки (6):
 
-0. **Drain перед чтением** — сайт (в) правила Q-05: процесс ждёт publisher-а
-   с тем же таймаутом, и только после ack идёт шаг 1. Обязательства здесь
-   как правило **унаследованные**: прогон, убитый между commit-ом своей
-   mutation и доставкой её checkpoint-а, оставил их в локальной DB, и
-   очередь publisher-а получает их при первом за процесс открытии этой DB
-   (впереди собственных записей). Без этого шага порядок был бы такой:
-   проверка (6) читает store, не знающий о той mutation, решение принято,
-   snapshot применён — и правка потеряна молча, ровно тот исход, ради
-   которого правило и переписано свойством. Таймаут — `instrument`, exit 2,
-   `--into` остаётся пустым: отказ здесь дешевле молчаливой потери.
 1. `workstream_key` берётся из run-start восстанавливаемого прогона (§ 1.3);
    его отсутствие — уже отказ на проверке legacy, не здесь.
 2. Один `list` индекса `workstreams/<workstream_key>/runs/`.
@@ -1481,8 +1485,8 @@ A. Проверка по ключам `runs/A/calls/` не находит нич
    остаётся в spec-runner#528. Но развилка, из-за которой он не закрывал
    даже канонную последовательность «crash → restore», снята решением
    владельца 2026-09-20: доставка обязана случиться раньше, чем **эта**
-   проверка читает store, и теперь она там и стоит — шаг 0 порядка выше,
-   сайт (в) правила Q-05. Прежняя формулировка требовала для этого «ещё
+   проверка читает store, и теперь она там и стоит — раньше первой из
+   семи проверок, сайт (в) правила Q-05. Прежняя формулировка требовала для этого «ещё
    одну точку ожидания» и упиралась в записанный отказ; отказ относился к
    точке «сразу после mutation», а не к забору на границе invocation-а
    (§ Q-05). Что из #528 остаётся: сами obligation-строки в транзакции
@@ -1791,7 +1795,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
-| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2) с **шагом 0** — drain перед чтением store (сайт (в) правила Q-05; таймаут → `instrument`, exit 2, `--into` остаётся пустым) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46, 48 |
+| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), **drain перед первой проверкой** (сайт (в) правила Q-05; таймаут → `instrument`, exit 2, `--into` остаётся пустым), проверка (6) по индексу workstream-а (§ 7.2) и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46, 48 |
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
