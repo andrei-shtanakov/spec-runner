@@ -165,6 +165,99 @@ class TestLoadConfigFromYaml:
         assert result.get("plugins_dir") is None
 
 
+class TestDurabilityStoreConfig:
+    """BEH-28: a durability.store adapter that has not declared itself
+    secure is refused at load, before a run reads any further config key.
+    spec-runner checks the declaration only (OUT-03) — it never enforces
+    encryption or IAM itself."""
+
+    def _write(self, tmp_path, body: str) -> Path:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(f"executor:\n  durability:\n    store:\n{body}")
+        return cfg
+
+    def test_tls_false_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: false\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "local_volume" in str(exc.value)
+        assert "tls" in str(exc.value)
+
+    def test_undeclared_encryption_at_rest_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      tls: true\n      immutable_put: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "encryption_at_rest" in str(exc.value)
+
+    def test_undeclared_immutable_put_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      tls: true\n      encryption_at_rest: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "immutable_put" in str(exc.value)
+
+    def test_secure_adapter_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      options:\n"
+            "        root: durable-store\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] == "local_volume"
+        assert result["durability_store_options"] == {"root": "durable-store"}
+        assert result["durability_store_tls"] is True
+
+    def test_no_durability_block_is_unaffected(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("executor:\n  max_retries: 3\n")
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] is None
+
+    def test_executor_config_direct_construction_is_also_refused(self):
+        """Defense in depth: a config built without the YAML loader (tests,
+        other callers) is refused the same way `__post_init__` refuses any
+        other unsafe declaration (e.g. harness_guard)."""
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="local_volume"):
+            ExecutorConfig(
+                durability_store_adapter="local_volume",
+                durability_store_tls=False,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+            )
+
+    def test_executor_config_direct_construction_accepts_secure_declaration(self):
+        config = ExecutorConfig(
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+        )
+        assert config.durability_store_adapter == "local_volume"
+
+
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:
         """Create a Namespace with default CLI arg values (None = not passed)."""

@@ -357,6 +357,40 @@ class TestValidateConfig:
         assert result.errors == []
 
 
+class TestValidateDurabilityStore:
+    """BEH-28 in `validate`'s report — the same check as `load_config_from_yaml`,
+    named here instead of only reachable as a load-time crash."""
+
+    def test_insecure_adapter_is_reported(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: false\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        result = validate_config(config_file)
+        assert not result.ok
+        assert any("local_volume" in e and "tls" in e for e in result.errors)
+
+    def test_secure_adapter_is_not_reported(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        result = validate_config(config_file)
+        assert result.ok
+
+
 class TestValidateAll:
     """Tests for validate_all orchestrator function."""
 
@@ -384,6 +418,31 @@ class TestValidateAll:
         config_file.write_text("executor:\n  max_retry: 5\n")
         result = validate_all(tasks_file=tasks_file, config_file=config_file)
         assert not result.ok
+
+    def test_validate_all_with_insecure_durability_store_does_not_crash(
+        self, tmp_path: Path
+    ) -> None:
+        """`_config_for_validation` builds an `ExecutorConfig` from the same
+        YAML `validate_config` already flagged (#367 verify-first check) —
+        it must not let the loader's `ConfigError` propagate as an unhandled
+        exception past `validate_config`'s own report of it (BEH-28)."""
+        spec_dir = tmp_path / "spec"
+        spec_dir.mkdir()
+        tasks_file = spec_dir / "tasks.md"
+        tasks_file.write_text("# Tasks\n\n### TASK-001: Setup\n🔴 P0 | ⬜ todo | Est: 1d\n\n")
+        config_file = tmp_path / "executor.config.yaml"
+        config_file.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: false\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        result = validate_all(tasks_file=tasks_file, config_file=config_file)
+        assert not result.ok
+        assert any("local_volume" in e for e in result.errors)
 
     def test_validate_all_tasks_only(self, tmp_path: Path) -> None:
         """Only tasks_file provided, no config."""

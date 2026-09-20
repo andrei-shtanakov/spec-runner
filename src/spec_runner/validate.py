@@ -11,6 +11,7 @@ from spec_runner.config import (
     KNOWN_EXECUTOR_KEYS,
     ConfigError,
     ExecutorConfig,
+    durability_store_missing_properties,
     mixed_shape_error,
 )
 from spec_runner.logging import get_logger
@@ -412,6 +413,7 @@ def validate_config(config_path: Path) -> ValidationResult:
     _validate_spec_context_rules(executor_section, result)
     _validate_review_policy(executor_section, result)
     _validate_execution_mode(executor_section, result)
+    _validate_durability_store(executor_section, result)
 
     return result
 
@@ -461,6 +463,36 @@ def _validate_execution_mode(section: dict, result: "ValidationResult") -> None:
     if mode is not None and mode not in EXECUTION_MODES:
         result.errors.append(
             f"execution_mode must be one of {', '.join(EXECUTION_MODES)} (got {mode!r})"
+        )
+
+
+def _validate_durability_store(section: dict, result: "ValidationResult") -> None:
+    """Report BEH-28 in `validate`'s output, not only as a load-time crash.
+
+    `load_config_from_yaml` already refuses this at load (fail-fast, before
+    `run`/`watch` reach run-start); this mirrors the same check
+    (`durability_store_missing_properties`, shared with config.py so the two
+    surfaces cannot disagree) so `spec-runner validate` names it in a report
+    instead of requiring a real run to hit the `ConfigError`.
+    """
+    durability = section.get("durability")
+    if not isinstance(durability, dict):
+        return
+    store = durability.get("store")
+    if not isinstance(store, dict):
+        return
+    adapter = store.get("adapter")
+    if not adapter:
+        return
+    missing = durability_store_missing_properties(
+        tls=bool(store.get("tls")),
+        encryption_at_rest=bool(store.get("encryption_at_rest")),
+        immutable_put=bool(store.get("immutable_put")),
+    )
+    if missing:
+        result.errors.append(
+            f"durability.store adapter {adapter!r} is missing required "
+            f"security properties: {', '.join(missing)}"
         )
 
 

@@ -275,6 +275,28 @@ def _validate_change_id(change_id: str) -> None:
         )
 
 
+def durability_store_missing_properties(
+    *, tls: bool, encryption_at_rest: bool, immutable_put: bool
+) -> list[str]:
+    """Security properties BEH-28 requires a declared `durability.store` adapter to state.
+
+    spec-runner checks the *declaration* only — encryption, TLS and immutable
+    writes are the store adapter's own job (OUT-03) — but an adapter that
+    does not even declare them is refused before any run reaches run-start.
+    Shared by `ExecutorConfig.__post_init__` (fail-fast at load) and
+    `validate.py`'s report (`validate.py` "повторяет те же проверки") so the
+    two surfaces cannot drift into disagreeing about the same config.
+    """
+    missing = []
+    if not tls:
+        missing.append("tls")
+    if not encryption_at_rest:
+        missing.append("encryption_at_rest")
+    if not immutable_put:
+        missing.append("immutable_put")
+    return missing
+
+
 # === ExecutorConfig ===
 
 
@@ -511,6 +533,24 @@ class ExecutorConfig:
     # Glob patterns exempt from strict-mode violations (e.g. ["uv.lock"]).
     harness_allow: list[str] = field(default_factory=list)
 
+    # Durable continuation checkpoint/evidence store (#480, BEH-28, design
+    # §1.1). Declared here so `run`/`validate` both refuse an adapter that
+    # has not declared itself secure — spec-runner checks the *declaration*
+    # only, never encryption or IAM itself (OUT-03, the store's own job).
+    # Empty `durability_store_adapter` means no store is configured, which is
+    # the default (experimental, CON-01) and carries no validation.
+    durability_store_adapter: str = ""
+    durability_store_options: dict[str, str] = field(default_factory=dict)
+    durability_store_tls: bool = False
+    durability_store_encryption_at_rest: bool = False
+    durability_store_immutable_put: bool = False
+    # "store" (default) durably acknowledges via the store adapter's `put`;
+    # "local" opts a project out of continuation entirely (design §0).
+    durability_ack: str = "store"
+    durability_ack_timeout_seconds: float = 3.0
+    durability_checkpoint_ack_timeout_seconds: float = 60.0
+    durability_retention_days: int = 30
+
     # False when no config file backed this run (CLI flags may still have
     # overridden individual defaults). Set by main() after load; execution
     # commands warn on it (#63) — a silently vanished config once flipped a
@@ -535,6 +575,23 @@ class ExecutorConfig:
                 setattr(self, attr, [value])
             elif not isinstance(value, list):
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
+
+        # BEH-28: a declared durability.store adapter must state tls,
+        # encryption_at_rest and immutable_put, or a run must not reach
+        # run-start with it.
+        if self.durability_store_adapter:
+            missing = durability_store_missing_properties(
+                tls=self.durability_store_tls,
+                encryption_at_rest=self.durability_store_encryption_at_rest,
+                immutable_put=self.durability_store_immutable_put,
+            )
+            if missing:
+                raise ConfigError(
+                    f"durability.store adapter {self.durability_store_adapter!r} "
+                    f"is missing required security properties: {', '.join(missing)} "
+                    "-- spec-runner checks the declaration only (OUT-03); declare "
+                    "tls: true, encryption_at_rest: true and immutable_put: true"
+                )
 
         if self.change_id:
             if self.spec_prefix:
@@ -765,6 +822,7 @@ KNOWN_EXECUTOR_KEYS: set[str] = set(ExecutorConfig.__dataclass_fields__.keys()) 
     "hooks",
     "commands",
     "paths",
+    "durability",
 }
 
 
@@ -962,6 +1020,36 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         post_done = hooks.get("post_done", {})
         commands = executor_config.get("commands", {})
         paths = executor_config.get("paths", {})
+        durability = executor_config.get("durability", {})
+        if not isinstance(durability, dict):
+            raise ConfigError(
+                f"{config_path}: durability must be a mapping, got {type(durability).__name__}"
+            )
+        durability_store = durability.get("store", {})
+        if not isinstance(durability_store, dict):
+            raise ConfigError(
+                f"{config_path}: durability.store must be a mapping, got "
+                f"{type(durability_store).__name__}"
+            )
+        # BEH-28: refuse at load, before the run reads any further keys — not
+        # deferred to `ExecutorConfig.__post_init__`, since `run`/`watch` read
+        # this dict long before a config is built (#182's failure shape: a
+        # setting that silently did nothing).
+        durability_store_adapter = durability_store.get("adapter")
+        if durability_store_adapter:
+            missing = durability_store_missing_properties(
+                tls=bool(durability_store.get("tls")),
+                encryption_at_rest=bool(durability_store.get("encryption_at_rest")),
+                immutable_put=bool(durability_store.get("immutable_put")),
+            )
+            if missing:
+                raise ConfigError(
+                    f"{config_path}: durability.store adapter "
+                    f"{durability_store_adapter!r} is missing required security "
+                    f"properties: {', '.join(missing)} -- spec-runner checks the "
+                    "declaration only (OUT-03); declare tls: true, "
+                    "encryption_at_rest: true and immutable_put: true"
+                )
         format_check = commands.get("format_check")
         if format_check is not None and not isinstance(format_check, str):
             raise ConfigError(
@@ -1064,6 +1152,17 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "review_pr_post_pr_wait_seconds": (executor_config.get("review_pr") or {}).get(
                 "post_pr_wait_seconds"
             ),
+            "durability_store_adapter": durability_store.get("adapter"),
+            "durability_store_options": durability_store.get("options"),
+            "durability_store_tls": durability_store.get("tls"),
+            "durability_store_encryption_at_rest": durability_store.get("encryption_at_rest"),
+            "durability_store_immutable_put": durability_store.get("immutable_put"),
+            "durability_ack": durability.get("ack"),
+            "durability_ack_timeout_seconds": durability.get("ack_timeout_seconds"),
+            "durability_checkpoint_ack_timeout_seconds": durability.get(
+                "checkpoint_ack_timeout_seconds"
+            ),
+            "durability_retention_days": durability.get("retention_days"),
         }
     except ConfigError:
         raise
