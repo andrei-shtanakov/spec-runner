@@ -1,6 +1,6 @@
 ---
 spec_stage: charter
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - discovery-brief
@@ -8,6 +8,8 @@ upstream_hashes:
   discovery-brief: 3f6e98075ebcf037371445458cc3a2cd752dd830
 version: 3
 approved_content_hash: 932751002d9e7af444eb33f883c1f13af7d4747f
+approved_by: andrei-shtanakov
+approved_at: '2026-09-20T14:49:50Z'
 ---
 
 # Charter — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
