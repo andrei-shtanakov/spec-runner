@@ -931,9 +931,10 @@ scenarios: [BEH-19, BEH-09]
    local-режим нет намеренно — его отказная форма та же, что у legacy в
    AC-19 и AC-34. Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked)
    — AC-14 проверяет восстановление через `git`, не формат. Q-05
-   (локальный snapshot синхронно, publisher с drain перед call-start и перед
-   closure, вторая точка — гейт успешного завершения,
-   manifest кладётся последним) — AC-11 считает checkpoint
+   (локальный snapshot синхронно, publisher, ожидание по свойству — сайты
+   (а) перед call-start и (б) перед closure в этой волне, (б) — гейт
+   успешного завершения; (в) перед первым чтением store у `restore`
+   объявлен и приезжает с механизмом #528, manifest кладётся последним) — AC-11 считает checkpoint
    полученным по ack двойника, AC-29 фиксирует лишь acknowledged id в
    closure, AC-46 — что успешного завершения без ack не бывает.
    Q-06/Q-08 (место seam-а, движок redaction) — AC-04, AC-25

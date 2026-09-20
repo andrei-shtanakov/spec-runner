@@ -1389,7 +1389,20 @@ read-only, статический пояс это допускает по име
 записей). Место выбрано по тому, что забор защищает: устаревший store
 искажает не только вердикт проверки (6), но и **сам выбор материала** —
 первая проверка берёт digests *последнего acknowledged* checkpoint-а, и без
-доставки последним считался бы не тот. Дренаж после любого из этих чтений
+доставки последним считался бы не тот.
+
+**Граница того, что забор покупает, названа здесь, а не оставлена на
+догадку.** Он работает ровно тогда, когда у процесса `restore` эти
+обязательства есть, то есть когда он запущен в дереве убитого прогона и
+открыл его локальную DB. Каталог удалён, восстановление идёт на другой
+машине или из свежего клона — локальных байтов обязательства нет по
+построению, доставлять нечего, и забор сторожит пустую очередь. Это не
+дефект забора: случай «обязательство без локальных байтов» — отдельное
+правило механизма (spec-runner#528), а остаток за ним — тот же
+**принятый** пробел FR-05. Механизм, которым обязательства попадают в
+очередь `restore` (подъём при первом за процесс открытии DB), тоже
+принадлежит #528 — здесь фиксируется только место, раньше которого читать
+store нельзя. Дренаж после любого из этих чтений
 бесполезен: и выбранный snapshot, и вердикт уже посчитаны. Таймаут —
 `instrument`, exit 2, `--into` остаётся пустым: отказ здесь дешевле
 молчаливой потери.
@@ -1809,7 +1822,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
-| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2); **drain перед первой проверкой** (сайт (в) правила Q-05) объявлен там же, но приезжает с механизмом обязательств (spec-runner#528) — до него очередь этого процесса пуста по построению и запись meta `continuation_index: restored` при `apply` (§ 7.3), `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
+| `src/spec_runner/restore_cmd.py`, `evidence_cmd.py` (новые) | `restore` (`plan`/`apply`, порядок проверок, next step, `--experimental`, `--json`), проверка (6) по индексу workstream-а (§ 7.2), запись meta `continuation_index: restored` при `apply` (§ 7.3); **drain перед первой проверкой** (сайт (в) правила Q-05) объявлен в § 7.2, но в объём этой задачи не входит — приезжает с механизмом обязательств (spec-runner#528), до него очередь процесса пуста по построению, `evidence` (`collect`, `close-call`, `purge`), `retention.py`. Closure этих трёх подкоманд пишет диспетчер по коду их выхода — своих сайтов closure у них нет (§ 6.3) | BEH-09, 11, 19…21, 30, 36…38, 40, 42, 46 |
 | `src/spec_runner/cli.py` | `main()`: `RunContext` вместо `uuid4().hex[:8]`, run-start по `PAYING_SUBCOMMANDS` до handler-а, dispatch в `try/except SystemExit/except BaseException/finally` с closure, перед closure читает `executor._shutdown_requested` (§ 6.3; `executor.py` не правится); `_run_start_gate` (replay spool + `open_calls`) и три его сайта — `_run_tasks_inner`, `cmd_retry`, `cmd_watch`, каждый сразу после гардов старта (§ 2.4); новые subparsers `restore`/`evidence`. Этим вызовом правка `cmd_retry`/`cmd_watch` и исчерпывается: сайты выхода `run`, `cmd_retry`, `cmd_watch`, `cmd_doctor` и `except SpecMetaError` не правятся вовсе — kind выводится в диспетчере, `RUN_STOP_REASONS` (`:536-541`) не растёт (§ 6.3) | BEH-02, 04, 09, 29, 32, 38, 46 |
 | `src/spec_runner/execution.py`, `tdd.py`, `review.py`, `review_pr.py`, `cli_plan.py` | сайты → `paid_call.execute`; `cli_plan` — **все три** сайта (`:170` gated, `:660` full, `:797` интерактивный цикл) на `build_cli_invocation` + `parse_cli_result`, provenance `plan:<stage>` и `plan:interactive`, параметр `invoke=` `_generate_stage_draft` снимается; `ReviewPrState` вызывает `after_mutation` при закрытии раунда; `_record_call`/`_record_pr_call` — шаг close; `RealAgentCallRefused` и ветка `except RealAgentCallRefused: raise` (`execution.py:504-512`, `:1255-1261`) удаляются — после переноса гварда на `_spawn` их некому поднимать (Q-06, пункт (4)) | BEH-05, 07, 08, 22…24, 46 |
 | `src/spec_runner/runner.py`, `__init__.py` | `run_claude_async` удаляется вместе с публичным экспортом (Q-06) — второй, асинхронный путь к бинарю провайдера; `build_cli_invocation`, `parse_cli_result`, `classify_agent_answer` остаются и используются seam-ом; осиротевшие `tests/test_runner.py` / `tests/test_events.py` правятся в той же задаче | BEH-05, 44 |
