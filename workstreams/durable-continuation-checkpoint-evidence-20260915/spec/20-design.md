@@ -680,7 +680,7 @@ open calls, — вызываемая из всех трёх handler-ов сра�
 `cmd_retry` — в его `with ExecutorState` (`:1480`), до правки `task_state` и
 до `execute_task`; в `cmd_watch` — один раз на invocation до первого круга
 цикла, под собственный `with ExecutorState` (круги открывают свои позже,
-`:1593`, `:1637`, `:1643`). Единственный сайт в `_run_tasks_inner` оставил бы
+`:1597`, `:1641`, `:1647`). Единственный сайт в `_run_tasks_inner` оставил бы
 «ту же процедуру» утверждением без механизма: ни `cmd_retry` (`cli.py:1467` —
 гарды → `execute_task` напрямую), ни `cmd_watch` (`:1541` — гарды →
 собственный цикл с `run_with_retries`) через `_run_tasks_inner` не проходят.
