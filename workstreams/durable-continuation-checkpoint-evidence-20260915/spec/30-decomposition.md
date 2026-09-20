@@ -19,9 +19,13 @@ acceptance (`25-acceptance.md`); их ревизии пинованы в frontma
 `upstream_hashes` этого узла. Резолюции
 design — Q-02 (ack = возврат `put` store-адаптера до `Popen`, spool ack-ом не
 является), Q-03 (WIP — tar с `git bundle` и байтами dirty/untracked), Q-05
-(локальный snapshot синхронно, один упорядоченный publisher, **две** точки
-drain — перед call-start и перед closure, причём вторая — гейт:
-недоставленный checkpoint даёт exit 2, — manifest последним), Q-06 (seam в `paid_call.py`,
+(локальный snapshot синхронно, один упорядоченный publisher, ожидание — по
+свойству: пока есть недоставленные обязательства, процесс не тратит, не
+объявляет завершение и не решает по store так, что доставка развернула бы
+вердикт в отказ; сайты (а) перед call-start и (б) перед closure строит эта
+волна, причём (б) — гейт: недоставленный checkpoint даёт exit 2; сайт (в)
+перед первым чтением store у `restore` объявлен и приезжает с механизмом
+обязательств, spec-runner#528, — manifest последним), Q-06 (seam в `paid_call.py`,
 `_spawn` — единственный spawn провайдера), Q-07 (состав `PolicyIdentity`), Q-08
 (движок redaction), Q-11 (retention считает spec-runner, удаляет адаптер,
 audit-запись в store), Q-12 (open calls на старте `run` — из `open`-строк DB с
@@ -323,10 +327,11 @@ run-start, call-start и manifest-а, `facts` рядом, не в identity; mani
 `manifest_sha256` — repository/workstream/`refs[]`/`excluded` и WIP заполняет
 DT-05. `Publisher` получает очередь по `sequence`, `drain(timeout)` и
 `last_acknowledged()`; manifest кладётся последним, ack manifest-а = ack
-checkpoint-а; обе точки drain (Q-05): перед call-start — шаг 1 `execute`
-(таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind="instrument")`,
-вызова нет) и перед closure (`last_checkpoint_id = last_acknowledged()`),
-причём вторая — **гейт** (spec-runner#527): недоставленный checkpoint даёт
+checkpoint-а; два сайта правила Q-05, которые строит эта задача: перед
+call-start — шаг 1 `execute` (таймаут `checkpoint_ack_timeout_seconds` →
+`Refusal(kind="instrument")`, вызова нет) и перед closure
+(`last_checkpoint_id = last_acknowledged()`), причём второй —
+**гейт** (spec-runner#527): недоставленный checkpoint даёт
 closure `failed` и exit 2, так что подкоманда без платного вызова успешной
 не завершается, а диспетчер добавляет в stderr строку «решение записано
 локально, но не доставлено». Синхронного ожидания **внутри**
@@ -499,7 +504,10 @@ parallel_group: core
 половина** §5. Новый `restore_cmd.py`: subparser `restore <run_id> --into
 <dir> [--experimental] [--json]`; непустой `--into` — отказ до всего;
 `restore.plan(run_id) → RestorePlan | RestoreRefusal` — до записи в каталог,
-в объявленном порядке: `contract_version` → digests всех файлов последнего
+в объявленном порядке (сайт (в) правила Q-05 — drain раньше первой
+проверки — в объём ЭТОЙ задачи не входит: он приезжает с механизмом
+обязательств, spec-runner#528, а до него очередь процесса пуста по
+построению): `contract_version` → digests всех файлов последнего
 acknowledged checkpoint-а + `manifest_sha256` → repository identity (root
 commit клона против manifest) → policy identity (`config_hash` активного
 config, ключ и оба значения в сообщении) → namespace (оба значения и оба
