@@ -848,11 +848,15 @@ checkpoint). Ни то, ни другое больше не держится н�
 backup) — и **harness-написанные флипы `tasks.md`**, то есть конкретные
 сайты записи, а не функция `task.update_task_status` целиком (решение
 владельца 2026-09-20): флип `in_progress` и возвраты в `todo` в
-`execute_task` (`execution.py:646`, `:668`, `:687`), флипы `blocked` на
-терминальных отказах (`execution.py:1391`, `:1437`), `done`/`blocked` в
-`cmd_retry` (`cli.py:1525`, `:1528`), `done` в `post_done_hook`
-(`hooks.py:1597`) и возврат stale-задач в `todo` внутри `run`
-(`state.py:2742`).
+`execute_task` (`execution.py:646`, `:668`, `:687`), флип `review` перед
+платным вызовом ревью (`hooks.py:1267`), флипы `blocked` на терминальных
+отказах (`execution.py:1391`, `:1437`), `done`/`blocked` в `cmd_retry`
+(`cli.py:1525`, `:1528`), `done` в `post_done_hook` (`hooks.py:1597`) и
+возврат stale-задач в `todo` внутри `run` (`state.py:2742`). Флип `review`
+входит по той же букве, что и `in_progress`: набор harness-процессных
+статусов репозиторий определяет сам — `BOOKKEEPING_STATUSES =
+{in_progress, review, blocked}` (`bookkeeping.py:59`), — и именно такой
+прерванный флип восстанавливает `recover_interrupted_flip`.
 
 Последнее — прочтение §3 требований, а не новый сайт: §3 числит
 continuation-relevant «harness-written status flips `tasks.md` (#192)» по
@@ -861,10 +865,13 @@ continuation-relevant «harness-written status flips `tasks.md` (#192)» по
 возобновление читает его. Перечень сайтов §3.1 перечислял лишь часть
 доставленных путей и требование §3 не сужает: `commit_status_flip` —
 половина **коммита** флипа, а не граница его публикации, и флип
-`execution.py:646` через неё не идёт (в дереве `commit_status_flip`
-зовётся только на blocked-пути, `hooks.py:724`, а
-`commit_status_flip_quietly` — на терминальных отказах,
-`execution.py:1392`, `:1438`).
+`execution.py:646` через неё не идёт. Замер по дереву целиком:
+`commit_status_flip` зовут три сайта — blocked-путь (`hooks.py:724`),
+`commit_status_flip_quietly` с терминальных отказов (`bookkeeping.py:375`
+← `execution.py:1392`, `:1438`) и `recover_interrupted_flip`
+(`bookkeeping.py:347`). Последний и есть точный аргумент: прерванный флип
+коммитится уже **следующим прогоном, под другим `run_id`**, то есть в
+своём прогоне он публикации по-прежнему не имеет.
 
 Наблюдаемое следствие, на которое опираются BEH-09 и §7.2: любой
 `run`/`retry`/`watch`, дошедший до ack call-start, к этому моменту уже
