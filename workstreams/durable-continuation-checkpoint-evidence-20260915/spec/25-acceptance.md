@@ -229,9 +229,13 @@ continuation-relevant mutation по §3 (решение владельца 2026-
 `restore` более раннего `run_id` при более позднем закрытом прогоне того же
 workstream-а **из блокирующей половины перечня, несущем хотя бы один
 acknowledged checkpoint**, — предъявлено как минимум на `review-pr` и на `plan` —
-отказывает `needs-human`, называя выходом последний прогон workstream-а с
-acknowledged checkpoint-ом, после которого нет ни одного блокирующего
-прогона. Знак берётся исполнением: `restore` напечатанного `run_id` в новый
+отказывает `needs-human`, называя выходом последний **блокирующий** прогон
+workstream-а с acknowledged checkpoint-ом, после которого нет ни одного
+блокирующего прогона. Слово «блокирующий» здесь существенно: дверь
+`evidence close-call` публикует свой checkpoint и лежит в индексе позже,
+поэтому по формулировке «последний прогон с acknowledged checkpoint-ом»
+выходом оказалась бы она — а восстанавливать её нечего и незачем, она в
+неблокирующей половине. Знак берётся исполнением: `restore` напечатанного `run_id` в новый
 пустой `--into` применяет snapshot; его отказ — невыполненный критерий. В
 конфигурации A → B (`plan`, checkpoint) → C (`review-pr`, checkpoint)
 выходом обязан быть C; напечатанные здесь B или сам восстанавливаемый
@@ -289,7 +293,12 @@ scenarios: [BEH-13]
 Наблюдаемый знак: после каждой из mutation — attempt, RED checkpoint,
 запись и release claims, `tdd_phases`, `verify_evidence`, gate verdict,
 waiver, remedy, `budget authorize` отдельным invocation, строка `pr_*`,
-harness status flip — двойник store получил ровно один новый checkpoint с
+harness status flip в **обеих формах** (коммитящая
+`bookkeeping.commit_status_flip` и запись самого флипа — на двух статусах,
+которые harness пишет о собственном процессе до платного вызова:
+`in_progress` из `execute_task` и `review` перед вызовом ревью; покрытие
+одного из двух критерий не выполняет, они одного класса по §3) — двойник
+store получил ровно один новый checkpoint с
 UUIDv4 `checkpoint_id`, строго возрастающим `sequence` внутри `run_id` и
 `supersedes` на предыдущий; после `status`, `costs`, `validate`, `report`,
 `evidence <run_id>` — ничего (read-only здесь именует форму `evidence
