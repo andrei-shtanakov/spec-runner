@@ -1,6 +1,6 @@
 ---
 spec_stage: acceptance
-status: approval_pending
+status: approved
 owner_role: qa
 traces_to:
 - requirements
@@ -10,6 +10,8 @@ upstream_hashes:
   behaviour-spec: 32587a27ccba928218823ff6fba608c147d72e3e
 version: 2
 approved_content_hash: a97f59e86ce87ff9ad652582769bf628f11b00ff
+approved_by: andrei-shtanakov
+approved_at: '2026-09-20T15:43:58Z'
 ---
 
 # Acceptance — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
