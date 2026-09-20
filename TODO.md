@@ -843,6 +843,19 @@ spec-runner#426. Узлы не одобрены, каскад `stale` стату
       тот же C с доставленным acknowledged checkpoint-ом обязан дать отказ
       шагом 5 даже после закрытия X дверью, потому что дверь закрывает
       call, а не прогон. Правка в BEH-09 и AC-08.
+
+      **Побочно найдено ревью и НЕ закрыто — расхождение §3 и §3.1 по
+      status flip-ам.** §3 требований перечисляет «harness-written status
+      flips `tasks.md` (#192)» среди continuation-relevant mutation, а
+      §3.1 дизайна пишет, что `mark_running`/`set_meta` seam не зовут, и
+      единственным публикующим сайтом флипов называет
+      `bookkeeping.commit_status_flip`. Между ними живёт
+      `update_task_status(..., "in_progress")` в `execution.py:646` — флип
+      в `tasks.md`, написанный до любого платного вызова и через
+      `commit_status_flip` НЕ проходящий. По §3 он mutation, по §3.1
+      публикации не имеет. Для BEH-09 это не важно (там теперь объявлен
+      факт, а не вывод), но при реализации DT-02/DT-03 вопрос «какой
+      именно класс флипов публикуется» придётся решить явно.
 - [x] **watch-red-prerun-completed-misclassified** (spec-runner#480, из ревью PR #522) @owner:TBD @id:watch-red-prerun-completed-misclassified
       Не связано с предыдущими двумя. `cmd_watch`, остановленный красной
       pre-run validation, делает `print` + `return` с кодом выхода 0 без
