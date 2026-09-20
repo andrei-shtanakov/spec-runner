@@ -1404,7 +1404,8 @@ instrument-класс ((1), (2), (7)) — exit 2, остальные — `needs-
 exit 1; исключение — (6) при недоступном store или индексе: отсутствие
 open call тогда не доказано, и это instrument, exit 2, а не `needs-human`.
 Второй instrument-исход пути `restore` — таймаут drain — ни одной из семи
-проверок не принадлежит: он стоит раньше перечня, до первого чтения (ниже).
+проверок не принадлежит: он стоит раньше перечня, до первого чтения (абзац
+выше).
 
 Проверка (6) — namespace-wide, а не по восстанавливаемому `run_id`, и это
 единственный способ выполнить FR-02 на пути restore. `run_id` — ключ
@@ -1804,7 +1805,7 @@ BEH-40 integrity fail-closed, BEH-43 ни байта в Git, BEH-44 контра
 | `src/spec_runner/artifact_store.py` (новый) | протокол `ArtifactStore`, `StoreCapabilities`, ключи § 1.3 (включая индекс workstream-а и `workstream_key`), `LocalVolumeStore`, `open_store_readonly` | BEH-09, 25, 28, 36, 37, 42 |
 | `src/spec_runner/evidence.py` (новый) | `Publisher` (очередь по `sequence`, `drain`, `last_acknowledged`), записи `RunStart`/`CallStart`/`CallResult`/`Closure`, `export_attempt`, экспорт срезов task-history и audit-log (§ 6.5), `bound_evidence` | BEH-01, 22, 23, 26, 27, 31 |
 | `src/spec_runner/redaction.py` (новый) | denylist из окружения + паттерны, placeholder `[REDACTED:kind:hash8]`; общая константа словаря имён с `obs._DEFAULT_REDACT_KEYS` | BEH-27 |
-| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`; ack **не ждёт** ни у одной подкоманды — § 3.1, Q-05: ожидание внутри неё рвало бы многошаговый handler), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий, `drain` и его отказные режимы на двух сайтах из трёх — (а) перед call-start (`instrument`, вызова нет; сам вызов ставит DT-02, § 2.2 шаг 1) и (б) перед closure (гейт: closure `failed`, exit 2). Сайт (в) — забор на чтение у `restore` — правилом Q-05 объявлен, но строится вместе с механизмом обязательств (spec-runner#528): на пустой очереди ему нечего ждать | BEH-12…15, 40, 47, 48 |
+| `src/spec_runner/checkpoint.py` (новый) | `after_mutation` (один seam; выход при заполненном `config.probe_provenance`; ack **не ждёт** ни у одной подкоманды — § 3.1, Q-05: ожидание внутри неё рвало бы многошаговый handler), backup-snapshot, manifest + `PolicyIdentity`, `sequence`, ротация локальных копий, `drain` и его отказные режимы на двух сайтах из трёх — (а) перед call-start (`instrument`, вызова нет; сам вызов врезает DT-03 в шаг 1 `paid_call.execute`, который DT-02 оставляет для него, § 2.2) и (б) перед closure (гейт: closure `failed`, exit 2). Сайт (в) — забор на чтение у `restore` — правилом Q-05 объявлен, но строится вместе с механизмом обязательств (spec-runner#528): на пустой очереди ему нечего ждать | BEH-12…15, 40, 47, 48 |
 | `src/spec_runner/wip.py` (новый) | `collect` (bundle + dirty tar + index), `apply` (fetch bundle, распаковка, `stash store`) | BEH-16…18 |
 | `src/spec_runner/spool.py` (новый) | `Spool.append`/`replay`/ротация, таблица `spool_replays` | BEH-15, 33…35 |
 | `src/spec_runner/run_context.py` (новый) + `closure.py` (новый) | `RunContext` (`run_id`, `pipeline_id`, `start`/`close`, отметка размера task-history на старте — § 6.5), `PAYING_SUBCOMMANDS` (включает `evidence close-call` и `evidence purge`, § 6.2), `CLOSURE_KINDS` — пять kind'ов, `derive(outcome)` — правило вывода из кода выхода и исхода работы (§ 6.3) | BEH-01, 02, 04, 23, 29…32, 46 |
