@@ -775,11 +775,14 @@ runtime-state по инварианту конвейера «нужное для
 (design/behaviour-spec/acceptance для #480) влит PR #522 (`973081b`,
 2026-09-17, человеческий мерж) с тремя открытыми находками терминального
 ревью (harness-claude, круг 8, `--dry-run` — вердикт нигде не опубликован,
-GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все три — в самом
-бандле (design/behaviour-spec), не в коде: код по этому workstream ещё не
-писался, decomposition остаётся `status: draft`.**
+GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Код по этому
+workstream не писался; все шесть узлов бандла — `status: draft`, ни один не
+одобрен (сверено по frontmatter 2026-09-20), поэтому правка текста каскада
+переодобрения пока не стоит. Все три находки закрыты 2026-09-20 — две из
+них последующими PR-ами бандла, третья оказалась дефектом доставленного
+кода; замеры в каждом пункте.**
 
-- [ ] **restore-step5-excludes-only-doors** (spec-runner#480, из ревью PR #522) @owner:TBD @id:restore-step5-excludes-only-doors
+- [x] **restore-step5-excludes-only-doors** (spec-runner#480, из ревью PR #522) @owner:TBD @id:restore-step5-excludes-only-doors
       Шаг 5 проверки (6) в `20-design.md` (§7.2) исключает из правила «более
       поздний прогон без open calls блокирует restore» только
       `evidence close-call`/`evidence purge` — но `restore` тоже входит в
@@ -792,7 +795,17 @@ GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все �
       continuation-relevant mutation», а не перечисление двух команд) — это
       покрывает и `restore`, — и привести § 2.6 (`design.md:606`, сформулирован
       без исключений) в соответствие.
-- [ ] **beh-09-close-call-scenario-unreachable** (spec-runner#480, из ревью PR #522) @owner:TBD @id:beh-09-close-call-scenario-unreachable
+
+      **Закрыто PR #524/#526 (сверено 2026-09-20).** Исключение больше не
+      перечень двух дверей: ключ шага 5 переписан на составной — подкоманда
+      из блокирующей половины **и** хотя бы один acknowledged checkpoint под
+      её `run_id`, — а неблокирующая половина (`evidence close-call`,
+      `evidence purge`, `doctor`, `restore`) несёт у каждой строки
+      собственную выводимую причину. У `restore` она ровно та, которой не
+      хватало: он пишет только в свой новый пустой `--into` и в namespace
+      восстанавливаемого прогона не добавляет ничего. § 2.6 приведён в
+      соответствие там же.
+- [x] **beh-09-close-call-scenario-unreachable** (spec-runner#480, из ревью PR #522) @owner:TBD @id:beh-09-close-call-scenario-unreachable
       Сценарий BEH-09 (`15-behaviour-spec.md`) утверждает, что после закрытия
       open call дверью `evidence close-call` restore прогона A **применяется**
       — но в том же сценарии прогон C (обычный платящий `run`, оставивший
@@ -803,7 +816,20 @@ GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все �
       на конфигурацию, где A — последний прогон workstream-а до самого
       краша (после close-call более поздних не-дверных прогонов не
       остаётся).
-- [ ] **watch-red-prerun-completed-misclassified** (spec-runner#480, из ревью PR #522) @owner:TBD @id:watch-red-prerun-completed-misclassified
+
+      **Перевыведено 2026-09-20 под новым ключом — противоречия нет, но
+      сценарий был недоопределён.** Прогон C блокирует не тем, что он
+      «более поздний без open calls» (такого условия больше не существует),
+      а только если несёт acknowledged checkpoint. На границах Given
+      (`os._exit` после ack call-start либо после возврата `Popen`) C убит
+      до первой continuation-relevant mutation, checkpoint-а не имеет — и
+      ветка «restore применяется» достижима. Но вердикт сценария зависел от
+      факта, который в нём не назван, а значит исполнитель выбрал бы любой:
+      условие теперь записано прямо, и рядом добавлен различающий случай —
+      тот же C с доставленным acknowledged checkpoint-ом обязан дать отказ
+      шагом 5 даже после закрытия X дверью, потому что дверь закрывает
+      call, а не прогон. Правка в BEH-09 и AC-08.
+- [x] **watch-red-prerun-completed-misclassified** (spec-runner#480, из ревью PR #522) @owner:TBD @id:watch-red-prerun-completed-misclassified
       Не связано с предыдущими двумя. `cmd_watch`, остановленный красной
       pre-run validation, делает `print` + `return` с кодом выхода 0 без
       единого attempt (`cli.py:1560`) — диспетчер по правилу §6.3 закрывает
@@ -814,6 +840,15 @@ GitHub всё ещё показывает round-7 `CHANGES_REQUESTED`). Все �
       as workstream success»). BEH-46/AC-27 фиксируют это поведение `watch`
       как правильное — противоречит FR-07 (Must: каждый orderly stop несёт
       kind и причину, не читается как пустой успех).
+
+      **Закрыто 2026-09-20: это был дефект доставленного кода, а не только
+      текста.** `cmd_watch` на красной pre-run validation теперь выходит 1,
+      как `run` на том же дефекте спеки; красный первым — параметризованный
+      по обеим подкомандам `TestRedPreRunValidationExit` в
+      `tests/test_exit_contract.py` (до правки `watch` не поднимал
+      `SystemExit` вовсе). Видимое изменение контракта записано в CHANGELOG
+      `[Unreleased]`. BEH-46 и AC-27 черновика приведены в соответствие:
+      конфигурация ушла из перечня `completed` в `failed` с кодом 1.
 
 **Приняты 2026-09-18: #525 и #527** (inbox, from devtools — выносы из PR #524
 и #526). Оба — решения в самом бандле #480, не в коде: кода по этому
