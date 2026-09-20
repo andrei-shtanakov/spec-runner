@@ -449,7 +449,7 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** платного вызова нет, но continuation-state меняется — задача снова
   выбираема, — поэтому команда пишет свою пару run-start + closure. Первая
   попытка отказана argparse-ом (`--reason` объявлен `required=True` по
-  образцу `tdd abandon`, `cli.py:2211`), то есть **до** вызова handler-а и до
+  образцу `tdd abandon`, `cli.py:2215`), то есть **до** вызова handler-а и до
   `start()`: у неё нет ни run-start, ни closure, и это BEH-04, а не пробел.
   У трёх остальных invocation-ов двойник store получает ровно один run-start
   и ровно одну closure: `completed` на записи `resolved_unknown` и на

@@ -141,7 +141,7 @@ parallel_group: core
 столбцы §2.3. Три новых модуля: `run_context.py` (`RunContext` — full UUIDv4
 `run_id`, `pipeline_id` из structlog contextvars после `setup_logging`,
 `subcommand`, `started_at`, `Publisher`, `policy`; создаётся в `cli.main()`
-вместо `bind_contextvars(run_id=uuid4().hex[:8])`, `cli.py:2504`; `start()` —
+вместо `bind_contextvars(run_id=uuid4().hex[:8])`, `cli.py:2508`; `start()` —
 **одна** точка: диспетчер `main()` перед вызовом handler-а по множеству
 `PAYING_SUBCOMMANDS` (рядом с ним — `BLOCKING`/`NON_BLOCKING` шага 5 § 7.2 и тест их полноты, предмет DT-06), так что `retry`, `watch` и `run --force`, не берущие
 executor lock, получают run-start наравне с обычным `run`; `_acquire_run_lock`

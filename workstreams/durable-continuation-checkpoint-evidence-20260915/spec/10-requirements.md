@@ -34,7 +34,7 @@ remedies, waivers, budget authorizations, review-loop state, стоимость 
 Наблюдаемые дефекты, каждый из которых закрывается требованием ниже:
 
 - три несвязанных идентификатора прогона — обрезанный `uuid4().hex[:8]` в
-  structlog (`cli.py:2504`), собственный UUID `AuditLogger`
+  structlog (`cli.py:2508`), собственный UUID `AuditLogger`
   (`audit_log.py:120`), ULID `pipeline_id` в `obs.init_logging` (`obs.py:250`);
   ни один не попадает в `attempts`, `agent_calls` или prompt-артефакты (FR-01);
 - ledger `agent_calls` (`state.py:1900`) и `record_attempt` пишутся **после**
@@ -198,7 +198,7 @@ manifest, evidence bundle и run-closure. `pipeline_id` хранится отд�
 
 Уточнения:
 
-- Существующий обрезанный display-id (`cli.py:2504`) и независимый audit
+- Существующий обрезанный display-id (`cli.py:2508`) и независимый audit
   UUID (`audit_log.py:120`) **заменяются**, не дублируются: structlog
   получает полный `run_id`; `AuditLogger` принимает `run_id` извне и не
   чеканит свой. Человеческий вывод вправе показывать сокращение, поле — нет.
@@ -1264,7 +1264,7 @@ drill-ом с записью результата, restore-drill (M-01) и open-
 - `docs/architecture.md:229` — «Runtime-state inventory and delivery policy
   (#478)»: SSOT владения и retention; «Required delivery mechanism».
 - `TODO.md:768` — `runtime-state-artifact-export` (#480, открыт).
-- `src/spec_runner/cli.py:2504`, `audit_log.py:120`, `obs.py:250` — три
+- `src/spec_runner/cli.py:2508`, `audit_log.py:120`, `obs.py:250` — три
   идентификатора прогона.
 - `src/spec_runner/state.py:1900` (`record_agent_call`), `:2171`
   (`record_attempt`), `:2352` (`_enter_degraded_mode`); таблицы `attempts`,

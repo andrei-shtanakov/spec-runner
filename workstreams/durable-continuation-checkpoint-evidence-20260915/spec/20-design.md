@@ -972,7 +972,7 @@ sha256}` (sha256 — над каноническим JSON остальных п�
 contextvars после `setup_logging` → `obs.init_logging`, `obs.py:250`),
 `subcommand`, `started_at`, `store`/`Publisher`, `policy: PolicyIdentity`.
 Создаётся в `cli.main()` там, где сегодня
-`bind_contextvars(run_id=uuid4().hex[:8])` (`cli.py:2504`) — эта строка
+`bind_contextvars(run_id=uuid4().hex[:8])` (`cli.py:2508`) — эта строка
 заменяется на bind полного `run_id` (BEH-02, статический тест). Доступ —
 `run_context.current()` (module-level, один на процесс; тесты ставят и
 снимают через фикстуру). `AuditLogger` получает `run_id=` из контекста в
@@ -1054,10 +1054,10 @@ exit 2 и reason, называющим неподтверждённый checkpoi
 (`SystemExit.code` или код, возвращённый handler-ом). Сигнал диспетчер
 наблюдает не по способу ухода, а по флагу: `main()` вешает
 `executor._signal_handler` на SIGINT и SIGTERM до dispatch-а
-(`cli.py:2519-2520`), handler лишь поднимает `_shutdown_requested`
+(`cli.py:2523-2524`), handler лишь поднимает `_shutdown_requested`
 (`executor.py:18-21`), процесс не завершается и `KeyboardInterrupt` не
 поднимается — циклы `run` и `watch` видят `check_stop_requested` и делают
-`break`, выходя штатным кодом (`cli.py:1281-1285`, `:1613-1616`). Поэтому
+`break`, выходя штатным кодом (`cli.py:1281-1285`, `:1617-1620`). Поэтому
 `close()` читает `executor._shutdown_requested` при сборке `outcome`, и
 поднятый флаг есть «сигнал» второй строки правила, какой бы код handler ни
 вернул; `_signal_handler` и флаг не правятся, диспетчер их только читает.
@@ -1116,7 +1116,7 @@ required` до них не доходит — `HOOK_FAILURE` фатален (`ex
 для `run` «не доделал выбранное» закодировано кодом выхода, а второй факт
 нужен там, где код лжёт: `retry`, чья задача закончила `blocked`
 (`cli.py:1528`, exit 0), и `watch`, остановленный `max_consecutive_failures`
-(`:1623`, exit 0).
+(`:1627`, exit 0).
 
 Откуда берётся исход работы — по перечню платящих подкоманд FR-01
 (одиннадцать позиций):
