@@ -680,7 +680,7 @@ open calls, — вызываемая из всех трёх handler-ов сра�
 `cmd_retry` — в его `with ExecutorState` (`:1480`), до правки `task_state` и
 до `execute_task`; в `cmd_watch` — один раз на invocation до первого круга
 цикла, под собственный `with ExecutorState` (круги открывают свои позже,
-`:1593`, `:1637`, `:1643`). Единственный сайт в `_run_tasks_inner` оставил бы
+`:1597`, `:1641`, `:1647`). Единственный сайт в `_run_tasks_inner` оставил бы
 «ту же процедуру» утверждением без механизма: ни `cmd_retry` (`cli.py:1467` —
 гарды → `execute_task` напрямую), ни `cmd_watch` (`:1541` — гарды →
 собственный цикл с `run_with_retries`) через `_run_tasks_inner` не проходят.
@@ -845,8 +845,63 @@ checkpoint). Ни то, ни другое больше не держится н�
 `ReviewPrState` при завершении раунда (`review_pr.py:282`; у него своё
 соединение — он передаёт его в `conn`), `bookkeeping.commit_status_flip`
 (`conn=None`: checkpointer сам открывает соединение к `state_file` для
-backup). `mark_running` и `set_meta` — не continuation-relevant по §3
-требований и seam не вызывают; `phase_results` (best-effort, #164) — тоже.
+backup) — и **harness-написанные флипы `tasks.md`**, то есть конкретные
+сайты записи, а не функция `task.update_task_status` целиком (решение
+владельца 2026-09-20): флип `in_progress` и возвраты в `todo` в
+`execute_task` (`execution.py:646`, `:668`, `:687`), флип `review` перед
+платным вызовом ревью (`hooks.py:1267`), флипы `blocked` на терминальных
+отказах (`execution.py:1391`, `:1437`), `done`/`blocked` в `cmd_retry`
+(`cli.py:1525`, `:1528`), `done` в `post_done_hook` (`hooks.py:1597`) и
+возврат stale-задач в `todo` внутри `run` (`state.py:2742`). Флип `review`
+входит по той же букве, что и `in_progress`: набор harness-процессных
+статусов репозиторий определяет сам — `BOOKKEEPING_STATUSES =
+{in_progress, review, blocked}` (`bookkeeping.py:59`), — и именно такой
+прерванный флип восстанавливает `recover_interrupted_flip`.
+
+Последнее — прочтение §3 требований, а не новый сайт: §3 числит
+continuation-relevant «harness-written status flips `tasks.md` (#192)» по
+свойству «без этой записи следующий шаг повторяет работу или теряет
+ограничение», и флип в `in_progress` этим свойством обладает —
+возобновление читает его. Перечень сайтов §3.1 перечислял лишь часть
+доставленных путей и требование §3 не сужает: `commit_status_flip` —
+половина **коммита** флипа, а не граница его публикации, и флип
+`execution.py:646` через неё не идёт. Замер по дереву целиком:
+`commit_status_flip` зовут три сайта — blocked-путь (`hooks.py:724`),
+`commit_status_flip_quietly` с терминальных отказов (`bookkeeping.py:375`
+← `execution.py:1392`, `:1438`) и `recover_interrupted_flip`
+(`bookkeeping.py:347`). Последний и есть точный аргумент: прерванный флип
+коммитится уже **следующим прогоном, под другим `run_id`**, то есть в
+своём прогоне он публикации по-прежнему не имеет.
+
+Наблюдаемое следствие, на которое опираются BEH-09 и §7.2: любой
+`run`/`retry`/`watch`, дошедший до ack call-start, к этому моменту уже
+несёт **acknowledged** checkpoint — флип стоит до первого платного вызова
+(`execution.py:646` против `:690-801`), а ожидание publisher-а — перед
+call-start (Q-05, точка (а)). Прогона этих трёх подкоманд с open call и
+без acknowledged checkpoint-а не существует. У `plan` в его **интерактивной**
+форме порядок обратный: до подтверждения оператором он не пишет ничего, а
+задачи дописываются в `tasks.md` уже после последнего платного вызова
+(`cli_plan.py:878`), поэтому такой прогон, убитый на любом call-start, не
+несёт ни одной continuation-relevant mutation — сколько бы кругов Q&A
+(`cli_plan.py:850`) он ни сделал. Форма здесь существенна: `plan --full`
+пишет артефакт стадии сразу после её вызова (`cli_plan.py:694`), то есть
+call-start следующей стадии уже идёт после записи.
+
+`mark_running` и `set_meta` — не continuation-relevant по §3 требований и
+seam не вызывают (они пишут статус в state DB, а §3 говорит о `tasks.md`);
+`phase_results` (best-effort, #164) — тоже.
+
+Почему сайты, а не функция: у `task.update_task_status` (`task.py:438`)
+есть вызывающие вне harness-а — `task_commands.py:136/157/179`
+(`spec-runner task start|done|block`) и `github_sync.py:166`
+(`spec-runner sync`). Обе подкоманды в перечне платящих FR-01 (§6.2) не
+состоят, run-start под ними диспетчер не кладёт, а `sequence` checkpoint-а
+ключуется `checkpoint_seq:<run_id>` — публиковать оттуда было бы не из
+чего. Seam зовёт сайт записи, не сама функция; статический тест BEH-13
+(«ровно один seam») это допускает — он требует единственности точки
+публикации, а не единственности вызывающего. Операторские флипы под
+«harness-written» не подпадают, и это следствие правила, а не исключение
+из него.
 
 **Три решения принимает сама `after_mutation`, и все три — по тому, что у
 неё уже в руках.** (1) `config.probe_provenance` заполнен (§ 2.7) — выход сразу,
@@ -972,7 +1027,7 @@ sha256}` (sha256 — над каноническим JSON остальных п�
 contextvars после `setup_logging` → `obs.init_logging`, `obs.py:250`),
 `subcommand`, `started_at`, `store`/`Publisher`, `policy: PolicyIdentity`.
 Создаётся в `cli.main()` там, где сегодня
-`bind_contextvars(run_id=uuid4().hex[:8])` (`cli.py:2504`) — эта строка
+`bind_contextvars(run_id=uuid4().hex[:8])` (`cli.py:2508`) — эта строка
 заменяется на bind полного `run_id` (BEH-02, статический тест). Доступ —
 `run_context.current()` (module-level, один на процесс; тесты ставят и
 снимают через фикстуру). `AuditLogger` получает `run_id=` из контекста в
@@ -1054,10 +1109,10 @@ exit 2 и reason, называющим неподтверждённый checkpoi
 (`SystemExit.code` или код, возвращённый handler-ом). Сигнал диспетчер
 наблюдает не по способу ухода, а по флагу: `main()` вешает
 `executor._signal_handler` на SIGINT и SIGTERM до dispatch-а
-(`cli.py:2519-2520`), handler лишь поднимает `_shutdown_requested`
+(`cli.py:2524-2525`), handler лишь поднимает `_shutdown_requested`
 (`executor.py:18-21`), процесс не завершается и `KeyboardInterrupt` не
 поднимается — циклы `run` и `watch` видят `check_stop_requested` и делают
-`break`, выходя штатным кодом (`cli.py:1281-1285`, `:1613-1616`). Поэтому
+`break`, выходя штатным кодом (`cli.py:1281-1285`, `:1617-1620`). Поэтому
 `close()` читает `executor._shutdown_requested` при сборке `outcome`, и
 поднятый флаг есть «сигнал» второй строки правила, какой бы код handler ни
 вернул; `_signal_handler` и флаг не правятся, диспетчер их только читает.
@@ -1116,7 +1171,7 @@ required` до них не доходит — `HOOK_FAILURE` фатален (`ex
 для `run` «не доделал выбранное» закодировано кодом выхода, а второй факт
 нужен там, где код лжёт: `retry`, чья задача закончила `blocked`
 (`cli.py:1528`, exit 0), и `watch`, остановленный `max_consecutive_failures`
-(`:1623`, exit 0).
+(`:1627`, exit 0).
 
 Откуда берётся исход работы — по перечню платящих подкоманд FR-01
 (одиннадцать позиций):

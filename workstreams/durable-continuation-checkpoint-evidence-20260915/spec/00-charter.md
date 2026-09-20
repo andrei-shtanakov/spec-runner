@@ -33,7 +33,7 @@ Git-материал и WIP, нужные для следующего шага) 
 
 ### Как это устроено сегодня
 
-- **Три несвязанных идентификатора прогона.** `cli.py:2504` привязывает к
+- **Три несвязанных идентификатора прогона.** `cli.py:2508` привязывает к
   structlog обрезанный `uuid4().hex[:8]` под именем `run_id`; `AuditLogger`
   (`audit_log.py:120`) чеканит собственный полный UUID; `obs.init_logging`
   (`obs.py:250`) чеканит ULID `pipeline_id`. Ни один из них не попадает в
@@ -495,7 +495,7 @@ issue/handoff-ом без правки их файлов.
   retention.
 - `TODO.md` — пункты `executor-state-inventory` (#478, закрыт) и
   `runtime-state-artifact-export` (#480, открыт).
-- `src/spec_runner/cli.py:2504` — обрезанный display `run_id`;
+- `src/spec_runner/cli.py:2508` — обрезанный display `run_id`;
   `src/spec_runner/audit_log.py:120` — независимый audit UUID;
   `src/spec_runner/obs.py:250` — ULID `pipeline_id`.
 - `src/spec_runner/state.py:348`–`:612` — append-only таблицы состояния;
