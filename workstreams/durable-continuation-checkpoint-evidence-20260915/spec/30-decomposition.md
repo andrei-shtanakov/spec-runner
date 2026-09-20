@@ -1,13 +1,15 @@
 ---
 spec_stage: decomposition
-status: draft
+status: approval_pending
 owner_role: tech-lead
 traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: 5a0bf8040a61eed7715cee687ef41b376ac88e0a
-  acceptance: aee289ca092cbcb9d42a734e9a0a101bb8767c61
+  design: da2f42ccb698c3ccd685e2ced751f1f7db4b8787
+  acceptance: d1f1c17a50d893ccc1893b7b5a9633f7fa07a06a
+version: 2
+approved_content_hash: f3dbbeff3b4074304408d228620126624101a28e
 ---
 
 # Decomposition — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
