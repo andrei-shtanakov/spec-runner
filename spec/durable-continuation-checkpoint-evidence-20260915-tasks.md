@@ -1,17 +1,18 @@
 ---
-spec_stage: tasks
-status: draft
-owner_role: stream-owner
-version: 1
-generated_by: fleet-agent
-generated_at: "2026-09-20T19:53:50+04:00"
-source_prompt_version: ""
-validation: ""
-approved_by: ""
 traces_to:
 - decomposition
 upstream_hashes:
   decomposition: e07403320a1f7e0ac3efbe31d0dccdd8e7e25a39
+spec_stage: tasks
+status: approved
+version: 2
+generated_by: fleet-agent
+generated_at: '2026-09-20T19:53:50+04:00'
+source_prompt_version: ''
+validation: pass
+approved_by: andrei-shtanakov
+approved_at: '2026-09-20T16:04:13Z'
+owner_role: stream-owner
 ---
 
 ## Milestone 1: Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
