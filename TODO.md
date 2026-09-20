@@ -765,11 +765,47 @@ runtime-state по инварианту конвейера «нужное для
       audit, calls и closure; durable call-start подтверждается до траты, а
       run-closure пишется на каждом orderly exit, включая ранние отказы без
       task/attempt.
-- [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export
+- [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export @blocked_by:todo://devtools/task-bridge-subject-deliverables-unpinned
       Реализовать принятый механизм. До него инвариант не выполнен: `tasks.md`
       восстанавливает очередь, но не claims, authority decisions, стоимость и
       результаты неуспешных вызовов; planning вообще не имеет task-attempt
       ledger, а success-only `post_review` оба разрыва не закрывает.
+
+      **Спека готова к исполнению, платные прогоны остановлены (решение
+      владельца 2026-09-20).** Бандл одобрен целиком (§I12: шесть узлов,
+      подписи, пины сверены пересчётом), tasks-спека одобрена
+      (`spec/durable-continuation-checkpoint-evidence-20260915-tasks.md`,
+      14 задач, `status: approved v2`), `preflight` — `ready: nothing
+      blocks a run`.
+
+      Держит **devtools#282**: мост переносит в чек-лист только
+      `scenarios`, а новые модули «Предмета» DT не доезжают обязательством.
+      Измерено ценой: первый же прогон TASK-001 отказал на ревью-гейте —
+      **$7.00, 39 минут**, агент выполнил чек-лист (BEH-28: отказ config
+      на небезопасном адаптере), а предмет DT-01 требовал весь store-слой,
+      `src/spec_runner/artifact_store.py` в дереве так и нет. Ревьюер
+      прав: без него упрутся DT-02/DT-03.
+
+      Разобрано вручную, как регрессионная матрица для правки: **DT-01 и
+      DT-12** — нарушение (у DT-12 в BEH-42 есть и легальная лазейка
+      «команда spec-runner ИЛИ lifecycle store», позволяющая не писать
+      `evidence purge` вовсе); **DT-04** — отрицательный контроль, оба его
+      сценария гоняют новый модуль напрямую; **DT-03** — граничный, ядро
+      пинуется BEH-12, а `sequence`/manifest/`PolicyIdentity`/publisher
+      всплывут только в DT-05. Из 14 DT девять обязаны создать модуль,
+      которого в дереве нет (20 модулей) — это область проверки, не список
+      нарушений.
+
+      Отдельно в тот же issue: `retention_days` 7–365 объявлен и в DT-01,
+      и в DT-12, и TASK-001 его уже реализовала.
+
+      **Состояние TASK-001:** ветка `task/task-001-store-localvolumestore-durabil`,
+      четыре коммита (red, green, флип статуса, доработки ревьюера),
+      статус в спеке `🔍 REVIEW`. Доработки ревьюера (141 строка: тесты на
+      три свойства разом, границы `retention_days`, прямое построение
+      `ExecutorConfig`) закоммичены отдельно — гейт стоит до коммита, и в
+      candidate они не попали. Дерево чистое, следующий прогон не упрётся
+      в dirty guard.
 
 **Бандл `workstreams/durable-continuation-checkpoint-evidence-20260915/`
 (design/behaviour-spec/acceptance для #480) влит PR #522 (`973081b`,
