@@ -319,3 +319,116 @@ class TestBEH16UnresolvableCandidateIsRefusedNotSkipped:
         plain = _task(tdd_waiver=None, negative_control=None)
 
         assert candidate_refusal(plain, _cfg(tmp_path), "") is None
+
+
+class TestThePatchPathIsBoundToTheCommitTree:
+    """kind: contract — находка ревью цепи DT-01…DT-04 (блокирующая).
+
+    AP-01: патч берётся ИЗ КАНДИДАТ-КОММИТА. Единственной проверкой этого
+    была `(worktree / mutate).is_file()`, а `pathlib` для абсолютного
+    правого операнда возвращает сам абсолютный путь — то есть объявление
+    `/tmp/mutant.patch` читало файл ВНЕ одноразового дерева, `git apply`
+    применял его, мутант ронял тест, и контроль объявлялся удовлетворённым
+    патчем, которого нет ни в одном коммите. Ровно та дисциплина, которая
+    у соседней фичи уже есть: `parse_group_element` отвергает
+    `outside_repository`.
+    """
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/tmp/mutant.patch", "../outside/mutant.patch", "spec/../../mutant.patch"],
+        ids=["absolute", "parent-escape", "escape-mid-path"],
+    )
+    def test_a_path_outside_the_tree_is_refused_before_any_run(self, tmp_path, path):
+        from spec_runner.negative_control import structural_impossibility
+
+        refusal = structural_impossibility(
+            _task(negative_control=_control(f"{path} :: tests/test_x.py::test_y")),
+            _cfg(tmp_path),
+        )
+
+        assert refusal is not None, f"путь {path!r} не отвергнут"
+        assert "patch" in refusal.lower(), refusal
+
+    def test_a_path_inside_the_tree_is_not_refused(self, tmp_path):
+        from spec_runner.negative_control import structural_impossibility
+
+        refusal = structural_impossibility(
+            _task(negative_control=_control("spec/negative-controls/TASK-008.patch :: t.py::a")),
+            _cfg(tmp_path),
+        )
+
+        assert refusal is None, refusal
+
+    def test_validate_refuses_the_same_path_rather_than_finding_the_file(self, tmp_path):
+        """`validate` читает путь через `project_root / patch`, и для
+        абсолютного операнда это тот же файл на машине оператора: он
+        существует, проверка молчит, и объявление доезжает до прогона."""
+        outside = tmp_path / "mutant.patch"
+        outside.write_text("--- a/x\n", encoding="utf-8")
+        task = _task(negative_control=_control(f"{outside} :: tests/test_x.py::test_y"))
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert any("TASK-008" in e and "patch" in e.lower() for e in result.errors), result.errors
+
+
+class TestARefusalBeforeThePaidCallLeavesTheTaskReady:
+    """kind: integration — находка ревью цепи.
+
+    Обе соседние отказные ветки (`claims` выше, запись waiver'а ниже) явно
+    возвращают статус в `todo`, потому что флип в `in_progress` уже
+    произошёл. Ветка контроля этого не делала, и харнессовый флип оставался
+    в `tasks.md` незакоммиченным: следующий прогон либо уносил его в
+    `git stash` через `rescue_uncommitted`, либо коммитил через
+    `recover_interrupted_flip`, печатая «Recovered an interrupted run» про
+    задачу, которая ни разу не запускалась.
+    """
+
+    def test_the_task_is_left_todo_not_in_progress(self, tmp_path, monkeypatch):
+        from spec_runner import execution
+        from spec_runner.state import ExecutorState
+
+        root = TestBEH04RefusalCostsNoPaidCall()._repo(tmp_path)
+        cfg = _cfg(root, state_file=root / "spec" / "state.db", logs_dir=root / "spec" / "logs")
+        monkeypatch.setattr(execution, "build_cli_invocation", lambda **k: None)
+
+        with ExecutorState(cfg) as state:
+            result = execution.execute_task(_task(negative_control=None), cfg, state)
+
+        assert result == "TERMINAL_REFUSAL", result
+        body = (root / "spec" / "tasks.md").read_text(encoding="utf-8")
+        assert "IN_PROGRESS" not in body, f"флип не отменён:\n{body}"
+        assert "TODO" in body, body
+
+
+class TestOneDefectIsReportedOnce:
+    """kind: contract — находка ревью цепи DT-01…DT-04.
+
+    `**TDD-waiver:**` на задаче, которая не `standard`, поднимает
+    `ConfigError`; обработчик пишет ошибку и ставит `waiver = None`. Ветка
+    контроля читала это значение как «маркера нет» и добавляла вторую
+    строку — неверную: «carries no **TDD-waiver:**» про задачу, которая
+    маркер несёт. Оператор уходил искать то, что у него есть. Правило про
+    одну ошибку двумя читателями в этом файле уже сформулировано (#431 п.3).
+    """
+
+    def test_a_waiver_that_does_not_resolve_is_not_called_absent(self, tmp_path):
+        task = _task(
+            execution_mode="tdd",
+            tdd_waiver=WAIVER,
+            negative_control=_control(),
+        )
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert result.errors, "нерезолвящийся waiver обязан оставаться ошибкой"
+        assert not any("carries no **TDD-waiver:**" in e for e in result.errors), result.errors
+
+    def test_a_genuinely_absent_waiver_is_still_named(self, tmp_path):
+        """Починка не должна проглотить настоящий случай."""
+        task = _task(tdd_waiver=None, negative_control=_control())
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert any("TDD-waiver" in e for e in result.errors), result.errors

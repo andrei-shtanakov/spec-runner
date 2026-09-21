@@ -417,20 +417,12 @@ class ExecutorState:
                 provenance TEXT
             )
         """)
-        # #429: applying an addressed waiver is a DIFFERENT fact from
-        # `phase_waivers`, not a second record of it. `phase_waivers` says an
-        # operator overrode an observed outcome — actor, reason, after the
-        # fact. Here nothing was observed and no operator acted at the moment:
-        # the harness APPLIED a sanction granted in advance, in the bundle.
-        # Writing that into `phase_waivers` would record "an operator
-        # overrode" where there was no operator, and break the contract its
-        # own docstring states.
-        #
-        # The row says what was removed and — just as important — what was
-        # NOT: claims and the frozen-files block stay in force, and the task
-        # records no TDD lifecycle at all. That absence is written down
-        # rather than left to be inferred from missing rows, because missing
-        # rows are also what a crash looks like.
+        # #428 FR-06: свидетельство негативного контроля. Обе половины
+        # раздельно — «красный мутант» и «зелёный оригинал» разные факты, и
+        # слитая запись не отличила бы контроль, который вторую половину не
+        # гонял вовсе. `environment_id` + `config_hash` — пин по Q-D: без
+        # него запись пережила бы смену адаптера и продолжала бы читаться
+        # как действительная, хотя вердикт получен другим инструментом.
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS negative_controls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -447,12 +439,20 @@ class ExecutorState:
                 timestamp TEXT NOT NULL
             )
         """)
-        # #428 FR-06: свидетельство негативного контроля. Обе половины
-        # раздельно — «красный мутант» и «зелёный оригинал» разные факты, и
-        # слитая запись не отличила бы контроль, который вторую половину не
-        # гонял вовсе. `environment_id` + `config_hash` — пин по Q-D: без
-        # него запись пережила бы смену адаптера и продолжала бы читаться
-        # как действительная, хотя вердикт получен другим инструментом.
+        # #429: applying an addressed waiver is a DIFFERENT fact from
+        # `phase_waivers`, not a second record of it. `phase_waivers` says an
+        # operator overrode an observed outcome — actor, reason, after the
+        # fact. Here nothing was observed and no operator acted at the moment:
+        # the harness APPLIED a sanction granted in advance, in the bundle.
+        # Writing that into `phase_waivers` would record "an operator
+        # overrode" where there was no operator, and break the contract its
+        # own docstring states.
+        #
+        # The row says what was removed and — just as important — what was
+        # NOT: claims and the frozen-files block stay in force, and the task
+        # records no TDD lifecycle at all. That absence is written down
+        # rather than left to be inferred from missing rows, because missing
+        # rows are also what a crash looks like.
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS waivers_applied (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

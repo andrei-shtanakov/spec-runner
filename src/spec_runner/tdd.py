@@ -404,6 +404,16 @@ def _replay_selector(
             # уйти вперёд. «Нет в коммите» и «не применяется» разводятся
             # кодом отказа: это разные факты о работе задачи, и
             # классификация обязана их различать.
+            # Путь судится и ЗДЕСЬ, а не только предикатом неисполнимости:
+            # проверка ниже — `(worktree / mutate)`, и для абсолютного правого
+            # операнда `pathlib` возвращает сам абсолютный путь, то есть файл
+            # ВНЕ одноразового дерева. Отказ на месте дефекта, а не только у
+            # вызывающего: этот шов зовут и другие пути.
+            from .negative_control import patch_path_refusal
+
+            outside = patch_path_refusal(mutate)
+            if outside is not None:
+                return attempt("mutate", outside, refusal_code="patch_absent")
             if not (worktree / mutate).is_file():
                 return attempt(
                     "mutate",

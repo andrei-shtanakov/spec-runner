@@ -239,3 +239,34 @@ class TestBEH08NoPaidCallsNoLeftoverWorktrees:
         clean, mutated = replay_both_halves(_cfg(root), sha=head, control=_control())
 
         assert clean.outcome is not None and mutated is not None
+
+
+class TestThePatchIsReadFromTheCommitOnly:
+    """kind: integration — находка ревью цепи DT-01…DT-04 (блокирующая),
+    проверенная на самом шве, а не только у вызывающего.
+
+    `(worktree / mutate).is_file()` было единственной проверкой «патч в
+    коммите», но для абсолютного правого операнда `pathlib` возвращает сам
+    абсолютный путь: `git apply` применял файл с машины оператора, мутант
+    ронял тест, и контроль объявлялся удовлетворённым патчем, которого нет
+    ни в одном коммите.
+    """
+
+    def test_an_absolute_patch_path_is_refused_not_applied(self, tmp_path):
+        from spec_runner.negative_control import replay_both_halves
+
+        root, head = _repo(tmp_path)
+        # Настоящий, применимый патч — но ВНЕ репозитория. Если шов его
+        # прочтёт, мутант сработает и половина вернётся с выполненным
+        # прогоном вместо отказа.
+        outside = tmp_path / "outside.patch"
+        outside.write_text(PATCH, encoding="utf-8")
+        from pathlib import PurePosixPath
+
+        control = NegativeControl(patch=PurePosixPath(str(outside)), selector=SELECTOR)
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=control)
+
+        assert mutated is not None and mutated.stage == "mutate", mutated
+        assert mutated.refusal_code == "patch_absent", mutated
+        assert mutated.outcome is None, "мутант был исполнен на патче вне коммита"

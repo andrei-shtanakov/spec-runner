@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -89,6 +90,9 @@ def structural_impossibility(task: Task, config: ExecutorConfig) -> str | None:
 
     control = task.negative_control
     if control is not None:
+        path_refusal = patch_path_refusal(control.patch)
+        if path_refusal is not None:
+            return path_refusal
         parsed = adapter.parse_selector(control.selector)
         from .tdd_runners import SelectorRefusal
 
@@ -98,6 +102,47 @@ def structural_impossibility(task: Task, config: ExecutorConfig) -> str | None:
                 f"{adapter.name} adapter can read: {parsed.message}"
             )
 
+    return None
+
+
+def patch_path_refusal(patch) -> str | None:
+    """Отказ, когда объявленный путь патча не может указывать в коммит.
+
+    AP-01: патч берётся ИЗ КАНДИДАТ-КОММИТА и применяется к нему же. Единственной
+    проверкой этого была `(worktree / mutate).is_file()`, но `pathlib` для
+    абсолютного правого операнда возвращает сам абсолютный путь: объявление
+    `/tmp/mutant.patch` читало файл ВНЕ одноразового дерева, `git apply`
+    применял его, мутант ронял тест — и контроль объявлялся удовлетворённым
+    патчем, которого нет ни в одном коммите. То же по `..`-пути.
+
+    Факт статический: он виден по самой строке, до любого прогона. Поэтому
+    здесь, а не в разборе (`task.py` судит ФОРМУ строки) и не в классификации
+    (та судит исход прогона). Один читатель на три места — `validate`, предикат
+    неисполнимости и сам шов реплея, — иначе они разойдутся в том, что считают
+    путём внутрь дерева.
+
+    Прецедент в этом же репо: `parse_group_element` отвергает элемент, который
+    `resolves outside the repository`.
+    """
+    raw = PurePosixPath(patch)
+    if raw.is_absolute():
+        return (
+            f"the declared negative-control patch {str(raw)!r} is an absolute path: a "
+            "patch is read from the candidate commit, and an absolute path names a file "
+            "on this machine that no commit contains"
+        )
+    depth = 0
+    for part in raw.parts:
+        if part == "..":
+            depth -= 1
+            if depth < 0:
+                return (
+                    f"the declared negative-control patch {str(raw)!r} resolves outside "
+                    "the repository: a patch is read from the candidate commit, and "
+                    "nothing outside the tree is in it"
+                )
+        elif part != ".":
+            depth += 1
     return None
 
 
@@ -266,7 +311,16 @@ def _classify_mutated(config, clean, mutated) -> ControlResult:
             # самого разбора. Сомнение снимается НАБЛЮДЕНИЕМ — разбор
             # переспрашивается на чистом дереве, — а не толкованием.
             recheck = _replay_for_control(
-                config, sha=clean.sha, control=_ControlLike(clean.selector), mutate=None, order=3
+                config,
+                sha=clean.sha,
+                control=_ControlLike(clean.selector),
+                mutate=None,
+                order=3,
+                # Спрашивается РАЗБОР, а не исход: прогон ответил бы на другой
+                # вопрос и стоил бы полного разворачивания окружения (на
+                # ExUnit — компиляции проекта). Бюджет Р-2: «+1 разбор, 0
+                # прогонов».
+                preflight_only=True,
             )
             if recheck.stage == "preflight" and recheck.refusal_code == "unparseable_test_file":
                 return result(

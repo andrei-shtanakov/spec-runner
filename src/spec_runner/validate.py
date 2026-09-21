@@ -664,6 +664,8 @@ def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -
     факт о дереве, которое `validate` не вправе считать окончательным,
     остаётся предупреждением.
     """
+    from .negative_control import patch_path_refusal
+
     result = ValidationResult()
     control = task.negative_control
     error = task.negative_control_error
@@ -672,6 +674,15 @@ def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -
         return result
 
     if waiver is None:
+        # «Маркер не объявлен» и «маркер есть, но не резолвится» приходят сюда
+        # одним значением: обработчик `ConfigError` выше ставит `waiver = None`
+        # ПОСЛЕ того, как записал свою ошибку. Читать второе как первое значит
+        # печатать про одну задачу две строки, из которых вторая — неправда
+        # («carries no **TDD-waiver:**» про задачу, которая маркер несёт), и
+        # отправлять оператора искать то, что у него есть. Правило про одного
+        # читателя на одну ошибку этот файл уже держит (#431 п.3).
+        if task.tdd_waiver:
+            return result
         if control is not None or error is not None:
             result.errors.append(
                 f"{task.id}: **Negative-control:** is declared but the task carries no "
@@ -695,6 +706,15 @@ def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -
             "the class is admissible only with evidence that the new test goes red when "
             "the property it claims to check is broken"
         )
+        return result
+
+    # Путь судится ТЕМ ЖЕ читателем, что и предикат неисполнимости: иначе
+    # `validate` находит файл на машине оператора (для абсолютного операнда
+    # `project_root / patch` возвращает сам абсолютный путь) и молчит про
+    # объявление, которое прогон отвергнет.
+    path_refusal = patch_path_refusal(control.patch)
+    if path_refusal is not None:
+        result.errors.append(f"{task.id}: {path_refusal}")
         return result
 
     patch = Path(config.project_root) / str(control.patch)

@@ -530,3 +530,74 @@ class TestTheGateDoesNotLeakAcrossTasks:
             REGISTRY.unregister("tdd.red", "tests")
             REGISTRY.unregister("tdd.claims", "tests")
             REGISTRY.unregister("tdd.negative_control", "tests")
+
+
+class TestTheRecheckParsesWithoutRunning:
+    """kind: contract — находка ревью цепи DT-01…DT-04.
+
+    `unparseable_test_file` — единственный код, который нельзя отнести
+    заранее, и сомнение снимается переспросом разбора на чистом дереве.
+    Дизайн §3 требует для него режим `preflight_only`, а бюджет Р-2 —
+    «+1 разбор, 0 прогонов». Вызов флага не передавал: `preflight_only`
+    был объявлен, проброшен и **никем не задан** — тот же класс дефекта,
+    за который репо уже платило (`supports_file_targets`, #448). Цена
+    расхождения не косметическая: на ExUnit третий вызов разворачивал
+    окружение и компилировал проект целиком.
+    """
+
+    def test_the_third_call_never_reaches_the_runner(self, tmp_path, monkeypatch):
+        from spec_runner import tdd
+        from spec_runner.negative_control import _classify_mutated, _replay_for_control
+
+        root, head = _repo(tmp_path)
+        cfg = _cfg(root)
+
+        # Чистая половина — настоящая: переспрос идёт по её дереву и её
+        # селектору, и подменять их значит проверять не тот путь.
+        clean = _replay_for_control(cfg, sha=head, control=_control(), mutate=None, order=1)
+        mutated = tdd.ReplayAttempt(
+            stage="preflight",
+            detail="the test file does not parse",
+            environment_id=clean.environment_id,
+            sha=head,
+            selector=SELECTOR,
+            mutated=True,
+            order=2,
+            refusal_code="unparseable_test_file",
+        )
+
+        runs: list = []
+        real_run = tdd._run_selector
+        monkeypatch.setattr(
+            tdd, "_run_selector", lambda *a, **k: runs.append(a) or real_run(*a, **k)
+        )
+
+        verdict = _classify_mutated(cfg, clean, mutated)
+
+        assert runs == [], f"переспрос разбора прогнал тесты {len(runs)} раз(а)"
+        assert verdict.verdict == "unsatisfied", verdict
+
+    def test_the_recheck_still_tells_a_broken_toolchain_apart(self, tmp_path):
+        """Экономия не должна стоить различения: разбор на чистом дереве
+        обязан по-прежнему отвечать, сломан ли инструмент."""
+        from spec_runner import tdd
+        from spec_runner.negative_control import _classify_mutated, _replay_for_control
+
+        root, head = _repo(tmp_path)
+        cfg = _cfg(root)
+        clean = _replay_for_control(cfg, sha=head, control=_control(), mutate=None, order=1)
+        broken = tdd.ReplayAttempt(
+            stage="preflight",
+            detail="the test file does not parse",
+            environment_id=clean.environment_id,
+            sha=head,
+            selector="tests/test_subject.py::test_absent",
+            mutated=True,
+            order=2,
+            refusal_code="unparseable_test_file",
+        )
+
+        verdict = _classify_mutated(cfg, clean, broken)
+
+        # Чистое дерево РАЗБИРАЕТСЯ (файл цел), значит отказ — про патч.
+        assert verdict.verdict == "unsatisfied", verdict

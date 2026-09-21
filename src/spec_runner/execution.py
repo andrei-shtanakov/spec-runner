@@ -706,6 +706,15 @@ def _execute_task(
         else:
             control_refusal = structural_impossibility(task, config)
         if control_refusal is not None:
+            # Флип в `in_progress` уже произошёл, а задача, остановленная до
+            # платного вызова, в работу не входила. Без отката харнессовый
+            # флип остаётся в `tasks.md` незакоммиченным, и следующий прогон
+            # либо уносит его в `git stash` через `rescue_uncommitted`, либо
+            # коммитит через `recover_interrupted_flip`, печатая «Recovered an
+            # interrupted run» про задачу, которая ни разу не запускалась. Обе
+            # соседние отказные ветки — claims выше и запись waiver'а ниже —
+            # откатывают статус ровно по этой причине.
+            update_task_status(config.tasks_file, task_id, "todo")
             return _refuse_task(task, config, state, control_refusal)
 
         # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
