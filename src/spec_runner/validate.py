@@ -498,9 +498,7 @@ def _validate_durability_store(section: dict, result: "ValidationResult") -> Non
             f"security properties: {', '.join(missing)}"
         )
     retention_days = durability.get("retention_days")
-    if retention_days is not None and durability_retention_days_out_of_range(
-        int(retention_days)
-    ):
+    if retention_days is not None and durability_retention_days_out_of_range(int(retention_days)):
         result.errors.append(
             "durability.retention_days must be between "
             f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "

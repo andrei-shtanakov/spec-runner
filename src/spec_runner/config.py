@@ -305,9 +305,7 @@ DURABILITY_RETENTION_DAYS_MAX = 365
 
 def durability_retention_days_out_of_range(retention_days: int) -> bool:
     """True when `retention_days` falls outside BEH-42's 7-365 bound."""
-    return not (
-        DURABILITY_RETENTION_DAYS_MIN <= retention_days <= DURABILITY_RETENTION_DAYS_MAX
-    )
+    return not (DURABILITY_RETENTION_DAYS_MIN <= retention_days <= DURABILITY_RETENTION_DAYS_MAX)
 
 
 # === ExecutorConfig ===
