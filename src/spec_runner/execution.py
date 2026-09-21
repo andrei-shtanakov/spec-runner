@@ -584,12 +584,23 @@ def execute_task(
     # class of mistake.
     borrowed = not is_registered("tdd.claims", "tests")
     ensure_red_gate()
+    # #428: СВОЙ признак заимствования, а не чужой. `borrowed` выше — ответ
+    # про `tdd.claims`; проект, где claims уже зарегистрированы, дал бы
+    # `False`, и гейт контроля остался бы в реестре НА ВЕСЬ ПРОЦЕСС — ровно
+    # та утечка, ради предотвращения которой эта обёртка и написана
+    # («borrowing would then look like inheriting»).
+    from .gates import ensure_negative_control_gate
+
+    borrowed_nc = not is_registered("tdd.negative_control", "tests")
+    ensure_negative_control_gate()
     try:
         return _execute_task(task, config, state, harness_baseline)
     finally:
         if borrowed:
             REGISTRY.unregister("tdd.red", "tests")
             REGISTRY.unregister("tdd.claims", "tests")
+        if borrowed_nc:
+            REGISTRY.unregister("tdd.negative_control", "tests")
 
 
 def _execute_task(

@@ -634,6 +634,69 @@ def evaluate_claims(ctx: GateContext) -> GateResult:
     )
 
 
+def _negative_control_gate(ctx: GateContext) -> GateResult:
+    """Гейт исполненного негативного контроля (#428, FR-07, design §5).
+
+    **Читает готовый вердикт, а не исполняет контроль.** Исполнение стоит
+    до платного ревью (§4a), потому что текст обязательства сообщает
+    ревьюеру о различении как о СОСТОЯВШЕМСЯ факте, и утверждать это до
+    исполнения было бы хуже старого текста, честно говорившего «ты
+    единственная проверка».
+
+    Молчит до реализации — и это не послабление. Точка 1 зовёт
+    `evaluate_gates("tests", …)`, то есть ВСЕ гейты фазы; гейт, отказывающий
+    там, отказал бы каждой waived-задаче на каждом прогоне, до первого
+    платного вызова, — фича блокировала бы ровно те задачи, ради которых
+    написана. Пропускает только явное `True`: ОТСУТСТВИЕ ключа означает
+    «судить», то есть умолчание закрыто, а не открыто.
+    """
+    if not ctx.facts.get("waiver_applied"):
+        return GateResult(
+            GateStatus.SATISFIED, PhaseOutcome.SKIPPED, "no addressed waiver on this task"
+        )
+    if ctx.facts.get("pre_implementation") is True:
+        return GateResult(
+            GateStatus.SATISFIED,
+            PhaseOutcome.SKIPPED,
+            "pre-implementation: the control has nothing to judge yet",
+        )
+
+    verdict = ctx.facts.get("negative_control")
+    if verdict is None:
+        # Молчание сайта не отмывается в пропуск — то же правило, по
+        # которому `evaluate_claims` требует `waiver_applied`.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run did not report a negative-control verdict",
+        )
+    if verdict == "satisfied":
+        return GateResult(GateStatus.SATISFIED, PhaseOutcome.PASS, "negative control satisfied")
+    if verdict == "instrument_error":
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            str(ctx.facts.get("negative_control_detail") or "the control could not be judged"),
+        )
+    return GateResult(
+        GateStatus.UNSATISFIED,
+        PhaseOutcome.UNEXPECTED_FAIL,
+        str(ctx.facts.get("negative_control_detail") or "negative control not satisfied"),
+    )
+
+
+def ensure_negative_control_gate(registry: GateRegistry | None = None) -> None:
+    """Зарегистрировать гейт контроля (идемпотентно).
+
+    Регистрация ПОТАСКОВАЯ: waiver — факт задачи в `tasks.md`, а оба
+    проектных сайта его не знают. Регистрация там сделала бы `has_gates()`
+    истинным на весь прогон, и каждая задача получила бы кандидат-коммит и
+    открытие state DB — дормантность (NFR-02) стала бы невыполнимой.
+    """
+    reg = registry if registry is not None else REGISTRY
+    reg.register("tdd.negative_control", "tests", _negative_control_gate)
+
+
 def register_builtin_gates(
     config: ExecutorConfig,
     registry: GateRegistry | None = None,
@@ -749,6 +812,7 @@ __all__ = [
     "GateRegistry",
     "GateResult",
     "GateStatus",
+    "ensure_negative_control_gate",
     "evaluate_gates",
     "ensure_red_gate",
     "evaluate_pre_terminal",

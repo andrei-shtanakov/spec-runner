@@ -554,6 +554,70 @@ def _is_our_bookkeeping_commit(log_line: str, task_id: str) -> bool:
     return subject.startswith(f"{task_id}:")
 
 
+def _run_negative_control_before_review(
+    task: Task, config: ExecutorConfig, candidate_sha: str | None
+) -> tuple[str | None, str, str]:
+    """Исполнить контроль до платного ревью; `(вердикт, текст, sha)`.
+
+    Инструментальная неудача **переисполняется здесь**, в пределах
+    `gate_recovery_attempts`, а не в гейте: гейт читает готовый вердикт и
+    повторная оценка перечитала бы тот же кэш (Р-3). Детерминированные
+    исходы не повторяются — тот же вопрос тем же байтам.
+    """
+    waiver = None
+    try:
+        waiver = config.resolve_waiver(task)
+    except Exception:  # разобран выше по стеку; здесь это просто «не наша задача»
+        return None, "", ""
+    if waiver is None or task.negative_control is None:
+        return None, "", ""
+
+    # SHA вычисляется ПОСЛЕ проверки waiver'а, а не в аргументе вызова.
+    # Первая редакция считала его заранее (`sha or _head_sha(config)`), и
+    # проект без waived-задач платил лишним git-вызовом на каждой задаче —
+    # нарушение NFR-02, которое этот же бандл и запрещает. Поймал полный
+    # сбор: три чужих теста считают вызовы `subprocess.run`.
+    candidate_sha = candidate_sha or _head_sha(config)
+
+    from .negative_control import candidate_refusal, run_negative_control
+
+    absent = candidate_refusal(task, config, candidate_sha)
+    if absent is not None:
+        return "unsatisfied", absent, ""
+
+    budget = max(0, int(getattr(config, "gate_recovery_attempts", 0)))
+    result = None
+    for _ in range(budget + 1):
+        result = run_negative_control(config, sha=candidate_sha, control=task.negative_control)
+        if result.verdict != "instrument_error":
+            break
+    assert result is not None
+    return result.verdict, result.detail, candidate_sha
+
+
+def _negative_control_facts(
+    task: Task,
+    config: ExecutorConfig,
+    gated_sha: str,
+    verdict: str | None,
+    detail: str,
+    verdict_sha: str,
+    review_changed_candidate: bool,
+) -> dict:
+    """Вердикт контроля для гейта, переисполненный при смене кандидата.
+
+    Вердикт привязан к коммиту, на котором получен: ревью может изменить
+    дерево, и гейт одобрил бы тогда кандидата, на котором контроль не
+    исполнялся.
+    """
+    if verdict is None:
+        return {}
+    if review_changed_candidate and gated_sha and gated_sha != verdict_sha:
+        fresh = _run_negative_control_before_review(task, config, gated_sha)
+        verdict, detail = fresh[0] or verdict, fresh[1] or detail
+    return {"negative_control": verdict, "negative_control_detail": detail}
+
+
 def _run_pre_terminal_gates(
     task: Task,
     config: ExecutorConfig,
@@ -1185,6 +1249,21 @@ def post_done_hook(
         )
         return (False, reverify_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
+    # #428 §4a: контроль исполняется ДО платного ревью и отказывает НА
+    # МЕСТЕ. Два основания, и оба измеримые. Текст обязательства (FR-08)
+    # сообщает ревьюеру, что машина УЖЕ показала различение: исполнять
+    # контроль после ревью значило бы утверждать как состоявшийся факт то,
+    # чего не произошло. И платный вызов не тратится на работу, которая уже
+    # отказана, — прецедент формы рядом: `_claims_intact_before_review`
+    # (#214).
+    control_verdict, control_detail, control_sha = _run_negative_control_before_review(
+        task, config, review_checkpoint_sha
+    )
+    if control_verdict == "unsatisfied":
+        refusal = refusal_for(GateStatus.UNSATISFIED, control_detail)
+        refusal = _commit_blocked_status(task, config, refusal, review_checkpoint_sha)
+        return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
+
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
 
@@ -1502,6 +1581,19 @@ def post_done_hook(
                 "execution_mode": config.resolve_execution_mode(task),
                 # #429: point 2 of 3 (pre-terminal / merge).
                 "waiver_applied": config.resolve_waiver(task) is not None,
+                # #428: гейт ЧИТАЕТ вердикт, а не исполняет контроль. Если
+                # ревью изменило кандидата, вердикт снят с другого дерева —
+                # переисполняем здесь, до гейта, тем же рассуждением, что у
+                # `_reverify_live_evidence_for_candidate`.
+                **_negative_control_facts(
+                    task,
+                    config,
+                    gated_sha,
+                    control_verdict,
+                    control_detail,
+                    control_sha,
+                    review_changed_candidate,
+                ),
             },
         )
         if blocked is not None:

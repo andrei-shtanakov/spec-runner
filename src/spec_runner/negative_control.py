@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
     from .task import Task
+    from .tdd import ReplayAttempt
 
 
 def _is_waived(task: Task, config: ExecutorConfig) -> bool:
@@ -141,6 +143,20 @@ def clean_half_is_green(attempt) -> bool:
     )
 
 
+def _replay_for_control(config, *, sha: str, control, mutate, order: int):
+    """Один вызов шва — отдельной функцией, чтобы тест мог подменить ОДНУ
+    половину, не трогая другую.
+
+    Без этого шва «стенд сломался между половинами» (BEH-12) нечем
+    предъявить: настоящий таймаут или исчезнувший тулчейн в тесте
+    невоспроизводим дёшево, а подменять весь реплей значило бы перестать
+    проверять чистую половину живьём.
+    """
+    from .tdd import _replay_selector
+
+    return _replay_selector(config, sha=sha, selector=control.selector, mutate=mutate, order=order)
+
+
 def replay_both_halves(config: ExecutorConfig, *, sha: str, control):
     """`(чистая, мутированная|None)` — исполнение контроля без вердикта.
 
@@ -148,17 +164,164 @@ def replay_both_halves(config: ExecutorConfig, *, sha: str, control):
     доказательством исправности стенда. Мутированная не запускается вовсе,
     пока стенд не доказан, — негодный стенд стоит один прогон, а не два
     (NFR-04).
-
-    Вердиктов здесь нет: `ReplayAttempt` — факт о прогоне, классификация
-    живёт отдельно (design §3). Разделение не косметическое: оно не даёт
-    исполнению и толкованию разойтись по двум редакциям одного правила.
     """
-    from .tdd import _replay_selector
-
-    clean = _replay_selector(config, sha=sha, selector=control.selector, order=1)
+    clean = _replay_for_control(config, sha=sha, control=control, mutate=None, order=1)
     if not clean_half_is_green(clean):
         return clean, None
-    mutated = _replay_selector(
-        config, sha=sha, selector=control.selector, mutate=control.patch, order=2
-    )
+    mutated = _replay_for_control(config, sha=sha, control=control, mutate=control.patch, order=2)
     return clean, mutated
+
+
+@dataclass(frozen=True)
+class ControlResult:
+    """Вердикт контроля и факты, на которых он получен (design §3)."""
+
+    verdict: str  # satisfied | unsatisfied | instrument_error
+    detail: str
+    clean: ReplayAttempt | None = None
+    mutated: ReplayAttempt | None = None
+    sha: str = ""
+
+    @property
+    def retriable(self) -> bool:
+        """Повторяется ТОЛЬКО инструментальная неудача.
+
+        `satisfied` и `unsatisfied` детерминированы: повторять их значит
+        задавать тот же вопрос тем же байтам. Повторяет исполнитель
+        контроля, а не гейт (Р-3): гейт читает готовый вердикт и перечитал
+        бы тот же кэш.
+        """
+        return self.verdict == "instrument_error"
+
+
+#: Коды preflight, детерминированно вызванные содержимым патча: на чистой
+#: половине та же стадия прошла, значит разница между половинами — патч.
+_PATCH_PREFLIGHT_CODES = frozenset(
+    {"not_a_definition_line", "missing_test_file", "no_tests_in_file"}
+)
+#: Коды preflight про МАШИНУ, а не про патч. Отнести их к патчу значило бы
+#: сказать автору «твой мутант не различил», когда пропал тулчейн.
+_STAND_PREFLIGHT_CODES = frozenset({"runner_toolchain_missing", "preflight_failed"})
+
+
+def _classify_clean(clean) -> ControlResult | None:
+    """Чистая половина: три строки, сверху вниз (design §3).
+
+    Строка «красен без мутанта» стоит ПЕРВОЙ и судится `PROVEN`: для
+    падения мера надёжна, а FR-05 прямо запрещает отправлять этот вердикт в
+    instrument — иначе оператор читает «сломан харнесс» про исправный.
+    """
+    from .tdd_runners import RunOutcome, SelectionProof
+
+    if (
+        clean.stage == "run"
+        and clean.outcome is RunOutcome.TESTS_FAILED
+        and clean.proof is SelectionProof.PROVEN
+    ):
+        return ControlResult(
+            "unsatisfied",
+            "the task's test is already red on the clean candidate: a test that fails "
+            "without the mutant proves nothing about the mutant",
+            clean=clean,
+        )
+    if clean_half_is_green(clean):
+        return None
+    return ControlResult(
+        "instrument_error",
+        f"the clean half reached no verdict ({clean.stage}): {clean.detail}",
+        clean=clean,
+    )
+
+
+def _classify_mutated(config, clean, mutated) -> ControlResult:
+    """Мутированная половина: восемь строк, сверху вниз (design §3).
+
+    Строки взаимно исключающи по построению, читается первое совпадение.
+    """
+    from .tdd_runners import RunOutcome, SelectionProof
+
+    def result(verdict: str, detail: str) -> ControlResult:
+        return ControlResult(verdict, detail, clean=clean, mutated=mutated)
+
+    if mutated.stage == "mutate":
+        if mutated.refusal_code in ("patch_absent", "patch_inapplicable"):
+            # AP-12.4: оба — факты о РАБОТЕ задачи, а не о стенде.
+            # Применимость детерминирована: патч и цель один коммит.
+            return result("unsatisfied", mutated.detail)
+        return result("instrument_error", mutated.detail)
+
+    if mutated.stage == "preflight":
+        if mutated.refusal_code in _STAND_PREFLIGHT_CODES:
+            return result("instrument_error", mutated.detail)
+        if mutated.refusal_code == "unparseable_test_file":
+            # Единственный код, который нельзя отнести заранее: адаптер
+            # возвращает его и при настоящей ошибке разбора, и при сбое
+            # самого разбора. Сомнение снимается НАБЛЮДЕНИЕМ — разбор
+            # переспрашивается на чистом дереве, — а не толкованием.
+            recheck = _replay_for_control(
+                config, sha=clean.sha, control=_ControlLike(clean.selector), mutate=None, order=3
+            )
+            if recheck.stage == "preflight" and recheck.refusal_code == "unparseable_test_file":
+                return result(
+                    "instrument_error",
+                    f"the clean tree does not parse either: the toolchain is broken, "
+                    f"not the patch ({mutated.detail})",
+                )
+            return result("unsatisfied", mutated.detail)
+        if mutated.refusal_code in _PATCH_PREFLIGHT_CODES:
+            return result("unsatisfied", mutated.detail)
+        return result("instrument_error", mutated.detail)
+
+    if mutated.stage != "run":
+        return result("instrument_error", mutated.detail)
+
+    if (
+        clean.selector_identity is not None
+        and mutated.selector_identity is not None
+        and clean.selector_identity != mutated.selector_identity
+    ):
+        return result(
+            "unsatisfied",
+            "the patch changed the test's declaration line, so the declared selector no "
+            "longer addresses what it declared",
+        )
+    if mutated.outcome in (RunOutcome.RUNNER_ERROR, RunOutcome.UNRECOGNIZED):
+        return result("instrument_error", f"the runner itself failed: {mutated.detail}")
+    if mutated.proof is SelectionProof.REFUTED:
+        return result("unsatisfied", "a test other than the declared one was executed")
+    if mutated.outcome is RunOutcome.COLLECTION_OR_COMPILE_ERROR:
+        return result("unsatisfied", "the mutant broke the build, so the declared test never ran")
+    if mutated.outcome is RunOutcome.SELECTION_FAILED:
+        return result("unsatisfied", "after the patch the selector selected no test at all")
+    if mutated.outcome is RunOutcome.TESTS_FAILED and mutated.proof is SelectionProof.PROVEN:
+        return result("satisfied", "the declared test goes red under the declared mutant")
+    if mutated.outcome is RunOutcome.TESTS_PASSED and mutated.execution_proven:
+        return result(
+            "unsatisfied",
+            "the mutant did not discriminate: the test stayed green under it, so it does "
+            "not prove the test can fail",
+        )
+    return result("instrument_error", f"the mutated half reached no verdict: {mutated.detail}")
+
+
+class _ControlLike:
+    """Минимальный носитель селектора для переспроса разбора."""
+
+    def __init__(self, selector: str) -> None:
+        self.selector = selector
+
+
+def run_negative_control(config: ExecutorConfig, *, sha: str, control) -> ControlResult:
+    """Исполнить контроль и вынести вердикт (design §3).
+
+    Исполнение и классификация разделены намеренно: `ReplayAttempt` — факт
+    о прогоне, таблица — его толкование, и они не должны существовать в
+    двух редакциях одного правила.
+    """
+    clean, mutated = replay_both_halves(config, sha=sha, control=control)
+    early = _classify_clean(clean)
+    if early is not None:
+        return ControlResult(early.verdict, early.detail, clean=clean, mutated=None, sha=sha)
+    assert mutated is not None
+    verdict = _classify_mutated(config, clean, mutated)
+    return ControlResult(verdict.verdict, verdict.detail, clean=clean, mutated=mutated, sha=sha)
