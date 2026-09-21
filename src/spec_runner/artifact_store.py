@@ -302,7 +302,9 @@ class _ReadOnlyStore:
 ADAPTERS = ("local_volume",)
 
 
-def _build_store(adapter: str, options: dict[str, str]) -> ArtifactStore:
+def _build_store(
+    adapter: str, options: dict[str, str], *, encryption_at_rest: bool = False
+) -> ArtifactStore:
     """Собрать адаптер по объявлению config-а — ПРИВАТНО.
 
     Имя с подчёркиванием — не стиль, а половина пояса § 1.4: правило «в store
@@ -314,21 +316,28 @@ def _build_store(adapter: str, options: dict[str, str]) -> ArtifactStore:
     Путеподобные options к этому моменту уже абсолютны — их разрешает
     загрузчик (§ 1.1), и повторять резолв здесь нельзя: он пришёлся бы на
     CWD процесса, который вправе её сменить.
+
+    `encryption_at_rest` приходит ОТДЕЛЬНЫМ аргументом, а не из `options`, и
+    это не вкусовщина: гейт BEH-28 судит по `durability.store.
+    encryption_at_rest`, и адаптер, читающий то же свойство из другого места,
+    объявил бы возможности, противоречащие конфигу, который гейт пропустил
+    (находка ревью).
     """
     if adapter != "local_volume":
         raise ValueError(f"неизвестный адаптер store: {adapter!r}; известны: {', '.join(ADAPTERS)}")
     root = options.get("root")
     if not root:
         raise ValueError("адаптер local_volume требует options.root")
-    declared = str(options.get("encryption_at_rest", "")).lower() in {"1", "true", "yes"}
-    return LocalVolumeStore(Path(root), encryption_at_rest=declared)
+    return LocalVolumeStore(Path(root), encryption_at_rest=encryption_at_rest)
 
 
-def open_store_readonly(adapter: str, options: dict[str, str]) -> ArtifactStore:
+def open_store_readonly(
+    adapter: str, options: dict[str, str], *, encryption_at_rest: bool = False
+) -> ArtifactStore:
     """Единственный `Publisher`-less вход в store (design § 7.1).
 
     Назван так, чтобы статический пояс § 1.4 мог допустить его **по имени**:
     правило «в store пишет только publisher» иначе пришлось бы проверять
     рассуждением, а не поиском.
     """
-    return _ReadOnlyStore(_build_store(adapter, options))
+    return _ReadOnlyStore(_build_store(adapter, options, encryption_at_rest=encryption_at_rest))

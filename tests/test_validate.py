@@ -787,3 +787,45 @@ class TestValidatorRegistry:
         )
         with pytest.raises(ValueError, match="unknown validator_key"):
             validate_spec_stage("requirements", cfg, profile)
+
+
+class TestValidateReadsDeclarationsAsStrictlyAsTheLoader:
+    """Находка ревью: отчёт, читающий декларации мягче гейта, называет зелёным
+    config, который `run` отвергнет — и оператор узнаёт о дефекте не там, где
+    спросил."""
+
+    def test_string_false_tls_is_reported_not_passed(self, tmp_path: Path):
+        from spec_runner.validate import validate_config
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            '      tls: "false"\n'
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        result = validate_config(cfg)
+        assert any("tls" in e for e in result.errors), (
+            f"validate промолчал о строковом tls: {result.errors}"
+        )
+
+    def test_unreadable_declaration_is_named_not_crashed_on(self, tmp_path: Path):
+        from spec_runner.validate import validate_config
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: [yes]\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        result = validate_config(cfg)
+        assert any("tls" in e for e in result.errors)

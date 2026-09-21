@@ -1288,7 +1288,13 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "durability_checkpoint_ack_timeout_seconds": durability.get(
                 "checkpoint_ack_timeout_seconds"
             ),
-            "durability_retention_days": durability.get("retention_days"),
+            # Нормализованным целым, а не исходной строкой: загрузчик её уже
+            # проверил, и пронести дальше `"30"` значило бы поссорить две
+            # поверхности — проверка прошла бы здесь и отказала в
+            # `ExecutorConfig`, который требует настоящий `int`.
+            "durability_retention_days": (
+                None if durability.get("retention_days") is None else _retention
+            ),
         }
     except ConfigError:
         raise

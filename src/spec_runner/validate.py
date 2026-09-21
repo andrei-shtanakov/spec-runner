@@ -13,6 +13,7 @@ from spec_runner.config import (
     KNOWN_EXECUTOR_KEYS,
     ConfigError,
     ExecutorConfig,
+    durability_declared_flag,
     durability_retention_days_out_of_range,
     durability_store_missing_properties,
     mixed_shape_error,
@@ -493,10 +494,27 @@ def _validate_durability_store(section: dict, result: "ValidationResult") -> Non
         store = {}
     adapter = store.get("adapter")
     if adapter:
-        missing = durability_store_missing_properties(
-            tls=bool(store.get("tls")),
-            encryption_at_rest=bool(store.get("encryption_at_rest")),
-            immutable_put=bool(store.get("immutable_put")),
+        # Те же строгие правила чтения, что у загрузчика: `bool("false")` —
+        # это True, и отчёт, читающий декларации мягче гейта, назвал бы
+        # зелёным config, который `run` отвергнет (находка ревью). Отказ
+        # загрузчика здесь становится строкой отчёта, а не исключением:
+        # `validate` обязан назвать все дефекты разом.
+        declared: dict[str, bool] = {}
+        unreadable = False
+        for field in ("tls", "encryption_at_rest", "immutable_put"):
+            try:
+                declared[field] = durability_declared_flag(store.get(field), field=field)
+            except ConfigError as exc:
+                result.errors.append(str(exc))
+                unreadable = True
+        missing = (
+            []
+            if unreadable
+            else durability_store_missing_properties(
+                tls=declared["tls"],
+                encryption_at_rest=declared["encryption_at_rest"],
+                immutable_put=declared["immutable_put"],
+            )
         )
         if missing:
             result.errors.append(

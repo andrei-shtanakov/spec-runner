@@ -318,3 +318,23 @@ class TestWritingFactoryIsNotAPublicDoor:
         assert not hasattr(artifact_store, "build_store"), (
             "пишущая фабрика экспортирована публично — второй Publisher-less вход"
         )
+
+
+class TestCapabilitiesAgreeWithTheConfigGate:
+    def test_encryption_at_rest_comes_from_the_declaration_the_gate_reads(self, tmp_path: Path):
+        """Гейт BEH-28 судит по `durability.store.encryption_at_rest`. Адаптер,
+        читающий то же свойство из `options`, объявил бы возможности,
+        противоречащие конфигу, который гейт пропустил."""
+        ro = open_store_readonly(
+            "local_volume",
+            {"root": str(tmp_path), "encryption_at_rest": "true"},
+            encryption_at_rest=False,
+        )
+        assert ro.capabilities().encryption_at_rest is False, (
+            "возможности собраны из options в обход объявления store"
+        )
+
+        declared = open_store_readonly(
+            "local_volume", {"root": str(tmp_path)}, encryption_at_rest=True
+        )
+        assert declared.capabilities().encryption_at_rest is True
