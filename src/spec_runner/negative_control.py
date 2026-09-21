@@ -327,13 +327,28 @@ def _classify_mutated(config, clean, mutated) -> ControlResult:
                 # прогонов».
                 preflight_only=True,
             )
+            # «Не удовлетворён» следует ТОЛЬКО из положительного наблюдения
+            # «чистое дерево разбирается». Замыкающая строка читала любую
+            # неудачу самого переспроса — не удался `git worktree add`,
+            # таймаут, пропавший тулчейн, сорвавшийся разбор — как «патч
+            # виноват»: автору предъявлялось как факт о его работе то, что
+            # случилось с машиной между половинами, причём `retriable` при
+            # таком вердикте False, то есть без единого ретрая. Отсутствие
+            # наблюдения — не наблюдение.
+            if recheck.stage == "preflight" and recheck.refusal_code is None:
+                return result("unsatisfied", mutated.detail)
             if recheck.stage == "preflight" and recheck.refusal_code == "unparseable_test_file":
                 return result(
                     "instrument_error",
                     f"the clean tree does not parse either: the toolchain is broken, "
                     f"not the patch ({mutated.detail})",
                 )
-            return result("unsatisfied", mutated.detail)
+            return result(
+                "instrument_error",
+                f"the recheck could not establish whether the clean tree parses "
+                f"({recheck.stage}: {recheck.detail[:160]}), so what the mutated half "
+                f"reported cannot be read as a fact about the patch ({mutated.detail})",
+            )
         if mutated.refusal_code in _PATCH_PREFLIGHT_CODES:
             return result("unsatisfied", mutated.detail)
         return result("instrument_error", mutated.detail)

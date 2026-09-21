@@ -672,3 +672,98 @@ class TestARealTimeoutIsSeenAsOne:
 
         assert attempt.stage == "timeout", attempt
         assert attempt.outcome is None, "у таймаута нет исхода прогона"
+
+
+class TestUnsatisfiedNeedsAPositiveObservation:
+    """kind: contract — находка ревью круга 3 (блокирующая).
+
+    Переспрос разбора снимает сомнение ТОЛЬКО положительным наблюдением
+    «чистое дерево разбирается». Замыкающая строка читала любую неудачу
+    самого переспроса — не удался `git worktree add`, таймаут, пропавший
+    тулчейн, сорвавшийся разбор — как «патч виноват»: автору предъявлялось
+    как факт о его работе то, что случилось с машиной между двумя
+    половинами, и `retriable` при этом False, то есть без единого ретрая.
+    Ровно то, что `_STAND_PREFLIGHT_CODES` двумя экранами выше запрещает.
+    """
+
+    def _mutated(self, head: str):
+        from spec_runner import tdd
+
+        return tdd.ReplayAttempt(
+            stage="preflight",
+            detail="the test file does not parse",
+            environment_id="unpinned",
+            sha=head,
+            selector=SELECTOR,
+            mutated=True,
+            order=2,
+            refusal_code="unparseable_test_file",
+        )
+
+    def test_a_recheck_that_cannot_run_is_an_instrument_error(self, tmp_path):
+        """Стенд ломается по-настоящему: переспрос идёт по коммиту, которого
+        нет, и не доходит до разбора вовсе."""
+        from spec_runner import tdd
+        from spec_runner.negative_control import _classify_mutated
+
+        root, head = _repo(tmp_path)
+        cfg = _cfg(root)
+        absent = "0" * 40
+        clean = tdd.ReplayAttempt(
+            stage="run",
+            detail="",
+            environment_id="unpinned",
+            sha=absent,
+            selector=SELECTOR,
+            mutated=False,
+            order=1,
+        )
+
+        verdict = _classify_mutated(cfg, clean, self._mutated(absent))
+
+        assert verdict.verdict == "instrument_error", verdict
+        assert verdict.retriable, "сбой стенда обязан переисполняться"
+
+    def test_a_stand_preflight_code_is_not_the_patchs_fault(self, tmp_path, monkeypatch):
+        """Центральный случай ExUnit: `preflight` зовёт `elixir`, и его
+        таймаут возвращается кодом `preflight_failed` — факт о машине.
+        Переспрос подменён на своей границе, потому что воспроизводить
+        пропавший тулчейн значит проверять окружение, а не правило."""
+        from spec_runner import negative_control as nc
+        from spec_runner import tdd
+        from spec_runner.negative_control import _classify_mutated
+
+        root, head = _repo(tmp_path)
+        cfg = _cfg(root)
+        clean = nc._replay_for_control(cfg, sha=head, control=_control(), mutate=None, order=1)
+
+        def _broken_recheck(config, *, sha, control, mutate, order, preflight_only=False):
+            return tdd.ReplayAttempt(
+                stage="preflight",
+                detail="checking the file did not complete (timeout or a failed parse run)",
+                environment_id="unpinned",
+                sha=sha,
+                selector=control.selector,
+                mutated=False,
+                order=order,
+                refusal_code="preflight_failed",
+            )
+
+        monkeypatch.setattr(nc, "_replay_for_control", _broken_recheck)
+
+        verdict = _classify_mutated(cfg, clean, self._mutated(head))
+
+        assert verdict.verdict == "instrument_error", verdict
+
+    def test_a_clean_tree_that_parses_still_convicts_the_patch(self, tmp_path):
+        """Починка не должна проглотить настоящий случай: положительное
+        наблюдение по-прежнему даёт `unsatisfied`."""
+        from spec_runner.negative_control import _classify_mutated, _replay_for_control
+
+        root, head = _repo(tmp_path)
+        cfg = _cfg(root)
+        clean = _replay_for_control(cfg, sha=head, control=_control(), mutate=None, order=1)
+
+        verdict = _classify_mutated(cfg, clean, self._mutated(head))
+
+        assert verdict.verdict == "unsatisfied", verdict
