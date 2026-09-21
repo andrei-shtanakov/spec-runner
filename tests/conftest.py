@@ -286,14 +286,33 @@ def _restore_structlog_configuration():
     Снимок берётся до теста и возвращается после — включая случай, когда тест
     не трогал настройку вовсе (тогда восстановление ничего не меняет).
     Проверяется парой тестов в `tests/test_logging_isolation.py`.
+
+    Одного `configure()` для этого мало, и это видно по исходнику structlog:
+    при `cache_logger_on_first_use=True` первый вызов подменяет `bind` у
+    прокси замыканием над уже собранным логгером
+    (`BoundLoggerLazyProxy.bind`: `self.bind = finalized_bind`), а
+    `configure()` подмену не отменяет. Логгер модуля, впервые использованный
+    ВНУТРИ испорченного теста, держал бы файловый sink до конца сессии.
+    Поэтому кэш сбрасывается явно: у всех прокси, живущих атрибутами модулей
+    `spec_runner.*`, снимается экземплярный `bind`, и следующее обращение
+    пересобирает логгер по восстановленной настройке.
     """
+    import sys
+
     import structlog
+    from structlog._config import BoundLoggerLazyProxy
 
     saved = structlog.get_config().copy()
     try:
         yield
     finally:
         structlog.configure(**saved)
+        for name, module in list(sys.modules.items()):
+            if not name.startswith("spec_runner"):
+                continue
+            for value in list(vars(module).values()):
+                if isinstance(value, BoundLoggerLazyProxy):
+                    value.__dict__.pop("bind", None)
 
 
 @pytest.fixture(autouse=True)
