@@ -573,6 +573,7 @@ def execute_task(
 
     if waiver is None:
         return _execute_task(task, config, state, harness_baseline)
+
     # The question is "were the TDD gates already in force", not "is anything
     # registered at all" — and `has_gates()` answers the second. A `standard`
     # project with `review_policy: required` has the review gate attached, so
@@ -667,6 +668,35 @@ def _execute_task(
             )
             update_task_status(config.tasks_file, task_id, "todo")
             return False
+        # #428 FR-01/FR-09: контроль проверяется ЗДЕСЬ — после точки 1 и до
+        # записи применения. Порядок не произволен с обеих сторон.
+        #
+        # После claims: нарушенный claim — про чужую замороженную эвиденцию,
+        # то есть про уже нанесённый ущерб, а отсутствующее объявление — про
+        # ещё не предъявленное доказательство. Первым называется более
+        # серьёзный факт, и гарантия #429 («claims проверяются на всех трёх
+        # точках») остаётся видимой ровно такой, какой была.
+        #
+        # До записи применения: задача, остановленная здесь, waiver'ом НЕ
+        # воспользовалась, и строка о снятом baseline-RED про неё была бы
+        # ложью — тем же рассуждением, каким событие уже отодвинуто за
+        # точку 1.
+        from .negative_control import structural_impossibility
+
+        control_refusal: str | None = None
+        if task.negative_control_error is not None:
+            control_refusal = task.negative_control_error
+        elif task.negative_control is None:
+            control_refusal = (
+                "**TDD-waiver:** is declared but **Negative-control:** is not: the "
+                "characterisation class is admissible only with evidence that the new "
+                "test goes red when the property it claims to check is broken"
+            )
+        else:
+            control_refusal = structural_impossibility(task, config)
+        if control_refusal is not None:
+            return _refuse_task(task, config, state, control_refusal)
+
         # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
         # санкция ПРИМЕНЕНА, а не что её собирались применить. Задача,
         # остановленная гейтом до платного вызова, waiver'ом не

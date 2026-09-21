@@ -657,6 +657,56 @@ def _config_for_validation(
     return ExecutorConfig(**kwargs)
 
 
+def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -> ValidationResult:
+    """Статические дефекты объявления негативного контроля (#428, FR-10).
+
+    Ошибками считается только то, что установимо **из самого объявления**;
+    факт о дереве, которое `validate` не вправе считать окончательным,
+    остаётся предупреждением.
+    """
+    result = ValidationResult()
+    control = task.negative_control
+    error = task.negative_control_error
+
+    if control is None and error is None and waiver is None:
+        return result
+
+    if waiver is None:
+        if control is not None or error is not None:
+            result.errors.append(
+                f"{task.id}: **Negative-control:** is declared but the task carries no "
+                "**TDD-waiver:** — a negative control without a lifted obligation has "
+                "no subject"
+            )
+        return result
+
+    if task.status == "done":
+        # Закрытая задача уже прошла свой путь; требовать от неё маркер
+        # значит переписывать историю и блокировать прогон соседей.
+        return result
+
+    if error is not None:
+        result.errors.append(f"{task.id}: {error}")
+        return result
+
+    if control is None:
+        result.errors.append(
+            f"{task.id}: carries **TDD-waiver:** but declares no **Negative-control:** — "
+            "the class is admissible only with evidence that the new test goes red when "
+            "the property it claims to check is broken"
+        )
+        return result
+
+    patch = Path(config.project_root) / str(control.patch)
+    if not patch.is_file():
+        result.warnings.append(
+            f"{task.id}: declared negative-control patch {str(control.patch)!r} does not "
+            "exist in the working tree yet — it is written by this task, so its absence "
+            "here is a fact for the run to establish, not one this check can assume fixed"
+        )
+    return result
+
+
 def _validate_verify_first_declarations(
     tasks: list[Task], config: ExecutorConfig
 ) -> ValidationResult:
@@ -717,9 +767,21 @@ def _validate_verify_first_declarations(
         # for errors that were visible together the first time — and
         # `validate` exists precisely to report them all at once.
         try:
-            config.resolve_waiver(task)
+            waiver = config.resolve_waiver(task)
         except ConfigError as exc:
             result.errors.append(f"{task.id}: {exc}")
+            waiver = None
+
+        # #428 FR-10: объявление негативного контроля — две границы, и обе
+        # обязательны. По СТАТУСУ: закрытая waived-задача не проверяется —
+        # три `✅ DONE` задачи этого репо несут `**TDD-waiver:**` и не несут
+        # `**Negative-control:**`, которого тогда не существовало, и без
+        # фильтра они остановили бы каждый прогон (OUT-03 запрещает такой
+        # ретроспективный эффект). По ДЕРЕВУ: отсутствие файла патча —
+        # предупреждение, а не ошибка, потому что патч создаёт сама задача;
+        # тот же выбор и по той же причине, что у `not_a_regular_file`
+        # ниже.
+        result.merge(_validate_negative_control(task, config, waiver))
 
         if task.verifies_error:
             # Already reported by validate_task_fields — a different defect
