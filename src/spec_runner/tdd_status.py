@@ -183,13 +183,22 @@ def _applied_waiver(data: dict, task_id: str) -> tuple[str, str]:
     """`(lifecycle, qualification)` for this task's applied waiver, or two
     empty strings when none is on record.
 
-    Its own function because EVERY line that would otherwise assert an open
-    RED obligation needs it, not just the one for a task with no history at
-    all (#462, local review round 4): a task that authored a red under `tdd`,
-    had it abandoned, and was then re-declared `standard` with a marker
-    carries both records, and the retired branch used to print "needs RED
-    authoring" two lines under the header naming the sanction — the very
-    contradiction this fix exists to remove.
+    Its own function because every line whose text asserts an open RED
+    obligation needs it, not just the one for a task with no history at all
+    (#462, local review rounds 4 and 6). Those lines are three, and naming
+    them is what makes the claim checkable rather than sweeping:
+
+    - the retired-checkpoint line ("needs RED authoring");
+    - the verify-first entry read red ("awaiting red authoring");
+    - the no-history line (a red is owed).
+
+    A waiver row outlives the declaration that caused it, so all three are
+    reachable with one on record: `resolve_waiver` refuses a marker on a
+    non-`standard` task, but nothing deletes the row when the operator
+    re-declares the task `tdd` or `verify_first`. Each printed two lines
+    under a header naming the sanction — the very contradiction this fix
+    exists to remove. The remaining lines state evidence, not an obligation,
+    and are left alone.
 
     The LAST matching row, not the first: `applied_waivers` is ordered
     oldest-first, deduplication is by (task, namespace, sanction), and a
@@ -273,7 +282,10 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         if verify["outcome"] == "green":
             return f"green verify-evidence, no red authored ({commit})"
         if verify["outcome"] == "test_failure":
-            return f"verify-first entry read red ({commit}); awaiting red authoring"
+            owed = f"verify-first entry read red ({commit}); awaiting red authoring"
+            if waiver_note:
+                return f"{owed} unless the waiver still stands — {waiver_note}"
+            return owed
         return f"verify-first entry could not be judged: instrument-error ({commit})"
     if waiver_note:
         return f"{waiver_lifecycle}; a red is owed unless the waiver still stands — {waiver_note}"

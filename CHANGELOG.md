@@ -41,10 +41,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
   the red is owed nor that it is not — dropping "needs RED authoring" would
   lose the only sentence saying what to do next, exactly as asserting the
   debt hid the sanction. When several sanctions are on record the operative
-  one is named and the rest are counted, and the qualification reaches every
-  line that would otherwise assert an open obligation, including a task that
-  authored a red under `tdd`, had it retired, and was then re-declared
-  `standard` with a marker. A task with no waiver row at all is untouched.
+  one is named and the rest are counted, and the qualification reaches all
+  three lines that assert an open obligation — the retired checkpoint's
+  "needs RED authoring", the verify-first entry's "awaiting red authoring",
+  and the no-history line — because a waiver row outlives the declaration
+  that wrote it: nothing deletes it when the task is later re-declared `tdd`
+  or `verify_first`. Lines that state evidence rather than an obligation are
+  untouched, as is a task with no waiver row at all.
 
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same

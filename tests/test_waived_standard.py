@@ -1220,6 +1220,86 @@ class TestStatusReportsWaiversAsContract:
 
         assert "needs RED authoring" in text, text
 
+    @pytest.mark.parametrize(
+        ("extra", "obligation", "unwaived_obligation"),
+        [
+            # Без записи waiver'а долг у пустой истории несёт «yet» — та же
+            # мысль другими словами; остальные две ветки формулировку не
+            # меняют.
+            ({}, "a red is owed", "no red checkpoint yet"),
+            (
+                {"retired_checkpoints": [{"task_id": "TASK-008", "status": "abandoned"}]},
+                "needs RED authoring",
+                "needs RED authoring",
+            ),
+            (
+                {
+                    "verify_evidence": [
+                        {
+                            "task_id": "TASK-008",
+                            "outcome": "test_failure",
+                            "commit_sha": "0123456789abcdef",
+                        }
+                    ]
+                },
+                "awaiting red authoring",
+                "awaiting red authoring",
+            ),
+        ],
+        ids=["no-history", "retired-checkpoint", "verify-first-read-red"],
+    )
+    def test_every_line_asserting_an_open_red_obligation_is_qualified(
+        self, extra, obligation, unwaived_obligation
+    ):
+        """Обещание «каждая строка» — по списку, а не на слово (#462, круг 6).
+
+        Строка waiver'а переживает объявление, которое её вызвало:
+        `resolve_waiver` отвергает маркер на не-`standard` задаче, но
+        удалять уже записанную строку некому. Значит, задача может дойти
+        до любой из трёх веток, неся waiver на записи, — и каждая печатала
+        бы безусловный долг двумя строками ниже заголовка с санкцией.
+        Ветка verify-first была пропущена ровно так, пока докстринг и
+        CHANGELOG обещали «every line».
+
+        Зовётся `lifecycle_of` напрямую: предмет — именно выбор ветки, а
+        три живых прогона ради трёх форм одной строки стоили бы дороже,
+        чем стоит сам пин. Проводка `collect`→`render` для двух из трёх
+        закреплена сквозными тестами выше.
+        """
+        from spec_runner.tdd_status import lifecycle_of
+
+        data = {
+            "phases": {},
+            "verify_evidence": [],
+            "active_checkpoints": [],
+            "retired_checkpoints": [],
+            "applied_waivers": [
+                {
+                    "task_id": "TASK-008",
+                    "waiver_class": "characterisation",
+                    "sanction": "batch-approve-2026-09-09",
+                    "lifecycle": "no TDD lifecycle recorded for this task",
+                    "baseline_sha": "abcdef1234",
+                }
+            ],
+        }
+        data.update(extra)
+
+        line = lifecycle_of(data, "TASK-008")
+
+        assert obligation in line, f"пропала фраза о том, что делать дальше: {line}"
+        assert "unless the waiver still stands" in line, (
+            f"долг утверждается безусловно, хотя санкция на записи: {line}"
+        )
+        assert "batch-approve-2026-09-09" in line, f"санкция не названа: {line}"
+
+        data["applied_waivers"] = []
+        unwaived = lifecycle_of(data, "TASK-008")
+        assert unwaived_obligation in unwaived, unwaived
+        assert "unless the waiver still stands" not in unwaived, (
+            f"оговорка появляется без единой записи waiver'а: {unwaived}"
+        )
+
     def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
         """Вторая половина: без санкции «yet» — правда, и остаётся."""
         from spec_runner.tdd_status import collect, render
