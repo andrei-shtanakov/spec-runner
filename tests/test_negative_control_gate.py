@@ -432,3 +432,99 @@ class TestOneDefectIsReportedOnce:
         result = _validate([task], _cfg(tmp_path))
 
         assert any("TDD-waiver" in e for e in result.errors), result.errors
+
+
+class TestTheRefusalIsTypedAsPolicy:
+    """kind: contract — находка ревью круга 7.
+
+    AC-11 требует, чтобы ни один член класса структурной невозможности не
+    давал «переисполнений И infrastructure-исхода». Отказ шёл через
+    `refusal_for(INSTRUMENT_ERROR, …)` → `ErrorCode.INFRASTRUCTURE` → exit 2,
+    то есть CI и дашборд читали «сломан инструмент, о работе ничего не
+    известно» там, где дефектно ОБЪЯВЛЕНИЕ. Design §4 предписывал
+    `RefusalKind.INSTRUMENT` — противоречие в самой базе; авторитетна
+    приёмка, по прецеденту владельца (AP-12: FR-04 против AP-08).
+    """
+
+    def test_a_declaration_defect_is_a_policy_refusal_not_a_broken_machine(
+        self, tmp_path, monkeypatch
+    ):
+        from spec_runner import execution
+        from spec_runner.state import ErrorCode, ExecutorState
+
+        root = TestBEH04RefusalCostsNoPaidCall()._repo(tmp_path)
+        cfg = _cfg(root, state_file=root / "spec" / "state.db", logs_dir=root / "spec" / "logs")
+        monkeypatch.setattr(execution, "build_cli_invocation", lambda **k: None)
+
+        with ExecutorState(cfg) as state:
+            result = execution.execute_task(_task(negative_control=None), cfg, state)
+            attempt = state.get_task_state("TASK-008").attempts[-1]
+
+        assert result == "TERMINAL_REFUSAL", result
+        assert attempt.error_code == ErrorCode.HOOK_FAILURE, attempt.error_code
+        assert attempt.error_kind != "instrument", attempt.error_kind
+
+
+class TestTheCanonicalPatchPathIsCommittable:
+    """kind: contract — находка ревью круга 7 (блокирующая).
+
+    Канонический путь мутанта — `spec/negative-controls/<TASK-ID>.patch`, а
+    `/spec/*` в .gitignore этого репо игнорирует его: задача физически не
+    может доставить патч в кандидат-коммит, контроль всегда `patch_absent`
+    → `unsatisfied`, и waived-задача не завершается никогда. Фича была бы
+    неприменима в собственном репозитории — проверяется на самом .gitignore,
+    потому что доказывает это git, а не прочтение правила.
+    """
+
+    def test_git_does_not_ignore_a_control_patch(self):
+        import subprocess
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        probe = "spec/negative-controls/TASK-999.patch"
+        # БЕЗ `-v`: с ним git печатает и отрицающий паттерн, и код выхода
+        # становится 0 у пути, который на самом деле НЕ игнорируется, —
+        # измерялась бы не та величина. Без флага rc=1 значит «не игнорируется».
+        ignored = subprocess.run(
+            ["git", "check-ignore", probe], cwd=root, capture_output=True, text=True
+        )
+        why = subprocess.run(
+            ["git", "check-ignore", "-v", probe], cwd=root, capture_output=True, text=True
+        )
+
+        assert ignored.returncode == 1, (
+            f"канонический путь мутанта игнорируется: {why.stdout.strip()}"
+        )
+
+
+class TestTwoIndependentDefectsAreBothNamed:
+    """kind: contract — находка ревью круга 7, обратная сторона починки
+    круга 1.
+
+    Молчание при нерезолвящемся waiver'е убрало ложную строку «маркера
+    нет», но вместе с ней — и НЕЗАВИСИМУЮ ошибку: неразбираемое
+    `**Negative-control:**` перестало называться вовсе, и оператор,
+    починив waiver, возвращался за вторым кругом за тем, что было видно
+    сразу. `validate` существует ровно затем, чтобы этого не было.
+    """
+
+    def test_an_unparseable_declaration_is_named_even_when_the_waiver_fails(self, tmp_path):
+        task = _task(
+            execution_mode="tdd",  # из-за этого waiver не резолвится
+            tdd_waiver=WAIVER,
+            negative_control_error="**Negative-control:** separator ' :: ' is missing",
+        )
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert any("execution mode" in e for e in result.errors), result.errors
+        assert any("separator" in e for e in result.errors), (
+            f"независимый дефект объявления проглочен: {result.errors}"
+        )
+
+    def test_the_false_line_stays_gone(self, tmp_path):
+        task = _task(execution_mode="tdd", tdd_waiver=WAIVER, negative_control=_control())
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert not any("carries no **TDD-waiver:**" in e for e in result.errors), result.errors

@@ -44,7 +44,7 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def _refuse_task(task, config, state, reason: str) -> str:
+def _refuse_task(task, config, state, reason: str, *, kind: "RefusalKind | None" = None) -> str:
     """Refuse one task with the attempt recorded, instead of raising (#429).
 
     A declaration the resolver cannot read is an operator error about THIS
@@ -54,8 +54,19 @@ def _refuse_task(task, config, state, reason: str) -> str:
     `in_progress`, and every later task unstarted.
     """
     from .gates import GateStatus, refusal_for
+    from .phases import Refusal
 
-    refusal = refusal_for(GateStatus.INSTRUMENT_ERROR, reason)
+    # Вид отказа — про ПРИРОДУ факта, а не про место в коде. Дефектное
+    # объявление — факт о работе (exit 1, «не доставлено»); сломанный
+    # инструмент — exit 2, «о работе ничего не известно», и оркестратор
+    # читает разницу. AC-11 запрещает infrastructure-исход для класса
+    # структурной невозможности; design §4 предписывал обратное —
+    # противоречие в базе, разрешено в пользу приёмки (AP-12).
+    refusal = (
+        Refusal(reason, kind, terminal=True)
+        if kind is not None
+        else refusal_for(GateStatus.INSTRUMENT_ERROR, reason)
+    )
     state.record_attempt(
         task.id,
         False,
@@ -715,7 +726,9 @@ def _execute_task(
             # соседние отказные ветки — claims выше и запись waiver'а ниже —
             # откатывают статус ровно по этой причине.
             update_task_status(config.tasks_file, task_id, "todo")
-            return _refuse_task(task, config, state, control_refusal)
+            from .phases import RefusalKind
+
+            return _refuse_task(task, config, state, control_refusal, kind=RefusalKind.POLICY)
 
         # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
         # санкция ПРИМЕНЕНА, а не что её собирались применить. Задача,
