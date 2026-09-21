@@ -31,8 +31,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
   the task where it was lifted, directly under a header naming the waiver.
   The aggregate form was fixed in v2.36.0; with `task_id` the emptiness
   branch is unreachable, so the per-task line kept saying it. `lifecycle_of`
-  now reads the applied waiver and names the class and the sanction. An
-  unwaived task still says "yet", because there it is true.
+  now reads the applied waiver and names the class, the sanction and the
+  baseline of the run it applied to. An unwaived task still says "yet",
+  because there it is true.
+
+  Worded as history on purpose: `waivers_applied` is append-only and read by
+  task id alone, so the row outlives the marker that caused it. An operator
+  who has since removed the marker owes a red again, and the line says which
+  run the waiver applied to rather than claiming the obligation is lifted
+  today.
 
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same

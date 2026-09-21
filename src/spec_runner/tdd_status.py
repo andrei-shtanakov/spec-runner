@@ -238,9 +238,18 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         # aggregate form already said so (#430); with `task_id` the
         # emptiness branch in `render` is unreachable (`tasks = [task_id]`),
         # so the per-task line said the opposite of the header above it.
+        #
+        # Worded as HISTORY, and the baseline named (#462, local review):
+        # `waivers_applied` is append-only and `collect` filters it by
+        # task_id alone, so this row outlives the marker that caused it. An
+        # operator who removed the marker is owed a red again, and a line
+        # claiming the obligation is lifted *now* would be the same kind of
+        # untruth this fix removed, pointing the other way.
         return (
-            f"{waiver['lifecycle']} — addressed TDD waiver applied "
-            f"(class {waiver['waiver_class']}, sanction {waiver['sanction']})"
+            f"{waiver['lifecycle']} — a waiver was applied on an earlier run "
+            f"(class {waiver['waiver_class']}, sanction {waiver['sanction']}, "
+            f"baseline {waiver['baseline_sha'][:8]}); that row is history, "
+            f"not what tasks.md declares now"
         )
     return "no red checkpoint yet"
 

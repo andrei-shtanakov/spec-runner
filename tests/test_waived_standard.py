@@ -1069,6 +1069,17 @@ class TestStatusReportsWaiversAsContract:
         )
         assert "waiver" in text.lower(), f"причина пустоты не названа: {text}"
 
+        # Строка говорит о ПРОШЛОМ прогоне и называет его baseline (#462,
+        # находка локального ревью круга 2). `waivers_applied` —
+        # append-only, `collect` фильтрует её только по `task_id` и ни
+        # разу не сверяется с тем, что написано в `tasks.md` сейчас.
+        # Оператор, снявший маркер, получил бы утверждение, что долг снят
+        # санкцией, — тогда как долг вернулся в силу. Ровно та же неправда,
+        # что чинилась выше, только в другую сторону.
+        assert "earlier run" in text, f"строка читается как нынешнее состояние: {text}"
+        assert "abcdef12" in text, f"baseline того прогона не назван: {text}"
+        assert "not what tasks.md declares now" in text, text
+
     def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
         """Вторая половина: без санкции «yet» — правда, и остаётся."""
         from spec_runner.tdd_status import collect, render
