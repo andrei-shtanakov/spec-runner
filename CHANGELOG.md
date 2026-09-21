@@ -12,6 +12,28 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **One defect, one line: `validate` no longer reports a mode typo twice**
+  (#431). `_validate_verify_first_declarations` resolved the execution mode
+  in two places — `resolve_waiver` begins by resolving it and re-raises that
+  `ConfigError` verbatim, and the mode check below added the same sentence
+  again. A task carrying both a `**TDD-waiver:**` marker and a typo in
+  `**Mode:**` produced two identical errors, with nothing in the report
+  saying they were one defect. The mode is now resolved once, above both
+  readers; the order in which the other defects are reported is unchanged.
+  Visible side effect: a task with an unparseable `**Verifies:**` *and* an
+  unknown mode now gets the mode line too, where the `continue` used to eat
+  it — the same "all defects in one pass" principle the marker check was
+  moved forward for.
+
+- **`tdd status <TASK-ID>` stops promising a red that a sanction removed**
+  (#431). For a task with an applied TDD waiver the per-task form answered
+  "no red checkpoint yet" — "yet" reads as an open obligation at exactly
+  the task where it was lifted, directly under a header naming the waiver.
+  The aggregate form was fixed in v2.36.0; with `task_id` the emptiness
+  branch is unreachable, so the per-task line kept saying it. `lifecycle_of`
+  now reads the applied waiver and names the class and the sanction. An
+  unwaived task still says "yet", because there it is true.
+
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same
   `validate_all` before their loop; `run` refuses with exit 1 and the H-1
