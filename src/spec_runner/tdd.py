@@ -415,16 +415,23 @@ def _replay_selector(
             if outside is not None:
                 return attempt("mutate", outside, refusal_code="patch_absent")
             candidate_patch = worktree / mutate
-            # Символическая ссылка — тот же обход через содержимое дерева, а
-            # не через форму строки: `is_file()` и `git apply` следуют за ней,
-            # и объявленный путь читает файл, которого нет ни в одном коммите.
+            # Одна проверка на всё правило «патч читается из коммита»:
+            # разрешённый путь обязан лежать ВНУТРИ одноразового дерева, чем
+            # бы ни был каждый его компонент. Отдельная проверка последнего
+            # компонента ловила ссылку-файл и пропускала ссылку-КАТАЛОГ
+            # (`spec/negative-controls -> /tmp/…`), за которой лежит обычный
+            # файл: `is_file()` и `git apply` следуют по ней одинаково.
             # Соседняя фича отвергает такой вход по имени (`parse_group_element`).
-            if candidate_patch.is_symlink():
+            try:
+                inside = candidate_patch.resolve().is_relative_to(worktree.resolve())
+            except OSError:
+                inside = False
+            if not inside:
                 return attempt(
                     "mutate",
-                    f"the declared patch {str(mutate)!r} is a symbolic link in the "
-                    f"candidate commit {sha[:12]}: what it points at is not in the "
-                    "commit, and the control judges the commit",
+                    f"the declared patch {str(mutate)!r} resolves outside the candidate "
+                    f"commit {sha[:12]} (a symbolic link in the path): what it points at "
+                    "is not in the commit, and the control judges the commit",
                     refusal_code="patch_absent",
                 )
             if not candidate_patch.is_file():

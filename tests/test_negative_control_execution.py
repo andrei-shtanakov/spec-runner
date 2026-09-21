@@ -327,3 +327,40 @@ class TestAnUnreadablePatchIsTheMachinesFault:
         verdict = _classify_mutated(_cfg(root), clean, mutated)
         assert verdict.verdict == "instrument_error", verdict
         assert verdict.retriable, "сбой машины обязан переисполняться"
+
+
+class TestASymlinkedDirectoryIsNotTheCommitEither:
+    """kind: integration — находка ревью круга 4.
+
+    Проверка предыдущего круга смотрела ТОЛЬКО последний компонент пути:
+    `spec/negative-controls` сам может быть ссылкой наружу, и тогда
+    `spec/negative-controls/TASK-008.patch` — обычный файл по ту сторону.
+    Правило одно и то же — «патч читается из коммита», — значит и проверка
+    обязана быть одна: разрешённый путь лежит внутри дерева, чем бы ни был
+    каждый его компонент.
+    """
+
+    def test_a_patch_behind_a_symlinked_directory_is_refused(self, tmp_path):
+        from spec_runner.negative_control import replay_both_halves
+
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        (outside_dir / "TASK-008.patch").write_text(PATCH, encoding="utf-8")
+
+        root, _ = _repo(tmp_path)
+        real_dir = root / "spec" / "negative-controls"
+        for item in real_dir.iterdir():
+            item.unlink()
+        real_dir.rmdir()
+        real_dir.symlink_to(outside_dir, target_is_directory=True)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-m", "the controls directory is a link")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=_control())
+
+        assert mutated is not None and mutated.stage == "mutate", mutated
+        assert mutated.refusal_code == "patch_absent", mutated
+        assert mutated.outcome is None, "мутант исполнен на патче вне коммита"
