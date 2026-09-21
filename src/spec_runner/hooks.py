@@ -1400,8 +1400,22 @@ def post_done_hook(
     control_verdict, control_detail, control_sha = _run_negative_control_before_review(
         task, config, review_checkpoint_sha
     )
-    if control_verdict == "unsatisfied":
-        refusal = refusal_for(GateStatus.UNSATISFIED, control_detail)
+    if control_verdict in ("unsatisfied", "instrument_error"):
+        # Обе половины отказа стоят ЗДЕСЬ, до платного вызова. Design §4a:
+        # «до гейта доезжает только удовлетворённый». Инструментальная
+        # неудача уже исчерпала `gate_recovery_attempts` выше, и дальше её
+        # ждёт тот же гейт с тем же ответом — с той разницей, что ревьюер
+        # к тому моменту оплачен вердиктом, с которым нечего делать. Тот же
+        # прецедент, на который ссылается комментарий выше:
+        # `_claims_intact_before_review` останавливается и на неудаче
+        # инструмента тоже. Вид отказа разный — «работа не доставлена»
+        # (exit 1) против «о работе ничего не известно» (exit 2).
+        status = (
+            GateStatus.UNSATISFIED
+            if control_verdict == "unsatisfied"
+            else GateStatus.INSTRUMENT_ERROR
+        )
+        refusal = refusal_for(status, control_detail)
         refusal = _commit_blocked_status(task, config, refusal, review_checkpoint_sha)
         return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
 

@@ -312,3 +312,51 @@ class TestAnUnrunnableControlIsStillRecorded:
         # читаемом как «патч того кандидата». Отсутствие пишется отсутствием.
         assert rows[0]["patch_blob_sha"] == "", rows[0]
         assert rows[0]["commit_sha"] == "", rows[0]
+
+
+class TestOnlyASatisfiedControlReachesTheReviewer:
+    """kind: integration — находка ревью круга 8.
+
+    Design §4a: «до гейта доезжает только удовлетворённый (и SHA, на котором
+    получен)». Отказ на месте стоял только на `unsatisfied`, поэтому
+    исчерпавший бюджет `instrument_error` проваливался дальше: ревьюер
+    оплачивался, вердикт уносился в facts, гейт всё равно блокировал —
+    платный вызов покупал ничего. Прецедент, на который ссылается сам
+    комментарий сайта, `_claims_intact_before_review`, останавливается и на
+    инструментальной неудаче тоже.
+    """
+
+    def test_an_exhausted_instrument_error_stops_before_the_paid_call(self, tmp_path, monkeypatch):
+        from spec_runner import negative_control as nc
+        from spec_runner.state import ErrorCode
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, gate_recovery_attempts=1)
+        tries: list = []
+        monkeypatch.setattr(
+            nc,
+            "run_negative_control",
+            lambda *a, **k: tries.append(1)
+            or nc.ControlResult("instrument_error", "the toolchain vanished", None, None),
+        )
+
+        (ok, error, *_), reviewed = _run(root, cfg, monkeypatch)
+
+        assert reviewed == [], "ревьюер оплачен при нерешённом контроле"
+        assert ok is False, error
+        assert len(tries) == 2, f"бюджет 1 даёт 2 попытки, было {len(tries)}"
+        # exit 2 — «о работе ничего не известно», а не «работа не доставлена».
+        # Вид живёт НА отказе, а не в его словах: классификация по тексту —
+        # ровно то, что #230 и убрал.
+        assert getattr(error, "error_code", None) == ErrorCode.INFRASTRUCTURE, (
+            f"отказ типизирован как {getattr(error, 'kind', None)}: {error}"
+        )
+
+    def test_a_satisfied_control_still_reaches_the_reviewer(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+
+        (ok, error, *_), reviewed = _run(root, cfg, monkeypatch)
+
+        assert reviewed, "удовлетворённый контроль не должен мешать ревью"
+        assert ok, error
