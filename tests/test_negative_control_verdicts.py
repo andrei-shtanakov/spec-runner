@@ -16,6 +16,7 @@ BEH-13 гоняется на ОБОИХ измеренных раннерах: �
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -257,6 +258,20 @@ class TestBEH12TheStandIsNotBlamedOnThePatch:
 
 
 _EXUNIT_MISSING = shutil.which("mix") is None or shutil.which("elixir") is None
+
+#: Выставляется обязательным ExUnit-job'ом. С ним отсутствие тулчейна —
+#: ОШИБКА СБОРА, а не skip: AC-10 объявлен обязательным, и «зелёный, потому
+#: что не запускалось» — ровно то, против чего заведён этот приём у соседнего
+#: контрактного файла (`tests/test_exunit_adapter.py`). Гейт живёт рядом с
+#: тестами, а не в workflow, считающем, сколько их прошло.
+_EXUNIT_REQUIRED = os.environ.get("SPEC_RUNNER_REQUIRE_EXUNIT") == "1"
+
+if _EXUNIT_MISSING and _EXUNIT_REQUIRED:
+    raise RuntimeError(
+        "SPEC_RUNNER_REQUIRE_EXUNIT=1, но `mix`/`elixir` не на PATH — BEH-13 "
+        "сравнивает вердикты ДВУХ измеренных раннеров, и пропущенный ExUnit "
+        "оставляет ветки классификации без единой исполняемой проверки"
+    )
 
 MIX_EXS = """defmodule Probe.MixProject do
   use Mix.Project

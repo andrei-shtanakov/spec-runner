@@ -623,11 +623,19 @@ def _record_negative_control(task: Task, config: ExecutorConfig, sha: str, resul
     control = task.negative_control
     if control is None:
         return
-    blob = subprocess.run(
-        ["git", "rev-parse", f"{sha}:{control.patch}"],
-        cwd=config.project_root,
-        capture_output=True,
-        text=True,
+    # Пустой sha — «кандидата нет», и `git rev-parse ":path"` ответил бы
+    # blob'ом из ИНДЕКСА: свидетельство несло бы хэш содержимого, которое
+    # никакой коммит не фиксировал, в поле, читаемом как «патч того
+    # кандидата». Отсутствие пишется отсутствием.
+    blob = (
+        subprocess.run(
+            ["git", "rev-parse", f"{sha}:{control.patch}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if sha
+        else None
     )
     clean = result.clean
     mutated = result.mutated
@@ -638,7 +646,9 @@ def _record_negative_control(task: Task, config: ExecutorConfig, sha: str, resul
                 namespace=resolve_namespace(config),
                 commit_sha=sha,
                 selector=control.selector,
-                patch_blob_sha=blob.stdout.strip() if blob.returncode == 0 else "",
+                patch_blob_sha=(
+                    blob.stdout.strip() if blob is not None and blob.returncode == 0 else ""
+                ),
                 clean_outcome=(clean.outcome.value if clean and clean.outcome else ""),
                 mutated_outcome=(mutated.outcome.value if mutated and mutated.outcome else ""),
                 verdict=result.verdict,

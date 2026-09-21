@@ -307,3 +307,8 @@ class TestAnUnrunnableControlIsStillRecorded:
         assert reviewed == [], "платное ревью вызвано без исполненного контроля"
         assert rows and rows[0]["verdict"] == "unsatisfied", rows
         assert rows[0]["clean_outcome"] == "" and rows[0]["mutated_outcome"] == "", rows[0]
+        # `git rev-parse ":path"` ответил бы blob'ом из ИНДЕКСА — хэшем
+        # содержимого, которого никакой коммит не фиксировал, в поле,
+        # читаемом как «патч того кандидата». Отсутствие пишется отсутствием.
+        assert rows[0]["patch_blob_sha"] == "", rows[0]
+        assert rows[0]["commit_sha"] == "", rows[0]
