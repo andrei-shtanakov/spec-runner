@@ -6,11 +6,10 @@
       "TASK-003": "tdd"
     },
     "validate_errors": [],
-    "validate_ok": true,
+    "validate_ok_for_non_verify_first": true,
     "validate_warnings": [
       "TASK-002: no traceability references",
-      "TASK-003: no traceability references",
-      "TASK-004: no traceability references"
+      "TASK-003: no traceability references"
     ]
   },
   "tdd": {
@@ -20,11 +19,10 @@
       "TASK-003": "tdd"
     },
     "validate_errors": [],
-    "validate_ok": true,
+    "validate_ok_for_non_verify_first": true,
     "validate_warnings": [
       "TASK-002: no traceability references",
-      "TASK-003: no traceability references",
-      "TASK-004: no traceability references"
+      "TASK-003: no traceability references"
     ]
   }
 }

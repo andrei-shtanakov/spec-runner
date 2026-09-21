@@ -27,9 +27,22 @@ refactor, including its `--update-golden` mechanic (`tests/conftest.py`).
 Today no such golden exists: this is the first test to freeze this exact
 snapshot, so it fails on a missing fixture rather than a wrong value — that
 absence is itself what this slice must fill in.
+
+Narrowed 2026-09-21 (spec-runner#377) without changing what it promises.
+`resolved_modes` was always read per task, but `validate_*` went into the
+golden whole, so the verify_first sibling's own diagnostics were frozen here
+too — a pin wider than BEH-06's contract, and one that would have reddened
+on a *correct* new refusal for that sibling. `_own_diagnostics` filters both
+lists to the three tasks (plus anything naming no task), `validate_ok`
+becomes `validate_ok_for_non_verify_first` — derived from the filtered
+errors, since the whole file's verdict is not this red's subject — and the
+golden was re-snapped with `--update-golden`. Measured both directions: a
+new error raised for the verify_first sibling leaves this green, and
+rewording the warning that TASK-002/003 carry reddens it.
 """
 
 import json
+import re
 from pathlib import Path
 
 from spec_runner.config import ExecutorConfig
@@ -78,6 +91,33 @@ Plain description, untouched by this feature.
 
 NON_VERIFY_FIRST_IDS = ("TASK-001", "TASK-002", "TASK-003")
 
+_TASK_ID = re.compile(r"\bTASK-\d+\b")
+
+
+def _own_diagnostics(lines: list[str]) -> list[str]:
+    """Only what BEH-06 is about: diagnostics naming one of the three
+    non-verify-first tasks, plus any that name no task at all.
+
+    The fixture needs the verify_first sibling — BEH-06 promises zero drift
+    *including* when one shares the file — but its diagnostics are another
+    task's subject, and freezing them here pinned this red wider than its
+    own contract (spec-runner#377). `_validate_verify_first_declarations`
+    judges a declaration against the adapter, and TASK-006 tightens exactly
+    that: a new refusal for TASK-004 would have reddened the zero-behaviour
+    gate as though three ordinary tasks had drifted, months after the
+    context for reading that failure had gone.
+
+    A diagnostic naming no task is kept: it is about the file as a whole,
+    which is the three tasks' file too.
+    """
+    kept = []
+    for line in lines:
+        named = set(_TASK_ID.findall(line))
+        if named and not named & set(NON_VERIFY_FIRST_IDS):
+            continue
+        kept.append(line)
+    return kept
+
 
 def _snapshot(tmp_path: Path) -> dict:
     tasks_path = tmp_path / "tasks.md"
@@ -95,11 +135,17 @@ def _snapshot(tmp_path: Path) -> dict:
         )
         resolved = {tid: cfg.resolve_execution_mode(by_id[tid]) for tid in NON_VERIFY_FIRST_IDS}
         result = validate_all(tasks_file=tasks_path, config_file=None)
+        errors = _own_diagnostics(result.errors)
         out[project_default] = {
             "resolved_modes": resolved,
-            "validate_ok": result.ok,
-            "validate_errors": result.errors,
-            "validate_warnings": result.warnings,
+            # Not `result.ok`: that is the whole file's verdict, and the
+            # whole file contains a verify_first task this red does not
+            # speak for (#377). The key is named for what it actually
+            # holds — nothing here would flip it but a diagnostic about
+            # TASK-001..003.
+            "validate_ok_for_non_verify_first": not errors,
+            "validate_errors": errors,
+            "validate_warnings": _own_diagnostics(result.warnings),
         }
     return out
 
