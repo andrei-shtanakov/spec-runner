@@ -34,6 +34,13 @@ def runtime_state_paths(config: ExecutorConfig) -> list[Path]:
         state.with_name(state.name + "-wal"),
         state.with_name(state.name + "-shm"),
         state.with_suffix(".lock"),
+        # Локальные копии checkpoint-ов и аварийный spool (#480, DT-01): та же
+        # опасность, что у state DB, и по той же причине — переключение ветки
+        # вернуло бы их под открытым процессом. Берутся из config, а не
+        # литералом, чтобы namespace-вариант не разошёлся с тем, что пишет
+        # publisher.
+        config.checkpoints_dir,
+        config.spool_file,
         config.logs_dir,
         config.stop_file,
         config.ready_file,

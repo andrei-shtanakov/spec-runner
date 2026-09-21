@@ -297,6 +297,11 @@ def durability_store_missing_properties(
     return missing
 
 
+#: Option keys of `durability.store` that name a path and are therefore
+#: resolved to absolute at load (design 1.1). A list, not a guess by value:
+#: "looks like a path" would also catch an adapter's bucket name or prefix.
+DURABILITY_PATHLIKE_OPTIONS = ("root",)
+
 #: BEH-28/BEH-42's bound on `durability.retention_days` -- outside this range
 #: is a separate `ConfigError`, alongside the missing-properties check.
 DURABILITY_RETENTION_DAYS_MIN = 7
@@ -635,6 +640,19 @@ class ExecutorConfig:
 
         if not self.state_file.is_absolute():
             self.state_file = self.project_root / self.state_file
+        # Путеподобные `durability.store.options` — абсолютными ЗДЕСЬ, один раз
+        # и относительно `project_root` (design § 1.1). Не лениво при первом
+        # `put`: процесс вправе сменить рабочий каталог внутри себя
+        # (`doctor.run_probe` уходит `os.chdir` в scratch и удаляет его), и
+        # относительный `root`, разрешённый после этого, указал бы внутрь
+        # каталога, который сейчас удалят — платный вызов состоялся бы, а
+        # durable-запись о нём уехала бы вместе со scratch. Повторный
+        # `__post_init__` (его зовёт `doctor.build_scratch`) абсолютный путь
+        # уже не двигает.
+        for _option in DURABILITY_PATHLIKE_OPTIONS:
+            _value = self.durability_store_options.get(_option)
+            if _value and not Path(_value).is_absolute():
+                self.durability_store_options[_option] = str(self.project_root / _value)
         if not self.logs_dir.is_absolute():
             self.logs_dir = self.project_root / self.logs_dir
         if not self.plugins_dir.is_absolute():
@@ -645,6 +663,23 @@ class ExecutorConfig:
         """The active spec dir: ``spec/changes/<id>/`` under a change, else ``spec/``."""
         base = self.project_root / "spec"
         return base / "changes" / self.change_id if self.change_id else base
+
+    @property
+    def checkpoints_dir(self) -> Path:
+        """Локальные копии checkpoint-ов (design § 3.2), рядом со state DB.
+
+        Свойство, а не литерал у каждого читателя: путь namespace-зависим так
+        же, как `state_file` (`spec_prefix`/`change_id`), и «почти тот же
+        литерал» в двух местах — способ разойтись молча. Каталог заводит тот,
+        кто пишет: команда, ничего не опубликовавшая, не оставляет и пустой
+        директории.
+        """
+        return self.state_file.with_name(f".executor-{self.spec_prefix}checkpoints")
+
+    @property
+    def spool_file(self) -> Path:
+        """Аварийный spool (design § 8): тот же namespace, что у state DB."""
+        return self.state_file.with_name(f".executor-{self.spec_prefix}spool.jsonl")
 
     @property
     def stop_file(self) -> Path:
@@ -1067,15 +1102,28 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
                     "declaration only (OUT-03); declare tls: true, "
                     "encryption_at_rest: true and immutable_put: true"
                 )
-            durability_retention_days = durability.get("retention_days")
-            if durability_retention_days is not None and durability_retention_days_out_of_range(
-                int(durability_retention_days)
-            ):
+
+        # Вне ветки адаптера намеренно: `retention_days` — свойство политики
+        # хранения, а не адаптера, и объявить срок, ничего не объявив о store,
+        # ровно так же бессмысленно. Проверка внутри ветки пропускала бы
+        # `retention_days: 3` в конфиге без адаптера — то есть отказ зависел бы
+        # от соседнего ключа (находка ревью).
+        durability_retention_days = durability.get("retention_days")
+        if durability_retention_days is not None:
+            try:
+                _retention = int(durability_retention_days)
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    f"{config_path}: durability.retention_days must be a whole number of "
+                    f"days, got {durability_retention_days!r}"
+                ) from None
+            if durability_retention_days_out_of_range(_retention):
                 raise ConfigError(
                     f"{config_path}: durability.retention_days must be between "
                     f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
                     f"got {durability_retention_days}"
                 )
+
         format_check = commands.get("format_check")
         if format_check is not None and not isinstance(format_check, str):
             raise ConfigError(

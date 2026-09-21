@@ -28,6 +28,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from uuid import uuid4
 
 
 class AlreadyExists(Exception):
@@ -207,9 +208,15 @@ class LocalVolumeStore:
         """
         target = self._path(key)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.parent / f".{target.name}.{os.getpid()}.tmp"
+        # Уникальность имени — по публикации, не по процессу: у двух `put`
+        # одного ключа в одном процессе PID совпадает, и общий временный файл
+        # сделал бы их гонкой. `O_EXCL` ниже доказывает, что файл наш.
+        tmp = target.parent / f".{target.name}.{os.getpid()}.{uuid4().hex}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # `finally` начинается ЗДЕСЬ, а не выше: до успешного `os.open` файла
+        # с этим именем не существует либо он чужой, и снимать его нельзя —
+        # это удалило бы чужую незавершённую публикацию.
         try:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 os.write(fd, data)
                 os.fsync(fd)

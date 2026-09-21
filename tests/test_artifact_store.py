@@ -222,3 +222,67 @@ def test_local_volume_store_satisfies_the_protocol():
     """Статически и в рантайме: адаптер подставим под протокол."""
     store: ArtifactStore = LocalVolumeStore(Path("/tmp/x"))
     assert isinstance(store, ArtifactStore)
+
+
+class TestPutDoesNotTouchAnotherPublication:
+    """Находка ревью: `finally`, начинавшийся до `os.open`, снимал чужой
+    временный файл, если открытие своего не удалось."""
+
+    def test_a_failing_open_leaves_a_concurrent_temporary_alone(self, tmp_path: Path, monkeypatch):
+        store = LocalVolumeStore(tmp_path)
+        target_dir = tmp_path / "runs" / "R1"
+        target_dir.mkdir(parents=True)
+        foreign = target_dir / ".closure.json.999.deadbeef.tmp"
+        foreign.write_bytes(b"foreign unfinished publication")
+
+        def _boom(*args, **kwargs):
+            raise OSError("no fds")
+
+        monkeypatch.setattr(os, "open", _boom)
+        with pytest.raises(OSError):
+            store.put("runs/R1/closure.json", b"mine", metadata={})
+
+        assert foreign.exists(), "снят чужой временный файл при неудачном open"
+
+    def test_two_puts_of_one_key_do_not_share_a_temporary_name(self, tmp_path: Path):
+        """Один процесс, один ключ, два вызова: имена обязаны различаться,
+        иначе второй `put` удалит временный файл первого."""
+        store = LocalVolumeStore(tmp_path)
+        seen: list[str] = []
+        real_open = os.open
+
+        def _recording_open(path, flags, mode=0o777, **kw):
+            seen.append(str(path))
+            return real_open(path, flags, mode, **kw)
+
+        import unittest.mock as mock
+
+        with mock.patch.object(os, "open", _recording_open):
+            store.put("runs/R1/a.json", b"1", metadata={})
+            with pytest.raises(AlreadyExists):
+                store.put("runs/R1/a.json", b"2", metadata={})
+
+        tmps = [s for s in seen if s.endswith(".tmp")]
+        assert len(tmps) == 2 and tmps[0] != tmps[1], f"временные имена совпали: {tmps}"
+
+
+class TestRuntimeStatePathsCoverTheStoreLocals:
+    """DT-01 требует свойства путей «здесь же, чтобы каждая следующая задача
+    брала путь из config, а не из литерала»."""
+
+    def test_checkpoints_and_spool_follow_the_state_db_namespace(self, tmp_path: Path):
+        from spec_runner.config import ExecutorConfig
+
+        cfg = ExecutorConfig(project_root=tmp_path, spec_prefix="ws-")
+        assert cfg.checkpoints_dir.name == ".executor-ws-checkpoints"
+        assert cfg.spool_file.name == ".executor-ws-spool.jsonl"
+        assert cfg.checkpoints_dir.parent == cfg.state_file.parent
+
+    def test_both_are_runtime_state_and_never_committed(self, tmp_path: Path):
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.git_ops import runtime_state_paths
+
+        cfg = ExecutorConfig(project_root=tmp_path)
+        paths = runtime_state_paths(cfg)
+        assert cfg.checkpoints_dir in paths, "локальные копии checkpoint-ов попали бы в коммит"
+        assert cfg.spool_file in paths, "аварийный spool попал бы в коммит"

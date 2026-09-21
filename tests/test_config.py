@@ -683,3 +683,56 @@ class TestSpecGovernance:
         config_path.write_text("spec_governance: strict\n")
         loaded = load_config_from_yaml(config_path)
         assert loaded["spec_governance"] == "strict"
+
+
+class TestDurabilityStoreOptionsAreAbsoluteAtLoad:
+    """Находка ревью: путеподобные `options` обязаны стать абсолютными на
+    загрузке (design § 1.1), иначе относительный `root`, разрешённый после
+    `os.chdir` пробы `doctor`, укажет внутрь каталога, который тут же удалят —
+    платный вызов состоится, а durable-записи о нём уедут со scratch.
+    """
+
+    def test_relative_root_is_resolved_against_project_root(self, tmp_path: Path):
+        from spec_runner.config import ExecutorConfig
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": "var/store"},
+        )
+        assert cfg.durability_store_options["root"] == str(tmp_path / "var" / "store")
+
+    def test_absolute_root_is_left_alone_and_survives_a_second_post_init(self, tmp_path: Path):
+        """`doctor.build_scratch` зовёт `__post_init__` повторно — абсолютный
+        путь он двигать не вправе."""
+        from spec_runner.config import ExecutorConfig
+
+        absolute = str(tmp_path / "elsewhere")
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": absolute},
+        )
+        cfg.__post_init__()
+        assert cfg.durability_store_options["root"] == absolute
+
+    def test_non_path_options_are_not_touched(self, tmp_path: Path):
+        """Перечень, а не догадка по значению: «похоже на путь» поймало бы и
+        имя бакета."""
+        from spec_runner.config import ExecutorConfig
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": "var/store", "bucket": "relative/looking"},
+        )
+        assert cfg.durability_store_options["bucket"] == "relative/looking"

@@ -479,31 +479,49 @@ def _validate_durability_store(section: dict, result: "ValidationResult") -> Non
     instead of requiring a real run to hit the `ConfigError`.
     """
     durability = section.get("durability")
+    if durability is None:
+        return
+    # Нескалярные формы отказывает загрузчик — значит и отчёт обязан их
+    # называть, иначе `validate` зелёный, а `run` отвергнут (находка ревью):
+    # оператор узнаёт о дефекте не там, где спросил.
     if not isinstance(durability, dict):
+        result.errors.append(f"durability must be a mapping, got {type(durability).__name__}")
         return
-    store = durability.get("store")
+    store = durability.get("store", {})
     if not isinstance(store, dict):
-        return
+        result.errors.append(f"durability.store must be a mapping, got {type(store).__name__}")
+        store = {}
     adapter = store.get("adapter")
-    if not adapter:
-        return
-    missing = durability_store_missing_properties(
-        tls=bool(store.get("tls")),
-        encryption_at_rest=bool(store.get("encryption_at_rest")),
-        immutable_put=bool(store.get("immutable_put")),
-    )
-    if missing:
-        result.errors.append(
-            f"durability.store adapter {adapter!r} is missing required "
-            f"security properties: {', '.join(missing)}"
+    if adapter:
+        missing = durability_store_missing_properties(
+            tls=bool(store.get("tls")),
+            encryption_at_rest=bool(store.get("encryption_at_rest")),
+            immutable_put=bool(store.get("immutable_put")),
         )
+        if missing:
+            result.errors.append(
+                f"durability.store adapter {adapter!r} is missing required "
+                f"security properties: {', '.join(missing)}"
+            )
+    # Вне ветки адаптера — как и в загрузчике: срок хранения не свойство
+    # адаптера, и отказ по нему не может зависеть от соседнего ключа.
     retention_days = durability.get("retention_days")
-    if retention_days is not None and durability_retention_days_out_of_range(int(retention_days)):
-        result.errors.append(
-            "durability.retention_days must be between "
-            f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
-            f"got {retention_days}"
-        )
+    if retention_days is not None:
+        try:
+            retention = int(retention_days)
+        except (TypeError, ValueError):
+            # Отчёт, а не `ValueError` из середины валидации: `validate`
+            # существует затем, чтобы назвать дефект, а не упасть на нём.
+            result.errors.append(
+                f"durability.retention_days must be a whole number of days, got {retention_days!r}"
+            )
+            return
+        if durability_retention_days_out_of_range(retention):
+            result.errors.append(
+                "durability.retention_days must be between "
+                f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+                f"got {retention_days}"
+            )
 
 
 #: `review_policy` values the runtime understands (#157).
