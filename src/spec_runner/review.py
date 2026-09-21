@@ -189,8 +189,17 @@ def append_waiver_obligation(prompt: str, config: ExecutorConfig, task: Task) ->
 
     Fires only for a VALID addressed-waived task: `resolve_waiver` returns
     None without a marker, so an ordinary `standard` task is untouched, and a
-    malformed marker raises rather than silently producing a half-block —
-    the same fail-closed reading the resolver has everywhere else.
+    marker the resolver cannot read produces no block rather than a
+    half-written one.
+
+    This site does NOT refuse such a task, and no longer says it does
+    (spec-runner#435): the `ConfigError` is caught and the prompt returned
+    unchanged. The refusal lives where the task is run — `execute_task`
+    resolves the waiver before anything paid happens and stops the task
+    there — and `validate` reports the same defect statically. A task whose
+    marker is unreadable therefore never reaches review at all; inventing
+    obligation terms for a declaration we cannot read would be the only
+    thing raising here could add.
 
     The obligation text comes from the CLASS (`WAIVER_REVIEW_OBLIGATIONS`),
     never from the marker's own words: the declaration names a class, it does

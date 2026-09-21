@@ -133,10 +133,18 @@ new result keys are promises, not fixes.
   `WAIVER_REVIEW_OBLIGATIONS`, so a class without a stated review obligation
   cannot be added.
 
-  This closes the gap that made "negative control is verified by review"
-  true only on paper: until now the reviewer was told nothing about the
-  waiver at all. There is still no executable gate for it (#428) — the
-  reviewer is the only check, and the block says so.
+  Until this entry the reviewer was told nothing about the waiver at all,
+  so "negative control is verified by review" was true only on paper. What
+  changed is that the reviewer is now TOLD; whether its verdict can stop
+  anything is still `review_policy`'s answer, not this feature's
+  (corrected 2026-09-21, #435 — the original wording said "closes the gap"
+  and was a claim about the feature written as though it were a claim about
+  every configuration). Under the default `review_policy: advisory` the
+  review gate is not registered at all and a `REVIEW_FAILED` is a warning,
+  so a waived task still reaches DONE; with `run_review: false` the block is
+  never built; under `required` — this repo's own setting — the verdict
+  refuses. And the negative control itself still has no executable gate
+  anywhere (#428): the reviewer is the only check, and the block says so.
 
 - **Addressed TDD waivers for `standard` tasks** (#429). A task may carry
   `**TDD-waiver:** <class> · sanction: <id>` beside `**Mode:** standard`,
