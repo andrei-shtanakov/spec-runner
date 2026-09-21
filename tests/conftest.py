@@ -268,6 +268,35 @@ def _real_agent_refusal(cmd: str, cls: type[AssertionError] = AssertionError) ->
 
 
 @pytest.fixture(autouse=True)
+def _restore_structlog_configuration():
+    """Вернуть глобальную настройку логирования после теста, сменившего её.
+
+    spec-runner#536. `obs.init_logging` — это `structlog.configure()`, то есть
+    настройка ПРОЦЕССА, и продакшен вправе её менять: `watch --tui` обязан
+    освободить stderr, иначе он изуродует экран. Но тест, доехавший до такого
+    кода, менял поведение всех последующих тестов сессии — предупреждения
+    уходили в файловый sink, и проверки на `capsys` зеленели или краснели в
+    зависимости от порядка файлов.
+
+    Наблюдалось так: `TestOrphanedSuccessWarning` падал на паре
+    `test_watch.py test_exit_contract.py` и проходил в полном сборе, потому
+    что pytest собирает файлы по алфавиту и `test_exit_contract` идёт раньше
+    `test_watch`. Виноватым выглядел пострадавший.
+
+    Снимок берётся до теста и возвращается после — включая случай, когда тест
+    не трогал настройку вовсе (тогда восстановление ничего не меняет).
+    Проверяется парой тестов в `tests/test_logging_isolation.py`.
+    """
+    import structlog
+
+    saved = structlog.get_config().copy()
+    try:
+        yield
+    finally:
+        structlog.configure(**saved)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_agent_calls(monkeypatch):
     """Fail a test that would invoke a real agent, instead of billing for it.
 
