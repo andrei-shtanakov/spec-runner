@@ -59,6 +59,17 @@ spec/
 !workstreams/*/spec/
 workstreams/*/spec/*
 !workstreams/*/spec/*.md
+# Discovery-бриф лежит подкаталогом, и правило выше его НЕ спасает: git не
+# заходит в исключённый каталог, поэтому `!…/spec/*.md` до вложенного файла
+# не достаёт. Оба существующих бандла несут свой бриф только потому, что его
+# добавили принудительно (`git add -f`), а для уже отслеживаемого файла
+# .gitignore не применяется — то есть ловушка стояла для каждого следующего
+# бандла и сработала на #428: charter объявил `traces_to: [discovery-brief]`,
+# а сам бриф в мерж не попал. Правило расширено явно, как и предписывает
+# комментарий выше, вместо третьего force-add.
+!workstreams/*/spec/00-discovery/
+workstreams/*/spec/00-discovery/*
+!workstreams/*/spec/00-discovery/*.md
 # …и tasks-спеки конвейера в КОРНЕВОМ spec/ (managed-спека `spec/<ws>-tasks.md`
 # доставляется PR-ом и versioned). Runtime-состояние spec-runner внутри spec/
 # (state-DB, .tdd-evidence, прочее) остаётся игнорированным.
