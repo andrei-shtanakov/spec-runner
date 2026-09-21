@@ -304,6 +304,25 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
             f"{sorted(shipped - _NEVER_EXECUTE)}"
         )
 
+    def test_the_subprocess_run_door_is_belted(self, monkeypatch):
+        """The third of three doors, and the only one whose mark nothing
+        asserted (spec-runner#462).
+
+        The belt marks all three wrappers so that deleting one names the
+        door left unwatched — but the mark is only a signal if something
+        reads it, and `subprocess.run`'s was read nowhere. The comment in
+        `conftest.py` therefore claimed a property that held for two doors
+        out of three.
+        """
+        self._unguarded(monkeypatch)
+
+        assert getattr(subprocess.run, "belted_door", None) == "subprocess.run", (
+            "the subprocess.run door has no belt of its own installed"
+        )
+
+        with pytest.raises(PaidBinaryReached):
+            subprocess.run([BELT_PROBE_COMMAND])
+
     def test_the_popen_door_is_belted(self, monkeypatch):
         """`Popen` is one refactoring away from being the path a seam takes,
         and is already the path the plan seam's captured `run` goes through."""

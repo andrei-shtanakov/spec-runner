@@ -133,11 +133,26 @@ class TestAllowListKnowsVerifyComposition:
         module under `spec_runner` imports the test suite. What
         `build_task_json_result` actually prints is asserted by the test
         above, against a real result and the schema.
+
+        Two checks, because the import check alone cannot fail for the
+        defect BEH-33 names (spec-runner#462). A production module does not
+        have to *import* the list to apply it — the ordinary shape of this
+        defect is a copy: the same names bound in `cli.py` and filtered
+        against, which no import ever mentions. So the same ASTs are walked
+        a second time for a binding or a use of those names anywhere under
+        `spec_runner`. Still structural, not grep: an occurrence inside a
+        string or a comment — the "keep in sync with
+        `OPTIONAL_TASK_RESULT_FIELDS`" sentence `20-design.md` explicitly
+        does not want reddening a contract — is not a node.
         """
         package = Path(inspect.getfile(cli_module)).parent
+        trees = {
+            module.relative_to(package): ast.parse(module.read_text(encoding="utf-8"))
+            for module in sorted(package.rglob("*.py"))
+        }
+
         offenders: list[str] = []
-        for module in sorted(package.rglob("*.py")):
-            tree = ast.parse(module.read_text(encoding="utf-8"))
+        for module, tree in trees.items():
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     names = [alias.name for alias in node.names]
@@ -146,11 +161,29 @@ class TestAllowListKnowsVerifyComposition:
                 else:
                     continue
                 if any(name == "tests" or name.startswith("tests.") for name in names):
-                    offenders.append(f"{module.relative_to(package)}:{node.lineno}")
+                    offenders.append(f"{module}:{node.lineno}")
 
         assert not offenders, (
             f"production modules import the test suite, so a test-only "
             f"allow-list could reach runtime: {offenders}"
+        )
+
+        allow_list_names = {
+            "REQUIRED_TASK_RESULT_FIELDS",
+            "OPTIONAL_TASK_RESULT_FIELDS",
+            "ALLOWED_TASK_RESULT_FIELDS",
+        }
+        applied: list[str] = []
+        for module, tree in trees.items():
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in allow_list_names:
+                    applied.append(f"{module}:{node.lineno}:{node.id}")
+                elif isinstance(node, ast.Attribute) and node.attr in allow_list_names:
+                    applied.append(f"{module}:{node.lineno}:{node.attr}")
+
+        assert not applied, (
+            f"the allow-list is a test-only construct (BEH-33), but a "
+            f"production module binds or reads it: {applied}"
         )
 
 

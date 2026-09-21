@@ -19,7 +19,13 @@ All five conditions of the class, confirmed:
   (TASK-004/DT-04) already turns any `parse_group_element` refusal into a
   named `validate` error quoting the adapter and the declared value. None of
   `tdd_runners.py`, `validate.py` or `live_verify.py` is modified by this
-  task;
+  task — including the capability dispatch this paragraph now credits, which
+  belongs to a LATER change by a different owner (spec-runner#460, commit
+  `1202318`, the fix for spec-runner#448) and was written into this docstring
+  and the assertions below when it landed. At this task's own baseline the
+  same declaration was already refused, by `ExUnitAdapter.parse_selector`
+  under the generic code `not_a_line_selector`; #460 changed the refusal's
+  code and sentence, not whether it happens;
 - this task adds the missing characterisation coverage: that ONE declaration
   driven through BOTH adapters, from `validate` through to `run_live_verify`,
   diverges exactly as an adapter-owned property — pytest carries it to a real
@@ -31,7 +37,13 @@ All five conditions of the class, confirmed:
   `ExUnitAdapter.parse_selector`'s refusal, and `validate`'s wrapping of a
   refusal into a named error all already exist and already behave this way —
   writing this file against unmodified `main` cannot fail without first
-  reverting delivered code, which is not this task's job;
+  reverting delivered code, which is not this task's job. Re-measured
+  after #460 sharpened the refusal, because a later change to the subject
+  could have retro-created a red the waiver claims was impossible: this file
+  AS IT STANDS TODAY, checked out into a `git worktree` at the baseline
+  commit below, is 16 passed. The assertions survive because they pin the
+  adapter's name (which `validate` quotes from its own wrapper) and the form
+  `path:line` (which the baseline's sentence named too), not #460's code;
 - every claim below carries a negative control that flips the observed
   result under a deliberately violated property, proving the assertion
   actually discriminates rather than passing vacuously. Per claim:
