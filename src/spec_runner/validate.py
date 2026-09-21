@@ -8,15 +8,11 @@ from pathlib import Path
 import yaml
 
 from spec_runner.config import (
-    DURABILITY_RETENTION_DAYS_MAX,
-    DURABILITY_RETENTION_DAYS_MIN,
     KNOWN_EXECUTOR_KEYS,
     ConfigError,
     ExecutorConfig,
-    durability_declared_flag,
-    durability_retention_days_out_of_range,
-    durability_store_missing_properties,
     mixed_shape_error,
+    read_durability,
 )
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
@@ -479,67 +475,13 @@ def _validate_durability_store(section: dict, result: "ValidationResult") -> Non
     surfaces cannot disagree) so `spec-runner validate` names it in a report
     instead of requiring a real run to hit the `ConfigError`.
     """
-    durability = section.get("durability")
-    if durability is None:
-        return
-    # Нескалярные формы отказывает загрузчик — значит и отчёт обязан их
-    # называть, иначе `validate` зелёный, а `run` отвергнут (находка ревью):
-    # оператор узнаёт о дефекте не там, где спросил.
-    if not isinstance(durability, dict):
-        result.errors.append(f"durability must be a mapping, got {type(durability).__name__}")
-        return
-    store = durability.get("store", {})
-    if not isinstance(store, dict):
-        result.errors.append(f"durability.store must be a mapping, got {type(store).__name__}")
-        store = {}
-    adapter = store.get("adapter")
-    if adapter:
-        # Те же строгие правила чтения, что у загрузчика: `bool("false")` —
-        # это True, и отчёт, читающий декларации мягче гейта, назвал бы
-        # зелёным config, который `run` отвергнет (находка ревью). Отказ
-        # загрузчика здесь становится строкой отчёта, а не исключением:
-        # `validate` обязан назвать все дефекты разом.
-        declared: dict[str, bool] = {}
-        unreadable = False
-        for field in ("tls", "encryption_at_rest", "immutable_put"):
-            try:
-                declared[field] = durability_declared_flag(store.get(field), field=field)
-            except ConfigError as exc:
-                result.errors.append(str(exc))
-                unreadable = True
-        missing = (
-            []
-            if unreadable
-            else durability_store_missing_properties(
-                tls=declared["tls"],
-                encryption_at_rest=declared["encryption_at_rest"],
-                immutable_put=declared["immutable_put"],
-            )
-        )
-        if missing:
-            result.errors.append(
-                f"durability.store adapter {adapter!r} is missing required "
-                f"security properties: {', '.join(missing)}"
-            )
-    # Вне ветки адаптера — как и в загрузчике: срок хранения не свойство
-    # адаптера, и отказ по нему не может зависеть от соседнего ключа.
-    retention_days = durability.get("retention_days")
-    if retention_days is not None:
-        try:
-            retention = int(retention_days)
-        except (TypeError, ValueError):
-            # Отчёт, а не `ValueError` из середины валидации: `validate`
-            # существует затем, чтобы назвать дефект, а не упасть на нём.
-            result.errors.append(
-                f"durability.retention_days must be a whole number of days, got {retention_days!r}"
-            )
-            return
-        if durability_retention_days_out_of_range(retention):
-            result.errors.append(
-                "durability.retention_days must be between "
-                f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
-                f"got {retention_days}"
-            )
+    # Тот же читатель, что у загрузчика, — не копия его правил. Три круга
+    # ревью нашли три расхождения именно здесь: строгий гейт против мягкого
+    # отчёта, нормализованное целое против исходной строки, молчание о
+    # нескалярных формах. Отчёт отличается от загрузчика ровно одним — он
+    # превращает отказ в строку, а не в исключение.
+    _, problems = read_durability(section)
+    result.errors.extend(problems)
 
 
 #: `review_policy` values the runtime understands (#157).

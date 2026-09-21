@@ -309,11 +309,44 @@ class TestPutWritesEveryByte:
         assert LocalVolumeStore(tmp_path).get("runs/R1/x.json") == b"abcdef"
 
 
-class TestWritingFactoryIsNotAPublicDoor:
-    def test_only_the_readonly_entry_is_public(self):
-        """§ 1.4: `open_store_readonly` — единственный публичный вход без
-        Publisher-а. Пишущая фабрика обязана быть приватной, иначе пояс
-        «в store пишет только publisher» нечем проверить поиском."""
+class TestOnlyTheDeclaredDoorReachesAWritableStore:
+    """§ 1.4: в store пишет только publisher, и правило обязано проверяться
+    ПОИСКОМ, а не рассуждением.
+
+    Прежняя редакция сверяла одно имя (`build_store`) и оставалась зелёной,
+    пока рядом жил публичный пишущий `LocalVolumeStore`: пояс, проверяющий
+    один из двух входов, не пояс (находка ревью, круг 4). Теперь проверяется
+    свойство — ни один модуль пакета не добирается до пишущего store иначе
+    как через объявленную дверь.
+    """
+
+    def test_no_module_outside_artifact_store_reaches_a_writable_store(self):
+        import ast
+        import pathlib
+
+        package = pathlib.Path(artifact_store.__file__).parent
+        writable = {"LocalVolumeStore", "_build_store"}
+        offenders: list[str] = []
+        for module in sorted(package.rglob("*.py")):
+            if module.name == "artifact_store.py":
+                continue
+            tree = ast.parse(module.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
+                    "artifact_store"
+                ):
+                    for alias in node.names:
+                        if alias.name in writable:
+                            offenders.append(f"{module.name}:{node.lineno} {alias.name}")
+                if isinstance(node, ast.Attribute) and node.attr in writable:
+                    value = node.value
+                    if isinstance(value, ast.Name) and value.id.endswith("artifact_store"):
+                        offenders.append(f"{module.name}:{node.lineno} {node.attr}")
+        assert not offenders, (
+            f"пишущий store достижим в обход объявленной двери `open_store_readonly`: {offenders}"
+        )
+
+    def test_the_declared_door_is_the_public_one(self):
         assert hasattr(artifact_store, "open_store_readonly")
         assert not hasattr(artifact_store, "build_store"), (
             "пишущая фабрика экспортирована публично — второй Publisher-less вход"

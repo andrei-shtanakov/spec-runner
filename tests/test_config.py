@@ -257,7 +257,18 @@ class TestDurabilityStoreConfig:
         )
         assert config.durability_store_adapter == "local_volume"
 
-    def test_secure_adapter_with_no_options_loads(self, tmp_path):
+    def test_local_volume_without_root_is_refused_at_load(self, tmp_path):
+        """Ожидание переписано, а не починено молча.
+
+        Прежняя редакция утверждала, что `local_volume` без `options.root`
+        ЗАГРУЖАЕТСЯ. Формально это было верно — и бесполезно: собрать такой
+        store нечем, и первая же попытка падала `ValueError` уже внутри
+        прогона, то есть после старта. Отказ переехал на загрузку, где ему и
+        место: адаптер без своего обязательного option — это незаполненное
+        объявление, а не рабочая настройка (находка ревью, круг 4).
+        """
+        from spec_runner.config import ConfigError
+
         cfg = self._write(
             tmp_path,
             "      adapter: local_volume\n"
@@ -265,9 +276,22 @@ class TestDurabilityStoreConfig:
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n",
         )
+        with pytest.raises(ConfigError, match="options.root"):
+            load_config_from_yaml(cfg)
+
+    def test_secure_adapter_with_root_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n",
+        )
         result = load_config_from_yaml(cfg)
         assert result["durability_store_adapter"] == "local_volume"
-        assert result["durability_store_options"] is None
+        assert result["durability_store_options"] == {"root": "var/store"}
 
     def test_all_three_properties_missing_names_all_three(self, tmp_path):
         from spec_runner.config import ConfigError
@@ -309,6 +333,8 @@ class TestDurabilityStoreConfig:
             "      tls: true\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         cfg = tmp_path / "config.yaml"
         cfg.write_text(text)

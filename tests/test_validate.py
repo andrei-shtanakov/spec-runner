@@ -371,6 +371,8 @@ class TestValidateDurabilityStore:
             "      tls: false\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         result = validate_config(config_file)
         assert not result.ok
@@ -386,6 +388,8 @@ class TestValidateDurabilityStore:
             "      tls: true\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         result = validate_config(config_file)
         assert result.ok
@@ -401,6 +405,8 @@ class TestValidateDurabilityStore:
             "      tls: true\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         result = validate_config(config_file)
         assert not result.ok
@@ -417,6 +423,8 @@ class TestValidateDurabilityStore:
             "      tls: true\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         result = validate_config(config_file)
         assert result.ok
@@ -470,6 +478,8 @@ class TestValidateAll:
             "      tls: false\n"
             "      encryption_at_rest: true\n"
             "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
         )
         result = validate_all(tasks_file=tasks_file, config_file=config_file)
         assert not result.ok
@@ -805,7 +815,9 @@ class TestValidateReadsDeclarationsAsStrictlyAsTheLoader:
             "      adapter: local_volume\n"
             '      tls: "false"\n'
             "      encryption_at_rest: true\n"
-            "      immutable_put: true\n",
+            "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n",
             encoding="utf-8",
         )
         result = validate_config(cfg)
@@ -824,7 +836,9 @@ class TestValidateReadsDeclarationsAsStrictlyAsTheLoader:
             "      adapter: local_volume\n"
             "      tls: [yes]\n"
             "      encryption_at_rest: true\n"
-            "      immutable_put: true\n",
+            "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n",
             encoding="utf-8",
         )
         result = validate_config(cfg)

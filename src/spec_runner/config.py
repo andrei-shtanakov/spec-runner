@@ -1084,6 +1084,142 @@ def missing_config_warning(config: "ExecutorConfig") -> str | None:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class DurabilitySettings:
+    """Разобранный блок `durability:` — типизированный и проверенный.
+
+    Одна функция чтения на все поверхности, и это не вкусовщина, а вывод из
+    трёх кругов ревью. Правило жило в трёх местах — загрузчик,
+    `ExecutorConfig.__post_init__` и `validate`, — каждое читало YAML по-своему,
+    и починка одного оставляла два несогласованными: строгий гейт против
+    мягкого отчёта, нормализованное целое против исходной строки. Перечень
+    мест вместо свойства — ровно тот режим отказа, о котором пишет бандл.
+
+    Здесь читают **сырой YAML**: `__post_init__` работает уже с полями и
+    проверяет свои инварианты отдельно (конфиг собирают и в коде, минуя файл).
+    """
+
+    store_adapter: str | None
+    store_options: dict[str, str]
+    store_tls: bool
+    store_encryption_at_rest: bool
+    store_immutable_put: bool
+    ack: str | None
+    ack_timeout_seconds: float | None
+    checkpoint_ack_timeout_seconds: float | None
+    retention_days: int | None
+
+
+def read_durability(
+    executor_config: dict, *, where: str = ""
+) -> tuple[DurabilitySettings | None, list[str]]:
+    """Прочитать блок `durability:`, СОБРАВ все дефекты, а не первый.
+
+    Две формы одного чтения, потому что у поверхностей разные обязанности:
+    загрузчик обязан остановиться на первом дефекте (дальше он всё равно не
+    пойдёт), а `validate` — назвать их все, иначе оператор правит по одному и
+    ходит по кругу. Общее тело ровно одно: три круга ревью нашли три
+    расхождения именно там, где правило было переписано во второй раз.
+
+    Возвращает разобранные настройки (или None, если читать оказалось нечего)
+    и перечень сообщений.
+    """
+    prefix = f"{where}: " if where else ""
+    problems: list[str] = []
+
+    durability = executor_config.get("durability") or {}
+    if not isinstance(durability, dict):
+        return None, [f"{prefix}durability must be a mapping, got {type(durability).__name__}"]
+
+    store = durability.get("store") or {}
+    if not isinstance(store, dict):
+        problems.append(f"{prefix}durability.store must be a mapping, got {type(store).__name__}")
+        store = {}
+
+    options = store.get("options") or {}
+    if not isinstance(options, dict):
+        problems.append(
+            f"{prefix}durability.store.options must be a mapping, got {type(options).__name__}"
+        )
+        options = {}
+
+    flags: dict[str, bool] = {}
+    unreadable = False
+    for flag_name in ("tls", "encryption_at_rest", "immutable_put"):
+        try:
+            flags[flag_name] = durability_declared_flag(store.get(flag_name), field=flag_name)
+        except ConfigError as exc:
+            problems.append(f"{prefix}{exc}")
+            flags[flag_name] = False
+            unreadable = True
+
+    adapter = store.get("adapter") or None
+    if adapter and not unreadable:
+        missing = durability_store_missing_properties(
+            tls=flags["tls"],
+            encryption_at_rest=flags["encryption_at_rest"],
+            immutable_put=flags["immutable_put"],
+        )
+        if missing:
+            problems.append(
+                f"{prefix}durability.store adapter {adapter!r} is missing required "
+                f"security properties: {', '.join(missing)} -- spec-runner checks the "
+                "declaration only (OUT-03); declare tls: true, "
+                "encryption_at_rest: true and immutable_put: true"
+            )
+    if adapter == "local_volume" and not options.get("root"):
+        # Отказ здесь, а не у делегата: иначе config проходит оба гейта и
+        # падает `ValueError` при первой сборке store — после старта прогона.
+        problems.append(f"{prefix}durability.store adapter 'local_volume' requires options.root")
+
+    retention_raw = durability.get("retention_days")
+    retention: int | None = None
+    if retention_raw is not None:
+        if isinstance(retention_raw, bool) or not isinstance(retention_raw, (int, str)):
+            problems.append(
+                f"{prefix}durability.retention_days must be a whole number of days, "
+                f"got {retention_raw!r}"
+            )
+        else:
+            try:
+                retention = int(retention_raw)
+            except ValueError:
+                problems.append(
+                    f"{prefix}durability.retention_days must be a whole number of days, "
+                    f"got {retention_raw!r}"
+                )
+                retention = None
+            else:
+                if durability_retention_days_out_of_range(retention):
+                    problems.append(
+                        f"{prefix}durability.retention_days must be between "
+                        f"{DURABILITY_RETENTION_DAYS_MIN} and "
+                        f"{DURABILITY_RETENTION_DAYS_MAX}, got {retention_raw}"
+                    )
+
+    settings = DurabilitySettings(
+        store_adapter=adapter,
+        store_options={str(k): str(v) for k, v in options.items()},
+        store_tls=flags["tls"],
+        store_encryption_at_rest=flags["encryption_at_rest"],
+        store_immutable_put=flags["immutable_put"],
+        ack=durability.get("ack"),
+        ack_timeout_seconds=durability.get("ack_timeout_seconds"),
+        checkpoint_ack_timeout_seconds=durability.get("checkpoint_ack_timeout_seconds"),
+        retention_days=retention,
+    )
+    return settings, problems
+
+
+def parse_durability(executor_config: dict, *, where: str = "") -> DurabilitySettings:
+    """Форма для загрузчика: первый дефект — `ConfigError`, дальше не идём."""
+    settings, problems = read_durability(executor_config, where=where)
+    if problems:
+        raise ConfigError(problems[0])
+    assert settings is not None  # проблем нет — значит блок разобран
+    return settings
+
+
 def load_config_from_yaml(config_path: Path | None = None) -> dict:
     """Load configuration from YAML file.
 
@@ -1120,61 +1256,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         post_done = hooks.get("post_done", {})
         commands = executor_config.get("commands", {})
         paths = executor_config.get("paths", {})
-        durability = executor_config.get("durability", {})
-        if not isinstance(durability, dict):
-            raise ConfigError(
-                f"{config_path}: durability must be a mapping, got {type(durability).__name__}"
-            )
-        durability_store = durability.get("store", {})
-        if not isinstance(durability_store, dict):
-            raise ConfigError(
-                f"{config_path}: durability.store must be a mapping, got "
-                f"{type(durability_store).__name__}"
-            )
-        # BEH-28: refuse at load, before the run reads any further keys — not
-        # deferred to `ExecutorConfig.__post_init__`, since `run`/`watch` read
-        # this dict long before a config is built (#182's failure shape: a
-        # setting that silently did nothing).
-        durability_store_adapter = durability_store.get("adapter")
-        if durability_store_adapter:
-            missing = durability_store_missing_properties(
-                tls=durability_declared_flag(durability_store.get("tls"), field="tls"),
-                encryption_at_rest=durability_declared_flag(
-                    durability_store.get("encryption_at_rest"), field="encryption_at_rest"
-                ),
-                immutable_put=durability_declared_flag(
-                    durability_store.get("immutable_put"), field="immutable_put"
-                ),
-            )
-            if missing:
-                raise ConfigError(
-                    f"{config_path}: durability.store adapter "
-                    f"{durability_store_adapter!r} is missing required security "
-                    f"properties: {', '.join(missing)} -- spec-runner checks the "
-                    "declaration only (OUT-03); declare tls: true, "
-                    "encryption_at_rest: true and immutable_put: true"
-                )
-
-        # Вне ветки адаптера намеренно: `retention_days` — свойство политики
-        # хранения, а не адаптера, и объявить срок, ничего не объявив о store,
-        # ровно так же бессмысленно. Проверка внутри ветки пропускала бы
-        # `retention_days: 3` в конфиге без адаптера — то есть отказ зависел бы
-        # от соседнего ключа (находка ревью).
-        durability_retention_days = durability.get("retention_days")
-        if durability_retention_days is not None:
-            try:
-                _retention = int(durability_retention_days)
-            except (TypeError, ValueError):
-                raise ConfigError(
-                    f"{config_path}: durability.retention_days must be a whole number of "
-                    f"days, got {durability_retention_days!r}"
-                ) from None
-            if durability_retention_days_out_of_range(_retention):
-                raise ConfigError(
-                    f"{config_path}: durability.retention_days must be between "
-                    f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
-                    f"got {durability_retention_days}"
-                )
+        durability_settings = parse_durability(executor_config, where=str(config_path))
 
         format_check = commands.get("format_check")
         if format_check is not None and not isinstance(format_check, str):
@@ -1278,23 +1360,24 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "review_pr_post_pr_wait_seconds": (executor_config.get("review_pr") or {}).get(
                 "post_pr_wait_seconds"
             ),
-            "durability_store_adapter": durability_store.get("adapter"),
-            "durability_store_options": durability_store.get("options"),
-            "durability_store_tls": durability_store.get("tls"),
-            "durability_store_encryption_at_rest": durability_store.get("encryption_at_rest"),
-            "durability_store_immutable_put": durability_store.get("immutable_put"),
-            "durability_ack": durability.get("ack"),
-            "durability_ack_timeout_seconds": durability.get("ack_timeout_seconds"),
-            "durability_checkpoint_ack_timeout_seconds": durability.get(
-                "checkpoint_ack_timeout_seconds"
+            # Из единого читателя — уже типизированными: пронести сюда сырое
+            # YAML-значение значило бы положить строку в bool-поле и поссорить
+            # загрузчик с `__post_init__` (находки кругов 3 и 4).
+            "durability_store_adapter": durability_settings.store_adapter,
+            "durability_store_options": durability_settings.store_options,
+            "durability_store_tls": durability_settings.store_tls,
+            "durability_store_encryption_at_rest": durability_settings.store_encryption_at_rest,
+            "durability_store_immutable_put": durability_settings.store_immutable_put,
+            "durability_ack": durability_settings.ack,
+            "durability_ack_timeout_seconds": durability_settings.ack_timeout_seconds,
+            "durability_checkpoint_ack_timeout_seconds": (
+                durability_settings.checkpoint_ack_timeout_seconds
             ),
             # Нормализованным целым, а не исходной строкой: загрузчик её уже
             # проверил, и пронести дальше `"30"` значило бы поссорить две
             # поверхности — проверка прошла бы здесь и отказала в
             # `ExecutorConfig`, который требует настоящий `int`.
-            "durability_retention_days": (
-                None if durability.get("retention_days") is None else _retention
-            ),
+            "durability_retention_days": durability_settings.retention_days,
         }
     except ConfigError:
         raise
