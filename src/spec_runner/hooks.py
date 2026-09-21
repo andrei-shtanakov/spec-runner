@@ -592,7 +592,54 @@ def _run_negative_control_before_review(
         if result.verdict != "instrument_error":
             break
     assert result is not None
+    _record_negative_control(task, config, candidate_sha, result)
     return result.verdict, result.detail, candidate_sha
+
+
+def _record_negative_control(task: Task, config: ExecutorConfig, sha: str, result) -> None:
+    """Записать свидетельство контроля (#428, FR-06).
+
+    Пишется на ЛЮБОМ вердикте, а не только на успехе: запись фиксирует, что
+    проверка состоялась и чем кончилась, — иначе «контроль был исполнен»
+    подтверждается только тем, что задача завершилась, то есть ровно тем
+    доверием, которое механика и заменяет.
+
+    Пин `environment_id` + `config_hash` — по Q-D: «подтверждено» значит
+    разное под разными адаптерами и разными policy-ключами.
+    """
+    from .gates import GateContext
+    from .state import ExecutorState
+    from .tdd import resolve_namespace
+
+    control = task.negative_control
+    if control is None:
+        return
+    blob = subprocess.run(
+        ["git", "rev-parse", f"{sha}:{control.patch}"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    clean = result.clean
+    mutated = result.mutated
+    try:
+        with ExecutorState(config) as state:
+            state.record_negative_control(
+                task_id=task.id,
+                namespace=resolve_namespace(config),
+                commit_sha=sha,
+                selector=control.selector,
+                patch_blob_sha=blob.stdout.strip() if blob.returncode == 0 else "",
+                clean_outcome=(clean.outcome.value if clean and clean.outcome else ""),
+                mutated_outcome=(mutated.outcome.value if mutated and mutated.outcome else ""),
+                verdict=result.verdict,
+                environment_id=(clean.environment_id if clean else ""),
+                config_hash=GateContext(
+                    task_id=task.id, checkpoint_sha=sha, config=config, state=None
+                ).config_hash,
+            )
+    except Exception as exc:  # noqa: BLE001 - бухгалтерия не роняет прогон
+        logger.warning("Could not record the negative control", task_id=task.id, error=str(exc))
 
 
 def _negative_control_facts(

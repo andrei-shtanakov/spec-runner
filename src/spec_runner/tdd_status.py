@@ -44,6 +44,7 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
             | ({task_id} if task_id else set())
         )
         phases = state.tdd_phase_histories(namespace, phase_tasks)
+        negative_controls = state.negative_controls(namespace, task_id)
         applied_waivers = [
             row
             for row in state.applied_waivers(namespace)
@@ -73,6 +74,10 @@ def collect(config: ExecutorConfig, task_id: str | None = None) -> dict:
         # false. `applied_waivers` below says which tasks did not run under it.
         "execution_mode": config.execution_mode,
         "applied_waivers": applied_waivers,
+        # #428 FR-06: свидетельство контроля приходит ТЕМ ЖЕ чтением, что и
+        # всё остальное, — иначе текстовая и JSON-поверхности разойдутся, а
+        # это дефект, который репо уже ловило.
+        "negative_controls": negative_controls,
         "active_checkpoints": [
             {
                 "checkpoint_id": cp.checkpoint_id,
@@ -348,6 +353,15 @@ def render(data: dict, task_id: str | None) -> str:
                 f"{cp['outcome']}  {cp['selector']}"
             )
             lines.append(f"      env {cp['environment_id']}  baseline {cp['baseline_sha'][:12]}")
+        for nc in [x for x in data.get("negative_controls", []) if x["task_id"] == tid]:
+            lines.append(
+                f"   negative-control {nc['commit_sha'][:12]}  {nc['verdict']}  {nc['selector']}"
+            )
+            lines.append(
+                f"      clean {nc['clean_outcome'] or '—'}  mutated "
+                f"{nc['mutated_outcome'] or '—'}  patch {nc['patch_blob_sha'][:12]}"
+            )
+            lines.append(f"      config_hash {nc['config_hash']}  env {nc['environment_id']}")
         for v in [x for x in data.get("verify_evidence", []) if x["task_id"] == tid]:
             lines.append(
                 f"   verify-evidence {v['commit_sha'][:12]}  {v['outcome']}  "
