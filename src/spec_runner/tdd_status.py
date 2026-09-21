@@ -179,9 +179,18 @@ def _has_confirmed_red(data: dict, task_id: str) -> bool:
     return False
 
 
-def _applied_waiver(data: dict, task_id: str) -> tuple[str, str]:
-    """`(lifecycle, qualification)` for this task's applied waiver, or two
-    empty strings when none is on record.
+def _applied_waiver(data: dict, task_id: str) -> str:
+    """The qualification this task's applied waiver puts on a line that would
+    otherwise assert an open RED obligation, or "" when none is on record.
+
+    Only the qualification. The row's own `lifecycle` column is deliberately
+    NOT returned (#462, local review round 8): it is the frozen literal
+    `WAIVER_LIFECYCLE`, written once and never updated, so printing it as the
+    head of a line states "no TDD lifecycle recorded" in the present tense
+    while `collect` may be carrying a `refused:` phase row for that same task
+    into `--json` — the text surface and the JSON surface of one `collect`
+    then say opposite things. The head must come from live data; only the
+    hedged clause may come from the row.
 
     Its own function because every line whose text asserts an open RED
     obligation needs it, not just the one for a task with no history at all
@@ -218,10 +227,10 @@ def _applied_waiver(data: dict, task_id: str) -> tuple[str, str]:
     """
     waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
     if not waivers:
-        return "", ""
+        return ""
     waiver = waivers[-1]
     earlier = f"; {len(waivers) - 1} earlier sanction(s) also on record" if len(waivers) > 1 else ""
-    return waiver["lifecycle"], (
+    return (
         f"a waiver was applied on an earlier run (class {waiver['waiver_class']}, "
         f"sanction {waiver['sanction']}, baseline {waiver['baseline_sha'][:8]})"
         f"{earlier}; that row is history, not what tasks.md declares now"
@@ -235,7 +244,7 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     *attempt* succeeded. True of the attempt and misleading about the task: it
     has no confirmed red and cannot proceed.
     """
-    waiver_lifecycle, waiver_note = _applied_waiver(data, task_id)
+    waiver_note = _applied_waiver(data, task_id)
     history = data.get("phases", {}).get(task_id) or []
     verify = next((v for v in data.get("verify_evidence", []) if v["task_id"] == task_id), None)
     if history:
@@ -288,7 +297,9 @@ def lifecycle_of(data: dict, task_id: str) -> str:
             return owed
         return f"verify-first entry could not be judged: instrument-error ({commit})"
     if waiver_note:
-        return f"{waiver_lifecycle}; a red is owed unless the waiver still stands — {waiver_note}"
+        return (
+            f"no red checkpoint yet; a red is owed unless the waiver still stands — {waiver_note}"
+        )
     return "no red checkpoint yet"
 
 

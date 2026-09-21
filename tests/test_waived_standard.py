@@ -1041,13 +1041,20 @@ class TestStatusReportsWaiversAsContract:
         assert "(nothing recorded)" not in text
         assert "expected for the waived task(s) above" in text
 
-    def test_the_per_task_form_does_not_promise_a_red_that_was_waived(self, tmp_path):
+    def test_the_per_task_form_does_not_promise_a_red_unconditionally(self, tmp_path):
         """`tdd status TASK-008` — вторая форма той же команды (#431 п.2).
 
         Агрегатная форма исправлена в #430; пер-задачная — нет. С `task_id`
         ветка пустоты недостижима (`tasks = [task_id]`), и `lifecycle_of`
-        отвечал «no red checkpoint yet» — «yet» читается как незакрытое
-        обязательство ровно у той задачи, где оно снято санкцией.
+        отвечал голым «no red checkpoint yet» — «yet» читается как
+        незакрытое обязательство ровно у той задачи, где оно снято
+        санкцией.
+
+        Предмет — не отсутствие фразы, а отсутствие БЕЗУСЛОВНОСТИ: голова
+        строки берётся из живых данных (чекпойнта действительно нет), а
+        санкция приходит оговоркой следом. Голова из строки waiver'а была
+        бы своей неправдой — колонка `lifecycle` заморожена при записи, а
+        `collect` в том же ответе может нести `refused:`-фазу.
         """
         from spec_runner.tdd_status import collect, render
 
@@ -1064,8 +1071,13 @@ class TestStatusReportsWaiversAsContract:
 
         text = render(collect(cfg, "TASK-008"), "TASK-008")
 
-        assert "no red checkpoint yet" not in text, (
-            f"обязательство снято санкцией — «yet» обещает несуществующий долг: {text}"
+        line = next(ln for ln in text.splitlines() if ln.startswith("TASK-008:"))
+
+        assert line != "TASK-008: no red checkpoint yet", (
+            f"обязательство снято санкцией — голое «yet» обещает несуществующий долг: {line}"
+        )
+        assert line.startswith("TASK-008: no red checkpoint yet;"), (
+            f"голова строки должна быть фактом живых данных, а не колонкой строки waiver'а: {line}"
         )
         assert "waiver" in text.lower(), f"причина пустоты не названа: {text}"
 

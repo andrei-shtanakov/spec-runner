@@ -47,7 +47,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   and the no-history line — because a waiver row outlives the declaration
   that wrote it: nothing deletes it when the task is later re-declared `tdd`
   or `verify_first`. Lines that state evidence rather than an obligation are
-  untouched, as is a task with no waiver row at all.
+  untouched, as is a task with no waiver row at all. Every head clause is
+  derived from live data; only the hedged clause comes from the stored row,
+  whose `lifecycle` column is frozen at write time and would otherwise
+  contradict the phase history that `tdd status --json` prints from the same
+  read.
 
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same
