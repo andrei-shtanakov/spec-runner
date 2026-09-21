@@ -1080,6 +1080,52 @@ class TestStatusReportsWaiversAsContract:
         assert "abcdef12" in text, f"baseline того прогона не назван: {text}"
         assert "not what tasks.md declares now" in text, text
 
+    def test_the_per_task_form_names_the_operative_sanction_not_the_retired_one(self, tmp_path):
+        """Две санкции у одной задачи — штатное состояние (#462, круг 3).
+
+        Дедупликация в `record_waiver_applied` — по (задача, неймспейс,
+        санкция), и `test_a_different_sanction_is_a_different_fact` пинит,
+        что вторая санкция пишется второй строкой. `applied_waivers`
+        отдаёт их старейшей первой, и `next(...)` называл бы именно
+        отставленную — тогда как ровно «какая санкция» эта строка и
+        существует, чтобы назвать.
+        """
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="1111111111",
+            )
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="spec-runner#429",
+                baseline_sha="2222222222",
+            )
+
+        line = next(
+            ln
+            for ln in render(collect(cfg, "TASK-008"), "TASK-008").splitlines()
+            if ln.startswith("TASK-008:")
+        )
+
+        assert "spec-runner#429" in line, f"названа не действующая санкция: {line}"
+        assert "22222222" in line, f"назван baseline не того прогона: {line}"
+        assert "batch-approve-2026-09-09" not in line, (
+            f"отставленная санкция выдана за действующую: {line}"
+        )
+        assert "1 earlier sanction(s) also on record" in line, (
+            f"о второй записи умолчали, выбрав одну молча: {line}"
+        )
+
     def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
         """Вторая половина: без санкции «yet» — правда, и остаётся."""
         from spec_runner.tdd_status import collect, render

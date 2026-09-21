@@ -231,8 +231,18 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         if verify["outcome"] == "test_failure":
             return f"verify-first entry read red ({commit}); awaiting red authoring"
         return f"verify-first entry could not be judged: instrument-error ({commit})"
-    waiver = next((w for w in data.get("applied_waivers", []) if w["task_id"] == task_id), None)
-    if waiver is not None:
+    # The LAST matching row, not the first: `applied_waivers` is ordered
+    # oldest-first, deduplication is by (task, namespace, sanction), and a
+    # second sanction for the same task is a supported state — so `next(...)`
+    # named the retired sanction while the header above listed both (#462,
+    # local review round 3). Which sanction the missing red is attributable
+    # to is the whole point of the sentence.
+    waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
+    if waivers:
+        waiver = waivers[-1]
+        earlier = (
+            f"; {len(waivers) - 1} earlier sanction(s) also on record" if len(waivers) > 1 else ""
+        )
         # #431: "no red checkpoint yet" — "yet" is an open obligation, and
         # this is the one task where it was lifted by sanction. The
         # aggregate form already said so (#430); with `task_id` the
@@ -248,8 +258,8 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         return (
             f"{waiver['lifecycle']} — a waiver was applied on an earlier run "
             f"(class {waiver['waiver_class']}, sanction {waiver['sanction']}, "
-            f"baseline {waiver['baseline_sha'][:8]}); that row is history, "
-            f"not what tasks.md declares now"
+            f"baseline {waiver['baseline_sha'][:8]}){earlier}; that row is "
+            f"history, not what tasks.md declares now"
         )
     return "no red checkpoint yet"
 
