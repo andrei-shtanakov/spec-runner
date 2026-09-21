@@ -268,6 +268,54 @@ def _real_agent_refusal(cmd: str, cls: type[AssertionError] = AssertionError) ->
 
 
 @pytest.fixture(autouse=True)
+def _restore_structlog_configuration():
+    """Вернуть глобальную настройку логирования после теста, сменившего её.
+
+    spec-runner#536. `obs.init_logging` — это `structlog.configure()`, то есть
+    настройка ПРОЦЕССА, и продакшен вправе её менять: `watch --tui` обязан
+    освободить stderr, иначе он изуродует экран. Но тест, доехавший до такого
+    кода, менял поведение всех последующих тестов сессии — предупреждения
+    уходили в файловый sink, и проверки на `capsys` зеленели или краснели в
+    зависимости от порядка файлов.
+
+    Наблюдалось так: `TestOrphanedSuccessWarning` падал на паре
+    `test_watch.py test_exit_contract.py` и проходил в полном сборе, потому
+    что pytest собирает файлы по алфавиту и `test_exit_contract` идёт раньше
+    `test_watch`. Виноватым выглядел пострадавший.
+
+    Снимок берётся до теста и возвращается после — включая случай, когда тест
+    не трогал настройку вовсе (тогда восстановление ничего не меняет).
+    Проверяется парой тестов в `tests/test_logging_isolation.py`.
+
+    Одного `configure()` для этого мало, и это видно по исходнику structlog:
+    при `cache_logger_on_first_use=True` первый вызов подменяет `bind` у
+    прокси замыканием над уже собранным логгером
+    (`BoundLoggerLazyProxy.bind`: `self.bind = finalized_bind`), а
+    `configure()` подмену не отменяет. Логгер модуля, впервые использованный
+    ВНУТРИ испорченного теста, держал бы файловый sink до конца сессии.
+    Поэтому кэш сбрасывается явно: у всех прокси, живущих атрибутами модулей
+    `spec_runner.*`, снимается экземплярный `bind`, и следующее обращение
+    пересобирает логгер по восстановленной настройке.
+    """
+    import sys
+
+    import structlog
+    from structlog._config import BoundLoggerLazyProxy
+
+    saved = structlog.get_config().copy()
+    try:
+        yield
+    finally:
+        structlog.configure(**saved)
+        for name, module in list(sys.modules.items()):
+            if not name.startswith("spec_runner"):
+                continue
+            for value in list(vars(module).values()):
+                if isinstance(value, BoundLoggerLazyProxy):
+                    value.__dict__.pop("bind", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_agent_calls(monkeypatch):
     """Fail a test that would invoke a real agent, instead of billing for it.
 
