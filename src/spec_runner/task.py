@@ -4,7 +4,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .logging import get_logger
 from .spec import split_frontmatter_raw, strip_frontmatter
@@ -64,6 +64,16 @@ MODE = re.compile(r"\*\*Mode:\*\* (.+)")
 # refuses what it cannot recognise, and a parser that "helpfully" normalised
 # would hide exactly that refusal.
 TDD_WAIVER = re.compile(r"\*\*TDD-waiver:\*\* (.+)")
+# #428 (FR-01, AP-10): объявление негативного контроля — путь к патчу и
+# селектор теста, который обязан покраснеть под ним. Отдельная строка, а не
+# третье поле внутри `**TDD-waiver:**`: у того закрытая грамматика из двух
+# полей, и третье потребовало бы парсера внутри существующего.
+NEGATIVE_CONTROL = re.compile(r"\*\*Negative-control:\*\* (.+)")
+#: Разделитель — двоеточия С ПРОБЕЛАМИ по обе стороны. Это не украшение:
+#: `::` внутри pytest-селектора (`tests/test_x.py::test_y`) пробелов не
+#: несёт, поэтому деление по строке с пробелами его не задевает. Деление
+#: делается ИМЕННО по ней, а не по `::` с последующей склейкой.
+NEGATIVE_CONTROL_SEPARATOR = " :: "
 ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # #367 FR-02: the declared verify-first check group — a machine-readable
 # metadata line in the same row as `**Mode:**`/`**Traces to:**`, never
@@ -126,6 +136,48 @@ VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 VERIFIES_ITEM = re.compile(r"^[ \t]*[-*]\s+(?!\[[ x]\])(.+)$")
 
 
+def _parse_negative_control(declared: str) -> "tuple[NegativeControl | None, str | None]":
+    """`(разобранное, отказ)` — ровно одно из двух не None (#428, FR-01).
+
+    Деление по ` :: ` **ровно один раз**: ноль вхождений — объявление
+    неполно, больше одного — неоднозначно. Оба случая отказ, а не выбор
+    одной из интерпретаций: `a.patch :: b.patch :: t.py::x` при делении «по
+    первому» тихо стал бы патчем `a.patch` с селектором
+    `b.patch :: t.py::x`, которого оператор не писал.
+
+    Значения хранятся дословно. Годность пути и селектора — не вопрос
+    разбора: файл патча появляется позже (его пишет сама задача), а
+    селектор судит адаптер. Здесь проверяется только форма строки.
+    """
+    # Делим ИСХОДНУЮ строку, а не обрезанную: `" :: x"` после `.strip()`
+    # становится `":: x"` и уходит в ветку «разделитель не найден», то есть
+    # оператор с пустым путём получает неверный диагноз, а ветка про пустое
+    # поле оказывается недостижимой. Обрезаются ЧАСТИ, а не строка целиком.
+    raw = declared.strip()
+    parts = declared.split(NEGATIVE_CONTROL_SEPARATOR)
+    if len(parts) == 1:
+        return None, (
+            f"**Negative-control:** must be '<path to patch>{NEGATIVE_CONTROL_SEPARATOR}"
+            f"<selector>' — the ' :: ' separator (colons WITH spaces) is missing, and "
+            f"guessing where the path ends would invent a declaration nobody wrote. "
+            f"Declared: {raw!r}"
+        )
+    if len(parts) > 2:
+        return None, (
+            f"**Negative-control:** carries {len(parts) - 1} ' :: ' separators, so the "
+            f"split is ambiguous; taking the first would produce a path and a selector "
+            f"the operator never wrote. Declared: {raw!r}"
+        )
+    patch, selector = (part.strip() for part in parts)
+    if not patch or not selector:
+        empty = "path" if not patch else "selector"
+        return None, (
+            f"**Negative-control:** has an empty {empty}; both the patch path and the "
+            f"selector are required. Declared: {raw!r}"
+        )
+    return NegativeControl(patch=PurePosixPath(patch), selector=selector), None
+
+
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
     """True when splitting ``trailing`` on commas would break a pytest
     parametrize suffix, e.g. ``test_y[a,b]``, into fragments the operator
@@ -151,6 +203,20 @@ STATUS_FROM_EMOJI = {v: k for k, v in STATUS_EMOJI.items()}
 PRIORITY_EMOJI = {"p0": "🔴", "p1": "🟠", "p2": "🟡", "p3": "🟢"}
 
 PRIORITY_FROM_EMOJI = {v: k for k, v in PRIORITY_EMOJI.items()}
+
+
+@dataclass(frozen=True)
+class NegativeControl:
+    """Разобранное объявление негативного контроля (#428, FR-01).
+
+    Два поля раздельно, а не одна строка: путь и селектор читают разные
+    места — патч применяет реплей, селектор исполняет адаптер, — и
+    повторное деление у каждого читателя было бы вторым парсером одного
+    факта.
+    """
+
+    patch: PurePosixPath
+    selector: str
 
 
 @dataclass
@@ -195,6 +261,16 @@ class Task:
     #: the rest of the file still parses; `validate_task_fields` turns it
     #: into a named, quoted validate error (FR-03, NFR-03: no traceback).
     verifies_error: str | None = None
+    #: Разобранное объявление негативного контроля (#428, FR-01), или None,
+    #: когда строки `**Negative-control:**` нет вовсе.
+    negative_control: "NegativeControl | None" = None
+    #: Названный отказ, когда строка ЕСТЬ, но не разбирается. Отдельно от
+    #: `negative_control is None` по той же причине, по которой
+    #: `verifies_error` отделён от `verifies is None`: «маркера нет» и
+    #: «маркер негоден» — разные дефекты, и слить их значит потерять
+    #: второй. `parse_tasks` на этом не падает: задача помечается, файл
+    #: читается дальше, а называет дефект `validate`.
+    negative_control_error: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -369,6 +445,13 @@ def parse_tasks(filepath: Path) -> list[Task]:
         waiver_match = TDD_WAIVER.search(line)
         if waiver_match:
             current_task.tdd_waiver = waiver_match.group(1).strip()
+            continue
+
+        control_match = NEGATIVE_CONTROL.search(line)
+        if control_match:
+            parsed, refusal = _parse_negative_control(control_match.group(1))
+            current_task.negative_control = parsed
+            current_task.negative_control_error = refusal
             continue
 
         verifies_match = VERIFIES.search(line)
