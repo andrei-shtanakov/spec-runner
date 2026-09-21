@@ -622,7 +622,12 @@ def _declaration_line(worktree: Path, selector: Selector) -> str | None:
         return None
     try:
         text = (worktree / str(selector.path)).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Не только ввод-вывод: файл в другой кодировке поднял бы
+        # `UnicodeDecodeError`, и он вышел бы наружу — а этот шов общий с
+        # RED-путём, который до #428 такой файл переживал. Идентичность
+        # объявления — вспомогательный факт: её отсутствие означает «не
+        # читаем», а не «замени этим исключением вердикт».
         return None
     if not 1 <= int(line) <= len(text):
         return None

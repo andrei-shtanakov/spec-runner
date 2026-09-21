@@ -898,3 +898,61 @@ class TestASelectorThatSelectsNothingIsNotABrokenHarness:
 
         assert result.verdict == "unsatisfied", result
         assert not result.retriable, "детерминированный факт переисполняется"
+
+
+class TestCleanHalfPreflightSpeaksTheSameTable:
+    """kind: contract — находка ревью круга 12.
+
+    На мутированной половине коды preflight давно разведены: часть — про
+    объявление и работу (`_PATCH_PREFLIGHT_CODES`), часть — про машину
+    (`_STAND_PREFLIGHT_CODES`). Чистая половина отправляла ВСЕ в
+    instrument_error: отсутствующий тест-файл или объявленная строка, не
+    являющаяся определением теста, переисполнялись полными прогонами и
+    давали exit 2 «о работе ничего не известно» про исправный инструмент.
+    """
+
+    def test_a_patch_shaped_preflight_code_is_the_declarations_fault(self, tmp_path):
+        """Коды разведены по ТАБЛИЦЕ, а не по раннеру: на pytest этот путь
+        до preflight не доходит вовсе (отсутствующий файл приходит как
+        ошибка сборки), а производит их AST-preflight ExUnit'а. Поэтому
+        спрашивается классификатор — ветка, иначе не исполняемая здесь."""
+        from spec_runner import negative_control as nc
+        from spec_runner import tdd
+
+        root, head = _repo(tmp_path)
+        clean = tdd.ReplayAttempt(
+            stage="preflight",
+            detail="the declared line does not define a test",
+            environment_id="unpinned",
+            sha=head,
+            selector=SELECTOR,
+            mutated=False,
+            order=1,
+            refusal_code="not_a_definition_line",
+        )
+
+        result = nc._classify_clean(clean)
+
+        assert result is not None and result.verdict == "unsatisfied", result
+        assert not result.retriable, "детерминированный факт переисполняется"
+
+    def test_a_vanished_toolchain_is_still_the_machines_fault(self, tmp_path, monkeypatch):
+        from spec_runner import negative_control as nc
+        from spec_runner import tdd
+
+        root, head = _repo(tmp_path)
+        clean = tdd.ReplayAttempt(
+            stage="preflight",
+            detail="mix is not on PATH",
+            environment_id="unpinned",
+            sha=head,
+            selector=SELECTOR,
+            mutated=False,
+            order=1,
+            refusal_code="runner_toolchain_missing",
+        )
+
+        result = nc._classify_clean(clean)
+
+        assert result is not None and result.verdict == "instrument_error", result
+        assert result.retriable

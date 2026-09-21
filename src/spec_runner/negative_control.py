@@ -313,6 +313,17 @@ def _classify_clean(clean) -> ControlResult | None:
             f"any of them ({clean.detail[:200]})",
             clean=clean,
         )
+    if clean.stage == "preflight" and clean.refusal_code in _PATCH_PREFLIGHT_CODES:
+        # Та же таблица, что у мутированной половины. Эти коды говорят про
+        # ОБЪЯВЛЕНИЕ — файла нет, строка не определяет теста, в файле нет
+        # тестов, — и на чистой половине тем более: патч тут ни при чём.
+        # Ответ детерминирован, переисполнять его нечем.
+        return ControlResult(
+            "unsatisfied",
+            f"the declared selector does not describe a test in the candidate commit: "
+            f"{clean.detail[:200]}",
+            clean=clean,
+        )
     return ControlResult(
         "instrument_error",
         f"the clean half reached no verdict ({clean.stage}): {clean.detail}",

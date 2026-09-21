@@ -447,3 +447,23 @@ class TestTheReadPatternIsIndexed:
         assert any("red_checkpoints" in r[0] for r in rows), (
             "the (task_id, namespace) lookup would degrade to a table scan"
         )
+
+
+class TestADeclarationLineThatCannotBeDecoded:
+    """kind: contract — находка ревью круга 12: `_declaration_line` ловил
+    только `OSError`, и тест-файл в другой кодировке поднял бы
+    `UnicodeDecodeError` наружу. Шов общий с RED-путём, который такой файл
+    переживал до #428: идентичность объявления — вспомогательный факт, её
+    отсутствие не заменяет вердикт исключением.
+    """
+
+    def test_an_undecodable_file_yields_no_identity_instead_of_raising(self, tmp_path):
+        from spec_runner.tdd import _declaration_line
+        from spec_runner.tdd_runners import ExUnitAdapter
+
+        target = tmp_path / "test" / "subject_test.exs"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"\xff\xfe test \x00 not utf-8 \xff")
+        parsed = ExUnitAdapter().parse_selector("test/subject_test.exs:1")
+
+        assert _declaration_line(tmp_path, parsed) is None
