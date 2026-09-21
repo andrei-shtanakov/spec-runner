@@ -162,6 +162,17 @@ def _parse_negative_control(declared: str) -> "tuple[NegativeControl | None, str
     # оператор с пустым путём получает неверный диагноз, а ветка про пустое
     # поле оказывается недостижимой. Обрезаются ЧАСТИ, а не строка целиком.
     raw = declared.strip()
+    # Разделитель НА КРАЮ строки: редактор, обрезающий хвостовые пробелы,
+    # превращает `<path> :: ` в `<path> ::`, и деление по строке с пробелами
+    # по обе стороны совпадения не находит. Оператор при этом видит `::` в
+    # своём файле и читает «разделитель отсутствует» — диагноз обязан
+    # называть то, что на самом деле пусто. Дополняется до полной формы,
+    # чтобы ветки про пустые поля отвечали как обычно.
+    edge = declared.rstrip()
+    if edge.endswith(NEGATIVE_CONTROL_SEPARATOR.rstrip()):
+        declared = f"{edge} "
+    if declared.lstrip().startswith(NEGATIVE_CONTROL_SEPARATOR.lstrip()):
+        declared = f" {declared.lstrip()}"
     parts = declared.split(NEGATIVE_CONTROL_SEPARATOR)
     if len(parts) == 1:
         return None, (

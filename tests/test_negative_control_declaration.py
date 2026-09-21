@@ -232,3 +232,40 @@ class TestAValuelessMarkerNamesItsOwnDefect:
         with_space = _error_for("**Negative-control:** ")
 
         assert bare is not None and with_space is not None, (bare, with_space)
+
+
+class TestAnEdgeSeparatorIsDiagnosedByWhatItIs:
+    """kind: contract — находка ревью круга 14.
+
+    Редактор, обрезающий хвостовые пробелы, превращает
+    `<path> :: ` в `<path> ::`. Деление идёт по строке « :: » с пробелами
+    по обе стороны, поэтому на краю строки совпадения нет — и оператор,
+    видящий `::` в своём файле, читает «разделитель отсутствует».
+    Диагноз обязан называть то, что на самом деле пусто; это та же пара
+    «маркера нет» / «маркер негоден», что и в круге 11.
+    """
+
+    def test_a_trailing_separator_means_an_empty_selector(self):
+        from spec_runner.task import _parse_negative_control
+
+        control, error = _parse_negative_control(" spec/negative-controls/TASK-008.patch ::")
+
+        assert control is None
+        assert error is not None and "selector" in error, error
+        assert "separator" not in error or "missing" not in error, error
+
+    def test_a_leading_separator_means_an_empty_path(self):
+        from spec_runner.task import _parse_negative_control
+
+        control, error = _parse_negative_control(":: tests/test_x.py::test_y")
+
+        assert control is None
+        assert error is not None and "path" in error, error
+
+    def test_a_genuinely_missing_separator_still_says_so(self):
+        from spec_runner.task import _parse_negative_control
+
+        control, error = _parse_negative_control(" spec/x.patch tests/test_x.py::test_y")
+
+        assert control is None
+        assert error is not None and "separator" in error, error
