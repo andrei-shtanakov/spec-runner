@@ -520,3 +520,38 @@ class TestTheGateIsToldWhatTheControlFound:
         hooks._negative_control_facts(_task(), cfg, "samesha", "satisfied", "ok", "samesha", True)
 
         assert shas == [], "контроль переисполнен без смены кандидата"
+
+
+class TestTheControlNamesItsOwnStage:
+    """kind: integration — находка ревью круга 13.
+
+    Для waived-задачи последняя объявленная стадия перед контролем —
+    `commit`, поэтому `error_stage` неудавшегося контроля читался как
+    «сломалось на коммите». Контроль при этом — самый дорогой
+    детерминированный шаг хука: до двух полных реплеев, до
+    `gate_recovery_attempts + 1` раз. Этот же файл уже чинил такую
+    приписку однажды (#367 BEH-30): пре-терминальный гейт объявляет
+    `tests` ровно затем, чтобы отказ не читался как чужая стадия.
+    """
+
+    def test_the_stage_reported_is_not_the_commit(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner.stages import StageReporter
+
+        root = _repo(tmp_path, patch=USELESS_PATCH)  # контроль не различит
+        cfg = _cfg(root)
+        reporter = StageReporter("TASK-008", lambda *a, **k: None)
+        from spec_runner.state import ReviewVerdict
+
+        monkeypatch.setattr(
+            hooks, "run_code_review", lambda *a, **k: (ReviewVerdict.PASSED, None, "ok")
+        )
+        (root / "widget.py").write_text("x = 1\n", encoding="utf-8")
+
+        ok, error, *_ = hooks.post_done_hook(_task(), cfg, True, reporter=reporter)
+
+        assert ok is False, error
+        assert reporter.current != "commit", (
+            f"отказ контроля приписан стадии {reporter.current!r}"
+        )
+        assert reporter.current == "tests", reporter.current

@@ -716,6 +716,27 @@ def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -
         )
         return result
 
+    # Селектор судится адаптером проекта — тем же, что и на прогоне. Отказ
+    # по нему существует (предикат неисполнимости), но стоит ПОСЛЕ
+    # `pre_start_hook`; назвать его здесь — значит назвать бесплатно.
+    # Молчание при нерезолвимом адаптере намеренное: это отдельный дефект,
+    # о котором говорит своя проверка, а не повод промолчать про селектор.
+    try:
+        from .tdd_runners import SelectorRefusal, adapter_for
+
+        adapter_name = config.resolve_tdd_runner()
+        adapter = adapter_for(adapter_name) if adapter_name else None
+    except Exception:  # нерезолвимый адаптер — не предмет ЭТОЙ проверки
+        adapter = None
+    if adapter is not None:
+        parsed = adapter.parse_selector(control.selector)
+        if isinstance(parsed, SelectorRefusal):
+            result.errors.append(
+                f"{task.id}: the declared negative-control selector is not one the "
+                f"{adapter.name} adapter can read: {parsed.message}"
+            )
+            return result
+
     # Путь судится ТЕМ ЖЕ читателем, что и предикат неисполнимости: иначе
     # `validate` находит файл на машине оператора (для абсолютного операнда
     # `project_root / patch` возвращает сам абсолютный путь) и молчит про

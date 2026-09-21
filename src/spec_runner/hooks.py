@@ -1433,6 +1433,12 @@ def post_done_hook(
             )
             return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
+    if reporter and _control_will_run(task, config):
+        # Своя стадия — иначе отказ контроля читается как «сломалось на
+        # коммите»: `error_stage` берётся из последней объявленной, а для
+        # waived-задачи это `commit`. Тот же дефект этот файл уже чинил у
+        # пре-терминального гейта (#367 BEH-30), и лечится он так же.
+        reporter.enter("tests")
     control_verdict, control_detail, control_sha = _run_negative_control_before_review(
         task, config, review_checkpoint_sha
     )

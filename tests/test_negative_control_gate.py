@@ -549,3 +549,21 @@ class TestValidateWarnsAboutAnIgnoredPatch:
         assert any("ignore" in w.lower() for w in result.warnings + result.errors), (
             f"игнорируемый патч не назван: {result.warnings + result.errors}"
         )
+
+
+class TestValidateJudgesTheSelectorWithTheProjectsAdapter:
+    """kind: contract — находка ревью круга 13: селектор, который адаптер
+    проекта прочитать не может, отвергался только на прогоне — после
+    `pre_start_hook`. Здесь это стоит ноль."""
+
+    def test_an_unreadable_selector_is_named_before_the_run(self, tmp_path):
+        task = _task(negative_control=_control(f"{PATCH} :: not-a-node-id"))
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert any("selector" in e.lower() for e in result.errors), result.errors
+
+    def test_a_readable_selector_passes(self, tmp_path):
+        result = _validate([_task(negative_control=_control())], _cfg(tmp_path))
+
+        assert not any("selector" in e.lower() for e in result.errors), result.errors
