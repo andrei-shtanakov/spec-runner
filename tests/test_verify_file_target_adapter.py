@@ -38,12 +38,21 @@ All five conditions of the class, confirmed:
   refusal into a named error all already exist and already behave this way —
   writing this file against unmodified `main` cannot fail without first
   reverting delivered code, which is not this task's job. Re-measured
-  after #460 sharpened the refusal, because a later change to the subject
-  could have retro-created a red the waiver claims was impossible: this file
-  AS IT STANDS TODAY, checked out into a `git worktree` at the baseline
-  commit below, is 16 passed. The assertions survive because they pin the
-  adapter's name (which `validate` quotes from its own wrapper) and the form
-  `path:line` (which the baseline's sentence named too), not #460's code;
+  2026-09-21 (spec-runner#462), because a later change to the subject can
+  retro-create a red the waiver calls impossible — and here it did. Both
+  runs are of this file inside a `git worktree` at the baseline commit
+  below, against THAT tree's `spec_runner` (`PYTHONPATH`; the venv's
+  editable install otherwise resolves the package to the live checkout, and
+  the measurement answers nothing — the first attempt at this paragraph
+  claimed "16 passed" for exactly that reason and was wrong):
+
+  - the file as TASK-011 shipped it (`9567372`) — 6 passed. That is the
+    waiver's actual subject, and its condition holds;
+  - the file as it stands today — 13 passed, 3 failed. All three failures
+    are `TestBEH05RefusalNamesTheCapabilityNotTheSyntax`, which is NOT under
+    this waiver: #460 added that class together with the capability dispatch
+    it pins, as an ordinary fix with its own red, and pinning
+    `file_target_unsupported` is the whole point of it;
 - every claim below carries a negative control that flips the observed
   result under a deliberately violated property, proving the assertion
   actually discriminates rather than passing vacuously. Per claim:
