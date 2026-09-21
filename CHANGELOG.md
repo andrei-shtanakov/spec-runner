@@ -39,7 +39,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   task id alone, so the row outlives the marker that caused it. An operator
   who has since removed the marker owes a red again, and the line says which
   run the waiver applied to rather than claiming the obligation is lifted
-  today.
+  today. When several sanctions are on record for one task the operative one
+  is named and the rest are counted, and the qualification reaches every line
+  that would otherwise assert an open obligation — including a task that
+  authored a red under `tdd`, had it retired, and was then re-declared
+  `standard` with a marker.
 
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same

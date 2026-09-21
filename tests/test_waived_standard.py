@@ -1126,6 +1126,90 @@ class TestStatusReportsWaiversAsContract:
             f"о второй записи умолчали, выбрав одну молча: {line}"
         )
 
+    def test_a_retired_checkpoint_does_not_re_open_the_obligation_the_sanction_lifted(
+        self, tmp_path
+    ):
+        """Задача с ИСТОРИЕЙ, а не с пустотой (#462, круг 4).
+
+        Задача авторила red под `tdd`, его отставили, затем её объявили
+        `standard` с маркером и прогнали. Обе записи сосуществуют: waiver
+        не удаляет чекпойнты, чекпойнты не удаляют waiver. Ветка retired
+        возвращалась ДО чтения waiver'а и печатала «needs RED authoring»
+        двумя строками ниже заголовка, называющего санкцию, — та самая
+        противоречивость заголовка и строки, ради которой всё это и
+        чинилось.
+        """
+        from spec_runner.remedy import CheckpointStatus
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        sha = _commit(root, {"tests/test_old.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            checkpoint = RedCheckpoint(
+                task_id="TASK-008",
+                namespace=ns,
+                commit_sha=sha,
+                baseline_sha=sha,
+                selector="tests/test_old.py::t",
+                environment_id="unpinned",
+                execution_mode="tdd",
+                config_hash="h",
+                outcome=RedOutcome.EXPECTED_FAIL,
+                timestamp="2026-09-11T00:00:00",
+            )
+            state.record_red_checkpoint(checkpoint)
+            state.set_checkpoint_status(ns, checkpoint.checkpoint_id, CheckpointStatus.ABANDONED)
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abcdef1234",
+            )
+
+        line = next(
+            ln
+            for ln in render(collect(cfg, "TASK-008"), "TASK-008").splitlines()
+            if ln.startswith("TASK-008:")
+        )
+
+        assert "needs RED authoring" not in line, (
+            f"санкция снята, а строка всё равно требует red: {line}"
+        )
+        assert "batch-approve-2026-09-09" in line, f"санкция не названа: {line}"
+        assert "abandoned" in line, f"отставленный чекпойнт перестал быть виден: {line}"
+
+    def test_a_retired_checkpoint_without_a_waiver_still_asks_for_a_red(self, tmp_path):
+        """Вторая половина: без санкции требование — правда, и остаётся."""
+        from spec_runner.remedy import CheckpointStatus
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        sha = _commit(root, {"tests/test_old.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            checkpoint = RedCheckpoint(
+                task_id="TASK-009",
+                namespace=ns,
+                commit_sha=sha,
+                baseline_sha=sha,
+                selector="tests/test_old.py::t",
+                environment_id="unpinned",
+                execution_mode="tdd",
+                config_hash="h",
+                outcome=RedOutcome.EXPECTED_FAIL,
+                timestamp="2026-09-11T00:00:00",
+            )
+            state.record_red_checkpoint(checkpoint)
+            state.set_checkpoint_status(ns, checkpoint.checkpoint_id, CheckpointStatus.ABANDONED)
+
+        text = render(collect(cfg, "TASK-009"), "TASK-009")
+
+        assert "needs RED authoring" in text, text
+
     def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
         """Вторая половина: без санкции «yet» — правда, и остаётся."""
         from spec_runner.tdd_status import collect, render

@@ -179,6 +179,42 @@ def _has_confirmed_red(data: dict, task_id: str) -> bool:
     return False
 
 
+def _applied_waiver(data: dict, task_id: str) -> tuple[str, str]:
+    """`(lifecycle, qualification)` for this task's applied waiver, or two
+    empty strings when none is on record.
+
+    Its own function because EVERY line that would otherwise assert an open
+    RED obligation needs it, not just the one for a task with no history at
+    all (#462, local review round 4): a task that authored a red under `tdd`,
+    had it abandoned, and was then re-declared `standard` with a marker
+    carries both records, and the retired branch used to print "needs RED
+    authoring" two lines under the header naming the sanction — the very
+    contradiction this fix exists to remove.
+
+    The LAST matching row, not the first: `applied_waivers` is ordered
+    oldest-first, deduplication is by (task, namespace, sanction), and a
+    second sanction for the same task is a supported state — so the first
+    row is the retired sanction, while which sanction the missing red is
+    attributable to is the whole point of the sentence.
+
+    Worded as history: `waivers_applied` is append-only and read by task id
+    alone, so a row outlives the marker that caused it. An operator who
+    removed the marker is owed a red again, and a line claiming the
+    obligation is lifted *now* would be the same untruth pointing the other
+    way.
+    """
+    waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
+    if not waivers:
+        return "", ""
+    waiver = waivers[-1]
+    earlier = f"; {len(waivers) - 1} earlier sanction(s) also on record" if len(waivers) > 1 else ""
+    return waiver["lifecycle"], (
+        f"a waiver was applied on an earlier run (class {waiver['waiver_class']}, "
+        f"sanction {waiver['sanction']}, baseline {waiver['baseline_sha'][:8]})"
+        f"{earlier}; that row is history, not what tasks.md declares now"
+    )
+
+
 def lifecycle_of(data: dict, task_id: str) -> str:
     """One line for where a task stands — the thing plain `status` gets wrong.
 
@@ -186,6 +222,7 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     *attempt* succeeded. True of the attempt and misleading about the task: it
     has no confirmed red and cannot proceed.
     """
+    waiver_lifecycle, waiver_note = _applied_waiver(data, task_id)
     history = data.get("phases", {}).get(task_id) or []
     verify = next((v for v in data.get("verify_evidence", []) if v["task_id"] == task_id), None)
     if history:
@@ -220,7 +257,10 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         return f"red not confirmed: {cp['outcome']} ({cp['checkpoint_id']})"
     retired = [r for r in data["retired_checkpoints"] if r["task_id"] == task_id]
     if retired:
-        return f"no active red — last checkpoint {retired[-1]['status']}; needs RED authoring"
+        head = f"no active red — last checkpoint {retired[-1]['status']}"
+        if waiver_note:
+            return f"{head} — {waiver_note}"
+        return f"{head}; needs RED authoring"
     if verify is not None:
         # #367 BEH-31: no red checkpoint exists at all — the verify-first
         # entry evidence is the only account of what happened, and which of
@@ -231,36 +271,8 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         if verify["outcome"] == "test_failure":
             return f"verify-first entry read red ({commit}); awaiting red authoring"
         return f"verify-first entry could not be judged: instrument-error ({commit})"
-    # The LAST matching row, not the first: `applied_waivers` is ordered
-    # oldest-first, deduplication is by (task, namespace, sanction), and a
-    # second sanction for the same task is a supported state — so `next(...)`
-    # named the retired sanction while the header above listed both (#462,
-    # local review round 3). Which sanction the missing red is attributable
-    # to is the whole point of the sentence.
-    waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
-    if waivers:
-        waiver = waivers[-1]
-        earlier = (
-            f"; {len(waivers) - 1} earlier sanction(s) also on record" if len(waivers) > 1 else ""
-        )
-        # #431: "no red checkpoint yet" — "yet" is an open obligation, and
-        # this is the one task where it was lifted by sanction. The
-        # aggregate form already said so (#430); with `task_id` the
-        # emptiness branch in `render` is unreachable (`tasks = [task_id]`),
-        # so the per-task line said the opposite of the header above it.
-        #
-        # Worded as HISTORY, and the baseline named (#462, local review):
-        # `waivers_applied` is append-only and `collect` filters it by
-        # task_id alone, so this row outlives the marker that caused it. An
-        # operator who removed the marker is owed a red again, and a line
-        # claiming the obligation is lifted *now* would be the same kind of
-        # untruth this fix removed, pointing the other way.
-        return (
-            f"{waiver['lifecycle']} — a waiver was applied on an earlier run "
-            f"(class {waiver['waiver_class']}, sanction {waiver['sanction']}, "
-            f"baseline {waiver['baseline_sha'][:8]}){earlier}; that row is "
-            f"history, not what tasks.md declares now"
-        )
+    if waiver_note:
+        return f"{waiver_lifecycle} — {waiver_note}"
     return "no red checkpoint yet"
 
 
