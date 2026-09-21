@@ -19,7 +19,13 @@ All five conditions of the class, confirmed:
   (TASK-004/DT-04) already turns any `parse_group_element` refusal into a
   named `validate` error quoting the adapter and the declared value. None of
   `tdd_runners.py`, `validate.py` or `live_verify.py` is modified by this
-  task;
+  task — including the capability dispatch this paragraph now credits, which
+  belongs to a LATER change by a different owner (spec-runner#460, commit
+  `1202318`, the fix for spec-runner#448) and was written into this docstring
+  and the assertions below when it landed. At this task's own baseline the
+  same declaration was already refused, by `ExUnitAdapter.parse_selector`
+  under the generic code `not_a_line_selector`; #460 changed the refusal's
+  code and sentence, not whether it happens;
 - this task adds the missing characterisation coverage: that ONE declaration
   driven through BOTH adapters, from `validate` through to `run_live_verify`,
   diverges exactly as an adapter-owned property — pytest carries it to a real
@@ -31,7 +37,22 @@ All five conditions of the class, confirmed:
   `ExUnitAdapter.parse_selector`'s refusal, and `validate`'s wrapping of a
   refusal into a named error all already exist and already behave this way —
   writing this file against unmodified `main` cannot fail without first
-  reverting delivered code, which is not this task's job;
+  reverting delivered code, which is not this task's job. Re-measured
+  2026-09-21 (spec-runner#462), because a later change to the subject can
+  retro-create a red the waiver calls impossible — and here it did. Both
+  runs are of this file inside a `git worktree` at the baseline commit
+  below, against THAT tree's `spec_runner` (`PYTHONPATH`; the venv's
+  editable install otherwise resolves the package to the live checkout, and
+  the measurement answers nothing — the first attempt at this paragraph
+  claimed "16 passed" for exactly that reason and was wrong):
+
+  - the file as TASK-011 shipped it (`9567372`) — 6 passed. That is the
+    waiver's actual subject, and its condition holds;
+  - the file as it stands today — 13 passed, 3 failed. All three failures
+    are `TestBEH05RefusalNamesTheCapabilityNotTheSyntax`, which is NOT under
+    this waiver: #460 added that class together with the capability dispatch
+    it pins, as an ordinary fix with its own red, and pinning
+    `file_target_unsupported` is the whole point of it;
 - every claim below carries a negative control that flips the observed
   result under a deliberately violated property, proving the assertion
   actually discriminates rather than passing vacuously. Per claim:

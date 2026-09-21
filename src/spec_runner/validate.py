@@ -700,6 +700,17 @@ def _validate_verify_first_declarations(
     adapter = adapter_for(adapter_name) if adapter_name else None
 
     for task in tasks:
+        # Resolved ONCE, above both readers (#431 п.3). `resolve_waiver`
+        # begins by resolving the mode and re-raises that `ConfigError`
+        # verbatim, so a mode typo on a task carrying a marker used to be
+        # appended here and again below — two identical lines for one
+        # defect, and nothing in the report saying they were one.
+        try:
+            mode = config.resolve_execution_mode(task)
+        except ConfigError as exc:
+            result.errors.append(f"{task.id}: {exc}")
+            continue
+
         # #429: checked BEFORE the `verifies_error` skip, because they are
         # independent defects. Behind the skip, a task carrying both would
         # surface one per validation run and send the operator round twice
@@ -713,12 +724,6 @@ def _validate_verify_first_declarations(
         if task.verifies_error:
             # Already reported by validate_task_fields — a different defect
             # (unparseable declaration) from the ones checked here.
-            continue
-
-        try:
-            mode = config.resolve_execution_mode(task)
-        except ConfigError as exc:
-            result.errors.append(f"{task.id}: {exc}")
             continue
 
         if mode != "verify_first":

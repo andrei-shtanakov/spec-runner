@@ -179,6 +179,64 @@ def _has_confirmed_red(data: dict, task_id: str) -> bool:
     return False
 
 
+def _applied_waiver(data: dict, task_id: str) -> str:
+    """The qualification this task's applied waiver puts on a line that would
+    otherwise assert an open RED obligation, or "" when none is on record.
+
+    Only the qualification. The row's own `lifecycle` column is deliberately
+    NOT returned (#462, local review round 8): it is the frozen literal
+    `WAIVER_LIFECYCLE`, written once and never updated, so printing it as the
+    head of a line states "no TDD lifecycle recorded" in the present tense
+    while `collect` may be carrying a `refused:` phase row for that same task
+    into `--json` — the text surface and the JSON surface of one `collect`
+    then say opposite things. The head must come from live data; only the
+    hedged clause may come from the row.
+
+    Its own function because every line whose text asserts an open RED
+    obligation needs it, not just the one for a task with no history at all
+    (#462, local review rounds 4 and 6). Those lines are three, and naming
+    them is what makes the claim checkable rather than sweeping:
+
+    - the retired-checkpoint line ("needs RED authoring");
+    - the verify-first entry read red ("awaiting red authoring");
+    - the no-history line (a red is owed).
+
+    A waiver row outlives the declaration that caused it, so all three are
+    reachable with one on record: `resolve_waiver` refuses a marker on a
+    non-`standard` task, but nothing deletes the row when the operator
+    re-declares the task `tdd` or `verify_first`. Each printed two lines
+    under a header naming the sanction — the very contradiction this fix
+    exists to remove. The remaining lines state evidence, not an obligation,
+    and are left alone.
+
+    The LAST matching row, not the first: `applied_waivers` is ordered
+    oldest-first, deduplication is by (task, namespace, sanction), and a
+    second sanction for the same task is a supported state — so the first
+    row is the retired sanction, while which sanction the missing red is
+    attributable to is the whole point of the sentence.
+
+    Worded as history, and QUALIFYING rather than replacing the instruction
+    (#462, local review round 5): `waivers_applied` is append-only and read
+    by task id alone, so a row outlives the marker that caused it. This
+    module cannot see `tasks.md`, so it can establish neither that the red is
+    owed nor that it is not — and dropping "needs RED authoring" on the
+    strength of a row that may be stale loses the only sentence saying what
+    to do next, exactly as asserting the debt unconditionally hid a sanction.
+    Callers therefore keep their own obligation clause and append this one
+    after "unless the waiver still stands".
+    """
+    waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
+    if not waivers:
+        return ""
+    waiver = waivers[-1]
+    earlier = f"; {len(waivers) - 1} earlier sanction(s) also on record" if len(waivers) > 1 else ""
+    return (
+        f"a waiver was applied on an earlier run (class {waiver['waiver_class']}, "
+        f"sanction {waiver['sanction']}, baseline {waiver['baseline_sha'][:8]})"
+        f"{earlier}; that row is history, not what tasks.md declares now"
+    )
+
+
 def lifecycle_of(data: dict, task_id: str) -> str:
     """One line for where a task stands — the thing plain `status` gets wrong.
 
@@ -186,6 +244,7 @@ def lifecycle_of(data: dict, task_id: str) -> str:
     *attempt* succeeded. True of the attempt and misleading about the task: it
     has no confirmed red and cannot proceed.
     """
+    waiver_note = _applied_waiver(data, task_id)
     history = data.get("phases", {}).get(task_id) or []
     verify = next((v for v in data.get("verify_evidence", []) if v["task_id"] == task_id), None)
     if history:
@@ -220,7 +279,10 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         return f"red not confirmed: {cp['outcome']} ({cp['checkpoint_id']})"
     retired = [r for r in data["retired_checkpoints"] if r["task_id"] == task_id]
     if retired:
-        return f"no active red — last checkpoint {retired[-1]['status']}; needs RED authoring"
+        head = f"no active red — last checkpoint {retired[-1]['status']}; needs RED authoring"
+        if waiver_note:
+            return f"{head} unless the waiver still stands — {waiver_note}"
+        return head
     if verify is not None:
         # #367 BEH-31: no red checkpoint exists at all — the verify-first
         # entry evidence is the only account of what happened, and which of
@@ -229,8 +291,15 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         if verify["outcome"] == "green":
             return f"green verify-evidence, no red authored ({commit})"
         if verify["outcome"] == "test_failure":
-            return f"verify-first entry read red ({commit}); awaiting red authoring"
+            owed = f"verify-first entry read red ({commit}); awaiting red authoring"
+            if waiver_note:
+                return f"{owed} unless the waiver still stands — {waiver_note}"
+            return owed
         return f"verify-first entry could not be judged: instrument-error ({commit})"
+    if waiver_note:
+        return (
+            f"no red checkpoint yet; a red is owed unless the waiver still stands — {waiver_note}"
+        )
     return "no red checkpoint yet"
 
 

@@ -1041,6 +1041,288 @@ class TestStatusReportsWaiversAsContract:
         assert "(nothing recorded)" not in text
         assert "expected for the waived task(s) above" in text
 
+    def test_the_per_task_form_does_not_promise_a_red_unconditionally(self, tmp_path):
+        """`tdd status TASK-008` — вторая форма той же команды (#431 п.2).
+
+        Агрегатная форма исправлена в #430; пер-задачная — нет. С `task_id`
+        ветка пустоты недостижима (`tasks = [task_id]`), и `lifecycle_of`
+        отвечал голым «no red checkpoint yet» — «yet» читается как
+        незакрытое обязательство ровно у той задачи, где оно снято
+        санкцией.
+
+        Предмет — не отсутствие фразы, а отсутствие БЕЗУСЛОВНОСТИ: голова
+        строки берётся из живых данных (чекпойнта действительно нет), а
+        санкция приходит оговоркой следом. Голова из строки waiver'а была
+        бы своей неправдой — колонка `lifecycle` заморожена при записи, а
+        `collect` в том же ответе может нести `refused:`-фазу.
+        """
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=resolve_namespace(cfg),
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abcdef1234",
+            )
+
+        text = render(collect(cfg, "TASK-008"), "TASK-008")
+
+        line = next(ln for ln in text.splitlines() if ln.startswith("TASK-008:"))
+
+        assert line != "TASK-008: no red checkpoint yet", (
+            f"обязательство снято санкцией — голое «yet» обещает несуществующий долг: {line}"
+        )
+        assert line.startswith("TASK-008: no red checkpoint yet;"), (
+            f"голова строки должна быть фактом живых данных, а не колонкой строки waiver'а: {line}"
+        )
+        assert "waiver" in text.lower(), f"причина пустоты не названа: {text}"
+
+        # Строка говорит о ПРОШЛОМ прогоне и называет его baseline (#462,
+        # находка локального ревью круга 2). `waivers_applied` —
+        # append-only, `collect` фильтрует её только по `task_id` и ни
+        # разу не сверяется с тем, что написано в `tasks.md` сейчас.
+        # Оператор, снявший маркер, получил бы утверждение, что долг снят
+        # санкцией, — тогда как долг вернулся в силу. Ровно та же неправда,
+        # что чинилась выше, только в другую сторону.
+        assert "unless the waiver still stands" in text, (
+            f"долг либо обещан безусловно, либо заглушён — ни то, ни другое "
+            f"модуль установить не может: {text}"
+        )
+        assert "earlier run" in text, f"строка читается как нынешнее состояние: {text}"
+        assert "abcdef12" in text, f"baseline того прогона не назван: {text}"
+        assert "not what tasks.md declares now" in text, text
+
+    def test_the_per_task_form_names_the_operative_sanction_not_the_retired_one(self, tmp_path):
+        """Две санкции у одной задачи — штатное состояние (#462, круг 3).
+
+        Дедупликация в `record_waiver_applied` — по (задача, неймспейс,
+        санкция), и `test_a_different_sanction_is_a_different_fact` пинит,
+        что вторая санкция пишется второй строкой. `applied_waivers`
+        отдаёт их старейшей первой, и `next(...)` называл бы именно
+        отставленную — тогда как ровно «какая санкция» эта строка и
+        существует, чтобы назвать.
+        """
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="1111111111",
+            )
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="spec-runner#429",
+                baseline_sha="2222222222",
+            )
+
+        line = next(
+            ln
+            for ln in render(collect(cfg, "TASK-008"), "TASK-008").splitlines()
+            if ln.startswith("TASK-008:")
+        )
+
+        assert "spec-runner#429" in line, f"названа не действующая санкция: {line}"
+        assert "22222222" in line, f"назван baseline не того прогона: {line}"
+        assert "batch-approve-2026-09-09" not in line, (
+            f"отставленная санкция выдана за действующую: {line}"
+        )
+        assert "1 earlier sanction(s) also on record" in line, (
+            f"о второй записи умолчали, выбрав одну молча: {line}"
+        )
+
+    def test_a_retired_checkpoint_gets_the_obligation_qualified_not_dropped(self, tmp_path):
+        """Задача с ИСТОРИЕЙ, а не с пустотой (#462, круги 4 и 5).
+
+        Задача авторила red под `tdd`, его отставили, затем её объявили
+        `standard` с маркером и прогнали. Обе записи сосуществуют: waiver
+        не удаляет чекпойнты, чекпойнты не удаляют waiver. Ветка retired
+        возвращалась ДО чтения waiver'а и печатала «needs RED authoring»
+        двумя строками ниже заголовка, называющего санкцию.
+
+        Но и глушить инструкцию нельзя: модуль `tasks.md` не читает и
+        установить нынешнее объявление не может — маркер мог быть снят, и
+        тогда долг вернулся. Пропавшее «needs RED authoring» — потеря
+        единственной фразы, говорящей, что делать дальше. Поэтому
+        обязательство остаётся и КВАЛИФИЦИРУЕТСЯ: «unless the waiver still
+        stands», с названной санкцией и оговоркой, что строка — история.
+        """
+        from spec_runner.remedy import CheckpointStatus
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        sha = _commit(root, {"tests/test_old.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            checkpoint = RedCheckpoint(
+                task_id="TASK-008",
+                namespace=ns,
+                commit_sha=sha,
+                baseline_sha=sha,
+                selector="tests/test_old.py::t",
+                environment_id="unpinned",
+                execution_mode="tdd",
+                config_hash="h",
+                outcome=RedOutcome.EXPECTED_FAIL,
+                timestamp="2026-09-11T00:00:00",
+            )
+            state.record_red_checkpoint(checkpoint)
+            state.set_checkpoint_status(ns, checkpoint.checkpoint_id, CheckpointStatus.ABANDONED)
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=ns,
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abcdef1234",
+            )
+
+        line = next(
+            ln
+            for ln in render(collect(cfg, "TASK-008"), "TASK-008").splitlines()
+            if ln.startswith("TASK-008:")
+        )
+
+        assert "needs RED authoring" in line, (
+            f"единственная фраза о том, что делать дальше, пропала: {line}"
+        )
+        assert "unless the waiver still stands" in line, (
+            f"обязательство утверждается как безусловное, хотя санкция на записи: {line}"
+        )
+        assert "batch-approve-2026-09-09" in line, f"санкция не названа: {line}"
+        assert "abandoned" in line, f"отставленный чекпойнт перестал быть виден: {line}"
+
+    def test_a_retired_checkpoint_without_a_waiver_still_asks_for_a_red(self, tmp_path):
+        """Вторая половина: без санкции требование — правда, и остаётся."""
+        from spec_runner.remedy import CheckpointStatus
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        ns = resolve_namespace(cfg)
+        sha = _commit(root, {"tests/test_old.py": "def t():\n    assert False\n"})
+        with ExecutorState(cfg) as state:
+            checkpoint = RedCheckpoint(
+                task_id="TASK-009",
+                namespace=ns,
+                commit_sha=sha,
+                baseline_sha=sha,
+                selector="tests/test_old.py::t",
+                environment_id="unpinned",
+                execution_mode="tdd",
+                config_hash="h",
+                outcome=RedOutcome.EXPECTED_FAIL,
+                timestamp="2026-09-11T00:00:00",
+            )
+            state.record_red_checkpoint(checkpoint)
+            state.set_checkpoint_status(ns, checkpoint.checkpoint_id, CheckpointStatus.ABANDONED)
+
+        text = render(collect(cfg, "TASK-009"), "TASK-009")
+
+        assert "needs RED authoring" in text, text
+
+    @pytest.mark.parametrize(
+        ("extra", "obligation", "unwaived_obligation"),
+        [
+            # Без записи waiver'а долг у пустой истории несёт «yet» — та же
+            # мысль другими словами; остальные две ветки формулировку не
+            # меняют.
+            ({}, "a red is owed", "no red checkpoint yet"),
+            (
+                {"retired_checkpoints": [{"task_id": "TASK-008", "status": "abandoned"}]},
+                "needs RED authoring",
+                "needs RED authoring",
+            ),
+            (
+                {
+                    "verify_evidence": [
+                        {
+                            "task_id": "TASK-008",
+                            "outcome": "test_failure",
+                            "commit_sha": "0123456789abcdef",
+                        }
+                    ]
+                },
+                "awaiting red authoring",
+                "awaiting red authoring",
+            ),
+        ],
+        ids=["no-history", "retired-checkpoint", "verify-first-read-red"],
+    )
+    def test_every_line_asserting_an_open_red_obligation_is_qualified(
+        self, extra, obligation, unwaived_obligation
+    ):
+        """Обещание «каждая строка» — по списку, а не на слово (#462, круг 6).
+
+        Строка waiver'а переживает объявление, которое её вызвало:
+        `resolve_waiver` отвергает маркер на не-`standard` задаче, но
+        удалять уже записанную строку некому. Значит, задача может дойти
+        до любой из трёх веток, неся waiver на записи, — и каждая печатала
+        бы безусловный долг двумя строками ниже заголовка с санкцией.
+        Ветка verify-first была пропущена ровно так, пока докстринг и
+        CHANGELOG обещали «every line».
+
+        Зовётся `lifecycle_of` напрямую: предмет — именно выбор ветки, а
+        три живых прогона ради трёх форм одной строки стоили бы дороже,
+        чем стоит сам пин. Проводка `collect`→`render` для двух из трёх
+        закреплена сквозными тестами выше.
+        """
+        from spec_runner.tdd_status import lifecycle_of
+
+        data = {
+            "phases": {},
+            "verify_evidence": [],
+            "active_checkpoints": [],
+            "retired_checkpoints": [],
+            "applied_waivers": [
+                {
+                    "task_id": "TASK-008",
+                    "waiver_class": "characterisation",
+                    "sanction": "batch-approve-2026-09-09",
+                    "lifecycle": "no TDD lifecycle recorded for this task",
+                    "baseline_sha": "abcdef1234",
+                }
+            ],
+        }
+        data.update(extra)
+
+        line = lifecycle_of(data, "TASK-008")
+
+        assert obligation in line, f"пропала фраза о том, что делать дальше: {line}"
+        assert "unless the waiver still stands" in line, (
+            f"долг утверждается безусловно, хотя санкция на записи: {line}"
+        )
+        assert "batch-approve-2026-09-09" in line, f"санкция не названа: {line}"
+
+        data["applied_waivers"] = []
+        unwaived = lifecycle_of(data, "TASK-008")
+        assert unwaived_obligation in unwaived, unwaived
+        assert "unless the waiver still stands" not in unwaived, (
+            f"оговорка появляется без единой записи waiver'а: {unwaived}"
+        )
+
+    def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
+        """Вторая половина: без санкции «yet» — правда, и остаётся."""
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+
+        text = render(collect(cfg, "TASK-009"), "TASK-009")
+
+        assert "no red checkpoint yet" in text, text
+
     def test_a_run_without_waivers_says_nothing_extra(self, tmp_path):
         from spec_runner.tdd_status import collect, render
 
@@ -1097,14 +1379,19 @@ class TestPointOneStopsTheTaskBeforeThePaidCall:
             _frozen(cfg, state, sha)
             _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
             result = execution.execute_task(waived, cfg, state)
-            attempts = state.attempts_for(waived.id) if hasattr(state, "attempts_for") else None
+            # Безусловно, через единственный путь, который у `ExecutorState`
+            # есть (#431 п.1). Было: `attempts_for(...) if hasattr(...)` —
+            # метода с таким именем у класса нет, ветка `else None` бралась
+            # всегда, и `assert` за `if attempts is not None` не исполнялся
+            # ни разу. Под мутацией «убрать `record_attempt` из ветки
+            # отказа точки 1» тест оставался зелёным.
+            attempts = state.get_task_state(waived.id).attempts
             rows = state.applied_waivers(resolve_namespace(cfg))
 
         assert result is False
         assert paid == [], "платный вызов не должен был состояться"
         assert rows == [], "waiver не применён — строки быть не должно"
-        if attempts is not None:
-            assert attempts, "попытка обязана быть записана"
+        assert attempts, "попытка обязана быть записана"
 
     def test_a_clean_tree_records_exactly_one_applied_waiver(self, tmp_path, monkeypatch):
         """Вторая половина: точка 1 пройдена — событие есть, и ровно одно.
@@ -1180,3 +1467,19 @@ class TestValidateReportsMarkerDefectsTogetherWithTheRest:
         task = _task(execution_mode="standard", tdd_waiver=WAIVER)
         result = self._validate([task], cfg)
         assert not any("waiver" in e.lower() for e in result.errors), result.errors
+
+    def test_an_unknown_mode_beside_a_marker_is_reported_once(self, tmp_path):
+        """Один дефект — одна строка (#431 п.3).
+
+        `resolve_waiver` первым делом зовёт `resolve_execution_mode` и
+        пробрасывает его `ConfigError`; проверка режима ниже добавляла ту
+        же строку вторично. Оператор видел две одинаковые ошибки про одну
+        опечатку и не мог знать, что дефект один.
+        """
+        cfg = _cfg(tmp_path)
+        task = _task(execution_mode="tddd", tdd_waiver=WAIVER)
+
+        result = self._validate([task], cfg)
+
+        about_mode = [e for e in result.errors if "tddd" in e]
+        assert len(about_mode) == 1, f"одна опечатка — одна строка, получено: {about_mode}"

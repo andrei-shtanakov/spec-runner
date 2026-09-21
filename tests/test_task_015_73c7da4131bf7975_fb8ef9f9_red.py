@@ -47,24 +47,23 @@ class TestBEH31DeclaredBoundaryReplacedByContract:
             "node-id group and the file target explicitly"
         )
 
-        # Both halves must be named **in the asymmetry paragraph itself**.
+        # Both halves must be named **in one asymmetry paragraph**.
         # Unscoped, `"not execution" in text` was satisfied by unrelated
         # #367 prose elsewhere in the document, so the assertion held even if
         # the asymmetry were described with only one of its two halves
-        # (spec-runner#458).
+        # (spec-runner#458). Scoping it to *exactly one* such paragraph
+        # (spec-runner#462) overshot in the other direction: BEH-31 is about
+        # the contract being declared, not about the document mentioning the
+        # word once — a second paragraph elaborating the same asymmetry would
+        # have reddened this red for no behavioural reason.
         paragraphs = [p for p in text.split("\n\n") if "asymmetry" in p]
-        assert len(paragraphs) == 1, (
-            f"expected exactly one paragraph declaring the asymmetry, found {len(paragraphs)}"
-        )
-        asymmetry = paragraphs[0]
-        assert "not execution" in asymmetry, (
-            "BEH-31: the node-id group's existing rule (BEH-06 — a skip is "
-            f"not execution) must be named in the asymmetry paragraph itself: "
-            f"{asymmetry!r}"
-        )
-        assert "accounted" in asymmetry, (
-            "BEH-31: the file target's own rule (BEH-16 — every member is "
-            f"accounted for) must be named in the same paragraph: {asymmetry!r}"
+        assert paragraphs, "BEH-31: no paragraph declares the asymmetry at all"
+        whole = [p for p in paragraphs if "not execution" in p and "accounted" in p]
+        assert whole, (
+            "BEH-31: one paragraph must name BOTH halves — the node-id "
+            "group's existing rule (BEH-06 — a skip is not execution) and "
+            "the file target's own (BEH-16 — every member is accounted "
+            f"for). Paragraphs mentioning the asymmetry: {paragraphs!r}"
         )
         assert "devtools" in text, (
             "BEH-31: the accepted contract must record that it was "

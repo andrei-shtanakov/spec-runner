@@ -12,6 +12,47 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **One defect, one line: `validate` no longer reports a mode typo twice**
+  (#431). `_validate_verify_first_declarations` resolved the execution mode
+  in two places — `resolve_waiver` begins by resolving it and re-raises that
+  `ConfigError` verbatim, and the mode check below added the same sentence
+  again. A task carrying both a `**TDD-waiver:**` marker and a typo in
+  `**Mode:**` produced two identical errors, with nothing in the report
+  saying they were one defect. The mode is now resolved once, above both
+  readers; the order in which the other defects are reported is unchanged.
+  Visible side effect: a task with an unparseable `**Verifies:**` *and* an
+  unknown mode now gets the mode line too, where the `continue` used to eat
+  it — the same "all defects in one pass" principle the marker check was
+  moved forward for.
+
+- **`tdd status <TASK-ID>` stops promising a red unconditionally when a
+  sanction is on record** (#431). For a task with an applied TDD waiver the
+  per-task form answered "no red checkpoint yet" — "yet" reads as an open
+  obligation at exactly the task where it was lifted, directly under a header
+  naming the waiver. The aggregate form was fixed in v2.36.0; with `task_id`
+  the emptiness branch is unreachable, so the per-task line kept saying it.
+
+  The line now **qualifies** the obligation instead of either asserting or
+  hiding it: `no active red — last checkpoint abandoned; needs RED authoring
+  unless the waiver still stands — a waiver was applied on an earlier run
+  (class …, sanction …, baseline …); that row is history, not what tasks.md
+  declares now`. `waivers_applied` is append-only and read by task id alone,
+  and this command does not read `tasks.md`, so it can establish neither that
+  the red is owed nor that it is not — dropping "needs RED authoring" would
+  lose the only sentence saying what to do next, exactly as asserting the
+  debt hid the sanction. When several sanctions are on record the operative
+  one is named and the rest are counted, and the qualification reaches all
+  three lines that assert an open obligation — the retired checkpoint's
+  "needs RED authoring", the verify-first entry's "awaiting red authoring",
+  and the no-history line — because a waiver row outlives the declaration
+  that wrote it: nothing deletes it when the task is later re-declared `tdd`
+  or `verify_first`. Lines that state evidence rather than an obligation are
+  untouched, as is a task with no waiver row at all. Every head clause is
+  derived from live data; only the hedged clause comes from the stored row,
+  whose `lifecycle` column is frozen at write time and would otherwise
+  contradict the phase history that `tdd status --json` prints from the same
+  read.
+
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same
   `validate_all` before their loop; `run` refuses with exit 1 and the H-1
@@ -133,10 +174,18 @@ new result keys are promises, not fixes.
   `WAIVER_REVIEW_OBLIGATIONS`, so a class without a stated review obligation
   cannot be added.
 
-  This closes the gap that made "negative control is verified by review"
-  true only on paper: until now the reviewer was told nothing about the
-  waiver at all. There is still no executable gate for it (#428) — the
-  reviewer is the only check, and the block says so.
+  Until this entry the reviewer was told nothing about the waiver at all,
+  so "negative control is verified by review" was true only on paper. What
+  changed is that the reviewer is now TOLD; whether its verdict can stop
+  anything is still `review_policy`'s answer, not this feature's
+  (corrected 2026-09-21, #435 — the original wording said "closes the gap"
+  and was a claim about the feature written as though it were a claim about
+  every configuration). Under the default `review_policy: advisory` the
+  review gate is not registered at all and a `REVIEW_FAILED` is a warning,
+  so a waived task still reaches DONE; with `run_review: false` the block is
+  never built; under `required` — this repo's own setting — the verdict
+  refuses. And the negative control itself still has no executable gate
+  anywhere (#428): the reviewer is the only check, and the block says so.
 
 - **Addressed TDD waivers for `standard` tasks** (#429). A task may carry
   `**TDD-waiver:** <class> · sanction: <id>` beside `**Mode:** standard`,
