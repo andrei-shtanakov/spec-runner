@@ -248,6 +248,39 @@ class TestAValidDeclarationPassesCleanly:
 
         assert result.ok
 
+    def test_a_verify_first_task_without_traces_still_warns(self, tmp_path):
+        """Предупреждение о traceability не освобождает verify_first — и это
+        проверяется через `validate_all`, а не через один валидатор (#377,
+        находка локального ревью PR #558, круг 9).
+
+        Это покрытие держалось побочно: BEH-06-голден пинил снимок ВСЕГО
+        файла, и строка «TASK-004: no traceability references» лежала в нём
+        от verify_first-соседа в фикстуре. Сужение голдена до его
+        собственного предмета пин унесло, а пин, заведённый взамен, зовёт
+        `validate_task_fields` напрямую — и не увидит фильтрацию
+        предупреждений, добавленную уровнем выше, в `validate_all`/`merge`.
+        Правдоподобие той правки не гипотетическое: `spec/FORMAT.md` уже
+        описывает освобождение NFR от этого же предупреждения «to avoid
+        noise», и «verify_first и так пинится своим `**Verifies:**`» —
+        естественный следующий шаг той же логики.
+
+        Поэтому замена стоит на том же уровне, что и снятая проверка:
+        markdown → `parse_tasks` → `validate_all` → `warnings`.
+        """
+        tasks_path = _write(
+            tmp_path,
+            "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\n"
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_x\n"
+            "Est: 1d\n",
+        )
+
+        result = validate_all(tasks_file=tasks_path, config_file=None)
+
+        assert any("TASK-001" in w and "traceability" in w.lower() for w in result.warnings), (
+            f"verify_first не освобождает от предупреждения: {result.warnings}"
+        )
+
 
 class TestRefusalNeverEndsInATraceback:
     """kind: integration — BEH-04/NFR-03: every defect above is a named
