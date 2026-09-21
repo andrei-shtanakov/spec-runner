@@ -238,3 +238,72 @@ class TestAnInstrumentErrorIsReexecutedWithinBudget:
         _run(root, cfg, monkeypatch)
 
         assert len(calls) == 1, f"детерминированный вердикт переисполнен {len(calls)} раз"
+
+
+class TestClaimsAreNamedBeforeTheControlRuns:
+    """kind: integration — находка ревью круга 5.
+
+    Тот же порядок, что обоснован в точке 1: нарушенный claim — про уже
+    нанесённый ущерб чужой замороженной эвиденции, неудовлетворённый
+    контроль — про ещё не предъявленное доказательство. Обратный порядок
+    стоил двух полных прогонов селектора в одноразовых worktree на
+    кандидата, который не смержится ни при каком исходе, и оператор про
+    сломанный byte-lock не узнавал вовсе.
+    """
+
+    def test_a_broken_claim_is_reported_and_the_control_never_runs(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner import negative_control as nc
+        from spec_runner.gates import REGISTRY, ensure_red_gate
+
+        root = _repo(tmp_path, patch=USELESS_PATCH)  # контроль бы не различил
+        cfg = _cfg(root)
+        ran: list = []
+        monkeypatch.setattr(
+            nc,
+            "run_negative_control",
+            lambda *a, **k: ran.append(1) or nc.ControlResult("satisfied", "", None, None),
+        )
+        monkeypatch.setattr(
+            hooks,
+            "_claims_intact_before_review",
+            lambda *a, **k: "TASK-009's frozen test was edited",
+        )
+
+        # Сайт claims спрашивает реестр: без регистрации ветка не достигается
+        # вовсе, и тест измерял бы её отсутствие, а не порядок. Реестр
+        # процессный, поэтому чистится на любом исходе.
+        ensure_red_gate()
+        try:
+            (ok, error, *_), _reviewed = _run(root, cfg, monkeypatch)
+        finally:
+            REGISTRY.unregister("tdd.red", "tests")
+            REGISTRY.unregister("tdd.claims", "tests")
+
+        assert ok is False
+        assert "frozen" in (error or ""), f"про сломанный claim не сказано: {error}"
+        assert ran == [], "контроль исполнен на кандидате, который уже не мержится"
+
+
+class TestAnUnrunnableControlIsStillRecorded:
+    """kind: integration — BEH-16/AC-13 + FR-06: «контроль не мог быть
+    исполнен» — такой же durable факт, как исход прогона. Без записи
+    единственным следом остаётся `attempts.error`, то есть «проверка
+    подтверждается тем, что задача не завершилась».
+    """
+
+    def test_an_unresolvable_candidate_blocks_and_leaves_evidence(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        # Кандидат не резолвится: ровно то, что `candidate_refusal` судит.
+        monkeypatch.setattr(hooks, "_head_sha", lambda *a, **k: "")
+
+        (ok, error, *_), reviewed = _run(root, cfg, monkeypatch)
+        rows = _rows(cfg)
+
+        assert ok is False, "waived-задача завершилась, хотя контроль не исполнялся"
+        assert reviewed == [], "платное ревью вызвано без исполненного контроля"
+        assert rows and rows[0]["verdict"] == "unsatisfied", rows
+        assert rows[0]["clean_outcome"] == "" and rows[0]["mutated_outcome"] == "", rows[0]

@@ -583,6 +583,15 @@ def _run_negative_control_before_review(
 
     absent = candidate_refusal(task, config, candidate_sha)
     if absent is not None:
+        # Запись и здесь: «контроль не мог быть исполнен» — такой же durable
+        # факт, как исход прогона, и без неё единственным следом остаётся
+        # `attempts.error`, то есть состояние «проверка подтверждается тем,
+        # что задача не завершилась», против которого FR-06 и написан.
+        from .negative_control import ControlResult
+
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("unsatisfied", absent, None, None)
+        )
         return "unsatisfied", absent, ""
 
     budget = max(0, int(getattr(config, "gate_recovery_attempts", 0)))
@@ -1296,21 +1305,6 @@ def post_done_hook(
         )
         return (False, reverify_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
-    # #428 §4a: контроль исполняется ДО платного ревью и отказывает НА
-    # МЕСТЕ. Два основания, и оба измеримые. Текст обязательства (FR-08)
-    # сообщает ревьюеру, что машина УЖЕ показала различение: исполнять
-    # контроль после ревью значило бы утверждать как состоявшийся факт то,
-    # чего не произошло. И платный вызов не тратится на работу, которая уже
-    # отказана, — прецедент формы рядом: `_claims_intact_before_review`
-    # (#214).
-    control_verdict, control_detail, control_sha = _run_negative_control_before_review(
-        task, config, review_checkpoint_sha
-    )
-    if control_verdict == "unsatisfied":
-        refusal = refusal_for(GateStatus.UNSATISFIED, control_detail)
-        refusal = _commit_blocked_status(task, config, refusal, review_checkpoint_sha)
-        return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
-
     # Get previous error for review context (local import to avoid circular dependency)
     from .state import ExecutorState
 
@@ -1377,6 +1371,29 @@ def post_done_hook(
             task, config, claims_blocked, candidate_before_review
         )
         return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
+
+    # #428 §4a: контроль исполняется ДО платного ревью и отказывает НА
+    # МЕСТЕ. Два основания, и оба измеримые. Текст обязательства (FR-08)
+    # сообщает ревьюеру, что машина УЖЕ показала различение: исполнять
+    # контроль после ревью значило бы утверждать как состоявшийся факт то,
+    # чего не произошло. И платный вызов не тратится на работу, которая уже
+    # отказана, — прецедент формы рядом: `_claims_intact_before_review`
+    # (#214).
+    #
+    # ПОСЛЕ claims, а не до: тот же порядок, что обоснован в точке 1
+    # (`execution.py`). Нарушенный claim — про уже нанесённый ущерб чужой
+    # замороженной эвиденции, неудовлетворённый контроль — про ещё не
+    # предъявленное доказательство; первым называется более серьёзный факт.
+    # Цена обратного порядка измерима: до двух полных прогонов селектора в
+    # одноразовых worktree на кандидата, который не смержится ни при каком
+    # исходе, и оператор, которому про сломанный byte-lock не сказали вовсе.
+    control_verdict, control_detail, control_sha = _run_negative_control_before_review(
+        task, config, review_checkpoint_sha
+    )
+    if control_verdict == "unsatisfied":
+        refusal = refusal_for(GateStatus.UNSATISFIED, control_detail)
+        refusal = _commit_blocked_status(task, config, refusal, review_checkpoint_sha)
+        return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
 
     # Run code review (before commit, so fixes can be included)
     review_verdict = ReviewVerdict.SKIPPED
