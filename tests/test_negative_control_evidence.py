@@ -176,3 +176,27 @@ class TestBEH19AFailedWriteIsNotSuccess:
 
         assert data["negative_controls"] == []
         assert "satisfied" not in json.dumps(data["negative_controls"])
+
+
+class TestEvidenceIsVisibleWithoutATaskId:
+    """kind: integration — задача, у которой есть ТОЛЬКО свидетельство
+    контроля, обязана попасть в список `tdd status`.
+
+    Без этого текст печатает «(nothing recorded)», пока `--json` несёт
+    строку: две поверхности одного чтения расходятся — дефект, который
+    этот модуль и существует не допускать.
+    """
+
+    def test_a_task_with_only_control_evidence_is_listed(self, tmp_path):
+        from spec_runner.tdd_status import collect, render
+
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state:
+            _record(state, cfg)
+
+        data = collect(cfg, None)
+        text = render(data, None)
+
+        assert "TASK-008" in text, f"задача выпала из списка: {text}"
+        assert "nothing recorded" not in text, text
+        assert data["negative_controls"], "в JSON запись есть, а в тексте её не было бы"

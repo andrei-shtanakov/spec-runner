@@ -434,8 +434,11 @@ def _replay_selector(
         refusal = adapter.preflight(worktree, parsed)
         if refusal is not None:
             return attempt("preflight", refusal.message, refusal_code=refusal.code)
+        identity = _declaration_line(worktree, parsed)
         if preflight_only:
-            return attempt("preflight", "preflight only: nothing was run")
+            return attempt(
+                "preflight", "preflight only: nothing was run", selector_identity=identity
+            )
 
         # Prove and isolate the environment before running anything (#207).
         # A `git worktree` carries tracked files only, so a language that keeps
@@ -454,6 +457,7 @@ def _replay_selector(
             outcome=adapter.classify(result),
             proof=adapter.prove_selected(parsed, result),
             execution_proven=adapter.execution_proven(parsed, result),
+            selector_identity=identity,
             returncode=result.returncode,
         )
     except Exception as exc:  # a broken replay is unverifiable, never a red
@@ -523,6 +527,34 @@ def verify_red(
     )
 
 
+def _declaration_line(worktree: Path, selector: Selector) -> str | None:
+    """Текст строки объявления теста в СУДИМОМ дереве, или None (#428, Q-G).
+
+    Заполняется только там, где селектор адресуется строкой: на pytest node
+    id устойчив к сдвигам, и идентичность читать нечего — поле честно
+    пусто, а не выдумано.
+
+    Правило, которое это обслуживает, сформулировано как ОГРАНИЧЕНИЕ, а не
+    как детектор подмены: патч обязан оставить строку объявления
+    нетронутой. Сравнение текста не отличило бы одноимённый чужой тест, и
+    заявлять полную идентичность было бы неправдой; предел строковой
+    адресации назван прямо, а не спрятан.
+
+    Читается ВНУТРИ половины, пока её дерево живо: половины исполняются
+    последовательно, и одновременно развёрнутых worktree не существует.
+    """
+    line = getattr(selector.locator, "line", None)
+    if line is None:
+        return None
+    try:
+        text = (worktree / str(selector.path)).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    if not 1 <= int(line) <= len(text):
+        return None
+    return text[int(line) - 1].strip()
+
+
 def _run_selector(
     config: ExecutorConfig,
     worktree: Path,
@@ -544,37 +576,6 @@ def _run_selector(
         text=True,
         timeout=REPLAY_TIMEOUT_SECONDS,
         env={**os.environ, **(env or {})},
-    )
-
-
-def _classify(
-    adapter: TddRunnerAdapter,
-    selector: Selector,
-    result: subprocess.CompletedProcess,
-    env_id: str,
-) -> RedVerification:
-    """Two independent answers, combined by one table (#198).
-
-    `classify` says what the run did; `prove_selected` says whether the test we
-    asked for is what ran. Only both together can confirm a red — on ExUnit an
-    out-of-range line silently runs a *different* test and reports an ordinary
-    failure, so an exit code alone cannot mean "the test you named failed".
-    """
-    outcome = adapter.classify(result)
-    proof = adapter.prove_selected(selector, result)
-    if proof is SelectionProof.PROVEN:
-        if outcome is RunOutcome.TESTS_FAILED:
-            return RedVerification(
-                RedOutcome.EXPECTED_FAIL, "the selector failed on replay", env_id
-            )
-        if outcome is RunOutcome.TESTS_PASSED:
-            return RedVerification(RedOutcome.NOT_RED, "the selector passed on replay", env_id)
-    output = f"{result.stdout}\n{result.stderr}"
-    return RedVerification(
-        RedOutcome.UNVERIFIABLE,
-        f"the test run exited {result.returncode} without reaching a verdict "
-        f"({outcome.value}, selection {proof.value}): {_tail(output)}",
-        env_id,
     )
 
 

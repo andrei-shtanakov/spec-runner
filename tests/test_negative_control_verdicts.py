@@ -304,6 +304,44 @@ class TestBEH13SameVerdictOnBothMeasuredRunners:
     по списку источников ушёл бы в instrument error с ретраями.
     """
 
+    def test_selector_identity_is_filled_where_the_selector_is_a_line(self, tmp_path):
+        """Q-G мёртв, если поле не заполняется.
+
+        Первая редакция объявила `selector_identity`, сравнивала его в
+        таблице и НЕ писала — правило существовало только на бумаге, а
+        дыра «satisfied по чужому тесту» оставалась открытой.
+        """
+        from spec_runner.negative_control import replay_both_halves
+
+        ex_root = tmp_path / "ex"
+        (ex_root / "lib").mkdir(parents=True)
+        (ex_root / "test").mkdir(parents=True)
+        (ex_root / "spec" / "negative-controls").mkdir(parents=True)
+        (ex_root / "mix.exs").write_text(MIX_EXS, encoding="utf-8")
+        (ex_root / "lib" / "subject.ex").write_text(EX_SUBJECT, encoding="utf-8")
+        (ex_root / "test" / "subject_test.exs").write_text(EX_TEST, encoding="utf-8")
+        (ex_root / "test" / "test_helper.exs").write_text("ExUnit.start()\n", encoding="utf-8")
+        (ex_root / "spec" / "negative-controls" / "TASK-008.patch").write_text(
+            EX_BROKEN_PATCH, encoding="utf-8"
+        )
+        _git(ex_root, "init")
+        _git(ex_root, "config", "user.email", "t@t")
+        _git(ex_root, "config", "user.name", "t")
+        _git(ex_root, "add", "-A")
+        _git(ex_root, "commit", "-m", "candidate")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ex_root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        clean, _ = replay_both_halves(
+            _cfg(ex_root, test_command="mix test", tdd_runner="exunit"),
+            sha=head,
+            control=NegativeControl(patch=PATCH_PATH, selector="test/subject_test.exs:3"),
+        )
+
+        assert clean.selector_identity is not None, "идентичность объявления не прочитана"
+        assert "test" in clean.selector_identity, clean.selector_identity
+
     def test_pytest_and_exunit_agree(self, tmp_path):
         py_root, py_head = _repo(tmp_path / "py", patch=BROKEN_PATCH)
         py_result = _run(py_root, py_head)

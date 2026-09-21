@@ -143,7 +143,7 @@ def clean_half_is_green(attempt) -> bool:
     )
 
 
-def _replay_for_control(config, *, sha: str, control, mutate, order: int):
+def _replay_for_control(config, *, sha: str, control, mutate, order: int, preflight_only=False):
     """Один вызов шва — отдельной функцией, чтобы тест мог подменить ОДНУ
     половину, не трогая другую.
 
@@ -154,7 +154,14 @@ def _replay_for_control(config, *, sha: str, control, mutate, order: int):
     """
     from .tdd import _replay_selector
 
-    return _replay_selector(config, sha=sha, selector=control.selector, mutate=mutate, order=order)
+    return _replay_selector(
+        config,
+        sha=sha,
+        selector=control.selector,
+        mutate=mutate,
+        order=order,
+        preflight_only=preflight_only,
+    )
 
 
 def replay_both_halves(config: ExecutorConfig, *, sha: str, control):

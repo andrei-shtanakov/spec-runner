@@ -329,6 +329,11 @@ def render(data: dict, task_id: str | None) -> str:
         | {r["task_id"] for r in data["retired_checkpoints"]}
         | {c["task_id"] for c in data["claims"]}
         | {v["task_id"] for v in data.get("verify_evidence", [])}
+        # #428: задача, у которой есть ТОЛЬКО свидетельство контроля, иначе
+        # выпадала из списка — текстовая поверхность печатала «(nothing
+        # recorded)», пока `--json` нёс строку. Ровно то расхождение двух
+        # поверхностей одного чтения, которого этот модуль и избегает.
+        | {n["task_id"] for n in data.get("negative_controls", [])}
     )
     if task_id:
         tasks = [task_id]
