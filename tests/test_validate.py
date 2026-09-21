@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from spec_runner.task import Task
 from spec_runner.validate import (
     VALIDATORS,
@@ -258,6 +260,27 @@ class TestValidateWarnings:
         assert result.ok
         assert len(result.warnings) >= 1
         assert any("trace" in w.lower() or "traceability" in w.lower() for w in result.warnings)
+
+    @pytest.mark.parametrize("mode", [None, "standard", "tdd", "verify_first"])
+    def test_missing_traceability_warns_whatever_mode_the_task_declares(self, mode) -> None:
+        """Предупреждение не зависит от режима (#377, находка приёмки #558).
+
+        `validate_task_fields` судит поля, а не режим: `if not
+        task.traces_to` — и всё. Покрытие для `verify_first` держалось
+        побочно, голденом BEH-06, где такая задача жила соседом в фикстуре;
+        сужение голдена до его собственного предмета этот пин унесло, а
+        оставшиеся тесты про traceability режима не объявляют вовсе.
+        Поведение в дереве осталось — значит, ему нужен собственный тест,
+        а не тот, что пинил его из чужого контракта.
+        """
+        task = _make_task("TASK-001", traces_to=[])
+        task.execution_mode = mode
+
+        result = validate_task_fields([task])
+
+        assert any("TASK-001" in w and "traceability" in w.lower() for w in result.warnings), (
+            f"режим {mode!r} не меняет поля, но предупреждение пропало: {result.warnings}"
+        )
 
     def test_no_warnings_when_all_fields_present(self) -> None:
         """A fully-specified task should not produce warnings."""
