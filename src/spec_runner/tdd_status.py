@@ -197,11 +197,15 @@ def _applied_waiver(data: dict, task_id: str) -> tuple[str, str]:
     row is the retired sanction, while which sanction the missing red is
     attributable to is the whole point of the sentence.
 
-    Worded as history: `waivers_applied` is append-only and read by task id
-    alone, so a row outlives the marker that caused it. An operator who
-    removed the marker is owed a red again, and a line claiming the
-    obligation is lifted *now* would be the same untruth pointing the other
-    way.
+    Worded as history, and QUALIFYING rather than replacing the instruction
+    (#462, local review round 5): `waivers_applied` is append-only and read
+    by task id alone, so a row outlives the marker that caused it. This
+    module cannot see `tasks.md`, so it can establish neither that the red is
+    owed nor that it is not — and dropping "needs RED authoring" on the
+    strength of a row that may be stale loses the only sentence saying what
+    to do next, exactly as asserting the debt unconditionally hid a sanction.
+    Callers therefore keep their own obligation clause and append this one
+    after "unless the waiver still stands".
     """
     waivers = [w for w in data.get("applied_waivers", []) if w["task_id"] == task_id]
     if not waivers:
@@ -257,10 +261,10 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         return f"red not confirmed: {cp['outcome']} ({cp['checkpoint_id']})"
     retired = [r for r in data["retired_checkpoints"] if r["task_id"] == task_id]
     if retired:
-        head = f"no active red — last checkpoint {retired[-1]['status']}"
+        head = f"no active red — last checkpoint {retired[-1]['status']}; needs RED authoring"
         if waiver_note:
-            return f"{head} — {waiver_note}"
-        return f"{head}; needs RED authoring"
+            return f"{head} unless the waiver still stands — {waiver_note}"
+        return head
     if verify is not None:
         # #367 BEH-31: no red checkpoint exists at all — the verify-first
         # entry evidence is the only account of what happened, and which of
@@ -272,7 +276,7 @@ def lifecycle_of(data: dict, task_id: str) -> str:
             return f"verify-first entry read red ({commit}); awaiting red authoring"
         return f"verify-first entry could not be judged: instrument-error ({commit})"
     if waiver_note:
-        return f"{waiver_lifecycle} — {waiver_note}"
+        return f"{waiver_lifecycle}; a red is owed unless the waiver still stands — {waiver_note}"
     return "no red checkpoint yet"
 
 

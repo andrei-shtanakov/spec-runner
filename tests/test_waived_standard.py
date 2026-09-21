@@ -1076,6 +1076,10 @@ class TestStatusReportsWaiversAsContract:
         # Оператор, снявший маркер, получил бы утверждение, что долг снят
         # санкцией, — тогда как долг вернулся в силу. Ровно та же неправда,
         # что чинилась выше, только в другую сторону.
+        assert "unless the waiver still stands" in text, (
+            f"долг либо обещан безусловно, либо заглушён — ни то, ни другое "
+            f"модуль установить не может: {text}"
+        )
         assert "earlier run" in text, f"строка читается как нынешнее состояние: {text}"
         assert "abcdef12" in text, f"baseline того прогона не назван: {text}"
         assert "not what tasks.md declares now" in text, text
@@ -1126,18 +1130,21 @@ class TestStatusReportsWaiversAsContract:
             f"о второй записи умолчали, выбрав одну молча: {line}"
         )
 
-    def test_a_retired_checkpoint_does_not_re_open_the_obligation_the_sanction_lifted(
-        self, tmp_path
-    ):
-        """Задача с ИСТОРИЕЙ, а не с пустотой (#462, круг 4).
+    def test_a_retired_checkpoint_gets_the_obligation_qualified_not_dropped(self, tmp_path):
+        """Задача с ИСТОРИЕЙ, а не с пустотой (#462, круги 4 и 5).
 
         Задача авторила red под `tdd`, его отставили, затем её объявили
         `standard` с маркером и прогнали. Обе записи сосуществуют: waiver
         не удаляет чекпойнты, чекпойнты не удаляют waiver. Ветка retired
         возвращалась ДО чтения waiver'а и печатала «needs RED authoring»
-        двумя строками ниже заголовка, называющего санкцию, — та самая
-        противоречивость заголовка и строки, ради которой всё это и
-        чинилось.
+        двумя строками ниже заголовка, называющего санкцию.
+
+        Но и глушить инструкцию нельзя: модуль `tasks.md` не читает и
+        установить нынешнее объявление не может — маркер мог быть снят, и
+        тогда долг вернулся. Пропавшее «needs RED authoring» — потеря
+        единственной фразы, говорящей, что делать дальше. Поэтому
+        обязательство остаётся и КВАЛИФИЦИРУЕТСЯ: «unless the waiver still
+        stands», с названной санкцией и оговоркой, что строка — история.
         """
         from spec_runner.remedy import CheckpointStatus
         from spec_runner.tdd_status import collect, render
@@ -1175,8 +1182,11 @@ class TestStatusReportsWaiversAsContract:
             if ln.startswith("TASK-008:")
         )
 
-        assert "needs RED authoring" not in line, (
-            f"санкция снята, а строка всё равно требует red: {line}"
+        assert "needs RED authoring" in line, (
+            f"единственная фраза о том, что делать дальше, пропала: {line}"
+        )
+        assert "unless the waiver still stands" in line, (
+            f"обязательство утверждается как безусловное, хотя санкция на записи: {line}"
         )
         assert "batch-approve-2026-09-09" in line, f"санкция не названа: {line}"
         assert "abandoned" in line, f"отставленный чекпойнт перестал быть виден: {line}"

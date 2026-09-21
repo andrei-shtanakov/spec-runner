@@ -25,25 +25,26 @@ is a **breaking change** and requires a major version bump plus an entry here.
   it — the same "all defects in one pass" principle the marker check was
   moved forward for.
 
-- **`tdd status <TASK-ID>` stops promising a red that a sanction removed**
-  (#431). For a task with an applied TDD waiver the per-task form answered
-  "no red checkpoint yet" — "yet" reads as an open obligation at exactly
-  the task where it was lifted, directly under a header naming the waiver.
-  The aggregate form was fixed in v2.36.0; with `task_id` the emptiness
-  branch is unreachable, so the per-task line kept saying it. `lifecycle_of`
-  now reads the applied waiver and names the class, the sanction and the
-  baseline of the run it applied to. An unwaived task still says "yet",
-  because there it is true.
+- **`tdd status <TASK-ID>` stops promising a red unconditionally when a
+  sanction is on record** (#431). For a task with an applied TDD waiver the
+  per-task form answered "no red checkpoint yet" — "yet" reads as an open
+  obligation at exactly the task where it was lifted, directly under a header
+  naming the waiver. The aggregate form was fixed in v2.36.0; with `task_id`
+  the emptiness branch is unreachable, so the per-task line kept saying it.
 
-  Worded as history on purpose: `waivers_applied` is append-only and read by
-  task id alone, so the row outlives the marker that caused it. An operator
-  who has since removed the marker owes a red again, and the line says which
-  run the waiver applied to rather than claiming the obligation is lifted
-  today. When several sanctions are on record for one task the operative one
-  is named and the rest are counted, and the qualification reaches every line
-  that would otherwise assert an open obligation — including a task that
+  The line now **qualifies** the obligation instead of either asserting or
+  hiding it: `no active red — last checkpoint abandoned; needs RED authoring
+  unless the waiver still stands — a waiver was applied on an earlier run
+  (class …, sanction …, baseline …); that row is history, not what tasks.md
+  declares now`. `waivers_applied` is append-only and read by task id alone,
+  and this command does not read `tasks.md`, so it can establish neither that
+  the red is owed nor that it is not — dropping "needs RED authoring" would
+  lose the only sentence saying what to do next, exactly as asserting the
+  debt hid the sanction. When several sanctions are on record the operative
+  one is named and the rest are counted, and the qualification reaches every
+  line that would otherwise assert an open obligation, including a task that
   authored a red under `tdd`, had it retired, and was then re-declared
-  `standard` with a marker.
+  `standard` with a marker. A task with no waiver row at all is untouched.
 
 - **`watch` answers a red pre-run validation with exit 1, like `run`** (#480,
   from the terminal review of PR #522). Both subcommands run the same
