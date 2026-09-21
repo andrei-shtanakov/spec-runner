@@ -454,7 +454,11 @@ def _replay_selector(
                     refusal_code="patch_unreadable",
                 )
             applied = subprocess.run(
-                ["git", "apply", "--index", str(mutate)],
+                # `--`: путь приходит из объявления в tasks.md, и строка вида
+                # `--directory=/tmp` разобралась бы git'ом как ОПЦИЯ (а без
+                # позиционного аргумента git читает stdin). Практика репо:
+                # `git rm --cached … -- *rels` в `git_ops`.
+                ["git", "apply", "--index", "--", str(mutate)],
                 cwd=worktree,
                 capture_output=True,
                 text=True,

@@ -554,6 +554,28 @@ def _is_our_bookkeeping_commit(log_line: str, task_id: str) -> bool:
     return subject.startswith(f"{task_id}:")
 
 
+def _control_will_run(task: Task, config: ExecutorConfig) -> bool:
+    """Будет ли для этой задачи исполнен негативный контроль.
+
+    Нужен ровно для одного: решить, обязана ли дешёвая проверка claims
+    случиться ПЕРЕД двумя живыми реплеями. Предикат, а не побочный эффект,
+    потому что спрашивается до вызова.
+    """
+    # `auto_commit: false` — не «контроль не удовлетворён», а «судить
+    # нечего»: коммита, который сделал бы этот прогон, не существует, и
+    # реплей против HEAD судил бы ЧУЖУЮ работу. Это член класса структурной
+    # невозможности, и отказ по нему уже стоит до первого платного вызова
+    # (точка 1); здесь остаётся молчать, а не выносить вердикт о работе по
+    # дереву, к которой она не относится.
+    if not config.auto_commit:
+        return False
+    try:
+        waiver = config.resolve_waiver(task)
+    except Exception:  # разобран выше по стеку
+        return False
+    return waiver is not None and task.negative_control is not None
+
+
 def _run_negative_control_before_review(
     task: Task, config: ExecutorConfig, candidate_sha: str | None
 ) -> tuple[str | None, str, str]:
@@ -564,12 +586,7 @@ def _run_negative_control_before_review(
     повторная оценка перечитала бы тот же кэш (Р-3). Детерминированные
     исходы не повторяются — тот же вопрос тем же байтам.
     """
-    waiver = None
-    try:
-        waiver = config.resolve_waiver(task)
-    except Exception:  # разобран выше по стеку; здесь это просто «не наша задача»
-        return None, "", ""
-    if waiver is None or task.negative_control is None:
+    if not _control_will_run(task, config):
         return None, "", ""
 
     # SHA вычисляется ПОСЛЕ проверки waiver'а, а не в аргументе вызова.
@@ -1397,6 +1414,25 @@ def post_done_hook(
     # Цена обратного порядка измерима: до двух полных прогонов селектора в
     # одноразовых worktree на кандидата, который не смержится ни при каком
     # исходе, и оператор, которому про сломанный byte-lock не сказали вовсе.
+    # Claims — ПЕРЕД контролем, и когда ревью выключено тоже. Проверка выше
+    # висит на `config.run_review`, потому что заводилась «до платного
+    # вызова»; с этим сайтом дорогих вещей стало две, и при
+    # `run_review: false` контроль опережал claims-гейт мержа — нарушенная
+    # чужая заморозка не называлась вовсе, а оператор читал про сломанный
+    # инструмент. Поймал полный сбор: два чужих теста точки 2.
+    if (
+        not candidate_before_review
+        and is_registered("tdd.claims", "tests")
+        and _control_will_run(task, config)
+    ):
+        candidate_before_review = _head_sha(config)
+        claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
+        if claims_blocked is not None:
+            claims_blocked = _commit_blocked_status(
+                task, config, claims_blocked, candidate_before_review
+            )
+            return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
+
     control_verdict, control_detail, control_sha = _run_negative_control_before_review(
         task, config, review_checkpoint_sha
     )

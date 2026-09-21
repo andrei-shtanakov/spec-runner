@@ -360,3 +360,56 @@ class TestOnlyASatisfiedControlReachesTheReviewer:
 
         assert reviewed, "удовлетворённый контроль не должен мешать ревью"
         assert ok, error
+
+
+class TestWithoutACandidateOfItsOwnTheControlStaysSilent:
+    """kind: integration — поймано полным сбором после круга 8.
+
+    При `auto_commit: false` коммита, который сделал бы ЭТОТ прогон, не
+    существует: реплей против HEAD судил бы чужую работу и возвращал бы
+    вердикт о ней. Это член класса структурной невозможности, и отказ по
+    нему стоит до первого платного вызова (точка 1) — здесь остаётся
+    молчать. Заодно восстановлен порядок: claims называются раньше
+    контроля и когда ревью выключено.
+    """
+
+    def test_no_replay_happens_without_auto_commit(self, tmp_path, monkeypatch):
+        from spec_runner import negative_control as nc
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, auto_commit=False, run_review=False)
+        ran: list = []
+        monkeypatch.setattr(nc, "run_negative_control", lambda *a, **k: ran.append(1))
+
+        _run(root, cfg, monkeypatch)
+
+        assert ran == [], "контроль судил дерево, которое эта задача не коммитила"
+        assert _rows(cfg) == [], "записано свидетельство о чужом коммите"
+
+    def test_claims_are_named_before_the_control_when_review_is_off(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner import negative_control as nc
+        from spec_runner.gates import REGISTRY, ensure_red_gate
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, run_review=False)
+        ran: list = []
+        monkeypatch.setattr(
+            nc,
+            "run_negative_control",
+            lambda *a, **k: ran.append(1) or nc.ControlResult("satisfied", "", None, None),
+        )
+        monkeypatch.setattr(
+            hooks, "_claims_intact_before_review", lambda *a, **k: "a neighbour's claim broke"
+        )
+
+        ensure_red_gate()
+        try:
+            (ok, error, *_), _reviewed = _run(root, cfg, monkeypatch)
+        finally:
+            REGISTRY.unregister("tdd.red", "tests")
+            REGISTRY.unregister("tdd.claims", "tests")
+
+        assert ok is False
+        assert "claim" in (error or "").lower(), error
+        assert ran == [], "контроль исполнен раньше claims при выключенном ревью"

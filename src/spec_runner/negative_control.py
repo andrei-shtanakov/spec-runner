@@ -278,6 +278,23 @@ def _classify_clean(clean) -> ControlResult | None:
         )
     if clean_half_is_green(clean):
         return None
+    if clean.stage == "run" and clean.outcome is RunOutcome.TESTS_PASSED:
+        # Тесты ПРОШЛИ, но прогон не доказал, что исполнился ровно
+        # объявленный тест: селектор адресует больше одного (параметризация)
+        # либо сводка несёт вторую не-нейтральную категорию. Ответ на это
+        # детерминирован — переспрашивать нечего, — и относится к
+        # ОБЪЯВЛЕНИЮ, а не к машине. Отнести его к стенду значило бы
+        # переисполнять полные прогоны ради того же ответа, отдавать exit 2
+        # «о работе ничего не известно» про исправный тест и перезапускать
+        # задачу с новым платным вызовом: она не завершилась бы никогда.
+        return ControlResult(
+            "unsatisfied",
+            "the declared selector did not run exactly one test on the clean "
+            "candidate: the control compares one test's outcome with and without "
+            "the mutant, and a selector that addresses several proves nothing about "
+            f"any of them ({clean.detail[:200]})",
+            clean=clean,
+        )
     return ControlResult(
         "instrument_error",
         f"the clean half reached no verdict ({clean.stage}): {clean.detail}",

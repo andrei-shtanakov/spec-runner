@@ -364,3 +364,34 @@ class TestASymlinkedDirectoryIsNotTheCommitEither:
         assert mutated is not None and mutated.stage == "mutate", mutated
         assert mutated.refusal_code == "patch_absent", mutated
         assert mutated.outcome is None, "мутант исполнен на патче вне коммита"
+
+
+class TestThePatchPathIsNeverReadAsAnOption:
+    """kind: integration — находка ревью круга 9: путь приходит из
+    объявления в `tasks.md`, и строка вида `--directory=/tmp` не абсолютна,
+    `..` не содержит и внутри дерева разрешается — то есть все проверки
+    пути проходит, а `git apply` разберёт её как ОПЦИЮ (и без позиционного
+    аргумента прочитает stdin). Практика репо — ставить `--`.
+    """
+
+    def test_an_option_shaped_path_is_not_handed_to_git_as_a_flag(self, tmp_path):
+        from pathlib import PurePosixPath
+
+        from spec_runner.negative_control import replay_both_halves
+
+        root, _ = _repo(tmp_path)
+        odd = root / "--directory=x"
+        odd.write_text(PATCH, encoding="utf-8")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-m", "option-shaped patch name")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        control = NegativeControl(patch=PurePosixPath("--directory=x"), selector=SELECTOR)
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=control)
+
+        # Патч настоящий и применим: если git прочитал его КАК ПУТЬ, мутант
+        # исполнился. Разобранный как флаг, он дал бы отказ применения.
+        assert mutated is not None and mutated.stage == "run", mutated
+        assert mutated.outcome is not None, mutated

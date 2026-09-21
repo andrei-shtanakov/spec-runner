@@ -782,3 +782,53 @@ class TestUnsatisfiedNeedsAPositiveObservation:
         verdict = _classify_mutated(cfg, clean, self._mutated(head))
 
         assert verdict.verdict == "unsatisfied", verdict
+
+
+class TestASelectorThatRunsMoreThanOneTestIsADeclarationDefect:
+    """kind: contract — находка ревью круга 9.
+
+    Селектор параметризованного теста разбирается адаптером, то есть точку
+    1 проходит, но его прогон печатает `3 passed`, и `execution_proven`
+    (мера «исполнился ровно объявленный тест») ложно. Замыкающая строка
+    относила это к СТЕНДУ: `instrument_error` → переисполнения полными
+    прогонами → exit 2 «о работе ничего не известно» → нетерминальный
+    отказ → перезапуск задачи с новым платным вызовом. Оператор читал
+    «сломан харнесс» про исправный тест, и задача не завершалась никогда —
+    ровно то, что докстринг предиката неисполнимости объявляет
+    недопустимым.
+
+    Переспрашивать тут нечего: ответ детерминирован, и это факт об
+    ОБЪЯВЛЕНИИ, а не о машине.
+    """
+
+    PARAM_TEST = (
+        "import pytest\n\n\n"
+        "@pytest.mark.parametrize('n', [1, 2, 3])\n"
+        "def test_property(n):\n"
+        "    assert n\n"
+    )
+
+    def test_a_parametrized_selector_is_unsatisfied_not_a_broken_stand(self, tmp_path):
+        from spec_runner.negative_control import run_negative_control
+
+        root, head = _repo(tmp_path)
+        (root / "tests" / "test_subject.py").write_text(self.PARAM_TEST, encoding="utf-8")
+        subprocess.run(["git", "commit", "-qam", "parametrized"], cwd=root, check=True)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        result = run_negative_control(_cfg(root), sha=head, control=_control())
+
+        assert result.verdict == "unsatisfied", result
+        assert not result.retriable, "детерминированный факт об объявлении переисполняется"
+        assert "one test" in result.detail.lower() or "один" in result.detail.lower(), result.detail
+
+    def test_a_single_test_selector_is_unaffected(self, tmp_path):
+        from spec_runner.negative_control import run_negative_control
+
+        root, head = _repo(tmp_path)
+
+        result = run_negative_control(_cfg(root), sha=head, control=_control())
+
+        assert result.verdict == "satisfied", result
