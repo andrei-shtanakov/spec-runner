@@ -101,7 +101,10 @@ class TestLocalVolumeStoreCapabilities:
         локальный том не даёт TLS, шифрование объявляет оператор, lifecycle нет."""
         caps = LocalVolumeStore(Path("/tmp/x")).capabilities()
         assert isinstance(caps, StoreCapabilities)
-        assert caps.tls is False
+        # `None` = «неприменимо», как и говорит § 1.2 («tls: n/a»): у пути на
+        # диске транспорта нет. `False` было бы ответом на вопрос, которого
+        # здесь не стоит.
+        assert caps.tls is None
         assert caps.immutable_put is True
         assert caps.lifecycle == "none"
 
@@ -339,19 +342,26 @@ class TestOnlyTheDeclaredDoorReachesAWritableStore:
                     for alias in node.names:
                         if alias.name in writable:
                             offenders.append(f"{module.name}:{node.lineno} {alias.name}")
+
             # Вторая, и она обычнее: импорт модуля целиком и обращение
             # атрибутом. Сверять имя владельца здесь бессмысленно — оно может
             # быть любым (`as st`, `spec_runner.artifact_store.X`), поэтому
             # проверяется САМО имя, а модули, не импортирующие store, из
             # проверки исключены выше.
-            imports_store = any(
-                (isinstance(n, ast.ImportFrom) and (n.module or "").endswith("artifact_store"))
-                or (
-                    isinstance(n, ast.Import)
-                    and any(a.name.endswith("artifact_store") for a in n.names)
-                )
-                for n in ast.walk(tree)
-            )
+            def _touches_store(n: ast.AST) -> bool:
+                # Три идиомы, и относительная — самая ходовая внутри пакета:
+                # `from . import artifact_store` несёт имя модуля в `names`, а
+                # не в `module`, и прежняя проверка её не видела (находка
+                # ревью, круг 6).
+                if isinstance(n, ast.ImportFrom):
+                    if (n.module or "").endswith("artifact_store"):
+                        return True
+                    return any(a.name == "artifact_store" for a in n.names)
+                if isinstance(n, ast.Import):
+                    return any(a.name.endswith("artifact_store") for a in n.names)
+                return False
+
+            imports_store = any(_touches_store(n) for n in ast.walk(tree))
             if imports_store:
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Attribute) and node.attr in writable:

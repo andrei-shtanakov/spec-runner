@@ -324,10 +324,18 @@ def durability_declared_flag(value: object, *, field: str) -> bool:
     )
 
 
-#: Store adapters the runtime can actually build. Imported from the module
-#: that owns them, not restated here: a second list would drift, and the
-#: drift would surface as "config green, run dies at first put".
-KNOWN_STORE_ADAPTERS = ("local_volume",)
+def known_store_adapters() -> tuple[str, ...]:
+    """Имена адаптеров — у их владельца, а не копией здесь.
+
+    Копия дрейфовала бы молча, и дрейф вылез бы как «config зелёный, прогон
+    умирает при первой сборке store». Импорт отложен в тело функции: модуль
+    store ничего из config не берёт, но прямой импорт наверху связал бы их
+    порядок загрузки без нужды.
+    """
+    from spec_runner.artifact_store import ADAPTERS
+
+    return ADAPTERS
+
 
 #: Option keys of `durability.store` that name a path and are therefore
 #: resolved to absolute at load (design 1.1). A list, not a guess by value:
@@ -1149,22 +1157,30 @@ def read_durability(
         options = {}
 
     flags: dict[str, bool] = {}
-    unreadable = False
+    unreadable_fields: set[str] = set()
     for flag_name in ("tls", "encryption_at_rest", "immutable_put"):
         try:
             flags[flag_name] = durability_declared_flag(store.get(flag_name), field=flag_name)
         except ConfigError as exc:
             problems.append(f"{prefix}{exc}")
             flags[flag_name] = False
-            unreadable = True
+            unreadable_fields.add(flag_name)
 
     adapter = store.get("adapter") or None
-    if adapter and not unreadable:
-        missing = durability_store_missing_properties(
-            tls=flags["tls"],
-            encryption_at_rest=flags["encryption_at_rest"],
-            immutable_put=flags["immutable_put"],
-        )
+    if adapter:
+        # Нечитаемое объявление исключается ПОИМЁННО, а не глушит отчёт обо
+        # всех трёх: сказать «missing: tls» про поле, которое объявлено, но
+        # нечитаемо, было бы неправдой, а промолчать об остальных двух —
+        # отправить оператора на второй круг (находка ревью, круг 6).
+        missing = [
+            name
+            for name in durability_store_missing_properties(
+                tls=flags["tls"],
+                encryption_at_rest=flags["encryption_at_rest"],
+                immutable_put=flags["immutable_put"],
+            )
+            if name not in unreadable_fields
+        ]
         if missing:
             problems.append(
                 f"{prefix}durability.store adapter {adapter!r} is missing required "
@@ -1178,10 +1194,11 @@ def read_durability(
         # проверку обязательных options (они спрашиваются по имени), и всё
         # это выясняется при первой сборке store — после старта прогона
         # (находка ревью, круг 5).
-        if adapter not in KNOWN_STORE_ADAPTERS:
+        known = known_store_adapters()
+        if adapter not in known:
             problems.append(
                 f"{prefix}durability.store adapter {adapter!r} is unknown; "
-                f"known adapters: {', '.join(KNOWN_STORE_ADAPTERS)}"
+                f"known adapters: {', '.join(known)}"
             )
         elif adapter == "local_volume" and not options.get("root"):
             # Отказ здесь, а не у делегата: иначе config проходит оба гейта и

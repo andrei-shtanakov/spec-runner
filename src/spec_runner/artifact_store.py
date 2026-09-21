@@ -50,7 +50,12 @@ class StoreCapabilities:
     оператору, а не свести к «да/нет».
     """
 
-    tls: bool
+    #: `True`/`False` — объявление; `None` — «неприменимо» (design § 1.2
+    #: говорит про локальный том буквально `tls: n/a`). Три состояния, а не
+    #: два, потому что «нет TLS» и «TLS здесь не о чем» — разные утверждения,
+    #: и сводить их к `False` значит заставлять адаптер говорить неправду о
+    #: себе.
+    tls: bool | None
     encryption_at_rest: bool
     immutable_put: bool
     lifecycle: str
@@ -187,9 +192,16 @@ class LocalVolumeStore:
         self._encryption_at_rest = encryption_at_rest
 
     def capabilities(self) -> StoreCapabilities:
-        """`tls` неприменим к локальному пути, шифрование объявляет оператор."""
+        """`tls` неприменим к локальному пути, шифрование объявляет оператор.
+
+        `None`, а не `False`: у пути на диске транспорта нет, и объявлять
+        «TLS отсутствует» — значит отвечать на вопрос, которого здесь не
+        стоит. См. открытый вопрос про гейт BEH-28 в TODO: конфиг с этим
+        адаптером обязан объявить `tls: true`, то есть прямо обратное тому,
+        что адаптер говорит о себе.
+        """
         return StoreCapabilities(
-            tls=False,
+            tls=None,
             encryption_at_rest=self._encryption_at_rest,
             immutable_put=True,
             lifecycle="none",
