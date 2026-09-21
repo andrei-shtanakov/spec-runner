@@ -1041,6 +1041,45 @@ class TestStatusReportsWaiversAsContract:
         assert "(nothing recorded)" not in text
         assert "expected for the waived task(s) above" in text
 
+    def test_the_per_task_form_does_not_promise_a_red_that_was_waived(self, tmp_path):
+        """`tdd status TASK-008` — вторая форма той же команды (#431 п.2).
+
+        Агрегатная форма исправлена в #430; пер-задачная — нет. С `task_id`
+        ветка пустоты недостижима (`tasks = [task_id]`), и `lifecycle_of`
+        отвечал «no red checkpoint yet» — «yet» читается как незакрытое
+        обязательство ровно у той задачи, где оно снято санкцией.
+        """
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+        with ExecutorState(cfg) as state:
+            state.record_waiver_applied(
+                task_id="TASK-008",
+                namespace=resolve_namespace(cfg),
+                waiver_class="characterisation",
+                sanction="batch-approve-2026-09-09",
+                baseline_sha="abcdef1234",
+            )
+
+        text = render(collect(cfg, "TASK-008"), "TASK-008")
+
+        assert "no red checkpoint yet" not in text, (
+            f"обязательство снято санкцией — «yet» обещает несуществующий долг: {text}"
+        )
+        assert "waiver" in text.lower(), f"причина пустоты не названа: {text}"
+
+    def test_the_per_task_form_still_says_yet_for_an_unwaived_task(self, tmp_path):
+        """Вторая половина: без санкции «yet» — правда, и остаётся."""
+        from spec_runner.tdd_status import collect, render
+
+        root = _repo(tmp_path)
+        cfg = _repo_cfg(root)
+
+        text = render(collect(cfg, "TASK-009"), "TASK-009")
+
+        assert "no red checkpoint yet" in text, text
+
     def test_a_run_without_waivers_says_nothing_extra(self, tmp_path):
         from spec_runner.tdd_status import collect, render
 
@@ -1097,14 +1136,19 @@ class TestPointOneStopsTheTaskBeforeThePaidCall:
             _frozen(cfg, state, sha)
             _commit(root, {"tests/test_frozen.py": "def t():\n    assert True\n"})
             result = execution.execute_task(waived, cfg, state)
-            attempts = state.attempts_for(waived.id) if hasattr(state, "attempts_for") else None
+            # Безусловно, через единственный путь, который у `ExecutorState`
+            # есть (#431 п.1). Было: `attempts_for(...) if hasattr(...)` —
+            # метода с таким именем у класса нет, ветка `else None` бралась
+            # всегда, и `assert` за `if attempts is not None` не исполнялся
+            # ни разу. Под мутацией «убрать `record_attempt` из ветки
+            # отказа точки 1» тест оставался зелёным.
+            attempts = state.get_task_state(waived.id).attempts
             rows = state.applied_waivers(resolve_namespace(cfg))
 
         assert result is False
         assert paid == [], "платный вызов не должен был состояться"
         assert rows == [], "waiver не применён — строки быть не должно"
-        if attempts is not None:
-            assert attempts, "попытка обязана быть записана"
+        assert attempts, "попытка обязана быть записана"
 
     def test_a_clean_tree_records_exactly_one_applied_waiver(self, tmp_path, monkeypatch):
         """Вторая половина: точка 1 пройдена — событие есть, и ровно одно.
@@ -1180,3 +1224,19 @@ class TestValidateReportsMarkerDefectsTogetherWithTheRest:
         task = _task(execution_mode="standard", tdd_waiver=WAIVER)
         result = self._validate([task], cfg)
         assert not any("waiver" in e.lower() for e in result.errors), result.errors
+
+    def test_an_unknown_mode_beside_a_marker_is_reported_once(self, tmp_path):
+        """Один дефект — одна строка (#431 п.3).
+
+        `resolve_waiver` первым делом зовёт `resolve_execution_mode` и
+        пробрасывает его `ConfigError`; проверка режима ниже добавляла ту
+        же строку вторично. Оператор видел две одинаковые ошибки про одну
+        опечатку и не мог знать, что дефект один.
+        """
+        cfg = _cfg(tmp_path)
+        task = _task(execution_mode="tddd", tdd_waiver=WAIVER)
+
+        result = self._validate([task], cfg)
+
+        about_mode = [e for e in result.errors if "tddd" in e]
+        assert len(about_mode) == 1, f"одна опечатка — одна строка, получено: {about_mode}"

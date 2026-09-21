@@ -231,6 +231,17 @@ def lifecycle_of(data: dict, task_id: str) -> str:
         if verify["outcome"] == "test_failure":
             return f"verify-first entry read red ({commit}); awaiting red authoring"
         return f"verify-first entry could not be judged: instrument-error ({commit})"
+    waiver = next((w for w in data.get("applied_waivers", []) if w["task_id"] == task_id), None)
+    if waiver is not None:
+        # #431: "no red checkpoint yet" — "yet" is an open obligation, and
+        # this is the one task where it was lifted by sanction. The
+        # aggregate form already said so (#430); with `task_id` the
+        # emptiness branch in `render` is unreachable (`tasks = [task_id]`),
+        # so the per-task line said the opposite of the header above it.
+        return (
+            f"{waiver['lifecycle']} — addressed TDD waiver applied "
+            f"(class {waiver['waiver_class']}, sanction {waiver['sanction']})"
+        )
     return "no red checkpoint yet"
 
 
