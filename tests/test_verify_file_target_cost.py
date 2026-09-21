@@ -179,6 +179,47 @@ def _repo_with_real_declaration_file(tmp_path: Path) -> Path:
     return root
 
 
+def _diagnose(label: str, result, runs: int, expected_runs: int) -> str:
+    """Всё, что различает неудавшийся живой прогон, одной строкой отказа.
+
+    spec-runner#519. Этот тест падает примерно раз на десять полных прогонов
+    и не воспроизводится ни под нагрузкой CPU, ни при параллельных копиях,
+    ни перестановкой (случайного порядка в репо нет). Четыре версии механизма
+    отвергнуты замерами, причина не установлена — а сообщение отказа несло
+    только `detail` агрегата, то есть одну фразу про группу целиком.
+
+    Печатается СИГНАЛ, не объём: исход, счёт инвокаций и **только те члены,
+    что не passed**. Полный перечень селекторов сюда не идёт — он и так в
+    `detail`, а двадцать строк известного состава прячут ту единственную,
+    ради которой сообщение читают.
+    """
+    detail = str(getattr(result, "detail", "?"))
+    if len(detail) > 300:
+        detail = detail[:300] + f"… (+{len(detail) - 300} символов)"
+    lines = [
+        f"{label}: живой прогон не зелёный",
+        f"  outcome:    {getattr(result, 'outcome', '?')}",
+        f"  ran/passed: ran={getattr(result, 'ran', '?')} passed={getattr(result, 'passed', '?')}",
+        f"  инвокаций:  {runs} (ожидалось {expected_runs})",
+        f"  предъявлено селекторов: {len(getattr(result, 'group_executed', ()) or ())}",
+        f"  detail: {detail}",
+    ]
+    composition = getattr(result, "composition", ()) or ()
+    not_passed = [entry for entry in composition if entry.outcome != "passed"]
+    if composition:
+        lines.append(f"  состав: {len(composition)} член(ов), не passed — {len(not_passed)}")
+        for entry in not_passed:
+            reason = f" — {entry.reason}" if entry.reason else ""
+            lines.append(f"    · {entry.member}: {entry.outcome}{reason}")
+    else:
+        # Пустой состав у развёрнутой половины — норма: она гоняет по одному
+        # селектору на инвокацию, и пер-членных фактов у неё нет по
+        # построению. Сказано явно, чтобы читатель отказа не искал причину в
+        # пустоте.
+        lines.append("  состав: пуст (для развёрнутого списка это норма)")
+    return "\n".join(lines)
+
+
 def _cfg(root: Path, **overrides) -> ExecutorConfig:
     defaults: dict = {
         "project_root": root,
@@ -272,8 +313,12 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         expanded_elapsed = time.perf_counter() - start
         expanded_runs = invocations["count"]
 
-        assert file_target_result.passed, file_target_result.detail
-        assert expanded_result.passed, expanded_result.detail
+        assert file_target_result.passed, _diagnose(
+            "файловая цель", file_target_result, file_target_runs, 1
+        )
+        assert expanded_result.passed, _diagnose(
+            "развёрнутый список", expanded_result, expanded_runs, len(node_ids)
+        )
 
         # BEH-08's deterministic gate: run count, not seconds. The file
         # target never unrolls into one invocation per collected member.
