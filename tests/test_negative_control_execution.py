@@ -270,3 +270,60 @@ class TestThePatchIsReadFromTheCommitOnly:
         assert mutated is not None and mutated.stage == "mutate", mutated
         assert mutated.refusal_code == "patch_absent", mutated
         assert mutated.outcome is None, "мутант был исполнен на патче вне коммита"
+
+
+class TestASymlinkIsNotTheCommitsPatch:
+    """kind: integration — находка ревью цепи: та же дыра, что закрывает
+    `patch_path_refusal`, только через содержимое дерева, а не через форму
+    строки. Задача коммитит по объявленному пути ссылку наружу, и `is_file()`
+    вместе с `git apply` идут по ней в `/tmp`.
+    """
+
+    def test_a_symlinked_patch_is_refused_not_followed(self, tmp_path):
+        from spec_runner.negative_control import replay_both_halves
+
+        root, _ = _repo(tmp_path)
+        outside = tmp_path / "outside.patch"
+        outside.write_text(PATCH, encoding="utf-8")
+        link = root / "spec" / "negative-controls" / "TASK-008.patch"
+        link.unlink()
+        link.symlink_to(outside)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-m", "patch is a link")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=_control())
+
+        assert mutated is not None and mutated.stage == "mutate", mutated
+        assert mutated.refusal_code == "patch_absent", mutated
+        assert mutated.outcome is None, "мутант исполнен на патче вне коммита"
+
+
+class TestAnUnreadablePatchIsTheMachinesFault:
+    """kind: integration — BEH-11 (б), design §3: сбой ввода-вывода при
+    чтении патча — instrument_error с переисполнениями, а не «патч не
+    применяется». `git apply` отдал бы оба случая одним ненулевым кодом, и
+    поломка стенда предъявлялась бы автору как факт о его работе.
+    """
+
+    def test_an_io_failure_is_not_read_as_a_bad_patch(self, tmp_path, monkeypatch):
+        from spec_runner.negative_control import _classify_mutated, replay_both_halves
+
+        root, head = _repo(tmp_path)
+        real_read = Path.read_bytes
+
+        def _explode(self, *a, **k):
+            if self.name == "TASK-008.patch":
+                raise OSError(5, "Input/output error")
+            return real_read(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_bytes", _explode)
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=_control())
+
+        assert mutated is not None and mutated.refusal_code == "patch_unreadable", mutated
+        verdict = _classify_mutated(_cfg(root), clean, mutated)
+        assert verdict.verdict == "instrument_error", verdict
+        assert verdict.retriable, "сбой машины обязан переисполняться"

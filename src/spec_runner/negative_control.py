@@ -296,6 +296,11 @@ def _classify_mutated(config, clean, mutated) -> ControlResult:
         return ControlResult(verdict, detail, clean=clean, mutated=mutated)
 
     if mutated.stage == "mutate":
+        if mutated.refusal_code == "patch_unreadable":
+            # Сбой ввода-вывода — факт о МАШИНЕ: предъявлять его автору как
+            # «патч не применяется» значит называть его работу негодной за
+            # чужую поломку, и без переисполнений (BEH-11 б).
+            return result("instrument_error", mutated.detail)
         if mutated.refusal_code in ("patch_absent", "patch_inapplicable"):
             # AP-12.4: оба — факты о РАБОТЕ задачи, а не о стенде.
             # Применимость детерминирована: патч и цель один коммит.

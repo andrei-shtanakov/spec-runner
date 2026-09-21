@@ -650,7 +650,18 @@ def _negative_control_gate(ctx: GateContext) -> GateResult:
     написана. Пропускает только явное `True`: ОТСУТСТВИЕ ключа означает
     «судить», то есть умолчание закрыто, а не открыто.
     """
-    if not ctx.facts.get("waiver_applied"):
+    if ctx.facts.get("waiver_applied") is None:
+        # Молчание сайта — не пропуск. Ключ решает здесь ВСЁ: «судить» или
+        # «не наша задача», и сайт, его не сообщивший, — наша ошибка, а не
+        # разрешение. Тот же ответ, что у `evaluate_claims` на тот же ключ;
+        # #429 закрыл это у claims после того, как точка 1 села на путь,
+        # которым waived-задача не ходит. Докстринг ниже это и обещал.
+        return GateResult(
+            GateStatus.INSTRUMENT_ERROR,
+            PhaseOutcome.ERROR,
+            "the run did not report whether a waiver was applied",
+        )
+    if not ctx.facts["waiver_applied"]:
         return GateResult(
             GateStatus.SATISFIED, PhaseOutcome.SKIPPED, "no addressed waiver on this task"
         )

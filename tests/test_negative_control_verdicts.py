@@ -601,3 +601,74 @@ class TestTheRecheckParsesWithoutRunning:
 
         # Чистое дерево РАЗБИРАЕТСЯ (файл цел), значит отказ — про патч.
         assert verdict.verdict == "unsatisfied", verdict
+
+
+class TestTheSilenceOfASiteIsNotASkip:
+    """kind: contract — находка ревью цепи.
+
+    Докстринг гейта заявляет «пропускает только явное `True`: отсутствие
+    ключа означает судить», а код читал `not ctx.facts.get(...)`, то есть
+    отмывал молчание сайта в пропуск — ровно то, что `evaluate_claims` в
+    этом же файле объявлено НЕ делать и что #429 закрыл у claims после
+    того, как точка 1 села на путь, которым waived-задача не ходит.
+    """
+
+    def _ctx(self, tmp_path, **facts):
+        from spec_runner.gates import GateContext
+
+        return GateContext(
+            task_id="TASK-008",
+            checkpoint_sha="deadbeef",
+            config=ExecutorConfig(project_root=tmp_path),
+            state=None,
+            facts=facts,
+        )
+
+    def test_a_missing_waiver_fact_is_an_instrument_error(self, tmp_path):
+        from spec_runner.gates import GateStatus, _negative_control_gate
+
+        result = _negative_control_gate(self._ctx(tmp_path))
+
+        assert result.status is GateStatus.INSTRUMENT_ERROR, result
+        assert "waiver" in (result.detail or "").lower(), result.detail
+
+    def test_an_explicit_false_still_skips(self, tmp_path):
+        """Задача без waiver'а за эту механику не платит ничем (NFR-02)."""
+        from spec_runner.gates import GateStatus, _negative_control_gate
+
+        result = _negative_control_gate(self._ctx(tmp_path, waiver_applied=False))
+
+        assert result.status is GateStatus.SATISFIED, result
+        assert "no addressed waiver" in (result.detail or "")
+
+
+class TestARealTimeoutIsSeenAsOne:
+    """kind: contract — находка ревью цепи.
+
+    `subprocess.run(timeout=…)` поднимает `subprocess.TimeoutExpired` —
+    подкласс `SubprocessError`, а НЕ `TimeoutError`. Проверка
+    `isinstance(exc, TimeoutError)` никогда не была истинной, стадия
+    `timeout` не возникала ни на одном производственном пути, а тест
+    BEH-12 фабриковал `ReplayAttempt(stage="timeout")` — форму, которой код
+    не производит. Шов общий с RED-путём, так что мёртвой ветка была и там.
+    """
+
+    def test_a_replay_that_times_out_reports_the_timeout_stage(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from spec_runner import tdd
+        from spec_runner.negative_control import _replay_for_control
+
+        root, head = _repo(tmp_path)
+
+        def _explode(*a, **k):
+            raise sp.TimeoutExpired(cmd=["pytest"], timeout=1)
+
+        monkeypatch.setattr(tdd, "_run_selector", _explode)
+
+        attempt = _replay_for_control(
+            _cfg(root), sha=head, control=_control(), mutate=None, order=1
+        )
+
+        assert attempt.stage == "timeout", attempt
+        assert attempt.outcome is None, "у таймаута нет исхода прогона"

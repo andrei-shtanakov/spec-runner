@@ -1,0 +1,240 @@
+"""Проводка негативного контроля в `post_done_hook` (#428, FR-06/§4a).
+
+Source: workstreams/executable-negative-control-under-standard-20260921/spec/20-design.md §4a, §6
+Traces: FR-01, FR-04, FR-06
+Acceptance: AC-08, AC-14
+
+Находка ревью цепи (блокирующая): весь производственный путь — исполнение
+контроля до платного ревью, переисполнение инструментальной неудачи, запись
+свидетельства, перенос вердикта в гейт — не наблюдался ни одним тестом.
+Тесты DT-04 писали строку в `negative_controls` сами, то есть AC-14 («после
+прогона запись содержит…») доказывался тестом, который эту строку и создавал.
+Мутация «убрать вызов `_record_negative_control`» проходила зелёной.
+
+Поэтому здесь НИЧЕГО не подставляется, кроме платного ревьюера: стенд —
+настоящий git-репозиторий с настоящим pytest, и строка свидетельства
+читается из состояния ПОСЛЕ прогона, а не кладётся туда рукой.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+import pytest
+
+from spec_runner import hooks
+from spec_runner.config import ExecutorConfig
+from spec_runner.state import ExecutorState
+from spec_runner.task import NegativeControl, Task
+
+WAIVER = "characterisation · sanction: batch-approve-2026-09-09"
+SELECTOR = "tests/test_subject.py::test_property"
+PATCH_PATH = "spec/negative-controls/TASK-008.patch"
+
+SUBJECT = "def value():\n    return 1\n"
+TEST_FILE = "from subject import value\n\n\ndef test_property():\n    assert value() == 1\n"
+
+#: Различает: ломает свойство, строку объявления теста не трогает.
+GOOD_PATCH = """--- a/subject.py
++++ b/subject.py
+@@ -1,2 +1,2 @@
+ def value():
+-    return 1
++    return 2
+"""
+
+#: Применяется, но свойство цело — тест остаётся зелёным, контроль не различил.
+USELESS_PATCH = """--- a/subject.py
++++ b/subject.py
+@@ -1,2 +1,3 @@
+ def value():
++    # harmless comment
+     return 1
+"""
+
+
+def _git(root: Path, *args: str):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True)
+
+
+def _repo(tmp_path: Path, *, patch: str = GOOD_PATCH) -> Path:
+    root = tmp_path / "repo"
+    (root / "tests").mkdir(parents=True)
+    (root / "spec" / "negative-controls").mkdir(parents=True)
+    (root / "subject.py").write_text(SUBJECT, encoding="utf-8")
+    (root / "tests" / "test_subject.py").write_text(TEST_FILE, encoding="utf-8")
+    (root / PATCH_PATH).write_text(patch, encoding="utf-8")
+    (root / "conftest.py").write_text(
+        "import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(__file__).parent))\n",
+        encoding="utf-8",
+    )
+    (root / "spec" / "tasks.md").write_text(
+        "## Tasks\n\n### TASK-008: characterisation\n"
+        "P2 | 🔄 IN_PROGRESS   Est: 0.5d\n"
+        f"**Mode:** standard\n**TDD-waiver:** {WAIVER}\n"
+        f"**Negative-control:** {PATCH_PATH} :: {SELECTOR}\n\n"
+        "**Checklist:**\n- [ ] пункт\n",
+        encoding="utf-8",
+    )
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "candidate")
+    return root
+
+
+def _cfg(root: Path, **overrides) -> ExecutorConfig:
+    defaults: dict = {
+        "project_root": root,
+        "state_file": root / "spec" / ".executor-state.db",
+        "logs_dir": root / "spec" / ".logs",
+        "test_command": f"{sys.executable} -m pytest",
+        "create_git_branch": False,
+        "run_tests_on_done": False,
+        "run_lint_on_done": False,
+        "run_review": True,
+        "auto_commit": True,
+    }
+    defaults.update(overrides)
+    return ExecutorConfig(**defaults)
+
+
+def _task() -> Task:
+    return Task(
+        id="TASK-008",
+        name="characterisation",
+        priority="p2",
+        status="in_progress",
+        estimate="0.5d",
+        execution_mode="standard",
+        tdd_waiver=WAIVER,
+        negative_control=NegativeControl(patch=PurePosixPath(PATCH_PATH), selector=SELECTOR),
+    )
+
+
+def _run(root: Path, cfg: ExecutorConfig, monkeypatch) -> tuple[tuple, list]:
+    """Гнать настоящий `post_done_hook`; подставлен только платный ревьюер."""
+    from spec_runner.state import ReviewVerdict
+
+    reviewed: list = []
+
+    def _review(*a, **k):
+        reviewed.append(k or a)
+        return (ReviewVerdict.PASSED, None, "ok")
+
+    monkeypatch.setattr(hooks, "run_code_review", _review)
+    (root / "widget.py").write_text("x = 1\n", encoding="utf-8")
+    return hooks.post_done_hook(_task(), cfg, True), reviewed
+
+
+def _rows(cfg: ExecutorConfig) -> list[dict]:
+    from spec_runner.tdd import resolve_namespace
+
+    with ExecutorState(cfg) as state:
+        return state.negative_controls(resolve_namespace(cfg))
+
+
+class TestTheEvidenceComesFromTheRun:
+    """kind: integration — AC-14 в тех словах, в которых написан: «ПОСЛЕ
+    прогона запись содержит…». Строку кладёт прогон, а не тест."""
+
+    def test_a_satisfied_control_writes_its_row_and_lets_review_run(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+
+        (ok, error, *_), reviewed = _run(root, cfg, monkeypatch)
+        rows = _rows(cfg)
+
+        assert rows, "прогон не записал свидетельство контроля"
+        assert rows[0]["verdict"] == "satisfied", rows[0]
+        assert rows[0]["task_id"] == "TASK-008"
+        assert rows[0]["selector"] == SELECTOR
+        assert rows[0]["clean_outcome"] and rows[0]["mutated_outcome"], rows[0]
+        assert rows[0]["patch_blob_sha"], "blob патча не снят с кандидат-коммита"
+        assert reviewed, "удовлетворённый контроль не должен мешать ревью"
+        assert ok, error
+
+    def test_an_unsatisfied_control_refuses_before_the_paid_review(self, tmp_path, monkeypatch):
+        """§4a: отказ НА МЕСТЕ и до платного вызова. Мутант, который не
+        различает, — факт о работе задачи, и ревьюеру нечего подтверждать."""
+        root = _repo(tmp_path, patch=USELESS_PATCH)
+        cfg = _cfg(root)
+
+        (ok, error, *_), reviewed = _run(root, cfg, monkeypatch)
+        rows = _rows(cfg)
+
+        assert ok is False, "контроль не различил, а задача прошла"
+        assert reviewed == [], "платное ревью вызвано после неудовлетворённого контроля"
+        assert rows and rows[0]["verdict"] == "unsatisfied", rows
+        assert "mutant" in (error or "").lower() or "control" in (error or "").lower(), error
+
+
+class TestTheRecordSurvivesEveryVerdict:
+    """kind: integration — FR-06: свидетельство пишется на ЛЮБОМ вердикте.
+    Мутация «убрать вызов записи» обязана краснеть на обоих исходах."""
+
+    @pytest.mark.parametrize(
+        ("patch", "verdict"),
+        [(GOOD_PATCH, "satisfied"), (USELESS_PATCH, "unsatisfied")],
+        ids=["satisfied", "unsatisfied"],
+    )
+    def test_the_row_exists_after_the_run(self, tmp_path, monkeypatch, patch, verdict):
+        root = _repo(tmp_path, patch=patch)
+        cfg = _cfg(root)
+
+        _run(root, cfg, monkeypatch)
+
+        rows = _rows(cfg)
+        assert len(rows) == 1, rows
+        assert rows[0]["verdict"] == verdict, rows[0]
+
+
+class TestAnInstrumentErrorIsReexecutedWithinBudget:
+    """kind: integration — Р-2/Р-3: инструментальная неудача переисполняется
+    ЗДЕСЬ, в пределах `gate_recovery_attempts`, а не в гейте (гейт перечитал
+    бы тот же кэш). Число переисполнений наблюдаемо."""
+
+    def _count_runs(self, monkeypatch, verdicts: list[str]) -> list:
+        from spec_runner import negative_control as nc
+
+        calls: list = []
+        seq = list(verdicts)
+
+        def _fake(config, *, sha, control):
+            calls.append(sha)
+            return nc.ControlResult(seq.pop(0) if seq else "satisfied", "измерено", None, None)
+
+        monkeypatch.setattr(nc, "run_negative_control", _fake)
+        return calls
+
+    def test_it_stops_as_soon_as_the_verdict_is_determinate(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root, gate_recovery_attempts=2)
+        calls = self._count_runs(monkeypatch, ["instrument_error", "satisfied"])
+
+        _run(root, cfg, monkeypatch)
+
+        assert len(calls) == 2, f"переисполнений {len(calls)}, ожидалось 2"
+
+    def test_the_budget_is_a_ceiling_not_a_loop(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root, gate_recovery_attempts=2)
+        calls = self._count_runs(monkeypatch, ["instrument_error"] * 9)
+
+        _run(root, cfg, monkeypatch)
+
+        assert len(calls) == 3, f"бюджет 2 даёт 3 попытки, было {len(calls)}"
+
+    def test_a_determinate_verdict_is_never_repeated(self, tmp_path, monkeypatch):
+        """Тот же вопрос тем же байтам: повтор детерминированного исхода —
+        чистая трата, и бюджет Р-2 его не предусматривает."""
+        root = _repo(tmp_path)
+        cfg = _cfg(root, gate_recovery_attempts=3)
+        calls = self._count_runs(monkeypatch, ["unsatisfied"])
+
+        _run(root, cfg, monkeypatch)
+
+        assert len(calls) == 1, f"детерминированный вердикт переисполнен {len(calls)} раз"

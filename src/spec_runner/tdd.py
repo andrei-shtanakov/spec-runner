@@ -414,12 +414,37 @@ def _replay_selector(
             outside = patch_path_refusal(mutate)
             if outside is not None:
                 return attempt("mutate", outside, refusal_code="patch_absent")
-            if not (worktree / mutate).is_file():
+            candidate_patch = worktree / mutate
+            # Символическая ссылка — тот же обход через содержимое дерева, а
+            # не через форму строки: `is_file()` и `git apply` следуют за ней,
+            # и объявленный путь читает файл, которого нет ни в одном коммите.
+            # Соседняя фича отвергает такой вход по имени (`parse_group_element`).
+            if candidate_patch.is_symlink():
+                return attempt(
+                    "mutate",
+                    f"the declared patch {str(mutate)!r} is a symbolic link in the "
+                    f"candidate commit {sha[:12]}: what it points at is not in the "
+                    "commit, and the control judges the commit",
+                    refusal_code="patch_absent",
+                )
+            if not candidate_patch.is_file():
                 return attempt(
                     "mutate",
                     f"the declared patch {str(mutate)!r} is not in the candidate commit "
                     f"{sha[:12]}: the task did not deliver it",
                     refusal_code="patch_absent",
+                )
+            # Читается ДО `git apply`: сбой ввода-вывода — факт о машине, а
+            # `git apply` отдал бы его тем же ненулевым кодом, что и настоящую
+            # неприменимость, то есть сбой стенда предъявлялся бы автору как
+            # факт о его работе, без переисполнений (design §3, BEH-11 б).
+            try:
+                candidate_patch.read_bytes()
+            except OSError as exc:
+                return attempt(
+                    "mutate",
+                    f"the declared patch {str(mutate)!r} cannot be read: {exc}",
+                    refusal_code="patch_unreadable",
                 )
             applied = subprocess.run(
                 ["git", "apply", "--index", str(mutate)],
@@ -472,7 +497,13 @@ def _replay_selector(
         )
     except Exception as exc:  # a broken replay is unverifiable, never a red
         return attempt(
-            "timeout" if isinstance(exc, TimeoutError) else "run", f"replay failed: {exc}"
+            # `subprocess.run(timeout=…)` поднимает `subprocess.TimeoutExpired`
+            # — подкласс `SubprocessError`, а НЕ `TimeoutError`. Проверка по
+            # одному `TimeoutError` не была истинной ни разу: стадия `timeout`
+            # не возникала ни на одном пути, и таймаут приходил как `run` по
+            # замыкающей строке «всё прочее». Шов общий с RED-путём.
+            "timeout" if isinstance(exc, TimeoutError | subprocess.TimeoutExpired) else "run",
+            f"replay failed: {exc}",
         )
     finally:
         # The private build goes with the worktree, on every path — success,
