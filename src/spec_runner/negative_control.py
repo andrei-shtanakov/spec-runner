@@ -117,3 +117,48 @@ def candidate_refusal(task: Task, config: ExecutorConfig, candidate_sha: str | N
         "so there is nothing to replay the declared selector against. The "
         "task is not completed rather than silently passing every gate."
     )
+
+
+def clean_half_is_green(attempt) -> bool:
+    """Прошла ли чистая половина так, чтобы мутированную имело смысл гонять.
+
+    Мера — `execution_proven` verify-first-класса, а НЕ
+    `SelectionProof.PROVEN` (AP-12.1, Р-1). Причина структурная: `PROVEN`
+    для прошедшего теста на pytest недостижим там, где сводка несёт вторую
+    категорию (`1 passed, 1 warning`), потому что node id печатается только
+    у падения. Требовать `PROVEN` у зелёного значило бы instrument_error на
+    каждом прогоне обычного проекта.
+
+    Определение КРАСНОГО (`TESTS_FAILED` + `PROVEN`) этим не трогается: оно
+    про падения, где мера надёжна, и живёт в таблице классификации.
+    """
+    from .tdd_runners import RunOutcome
+
+    return (
+        attempt.stage == "run"
+        and attempt.outcome is RunOutcome.TESTS_PASSED
+        and bool(attempt.execution_proven)
+    )
+
+
+def replay_both_halves(config: ExecutorConfig, *, sha: str, control):
+    """`(чистая, мутированная|None)` — исполнение контроля без вердикта.
+
+    Порядок фиксирован (AP-08): чистая половина первой, и она служит
+    доказательством исправности стенда. Мутированная не запускается вовсе,
+    пока стенд не доказан, — негодный стенд стоит один прогон, а не два
+    (NFR-04).
+
+    Вердиктов здесь нет: `ReplayAttempt` — факт о прогоне, классификация
+    живёт отдельно (design §3). Разделение не косметическое: оно не даёт
+    исполнению и толкованию разойтись по двум редакциям одного правила.
+    """
+    from .tdd import _replay_selector
+
+    clean = _replay_selector(config, sha=sha, selector=control.selector, order=1)
+    if not clean_half_is_green(clean):
+        return clean, None
+    mutated = _replay_selector(
+        config, sha=sha, selector=control.selector, mutate=control.patch, order=2
+    )
+    return clean, mutated
