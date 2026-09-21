@@ -567,3 +567,28 @@ class TestValidateJudgesTheSelectorWithTheProjectsAdapter:
         result = _validate([_task(negative_control=_control())], _cfg(tmp_path))
 
         assert not any("selector" in e.lower() for e in result.errors), result.errors
+
+
+class TestThePointOneRefusalNamesTheStageItsSiblingsName:
+    """kind: contract — находка ревью круга 15.
+
+    `_refuse_task` пишет `error_stage="setup"` — верно для своего первого
+    вызывающего (#429), который стоит ДО `pre_start_hook`. Отказ контроля
+    стоит после, рядом с отказами claims и записи waiver'а, и те пишут
+    `reporter.current` (`tests`). Одно и то же место прогона в двух видах
+    строк — это дашборд, который не сможет сложить их вместе.
+    """
+
+    def test_the_stage_matches_the_neighbouring_refusals(self, tmp_path, monkeypatch):
+        from spec_runner import execution
+        from spec_runner.state import ExecutorState
+
+        root = TestBEH04RefusalCostsNoPaidCall()._repo(tmp_path)
+        cfg = _cfg(root, state_file=root / "spec" / "state.db", logs_dir=root / "spec" / "logs")
+        monkeypatch.setattr(execution, "build_cli_invocation", lambda **k: None)
+
+        with ExecutorState(cfg) as state:
+            execution.execute_task(_task(negative_control=None), cfg, state)
+            attempt = state.get_task_state("TASK-008").attempts[-1]
+
+        assert attempt.error_stage == "tests", attempt.error_stage

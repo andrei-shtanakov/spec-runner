@@ -44,7 +44,15 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def _refuse_task(task, config, state, reason: str, *, kind: "RefusalKind | None" = None) -> str:
+def _refuse_task(
+    task,
+    config,
+    state,
+    reason: str,
+    *,
+    kind: "RefusalKind | None" = None,
+    stage: str = "setup",
+) -> str:
     """Refuse one task with the attempt recorded, instead of raising (#429).
 
     A declaration the resolver cannot read is an operator error about THIS
@@ -74,7 +82,11 @@ def _refuse_task(task, config, state, reason: str, *, kind: "RefusalKind | None"
         error=str(refusal),
         error_code=_refusal_error_code(refusal),
         error_kind=_refusal_error_kind(refusal),
-        error_stage="setup",
+        # `setup` верно для первого вызывающего (#429): он стоит ДО
+        # `pre_start_hook`. Отказ, стоящий позже, обязан называть СВОЮ
+        # стадию — иначе одно и то же место прогона попадает в две разные
+        # строки `error_stage`, и дашборд их не сложит.
+        error_stage=stage,
     )
     log_progress(f"⛔ {reason}", task.id)
     # TERMINAL, not a plain failure: an unreadable declaration is a fact about
@@ -728,7 +740,14 @@ def _execute_task(
             update_task_status(config.tasks_file, task_id, "todo")
             from .phases import RefusalKind
 
-            return _refuse_task(task, config, state, control_refusal, kind=RefusalKind.POLICY)
+            return _refuse_task(
+                task,
+                config,
+                state,
+                control_refusal,
+                kind=RefusalKind.POLICY,
+                stage=reporter.current or "setup",
+            )
 
         # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
         # санкция ПРИМЕНЕНА, а не что её собирались применить. Задача,
