@@ -324,6 +324,11 @@ def durability_declared_flag(value: object, *, field: str) -> bool:
     )
 
 
+#: Store adapters the runtime can actually build. Imported from the module
+#: that owns them, not restated here: a second list would drift, and the
+#: drift would surface as "config green, run dies at first put".
+KNOWN_STORE_ADAPTERS = ("local_volume",)
+
 #: Option keys of `durability.store` that name a path and are therefore
 #: resolved to absolute at load (design 1.1). A list, not a guess by value:
 #: "looks like a path" would also catch an adapter's bucket name or prefix.
@@ -1167,10 +1172,23 @@ def read_durability(
                 "declaration only (OUT-03); declare tls: true, "
                 "encryption_at_rest: true and immutable_put: true"
             )
-    if adapter == "local_volume" and not options.get("root"):
-        # Отказ здесь, а не у делегата: иначе config проходит оба гейта и
-        # падает `ValueError` при первой сборке store — после старта прогона.
-        problems.append(f"{prefix}durability.store adapter 'local_volume' requires options.root")
+    if adapter is not None:
+        # Имя адаптера — закрытый словарь, и неизвестное отказывается ЗДЕСЬ.
+        # Иначе опечатка проезжает оба гейта зелёной, а заодно отменяет
+        # проверку обязательных options (они спрашиваются по имени), и всё
+        # это выясняется при первой сборке store — после старта прогона
+        # (находка ревью, круг 5).
+        if adapter not in KNOWN_STORE_ADAPTERS:
+            problems.append(
+                f"{prefix}durability.store adapter {adapter!r} is unknown; "
+                f"known adapters: {', '.join(KNOWN_STORE_ADAPTERS)}"
+            )
+        elif adapter == "local_volume" and not options.get("root"):
+            # Отказ здесь, а не у делегата: иначе config проходит оба гейта и
+            # падает `ValueError` при первой сборке store — после старта.
+            problems.append(
+                f"{prefix}durability.store adapter 'local_volume' requires options.root"
+            )
 
     retention_raw = durability.get("retention_days")
     retention: int | None = None

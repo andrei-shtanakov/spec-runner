@@ -331,6 +331,7 @@ class TestOnlyTheDeclaredDoorReachesAWritableStore:
             if module.name == "artifact_store.py":
                 continue
             tree = ast.parse(module.read_text(encoding="utf-8"))
+            # Поимённый импорт — первая форма обхода.
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
                     "artifact_store"
@@ -338,9 +339,22 @@ class TestOnlyTheDeclaredDoorReachesAWritableStore:
                     for alias in node.names:
                         if alias.name in writable:
                             offenders.append(f"{module.name}:{node.lineno} {alias.name}")
-                if isinstance(node, ast.Attribute) and node.attr in writable:
-                    value = node.value
-                    if isinstance(value, ast.Name) and value.id.endswith("artifact_store"):
+            # Вторая, и она обычнее: импорт модуля целиком и обращение
+            # атрибутом. Сверять имя владельца здесь бессмысленно — оно может
+            # быть любым (`as st`, `spec_runner.artifact_store.X`), поэтому
+            # проверяется САМО имя, а модули, не импортирующие store, из
+            # проверки исключены выше.
+            imports_store = any(
+                (isinstance(n, ast.ImportFrom) and (n.module or "").endswith("artifact_store"))
+                or (
+                    isinstance(n, ast.Import)
+                    and any(a.name.endswith("artifact_store") for a in n.names)
+                )
+                for n in ast.walk(tree)
+            )
+            if imports_store:
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Attribute) and node.attr in writable:
                         offenders.append(f"{module.name}:{node.lineno} {node.attr}")
         assert not offenders, (
             f"пишущий store достижим в обход объявленной двери `open_store_readonly`: {offenders}"
@@ -371,3 +385,28 @@ class TestCapabilitiesAgreeWithTheConfigGate:
             "local_volume", {"root": str(tmp_path)}, encryption_at_rest=True
         )
         assert declared.capabilities().encryption_at_rest is True
+
+
+class TestBeltCatchesTheWholeModuleImportForm:
+    def test_the_check_would_redden_on_an_attribute_access(self, tmp_path: Path):
+        """Пояс обязан ловить обычную форму обхода — импорт модуля целиком и
+        обращение атрибутом. Проверяется на синтетическом модуле: без этого
+        тест пояса утверждал бы лишь, что сегодня обхода нет, но не то, что
+        он будет замечен."""
+        import ast
+
+        source = (
+            "from spec_runner import artifact_store\n"
+            "def make():\n"
+            "    return artifact_store.LocalVolumeStore('/tmp/x')\n"
+        )
+        tree = ast.parse(source)
+        writable = {"LocalVolumeStore", "_build_store"}
+        imports_store = any(
+            isinstance(n, ast.ImportFrom) and (n.module or "").endswith("spec_runner")
+            for n in ast.walk(tree)
+        )
+        hits = [
+            n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in writable
+        ]
+        assert imports_store and hits == ["LocalVolumeStore"]

@@ -808,3 +808,42 @@ class TestDurabilityDeclarationsAreReadStrictly:
             self._cfg(tmp_path, durability_store_options="root=/tmp")
         with pytest.raises(ConfigError, match="whole number of days"):
             self._cfg(tmp_path, durability_retention_days="30")
+
+
+class TestUnknownStoreAdapterIsRefusedAtLoad:
+    """Находка ревью: опечатка в имени адаптера проезжала оба гейта зелёной —
+    и заодно отменяла проверку обязательных options, которые спрашиваются по
+    имени. Выяснялось бы при первой сборке store, то есть после старта."""
+
+    def test_unknown_adapter_is_named_with_the_known_set(self, tmp_path: Path):
+        from spec_runner.config import ConfigError, load_config_from_yaml
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: locl_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="locl_volume"):
+            load_config_from_yaml(cfg)
+
+    def test_validate_reports_it_too(self, tmp_path: Path):
+        from spec_runner.validate import validate_config
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: s3\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        assert any("s3" in e for e in validate_config(cfg).errors)
