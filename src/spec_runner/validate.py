@@ -12,6 +12,7 @@ from spec_runner.config import (
     ConfigError,
     ExecutorConfig,
     mixed_shape_error,
+    read_durability,
 )
 from spec_runner.logging import get_logger
 from spec_runner.requirements import parse_requirements
@@ -412,6 +413,7 @@ def validate_config(config_path: Path) -> ValidationResult:
     _validate_spec_context_rules(executor_section, result)
     _validate_review_policy(executor_section, result)
     _validate_execution_mode(executor_section, result)
+    _validate_durability_store(executor_section, result)
 
     return result
 
@@ -462,6 +464,24 @@ def _validate_execution_mode(section: dict, result: "ValidationResult") -> None:
         result.errors.append(
             f"execution_mode must be one of {', '.join(EXECUTION_MODES)} (got {mode!r})"
         )
+
+
+def _validate_durability_store(section: dict, result: "ValidationResult") -> None:
+    """Report BEH-28 in `validate`'s output, not only as a load-time crash.
+
+    `load_config_from_yaml` already refuses this at load (fail-fast, before
+    `run`/`watch` reach run-start); this mirrors the same check
+    (`durability_store_missing_properties`, shared with config.py so the two
+    surfaces cannot disagree) so `spec-runner validate` names it in a report
+    instead of requiring a real run to hit the `ConfigError`.
+    """
+    # Тот же читатель, что у загрузчика, — не копия его правил. Три круга
+    # ревью нашли три расхождения именно здесь: строгий гейт против мягкого
+    # отчёта, нормализованное целое против исходной строки, молчание о
+    # нескалярных формах. Отчёт отличается от загрузчика ровно одним — он
+    # превращает отказ в строку, а не в исключение.
+    _, problems = read_durability(section)
+    result.errors.extend(problems)
 
 
 #: `review_policy` values the runtime understands (#157).

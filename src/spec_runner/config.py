@@ -275,6 +275,84 @@ def _validate_change_id(change_id: str) -> None:
         )
 
 
+def durability_store_missing_properties(
+    *, tls: bool, encryption_at_rest: bool, immutable_put: bool
+) -> list[str]:
+    """Security properties BEH-28 requires a declared `durability.store` adapter to state.
+
+    spec-runner checks the *declaration* only — encryption, TLS and immutable
+    writes are the store adapter's own job (OUT-03) — but an adapter that
+    does not even declare them is refused before any run reaches run-start.
+    Shared by `ExecutorConfig.__post_init__` (fail-fast at load) and
+    `validate.py`'s report (`validate.py` "повторяет те же проверки") so the
+    two surfaces cannot drift into disagreeing about the same config.
+    """
+    missing = []
+    if not tls:
+        missing.append("tls")
+    if not encryption_at_rest:
+        missing.append("encryption_at_rest")
+    if not immutable_put:
+        missing.append("immutable_put")
+    return missing
+
+
+def durability_declared_flag(value: object, *, field: str) -> bool:
+    """Прочитать объявленное булево свойство store строго.
+
+    `bool(value)` здесь — ловушка, и она уже стоила бы гейта BEH-28:
+    `tls: "false"` в YAML приходит СТРОКОЙ, а непустая строка истинна, то есть
+    адаптер, прямо объявивший отсутствие TLS, проезжал бы как объявивший его.
+    Проверяется декларация (OUT-03), и значит форма декларации обязана быть
+    однозначной: булево либо распознаваемое строковое написание, всё
+    остальное — отказ по имени поля, а не догадка.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "1"}:
+            return True
+        if lowered in {"false", "no", "0", ""}:
+            return False
+    raise ConfigError(
+        f"durability.store.{field} must be a boolean (got {value!r}): "
+        "spec-runner checks the declaration, and an unreadable declaration is "
+        "not a declaration"
+    )
+
+
+def known_store_adapters() -> tuple[str, ...]:
+    """Имена адаптеров — у их владельца, а не копией здесь.
+
+    Копия дрейфовала бы молча, и дрейф вылез бы как «config зелёный, прогон
+    умирает при первой сборке store». Импорт отложен в тело функции: модуль
+    store ничего из config не берёт, но прямой импорт наверху связал бы их
+    порядок загрузки без нужды.
+    """
+    from spec_runner.artifact_store import ADAPTERS
+
+    return ADAPTERS
+
+
+#: Option keys of `durability.store` that name a path and are therefore
+#: resolved to absolute at load (design 1.1). A list, not a guess by value:
+#: "looks like a path" would also catch an adapter's bucket name or prefix.
+DURABILITY_PATHLIKE_OPTIONS = ("root",)
+
+#: BEH-28/BEH-42's bound on `durability.retention_days` -- outside this range
+#: is a separate `ConfigError`, alongside the missing-properties check.
+DURABILITY_RETENTION_DAYS_MIN = 7
+DURABILITY_RETENTION_DAYS_MAX = 365
+
+
+def durability_retention_days_out_of_range(retention_days: int) -> bool:
+    """True when `retention_days` falls outside BEH-42's 7-365 bound."""
+    return not (DURABILITY_RETENTION_DAYS_MIN <= retention_days <= DURABILITY_RETENTION_DAYS_MAX)
+
+
 # === ExecutorConfig ===
 
 
@@ -511,6 +589,24 @@ class ExecutorConfig:
     # Glob patterns exempt from strict-mode violations (e.g. ["uv.lock"]).
     harness_allow: list[str] = field(default_factory=list)
 
+    # Durable continuation checkpoint/evidence store (#480, BEH-28, design
+    # §1.1). Declared here so `run`/`validate` both refuse an adapter that
+    # has not declared itself secure — spec-runner checks the *declaration*
+    # only, never encryption or IAM itself (OUT-03, the store's own job).
+    # Empty `durability_store_adapter` means no store is configured, which is
+    # the default (experimental, CON-01) and carries no validation.
+    durability_store_adapter: str = ""
+    durability_store_options: dict[str, str] = field(default_factory=dict)
+    durability_store_tls: bool = False
+    durability_store_encryption_at_rest: bool = False
+    durability_store_immutable_put: bool = False
+    # "store" (default) durably acknowledges via the store adapter's `put`;
+    # "local" opts a project out of continuation entirely (design §0).
+    durability_ack: str = "store"
+    durability_ack_timeout_seconds: float = 3.0
+    durability_checkpoint_ack_timeout_seconds: float = 60.0
+    durability_retention_days: int = 30
+
     # False when no config file backed this run (CLI flags may still have
     # overridden individual defaults). Set by main() after load; execution
     # commands warn on it (#63) — a silently vanished config once flipped a
@@ -535,6 +631,50 @@ class ExecutorConfig:
                 setattr(self, attr, [value])
             elif not isinstance(value, list):
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
+
+        # Типы полей `durability.*` — ПЕРЕД любой проверкой их значений:
+        # сравнение диапазона с не-числом падает `TypeError` из середины
+        # `__post_init__`, то есть оператор получает трейсбек вместо отказа с
+        # именем ключа (находка ревью).
+        if not isinstance(self.durability_store_options, dict):
+            raise ConfigError(
+                "durability.store.options must be a mapping, got "
+                f"{type(self.durability_store_options).__name__}"
+            )
+        if not isinstance(self.durability_retention_days, int) or isinstance(
+            self.durability_retention_days, bool
+        ):
+            raise ConfigError(
+                "durability.retention_days must be a whole number of days, got "
+                f"{self.durability_retention_days!r}"
+            )
+
+        # BEH-28: a declared durability.store adapter must state tls,
+        # encryption_at_rest and immutable_put, or a run must not reach
+        # run-start with it.
+        if self.durability_store_adapter:
+            missing = durability_store_missing_properties(
+                tls=self.durability_store_tls,
+                encryption_at_rest=self.durability_store_encryption_at_rest,
+                immutable_put=self.durability_store_immutable_put,
+            )
+            if missing:
+                raise ConfigError(
+                    f"durability.store adapter {self.durability_store_adapter!r} "
+                    f"is missing required security properties: {', '.join(missing)} "
+                    "-- spec-runner checks the declaration only (OUT-03); declare "
+                    "tls: true, encryption_at_rest: true and immutable_put: true"
+                )
+
+        # Вне ветки адаптера — как в загрузчике и в `validate`: срок хранения
+        # не свойство адаптера, и отказ по нему не может зависеть от того,
+        # объявлен ли соседний ключ (находка ревью, вторая половина).
+        if durability_retention_days_out_of_range(self.durability_retention_days):
+            raise ConfigError(
+                "durability.retention_days must be between "
+                f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+                f"got {self.durability_retention_days}"
+            )
 
         if self.change_id:
             if self.spec_prefix:
@@ -561,6 +701,19 @@ class ExecutorConfig:
 
         if not self.state_file.is_absolute():
             self.state_file = self.project_root / self.state_file
+        # Путеподобные `durability.store.options` — абсолютными ЗДЕСЬ, один раз
+        # и относительно `project_root` (design § 1.1). Не лениво при первом
+        # `put`: процесс вправе сменить рабочий каталог внутри себя
+        # (`doctor.run_probe` уходит `os.chdir` в scratch и удаляет его), и
+        # относительный `root`, разрешённый после этого, указал бы внутрь
+        # каталога, который сейчас удалят — платный вызов состоялся бы, а
+        # durable-запись о нём уехала бы вместе со scratch. Повторный
+        # `__post_init__` (его зовёт `doctor.build_scratch`) абсолютный путь
+        # уже не двигает.
+        for _option in DURABILITY_PATHLIKE_OPTIONS:
+            _value = self.durability_store_options.get(_option)
+            if _value and not Path(_value).is_absolute():
+                self.durability_store_options[_option] = str(self.project_root / _value)
         if not self.logs_dir.is_absolute():
             self.logs_dir = self.project_root / self.logs_dir
         if not self.plugins_dir.is_absolute():
@@ -571,6 +724,23 @@ class ExecutorConfig:
         """The active spec dir: ``spec/changes/<id>/`` under a change, else ``spec/``."""
         base = self.project_root / "spec"
         return base / "changes" / self.change_id if self.change_id else base
+
+    @property
+    def checkpoints_dir(self) -> Path:
+        """Локальные копии checkpoint-ов (design § 3.2), рядом со state DB.
+
+        Свойство, а не литерал у каждого читателя: путь namespace-зависим так
+        же, как `state_file` (`spec_prefix`/`change_id`), и «почти тот же
+        литерал» в двух местах — способ разойтись молча. Каталог заводит тот,
+        кто пишет: команда, ничего не опубликовавшая, не оставляет и пустой
+        директории.
+        """
+        return self.state_file.with_name(f".executor-{self.spec_prefix}checkpoints")
+
+    @property
+    def spool_file(self) -> Path:
+        """Аварийный spool (design § 8): тот же namespace, что у state DB."""
+        return self.state_file.with_name(f".executor-{self.spec_prefix}spool.jsonl")
 
     @property
     def stop_file(self) -> Path:
@@ -765,6 +935,7 @@ KNOWN_EXECUTOR_KEYS: set[str] = set(ExecutorConfig.__dataclass_fields__.keys()) 
     "hooks",
     "commands",
     "paths",
+    "durability",
 }
 
 
@@ -926,6 +1097,164 @@ def missing_config_warning(config: "ExecutorConfig") -> str | None:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class DurabilitySettings:
+    """Разобранный блок `durability:` — типизированный и проверенный.
+
+    Одна функция чтения на все поверхности, и это не вкусовщина, а вывод из
+    трёх кругов ревью. Правило жило в трёх местах — загрузчик,
+    `ExecutorConfig.__post_init__` и `validate`, — каждое читало YAML по-своему,
+    и починка одного оставляла два несогласованными: строгий гейт против
+    мягкого отчёта, нормализованное целое против исходной строки. Перечень
+    мест вместо свойства — ровно тот режим отказа, о котором пишет бандл.
+
+    Здесь читают **сырой YAML**: `__post_init__` работает уже с полями и
+    проверяет свои инварианты отдельно (конфиг собирают и в коде, минуя файл).
+    """
+
+    store_adapter: str | None
+    store_options: dict[str, str]
+    store_tls: bool
+    store_encryption_at_rest: bool
+    store_immutable_put: bool
+    ack: str | None
+    ack_timeout_seconds: float | None
+    checkpoint_ack_timeout_seconds: float | None
+    retention_days: int | None
+
+
+def read_durability(
+    executor_config: dict, *, where: str = ""
+) -> tuple[DurabilitySettings | None, list[str]]:
+    """Прочитать блок `durability:`, СОБРАВ все дефекты, а не первый.
+
+    Две формы одного чтения, потому что у поверхностей разные обязанности:
+    загрузчик обязан остановиться на первом дефекте (дальше он всё равно не
+    пойдёт), а `validate` — назвать их все, иначе оператор правит по одному и
+    ходит по кругу. Общее тело ровно одно: три круга ревью нашли три
+    расхождения именно там, где правило было переписано во второй раз.
+
+    Возвращает разобранные настройки (или None, если читать оказалось нечего)
+    и перечень сообщений.
+    """
+    prefix = f"{where}: " if where else ""
+    problems: list[str] = []
+
+    durability = executor_config.get("durability") or {}
+    if not isinstance(durability, dict):
+        return None, [f"{prefix}durability must be a mapping, got {type(durability).__name__}"]
+
+    store = durability.get("store") or {}
+    if not isinstance(store, dict):
+        problems.append(f"{prefix}durability.store must be a mapping, got {type(store).__name__}")
+        store = {}
+
+    options = store.get("options") or {}
+    if not isinstance(options, dict):
+        problems.append(
+            f"{prefix}durability.store.options must be a mapping, got {type(options).__name__}"
+        )
+        options = {}
+
+    flags: dict[str, bool] = {}
+    unreadable_fields: set[str] = set()
+    for flag_name in ("tls", "encryption_at_rest", "immutable_put"):
+        try:
+            flags[flag_name] = durability_declared_flag(store.get(flag_name), field=flag_name)
+        except ConfigError as exc:
+            problems.append(f"{prefix}{exc}")
+            flags[flag_name] = False
+            unreadable_fields.add(flag_name)
+
+    adapter = store.get("adapter") or None
+    if adapter:
+        # Нечитаемое объявление исключается ПОИМЁННО, а не глушит отчёт обо
+        # всех трёх: сказать «missing: tls» про поле, которое объявлено, но
+        # нечитаемо, было бы неправдой, а промолчать об остальных двух —
+        # отправить оператора на второй круг (находка ревью, круг 6).
+        missing = [
+            name
+            for name in durability_store_missing_properties(
+                tls=flags["tls"],
+                encryption_at_rest=flags["encryption_at_rest"],
+                immutable_put=flags["immutable_put"],
+            )
+            if name not in unreadable_fields
+        ]
+        if missing:
+            problems.append(
+                f"{prefix}durability.store adapter {adapter!r} is missing required "
+                f"security properties: {', '.join(missing)} -- spec-runner checks the "
+                "declaration only (OUT-03); declare tls: true, "
+                "encryption_at_rest: true and immutable_put: true"
+            )
+    if adapter is not None:
+        # Имя адаптера — закрытый словарь, и неизвестное отказывается ЗДЕСЬ.
+        # Иначе опечатка проезжает оба гейта зелёной, а заодно отменяет
+        # проверку обязательных options (они спрашиваются по имени), и всё
+        # это выясняется при первой сборке store — после старта прогона
+        # (находка ревью, круг 5).
+        known = known_store_adapters()
+        if adapter not in known:
+            problems.append(
+                f"{prefix}durability.store adapter {adapter!r} is unknown; "
+                f"known adapters: {', '.join(known)}"
+            )
+        elif adapter == "local_volume" and not options.get("root"):
+            # Отказ здесь, а не у делегата: иначе config проходит оба гейта и
+            # падает `ValueError` при первой сборке store — после старта.
+            problems.append(
+                f"{prefix}durability.store adapter 'local_volume' requires options.root"
+            )
+
+    retention_raw = durability.get("retention_days")
+    retention: int | None = None
+    if retention_raw is not None:
+        if isinstance(retention_raw, bool) or not isinstance(retention_raw, (int, str)):
+            problems.append(
+                f"{prefix}durability.retention_days must be a whole number of days, "
+                f"got {retention_raw!r}"
+            )
+        else:
+            try:
+                retention = int(retention_raw)
+            except ValueError:
+                problems.append(
+                    f"{prefix}durability.retention_days must be a whole number of days, "
+                    f"got {retention_raw!r}"
+                )
+                retention = None
+            else:
+                if durability_retention_days_out_of_range(retention):
+                    problems.append(
+                        f"{prefix}durability.retention_days must be between "
+                        f"{DURABILITY_RETENTION_DAYS_MIN} and "
+                        f"{DURABILITY_RETENTION_DAYS_MAX}, got {retention_raw}"
+                    )
+
+    settings = DurabilitySettings(
+        store_adapter=adapter,
+        store_options={str(k): str(v) for k, v in options.items()},
+        store_tls=flags["tls"],
+        store_encryption_at_rest=flags["encryption_at_rest"],
+        store_immutable_put=flags["immutable_put"],
+        ack=durability.get("ack"),
+        ack_timeout_seconds=durability.get("ack_timeout_seconds"),
+        checkpoint_ack_timeout_seconds=durability.get("checkpoint_ack_timeout_seconds"),
+        retention_days=retention,
+    )
+    return settings, problems
+
+
+def parse_durability(executor_config: dict, *, where: str = "") -> DurabilitySettings:
+    """Форма для загрузчика: первый дефект — `ConfigError`, дальше не идём."""
+    settings, problems = read_durability(executor_config, where=where)
+    if problems:
+        raise ConfigError(problems[0])
+    assert settings is not None  # проблем нет — значит блок разобран
+    return settings
+
+
 def load_config_from_yaml(config_path: Path | None = None) -> dict:
     """Load configuration from YAML file.
 
@@ -962,6 +1291,8 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         post_done = hooks.get("post_done", {})
         commands = executor_config.get("commands", {})
         paths = executor_config.get("paths", {})
+        durability_settings = parse_durability(executor_config, where=str(config_path))
+
         format_check = commands.get("format_check")
         if format_check is not None and not isinstance(format_check, str):
             raise ConfigError(
@@ -1064,6 +1395,24 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "review_pr_post_pr_wait_seconds": (executor_config.get("review_pr") or {}).get(
                 "post_pr_wait_seconds"
             ),
+            # Из единого читателя — уже типизированными: пронести сюда сырое
+            # YAML-значение значило бы положить строку в bool-поле и поссорить
+            # загрузчик с `__post_init__` (находки кругов 3 и 4).
+            "durability_store_adapter": durability_settings.store_adapter,
+            "durability_store_options": durability_settings.store_options,
+            "durability_store_tls": durability_settings.store_tls,
+            "durability_store_encryption_at_rest": durability_settings.store_encryption_at_rest,
+            "durability_store_immutable_put": durability_settings.store_immutable_put,
+            "durability_ack": durability_settings.ack,
+            "durability_ack_timeout_seconds": durability_settings.ack_timeout_seconds,
+            "durability_checkpoint_ack_timeout_seconds": (
+                durability_settings.checkpoint_ack_timeout_seconds
+            ),
+            # Нормализованным целым, а не исходной строкой: загрузчик её уже
+            # проверил, и пронести дальше `"30"` значило бы поссорить две
+            # поверхности — проверка прошла бы здесь и отказала в
+            # `ExecutorConfig`, который требует настоящий `int`.
+            "durability_retention_days": durability_settings.retention_days,
         }
     except ConfigError:
         raise

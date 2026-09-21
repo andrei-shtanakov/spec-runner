@@ -165,6 +165,195 @@ class TestLoadConfigFromYaml:
         assert result.get("plugins_dir") is None
 
 
+class TestDurabilityStoreConfig:
+    """BEH-28: a durability.store adapter that has not declared itself
+    secure is refused at load, before a run reads any further config key.
+    spec-runner checks the declaration only (OUT-03) — it never enforces
+    encryption or IAM itself."""
+
+    def _write(self, tmp_path, body: str) -> Path:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(f"executor:\n  durability:\n    store:\n{body}")
+        return cfg
+
+    def test_tls_false_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: false\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "local_volume" in str(exc.value)
+        assert "tls" in str(exc.value)
+
+    def test_undeclared_encryption_at_rest_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      tls: true\n      immutable_put: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "encryption_at_rest" in str(exc.value)
+
+    def test_undeclared_immutable_put_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      tls: true\n      encryption_at_rest: true\n",
+        )
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "immutable_put" in str(exc.value)
+
+    def test_secure_adapter_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      options:\n"
+            "        root: durable-store\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] == "local_volume"
+        assert result["durability_store_options"] == {"root": "durable-store"}
+        assert result["durability_store_tls"] is True
+
+    def test_no_durability_block_is_unaffected(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("executor:\n  max_retries: 3\n")
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] is None
+
+    def test_executor_config_direct_construction_is_also_refused(self):
+        """Defense in depth: a config built without the YAML loader (tests,
+        other callers) is refused the same way `__post_init__` refuses any
+        other unsafe declaration (e.g. harness_guard)."""
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="local_volume"):
+            ExecutorConfig(
+                durability_store_adapter="local_volume",
+                durability_store_tls=False,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+            )
+
+    def test_executor_config_direct_construction_accepts_secure_declaration(self):
+        config = ExecutorConfig(
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+        )
+        assert config.durability_store_adapter == "local_volume"
+
+    def test_local_volume_without_root_is_refused_at_load(self, tmp_path):
+        """Ожидание переписано, а не починено молча.
+
+        Прежняя редакция утверждала, что `local_volume` без `options.root`
+        ЗАГРУЖАЕТСЯ. Формально это было верно — и бесполезно: собрать такой
+        store нечем, и первая же попытка падала `ValueError` уже внутри
+        прогона, то есть после старта. Отказ переехал на загрузку, где ему и
+        место: адаптер без своего обязательного option — это незаполненное
+        объявление, а не рабочая настройка (находка ревью, круг 4).
+        """
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+        with pytest.raises(ConfigError, match="options.root"):
+            load_config_from_yaml(cfg)
+
+    def test_secure_adapter_with_root_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n",
+        )
+        result = load_config_from_yaml(cfg)
+        assert result["durability_store_adapter"] == "local_volume"
+        assert result["durability_store_options"] == {"root": "var/store"}
+
+    def test_all_three_properties_missing_names_all_three(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(tmp_path, "      adapter: local_volume\n")
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        message = str(exc.value)
+        assert "tls" in message
+        assert "encryption_at_rest" in message
+        assert "immutable_put" in message
+
+    def test_retention_days_out_of_range_is_rejected_at_load(self, tmp_path):
+        from spec_runner.config import ConfigError
+
+        text = (
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 400\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+        )
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(text)
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+        assert "retention_days" in str(exc.value)
+
+    def test_retention_days_within_range_loads(self, tmp_path):
+        text = (
+            "executor:\n"
+            "  durability:\n"
+            "    retention_days: 90\n"
+            "    store:\n"
+            "      adapter: local_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n"
+            "      options:\n"
+            "        root: var/store\n"
+        )
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(text)
+        result = load_config_from_yaml(cfg)
+        assert result["durability_retention_days"] == 90
+
+    def test_executor_config_direct_construction_rejects_retention_days_out_of_range(self):
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="retention_days"):
+            ExecutorConfig(
+                durability_store_adapter="local_volume",
+                durability_store_tls=True,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+                durability_retention_days=5,
+            )
+
+
 class TestBuildConfig:
     def _default_args(self, **overrides) -> Namespace:
         """Create a Namespace with default CLI arg values (None = not passed)."""
@@ -520,3 +709,141 @@ class TestSpecGovernance:
         config_path.write_text("spec_governance: strict\n")
         loaded = load_config_from_yaml(config_path)
         assert loaded["spec_governance"] == "strict"
+
+
+class TestDurabilityStoreOptionsAreAbsoluteAtLoad:
+    """Находка ревью: путеподобные `options` обязаны стать абсолютными на
+    загрузке (design § 1.1), иначе относительный `root`, разрешённый после
+    `os.chdir` пробы `doctor`, укажет внутрь каталога, который тут же удалят —
+    платный вызов состоится, а durable-записи о нём уедут со scratch.
+    """
+
+    def test_relative_root_is_resolved_against_project_root(self, tmp_path: Path):
+        from spec_runner.config import ExecutorConfig
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": "var/store"},
+        )
+        assert cfg.durability_store_options["root"] == str(tmp_path / "var" / "store")
+
+    def test_absolute_root_is_left_alone_and_survives_a_second_post_init(self, tmp_path: Path):
+        """`doctor.build_scratch` зовёт `__post_init__` повторно — абсолютный
+        путь он двигать не вправе."""
+        from spec_runner.config import ExecutorConfig
+
+        absolute = str(tmp_path / "elsewhere")
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": absolute},
+        )
+        cfg.__post_init__()
+        assert cfg.durability_store_options["root"] == absolute
+
+    def test_non_path_options_are_not_touched(self, tmp_path: Path):
+        """Перечень, а не догадка по значению: «похоже на путь» поймало бы и
+        имя бакета."""
+        from spec_runner.config import ExecutorConfig
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            durability_store_adapter="local_volume",
+            durability_store_tls=True,
+            durability_store_encryption_at_rest=True,
+            durability_store_immutable_put=True,
+            durability_store_options={"root": "var/store", "bucket": "relative/looking"},
+        )
+        assert cfg.durability_store_options["bucket"] == "relative/looking"
+
+
+class TestDurabilityDeclarationsAreReadStrictly:
+    """Находка ревью: `bool("false")` — это True, то есть адаптер, ПРЯМО
+    объявивший отсутствие TLS, проезжал бы гейт BEH-28 как объявивший его."""
+
+    def _cfg(self, tmp_path: Path, **over):
+        from spec_runner.config import ExecutorConfig
+
+        base = {
+            "project_root": tmp_path,
+            "durability_store_adapter": "local_volume",
+            "durability_store_tls": True,
+            "durability_store_encryption_at_rest": True,
+            "durability_store_immutable_put": True,
+        }
+        base.update(over)
+        return ExecutorConfig(**base)
+
+    def test_string_false_is_not_a_declaration_of_true(self):
+        from spec_runner.config import durability_declared_flag
+
+        assert durability_declared_flag("false", field="tls") is False
+        assert durability_declared_flag("no", field="tls") is False
+        assert durability_declared_flag("true", field="tls") is True
+
+    def test_unreadable_declaration_is_refused_by_field_name(self):
+        from spec_runner.config import ConfigError, durability_declared_flag
+
+        with pytest.raises(ConfigError, match="encryption_at_rest"):
+            durability_declared_flag(["yes"], field="encryption_at_rest")
+
+    def test_retention_bound_holds_without_a_declared_adapter(self, tmp_path: Path):
+        """Отказ не может зависеть от того, объявлен ли соседний ключ."""
+        from spec_runner.config import ConfigError, ExecutorConfig
+
+        with pytest.raises(ConfigError, match="retention_days"):
+            ExecutorConfig(project_root=tmp_path, durability_retention_days=3)
+
+    def test_non_mapping_options_and_non_integer_retention_are_config_errors(self, tmp_path: Path):
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="options must be a mapping"):
+            self._cfg(tmp_path, durability_store_options="root=/tmp")
+        with pytest.raises(ConfigError, match="whole number of days"):
+            self._cfg(tmp_path, durability_retention_days="30")
+
+
+class TestUnknownStoreAdapterIsRefusedAtLoad:
+    """Находка ревью: опечатка в имени адаптера проезжала оба гейта зелёной —
+    и заодно отменяла проверку обязательных options, которые спрашиваются по
+    имени. Выяснялось бы при первой сборке store, то есть после старта."""
+
+    def test_unknown_adapter_is_named_with_the_known_set(self, tmp_path: Path):
+        from spec_runner.config import ConfigError, load_config_from_yaml
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: locl_volume\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="locl_volume"):
+            load_config_from_yaml(cfg)
+
+    def test_validate_reports_it_too(self, tmp_path: Path):
+        from spec_runner.validate import validate_config
+
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n"
+            "  durability:\n"
+            "    store:\n"
+            "      adapter: s3\n"
+            "      tls: true\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        assert any("s3" in e for e in validate_config(cfg).errors)
