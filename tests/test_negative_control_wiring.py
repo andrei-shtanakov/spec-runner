@@ -413,3 +413,110 @@ class TestWithoutACandidateOfItsOwnTheControlStaysSilent:
         assert ok is False
         assert "claim" in (error or "").lower(), error
         assert ran == [], "контроль исполнен раньше claims при выключенном ревью"
+
+
+class TestTheGateIsToldWhatTheControlFound:
+    """kind: integration — находка ревью круга 10.
+
+    Гейт ЧИТАЕТ вердикт, а не исполняет контроль, — значит проверять надо
+    вызывающую сторону: тест на самом гейте, которому facts передали рукой,
+    проводку не проверяет вовсе. Тот же приём, что у точки 2 в
+    `test_waived_standard.py`: перехват `_run_pre_terminal_gates` и
+    утверждение о том, ЧТО ему передал прод.
+
+    Привязку вердикта к коммиту держит ПЕРЕИСПОЛНЕНИЕ при смене кандидата, а
+    не отдельное поле в facts: изобретать ключ ради теста значило бы
+    проверять то, чего контракт не обещает.
+    """
+
+    def _capture_facts(self, root, cfg, monkeypatch) -> dict:
+        from spec_runner import hooks
+
+        seen: dict = {}
+        monkeypatch.setattr(
+            hooks,
+            "_run_pre_terminal_gates",
+            lambda task, config, candidate_sha=None, facts=None: seen.update(facts or {}),
+        )
+        monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
+        _run(root, cfg, monkeypatch)
+        return seen
+
+    def test_a_satisfied_verdict_reaches_the_gate(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+
+        facts = self._capture_facts(root, cfg, monkeypatch)
+
+        assert facts.get("negative_control") == "satisfied", facts
+        assert facts.get("waiver_applied") is True, facts
+        assert facts.get("negative_control_detail"), facts
+
+    def test_an_ordinary_task_reports_no_control_verdict(self, tmp_path, monkeypatch):
+        """Дормантность: проект без waiver'ов не платит за механику ничем —
+        ключа в facts нет вовсе, а не `None`, который гейт прочёл бы как
+        молчание сайта."""
+        from spec_runner.task import Task
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        plain = Task(
+            id="TASK-007",
+            name="ordinary",
+            priority="p2",
+            status="in_progress",
+            estimate="0.5d",
+            execution_mode="standard",
+        )
+
+        from spec_runner import hooks
+        from spec_runner.state import ReviewVerdict
+
+        seen: dict = {}
+        monkeypatch.setattr(
+            hooks,
+            "_run_pre_terminal_gates",
+            lambda task, config, candidate_sha=None, facts=None: seen.update(facts or {}),
+        )
+        monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
+        monkeypatch.setattr(
+            hooks, "run_code_review", lambda *a, **k: (ReviewVerdict.PASSED, None, "ok")
+        )
+        hooks.post_done_hook(plain, cfg, True)
+
+        assert "negative_control" not in seen, seen
+
+    def test_a_candidate_changed_by_review_is_judged_afresh(self, tmp_path, monkeypatch):
+        """Ревью правит дерево — вердикт, снятый на прежнем коммите, про
+        нового кандидата ничего не говорит, и гейт одобрил бы дерево, на
+        котором контроль не исполнялся."""
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        shas: list = []
+        monkeypatch.setattr(
+            hooks,
+            "_run_negative_control_before_review",
+            lambda task, config, sha: (shas.append(sha) or ("satisfied", "ok", sha or "old")),
+        )
+
+        hooks._negative_control_facts(_task(), cfg, "newsha", "satisfied", "ok", "oldsha", True)
+
+        assert shas == ["newsha"], f"вердикт не переснят на новом кандидате: {shas}"
+
+    def test_an_unchanged_candidate_is_not_re_judged(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        shas: list = []
+        monkeypatch.setattr(
+            hooks,
+            "_run_negative_control_before_review",
+            lambda task, config, sha: (shas.append(sha) or ("satisfied", "ok", sha or "")),
+        )
+
+        hooks._negative_control_facts(_task(), cfg, "samesha", "satisfied", "ok", "samesha", True)
+
+        assert shas == [], "контроль переисполнен без смены кандидата"

@@ -726,6 +726,27 @@ def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -
         return result
 
     patch = Path(config.project_root) / str(control.patch)
+    if patch.is_file():
+        # Файл на месте — и всё равно может не доехать до кандидат-коммита:
+        # `git add -A` игнорируемый путь не стейджит, реплей не найдёт патч
+        # и задача заблокируется навсегда. Названо здесь, где починка ещё
+        # бесплатна, а не после платного вызова.
+        import subprocess
+
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--", str(control.patch)],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if ignored.returncode == 0:
+            result.errors.append(
+                f"{task.id}: declared negative-control patch {str(control.patch)!r} is "
+                "IGNORED by git, so no `git add` can stage it into the candidate commit "
+                "the control replays — the mutant would be absent on every run; carve "
+                "the path out of .gitignore or declare a versioned one"
+            )
+            return result
     if not patch.is_file():
         result.warnings.append(
             f"{task.id}: declared negative-control patch {str(control.patch)!r} does not "

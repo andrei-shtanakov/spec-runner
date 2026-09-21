@@ -399,6 +399,19 @@ def _classify_mutated(config, clean, mutated) -> ControlResult:
             "the mutant did not discriminate: the test stayed green under it, so it does "
             "not prove the test can fail",
         )
+    if mutated.outcome is RunOutcome.TESTS_PASSED:
+        # Тот же факт, что и на чистой половине, — и ответ тот же. Прогон не
+        # доказал, что исполнился ровно объявленный тест (мутант выключил его
+        # `skipif`-ом, размножил параметризацией, добавил вторую категорию в
+        # сводку). Разница между половинами по построению вызвана ПАТЧЕМ, и
+        # ответ детерминирован: переисполнять его значит платить двумя
+        # полными прогонами за тот же ответ и отдавать exit 2 «о работе
+        # ничего не известно» про исправный стенд.
+        return result(
+            "unsatisfied",
+            "under the mutant the declared selector did not run exactly one test, so "
+            f"nothing can be concluded about the test it named ({mutated.detail[:200]})",
+        )
     return result("instrument_error", f"the mutated half reached no verdict: {mutated.detail}")
 
 

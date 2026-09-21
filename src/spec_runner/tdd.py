@@ -435,10 +435,32 @@ def _replay_selector(
                     refusal_code="patch_absent",
                 )
             if not candidate_patch.is_file():
+                # «Нет в коммите» и «нет вовсе» — разные факты, и второй не
+                # про автора: патч, лежащий в рабочем дереве, но игнорируемый
+                # git'ом, `git add -A` не застейджит, и реплей не найдёт его
+                # в коммите. Сказать такому оператору «задача его не
+                # доставила» значит отправить его искать файл, который у
+                # него на диске. Проверка стоит одного `git check-ignore`.
+                reason = "the task did not deliver it"
+                in_tree = (root / mutate).is_file()
+                if in_tree:
+                    ignored = subprocess.run(
+                        ["git", "check-ignore", "--", str(mutate)],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                    )
+                    reason = (
+                        "it is in the working tree but git IGNORES it, so no `git add` "
+                        "could stage it into the candidate — a fact about this "
+                        "repository's .gitignore, not about the task"
+                        if ignored.returncode == 0
+                        else "it is in the working tree but was never committed"
+                    )
                 return attempt(
                     "mutate",
                     f"the declared patch {str(mutate)!r} is not in the candidate commit "
-                    f"{sha[:12]}: the task did not deliver it",
+                    f"{sha[:12]}: {reason}",
                     refusal_code="patch_absent",
                 )
             # Читается ДО `git apply`: сбой ввода-вывода — факт о машине, а

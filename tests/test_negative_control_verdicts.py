@@ -832,3 +832,46 @@ class TestASelectorThatRunsMoreThanOneTestIsADeclarationDefect:
         result = run_negative_control(_cfg(root), sha=head, control=_control())
 
         assert result.verdict == "satisfied", result
+
+
+class TestBothHalvesAnswerTheSameFactTheSameWay:
+    """kind: contract — находка ревью круга 10.
+
+    Недоказанное исполнение на ЧИСТОЙ половине уже признано детерминированным
+    фактом об объявлении. На мутированной тот же вход уходил в замыкающую
+    строку `instrument_error`: переисполнения по два полных прогона, exit 2
+    «о работе ничего не известно» про исправный стенд, задача не
+    завершается. Разница между половинами по построению вызвана патчем, и
+    ответ на неё так же детерминирован (AP-12.4).
+    """
+
+    #: Собран построчно: контекстные строки diff'а начинаются с пробела, и
+    #: пустая контекстная строка — это строка ровно из одного пробела. В
+    #: тройной кавычке её убрал бы линтер (W293), и патч перестал бы
+    #: применяться — смысл здесь у пробела, а не у оформления.
+    SKIPPING_PATCH = "\n".join(
+        [
+            "--- a/tests/test_subject.py",
+            "+++ b/tests/test_subject.py",
+            "@@ -1,5 +1,8 @@",
+            "+import pytest",
+            "+",
+            " from subject import value",
+            " ",
+            " ",
+            '+@pytest.mark.skipif(True, reason="мутант выключил тест")',
+            " def test_property():",
+            "     assert value() == 1",
+            "",
+        ]
+    )
+
+    def test_a_mutant_that_only_skips_the_test_is_a_declaration_defect(self, tmp_path):
+        from spec_runner.negative_control import run_negative_control
+
+        root, head = _repo(tmp_path, patch=self.SKIPPING_PATCH)
+
+        result = run_negative_control(_cfg(root), sha=head, control=_control())
+
+        assert result.verdict == "unsatisfied", result
+        assert not result.retriable, "детерминированный факт переисполняется как поломка стенда"

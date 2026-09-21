@@ -395,3 +395,35 @@ class TestThePatchPathIsNeverReadAsAnOption:
         # исполнился. Разобранный как флаг, он дал бы отказ применения.
         assert mutated is not None and mutated.stage == "run", mutated
         assert mutated.outcome is not None, mutated
+
+
+class TestARepoThatSwallowsThePatchSaysSo:
+    """kind: integration — находка ревью круга 10.
+
+    Проект держит `spec/` в .gitignore — ровно та конфигурация, которую
+    этот же патч чинил в собственном репозитории. Задача исправно пишет
+    мутант в рабочее дерево, `git add -A` его не стейджит, реплей не
+    находит его в коммите и печатает «the task did not deliver it».
+    Оператора отправляют искать файл, который лежит у него на диске, а
+    настоящая причина — конфигурация репозитория — не названа ни отказом,
+    ни `validate`, хотя стоит одного `git check-ignore`.
+    """
+
+    def test_the_refusal_names_the_ignore_rather_than_the_author(self, tmp_path):
+        from spec_runner.negative_control import replay_both_halves
+
+        root, _ = _repo(tmp_path)
+        (root / ".gitignore").write_text("spec/negative-controls/\n", encoding="utf-8")
+        _git(root, "rm", "-r", "--cached", "-q", "spec/negative-controls")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-m", "the controls dir is ignored now")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert (root / "spec" / "negative-controls" / "TASK-008.patch").is_file()
+
+        clean, mutated = replay_both_halves(_cfg(root), sha=head, control=_control())
+
+        assert mutated is not None and mutated.refusal_code == "patch_absent", mutated
+        assert "ignore" in mutated.detail.lower(), f"настоящая причина не названа: {mutated.detail}"
+        assert "did not deliver" not in mutated.detail, mutated.detail

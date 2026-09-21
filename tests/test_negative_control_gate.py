@@ -528,3 +528,24 @@ class TestTwoIndependentDefectsAreBothNamed:
         result = _validate([task], _cfg(tmp_path))
 
         assert not any("carries no **TDD-waiver:**" in e for e in result.errors), result.errors
+
+
+class TestValidateWarnsAboutAnIgnoredPatch:
+    """kind: contract — вторая половина той же находки: `validate` видит
+    файл на месте и молчит, хотя `git add -A` его не застейджит. Названо
+    ДО прогона — там, где починка ещё бесплатна."""
+
+    def test_a_patch_git_ignores_is_named_before_the_run(self, tmp_path):
+        import subprocess
+
+        root = tmp_path / "repo"
+        (root / "spec" / "negative-controls").mkdir(parents=True)
+        (root / PATCH).write_text("--- a/x\n", encoding="utf-8")
+        (root / ".gitignore").write_text("spec/negative-controls/\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+
+        result = _validate([_task(negative_control=_control())], _cfg(root))
+
+        assert any("ignore" in w.lower() for w in result.warnings + result.errors), (
+            f"игнорируемый патч не назван: {result.warnings + result.errors}"
+        )
