@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+import spec_runner.artifact_store as artifact_store
 from spec_runner.artifact_store import (
     AlreadyExists,
     ArtifactStore,
@@ -286,3 +287,34 @@ class TestRuntimeStatePathsCoverTheStoreLocals:
         paths = runtime_state_paths(cfg)
         assert cfg.checkpoints_dir in paths, "локальные копии checkpoint-ов попали бы в коммит"
         assert cfg.spool_file in paths, "аварийный spool попал бы в коммит"
+
+
+class TestPutWritesEveryByte:
+    def test_a_short_write_is_retried_not_published(self, tmp_path: Path, monkeypatch):
+        """`os.write` вправе записать меньше запрошенного. Без цикла ключ
+        публиковался бы усечённым — и неизменяемым, то есть неисправимым, —
+        а `Ack` сообщал бы полный размер."""
+        real_write = os.write
+        calls: list[int] = []
+
+        def _short_write(fd: int, data) -> int:
+            calls.append(len(data))
+            return real_write(fd, bytes(data)[:1])
+
+        monkeypatch.setattr(os, "write", _short_write)
+        ack = LocalVolumeStore(tmp_path).put("runs/R1/x.json", b"abcdef", metadata={})
+
+        assert len(calls) > 1, "короткая запись не была дописана"
+        assert ack.size == 6
+        assert LocalVolumeStore(tmp_path).get("runs/R1/x.json") == b"abcdef"
+
+
+class TestWritingFactoryIsNotAPublicDoor:
+    def test_only_the_readonly_entry_is_public(self):
+        """§ 1.4: `open_store_readonly` — единственный публичный вход без
+        Publisher-а. Пишущая фабрика обязана быть приватной, иначе пояс
+        «в store пишет только publisher» нечем проверить поиском."""
+        assert hasattr(artifact_store, "open_store_readonly")
+        assert not hasattr(artifact_store, "build_store"), (
+            "пишущая фабрика экспортирована публично — второй Publisher-less вход"
+        )

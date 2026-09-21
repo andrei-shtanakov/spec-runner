@@ -218,7 +218,17 @@ class LocalVolumeStore:
         # это удалило бы чужую незавершённую публикацию.
         try:
             try:
-                os.write(fd, data)
+                # `os.write` вправе записать МЕНЬШЕ запрошенного, и молча: без
+                # цикла короткая запись опубликовала бы усечённый ключ — а он
+                # неизменяем, то есть исправить его нельзя по построению, и
+                # `Ack` при этом сообщал бы полный размер.
+                written = 0
+                view = memoryview(data)
+                while written < len(data):
+                    chunk = os.write(fd, view[written:])
+                    if chunk <= 0:
+                        raise OSError(f"короткая запись в {tmp}: {written} из {len(data)} байт")
+                    written += chunk
                 os.fsync(fd)
             finally:
                 os.close(fd)
@@ -292,8 +302,14 @@ class _ReadOnlyStore:
 ADAPTERS = ("local_volume",)
 
 
-def build_store(adapter: str, options: dict[str, str]) -> ArtifactStore:
-    """Собрать адаптер по объявлению config-а.
+def _build_store(adapter: str, options: dict[str, str]) -> ArtifactStore:
+    """Собрать адаптер по объявлению config-а — ПРИВАТНО.
+
+    Имя с подчёркиванием — не стиль, а половина пояса § 1.4: правило «в store
+    пишет только publisher» проверяется поиском публичных входов, и пишущая
+    фабрика с публичным именем была бы вторым `Publisher`-less входом рядом с
+    объявленным единственным (`open_store_readonly`). Publisher инстанцирует
+    адаптер через неё же, изнутри модуля.
 
     Путеподобные options к этому моменту уже абсолютны — их разрешает
     загрузчик (§ 1.1), и повторять резолв здесь нельзя: он пришёлся бы на
@@ -315,4 +331,4 @@ def open_store_readonly(adapter: str, options: dict[str, str]) -> ArtifactStore:
     правило «в store пишет только publisher» иначе пришлось бы проверять
     рассуждением, а не поиском.
     """
-    return _ReadOnlyStore(build_store(adapter, options))
+    return _ReadOnlyStore(_build_store(adapter, options))

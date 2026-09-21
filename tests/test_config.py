@@ -736,3 +736,49 @@ class TestDurabilityStoreOptionsAreAbsoluteAtLoad:
             durability_store_options={"root": "var/store", "bucket": "relative/looking"},
         )
         assert cfg.durability_store_options["bucket"] == "relative/looking"
+
+
+class TestDurabilityDeclarationsAreReadStrictly:
+    """Находка ревью: `bool("false")` — это True, то есть адаптер, ПРЯМО
+    объявивший отсутствие TLS, проезжал бы гейт BEH-28 как объявивший его."""
+
+    def _cfg(self, tmp_path: Path, **over):
+        from spec_runner.config import ExecutorConfig
+
+        base = {
+            "project_root": tmp_path,
+            "durability_store_adapter": "local_volume",
+            "durability_store_tls": True,
+            "durability_store_encryption_at_rest": True,
+            "durability_store_immutable_put": True,
+        }
+        base.update(over)
+        return ExecutorConfig(**base)
+
+    def test_string_false_is_not_a_declaration_of_true(self):
+        from spec_runner.config import durability_declared_flag
+
+        assert durability_declared_flag("false", field="tls") is False
+        assert durability_declared_flag("no", field="tls") is False
+        assert durability_declared_flag("true", field="tls") is True
+
+    def test_unreadable_declaration_is_refused_by_field_name(self):
+        from spec_runner.config import ConfigError, durability_declared_flag
+
+        with pytest.raises(ConfigError, match="encryption_at_rest"):
+            durability_declared_flag(["yes"], field="encryption_at_rest")
+
+    def test_retention_bound_holds_without_a_declared_adapter(self, tmp_path: Path):
+        """Отказ не может зависеть от того, объявлен ли соседний ключ."""
+        from spec_runner.config import ConfigError, ExecutorConfig
+
+        with pytest.raises(ConfigError, match="retention_days"):
+            ExecutorConfig(project_root=tmp_path, durability_retention_days=3)
+
+    def test_non_mapping_options_and_non_integer_retention_are_config_errors(self, tmp_path: Path):
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="options must be a mapping"):
+            self._cfg(tmp_path, durability_store_options="root=/tmp")
+        with pytest.raises(ConfigError, match="whole number of days"):
+            self._cfg(tmp_path, durability_retention_days="30")

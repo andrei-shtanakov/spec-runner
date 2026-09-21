@@ -297,6 +297,33 @@ def durability_store_missing_properties(
     return missing
 
 
+def durability_declared_flag(value: object, *, field: str) -> bool:
+    """Прочитать объявленное булево свойство store строго.
+
+    `bool(value)` здесь — ловушка, и она уже стоила бы гейта BEH-28:
+    `tls: "false"` в YAML приходит СТРОКОЙ, а непустая строка истинна, то есть
+    адаптер, прямо объявивший отсутствие TLS, проезжал бы как объявивший его.
+    Проверяется декларация (OUT-03), и значит форма декларации обязана быть
+    однозначной: булево либо распознаваемое строковое написание, всё
+    остальное — отказ по имени поля, а не догадка.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "1"}:
+            return True
+        if lowered in {"false", "no", "0", ""}:
+            return False
+    raise ConfigError(
+        f"durability.store.{field} must be a boolean (got {value!r}): "
+        "spec-runner checks the declaration, and an unreadable declaration is "
+        "not a declaration"
+    )
+
+
 #: Option keys of `durability.store` that name a path and are therefore
 #: resolved to absolute at load (design 1.1). A list, not a guess by value:
 #: "looks like a path" would also catch an adapter's bucket name or prefix.
@@ -592,6 +619,23 @@ class ExecutorConfig:
             elif not isinstance(value, list):
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
 
+        # Типы полей `durability.*` — ПЕРЕД любой проверкой их значений:
+        # сравнение диапазона с не-числом падает `TypeError` из середины
+        # `__post_init__`, то есть оператор получает трейсбек вместо отказа с
+        # именем ключа (находка ревью).
+        if not isinstance(self.durability_store_options, dict):
+            raise ConfigError(
+                "durability.store.options must be a mapping, got "
+                f"{type(self.durability_store_options).__name__}"
+            )
+        if not isinstance(self.durability_retention_days, int) or isinstance(
+            self.durability_retention_days, bool
+        ):
+            raise ConfigError(
+                "durability.retention_days must be a whole number of days, got "
+                f"{self.durability_retention_days!r}"
+            )
+
         # BEH-28: a declared durability.store adapter must state tls,
         # encryption_at_rest and immutable_put, or a run must not reach
         # run-start with it.
@@ -608,12 +652,16 @@ class ExecutorConfig:
                     "-- spec-runner checks the declaration only (OUT-03); declare "
                     "tls: true, encryption_at_rest: true and immutable_put: true"
                 )
-            if durability_retention_days_out_of_range(self.durability_retention_days):
-                raise ConfigError(
-                    "durability.retention_days must be between "
-                    f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
-                    f"got {self.durability_retention_days}"
-                )
+
+        # Вне ветки адаптера — как в загрузчике и в `validate`: срок хранения
+        # не свойство адаптера, и отказ по нему не может зависеть от того,
+        # объявлен ли соседний ключ (находка ревью, вторая половина).
+        if durability_retention_days_out_of_range(self.durability_retention_days):
+            raise ConfigError(
+                "durability.retention_days must be between "
+                f"{DURABILITY_RETENTION_DAYS_MIN} and {DURABILITY_RETENTION_DAYS_MAX}, "
+                f"got {self.durability_retention_days}"
+            )
 
         if self.change_id:
             if self.spec_prefix:
@@ -1090,9 +1138,13 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         durability_store_adapter = durability_store.get("adapter")
         if durability_store_adapter:
             missing = durability_store_missing_properties(
-                tls=bool(durability_store.get("tls")),
-                encryption_at_rest=bool(durability_store.get("encryption_at_rest")),
-                immutable_put=bool(durability_store.get("immutable_put")),
+                tls=durability_declared_flag(durability_store.get("tls"), field="tls"),
+                encryption_at_rest=durability_declared_flag(
+                    durability_store.get("encryption_at_rest"), field="encryption_at_rest"
+                ),
+                immutable_put=durability_declared_flag(
+                    durability_store.get("immutable_put"), field="immutable_put"
+                ),
             )
             if missing:
                 raise ConfigError(
