@@ -179,3 +179,56 @@ class TestBEH03MarkerAndWaiverMustComeTogether:
         assert fields["id"] == "TASK-008"
         assert fields["status"] == "todo"
         assert fields["priority"] == "p2"
+
+
+class TestAValuelessMarkerNamesItsOwnDefect:
+    """kind: contract — находка ревью круга 11.
+
+    Регэксп требовал пробел после `:**` и хотя бы один символ, поэтому
+    строка ровно `**Negative-control:**` не совпадала ни с чем и падала
+    сквозь разбор: задача становилась неотличима от задачи БЕЗ маркера, и
+    `validate` вместе с отказом точки 1 утверждали «маркера нет» про файл,
+    который маркер содержит. Диагноз при этом переворачивался невидимым
+    пробелом: та же строка с одним пробелом на конце разбиралась верно.
+
+    Канал `negative_control_error` существует ровно затем, чтобы «маркера
+    нет» и «маркер негоден» оставались разными дефектами.
+    """
+
+    def test_a_marker_without_a_value_is_a_named_defect(self, tmp_path):
+        from spec_runner.task import parse_tasks
+
+        path = tmp_path / "tasks.md"
+        path.write_text(
+            "## Tasks\n\n### TASK-008: characterisation\n"
+            "P2 | TODO   Est: 0.5d\n"
+            "**Mode:** standard\n"
+            "**Negative-control:**\n\n"
+            "**Checklist:**\n- [ ] пункт\n",
+            encoding="utf-8",
+        )
+
+        task = parse_tasks(path)[0]
+
+        assert task.negative_control is None
+        assert task.negative_control_error is not None, "пустой маркер неотличим от отсутствующего"
+
+    def test_the_diagnosis_does_not_turn_on_invisible_whitespace(self, tmp_path):
+        from spec_runner.task import parse_tasks
+
+        def _error_for(line: str) -> str | None:
+            path = tmp_path / f"tasks-{len(line)}.md"
+            path.write_text(
+                "## Tasks\n\n### TASK-008: characterisation\n"
+                "P2 | TODO   Est: 0.5d\n"
+                "**Mode:** standard\n"
+                f"{line}\n\n"
+                "**Checklist:**\n- [ ] пункт\n",
+                encoding="utf-8",
+            )
+            return parse_tasks(path)[0].negative_control_error
+
+        bare = _error_for("**Negative-control:**")
+        with_space = _error_for("**Negative-control:** ")
+
+        assert bare is not None and with_space is not None, (bare, with_space)

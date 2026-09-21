@@ -278,6 +278,24 @@ def _classify_clean(clean) -> ControlResult | None:
         )
     if clean_half_is_green(clean):
         return None
+    if clean.stage == "run" and clean.outcome in (
+        RunOutcome.SELECTION_FAILED,
+        RunOutcome.COLLECTION_OR_COMPILE_ERROR,
+    ):
+        # На мутированной половине оба исхода уже названы фактами об
+        # объявлении/работе («selected no test at all», «the mutant broke the
+        # build»). На ЧИСТОЙ половине они тем более не про машину: без
+        # всякого патча объявленный селектор не находит теста либо дерево
+        # кандидата его не собирает. Ответ детерминирован — переисполнять
+        # его значит платить полными прогонами за то же и отдавать exit 2
+        # «о работе ничего не известно» про исправный инструмент.
+        return ControlResult(
+            "unsatisfied",
+            "the declared selector did not yield a runnable test on the clean candidate: "
+            "there is nothing for the mutant to turn red — the selector names no test in "
+            f"this commit, or the commit does not collect it ({clean.detail[:200]})",
+            clean=clean,
+        )
     if clean.stage == "run" and clean.outcome is RunOutcome.TESTS_PASSED:
         # Тесты ПРОШЛИ, но прогон не доказал, что исполнился ровно
         # объявленный тест: селектор адресует больше одного (параметризация)

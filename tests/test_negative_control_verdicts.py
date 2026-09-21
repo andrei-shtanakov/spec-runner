@@ -875,3 +875,26 @@ class TestBothHalvesAnswerTheSameFactTheSameWay:
 
         assert result.verdict == "unsatisfied", result
         assert not result.retriable, "детерминированный факт переисполняется как поломка стенда"
+
+
+class TestASelectorThatSelectsNothingIsNotABrokenHarness:
+    """kind: contract — находка ревью круга 11.
+
+    На мутированной половине «селектор не выбрал ни одного теста» уже
+    назван фактом об объявлении. На чистой он тем более про объявление:
+    без всякого патча объявленный селектор не находит теста. Уходило в
+    instrument_error — переисполнения и exit 2 про исправный стенд.
+    """
+
+    def test_a_selector_matching_nothing_is_unsatisfied(self, tmp_path):
+        from spec_runner.negative_control import run_negative_control
+
+        root, head = _repo(tmp_path)
+        control = NegativeControl(
+            patch=PATCH_PATH, selector="tests/test_subject.py::test_never_written"
+        )
+
+        result = run_negative_control(_cfg(root), sha=head, control=control)
+
+        assert result.verdict == "unsatisfied", result
+        assert not result.retriable, "детерминированный факт переисполняется"
