@@ -327,6 +327,18 @@ def _classify_clean(clean) -> ControlResult | None:
             f"any of them ({clean.detail[:200]})",
             clean=clean,
         )
+    if clean.stage == "preflight" and clean.refusal_code == "unparseable_test_file":
+        # На МУТИРОВАННОЙ половине этот код неоднозначен (патч мог сломать
+        # разбор, а мог сломаться сам разбор), и потому там он снимается
+        # переспросом по чистому дереву. На ЧИСТОЙ половине переспрашивать
+        # нечего: это и есть чистое дерево, и его тест-файл не разбирается
+        # в самом кандидат-коммите. Факт о работе, детерминированный.
+        return ControlResult(
+            "unsatisfied",
+            "the declared test file does not parse in the candidate commit itself: "
+            f"there is nothing for the mutant to turn red ({clean.detail[:200]})",
+            clean=clean,
+        )
     if clean.stage == "preflight" and clean.refusal_code in _PATCH_PREFLIGHT_CODES:
         # Та же таблица, что у мутированной половины. Эти коды говорят про
         # ОБЪЯВЛЕНИЕ — файла нет, строка не определяет теста, в файле нет

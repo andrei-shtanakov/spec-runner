@@ -695,7 +695,15 @@ def _negative_control_facts(
     """
     if verdict is None:
         return {}
-    if review_changed_candidate and gated_sha and gated_sha != verdict_sha:
+    # Признак `review_changed_candidate` заведён (#351) ИМЕННО для случая
+    # «ревью изменило дерево, а HEAD не сдвинулся»: коммит роли FIXED —
+    # best-effort. Требовать вдобавок расхождения SHA значило гасить ровно
+    # тот случай, ради которого признак и передан, и одобрять кандидата
+    # вердиктом, снятым до правки, — правки подметаются в финальный коммит
+    # уже после гейта. Соседний перепрогон тестов/линта висит на этом
+    # признаке одном; две трактовки одного признака в одном файле — тоже
+    # дефект.
+    if review_changed_candidate and gated_sha:
         fresh = _run_negative_control_before_review(task, config, gated_sha)
         verdict, detail = fresh[0] or verdict, fresh[1] or detail
     return {"negative_control": verdict, "negative_control_detail": detail}
@@ -1458,7 +1466,14 @@ def post_done_hook(
             else GateStatus.INSTRUMENT_ERROR
         )
         refusal = refusal_for(status, control_detail)
-        refusal = _commit_blocked_status(task, config, refusal, review_checkpoint_sha)
+        # Судимый коммит — `control_sha`: при `run_review: false`
+        # `review_checkpoint_sha` не вычисляется вовсе, и bookkeeping-коммит
+        # отказа оставался без трейлера `Gate-Candidate`, хотя соседняя
+        # ветка claims в той же конфигурации его называет. Два отказа одного
+        # прогона по одному HEAD не должны иметь разную судебную запись.
+        refusal = _commit_blocked_status(
+            task, config, refusal, control_sha or review_checkpoint_sha
+        )
         return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
 
     # Run code review (before commit, so fixes can be included)

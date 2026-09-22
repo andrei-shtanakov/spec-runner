@@ -506,6 +506,13 @@ class TestTheGateIsToldWhatTheControlFound:
         assert shas == ["newsha"], f"вердикт не переснят на новом кандидате: {shas}"
 
     def test_an_unchanged_candidate_is_not_re_judged(self, tmp_path, monkeypatch):
+        """Переспрашивается ИЗМЕНЕНИЕ ДЕРЕВА, а не сдвиг SHA.
+
+        Первая редакция этого теста утверждала обратное — «sha совпали,
+        значит не переснимать» — и тем самым пинила дефект: коммит роли
+        FIXED best-effort, поэтому дерево меняется без движения HEAD, и
+        вердикт, снятый до правки, уезжал в гейт как действительный.
+        """
         from spec_runner import hooks
 
         root = _repo(tmp_path)
@@ -517,9 +524,9 @@ class TestTheGateIsToldWhatTheControlFound:
             lambda task, config, sha: (shas.append(sha) or ("satisfied", "ok", sha or "")),
         )
 
-        hooks._negative_control_facts(_task(), cfg, "samesha", "satisfied", "ok", "samesha", True)
+        hooks._negative_control_facts(_task(), cfg, "samesha", "satisfied", "ok", "samesha", False)
 
-        assert shas == [], "контроль переисполнен без смены кандидата"
+        assert shas == [], "контроль переисполнен без изменения дерева"
 
 
 class TestTheControlNamesItsOwnStage:
@@ -553,3 +560,52 @@ class TestTheControlNamesItsOwnStage:
         assert ok is False, error
         assert reporter.current != "commit", f"отказ контроля приписан стадии {reporter.current!r}"
         assert reporter.current == "tests", reporter.current
+
+
+class TestAReviewMutationDoesNotLaunderTheVerdict:
+    """kind: integration — находка ревью круга 17 (major).
+
+    Роль ревью в режиме FIXED правит дерево, её собственный коммит —
+    best-effort и может не состояться. Тогда `review_changed_candidate`
+    истинно, а HEAD не сдвинулся, и вердикт, снятый ДО правки, уезжал в
+    гейт как действительный: правки подметались в финальный коммит уже
+    ПОСЛЕ одобрения. Докстринг переноса вердикта объявляет это
+    недопустимым; переисполнение висело на сдвиге SHA, которого в этом
+    сценарии по построению нет.
+
+    Слепое пятно было и в тестах круга 10: оба звали функцию с разными и с
+    одинаковыми sha, то есть проверяли только ветку по sha.
+    """
+
+    def test_a_dirty_tree_after_review_re_judges_the_control(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        asked: list = []
+        monkeypatch.setattr(
+            hooks,
+            "_run_negative_control_before_review",
+            lambda task, config, sha: (asked.append(sha) or ("satisfied", "fresh", sha or "x")),
+        )
+
+        # SHA совпали — ровно тот случай, который ветка по sha гасит.
+        hooks._negative_control_facts(_task(), cfg, "same", "satisfied", "stale", "same", True)
+
+        assert asked == ["same"], f"вердикт не переснят на изменённом дереве: {asked}"
+
+    def test_an_untouched_tree_is_not_re_judged(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        asked: list = []
+        monkeypatch.setattr(
+            hooks,
+            "_run_negative_control_before_review",
+            lambda task, config, sha: (asked.append(sha) or ("satisfied", "fresh", sha or "x")),
+        )
+
+        hooks._negative_control_facts(_task(), cfg, "same", "satisfied", "stale", "same", False)
+
+        assert asked == [], "контроль переисполнен без изменения дерева"

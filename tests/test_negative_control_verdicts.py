@@ -956,3 +956,36 @@ class TestCleanHalfPreflightSpeaksTheSameTable:
 
         assert result is not None and result.verdict == "instrument_error", result
         assert result.retriable
+
+
+class TestAnUnparseableFileInTheCandidateIsTheCandidatesFault:
+    """kind: contract — находка ревью круга 17.
+
+    На МУТИРОВАННОЙ половине код `unparseable_test_file` неоднозначен —
+    патч мог сломать разбор, а мог сломаться сам разбор, — и снимается
+    переспросом по чистому дереву. На ЧИСТОЙ половине переспрашивать
+    нечего: это и есть чистое дерево, и файл не разбирается в самом
+    кандидат-коммите. Уходило в instrument_error: лишние реплеи и exit 2
+    за детерминированную ошибку разбора в коммите задачи.
+    """
+
+    def test_it_is_unsatisfied_without_retries(self, tmp_path):
+        from spec_runner import negative_control as nc
+        from spec_runner import tdd
+
+        root, head = _repo(tmp_path)
+        clean = tdd.ReplayAttempt(
+            stage="preflight",
+            detail="the test file does not parse",
+            environment_id="unpinned",
+            sha=head,
+            selector=SELECTOR,
+            mutated=False,
+            order=1,
+            refusal_code="unparseable_test_file",
+        )
+
+        result = nc._classify_clean(clean)
+
+        assert result is not None and result.verdict == "unsatisfied", result
+        assert not result.retriable
