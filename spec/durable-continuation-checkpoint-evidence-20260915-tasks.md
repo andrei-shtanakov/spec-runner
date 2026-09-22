@@ -559,7 +559,7 @@ FR-02 и отдельной строкой таблицы § 2.6, а не счи
 - **AC-44** (metric): Restore-drill и open-call матрица выполнены в объёме условия завершения
 
 ### TASK-001: Store-контракт, `LocalVolumeStore`, блок `durability:` в config и validate
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-28 (DT-01, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-01
