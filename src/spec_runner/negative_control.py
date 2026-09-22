@@ -292,6 +292,16 @@ def _classify_clean(clean) -> ControlResult | None:
         )
     if clean_half_is_green(clean):
         return None
+    if clean.stage == "run" and clean.proof is SelectionProof.REFUTED:
+        # Мутированная половина на этот же факт отвечает «исполнился НЕ
+        # объявленный тест». На чистой он тем более про объявление: без
+        # всякого патча селектор промахнулся мимо того, что назвал.
+        return ControlResult(
+            "unsatisfied",
+            "a test other than the declared one was executed on the clean candidate: "
+            f"the selector does not address what it names ({clean.detail[:200]})",
+            clean=clean,
+        )
     if clean.stage == "run" and clean.outcome in (
         RunOutcome.SELECTION_FAILED,
         RunOutcome.COLLECTION_OR_COMPILE_ERROR,

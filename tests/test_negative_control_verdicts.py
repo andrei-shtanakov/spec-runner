@@ -989,3 +989,37 @@ class TestAnUnparseableFileInTheCandidateIsTheCandidatesFault:
 
         assert result is not None and result.verdict == "unsatisfied", result
         assert not result.retriable
+
+
+class TestARefutedSelectionOnTheCleanHalfIsADeclarationFact:
+    """kind: contract — находка ревью круга 18, последняя из серии
+    асимметрий.
+
+    Мутированная половина на `SelectionProof.REFUTED` отвечает
+    «исполнился НЕ объявленный тест» — факт об объявлении. Чистая
+    отправляла тот же факт в замыкающую строку instrument_error: лишние
+    реплеи и exit 2 за детерминированный промах селектора.
+    """
+
+    def test_a_refuted_selection_is_unsatisfied(self, tmp_path):
+        from spec_runner import negative_control as nc
+        from spec_runner import tdd
+        from spec_runner.tdd_runners import RunOutcome, SelectionProof
+
+        root, head = _repo(tmp_path)
+        clean = tdd.ReplayAttempt(
+            stage="run",
+            detail="1 failed — но исполнен другой тест",
+            environment_id="unpinned",
+            sha=head,
+            selector=SELECTOR,
+            mutated=False,
+            order=1,
+            outcome=RunOutcome.TESTS_FAILED,
+            proof=SelectionProof.REFUTED,
+        )
+
+        result = nc._classify_clean(clean)
+
+        assert result is not None and result.verdict == "unsatisfied", result
+        assert not result.retriable

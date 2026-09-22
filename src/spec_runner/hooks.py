@@ -695,18 +695,32 @@ def _negative_control_facts(
     """
     if verdict is None:
         return {}
-    # Признак `review_changed_candidate` заведён (#351) ИМЕННО для случая
-    # «ревью изменило дерево, а HEAD не сдвинулся»: коммит роли FIXED —
-    # best-effort. Требовать вдобавок расхождения SHA значило гасить ровно
-    # тот случай, ради которого признак и передан, и одобрять кандидата
-    # вердиктом, снятым до правки, — правки подметаются в финальный коммит
-    # уже после гейта. Соседний перепрогон тестов/линта висит на этом
-    # признаке одном; две трактовки одного признака в одном файле — тоже
-    # дефект.
-    if review_changed_candidate and gated_sha:
+    if not review_changed_candidate:
+        return {"negative_control": verdict, "negative_control_detail": detail}
+
+    # Ревью изменило дерево. Правки к этому моменту уже закоммичены (см.
+    # вызов `commit_task_work` перед `gated_sha`), поэтому НОВЫЙ коммит —
+    # это и есть то, что смержится, и его надо судить заново.
+    if gated_sha and gated_sha != verdict_sha:
         fresh = _run_negative_control_before_review(task, config, gated_sha)
         verdict, detail = fresh[0] or verdict, fresh[1] or detail
-    return {"negative_control": verdict, "negative_control_detail": detail}
+        return {"negative_control": verdict, "negative_control_detail": detail}
+
+    # Коммита не случилось — правки остались в дереве (коммит отказал или
+    # нечего было стейджить). Переисполнять нечего: реплей читает КОММИТ, и
+    # тот же коммит даст те же байты — два полных реплея ради того же
+    # ответа, с риском, что флейк перевернёт вердикт уже прошедшей задачи.
+    # Но и старый вердикт проносить нельзя: он описывает дерево, которое
+    # смержено НЕ будет. Честный ответ — «не установлено».
+    return {
+        "negative_control": "instrument_error",
+        "negative_control_detail": (
+            "review changed the tree after the control ran and the change could not be "
+            f"committed ({gated_sha[:12] or 'no candidate'}): the mutant's evidence "
+            "describes a tree that will not be merged, and replaying the same commit "
+            "would answer about the same bytes"
+        ),
+    }
 
 
 def _run_pre_terminal_gates(
@@ -1689,6 +1703,15 @@ def post_done_hook(
     # "verifying the green" means; the phase is recorded here, once, after they
     # have all run and before anything decides on them.
     _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
+
+    # Правки ревью коммитятся ДО гейта — ровно то, что объявляет комментарий
+    # выше («HEAD после работы и любых правок ревью»). Без этого гейты судят
+    # коммит, которого не будет: финальный `commit_task_work` подметает
+    # правки уже ПОСЛЕ одобрения. Для негативного контроля это критично
+    # вдвойне — реплей читает КОММИТ, поэтому переисполнение по грязному
+    # дереву было гарантированным no-op: два полных реплея ради тех же байт.
+    if review_changed_candidate and config.auto_commit and has_gates():
+        commit_task_work(task, config)
 
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
 

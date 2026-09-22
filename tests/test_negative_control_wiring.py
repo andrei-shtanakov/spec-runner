@@ -577,7 +577,16 @@ class TestAReviewMutationDoesNotLaunderTheVerdict:
     одинаковыми sha, то есть проверяли только ветку по sha.
     """
 
-    def test_a_dirty_tree_after_review_re_judges_the_control(self, tmp_path, monkeypatch):
+    def test_a_verdict_from_another_tree_is_not_carried(self, tmp_path, monkeypatch):
+        """Правку ревью закоммитить не удалось (коммит отказал либо стейджить
+        было нечего) — вердикт описывает дерево, которое НЕ смержится.
+
+        Первая редакция этого теста требовала переисполнения на том же
+        sha. Это гарантированный no-op: реплей читает КОММИТ, а изменились
+        незакоммиченные байты, — два полных реплея ради того же ответа, да
+        ещё с риском, что флейк перевернёт вердикт уже прошедшей задачи.
+        Честный ответ — «не установлено», и его даёт гейт.
+        """
         from spec_runner import hooks
 
         root = _repo(tmp_path)
@@ -589,10 +598,13 @@ class TestAReviewMutationDoesNotLaunderTheVerdict:
             lambda task, config, sha: (asked.append(sha) or ("satisfied", "fresh", sha or "x")),
         )
 
-        # SHA совпали — ровно тот случай, который ветка по sha гасит.
-        hooks._negative_control_facts(_task(), cfg, "same", "satisfied", "stale", "same", True)
+        facts = hooks._negative_control_facts(
+            _task(), cfg, "same", "satisfied", "stale", "same", True
+        )
 
-        assert asked == ["same"], f"вердикт не переснят на изменённом дереве: {asked}"
+        assert asked == [], "переисполнение против тех же байт"
+        assert facts["negative_control"] == "instrument_error", facts
+        assert "will not be merged" in facts["negative_control_detail"], facts
 
     def test_an_untouched_tree_is_not_re_judged(self, tmp_path, monkeypatch):
         from spec_runner import hooks
@@ -609,3 +621,71 @@ class TestAReviewMutationDoesNotLaunderTheVerdict:
         hooks._negative_control_facts(_task(), cfg, "same", "satisfied", "stale", "same", False)
 
         assert asked == [], "контроль переисполнен без изменения дерева"
+
+
+class TestReviewFixesAreJudgedNotAssumed:
+    """kind: integration — находка ревью круга 18, продолжение круга 17.
+
+    Переисполнение по одному признаку было гарантированным no-op: реплей
+    судит КОММИТ (`git worktree add --detach <sha>`), а изменились
+    незакоммиченные правки ревьюера. Прогон платил двумя полными реплеями
+    и узнавал ровно то же самое, а флейки могли перевернуть вердикт уже
+    прошедшей задачи.
+
+    Починка — по обещанию соседнего комментария: `gated_sha` объявлен как
+    «HEAD после работы И правок ревью», значит правки коммитятся ДО гейта.
+    Тогда переисполнение судит то, что смержится; если закоммитить не
+    удалось, старый вердикт не проносится.
+    """
+
+    def test_review_fixes_are_committed_before_the_gate(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner.state import ReviewVerdict
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+        seen: dict = {}
+
+        def _review(*a, **k):
+            # Ревьюер правит дерево и НЕ коммитит — ровно те три ветки
+            # `run_code_review`, что возвращают FIXED с неподвижным HEAD.
+            (root / "widget.py").write_text("x = 2  # правка ревью\n", encoding="utf-8")
+            return (ReviewVerdict.FIXED, None, "fixed")
+
+        monkeypatch.setattr(hooks, "run_code_review", _review)
+        monkeypatch.setattr(
+            hooks,
+            "_run_pre_terminal_gates",
+            lambda task, config, candidate_sha=None, facts=None: seen.update(
+                {"sha": candidate_sha, **(facts or {})}
+            ),
+        )
+        monkeypatch.setattr(hooks, "has_gates", lambda *a, **k: True)
+        (root / "widget.py").write_text("x = 1\n", encoding="utf-8")
+        before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        hooks.post_done_hook(_task(), cfg, True)
+
+        assert seen.get("sha") and seen["sha"] != before, (
+            f"гейт судит коммит без правок ревью: {seen.get('sha')} == {before}"
+        )
+        committed = subprocess.run(
+            ["git", "show", f"{seen['sha']}:widget.py"], cwd=root, capture_output=True, text=True
+        ).stdout
+        assert "правка ревью" in committed, committed
+
+    def test_an_uncommittable_change_does_not_carry_the_old_verdict(self, tmp_path, monkeypatch):
+        """Если правку закоммитить не удалось, вердикт описывает ДРУГОЕ
+        дерево — и не должен доезжать до гейта как действительный."""
+        from spec_runner import hooks
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root)
+
+        facts = hooks._negative_control_facts(
+            _task(), cfg, "samesha", "satisfied", "ok", "samesha", True
+        )
+
+        assert facts.get("negative_control") != "satisfied", facts
