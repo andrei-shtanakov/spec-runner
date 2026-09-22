@@ -551,7 +551,5 @@ class TestTheControlNamesItsOwnStage:
         ok, error, *_ = hooks.post_done_hook(_task(), cfg, True, reporter=reporter)
 
         assert ok is False, error
-        assert reporter.current != "commit", (
-            f"отказ контроля приписан стадии {reporter.current!r}"
-        )
+        assert reporter.current != "commit", f"отказ контроля приписан стадии {reporter.current!r}"
         assert reporter.current == "tests", reporter.current

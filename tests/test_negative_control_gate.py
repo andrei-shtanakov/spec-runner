@@ -592,3 +592,28 @@ class TestThePointOneRefusalNamesTheStageItsSiblingsName:
             attempt = state.get_task_state("TASK-008").attempts[-1]
 
         assert attempt.error_stage == "tests", attempt.error_stage
+
+
+class TestAnEmptyWaiverMarkerIsStillAMarker:
+    """kind: contract — находка ревью круга 16.
+
+    Строка `**TDD-waiver:**  ` (маркер, разделитель регэкспа и пробел) даёт
+    после `.strip()` ПУСТУЮ строку, а не None. Охранник был написан через
+    истинность, поэтому пустое значение читалось как «маркера нет», и
+    `validate` снова печатал две строки про одну задачу — вторую неправдой.
+    Спрашивать надо «строка маркера была?».
+    """
+
+    def test_no_false_line_for_an_empty_waiver(self, tmp_path):
+        task = _task(tdd_waiver="", negative_control=_control())
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert not any("carries no **TDD-waiver:**" in e for e in result.errors), result.errors
+
+    def test_a_genuinely_absent_waiver_still_says_so(self, tmp_path):
+        task = _task(tdd_waiver=None, negative_control=_control())
+
+        result = _validate([task], _cfg(tmp_path))
+
+        assert any("carries no **TDD-waiver:**" in e for e in result.errors), result.errors
