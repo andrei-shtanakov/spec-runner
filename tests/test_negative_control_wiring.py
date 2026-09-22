@@ -726,3 +726,43 @@ class TestTheControlJudgesTheWorkNotTheOldHead:
         assert "candidate" in (error or "").lower(), error
         rows = _rows(cfg)
         assert rows and rows[0]["verdict"] != "satisfied", rows
+
+
+class TestAnUnreadableTreeIsNotACleanTree:
+    """kind: integration — приёмочное ревью PR #565, круг 2.
+
+    `uncommitted_work_paths` — ОТЧЁТ и по докстрингу fail-open: при
+    ошибке `git status` возвращает []. Применённый как гвард, он превращал
+    «состояние дерева неизвестно» в «дерево чистое», и контроль реплеил
+    старый HEAD. У функции есть `strict=True` ровно для вызывающего,
+    которому «не смог прочитать» нельзя читать как «чисто».
+    """
+
+    def test_a_failing_git_status_stops_the_control(self, tmp_path, monkeypatch):
+        from spec_runner import git_ops, hooks
+        from spec_runner import negative_control as nc
+
+        root = _repo(tmp_path)
+        cfg = _cfg(root, run_review=False)
+        monkeypatch.setattr(hooks, "commit_task_work", lambda *a, **k: "failed")
+
+        real_git = git_ops._git
+
+        def _broken_status(config, *args, **kwargs):
+            if args[:1] == ("status",):
+                return subprocess.CompletedProcess(args, 128, "", "fatal: index locked")
+            return real_git(config, *args, **kwargs)
+
+        monkeypatch.setattr(git_ops, "_git", _broken_status)
+        replayed: list = []
+        monkeypatch.setattr(
+            nc,
+            "run_negative_control",
+            lambda *a, **k: replayed.append(1) or nc.ControlResult("satisfied", "", None, None),
+        )
+
+        (ok, error, *_), _reviewed = _run(root, cfg, monkeypatch)
+
+        assert ok is False, "нечитаемое дерево пропущено как чистое"
+        assert replayed == [], "контроль реплеил при неизвестном состоянии дерева"
+        assert "git status" in (error or "").lower(), error

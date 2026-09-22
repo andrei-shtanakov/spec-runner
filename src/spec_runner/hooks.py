@@ -617,12 +617,26 @@ def _run_negative_control_before_review(
     # Вердикт с него уехал бы в гейт, а финальный коммит подмёл бы
     # незакоммиченную замену assertion уже вместе с DONE (приёмка PR #565).
     # `tasks.md` исключён: харнессовый флип статуса — не работа.
-    from .git_ops import uncommitted_work_paths
+    from .git_ops import WorktreeStatusError, uncommitted_work_paths
+    from .negative_control import ControlResult
 
-    stranded = uncommitted_work_paths(config, exclude=[config.tasks_file])
+    # `strict=True`: функция по докстрингу — ОТЧЁТ и fail-open, при ошибке
+    # `git status` отвечает []. Вызывающему-ГВАРДУ «не смог прочитать» нельзя
+    # читать как «чисто»: неизвестное состояние дерева превращалось бы в
+    # допуск, и контроль реплеил бы старый HEAD (приёмка PR #565, круг 2).
+    try:
+        stranded = uncommitted_work_paths(config, exclude=[config.tasks_file], strict=True)
+    except WorktreeStatusError as exc:
+        detail = (
+            f"the state of the working tree could not be read ({exc}): whether the "
+            f"candidate {candidate_sha[:12]} carries the task's work is unknown, and "
+            "unknown is not clean"
+        )
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
+        )
+        return "instrument_error", detail, candidate_sha
     if stranded:
-        from .negative_control import ControlResult
-
         detail = (
             "the candidate commit does not carry the task's work: "
             f"{len(stranded)} uncommitted path(s) in the tree ({', '.join(stranded[:3])}"
