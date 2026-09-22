@@ -1,6 +1,7 @@
 ---
 spec_stage: decomposition
-status: approved
+status: draft
+dt_contract_version: 2
 owner_role: tech-lead
 traces_to:
 - design
@@ -97,6 +98,28 @@ BEH-45 лежит на последней задаче графа (DT-14) — т
 scenarios: [BEH-28]
 depends_on: []
 parallel_group: core
+delivers:
+  - id: DEL-01
+    kind: module
+    statement: "Новый модуль `src/spec_runner/artifact_store.py`: протокол `ArtifactStore` (`put` с семантикой `if_none_match` всегда → `AlreadyExists` на существующем ключе, `get`, `list`, `delete`), декларация `StoreCapabilities(tls, encryption_at_rest, immutable_put, lifecycle)` и функция ключей §1.3 (`runs/<run_id>/…`, индекс `workstreams/<workstream_key>/runs/…` парой `.json`/`.closed`, каждый ключ пишется один раз)"
+    sources: [requirements#FR-06, requirements#NFR-05, acceptance#AC-23]
+  - id: DEL-02
+    kind: module
+    statement: "Адаптер `LocalVolumeStore(root)`: временный файл → `fsync` → `link`/`rename` с `O_EXCL`-семантикой, `tls` неприменим, `encryption_at_rest` по декларации оператора, `lifecycle: none`; `open_store_readonly` — единственный вход без `Publisher`"
+    sources: [requirements#FR-06, acceptance#AC-33]
+  - id: DEL-03
+    kind: config
+    statement: "Блок `durability:` (`store: {adapter, options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`, `retention_days`) в полях `ExecutorConfig` и `KNOWN_EXECUTOR_KEYS`; путеподобные `store.options` разрешаются в абсолютные относительно `project_root` на загрузке, не лениво и не от CWD"
+    sources: [acceptance#AC-26, acceptance#AC-45]
+  - id: DEL-04
+    kind: capability
+    statement: "На загрузке `ConfigError` с именем адаптера и недостающего свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, либо `retention_days` вне 7–365; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start"
+    sources: [acceptance#AC-26, acceptance#AC-38]
+    covered_by: BEH-28
+  - id: DEL-05
+    kind: config
+    statement: "Пути `.executor-checkpoints`/`.executor-spool.jsonl` выводятся из config с `spec_prefix`/`change_id` как у `state_file` и входят в `git_ops.runtime_state_paths`, чтобы следующие задачи брали путь из config, а не из литерала"
+    sources: [acceptance#AC-39, requirements#FR-03]
 
 Предмет — design §1.1–1.3 и половина §1 карты модулей: новый
 `src/spec_runner/artifact_store.py` с протоколом `ArtifactStore` (`put` с
@@ -144,6 +167,52 @@ config-ом не доходит до run-start (двойник store пуст); 
 scenarios: [BEH-03, BEH-05, BEH-06, BEH-07, BEH-24, BEH-26, BEH-38, BEH-44]
 depends_on: [DT-01]
 parallel_group: core
+delivers:
+  - id: DEL-06
+    kind: module
+    statement: "Новый `run_context.py`: `RunContext` (full UUIDv4 `run_id`, `pipeline_id` из structlog contextvars, `subcommand`, `started_at`, `Publisher`, `policy`), одна точка `start()` в диспетчере `cli.main()` по множеству `PAYING_SUBCOMMANDS` (включая `retry`, `watch`, `run --force`, не берущие executor lock) и `close(exit_code)` вокруг dispatch; meta только `last_run_id`/`last_pipeline_id`, маркер `continuation_index` не пишется"
+    sources: [requirements#FR-01, acceptance#AC-01, acceptance#AC-03]
+  - id: DEL-07
+    kind: module
+    statement: "Новый `closure.py`: `CLOSURE_KINDS` из пяти значений (`completed`/`refused`/`failed`/`interrupted`/`crashed`) и `schemas/run-closure.schema.json` с пинованным словарём"
+    sources: [requirements#FR-07, acceptance#AC-27]
+  - id: DEL-08
+    kind: module
+    statement: "Новый `evidence.py`: `Publisher` — единственный владелец `ArtifactStore` и единственный импортёр `_open_store`; `publish(record)` через redactor по каждому текстовому полю с SHA-256; записи `RunStart`/`CallStart`/`CallResult`/`Closure`; `bound_evidence(text, limit)` с head и tail, marker, `full_sha256`, `full_size`, пределы 1 MiB / 4 MiB"
+    sources: [requirements#FR-06, requirements#NFR-06, acceptance#AC-24]
+    covered_by: BEH-26
+  - id: DEL-09
+    kind: module
+    statement: "Новый `redaction.py`: denylist из окружения плюс паттерны, placeholder `[REDACTED:kind:hash8]`, общий словарь имён с `obs._DEFAULT_REDACT_KEYS`"
+    sources: [requirements#NFR-05, acceptance#AC-25]
+  - id: DEL-10
+    kind: module
+    statement: "Новый `paid_call.py`: `PaidCall`, `CallOutcome`, `execute(config, state, call)` в порядке §2.2 шаги 2–8; `_spawn` — единственная функция репо, передающая argv провайдера в `subprocess.run`; `call_id` чеканит сайт до `log_prompt` и передаёт полем, `execute` его проверяет, а не создаёт"
+    sources: [requirements#FR-02, acceptance#AC-04, design#Q-06]
+    covered_by: BEH-05
+  - id: DEL-11
+    kind: capability
+    statement: "Все сайты платного вызова переведены на `execute`: `tdd._run_agent`, `execution._run_agent_process`, `review._run_reviewer`, `review_pr.verify_comment`/`run_fix_agent`, все три сайта `cli_plan.py` (provenance `plan:<stage>`/`plan:interactive`) и `doctor`; `runner.run_claude_async` удалён вместе с экспортом, и `asyncio.create_subprocess_exec` не вызывается ни из одного модуля `src/spec_runner/`"
+    sources: [acceptance#AC-04, acceptance#AC-40]
+    covered_by: BEH-44
+  - id: DEL-12
+    kind: capability
+    statement: "Autouse-guard `_no_real_agent_calls` переключён на одно имя `paid_call._spawn`, патчи швов `tdd._run_agent`/`execution._run_agent_process` сняты тем же коммитом; отказ поднимается от `BaseException` и называет сайт по `provenance`; `RealAgentCallRefused` и его ветка удалены"
+    sources: [design#Q-06, acceptance#AC-40]
+  - id: DEL-13
+    kind: capability
+    statement: "Область пробы `doctor`: поле `probe_provenance` на scratch-конфиге, пин `execution_mode = standard`, обнуление `review_parallel`/`review_roles`/`audit_log_path`; seam отображает provenance по закрытой карте `<probe>:execute`/`<probe>:review` и публикует записи пробы с `task_id = null`; provenance вне карты при поднятом поле — `Refusal(kind=instrument)` до call-start"
+    sources: [acceptance#AC-45, requirements#FR-02]
+  - id: DEL-14
+    kind: config
+    statement: "Аддитивные столбцы в `_migrate`: `agent_calls`/`pr_agent_calls` — `run_id`, `call_id`, `status` (`open`/`closed`/`not_started`), `started_at`; `attempts` — `run_id`; новая таблица `plan_agent_calls` без `task_id`; `costs` показывает строку `planning`, `repo_total_cost` включает её; строка `open` пишется до store-ack и закрывается после call-result"
+    sources: [acceptance#AC-02, acceptance#AC-22, requirements#FR-01]
+    covered_by: BEH-03
+  - id: DEL-15
+    kind: config
+    statement: "`--json-result` и `status --json` получают аддитивные `run_id`/`pipeline_id`; `status` показывает `run_id` последнего run-start namespace-а; `docs/state-schema.md`, `schemas/executor-state.schema.json`, `json-result`, `status` и golden-фикстуры `tests/fixtures/maestro-interop/` меняются только добавлением ключей"
+    sources: [acceptance#AC-02, acceptance#AC-35]
+    covered_by: BEH-38
 
 Предмет — design §1.4, §2 и §6.1–6.3 в их первой, «рабочей» форме, и
 столбцы §2.3. Три новых модуля: `run_context.py` (`RunContext` — full UUIDv4
@@ -313,6 +382,36 @@ seam-а, порядок
 scenarios: [BEH-12]
 depends_on: [DT-02]
 parallel_group: core
+delivers:
+  - id: DEL-16
+    kind: module
+    statement: "Новый `checkpoint.py`: `after_mutation(config, *, table, task_id=None, conn=None)` — единственная точка публикации; snapshot через `sqlite3.Connection.backup()` с живого соединения в `<state_dir>/.executor-checkpoints/<seq:06d>-<id>/state.db`; `sequence` — монотонный счётчик в `executor_meta`; ротация локальных копий (последняя + предыдущая)"
+    sources: [requirements#FR-03, acceptance#AC-10]
+    covered_by: BEH-12
+  - id: DEL-17
+    kind: module
+    statement: "`PolicyIdentity` (`contract_version`, `config_hash` над `POLICY_KEYS`, `namespace`, `namespace_source`, `spec_prefix`, `change_id`) — одна dataclass для run-start, call-start и manifest-а; `facts` рядом, не в identity"
+    sources: [requirements#FR-03, acceptance#AC-12]
+  - id: DEL-18
+    kind: document
+    statement: "`schemas/checkpoint-manifest.schema.json` — полный состав §3.3 (identity, `sequence`, `supersedes`, `join_keys`, `digests`, `degraded`, `wip`, `spool`, `manifest_sha256`), введён отдельным коммитом"
+    sources: [acceptance#AC-12]
+  - id: DEL-19
+    kind: capability
+    statement: "`Publisher` получает очередь по `sequence`, `drain(timeout)` и `last_acknowledged()`; manifest кладётся последним, и ack manifest-а есть ack checkpoint-а"
+    sources: [requirements#FR-03, design#Q-05]
+  - id: DEL-20
+    kind: capability
+    statement: "Два сайта правила Q-05: перед call-start — шаг 1 `execute` (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind=instrument)`, вызова нет) и гейт перед closure (недоставленный checkpoint → closure `failed`, exit 2, строка в stderr «решение записано локально, но не доставлено»); синхронного ожидания внутри `after_mutation` нет"
+    sources: [design#Q-05, acceptance#AC-46, acceptance#AC-29]
+  - id: DEL-21
+    kind: capability
+    statement: "`after_mutation` выходит без публикации при поднятом `config.probe_provenance`: mutation эфемерной пробы `doctor` не continuation-relevant"
+    sources: [acceptance#AC-45]
+  - id: DEL-22
+    kind: capability
+    statement: "В этой задаче seam подключён к одному сайту записи — `record_attempt`; остальные сайты §3.1 подключает DT-05"
+    sources: [acceptance#AC-11]
 
 Предмет — design §3.1–3.2, §3.4–3.5 в объёме одного сайта записи. Новый
 `checkpoint.py`: `after_mutation(config, *, table, task_id=None, conn=None)` —
@@ -373,6 +472,25 @@ wal_autocheckpoint=0`, seam вызван через `record_attempt`, snapshot �
 scenarios: [BEH-36, BEH-37]
 depends_on: [DT-03]
 parallel_group: core
+delivers:
+  - id: DEL-23
+    kind: module
+    statement: "Новый `evidence_cmd.py`: subparser `evidence <run_id> [--json]`, `collect(store, run_id) → EvidenceView` — один сбор для человека и `--json` по образцу `tdd_status.py`; читает только store через `open_store_readonly`, без `project_root`, DB и Git"
+    sources: [requirements#FR-09, acceptance#AC-33]
+    covered_by: BEH-36
+  - id: DEL-24
+    kind: capability
+    statement: "Read-surface показывает статус `closed:<kind>` либо `crash/unknown` с пометкой «не доказуемо», последний acknowledged checkpoint, open calls, attempts с исходом и стоимостью (`unknown` при `null`), суммарную стоимость, `deletions[]`, стоимость хранения при поддержке адаптером; store недоступен → exit 2; legacy → «нет evidence-контракта» с перечнем недостающего; следующий шаг — рекомендация с пометкой «не доказуемо», ответ ограничен одним `run_id`"
+    sources: [acceptance#AC-34, requirements#FR-09]
+    covered_by: BEH-37
+  - id: DEL-25
+    kind: capability
+    statement: "При terminal `record_attempt` (`success`/`failed`/`blocked`) `evidence.export_attempt(state, task_id, n)` собирает строки этой задачи/attempt-а из таблиц §6.4 в JSONL и публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а; при поднятом `probe_provenance` не публикует ничего"
+    sources: [requirements#FR-06, acceptance#AC-21, acceptance#AC-45]
+  - id: DEL-26
+    kind: document
+    statement: "`schemas/evidence-view.schema.json` и `schemas/evidence-record.schema.json`"
+    sources: [acceptance#AC-33, acceptance#AC-21]
 
 Предмет — design §7.1 (в части `evidence`), §7.4 и §6.4. Новый
 `evidence_cmd.py`: subparser `evidence <run_id> [--json]` (подкоманды
@@ -422,6 +540,35 @@ seam-е для crash/unknown и open call (двойник, а не `sleep`-го�
 scenarios: [BEH-13, BEH-14, BEH-47, BEH-48]
 depends_on: [DT-04]
 parallel_group: core
+delivers:
+  - id: DEL-27
+    kind: capability
+    statement: "`after_mutation` вызывают все `record_*` перечня §3.1 в `state.py` (шаг close у `record_agent_call`), `claims.release_claims`, `lifecycle.advance`, `ReviewPrState` при завершении раунда (своё соединение через `conn`) и `bookkeeping.commit_status_flip`; `mark_running`, `set_meta` и `phase_results` seam не вызывают"
+    sources: [requirements#FR-03, acceptance#AC-11]
+    covered_by: BEH-13
+  - id: DEL-28
+    kind: capability
+    statement: "Manifest дополнен до §3.3: `repository` (нормализованный remote `host/owner/repo` без учётных данных и `.git`, все root commit-ы), `workstream` (`namespace`, `namespace_source: declared|computed`), `head`, `refs[]` (имя, SHA, `published`, `published_ref`), `join_keys`, `excluded[]`, `digests` для каждого файла включая `wip.tar`; ни абсолютных путей, ни PID"
+    sources: [acceptance#AC-12, requirements#FR-04]
+    covered_by: BEH-14
+  - id: DEL-29
+    kind: module
+    statement: "Новый `wip.py`: `collect(config) → WipArtifact | None` из `after_mutation` — `bundle.git` для каждого in-flight ref от published-base, stash-коммиты под `refs/spec-runner/wip/stash/<n>`, `dirty.tar` по `git_ops.uncommitted_work_paths`, `index.json` с per-file SHA-256; переупаковка только при изменении входов; пустой WIP — `wip: none` без файла"
+    sources: [requirements#FR-04, acceptance#AC-14, acceptance#AC-16]
+  - id: DEL-30
+    kind: module
+    statement: "`git_ops.repository_identity`: remote URL, нормализованный до `host/owner/repo`, плюс все root commit-ы по `git rev-list --max-parents=0 HEAD`"
+    sources: [acceptance#AC-18, requirements#FR-05]
+  - id: DEL-31
+    kind: capability
+    statement: "Область пробы `doctor` наблюдается целиком: у двойника store run-start, две пары call-start/call-result с provenance `doctor:execute`/`doctor:review`, одна closure, пустые префиксы `checkpoints/` и `attempts/`, ни одной записи с `task_id`; следующий `run --all` доходит до платного вызова собственной `TASK-001` проекта, в том числе после `reset` и в свежем клоне; ключи на месте при относительном `root`"
+    sources: [acceptance#AC-45]
+    covered_by: BEH-47
+  - id: DEL-32
+    kind: capability
+    statement: "Гейт перед closure на настоящих подкомандах: у `budget authorize`, `tdd release` и многошагового `tdd abandon` ack mutation-checkpoint-а стоит раньше выхода с кодом 0; при отклонённом ack — exit 2, stderr с недоставленным `sequence`/`checkpoint_id`, mutation в DB целиком; на `run --task` число и место обращений к store те же, что до бандла"
+    sources: [acceptance#AC-46]
+    covered_by: BEH-48
 
 Предмет — design §3.1 в полном перечне сайтов, §3.3 целиком и §4.1–4.2.
 `after_mutation` вызывают все `record_*` в `state.py` (`record_red_checkpoint`,
@@ -503,6 +650,44 @@ DT-02) и wall-clock цену гейта перед closure внутри CI-те
 scenarios: [BEH-16, BEH-17, BEH-18, BEH-19, BEH-20, BEH-21, BEH-41, BEH-43]
 depends_on: [DT-05]
 parallel_group: core
+delivers:
+  - id: DEL-33
+    kind: module
+    statement: "Новый `restore_cmd.py`: subparser `restore <run_id> --into <dir> [--experimental] [--json]`; непустой `--into` — отказ до всего; без `--experimental` — отказ с текстом CON-01, статус — константа `RESTORE_EXPERIMENTAL = True`; `schemas/restore-result.schema.json` (`status`, `next_step`|`reason`, `checks[]`, `wip`, `namespace`; exit 0/1/2)"
+    sources: [requirements#FR-05, acceptance#AC-19]
+    covered_by: BEH-21
+  - id: DEL-34
+    kind: capability
+    statement: "`restore.plan(run_id) → RestorePlan | RestoreRefusal` до записи в каталог, в объявленном порядке: `contract_version` → digests последнего acknowledged checkpoint-а и `manifest_sha256` → repository identity → policy identity → namespace → open calls всего workstream-а → spool; первое несовпадение — отказ (instrument для (1), (2), (7) — exit 2, остальные — `needs-human`, exit 1); legacy — fail-closed с перечнем недостающего"
+    sources: [acceptance#AC-18, requirements#NFR-04]
+    covered_by: BEH-20
+  - id: DEL-35
+    kind: capability
+    statement: "`restore.apply(plan)`: клон, `wip.apply` (`git bundle verify` → `fetch` → `switch` → распаковка `dirty.tar` с проверкой SHA-256 → `git stash store`), `state.db` из snapshot-а с правкой одного ключа meta `continuation_index = restored` через `set_meta`, replay spool; lock/stop/ready/worktrees не создаются; `tdd_namespace` дописывается shape-preserving merge-ом с `.bak`; недостижимый published ref — `needs-human` с именем и SHA до распаковки"
+    sources: [requirements#FR-05, acceptance#AC-14, acceptance#AC-15, acceptance#AC-17]
+    covered_by: BEH-16
+  - id: DEL-36
+    kind: capability
+    statement: "Следующий безопасный шаг выводится из DB: open call → `needs-human`; confirmed red без green → `run --task <id>`; после green с не-DONE lifecycle → `tdd resume <id>`; иначе `run --all`"
+    sources: [requirements#FR-05, acceptance#AC-17]
+  - id: DEL-37
+    kind: module
+    statement: "Новый `spool.py`, читающая половина: `Spool(path)`, `read` (единственные читатели — `replay` и checkpoint), проверка sha256 строки с отказом, называющим `seq` и оба digest-а, `replay(state)` в порядке `seq` с таблицей `spool_replays (run_id, seq)` для идемпотентности"
+    sources: [requirements#FR-08, acceptance#AC-31]
+  - id: DEL-38
+    kind: capability
+    statement: "Проверка (6) namespace-wide: половины `BLOCKING`/`NON_BLOCKING` шага 5 объявлены рядом с `PAYING_SUBCOMMANDS` с тестом полноты `set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING`; более поздний блокирующий прогон с acknowledged checkpoint-ом — `needs-human` с исполнимым выходом (последний блокирующий прогон без блокирующих после себя); холостой прогон не мешает; `--json` несёт `workstream` (`later_runs[]`, `open_calls[]`)"
+    sources: [design#Q-05, acceptance#AC-18]
+  - id: DEL-39
+    kind: module
+    statement: "`scripts/bench_durability.py` (manual: ack call-start p95/p99 и время доступности checkpoint-а вне машины, сравнение с NFR-02 в отчёте) и CI-тест `test_validation_under_60s` на reference-наборе ≈ 10 MiB"
+    sources: [requirements#NFR-02, requirements#NFR-03, acceptance#AC-41, acceptance#AC-42]
+    covered_by: BEH-41
+  - id: DEL-40
+    kind: capability
+    statement: "Autouse-фикстура в `tests/conftest.py`: после каждого E2E под git automation `git status --porcelain` продуктового репо не содержит путей под `.executor-*` и `tracked_state_paths` пуст"
+    sources: [acceptance#AC-39]
+    covered_by: BEH-43
 
 Предмет — design §7.1 (в части `restore`), §7.2–7.3, §4.3 и **читающая
 половина** §5. Новый `restore_cmd.py`: subparser `restore <run_id> --into
@@ -635,6 +820,25 @@ CI-теста, что 1 GiB drill выполнен (ручной, отчёт в 
 scenarios: [BEH-01, BEH-02]
 depends_on: [DT-03]
 parallel_group: identity
+delivers:
+  - id: DEL-41
+    kind: capability
+    statement: "`AuditLogger` принимает `run_id` обязательным параметром из контекста в `build_audit_logger`, собственный `uuid.uuid4()` удалён; `run_id` в structlog contextvars рядом с `pipeline_id`, так что OTel-записи несут его без правки формата"
+    sources: [requirements#FR-01, acceptance#AC-01]
+    covered_by: BEH-01
+  - id: DEL-42
+    kind: capability
+    statement: "`prompts_log.log_prompt` пишет `run_id`/`call_id` в заголовочную строку `=== <SLUG> PROMPT ===`; тело между заголовком и терминальной секцией остаётся prompt-ом как отправлен, байт в байт"
+    sources: [requirements#FR-01, acceptance#AC-01]
+  - id: DEL-43
+    kind: capability
+    statement: "`watch` — один `start()` на invocation, одна closure, строки обеих задач под одним `run_id`"
+    sources: [acceptance#AC-03, acceptance#AC-27]
+  - id: DEL-44
+    kind: capability
+    statement: "Статические тесты: в `cli.py` нет `uuid4().hex[:8]` как источника `run_id`, в `audit_log.py` нет собственного `uuid4()`"
+    sources: [acceptance#AC-01]
+    covered_by: BEH-02
 
 Предмет — остаток design §6.1 за пределами DT-02: `AuditLogger` принимает
 `run_id` обязательным параметром из контекста в `build_audit_logger`
@@ -667,6 +871,26 @@ prompt-артефактов, manifest и closure после настоящего
 scenarios: [BEH-15, BEH-33, BEH-34, BEH-35]
 depends_on: [DT-06]
 parallel_group: spool
+delivers:
+  - id: DEL-45
+    kind: capability
+    statement: "`state._enter_degraded_mode`: каждый `record_*`, поймавший `OperationalError`, вызывает `Spool.append(table, payload)` (append-only, `fsync` на строку, строка `{seq, run_id, namespace, task_id, attempt, table, payload, sha256}`) и возвращается как записанный только при успехе; `_save()` тем же путём; отказ spool-а → `Refusal(kind=instrument)`, следующий платный вызов не начинается, exit 2, closure `failed` с причиной, называющей обе неудачи"
+    sources: [requirements#FR-08, acceptance#AC-30, acceptance#AC-32]
+    covered_by: BEH-33
+  - id: DEL-46
+    kind: capability
+    statement: "`spool.replay(state)` вызывается на старте `run`/`retry`/`watch` после run-start и гардов старта до выбора задачи, из `tdd`/`budget`-команд и из `restore`; повреждённая строка — отказ с `seq` и обоими digest-ами, 0 `Popen`, closure `failed`; после replay файл ротируется в `.executor-spool.<ts>.jsonl.done` и ссылка `spool_replayed` уходит в следующий manifest"
+    sources: [acceptance#AC-31, acceptance#AC-30]
+    covered_by: BEH-34
+  - id: DEL-47
+    kind: capability
+    statement: "Checkpoint в degraded mode: DB snapshot из последнего успешного состояния файла, `spool.jsonl` — копия байтов активного spool-а, manifest `degraded: true`, `sequence` — из spool"
+    sources: [acceptance#AC-13, requirements#FR-08]
+    covered_by: BEH-15
+  - id: DEL-48
+    kind: capability
+    statement: "Статический тест единственного читателя: `Spool.read` вызывается только из `replay` и checkpoint-а; `get_next_tasks`, claims gate и budget guard spool не читают"
+    sources: [requirements#FR-08]
 
 Предмет — **пишущая половина** design §5 и её след в §3.2–3.3.
 `state._enter_degraded_mode` (`state.py:2352`) перестаёт быть «уведомить и жить
@@ -710,6 +934,30 @@ BEH-35 — двойник `Popen` не вызван после отказа, TAS
 scenarios: [BEH-09, BEH-10, BEH-11]
 depends_on: [DT-06]
 parallel_group: door
+delivers:
+  - id: DEL-49
+    kind: capability
+    statement: "`paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12 с двумя ветками по meta `continuation_index`: при `local` — targeted `get` двух ключей на каждую `open`-строку (call-result закрывает; call-start без результата — open call; ни того ни другого — `not_started`); при отсутствии маркера или `restored` — один `list` индекса workstream-а, восстановление `open`-строк с `task_id` из call-start, маркер `local` последним шагом; недоступный store — `Refusal(kind=instrument)`, exit 2, маркер не ставится"
+    sources: [design#Q-12, acceptance#AC-08]
+    covered_by: BEH-09
+  - id: DEL-50
+    kind: capability
+    statement: "Общий рубеж старта `cli._run_start_gate(args, config, state)` вызывается из трёх handler-ов сразу после гардов старта: `_run_tasks_inner`, `cmd_retry` и `cmd_watch` (один раз на invocation)"
+    sources: [design#Q-12, acceptance#AC-08]
+  - id: DEL-51
+    kind: capability
+    statement: "`run --all` пропускает задачу с open call с причиной, называющей `call_id`, provenance и «open call», и выполняет остальные ready; `run --task` отказывает той же причиной, exit 1; ни один путь не создаёт второй call-start для того же attempt"
+    sources: [acceptance#AC-08]
+  - id: DEL-52
+    kind: module
+    statement: "Дверь `spec-runner evidence close-call <run_id> --call <call_id> --reason …` по образцу `remedy.cmd_tdd`: обязательный `--reason`, записанный actor, `SPEC_RUNNER_AGENT` guardrail, отказ под PID-checked lock, идемпотентность по `result.json` в store до записи; пишет `CallResult(outcome=resolved_unknown, supersedes=<start key>)` и закрывает строку ledger-а семейства вызова; входит в `PAYING_SUBCOMMANDS` и той же строкой в `NON_BLOCKING`"
+    sources: [acceptance#AC-08, acceptance#AC-03, requirements#FR-09]
+    covered_by: BEH-11
+  - id: DEL-53
+    kind: capability
+    statement: "Контракт `call_id` живьём: второй call-result и второй call-start под тем же id отвергнуты с именем `call_id`, первая запись неизменна, отказ не улучшает исход задачи"
+    sources: [acceptance#AC-09]
+    covered_by: BEH-10
 
 Предмет — design §2.4 (абзац про старт `run`) и §2.5.
 `paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12.
@@ -802,6 +1050,28 @@ DB и в клоне на другом пути — те же три исхода
 scenarios: [BEH-04, BEH-29, BEH-30, BEH-31, BEH-32, BEH-46]
 depends_on: [DT-06]
 parallel_group: closure
+delivers:
+  - id: DEL-54
+    kind: module
+    statement: "`closure.derive(outcome)` — единственное место правила вывода kind: исключение → `crashed`; сигнал (флаг `executor._shutdown_requested`) → `interrupted`; код ≠ 0 при отказном `error_kind` последнего неуспешного attempt-а из `ERROR_KINDS` → `refused`; прочий код ≠ 0 → `failed`; код 0 с невыполненной работой или open call → `failed`; код 0 без неё → `completed`; второй словарь отказных kind-ов не заводится"
+    sources: [requirements#FR-07, acceptance#AC-27]
+  - id: DEL-55
+    kind: capability
+    statement: "Kind выводит диспетчер `cli.main()`; ни один сайт выхода ни одной подкоманды не правится; `CLOSURE_KINDS` не расширяется, `RUN_STOP_REASONS` остаётся семизначным, `set_meta(last_run_stop_reason)` и его дефолт не трогаются"
+    sources: [acceptance#AC-27, requirements#FR-07]
+  - id: DEL-56
+    kind: capability
+    statement: "Отказные режимы записи closure: повторная closure → `AlreadyExists`, первая неизменна; отказ записи closure → stderr с причиной, exit code не улучшается; closure по времени позже последнего checkpoint-ack"
+    sources: [acceptance#AC-29]
+    covered_by: BEH-31
+  - id: DEL-57
+    kind: capability
+    statement: "Closure несёт `run_id`, `pipeline_id`, подкоманду, kind, свободную строку `reason`, exit code, число open calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/`attempt_ids`"
+    sources: [requirements#FR-07, acceptance#AC-27]
+  - id: DEL-58
+    kind: capability
+    statement: "`PAYING_SUBCOMMANDS` — одиннадцать позиций с ровно одним run-start и одной closure на invocation, включая три пути без executor lock (`retry`, `watch`, `run --all --force`); read-only команды run-start/checkpoint/closure не пишут; после `kill -9` closure нет, `evidence` — `crash/unknown`, `status` показывает `run_id` незавершённого прогона"
+    sources: [acceptance#AC-03, acceptance#AC-28, acceptance#AC-35]
 
 Предмет — правило вывода kind closure из design § 6.3 и остаток § 6.2 за
 пределами рабочей формы DT-02. Drain перед closure и его отказный режим
@@ -889,6 +1159,20 @@ drain publisher-а сверх «closure позже последнего ack», �
 scenarios: [BEH-40]
 depends_on: [DT-06]
 parallel_group: integrity
+delivers:
+  - id: DEL-59
+    kind: capability
+    statement: "Проверка (2) `restore` параметризована по каждому файлу bundle-а (DB snapshot, manifest, WIP artifact, spool, каждый call record, экспорт attempt-а, closure) × {один байт изменён; обязательный файл удалён}; изменённый manifest отвергается по `manifest_sha256`, даже если перечисленные digests сходятся"
+    sources: [requirements#NFR-04, acceptance#AC-37]
+    covered_by: BEH-40
+  - id: DEL-60
+    kind: capability
+    statement: "`run` (и `retry`/`watch`) на старте — после run-start и гардов старта, до `Popen` и до `claims.check_claims` — проверяет целостность bundle-а, от которого namespace продолжается, и отказывает `Refusal(kind=instrument)`, exit 2, closure `failed`"
+    sources: [acceptance#AC-37, requirements#NFR-04]
+  - id: DEL-61
+    kind: capability
+    statement: "`evidence` при повреждении — exit 2 с `reason`, называющим файл и оба digest-а; `restore --json` и `evidence --json` несут то же в `reason`; авто-лечения нет, ни один вариант не заканчивается успешным restore с предупреждением"
+    sources: [acceptance#AC-37, acceptance#AC-34]
 
 Предмет — NFR-04 на трёх читателях bundle-а. `restore` — проверка (2) DT-06
 расширяется до параметризации BEH-40: каждый файл bundle-а (DB snapshot,
@@ -919,6 +1203,21 @@ Red-рамки по design: параметризация по каждому ф�
 scenarios: [BEH-42]
 depends_on: [DT-06]
 parallel_group: retention
+delivers:
+  - id: DEL-62
+    kind: module
+    statement: "Новый `retention.py`: каждый `put` несёт метаданные (`run_id`, `kind`, `closure_at`, `retention_until`); `spec-runner evidence purge <run_id> --reason …` (обязательный `--reason`, actor, `SPEC_RUNNER_AGENT` guardrail) считает истёкшее и удаляемые промежуточные checkpoint-ы (только с acknowledged преемником), вызывает `delete` адаптера и только после успеха пишет `deletions/<ts>.json` без payload; отказ store оставляет всё как есть и audit-записи не пишет; `AuditLogger` получает копию"
+    sources: [requirements#NFR-07, acceptance#AC-38]
+    covered_by: BEH-42
+  - id: DEL-63
+    kind: capability
+    statement: "`evidence purge` входит в `PAYING_SUBCOMMANDS` и той же строкой в `NON_BLOCKING` шага 5; kind её closure выводит диспетчер по коду выхода (0 `completed`, 1 и 2 `failed`); open call она не закрывает по построению"
+    sources: [acceptance#AC-03, requirements#FR-01]
+  - id: DEL-64
+    kind: capability
+    statement: "`retention_days` вне 7–365 — `ConfigError` при загрузке и ошибка `validate`, наблюдается вместе с удалением"
+    sources: [acceptance#AC-38]
+    restates: DEL-04
 
 Предмет — design Q-11 и `retention.py`. Каждый `put` несёт метаданные
 (`run_id`, `kind`, `closure_at`, `retention_until`), которые cloud-адаптер
@@ -958,6 +1257,29 @@ test_retention_policy.py` (новый). Red-рамки: три checkpoint-а (se
 scenarios: [BEH-08, BEH-22, BEH-23, BEH-25, BEH-27]
 depends_on: [DT-08, DT-09]
 parallel_group: matrix
+delivers:
+  - id: DEL-65
+    kind: capability
+    statement: "Матрица outcome {success, `TASK_FAILED`, blocked, timeout, infrastructure error} × site {GREEN, review, `review:<role>`, `plan --full`, `plan --gated`, интерактивный `plan`, `review-pr fix`, `doctor`}: каждая клетка оставляет call record, адресуемый `run_id/call_id`, с provenance, outcome, стоимостью (число или `null`, никогда `0.0` за неизвестную), bounded/redacted prompt и result с SHA-256 и размером; число records равно числу `spawn` двойника; найденные дыры seam-а закрываются здесь"
+    sources: [requirements#FR-06, acceptance#AC-20]
+  - id: DEL-66
+    kind: capability
+    statement: "Четыре режима fake CLI (timeout, пустой ответ, `is_error` при exit 0, crash провайдера) дают call-result с outcome по `classify_agent_answer`, а не open call: `evidence` показывает 0 open calls, следующий `run` не ставит задачу в `needs-human`"
+    sources: [acceptance#AC-07]
+    covered_by: BEH-08
+  - id: DEL-67
+    kind: capability
+    statement: "Экспорт `pr_*` при завершении раунда `review-pr`; «только свои строки» для трёх задач с исходами `done`/`failed`/`blocked` по `evidence-record.schema.json`; корроборирующие срезы `.task-history.log` от отметки `RunContext.start()` и audit-trail по своему `run_id` через redactor и `bound_evidence`, оба необязательные"
+    sources: [acceptance#AC-21, requirements#FR-06]
+  - id: DEL-68
+    kind: capability
+    statement: "Immutability на живом адаптере: повторный `put` с другим содержимым отвергнут, чтение возвращает исходник байт в байт, исправление — новая запись с `supersedes`, `evidence <run_id>` показывает обе, помечая первую superseded, не удаляя"
+    sources: [acceptance#AC-23]
+    covered_by: BEH-25
+  - id: DEL-69
+    kind: document
+    statement: "Корпус `tests/fixtures/secrets-corpus/` из 100 синтетических секретов известной формы; паттерны `redaction.py` дополнены до полного покрытия корпуса; статический пояс по образцу `PaidBinaryReached` на `ArtifactStore.put` вне `Publisher.publish`; ни одно из 100 значений — ни в одном файле у двойника store при `full_sha256`/`full_size` от исходника"
+    sources: [requirements#NFR-05, acceptance#AC-25]
 
 Предмет — FR-06 как измерение по всей поверхности, которую DT-02…DT-09
 построили, и три вещи, которых там ещё нет. (1) Матрица outcome {success,
@@ -1013,6 +1335,21 @@ store на каждую клетку с `null` там, где fake CLI стои�
 scenarios: [BEH-39, BEH-45]
 depends_on: [DT-07, DT-10, DT-11, DT-12, DT-13]
 parallel_group: gate
+delivers:
+  - id: DEL-70
+    kind: capability
+    statement: "Точки инъекции в seam-ах (`paid_call.execute`, `checkpoint.after_mutation`, `Spool.append`, `RunContext.start`) и slow-тест `tests/test_write_ahead_fault_injection.py`: параметризован по границе, 1000 повторений на границу, детерминирован по seed; суммарно 0 mutation, подтверждённых и отсутствующих после рестарта, 0 `spawn` без acknowledged call-start, 0 автоматических повторов open call; найденные дыры закрываются в границах seam-ов"
+    sources: [requirements#NFR-01, acceptance#AC-36]
+    covered_by: BEH-39
+  - id: DEL-71
+    kind: document
+    statement: "Отдельными коммитами после green: раздел «Runtime-state inventory and delivery policy (#478)» в `docs/architecture.md` с контрактом checkpoint/evidence/closure и operational minimum для legacy, снятие `runner.run_claude_async` с диаграмм и та же правка в `CLAUDE.md`, сводка `docs/state-schema.md`, проверка полноты пяти схем в `schemas/`, CHANGELOG под Unreleased со статусом `experimental` для `restore` (CON-01) и ссылкой на #480, README с блоком `durability:` и командами `restore`/`evidence`"
+    sources: [acceptance#AC-43]
+    covered_by: BEH-45
+  - id: DEL-72
+    kind: document
+    statement: "Человеческие действия при приёмке PR: контракт `run_id`/`pipeline_id` объявлен соседям (devtools, Maestro) issue с `slug:` + `from:` либо записью в vault без правки их файлов; #480 закрыт ссылкой на PR с restore-drill (M-01) и матрицей open call (M-02); пункт `runtime-state-artifact-export` в `TODO.md` закрыт; 1 GiB drill выполнен и время записано"
+    sources: [acceptance#AC-43, acceptance#AC-44]
 
 Предмет — сквозная гарантия NFR-01 и сводный manual-критерий. Seam-ы
 (`paid_call.execute`, `checkpoint.after_mutation`, `Spool.append`,
