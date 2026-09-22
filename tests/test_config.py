@@ -1037,3 +1037,25 @@ class TestBEH28TlsIsDeclaredNotAsserted:
             build_config(load_config_from_yaml(cfg), Namespace(), detect_subdir=False)
 
         assert "transport" in str(exc.value).lower()
+
+    @pytest.mark.parametrize(
+        "bogus", ["", "maybe", "N/A ", "tru"], ids=["empty", "word", "spaced", "typo"]
+    )
+    def test_a_direct_config_with_an_unreadable_tls_is_refused(self, tmp_path, bogus):
+        """Приёмка PR #578, круг 2: тип `bool | str` открыл дыру — при прямом
+        построении `ExecutorConfig` (мимо загрузчика, который нормализует)
+        любая строка, кроме `n/a`, не равна `False` и потому не «missing»:
+        пустое объявление проходило гейт. `tls` обязан быть ровно `True`,
+        `False` или `TLS_NOT_APPLICABLE`; всё иное — «не объявлено»."""
+        from spec_runner.config import ConfigError, ExecutorConfig
+
+        with pytest.raises(ConfigError) as exc:
+            ExecutorConfig(
+                project_root=tmp_path,
+                durability_store_adapter="local_volume",
+                durability_store_tls=bogus,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+            )
+
+        assert "tls" in str(exc.value), str(exc.value)

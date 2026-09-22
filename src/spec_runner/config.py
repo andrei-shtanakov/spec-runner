@@ -336,7 +336,11 @@ def durability_store_missing_properties(
     # `TLS_NOT_APPLICABLE` — объявленное `n/a`, а не отсутствие: его допустимость
     # судит `durability_store_tls_refusal` по адаптеру. Отсутствие и
     # `false` по-прежнему «не объявлено».
-    if tls is False:
+    # Ровно три значения: `True`, `False`, `TLS_NOT_APPLICABLE`. Всё иное —
+    # «не объявлено», включая пустую строку и опечатку: загрузчик такое не
+    # пропустит, но `ExecutorConfig` строят и напрямую (приёмка PR #578,
+    # круг 2 — пустое объявление проходило гейт мимо загрузчика).
+    if tls is not True and tls != TLS_NOT_APPLICABLE:
         missing.append("tls")
     if not encryption_at_rest:
         missing.append("encryption_at_rest")
