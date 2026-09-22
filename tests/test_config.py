@@ -878,7 +878,11 @@ class TestBEH28TlsIsDeclaredNotAsserted:
         result = load_config_from_yaml(cfg)
 
         assert result["durability_store_adapter"] == "local_volume"
-        assert result["durability_store_tls"] is None, "n/a обязано остаться трёхзначным, не False"
+        from spec_runner.config import TLS_NOT_APPLICABLE
+
+        assert result["durability_store_tls"] == TLS_NOT_APPLICABLE, (
+            "n/a обязано остаться трёхзначным, не False"
+        )
 
     def test_na_on_an_adapter_with_a_transport_is_refused_by_name(self, tmp_path, monkeypatch):
         """Сетевой адаптер: capabilities говорят, что TLS применим. `n/a` в
@@ -981,9 +985,55 @@ class TestBEH28TlsIsDeclaredNotAsserted:
             ExecutorConfig(
                 project_root=tmp_path,
                 durability_store_adapter="fake_net",
-                durability_store_tls=None,
+                durability_store_tls="n/a",
                 durability_store_encryption_at_rest=True,
                 durability_store_immutable_put=True,
             )
 
         assert "transport" in str(exc.value).lower(), str(exc.value)
+
+    def test_na_survives_the_full_chain_into_a_working_config(self, tmp_path):
+        """Приёмка PR #578, блокирующая: `build_config` выбрасывает `None` как
+        «не задано», и `n/a`, представленное `None`, восстанавливалось в
+        `False` — рабочий конфиг отказывал «missing tls» на том самом
+        объявлении, ради которого гейт переписан. Тест загрузчика этого не
+        видел: он останавливался на словаре. Проверяется вся цепочка
+        `load_config_from_yaml → build_config → ExecutorConfig`."""
+        from argparse import Namespace
+
+        from spec_runner.config import build_config
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      options:\n        root: durable-store\n"
+            "      tls: n/a\n      encryption_at_rest: true\n      immutable_put: true\n",
+        )
+
+        config = build_config(load_config_from_yaml(cfg), Namespace(), detect_subdir=False)
+
+        assert config.durability_store_adapter == "local_volume"
+        assert config.durability_store_tls not in (True, False), config.durability_store_tls
+
+    def test_na_on_a_transport_adapter_is_refused_through_the_full_chain(
+        self, tmp_path, monkeypatch
+    ):
+        from argparse import Namespace
+
+        from spec_runner import artifact_store
+        from spec_runner.config import ConfigError, build_config
+
+        monkeypatch.setitem(
+            artifact_store.ADAPTER_DECLARATIONS,
+            "fake_net",
+            artifact_store.AdapterDeclaration(tls_applies=True),
+        )
+        cfg = self._write(
+            tmp_path,
+            "      adapter: fake_net\n      tls: n/a\n"
+            "      encryption_at_rest: true\n      immutable_put: true\n",
+        )
+
+        with pytest.raises(ConfigError) as exc:
+            build_config(load_config_from_yaml(cfg), Namespace(), detect_subdir=False)
+
+        assert "transport" in str(exc.value).lower()

@@ -285,7 +285,14 @@ DURABILITY_DECLARE_HINT = (
 )
 
 
-def durability_store_tls_refusal(*, adapter: str, tls: bool | None) -> str | None:
+#: Явное объявление «TLS неприменим» (BEH-28). СТРОКА, а не `None`: у
+#: контракта загрузчик → `build_config` `None` уже значит «не задано» и
+#: выбрасывается при сборке — третий смысл в него не помещается, и `n/a`,
+#: представленное `None`, восстанавливалось в `False` (приёмка PR #578).
+TLS_NOT_APPLICABLE = "n/a"
+
+
+def durability_store_tls_refusal(*, adapter: str, tls: bool | str) -> str | None:
     """`tls: n/a` допустимо ровно тогда, когда АДАПТЕР сам отрицает транспорт.
 
     Применимость читается из реестра `artifact_store` по имени, не из YAML:
@@ -294,7 +301,7 @@ def durability_store_tls_refusal(*, adapter: str, tls: bool | None) -> str | Non
     называет причину, а не «missing tls» — оператор объявил свойство, и
     сказать ему «не объявлено» было бы неправдой (BEH-28, 2026-09-22).
     """
-    if tls is not None:
+    if tls != TLS_NOT_APPLICABLE:
         return None
     from .artifact_store import tls_applies
 
@@ -314,7 +321,7 @@ def durability_store_tls_refusal(*, adapter: str, tls: bool | None) -> str | Non
 
 
 def durability_store_missing_properties(
-    *, tls: bool | None, encryption_at_rest: bool, immutable_put: bool
+    *, tls: bool | str, encryption_at_rest: bool, immutable_put: bool
 ) -> list[str]:
     """Security properties BEH-28 requires a declared `durability.store` adapter to state.
 
@@ -326,7 +333,7 @@ def durability_store_missing_properties(
     two surfaces cannot drift into disagreeing about the same config.
     """
     missing = []
-    # `None` здесь — объявленное `n/a`, а не отсутствие: его допустимость
+    # `TLS_NOT_APPLICABLE` — объявленное `n/a`, а не отсутствие: его допустимость
     # судит `durability_store_tls_refusal` по адаптеру. Отсутствие и
     # `false` по-прежнему «не объявлено».
     if tls is False:
@@ -338,8 +345,8 @@ def durability_store_missing_properties(
     return missing
 
 
-def durability_declared_tls(value: object) -> bool | None:
-    """`tls` трёхзначно: `true`/`false` как у остальных флагов, `n/a` → `None`.
+def durability_declared_tls(value: object) -> bool | str:
+    """`tls` трёхзначно: `true`/`false` как у остальных флагов, `n/a` → `TLS_NOT_APPLICABLE`.
 
     Отсутствие (`None` из YAML) — НЕ `n/a`: оно остаётся «не объявлено»
     (`False`), иначе пустая строка `tls:` читалась бы как честное
@@ -351,7 +358,7 @@ def durability_declared_tls(value: object) -> bool | None:
         "not_applicable",
         "not applicable",
     }:
-        return None
+        return TLS_NOT_APPLICABLE
     return durability_declared_flag(value, field="tls")
 
 
@@ -655,8 +662,8 @@ class ExecutorConfig:
     # the default (experimental, CON-01) and carries no validation.
     durability_store_adapter: str = ""
     durability_store_options: dict[str, str] = field(default_factory=dict)
-    #: Трёхзначно (BEH-28, 2026-09-22): `True`/`False` — объявление, `None` — `n/a`.
-    durability_store_tls: bool | None = False
+    #: Трёхзначно (BEH-28, 2026-09-22): `True`/`False` — объявление, `TLS_NOT_APPLICABLE` — `n/a`.
+    durability_store_tls: bool | str = False
     durability_store_encryption_at_rest: bool = False
     durability_store_immutable_put: bool = False
     # "store" (default) durably acknowledges via the store adapter's `put`;
@@ -1177,7 +1184,7 @@ class DurabilitySettings:
 
     store_adapter: str | None
     store_options: dict[str, str]
-    store_tls: bool | None
+    store_tls: bool | str
     store_encryption_at_rest: bool
     store_immutable_put: bool
     ack: str | None
@@ -1219,7 +1226,7 @@ def read_durability(
         )
         options = {}
 
-    flags: dict[str, bool | None] = {}
+    flags: dict[str, bool | str] = {}
     unreadable_fields: set[str] = set()
     for flag_name in ("tls", "encryption_at_rest", "immutable_put"):
         try:
