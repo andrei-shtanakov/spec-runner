@@ -21,8 +21,12 @@ On a branch, never on `master` (direct pushes are refused by a branch rule):
    `publish.yml` runs, so a failure here is a failure there.
 
 Semver, as practised here: a change to `--json-result` or the state-DB **format**
-is major. Additive tables, additive JSON keys and changed exit codes are minor
-(precedents: 2.16.0, 2.21.0, 2.23.0). A defect fix that moves no public surface
+is major. Additive JSON keys and changed exit codes are minor (precedents:
+2.16.0, 2.21.0, 2.23.0). An additive **state-DB table** was minor by precedent
+(2.36.0) but is major by `AGENTS.md` (Testing Guidelines: any change to the
+SQLite state surface), and the owner confirmed the rule over the precedent for
+3.0.0 (#428, AP-12.3) — say in the CHANGELOG section that the bump is by rule,
+not by breakage, so the reader does not go looking for a migration. A defect fix that moves no public surface
 is patch (2.27.1) — check that claim with a diff of `schemas/`,
 `docs/state-schema.md` and the `add_argument` lines in `cli.py`, rather than
 asserting it.

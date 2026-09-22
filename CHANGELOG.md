@@ -10,14 +10,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-> **Next release is a MAJOR bump (3.0.0).** The `negative_controls` table
-> extends the SQLite state surface, and `AGENTS.md` (Testing Guidelines)
-> makes any change to that surface a major-version change. Confirmed by the
-> owner for #428 (AP-12.3): the minor bump that shipped `waivers_applied` in
-> v2.36.0 was a precedent, not a repeal of the rule. Consumer compatibility
-> is unaffected — the table is additive and `--json-result` is untouched —
-> so the goldens in `tests/test_json_result_contract.py` do not change; the
-> declaration is about the rule, not about a broken reader.
+## [3.0.0] - 2026-09-22
+
+**Major, by rule rather than by breakage.** Measured against v2.36.0:
+`schemas/` and `--json-result` are untouched, the state DB gains **one**
+additive table (`negative_controls`), the CLI gains one subcommand
+(`tdd control`) — nothing existing changes meaning, and the goldens in
+`tests/test_json_result_contract.py` are the same bytes. By the additive
+list in `docs/release-runbook.md` that would read as minor. It is major
+because `AGENTS.md` (Testing Guidelines) makes *any* change to the SQLite
+state surface a major-version change, and the owner confirmed that rule for
+this table (#428, AP-12.3): the minor bump that shipped `waivers_applied` in
+v2.36.0 was a precedent, not a repeal. A reader of this file should expect
+**no** migration and **no** consumer breakage — only that the rule was
+applied as written. `docs/state-schema.md` (Breaking change policy) now
+states the same reconciliation.
 
 ### Added
 
@@ -3754,7 +3761,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...v3.0.0
 [2.36.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...v2.36.0
 [2.35.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...v2.35.0
 [2.34.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.33.2...v2.34.0
