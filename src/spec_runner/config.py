@@ -278,8 +278,50 @@ def _validate_change_id(change_id: str) -> None:
         )
 
 
+DURABILITY_DECLARE_HINT = (
+    "spec-runner checks the declaration only (OUT-03); declare tls: true "
+    "(or n/a for an adapter that itself has no transport), encryption_at_rest: true "
+    "and immutable_put: true"
+)
+
+
+#: Явное объявление «TLS неприменим» (BEH-28). СТРОКА, а не `None`: у
+#: контракта загрузчик → `build_config` `None` уже значит «не задано» и
+#: выбрасывается при сборке — третий смысл в него не помещается, и `n/a`,
+#: представленное `None`, восстанавливалось в `False` (приёмка PR #578).
+TLS_NOT_APPLICABLE = "n/a"
+
+
+def durability_store_tls_refusal(*, adapter: str, tls: bool | str) -> str | None:
+    """`tls: n/a` допустимо ровно тогда, когда АДАПТЕР сам отрицает транспорт.
+
+    Применимость читается из реестра `artifact_store` по имени, не из YAML:
+    сетевой адаптер обойти TLS строкой не может, а неизвестный адаптер не
+    заявляет ничего, и за него `n/a` объявить некому (fail-closed). Отказ
+    называет причину, а не «missing tls» — оператор объявил свойство, и
+    сказать ему «не объявлено» было бы неправдой (BEH-28, 2026-09-22).
+    """
+    if tls != TLS_NOT_APPLICABLE:
+        return None
+    from .artifact_store import tls_applies
+
+    applies = tls_applies(adapter)
+    if applies is None:
+        return (
+            f"durability.store adapter {adapter!r} declares tls: n/a, but the adapter "
+            "is unknown and states nothing about its transport — n/a can only be "
+            "declared for an adapter that itself says TLS does not apply"
+        )
+    if applies:
+        return (
+            f"durability.store adapter {adapter!r} declares tls: n/a, but the adapter "
+            "has a transport — n/a is not an answer where TLS applies; declare tls: true"
+        )
+    return None
+
+
 def durability_store_missing_properties(
-    *, tls: bool, encryption_at_rest: bool, immutable_put: bool
+    *, tls: bool | str, encryption_at_rest: bool, immutable_put: bool
 ) -> list[str]:
     """Security properties BEH-28 requires a declared `durability.store` adapter to state.
 
@@ -291,13 +333,37 @@ def durability_store_missing_properties(
     two surfaces cannot drift into disagreeing about the same config.
     """
     missing = []
-    if not tls:
+    # `TLS_NOT_APPLICABLE` — объявленное `n/a`, а не отсутствие: его допустимость
+    # судит `durability_store_tls_refusal` по адаптеру. Отсутствие и
+    # `false` по-прежнему «не объявлено».
+    # Ровно три значения: `True`, `False`, `TLS_NOT_APPLICABLE`. Всё иное —
+    # «не объявлено», включая пустую строку и опечатку: загрузчик такое не
+    # пропустит, но `ExecutorConfig` строят и напрямую (приёмка PR #578,
+    # круг 2 — пустое объявление проходило гейт мимо загрузчика).
+    if tls is not True and tls != TLS_NOT_APPLICABLE:
         missing.append("tls")
     if not encryption_at_rest:
         missing.append("encryption_at_rest")
     if not immutable_put:
         missing.append("immutable_put")
     return missing
+
+
+def durability_declared_tls(value: object) -> bool | str:
+    """`tls` трёхзначно: `true`/`false` как у остальных флагов, `n/a` → `TLS_NOT_APPLICABLE`.
+
+    Отсутствие (`None` из YAML) — НЕ `n/a`: оно остаётся «не объявлено»
+    (`False`), иначе пустая строка `tls:` читалась бы как честное
+    объявление неприменимости.
+    """
+    if isinstance(value, str) and value.strip().lower() in {
+        "n/a",
+        "na",
+        "not_applicable",
+        "not applicable",
+    }:
+        return TLS_NOT_APPLICABLE
+    return durability_declared_flag(value, field="tls")
 
 
 def durability_declared_flag(value: object, *, field: str) -> bool:
@@ -600,7 +666,8 @@ class ExecutorConfig:
     # the default (experimental, CON-01) and carries no validation.
     durability_store_adapter: str = ""
     durability_store_options: dict[str, str] = field(default_factory=dict)
-    durability_store_tls: bool = False
+    #: Трёхзначно (BEH-28, 2026-09-22): `True`/`False` — объявление, `TLS_NOT_APPLICABLE` — `n/a`.
+    durability_store_tls: bool | str = False
     durability_store_encryption_at_rest: bool = False
     durability_store_immutable_put: bool = False
     # "store" (default) durably acknowledges via the store adapter's `put`;
@@ -656,6 +723,11 @@ class ExecutorConfig:
         # encryption_at_rest and immutable_put, or a run must not reach
         # run-start with it.
         if self.durability_store_adapter:
+            tls_refusal = durability_store_tls_refusal(
+                adapter=self.durability_store_adapter, tls=self.durability_store_tls
+            )
+            if tls_refusal is not None:
+                raise ConfigError(tls_refusal)
             missing = durability_store_missing_properties(
                 tls=self.durability_store_tls,
                 encryption_at_rest=self.durability_store_encryption_at_rest,
@@ -665,8 +737,7 @@ class ExecutorConfig:
                 raise ConfigError(
                     f"durability.store adapter {self.durability_store_adapter!r} "
                     f"is missing required security properties: {', '.join(missing)} "
-                    "-- spec-runner checks the declaration only (OUT-03); declare "
-                    "tls: true, encryption_at_rest: true and immutable_put: true"
+                    f"-- {DURABILITY_DECLARE_HINT}"
                 )
 
         # Вне ветки адаптера — как в загрузчике и в `validate`: срок хранения
@@ -1117,7 +1188,7 @@ class DurabilitySettings:
 
     store_adapter: str | None
     store_options: dict[str, str]
-    store_tls: bool
+    store_tls: bool | str
     store_encryption_at_rest: bool
     store_immutable_put: bool
     ack: str | None
@@ -1159,11 +1230,15 @@ def read_durability(
         )
         options = {}
 
-    flags: dict[str, bool] = {}
+    flags: dict[str, bool | str] = {}
     unreadable_fields: set[str] = set()
     for flag_name in ("tls", "encryption_at_rest", "immutable_put"):
         try:
-            flags[flag_name] = durability_declared_flag(store.get(flag_name), field=flag_name)
+            flags[flag_name] = (
+                durability_declared_tls(store.get("tls"))
+                if flag_name == "tls"
+                else durability_declared_flag(store.get(flag_name), field=flag_name)
+            )
         except ConfigError as exc:
             problems.append(f"{prefix}{exc}")
             flags[flag_name] = False
@@ -1175,21 +1250,22 @@ def read_durability(
         # всех трёх: сказать «missing: tls» про поле, которое объявлено, но
         # нечитаемо, было бы неправдой, а промолчать об остальных двух —
         # отправить оператора на второй круг (находка ревью, круг 6).
+        tls_refusal = durability_store_tls_refusal(adapter=str(adapter), tls=flags["tls"])
+        if tls_refusal is not None and "tls" not in unreadable_fields:
+            problems.append(f"{prefix}{tls_refusal}")
         missing = [
             name
             for name in durability_store_missing_properties(
                 tls=flags["tls"],
-                encryption_at_rest=flags["encryption_at_rest"],
-                immutable_put=flags["immutable_put"],
+                encryption_at_rest=bool(flags["encryption_at_rest"]),
+                immutable_put=bool(flags["immutable_put"]),
             )
             if name not in unreadable_fields
         ]
         if missing:
             problems.append(
                 f"{prefix}durability.store adapter {adapter!r} is missing required "
-                f"security properties: {', '.join(missing)} -- spec-runner checks the "
-                "declaration only (OUT-03); declare tls: true, "
-                "encryption_at_rest: true and immutable_put: true"
+                f"security properties: {', '.join(missing)} -- {DURABILITY_DECLARE_HINT}"
             )
     if adapter is not None:
         # Имя адаптера — закрытый словарь, и неизвестное отказывается ЗДЕСЬ.
@@ -1239,8 +1315,8 @@ def read_durability(
         store_adapter=adapter,
         store_options={str(k): str(v) for k, v in options.items()},
         store_tls=flags["tls"],
-        store_encryption_at_rest=flags["encryption_at_rest"],
-        store_immutable_put=flags["immutable_put"],
+        store_encryption_at_rest=bool(flags["encryption_at_rest"]),
+        store_immutable_put=bool(flags["immutable_put"]),
         ack=durability.get("ack"),
         ack_timeout_seconds=durability.get("ack_timeout_seconds"),
         checkpoint_ack_timeout_seconds=durability.get("checkpoint_ack_timeout_seconds"),

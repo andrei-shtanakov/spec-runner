@@ -420,3 +420,43 @@ class TestBeltCatchesTheWholeModuleImportForm:
             n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in writable
         ]
         assert imports_store and hits == ["LocalVolumeStore"]
+
+
+class TestNoPublicNameHandsOutAWritableStore:
+    """§ 1.4, вторая форма: правило «в store пишет только Publisher» проверяется
+    поиском, а поиск по именам `LocalVolumeStore`/`_build_store` слеп к
+    ПЕРЕИМЕНОВАНИЮ — реестр `ADAPTERS = {"local_volume": LocalVolumeStore}`
+    раздавал пишущий класс под публичным именем, и пояс оставался зелёным
+    (находка локального ревью ветки BEH-28). Здесь ищется не имя, а
+    свойство: ни одно публичное имя модуля, кроме самого класса и
+    протокола, не связывает и не содержит класс с `put`.
+    """
+
+    def test_public_names_carry_no_writable_class(self):
+        import inspect
+
+        from spec_runner import artifact_store
+
+        def writable(obj) -> bool:
+            return inspect.isclass(obj) and callable(getattr(obj, "put", None))
+
+        def contains_writable(value, depth: int = 0) -> bool:
+            if depth > 3:
+                return False
+            if writable(value):
+                return True
+            if isinstance(value, dict):
+                return any(contains_writable(v, depth + 1) for v in value.values())
+            if isinstance(value, list | tuple | set | frozenset):
+                return any(contains_writable(v, depth + 1) for v in value)
+            if hasattr(value, "_fields"):  # NamedTuple-декларации
+                return any(contains_writable(getattr(value, f), depth + 1) for f in value._fields)
+            return False
+
+        allowed = {"LocalVolumeStore", "ArtifactStore"}
+        offenders = [
+            name
+            for name, value in vars(artifact_store).items()
+            if not name.startswith("_") and name not in allowed and contains_writable(value)
+        ]
+        assert offenders == [], f"публичные имена раздают пишущий store: {offenders}"

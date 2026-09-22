@@ -866,3 +866,44 @@ class TestValidateReadsDeclarationsAsStrictlyAsTheLoader:
         )
         result = validate_config(cfg)
         assert any("tls" in e for e in result.errors)
+
+
+class TestBEH28ValidateReportsTlsApplicability:
+    """`validate` повторяет те же проверки, что загрузчик: `n/a` у адаптера с
+    транспортом — ошибка с названной причиной; у адаптера без транспорта —
+    не ошибка."""
+
+    def _cfg(self, tmp_path: Path, adapter: str, tls: str) -> Path:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text(
+            "executor:\n  durability:\n    store:\n"
+            f"      adapter: {adapter}\n      tls: {tls}\n"
+            "      encryption_at_rest: true\n      immutable_put: true\n",
+            encoding="utf-8",
+        )
+        return cfg
+
+    def test_na_on_a_transport_adapter_is_an_error_naming_the_reason(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from spec_runner import artifact_store
+        from spec_runner.validate import validate_config
+
+        monkeypatch.setitem(
+            artifact_store.ADAPTER_DECLARATIONS,
+            "fake_net",
+            artifact_store.AdapterDeclaration(tls_applies=True),
+        )
+
+        result = validate_config(self._cfg(tmp_path, "fake_net", "n/a"))
+
+        assert any("fake_net" in e and "transport" in e.lower() for e in result.errors), (
+            result.errors
+        )
+
+    def test_na_on_local_volume_is_not_an_error(self, tmp_path: Path) -> None:
+        from spec_runner.validate import validate_config
+
+        result = validate_config(self._cfg(tmp_path, "local_volume", "n/a"))
+
+        assert not any("tls" in e for e in result.errors), result.errors
