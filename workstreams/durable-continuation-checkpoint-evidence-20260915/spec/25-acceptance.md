@@ -1,6 +1,6 @@
 ---
 spec_stage: acceptance
-status: approved
+status: draft
 owner_role: qa
 traces_to:
 - requirements
@@ -577,14 +577,18 @@ spool; `full_sha256`/`full_size` соответствуют нередактир
 прямом `put` адаптера в обход redactor-а; `evidence <run_id>` показывает
 redacted копии, локальный prompt-артефакт — полный текст.
 
-#### AC-26: Адаптер store без TLS или шифрования в покое отклонён при загрузке config · verification: test
+#### AC-26: Адаптер store объявляет свойства безопасности; `n/a` для TLS допустимо только у адаптера без транспорта · verification: test
 traces: [NFR-05]
 scenarios: [BEH-28]
 
-Наблюдаемый знак: config с адаптером `tls: false` или без объявленного
-шифрования в покое даёт `ConfigError` при `build_config` и ошибку `validate`
-с именем адаптера и недостающего свойства, `run` с ним не доходит до
-run-start; config с `tls: true` и managed encryption загружается.
+Наблюдаемый знак: config с адаптером `tls: false`, без объявленного
+`encryption_at_rest`/`immutable_put`, либо с `tls: n/a` у адаптера, у
+которого транспорт есть, даёт `ConfigError` при `build_config` и ошибку
+`validate` с именем адаптера и свойства (для `n/a` — с названной причиной),
+`run` с ним не доходит до run-start; config с `tls: n/a` у адаптера без
+транспорта (`local_volume`) и объявленными `encryption_at_rest`/
+`immutable_put` загружается; применимость TLS читается из capabilities
+адаптера, не из YAML, и неизвестный адаптер объявить `n/a` не может.
 
 ### G. Closure на каждом штатном завершении
 
