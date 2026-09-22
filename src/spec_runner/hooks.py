@@ -611,6 +611,29 @@ def _run_negative_control_before_review(
         )
         return "unsatisfied", absent, ""
 
+    # Кандидат обязан НЕСТИ работу задачи. Реплей читает коммит; если
+    # первичный `commit_task_work` отказал, работа осталась в дереве, а HEAD
+    # — это ПРЕЖНЕЕ состояние, где тест и мутант уже давали satisfied.
+    # Вердикт с него уехал бы в гейт, а финальный коммит подмёл бы
+    # незакоммиченную замену assertion уже вместе с DONE (приёмка PR #565).
+    # `tasks.md` исключён: харнессовый флип статуса — не работа.
+    from .git_ops import uncommitted_work_paths
+
+    stranded = uncommitted_work_paths(config, exclude=[config.tasks_file])
+    if stranded:
+        from .negative_control import ControlResult
+
+        detail = (
+            "the candidate commit does not carry the task's work: "
+            f"{len(stranded)} uncommitted path(s) in the tree ({', '.join(stranded[:3])}"
+            f"{'…' if len(stranded) > 3 else ''}) — replaying {candidate_sha[:12]} would "
+            "judge a tree that is not what would be merged"
+        )
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
+        )
+        return "instrument_error", detail, candidate_sha
+
     budget = max(0, int(getattr(config, "gate_recovery_attempts", 0)))
     result = None
     for _ in range(budget + 1):

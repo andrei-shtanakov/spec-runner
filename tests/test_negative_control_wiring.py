@@ -689,3 +689,40 @@ class TestReviewFixesAreJudgedNotAssumed:
         )
 
         assert facts.get("negative_control") != "satisfied", facts
+
+
+class TestTheControlJudgesTheWorkNotTheOldHead:
+    """kind: integration — приёмочное ревью PR #565, блокирующая находка.
+
+    Первичный `commit_task_work` отказал (git не смог), работа осталась в
+    дереве. Контроль реплеил СТАРЫЙ HEAD — где тест и мутант уже давали
+    satisfied, — вердикт уезжал в гейт, а финальный коммит подметал
+    незакоммиченную замену assertion на `assert True` уже вместе с DONE.
+    Задача завершалась с тестом, который приложенный мутант больше не
+    роняет. Родная сестра находки круга 18 с другой стороны коммита.
+    """
+
+    def test_uncommitted_work_stops_the_control_before_it_replays(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner import negative_control as nc
+
+        root = _repo(tmp_path)  # HEAD: тест + мутант, satisfied по построению
+        cfg = _cfg(root, run_review=False)
+        # Работа задачи: тест выхолощен, и это НЕ в коммите — коммит отказал.
+        (root / "tests" / "test_subject.py").write_text(
+            "def test_property():\n    assert True\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(hooks, "commit_task_work", lambda *a, **k: "failed")
+        replayed: list = []
+        real = nc.run_negative_control
+        monkeypatch.setattr(
+            nc, "run_negative_control", lambda *a, **k: replayed.append(k) or real(*a, **k)
+        )
+
+        (ok, error, *_), _reviewed = _run(root, cfg, monkeypatch)
+
+        assert ok is False, "задача завершена с работой, которой нет в кандидате"
+        assert replayed == [], "контроль реплеил старый HEAD вместо отказа"
+        assert "candidate" in (error or "").lower(), error
+        rows = _rows(cfg)
+        assert rows and rows[0]["verdict"] != "satisfied", rows
