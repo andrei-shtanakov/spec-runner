@@ -715,19 +715,11 @@ def _execute_task(
         # воспользовалась, и строка о снятом baseline-RED про неё была бы
         # ложью — тем же рассуждением, каким событие уже отодвинуто за
         # точку 1.
-        from .negative_control import structural_impossibility
+        from .negative_control import declaration_refusal
 
-        control_refusal: str | None = None
-        if task.negative_control_error is not None:
-            control_refusal = task.negative_control_error
-        elif task.negative_control is None:
-            control_refusal = (
-                "**TDD-waiver:** is declared but **Negative-control:** is not: the "
-                "characterisation class is admissible only with evidence that the new "
-                "test goes red when the property it claims to check is broken"
-            )
-        else:
-            control_refusal = structural_impossibility(task, config)
+        # Один читатель с прогоном по требованию (FR-12): команда отказывает
+        # теми же словами, где отказал бы гейт.
+        control_refusal: str | None = declaration_refusal(task, config)
         if control_refusal is not None:
             # Флип в `in_progress` уже произошёл, а задача, остановленная до
             # платного вызова, в работу не входила. Без отката харнессовый

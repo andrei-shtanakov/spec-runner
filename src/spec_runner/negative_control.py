@@ -160,6 +160,30 @@ def patch_path_refusal(patch) -> str | None:
     return None
 
 
+def declaration_refusal(task: Task, config: ExecutorConfig) -> str | None:
+    """Отказ по ОБЪЯВЛЕНИЮ waived-задачи, известный до любого прогона.
+
+    Один читатель на два места — точку 1 в `execute_task` и прогон по
+    требованию (FR-12): команда обязана отказывать теми же словами, где
+    отказал бы гейт, иначе у одного входа появляются два вердикта.
+
+    Три причины, в порядке: неразбираемая строка; маркер waiver'а без
+    контроля; структурная невозможность (`structural_impossibility`).
+    Не-waived задача — `None`: у неё этого вопроса нет.
+    """
+    if not _is_waived(task, config):
+        return None
+    if task.negative_control_error is not None:
+        return task.negative_control_error
+    if task.negative_control is None:
+        return (
+            "**TDD-waiver:** is declared but **Negative-control:** is not: the "
+            "characterisation class is admissible only with evidence that the new "
+            "test goes red when the property it claims to check is broken"
+        )
+    return structural_impossibility(task, config)
+
+
 def candidate_refusal(task: Task, config: ExecutorConfig, candidate_sha: str | None) -> str | None:
     """Отказ, когда судить нечего: кандидат-коммит не резолвится (FR-07).
 

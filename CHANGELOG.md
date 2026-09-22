@@ -55,6 +55,21 @@ is a **breaking change** and requires a major version bump plus an entry here.
   mandatory ExUnit CI job (`SPEC_RUNNER_REQUIRE_EXUNIT=1` makes a missing
   toolchain a collection error, not a skip).
 
+- **`spec-runner tdd control <TASK-ID> [--sha] [--json]` — the negative
+  control on demand** (#428, FR-12, DT-06; Could, shipped rather than cut).
+  The task's author runs both halves without driving the task to the
+  terminal site and reads the verdict the gate will reach. Both promises
+  hold by construction, not by agreement between two implementations: the
+  judge is the gate's own (`hooks._judge_negative_control`, extracted from
+  the pre-review path, which now equals judge + evidence), and declaration
+  refusals come from the same reader as point 1
+  (`negative_control.declaration_refusal`). The command writes **no**
+  evidence — the `negative_controls` row is written only by the gate path,
+  and `--json` says so (`evidence_written: false`) — so it cannot become a
+  way around the gate: after an on-demand run the gate still replays the
+  control itself. Exit codes follow the gate's refusal kinds: 0 satisfied,
+  1 unsatisfied or a declaration/configuration refusal, 2 instrument error.
+
 ### Changed
 
 - **The reviewer's waiver obligation no longer says "you are the only

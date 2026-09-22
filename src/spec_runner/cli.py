@@ -2247,6 +2247,18 @@ def _build_parser() -> argparse.ArgumentParser:
     for sub in (tdd_status, tdd_checkpoints):
         sub.add_argument("task_id", nargs="?", help="Limit to one task")
         sub.add_argument("--json", action="store_true", help="Machine-readable output")
+    # #428 FR-12 (Could): the negative control on demand — the gate's own
+    # judge, no evidence written, so it cannot become a way around the gate.
+    tdd_control = tdd_sub.add_parser(
+        "control",
+        parents=[common],
+        help="Run a waived task's negative control now and print the gate's verdict",
+    )
+    tdd_control.add_argument("task_id", help="The waived task whose control to run")
+    tdd_control.add_argument(
+        "--sha", help="Candidate commit to judge (default: HEAD, which must carry the work)"
+    )
+    tdd_control.add_argument("--json", action="store_true", help="Machine-readable output")
 
     # budget authorization (#230 part 2): an operator raising a ceiling
     budget_parser = subparsers.add_parser(
@@ -2568,6 +2580,10 @@ def main():
 
                 handler = cmd_tdd_status if args.tdd_command == "status" else cmd_tdd_checkpoints
                 raise SystemExit(handler(args, config))
+            if args.tdd_command == "control":
+                from .tdd_control import cmd_tdd_control
+
+                raise SystemExit(cmd_tdd_control(args, config))
 
             from .remedy import cmd_tdd
 

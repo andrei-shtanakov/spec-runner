@@ -8,7 +8,7 @@ import hashlib
 import os
 import stat
 import subprocess
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .gates import (
@@ -42,6 +42,9 @@ from .review import (
 )
 from .stages import StageReporter
 from .state import PhaseOutcome, ReviewVerdict
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .negative_control import ControlResult
 from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
@@ -576,18 +579,29 @@ def _control_will_run(task: Task, config: ExecutorConfig) -> bool:
     return waiver is not None and task.negative_control is not None
 
 
-def _run_negative_control_before_review(
+def _judge_negative_control(
     task: Task, config: ExecutorConfig, candidate_sha: str | None
-) -> tuple[str | None, str, str]:
-    """Исполнить контроль до платного ревью; `(вердикт, текст, sha)`.
+) -> "tuple[ControlResult, str] | None":
+    """Вынести вердикт контроля, НИЧЕГО не записывая; `(результат, sha)`.
+
+    Один судья на два вызывающих: гейтовый путь (`_run_negative_control_
+    before_review`, который записывает свидетельство) и прогон по
+    требованию (FR-12, который записывать не вправе). «Вердикт совпадает с
+    гейтовым» держится тем, что функция одна, а не параллельной
+    реализацией, которая разошлась бы молча.
+
+    `None` — «не наша задача» (нет waiver'а/контроля, либо `auto_commit`
+    выключен: см. `_control_will_run`).
 
     Инструментальная неудача **переисполняется здесь**, в пределах
     `gate_recovery_attempts`, а не в гейте: гейт читает готовый вердикт и
     повторная оценка перечитала бы тот же кэш (Р-3). Детерминированные
     исходы не повторяются — тот же вопрос тем же байтам.
     """
+    from .negative_control import ControlResult
+
     if not _control_will_run(task, config):
-        return None, "", ""
+        return None
 
     # SHA вычисляется ПОСЛЕ проверки waiver'а, а не в аргументе вызова.
     # Первая редакция считала его заранее (`sha or _head_sha(config)`), и
@@ -600,16 +614,7 @@ def _run_negative_control_before_review(
 
     absent = candidate_refusal(task, config, candidate_sha)
     if absent is not None:
-        # Запись и здесь: «контроль не мог быть исполнен» — такой же durable
-        # факт, как исход прогона, и без неё единственным следом остаётся
-        # `attempts.error`, то есть состояние «проверка подтверждается тем,
-        # что задача не завершилась», против которого FR-06 и написан.
-        from .negative_control import ControlResult
-
-        _record_negative_control(
-            task, config, candidate_sha, ControlResult("unsatisfied", absent, None, None)
-        )
-        return "unsatisfied", absent, ""
+        return ControlResult("unsatisfied", absent, None, None), ""
 
     # Кандидат обязан НЕСТИ работу задачи. Реплей читает коммит; если
     # первичный `commit_task_work` отказал, работа осталась в дереве, а HEAD
@@ -618,7 +623,6 @@ def _run_negative_control_before_review(
     # незакоммиченную замену assertion уже вместе с DONE (приёмка PR #565).
     # `tasks.md` исключён: харнессовый флип статуса — не работа.
     from .git_ops import WorktreeStatusError, uncommitted_work_paths
-    from .negative_control import ControlResult
 
     # `strict=True`: функция по докстрингу — ОТЧЁТ и fail-open, при ошибке
     # `git status` отвечает []. Вызывающему-ГВАРДУ «не смог прочитать» нельзя
@@ -632,10 +636,7 @@ def _run_negative_control_before_review(
             f"candidate {candidate_sha[:12]} carries the task's work is unknown, and "
             "unknown is not clean"
         )
-        _record_negative_control(
-            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
-        )
-        return "instrument_error", detail, candidate_sha
+        return ControlResult("instrument_error", detail, None, None), candidate_sha
     if stranded:
         detail = (
             "the candidate commit does not carry the task's work: "
@@ -643,10 +644,7 @@ def _run_negative_control_before_review(
             f"{'…' if len(stranded) > 3 else ''}) — replaying {candidate_sha[:12]} would "
             "judge a tree that is not what would be merged"
         )
-        _record_negative_control(
-            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
-        )
-        return "instrument_error", detail, candidate_sha
+        return ControlResult("instrument_error", detail, None, None), candidate_sha
 
     budget = max(0, int(getattr(config, "gate_recovery_attempts", 0)))
     result = None
@@ -655,8 +653,25 @@ def _run_negative_control_before_review(
         if result.verdict != "instrument_error":
             break
     assert result is not None
-    _record_negative_control(task, config, candidate_sha, result)
-    return result.verdict, result.detail, candidate_sha
+    return result, candidate_sha
+
+
+def _run_negative_control_before_review(
+    task: Task, config: ExecutorConfig, candidate_sha: str | None
+) -> tuple[str | None, str, str]:
+    """Гейтовый путь: судья + свидетельство; `(вердикт, текст, sha)`.
+
+    Запись — на ЛЮБОМ исходе судьи, включая «контроль не мог быть
+    исполнен»: без неё единственным следом остаётся `attempts.error`, то
+    есть состояние «проверка подтверждается тем, что задача не
+    завершилась», против которого FR-06 и написан.
+    """
+    judged = _judge_negative_control(task, config, candidate_sha)
+    if judged is None:
+        return None, "", ""
+    result, sha = judged
+    _record_negative_control(task, config, sha, result)
+    return result.verdict, result.detail, sha
 
 
 def _record_negative_control(task: Task, config: ExecutorConfig, sha: str, result) -> None:
