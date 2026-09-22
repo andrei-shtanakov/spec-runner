@@ -15,6 +15,24 @@
 > Отсутствующий тег означает «неизвестно» — придумывать значение не надо.
 
 ## Текущее состояние
+- ✅ **v3.0.0 выпущен и отрепетирован 2026-09-22** (PR #570, merge `b51f0b4`;
+  тег на **merge-коммите** по runbook §2 — записи о 2.35.0/2.36.0 ниже
+  называют конвенцией релизный коммит, расхождение runbook↔практика открыто,
+  тег не двигался). **Major по правилу, не по поломке:** против v2.36.0
+  `schemas/` и `--json-result` не тронуты, одна аддитивная таблица
+  `negative_controls`, один подпарсер `tdd control`; goldens — те же байты;
+  major потому, что AGENTS.md делает любое изменение SQLite-поверхности
+  major, и владелец подтвердил правило над прецедентом 2.36.0 (#428,
+  AP-12.3) — сказано в самой секции CHANGELOG и в runbook. Поверхности:
+  `publish.yml` (`35682949718`) success; PyPI 200 на per-version endpoint и
+  `info.version` = 3.0.0; GitHub Release из секции CHANGELOG; красный
+  `release-tag-guard` (`35682885039`) перезапущен зелёным; установка
+  `--refresh --reinstall --no-cache` печатает `3.0.0`. **Репетиция против
+  колеса с PyPI — PASS:** `test_negative_control_on_demand` +
+  `test_waiver_obligation_text` + `test_negative_control_wiring` под
+  `uv run --no-project --with spec-runner==3.0.0` (импорт сверен по
+  `spec_runner.__file__` из `archive-v0`): 38 passed; контроль против
+  `==2.36.0` — 2 errors на сборе, стенд различим.
 - ✅ **#428 закрыт 2026-09-22 — исполняемый негативный контроль для
   `characterisation` под `Mode: standard`** (PR #565 `ec368b3` DT-01…DT-04,
   PR #566 `85597b9` DT-05). Задача с `**TDD-waiver:**` обязана нести
