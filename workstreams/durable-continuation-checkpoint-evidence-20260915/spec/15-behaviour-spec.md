@@ -1,6 +1,6 @@
 ---
 spec_stage: behaviour-spec
-status: approved
+status: draft
 owner_role: product
 traces_to:
 - requirements
@@ -990,20 +990,32 @@ boundary**, **legacy run**, **restore**. «Двойник store» — тесто
 - **And** `evidence <run_id>` показывает redacted копии; локальный
   prompt-артефакт (не публикуемый) содержит полный текст, как сегодня.
 
-#### BEH-28: Адаптер store без TLS или шифрования в покое отклоняется при загрузке config
+#### BEH-28: Адаптер store объявляет свойства безопасности; отказ — за ложь, молчание и «неприменимо» там, где оно невозможно
 `traces: [FR-06]`
 
 - **checked_by**: `status: planned` `kind: contract` `owner: qa` `target: tests/test_config.py`
-- **Given** config с адаптером store, объявившим `tls: false` либо не
-  объявившим шифрование в покое; второй config с адаптером, объявившим
-  `tls: true` и managed encryption.
-- **When** config загружен (`build_config`) и выполнен `spec-runner
+- **Given** четыре config-а с блоком `durability.store`: (а) адаптер
+  объявил `tls: false`; (б) адаптер не объявил `encryption_at_rest` или
+  `immutable_put`; (в) адаптер без транспорта (`local_volume`: его
+  `StoreCapabilities.tls` — «неприменимо») объявил `tls: n/a`,
+  `encryption_at_rest: true`, `immutable_put: true`; (г) адаптер, у которого
+  транспорт есть, объявил `tls: n/a`.
+- **When** каждый config загружен (`build_config`) и выполнен `spec-runner
   validate`.
-- **Then** первый даёт `ConfigError` при загрузке и ошибку в `validate` с
-  именем адаптера и недостающего свойства; `run` с ним не доходит до
-  run-start.
-- **And** второй загружается; шифрование и IAM исполняет store (OUT-03),
-  spec-runner проверяет только объявление контракта.
+- **Then** (а), (б) и (г) дают `ConfigError` при загрузке и ошибку в
+  `validate` с именем адаптера и свойства; у (г) причина названа —
+  «неприменимо» допустимо только для адаптера без транспорта, и объявить
+  его за адаптер с транспортом оператор не вправе; `run` с любым из них не
+  доходит до run-start.
+- **And** (в) загружается: `tls: n/a` — честное объявление
+  неприменимости, а не выполненное требование шифрования транспорта;
+  шифрование и IAM исполняет store (OUT-03), spec-runner проверяет только
+  объявление.
+- **And** гейт различает три значения `tls` — `true`, `false`, `n/a` — и
+  неявного не подставляет: применимость TLS заявляет **адаптер** своими
+  capabilities, а не оператор строкой в YAML; необъявленное `tls` остаётся
+  отказом «не объявлено», неизвестный адаптер объявить `n/a` не может
+  (fail-closed).
 - **And** `retention_days` вне 7–365 в том же config даёт отдельную
   `ConfigError` (BEH-42).
 

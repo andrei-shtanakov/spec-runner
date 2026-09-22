@@ -113,7 +113,7 @@ delivers:
     sources: [acceptance#AC-26, acceptance#AC-45]
   - id: DEL-04
     kind: capability
-    statement: "На загрузке `ConfigError` с именем адаптера и недостающего свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, либо `retention_days` вне 7–365; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start"
+    statement: "На загрузке `ConfigError` с именем адаптера и свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, объявил `tls: n/a` при адаптере с транспортом (применимость TLS — из capabilities адаптера по реестру, неизвестный адаптер `n/a` объявить не может), либо `retention_days` вне 7–365; `tls: n/a` у адаптера без транспорта загружается; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start"
     sources: [acceptance#AC-26, acceptance#AC-38]
     covered_by: BEH-28
   - id: DEL-05
@@ -137,8 +137,10 @@ encryption_at_rest, immutable_put, lifecycle)`, функцией ключей §
 блок `durability:` (`store: {adapter, options…}`, `ack`, `ack_timeout_seconds`,
 `checkpoint_ack_timeout_seconds`, `retention_days`) в поля `ExecutorConfig` и
 тем самым в `KNOWN_EXECUTOR_KEYS`; **на загрузке** `ConfigError`, если адаптер
-объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, или
-`retention_days` вне 7–365; `validate.py` повторяет те же проверки в отчёте.
+объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`,
+объявил `tls: n/a` при адаптере с транспортом (применимость — из
+capabilities адаптера по реестру, не из YAML), или `retention_days` вне
+7–365; `validate.py` повторяет те же проверки в отчёте.
 Путеподобные `store.options` (у первого адаптера — `root`) разрешаются **на
 загрузке** в абсолютные пути относительно `project_root`, а не лениво при
 первом `put` и не относительно CWD (design §1.1): процесс вправе сменить рабочий каталог внутри

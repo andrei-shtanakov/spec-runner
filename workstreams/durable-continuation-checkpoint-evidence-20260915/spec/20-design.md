@@ -1,6 +1,6 @@
 ---
 spec_stage: design
-status: approved
+status: draft
 owner_role: architects
 traces_to:
 - requirements
@@ -557,8 +557,16 @@ options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`,
 `retention_days`) в поля `ExecutorConfig` (и тем самым в
 `KNOWN_EXECUTOR_KEYS`), и **на загрузке** отказывает `ConfigError`, если
 адаптер объявил `tls: false`, не объявил `encryption_at_rest` или
-`immutable_put` (BEH-28), или `retention_days` вне 7–365 (BEH-42);
-`validate.py` повторяет те же проверки в своём отчёте.
+`immutable_put`, объявил `tls: n/a` при адаптере, у которого транспорт есть
+(BEH-28), или `retention_days` вне 7–365 (BEH-42); `validate.py` повторяет
+те же проверки в своём отчёте. `tls` трёхзначно — `true`/`false`/`n/a`, —
+и применимость TLS заявляет **адаптер** (`StoreCapabilities.tls` есть
+`None` у адаптера без транспорта; читается по имени адаптера из реестра
+`artifact_store`, а не из YAML): `n/a` в config допустимо ровно тогда, когда
+адаптер сам говорит «неприменимо», неизвестный адаптер объявить `n/a` не
+может. Решение владельца 2026-09-22: единственный поставленный адаптер
+иначе нельзя было объявить правдиво — `tls: true` про локальный том
+требовался гейтом, написанным ради правдивости объявлений.
 **Путеподобные `options` разрешаются в абсолютные пути там же, на
 загрузке** — один раз и относительно `project_root`, а не относительно CWD и
 не лениво при первом `put`. Причина в дереве: процесс вправе сменить рабочий каталог внутри себя
