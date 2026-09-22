@@ -11,7 +11,7 @@ waived-половина зеленела бы одна.
 
 import contextlib
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -26,7 +26,7 @@ from spec_runner.gates import (
     has_gates,
 )
 from spec_runner.state import ExecutorState
-from spec_runner.task import Task, parse_tasks
+from spec_runner.task import NegativeControl, Task, parse_tasks
 from spec_runner.tdd import RedCheckpoint, RedOutcome, resolve_namespace
 
 WAIVER = "characterisation · sanction: batch-approve-2026-09-09"
@@ -42,6 +42,16 @@ def _cfg(tmp_path: Path, **overrides) -> ExecutorConfig:
     return ExecutorConfig(**defaults)
 
 
+#: #428: waived-задача обязана нести объявление негативного контроля —
+#: иначе её отказывают до платного вызова, и тест про claims/запись
+#: проверял бы не свой предмет. Объявление здесь ВАЛИДНОЕ и намеренно
+#: неинтересное: предмет этого файла — waiver, а не контроль.
+_CONTROL = NegativeControl(
+    patch=PurePosixPath("spec/negative-controls/TASK-008.patch"),
+    selector="tests/test_frozen.py::t",
+)
+
+
 def _task(**overrides) -> Task:
     defaults: dict = {
         "id": "TASK-008",
@@ -49,6 +59,7 @@ def _task(**overrides) -> Task:
         "priority": "p2",
         "status": "todo",
         "estimate": "0.5d",
+        "negative_control": _CONTROL,
     }
     defaults.update(overrides)
     return Task(**defaults)
@@ -1352,7 +1363,12 @@ class TestPointOneStopsTheTaskBeforeThePaidCall:
         cfg = _repo_cfg(
             root,
             run_review=False,
-            auto_commit=False,
+            # #428: waived-задача под `auto_commit: false` отвергается до
+            # платного вызова — контроль нечем воспроизводить, коммита
+            # кандидата не будет вовсе. Стенд этого файла про запись
+            # применения, а не про коммиты, поэтому `auto_commit` включён;
+            # герметичность держат три флага ниже и подмены хуков.
+            auto_commit=True,
             run_tests_on_done=False,
             run_lint_on_done=False,
         )

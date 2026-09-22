@@ -267,15 +267,67 @@ def resolve_adapter(config: ExecutorConfig) -> TddRunnerAdapter | None:
     return adapter_for(name) if name else None
 
 
-def verify_red(
+@dataclass(frozen=True)
+class ReplayAttempt:
+    """Факт об ОДНОМ прогоне селектора в одноразовом worktree (#428, design §2).
+
+    Не вердикт: `ReplayAttempt` говорит, что произошло, а что это значит —
+    решают читатели (RED-путь через `verify_red`, негативный контроль через
+    свою таблицу). Несёт **стадию и код отказа**, потому что без них
+    различить «не запустилось» и «запустилось без вердикта» нельзя, а
+    именно на этом различении стоит классификация вины патча и вины стенда.
+    """
+
+    stage: str
+    detail: str
+    environment_id: str
+    sha: str = ""
+    selector: str = ""
+    mutated: bool = False
+    order: int = 0
+    refusal_code: str | None = None
+    outcome: RunOutcome | None = None
+    proof: SelectionProof | None = None
+    execution_proven: bool | None = None
+    selector_identity: str | None = None
+    returncode: int | None = None
+
+
+def _replay_selector(
     config: ExecutorConfig,
     *,
     sha: str,
     selector: str | Selector,
-    baseline_sha: str,
-) -> RedVerification:
-    """Replay ``selector`` against commit ``sha`` in a disposable worktree."""
+    baseline_sha: str | None = None,
+    mutate: Path | None = None,
+    preflight_only: bool = False,
+    order: int = 0,
+) -> ReplayAttempt:
+    """Один прогон `selector` против коммита `sha` в одноразовом worktree.
+
+    Общий шов: им пользуются и RED-реплей, и негативный контроль. Вся
+    дисциплина — worktree, preflight ПО ДЕРЕВУ КОММИТА, изоляция окружения,
+    удаление на каждом пути — живёт здесь в одном экземпляре; две копии
+    разошлись бы на первом же исправлении.
+
+    `mutate` — патч, применяемый внутри worktree до preflight (негативный
+    контроль). `preflight_only` останавливает вызов до прогона тестов:
+    нужен, чтобы переспросить разбор на чистом дереве, не платя прогоном.
+    """
     env_id = environment_id(Path(config.project_root))
+    selector_text = selector if isinstance(selector, str) else str(selector)
+
+    def attempt(stage: str, detail: str, **extra) -> ReplayAttempt:
+        return ReplayAttempt(
+            stage=stage,
+            detail=detail,
+            environment_id=extra.pop("environment_id", env_id),
+            sha=sha,
+            selector=selector_text,
+            mutated=mutate is not None,
+            order=order,
+            **extra,
+        )
 
     # Both refusals below come before anything is executed, and both answer the
     # same question — "can this exit code mean what we would read into it?"
@@ -285,11 +337,7 @@ def verify_red(
         # Same reasoning as the scoped-test refusal (#139): guessing which
         # component of `a && b && c` accepts a node id is how you run the wrong
         # program and then believe its answer.
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
-            "test_command is composite; cannot narrow it to a single node id",
-            env_id,
-        )
+        return attempt("input", "test_command is composite; cannot narrow it to a single node id")
 
     # The runner, before the selector (#198). A red is confirmed by reading an
     # exit code, and an exit code only means what a *specific* runner says it
@@ -299,13 +347,12 @@ def verify_red(
     # with a checkpoint, claims and a satisfied gate behind it.
     adapter = resolve_adapter(config)
     if adapter is None:
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
+        return attempt(
+            "input",
             f"cannot confirm a red for {selector!r}: no authoritative exit-code "
             f"mapping for test_command {config.test_command!r} — only pytest is "
             "recognised, and guessing another runner's codes is how a test that "
             "never ran becomes a confirmed red",
-            env_id,
         )
 
     # The selector is the adapter's syntax, not a universal one: `::` is
@@ -314,27 +361,27 @@ def verify_red(
     # exactly once by exactly one adapter.
     parsed = adapter.parse_selector(selector) if isinstance(selector, str) else selector
     if isinstance(parsed, SelectorRefusal):
-        return RedVerification(RedOutcome.UNVERIFIABLE, parsed.message, env_id)
+        return attempt("input", parsed.message, refusal_code=parsed.code)
 
     root = Path(config.project_root)
 
-    # `baseline_sha` is the "red *against what*" of the checkpoint (§3.3), and
-    # a pair where the red is not a descendant of its claimed baseline is a
-    # false record — cheaper to refuse here than to store and puzzle over. A
-    # commit is its own ancestor, so baseline == sha is fine.
-    ancestry = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", baseline_sha, sha],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    if ancestry.returncode != 0:
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
-            f"{baseline_sha[:12]} is not an ancestor of {sha[:12]} "
-            f"(or one of them does not resolve)",
-            env_id,
+    if baseline_sha is not None:
+        # `baseline_sha` is the "red *against what*" of the checkpoint (§3.3),
+        # and a pair where the red is not a descendant of its claimed baseline
+        # is a false record — cheaper to refuse here than to store and puzzle
+        # over. A commit is its own ancestor, so baseline == sha is fine.
+        ancestry = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", baseline_sha, sha],
+            cwd=root,
+            capture_output=True,
+            text=True,
         )
+        if ancestry.returncode != 0:
+            return attempt(
+                "input",
+                f"{baseline_sha[:12]} is not an ancestor of {sha[:12]} "
+                f"(or one of them does not resolve)",
+            )
 
     parent = tempfile.mkdtemp(prefix="spec-runner-red-")
     worktree = Path(parent) / "tree"
@@ -346,14 +393,106 @@ def verify_red(
     )
     if added.returncode != 0:
         shutil.rmtree(parent, ignore_errors=True)
-        return RedVerification(
-            RedOutcome.UNVERIFIABLE,
-            f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}",
-            env_id,
-        )
+        return attempt("worktree", f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}")
 
     prepared = None
     try:
+        if mutate is not None:
+            # Патч берётся ИЗ КАНДИДАТ-КОММИТА и применяется к нему же
+            # (AP-01): путь относительный, `cwd` — worktree, то есть
+            # читается копия коммита, а не рабочего дерева, которое могло
+            # уйти вперёд. «Нет в коммите» и «не применяется» разводятся
+            # кодом отказа: это разные факты о работе задачи, и
+            # классификация обязана их различать.
+            # Путь судится и ЗДЕСЬ, а не только предикатом неисполнимости:
+            # проверка ниже — `(worktree / mutate)`, и для абсолютного правого
+            # операнда `pathlib` возвращает сам абсолютный путь, то есть файл
+            # ВНЕ одноразового дерева. Отказ на месте дефекта, а не только у
+            # вызывающего: этот шов зовут и другие пути.
+            from .negative_control import patch_path_refusal
+
+            outside = patch_path_refusal(mutate)
+            if outside is not None:
+                return attempt("mutate", outside, refusal_code="patch_absent")
+            candidate_patch = worktree / mutate
+            # Одна проверка на всё правило «патч читается из коммита»:
+            # разрешённый путь обязан лежать ВНУТРИ одноразового дерева, чем
+            # бы ни был каждый его компонент. Отдельная проверка последнего
+            # компонента ловила ссылку-файл и пропускала ссылку-КАТАЛОГ
+            # (`spec/negative-controls -> /tmp/…`), за которой лежит обычный
+            # файл: `is_file()` и `git apply` следуют по ней одинаково.
+            # Соседняя фича отвергает такой вход по имени (`parse_group_element`).
+            try:
+                inside = candidate_patch.resolve().is_relative_to(worktree.resolve())
+            except OSError:
+                inside = False
+            if not inside:
+                return attempt(
+                    "mutate",
+                    f"the declared patch {str(mutate)!r} resolves outside the candidate "
+                    f"commit {sha[:12]} (a symbolic link in the path): what it points at "
+                    "is not in the commit, and the control judges the commit",
+                    refusal_code="patch_absent",
+                )
+            if not candidate_patch.is_file():
+                # «Нет в коммите» и «нет вовсе» — разные факты, и второй не
+                # про автора: патч, лежащий в рабочем дереве, но игнорируемый
+                # git'ом, `git add -A` не застейджит, и реплей не найдёт его
+                # в коммите. Сказать такому оператору «задача его не
+                # доставила» значит отправить его искать файл, который у
+                # него на диске. Проверка стоит одного `git check-ignore`.
+                reason = "the task did not deliver it"
+                in_tree = (root / mutate).is_file()
+                if in_tree:
+                    ignored = subprocess.run(
+                        ["git", "check-ignore", "--", str(mutate)],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                    )
+                    reason = (
+                        "it is in the working tree but git IGNORES it, so no `git add` "
+                        "could stage it into the candidate — a fact about this "
+                        "repository's .gitignore, not about the task"
+                        if ignored.returncode == 0
+                        else "it is in the working tree but was never committed"
+                    )
+                return attempt(
+                    "mutate",
+                    f"the declared patch {str(mutate)!r} is not in the candidate commit "
+                    f"{sha[:12]}: {reason}",
+                    refusal_code="patch_absent",
+                )
+            # Читается ДО `git apply`: сбой ввода-вывода — факт о машине, а
+            # `git apply` отдал бы его тем же ненулевым кодом, что и настоящую
+            # неприменимость, то есть сбой стенда предъявлялся бы автору как
+            # факт о его работе, без переисполнений (design §3, BEH-11 б).
+            try:
+                candidate_patch.read_bytes()
+            except OSError as exc:
+                return attempt(
+                    "mutate",
+                    f"the declared patch {str(mutate)!r} cannot be read: {exc}",
+                    refusal_code="patch_unreadable",
+                )
+            applied = subprocess.run(
+                # `--`: путь приходит из объявления в tasks.md, и строка вида
+                # `--directory=/tmp` разобралась бы git'ом как ОПЦИЯ (а без
+                # позиционного аргумента git читает stdin). Практика репо:
+                # `git rm --cached … -- *rels` в `git_ops`.
+                ["git", "apply", "--index", "--", str(mutate)],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+            if applied.returncode != 0:
+                return attempt(
+                    "mutate",
+                    f"the declared patch does not apply to its own candidate commit "
+                    f"{sha[:12]}: {applied.stderr.strip()[:200]}",
+                    refusal_code="patch_inapplicable",
+                )
+
         # Preflight reads the **checkpoint's** source, not the canonical tree.
         # The selector describes a test in the commit being replayed, and the
         # working tree has moved on — measured on a real run, where the agent's
@@ -362,7 +501,12 @@ def verify_red(
         # reading the file from anywhere else quietly breaks it.
         refusal = adapter.preflight(worktree, parsed)
         if refusal is not None:
-            return RedVerification(RedOutcome.UNVERIFIABLE, refusal.message, env_id)
+            return attempt("preflight", refusal.message, refusal_code=refusal.code)
+        identity = _declaration_line(worktree, parsed)
+        if preflight_only:
+            return attempt(
+                "preflight", "preflight only: nothing was run", selector_identity=identity
+            )
 
         # Prove and isolate the environment before running anything (#207).
         # A `git worktree` carries tracked files only, so a language that keeps
@@ -370,12 +514,30 @@ def verify_red(
         # a real Elixir project, where the replay could not compile at all.
         prepared = adapter.prepare_replay(root, worktree, parsed)
         if isinstance(prepared, ReplayEnvironmentRefusal):
-            return RedVerification(RedOutcome.UNVERIFIABLE, prepared.message, env_id)
+            return attempt("environment", prepared.message)
         env_id = prepared.environment_id or env_id
         result = _run_selector(config, worktree, adapter, parsed, prepared.env)
-        return _classify(adapter, parsed, result, env_id)
+        output = f"{result.stdout}\n{result.stderr}"
+        return attempt(
+            "run",
+            _tail(output),
+            environment_id=env_id,
+            outcome=adapter.classify(result),
+            proof=adapter.prove_selected(parsed, result),
+            execution_proven=adapter.execution_proven(parsed, result),
+            selector_identity=identity,
+            returncode=result.returncode,
+        )
     except Exception as exc:  # a broken replay is unverifiable, never a red
-        return RedVerification(RedOutcome.UNVERIFIABLE, f"replay failed: {exc}", env_id)
+        return attempt(
+            # `subprocess.run(timeout=…)` поднимает `subprocess.TimeoutExpired`
+            # — подкласс `SubprocessError`, а НЕ `TimeoutError`. Проверка по
+            # одному `TimeoutError` не была истинной ни разу: стадия `timeout`
+            # не возникала ни на одном пути, и таймаут приходил как `run` по
+            # замыкающей строке «всё прочее». Шов общий с RED-путём.
+            "timeout" if isinstance(exc, TimeoutError | subprocess.TimeoutExpired) else "run",
+            f"replay failed: {exc}",
+        )
     finally:
         # The private build goes with the worktree, on every path — success,
         # refusal, timeout and the exception above. A build left behind is
@@ -405,6 +567,73 @@ def verify_red(
             subprocess.run(["git", "worktree", "prune"], cwd=root, capture_output=True, text=True)
 
 
+def verify_red(
+    config: ExecutorConfig,
+    *,
+    sha: str,
+    selector: str | Selector,
+    baseline_sha: str,
+) -> RedVerification:
+    """Replay ``selector`` against commit ``sha`` in a disposable worktree.
+
+    Тонкая обёртка над `_replay_selector` (#428, design §2): вся механика
+    реплея живёт там, здесь — только отображение факта о прогоне в вердикт
+    о КРАСНОМ. Нулевой дрейф этого отображения доказывают существующие
+    RED-тесты, проходящие без правок ожиданий.
+    """
+    attempt = _replay_selector(config, sha=sha, selector=selector, baseline_sha=baseline_sha)
+    if attempt.stage != "run" or attempt.outcome is None or attempt.proof is None:
+        return RedVerification(RedOutcome.UNVERIFIABLE, attempt.detail, attempt.environment_id)
+    if attempt.proof is SelectionProof.PROVEN:
+        if attempt.outcome is RunOutcome.TESTS_FAILED:
+            return RedVerification(
+                RedOutcome.EXPECTED_FAIL, "the selector failed on replay", attempt.environment_id
+            )
+        if attempt.outcome is RunOutcome.TESTS_PASSED:
+            return RedVerification(
+                RedOutcome.NOT_RED, "the selector passed on replay", attempt.environment_id
+            )
+    return RedVerification(
+        RedOutcome.UNVERIFIABLE,
+        f"the test run exited {attempt.returncode} without reaching a verdict "
+        f"({attempt.outcome.value}, selection {attempt.proof.value}): {attempt.detail}",
+        attempt.environment_id,
+    )
+
+
+def _declaration_line(worktree: Path, selector: Selector) -> str | None:
+    """Текст строки объявления теста в СУДИМОМ дереве, или None (#428, Q-G).
+
+    Заполняется только там, где селектор адресуется строкой: на pytest node
+    id устойчив к сдвигам, и идентичность читать нечего — поле честно
+    пусто, а не выдумано.
+
+    Правило, которое это обслуживает, сформулировано как ОГРАНИЧЕНИЕ, а не
+    как детектор подмены: патч обязан оставить строку объявления
+    нетронутой. Сравнение текста не отличило бы одноимённый чужой тест, и
+    заявлять полную идентичность было бы неправдой; предел строковой
+    адресации назван прямо, а не спрятан.
+
+    Читается ВНУТРИ половины, пока её дерево живо: половины исполняются
+    последовательно, и одновременно развёрнутых worktree не существует.
+    """
+    line = getattr(selector.locator, "line", None)
+    if line is None:
+        return None
+    try:
+        text = (worktree / str(selector.path)).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        # Не только ввод-вывод: файл в другой кодировке поднял бы
+        # `UnicodeDecodeError`, и он вышел бы наружу — а этот шов общий с
+        # RED-путём, который до #428 такой файл переживал. Идентичность
+        # объявления — вспомогательный факт: её отсутствие означает «не
+        # читаем», а не «замени этим исключением вердикт».
+        return None
+    if not 1 <= int(line) <= len(text):
+        return None
+    return text[int(line) - 1].strip()
+
+
 def _run_selector(
     config: ExecutorConfig,
     worktree: Path,
@@ -426,37 +655,6 @@ def _run_selector(
         text=True,
         timeout=REPLAY_TIMEOUT_SECONDS,
         env={**os.environ, **(env or {})},
-    )
-
-
-def _classify(
-    adapter: TddRunnerAdapter,
-    selector: Selector,
-    result: subprocess.CompletedProcess,
-    env_id: str,
-) -> RedVerification:
-    """Two independent answers, combined by one table (#198).
-
-    `classify` says what the run did; `prove_selected` says whether the test we
-    asked for is what ran. Only both together can confirm a red — on ExUnit an
-    out-of-range line silently runs a *different* test and reports an ordinary
-    failure, so an exit code alone cannot mean "the test you named failed".
-    """
-    outcome = adapter.classify(result)
-    proof = adapter.prove_selected(selector, result)
-    if proof is SelectionProof.PROVEN:
-        if outcome is RunOutcome.TESTS_FAILED:
-            return RedVerification(
-                RedOutcome.EXPECTED_FAIL, "the selector failed on replay", env_id
-            )
-        if outcome is RunOutcome.TESTS_PASSED:
-            return RedVerification(RedOutcome.NOT_RED, "the selector passed on replay", env_id)
-    output = f"{result.stdout}\n{result.stderr}"
-    return RedVerification(
-        RedOutcome.UNVERIFIABLE,
-        f"the test run exited {result.returncode} without reaching a verdict "
-        f"({outcome.value}, selection {proof.value}): {_tail(output)}",
-        env_id,
     )
 
 

@@ -554,6 +554,212 @@ def _is_our_bookkeeping_commit(log_line: str, task_id: str) -> bool:
     return subject.startswith(f"{task_id}:")
 
 
+def _control_will_run(task: Task, config: ExecutorConfig) -> bool:
+    """Будет ли для этой задачи исполнен негативный контроль.
+
+    Нужен ровно для одного: решить, обязана ли дешёвая проверка claims
+    случиться ПЕРЕД двумя живыми реплеями. Предикат, а не побочный эффект,
+    потому что спрашивается до вызова.
+    """
+    # `auto_commit: false` — не «контроль не удовлетворён», а «судить
+    # нечего»: коммита, который сделал бы этот прогон, не существует, и
+    # реплей против HEAD судил бы ЧУЖУЮ работу. Это член класса структурной
+    # невозможности, и отказ по нему уже стоит до первого платного вызова
+    # (точка 1); здесь остаётся молчать, а не выносить вердикт о работе по
+    # дереву, к которой она не относится.
+    if not config.auto_commit:
+        return False
+    try:
+        waiver = config.resolve_waiver(task)
+    except Exception:  # разобран выше по стеку
+        return False
+    return waiver is not None and task.negative_control is not None
+
+
+def _run_negative_control_before_review(
+    task: Task, config: ExecutorConfig, candidate_sha: str | None
+) -> tuple[str | None, str, str]:
+    """Исполнить контроль до платного ревью; `(вердикт, текст, sha)`.
+
+    Инструментальная неудача **переисполняется здесь**, в пределах
+    `gate_recovery_attempts`, а не в гейте: гейт читает готовый вердикт и
+    повторная оценка перечитала бы тот же кэш (Р-3). Детерминированные
+    исходы не повторяются — тот же вопрос тем же байтам.
+    """
+    if not _control_will_run(task, config):
+        return None, "", ""
+
+    # SHA вычисляется ПОСЛЕ проверки waiver'а, а не в аргументе вызова.
+    # Первая редакция считала его заранее (`sha or _head_sha(config)`), и
+    # проект без waived-задач платил лишним git-вызовом на каждой задаче —
+    # нарушение NFR-02, которое этот же бандл и запрещает. Поймал полный
+    # сбор: три чужих теста считают вызовы `subprocess.run`.
+    candidate_sha = candidate_sha or _head_sha(config)
+
+    from .negative_control import candidate_refusal, run_negative_control
+
+    absent = candidate_refusal(task, config, candidate_sha)
+    if absent is not None:
+        # Запись и здесь: «контроль не мог быть исполнен» — такой же durable
+        # факт, как исход прогона, и без неё единственным следом остаётся
+        # `attempts.error`, то есть состояние «проверка подтверждается тем,
+        # что задача не завершилась», против которого FR-06 и написан.
+        from .negative_control import ControlResult
+
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("unsatisfied", absent, None, None)
+        )
+        return "unsatisfied", absent, ""
+
+    # Кандидат обязан НЕСТИ работу задачи. Реплей читает коммит; если
+    # первичный `commit_task_work` отказал, работа осталась в дереве, а HEAD
+    # — это ПРЕЖНЕЕ состояние, где тест и мутант уже давали satisfied.
+    # Вердикт с него уехал бы в гейт, а финальный коммит подмёл бы
+    # незакоммиченную замену assertion уже вместе с DONE (приёмка PR #565).
+    # `tasks.md` исключён: харнессовый флип статуса — не работа.
+    from .git_ops import WorktreeStatusError, uncommitted_work_paths
+    from .negative_control import ControlResult
+
+    # `strict=True`: функция по докстрингу — ОТЧЁТ и fail-open, при ошибке
+    # `git status` отвечает []. Вызывающему-ГВАРДУ «не смог прочитать» нельзя
+    # читать как «чисто»: неизвестное состояние дерева превращалось бы в
+    # допуск, и контроль реплеил бы старый HEAD (приёмка PR #565, круг 2).
+    try:
+        stranded = uncommitted_work_paths(config, exclude=[config.tasks_file], strict=True)
+    except WorktreeStatusError as exc:
+        detail = (
+            f"the state of the working tree could not be read ({exc}): whether the "
+            f"candidate {candidate_sha[:12]} carries the task's work is unknown, and "
+            "unknown is not clean"
+        )
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
+        )
+        return "instrument_error", detail, candidate_sha
+    if stranded:
+        detail = (
+            "the candidate commit does not carry the task's work: "
+            f"{len(stranded)} uncommitted path(s) in the tree ({', '.join(stranded[:3])}"
+            f"{'…' if len(stranded) > 3 else ''}) — replaying {candidate_sha[:12]} would "
+            "judge a tree that is not what would be merged"
+        )
+        _record_negative_control(
+            task, config, candidate_sha, ControlResult("instrument_error", detail, None, None)
+        )
+        return "instrument_error", detail, candidate_sha
+
+    budget = max(0, int(getattr(config, "gate_recovery_attempts", 0)))
+    result = None
+    for _ in range(budget + 1):
+        result = run_negative_control(config, sha=candidate_sha, control=task.negative_control)
+        if result.verdict != "instrument_error":
+            break
+    assert result is not None
+    _record_negative_control(task, config, candidate_sha, result)
+    return result.verdict, result.detail, candidate_sha
+
+
+def _record_negative_control(task: Task, config: ExecutorConfig, sha: str, result) -> None:
+    """Записать свидетельство контроля (#428, FR-06).
+
+    Пишется на ЛЮБОМ вердикте, а не только на успехе: запись фиксирует, что
+    проверка состоялась и чем кончилась, — иначе «контроль был исполнен»
+    подтверждается только тем, что задача завершилась, то есть ровно тем
+    доверием, которое механика и заменяет.
+
+    Пин `environment_id` + `config_hash` — по Q-D: «подтверждено» значит
+    разное под разными адаптерами и разными policy-ключами.
+    """
+    from .gates import GateContext
+    from .state import ExecutorState
+    from .tdd import resolve_namespace
+
+    control = task.negative_control
+    if control is None:
+        return
+    # Пустой sha — «кандидата нет», и `git rev-parse ":path"` ответил бы
+    # blob'ом из ИНДЕКСА: свидетельство несло бы хэш содержимого, которое
+    # никакой коммит не фиксировал, в поле, читаемом как «патч того
+    # кандидата». Отсутствие пишется отсутствием.
+    blob = (
+        subprocess.run(
+            ["git", "rev-parse", f"{sha}:{control.patch}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if sha
+        else None
+    )
+    clean = result.clean
+    mutated = result.mutated
+    try:
+        with ExecutorState(config) as state:
+            state.record_negative_control(
+                task_id=task.id,
+                namespace=resolve_namespace(config),
+                commit_sha=sha,
+                selector=control.selector,
+                patch_blob_sha=(
+                    blob.stdout.strip() if blob is not None and blob.returncode == 0 else ""
+                ),
+                clean_outcome=(clean.outcome.value if clean and clean.outcome else ""),
+                mutated_outcome=(mutated.outcome.value if mutated and mutated.outcome else ""),
+                verdict=result.verdict,
+                environment_id=(clean.environment_id if clean else ""),
+                config_hash=GateContext(
+                    task_id=task.id, checkpoint_sha=sha, config=config, state=None
+                ).config_hash,
+            )
+    except Exception as exc:  # noqa: BLE001 - бухгалтерия не роняет прогон
+        logger.warning("Could not record the negative control", task_id=task.id, error=str(exc))
+
+
+def _negative_control_facts(
+    task: Task,
+    config: ExecutorConfig,
+    gated_sha: str,
+    verdict: str | None,
+    detail: str,
+    verdict_sha: str,
+    review_changed_candidate: bool,
+) -> dict:
+    """Вердикт контроля для гейта, переисполненный при смене кандидата.
+
+    Вердикт привязан к коммиту, на котором получен: ревью может изменить
+    дерево, и гейт одобрил бы тогда кандидата, на котором контроль не
+    исполнялся.
+    """
+    if verdict is None:
+        return {}
+    if not review_changed_candidate:
+        return {"negative_control": verdict, "negative_control_detail": detail}
+
+    # Ревью изменило дерево. Правки к этому моменту уже закоммичены (см.
+    # вызов `commit_task_work` перед `gated_sha`), поэтому НОВЫЙ коммит —
+    # это и есть то, что смержится, и его надо судить заново.
+    if gated_sha and gated_sha != verdict_sha:
+        fresh = _run_negative_control_before_review(task, config, gated_sha)
+        verdict, detail = fresh[0] or verdict, fresh[1] or detail
+        return {"negative_control": verdict, "negative_control_detail": detail}
+
+    # Коммита не случилось — правки остались в дереве (коммит отказал или
+    # нечего было стейджить). Переисполнять нечего: реплей читает КОММИТ, и
+    # тот же коммит даст те же байты — два полных реплея ради того же
+    # ответа, с риском, что флейк перевернёт вердикт уже прошедшей задачи.
+    # Но и старый вердикт проносить нельзя: он описывает дерево, которое
+    # смержено НЕ будет. Честный ответ — «не установлено».
+    return {
+        "negative_control": "instrument_error",
+        "negative_control_detail": (
+            "review changed the tree after the control ran and the change could not be "
+            f"committed ({gated_sha[:12] or 'no candidate'}): the mutant's evidence "
+            "describes a tree that will not be merged, and replaying the same commit "
+            "would answer about the same bytes"
+        ),
+    }
+
+
 def _run_pre_terminal_gates(
     task: Task,
     config: ExecutorConfig,
@@ -1252,6 +1458,75 @@ def post_done_hook(
         )
         return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
 
+    # #428 §4a: контроль исполняется ДО платного ревью и отказывает НА
+    # МЕСТЕ. Два основания, и оба измеримые. Текст обязательства (FR-08)
+    # сообщает ревьюеру, что машина УЖЕ показала различение: исполнять
+    # контроль после ревью значило бы утверждать как состоявшийся факт то,
+    # чего не произошло. И платный вызов не тратится на работу, которая уже
+    # отказана, — прецедент формы рядом: `_claims_intact_before_review`
+    # (#214).
+    #
+    # ПОСЛЕ claims, а не до: тот же порядок, что обоснован в точке 1
+    # (`execution.py`). Нарушенный claim — про уже нанесённый ущерб чужой
+    # замороженной эвиденции, неудовлетворённый контроль — про ещё не
+    # предъявленное доказательство; первым называется более серьёзный факт.
+    # Цена обратного порядка измерима: до двух полных прогонов селектора в
+    # одноразовых worktree на кандидата, который не смержится ни при каком
+    # исходе, и оператор, которому про сломанный byte-lock не сказали вовсе.
+    # Claims — ПЕРЕД контролем, и когда ревью выключено тоже. Проверка выше
+    # висит на `config.run_review`, потому что заводилась «до платного
+    # вызова»; с этим сайтом дорогих вещей стало две, и при
+    # `run_review: false` контроль опережал claims-гейт мержа — нарушенная
+    # чужая заморозка не называлась вовсе, а оператор читал про сломанный
+    # инструмент. Поймал полный сбор: два чужих теста точки 2.
+    if (
+        not candidate_before_review
+        and is_registered("tdd.claims", "tests")
+        and _control_will_run(task, config)
+    ):
+        candidate_before_review = _head_sha(config)
+        claims_blocked = _claims_intact_before_review(task, config, candidate_before_review)
+        if claims_blocked is not None:
+            claims_blocked = _commit_blocked_status(
+                task, config, claims_blocked, candidate_before_review
+            )
+            return (False, claims_blocked, ReviewVerdict.SKIPPED.value, "", False)
+
+    if reporter and _control_will_run(task, config):
+        # Своя стадия — иначе отказ контроля читается как «сломалось на
+        # коммите»: `error_stage` берётся из последней объявленной, а для
+        # waived-задачи это `commit`. Тот же дефект этот файл уже чинил у
+        # пре-терминального гейта (#367 BEH-30), и лечится он так же.
+        reporter.enter("tests")
+    control_verdict, control_detail, control_sha = _run_negative_control_before_review(
+        task, config, review_checkpoint_sha
+    )
+    if control_verdict in ("unsatisfied", "instrument_error"):
+        # Обе половины отказа стоят ЗДЕСЬ, до платного вызова. Design §4a:
+        # «до гейта доезжает только удовлетворённый». Инструментальная
+        # неудача уже исчерпала `gate_recovery_attempts` выше, и дальше её
+        # ждёт тот же гейт с тем же ответом — с той разницей, что ревьюер
+        # к тому моменту оплачен вердиктом, с которым нечего делать. Тот же
+        # прецедент, на который ссылается комментарий выше:
+        # `_claims_intact_before_review` останавливается и на неудаче
+        # инструмента тоже. Вид отказа разный — «работа не доставлена»
+        # (exit 1) против «о работе ничего не известно» (exit 2).
+        status = (
+            GateStatus.UNSATISFIED
+            if control_verdict == "unsatisfied"
+            else GateStatus.INSTRUMENT_ERROR
+        )
+        refusal = refusal_for(status, control_detail)
+        # Судимый коммит — `control_sha`: при `run_review: false`
+        # `review_checkpoint_sha` не вычисляется вовсе, и bookkeeping-коммит
+        # отказа оставался без трейлера `Gate-Candidate`, хотя соседняя
+        # ветка claims в той же конфигурации его называет. Два отказа одного
+        # прогона по одному HEAD не должны иметь разную судебную запись.
+        refusal = _commit_blocked_status(
+            task, config, refusal, control_sha or review_checkpoint_sha
+        )
+        return (False, refusal, ReviewVerdict.SKIPPED.value, "", False)
+
     # Run code review (before commit, so fixes can be included)
     review_verdict = ReviewVerdict.SKIPPED
     review_output: str | None = None
@@ -1466,6 +1741,15 @@ def post_done_hook(
     # have all run and before anything decides on them.
     _record_tdd_phase(config, task, TddPhase.GREEN_VERIFYING)
 
+    # Правки ревью коммитятся ДО гейта — ровно то, что объявляет комментарий
+    # выше («HEAD после работы и любых правок ревью»). Без этого гейты судят
+    # коммит, которого не будет: финальный `commit_task_work` подметает
+    # правки уже ПОСЛЕ одобрения. Для негативного контроля это критично
+    # вдвойне — реплей читает КОММИТ, поэтому переисполнение по грязному
+    # дереву было гарантированным no-op: два полных реплея ради тех же байт.
+    if review_changed_candidate and config.auto_commit and has_gates():
+        commit_task_work(task, config)
+
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
 
     # #380 review finding 1 (round 1) / round 3 finding 3: the candidate the
@@ -1502,6 +1786,19 @@ def post_done_hook(
                 "execution_mode": config.resolve_execution_mode(task),
                 # #429: point 2 of 3 (pre-terminal / merge).
                 "waiver_applied": config.resolve_waiver(task) is not None,
+                # #428: гейт ЧИТАЕТ вердикт, а не исполняет контроль. Если
+                # ревью изменило кандидата, вердикт снят с другого дерева —
+                # переисполняем здесь, до гейта, тем же рассуждением, что у
+                # `_reverify_live_evidence_for_candidate`.
+                **_negative_control_facts(
+                    task,
+                    config,
+                    gated_sha,
+                    control_verdict,
+                    control_detail,
+                    control_sha,
+                    review_changed_candidate,
+                ),
             },
         )
         if blocked is not None:

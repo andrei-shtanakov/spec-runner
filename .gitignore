@@ -76,6 +76,12 @@ workstreams/*/spec/00-discovery/*
 !/spec/
 /spec/*
 !/spec/*-tasks.md
+# …и мутанты негативного контроля (#428): патч доставляется задачей В
+# КАНДИДАТ-КОММИТ и читается ИЗ него — игнорируемый путь означал бы
+# `patch_absent` на каждом прогоне, то есть фичу, неприменимую в
+# собственном репозитории.
+!/spec/negative-controls/
+!/spec/negative-controls/*.patch
 
 COWORK_CONTEXT.md
 _cowork_output/

@@ -417,6 +417,28 @@ class ExecutorState:
                 provenance TEXT
             )
         """)
+        # #428 FR-06: свидетельство негативного контроля. Обе половины
+        # раздельно — «красный мутант» и «зелёный оригинал» разные факты, и
+        # слитая запись не отличила бы контроль, который вторую половину не
+        # гонял вовсе. `environment_id` + `config_hash` — пин по Q-D: без
+        # него запись пережила бы смену адаптера и продолжала бы читаться
+        # как действительная, хотя вердикт получен другим инструментом.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS negative_controls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                selector TEXT NOT NULL,
+                patch_blob_sha TEXT NOT NULL,
+                clean_outcome TEXT NOT NULL,
+                mutated_outcome TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                environment_id TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
         # #429: applying an addressed waiver is a DIFFERENT fact from
         # `phase_waivers`, not a second record of it. `phase_waivers` says an
         # operator overrode an observed outcome — actor, reason, after the
@@ -1126,6 +1148,85 @@ class ExecutorState:
             ),
         )
         self._conn.commit()
+
+    _NEGATIVE_CONTROL_COLUMNS = (
+        "task_id",
+        "namespace",
+        "commit_sha",
+        "selector",
+        "patch_blob_sha",
+        "clean_outcome",
+        "mutated_outcome",
+        "verdict",
+        "environment_id",
+        "config_hash",
+        "timestamp",
+    )
+
+    def _insert_negative_control(self, values: tuple) -> None:
+        """Единственный писатель строки — отдельным швом, чтобы запись можно
+        было сорвать в тесте, не подменяя весь `ExecutorState`."""
+        assert self._conn is not None
+        columns = ", ".join(self._NEGATIVE_CONTROL_COLUMNS)
+        marks = ", ".join("?" for _ in self._NEGATIVE_CONTROL_COLUMNS)
+        self._conn.execute(f"INSERT INTO negative_controls ({columns}) VALUES ({marks})", values)
+        self._conn.commit()
+
+    def record_negative_control(
+        self,
+        *,
+        task_id: str,
+        namespace: str,
+        commit_sha: str,
+        selector: str,
+        patch_blob_sha: str,
+        clean_outcome: str,
+        mutated_outcome: str,
+        verdict: str,
+        environment_id: str,
+        config_hash: str,
+    ) -> None:
+        """Записать исход контроля (#428, FR-06).
+
+        Append-only и **best-effort**, как `record_red_checkpoint`:
+        бухгалтерия не должна ронять прогон, который её породил. Но
+        отсутствие строки НЕ читается позже как «удовлетворён» — вердикт
+        живёт в своём месте, а свидетельство объясняет, а не допускает.
+        """
+        try:
+            self._insert_negative_control(
+                (
+                    task_id,
+                    namespace,
+                    commit_sha,
+                    selector,
+                    patch_blob_sha,
+                    clean_outcome,
+                    mutated_outcome,
+                    verdict,
+                    environment_id,
+                    config_hash,
+                    datetime.now().isoformat(),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - запись не вправе ронять прогон
+            from .logging import get_logger
+
+            get_logger("state").warning(
+                "Could not record the negative control", task_id=task_id, error=str(exc)
+            )
+
+    def negative_controls(self, namespace: str, task_id: str | None = None) -> list[dict]:
+        """Свидетельства контроля в ``namespace``, старейшее первым."""
+        assert self._conn is not None
+        columns = ", ".join(self._NEGATIVE_CONTROL_COLUMNS)
+        sql = f"SELECT {columns} FROM negative_controls WHERE namespace = ?"
+        params: list = [namespace]
+        if task_id is not None:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        rows = self._conn.execute(sql + " ORDER BY id", params).fetchall()
+        return [dict(zip(self._NEGATIVE_CONTROL_COLUMNS, row, strict=True)) for row in rows]
 
     def applied_waivers(self, namespace: str) -> list[dict]:
         """Applied waivers in ``namespace``, newest last — for `tdd status`."""

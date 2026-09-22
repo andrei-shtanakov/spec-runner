@@ -657,6 +657,130 @@ def _config_for_validation(
     return ExecutorConfig(**kwargs)
 
 
+def _validate_negative_control(task: "Task", config: "ExecutorConfig", waiver) -> ValidationResult:
+    """Статические дефекты объявления негативного контроля (#428, FR-10).
+
+    Ошибками считается только то, что установимо **из самого объявления**;
+    факт о дереве, которое `validate` не вправе считать окончательным,
+    остаётся предупреждением.
+    """
+    from .negative_control import patch_path_refusal
+
+    result = ValidationResult()
+    control = task.negative_control
+    error = task.negative_control_error
+
+    if control is None and error is None and waiver is None:
+        return result
+
+    if waiver is None:
+        # «Маркер не объявлен» и «маркер есть, но не резолвится» приходят сюда
+        # одним значением: обработчик `ConfigError` выше ставит `waiver = None`
+        # ПОСЛЕ того, как записал свою ошибку. Читать второе как первое значит
+        # печатать про одну задачу две строки, из которых вторая — неправда
+        # («carries no **TDD-waiver:**» про задачу, которая маркер несёт), и
+        # отправлять оператора искать то, что у него есть. Правило про одного
+        # читателя на одну ошибку этот файл уже держит (#431 п.3).
+        # `is not None`, а не истинность: строка `**TDD-waiver:**  ` даёт
+        # после `.strip()` ПУСТОЕ значение, и читать его как «маркера нет»
+        # значит снова печатать вторую, ложную строку про файл, который
+        # маркер содержит. Спрашивается «строка маркера была?».
+        if task.tdd_waiver is not None:
+            # Маркер есть, но не резолвится — про это ошибка уже записана.
+            # Молчать здесь можно только про НЕГО: неразбираемое объявление
+            # контроля — независимый дефект, видимый из той же строки, и
+            # проглотить его значит вернуть оператора за вторым кругом за
+            # тем, что было видно сразу. `validate` существует ровно затем,
+            # чтобы сообщать всё сразу (#431 п.3 — про дубли, не про потери).
+            if error is not None:
+                result.errors.append(f"{task.id}: {error}")
+            return result
+        if control is not None or error is not None:
+            result.errors.append(
+                f"{task.id}: **Negative-control:** is declared but the task carries no "
+                "**TDD-waiver:** — a negative control without a lifted obligation has "
+                "no subject"
+            )
+        return result
+
+    if task.status == "done":
+        # Закрытая задача уже прошла свой путь; требовать от неё маркер
+        # значит переписывать историю и блокировать прогон соседей.
+        return result
+
+    if error is not None:
+        result.errors.append(f"{task.id}: {error}")
+        return result
+
+    if control is None:
+        result.errors.append(
+            f"{task.id}: carries **TDD-waiver:** but declares no **Negative-control:** — "
+            "the class is admissible only with evidence that the new test goes red when "
+            "the property it claims to check is broken"
+        )
+        return result
+
+    # Селектор судится адаптером проекта — тем же, что и на прогоне. Отказ
+    # по нему существует (предикат неисполнимости), но стоит ПОСЛЕ
+    # `pre_start_hook`; назвать его здесь — значит назвать бесплатно.
+    # Молчание при нерезолвимом адаптере намеренное: это отдельный дефект,
+    # о котором говорит своя проверка, а не повод промолчать про селектор.
+    try:
+        from .tdd_runners import SelectorRefusal, adapter_for
+
+        adapter_name = config.resolve_tdd_runner()
+        adapter = adapter_for(adapter_name) if adapter_name else None
+    except Exception:  # нерезолвимый адаптер — не предмет ЭТОЙ проверки
+        adapter = None
+    if adapter is not None:
+        parsed = adapter.parse_selector(control.selector)
+        if isinstance(parsed, SelectorRefusal):
+            result.errors.append(
+                f"{task.id}: the declared negative-control selector is not one the "
+                f"{adapter.name} adapter can read: {parsed.message}"
+            )
+            return result
+
+    # Путь судится ТЕМ ЖЕ читателем, что и предикат неисполнимости: иначе
+    # `validate` находит файл на машине оператора (для абсолютного операнда
+    # `project_root / patch` возвращает сам абсолютный путь) и молчит про
+    # объявление, которое прогон отвергнет.
+    path_refusal = patch_path_refusal(control.patch)
+    if path_refusal is not None:
+        result.errors.append(f"{task.id}: {path_refusal}")
+        return result
+
+    patch = Path(config.project_root) / str(control.patch)
+    if patch.is_file():
+        # Файл на месте — и всё равно может не доехать до кандидат-коммита:
+        # `git add -A` игнорируемый путь не стейджит, реплей не найдёт патч
+        # и задача заблокируется навсегда. Названо здесь, где починка ещё
+        # бесплатна, а не после платного вызова.
+        import subprocess
+
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--", str(control.patch)],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if ignored.returncode == 0:
+            result.errors.append(
+                f"{task.id}: declared negative-control patch {str(control.patch)!r} is "
+                "IGNORED by git, so no `git add` can stage it into the candidate commit "
+                "the control replays — the mutant would be absent on every run; carve "
+                "the path out of .gitignore or declare a versioned one"
+            )
+            return result
+    if not patch.is_file():
+        result.warnings.append(
+            f"{task.id}: declared negative-control patch {str(control.patch)!r} does not "
+            "exist in the working tree yet — it is written by this task, so its absence "
+            "here is a fact for the run to establish, not one this check can assume fixed"
+        )
+    return result
+
+
 def _validate_verify_first_declarations(
     tasks: list[Task], config: ExecutorConfig
 ) -> ValidationResult:
@@ -717,9 +841,21 @@ def _validate_verify_first_declarations(
         # for errors that were visible together the first time — and
         # `validate` exists precisely to report them all at once.
         try:
-            config.resolve_waiver(task)
+            waiver = config.resolve_waiver(task)
         except ConfigError as exc:
             result.errors.append(f"{task.id}: {exc}")
+            waiver = None
+
+        # #428 FR-10: объявление негативного контроля — две границы, и обе
+        # обязательны. По СТАТУСУ: закрытая waived-задача не проверяется —
+        # три `✅ DONE` задачи этого репо несут `**TDD-waiver:**` и не несут
+        # `**Negative-control:**`, которого тогда не существовало, и без
+        # фильтра они остановили бы каждый прогон (OUT-03 запрещает такой
+        # ретроспективный эффект). По ДЕРЕВУ: отсутствие файла патча —
+        # предупреждение, а не ошибка, потому что патч создаёт сама задача;
+        # тот же выбор и по той же причине, что у `not_a_regular_file`
+        # ниже.
+        result.merge(_validate_negative_control(task, config, waiver))
 
         if task.verifies_error:
             # Already reported by validate_task_fields — a different defect

@@ -44,7 +44,15 @@ logger = get_logger("execution")
 # === Task Executor ===
 
 
-def _refuse_task(task, config, state, reason: str) -> str:
+def _refuse_task(
+    task,
+    config,
+    state,
+    reason: str,
+    *,
+    kind: "RefusalKind | None" = None,
+    stage: str = "setup",
+) -> str:
     """Refuse one task with the attempt recorded, instead of raising (#429).
 
     A declaration the resolver cannot read is an operator error about THIS
@@ -54,8 +62,19 @@ def _refuse_task(task, config, state, reason: str) -> str:
     `in_progress`, and every later task unstarted.
     """
     from .gates import GateStatus, refusal_for
+    from .phases import Refusal
 
-    refusal = refusal_for(GateStatus.INSTRUMENT_ERROR, reason)
+    # Вид отказа — про ПРИРОДУ факта, а не про место в коде. Дефектное
+    # объявление — факт о работе (exit 1, «не доставлено»); сломанный
+    # инструмент — exit 2, «о работе ничего не известно», и оркестратор
+    # читает разницу. AC-11 запрещает infrastructure-исход для класса
+    # структурной невозможности; design §4 предписывал обратное —
+    # противоречие в базе, разрешено в пользу приёмки (AP-12).
+    refusal = (
+        Refusal(reason, kind, terminal=True)
+        if kind is not None
+        else refusal_for(GateStatus.INSTRUMENT_ERROR, reason)
+    )
     state.record_attempt(
         task.id,
         False,
@@ -63,7 +82,11 @@ def _refuse_task(task, config, state, reason: str) -> str:
         error=str(refusal),
         error_code=_refusal_error_code(refusal),
         error_kind=_refusal_error_kind(refusal),
-        error_stage="setup",
+        # `setup` верно для первого вызывающего (#429): он стоит ДО
+        # `pre_start_hook`. Отказ, стоящий позже, обязан называть СВОЮ
+        # стадию — иначе одно и то же место прогона попадает в две разные
+        # строки `error_stage`, и дашборд их не сложит.
+        error_stage=stage,
     )
     log_progress(f"⛔ {reason}", task.id)
     # TERMINAL, not a plain failure: an unreadable declaration is a fact about
@@ -573,6 +596,7 @@ def execute_task(
 
     if waiver is None:
         return _execute_task(task, config, state, harness_baseline)
+
     # The question is "were the TDD gates already in force", not "is anything
     # registered at all" — and `has_gates()` answers the second. A `standard`
     # project with `review_policy: required` has the review gate attached, so
@@ -583,12 +607,23 @@ def execute_task(
     # class of mistake.
     borrowed = not is_registered("tdd.claims", "tests")
     ensure_red_gate()
+    # #428: СВОЙ признак заимствования, а не чужой. `borrowed` выше — ответ
+    # про `tdd.claims`; проект, где claims уже зарегистрированы, дал бы
+    # `False`, и гейт контроля остался бы в реестре НА ВЕСЬ ПРОЦЕСС — ровно
+    # та утечка, ради предотвращения которой эта обёртка и написана
+    # («borrowing would then look like inheriting»).
+    from .gates import ensure_negative_control_gate
+
+    borrowed_nc = not is_registered("tdd.negative_control", "tests")
+    ensure_negative_control_gate()
     try:
         return _execute_task(task, config, state, harness_baseline)
     finally:
         if borrowed:
             REGISTRY.unregister("tdd.red", "tests")
             REGISTRY.unregister("tdd.claims", "tests")
+        if borrowed_nc:
+            REGISTRY.unregister("tdd.negative_control", "tests")
 
 
 def _execute_task(
@@ -667,6 +702,53 @@ def _execute_task(
             )
             update_task_status(config.tasks_file, task_id, "todo")
             return False
+        # #428 FR-01/FR-09: контроль проверяется ЗДЕСЬ — после точки 1 и до
+        # записи применения. Порядок не произволен с обеих сторон.
+        #
+        # После claims: нарушенный claim — про чужую замороженную эвиденцию,
+        # то есть про уже нанесённый ущерб, а отсутствующее объявление — про
+        # ещё не предъявленное доказательство. Первым называется более
+        # серьёзный факт, и гарантия #429 («claims проверяются на всех трёх
+        # точках») остаётся видимой ровно такой, какой была.
+        #
+        # До записи применения: задача, остановленная здесь, waiver'ом НЕ
+        # воспользовалась, и строка о снятом baseline-RED про неё была бы
+        # ложью — тем же рассуждением, каким событие уже отодвинуто за
+        # точку 1.
+        from .negative_control import structural_impossibility
+
+        control_refusal: str | None = None
+        if task.negative_control_error is not None:
+            control_refusal = task.negative_control_error
+        elif task.negative_control is None:
+            control_refusal = (
+                "**TDD-waiver:** is declared but **Negative-control:** is not: the "
+                "characterisation class is admissible only with evidence that the new "
+                "test goes red when the property it claims to check is broken"
+            )
+        else:
+            control_refusal = structural_impossibility(task, config)
+        if control_refusal is not None:
+            # Флип в `in_progress` уже произошёл, а задача, остановленная до
+            # платного вызова, в работу не входила. Без отката харнессовый
+            # флип остаётся в `tasks.md` незакоммиченным, и следующий прогон
+            # либо уносит его в `git stash` через `rescue_uncommitted`, либо
+            # коммитит через `recover_interrupted_flip`, печатая «Recovered an
+            # interrupted run» про задачу, которая ни разу не запускалась. Обе
+            # соседние отказные ветки — claims выше и запись waiver'а ниже —
+            # откатывают статус ровно по этой причине.
+            update_task_status(config.tasks_file, task_id, "todo")
+            from .phases import RefusalKind
+
+            return _refuse_task(
+                task,
+                config,
+                state,
+                control_refusal,
+                kind=RefusalKind.POLICY,
+                stage=reporter.current or "setup",
+            )
+
         # Событие пишется ПОСЛЕ точки 1, а не до неё: оно фиксирует, что
         # санкция ПРИМЕНЕНА, а не что её собирались применить. Задача,
         # остановленная гейтом до платного вызова, waiver'ом не
