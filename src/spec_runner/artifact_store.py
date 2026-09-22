@@ -27,7 +27,7 @@ import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import NamedTuple, Protocol, runtime_checkable
 from uuid import uuid4
 
 
@@ -187,6 +187,10 @@ class LocalVolumeStore:
     проверкой и записью помещается чужая публикация).
     """
 
+    #: У пути на диске транспорта нет: TLS неприменим, и адаптер говорит это
+    #: сам — гейт BEH-28 читает это отсюда, а не из YAML оператора.
+    TLS_APPLIES = False
+
     def __init__(self, root: Path | str, *, encryption_at_rest: bool = False) -> None:
         self.root = Path(root)
         self._encryption_at_rest = encryption_at_rest
@@ -196,9 +200,9 @@ class LocalVolumeStore:
 
         `None`, а не `False`: у пути на диске транспорта нет, и объявлять
         «TLS отсутствует» — значит отвечать на вопрос, которого здесь не
-        стоит. См. открытый вопрос про гейт BEH-28 в TODO: конфиг с этим
-        адаптером обязан объявить `tls: true`, то есть прямо обратное тому,
-        что адаптер говорит о себе.
+        стоит. С 2026-09-22 гейт BEH-28 это различает: config объявляет
+        `tls: n/a`, и оно допустимо ровно потому, что `TLS_APPLIES` у этого
+        класса ложно.
         """
         return StoreCapabilities(
             tls=None,
@@ -311,7 +315,38 @@ class _ReadOnlyStore:
 
 
 #: Адаптеры, известные по имени в `durability.store.adapter`.
-ADAPTERS = ("local_volume",)
+class AdapterDeclaration(NamedTuple):
+    """Что адаптер заявляет о себе ДО открытия store (BEH-28).
+
+    Только факты, ни одной ссылки на класс: реестр читают `config.py` и
+    `validate.py` на загрузке, и раздавать им пишущий класс значило бы
+    открыть второй Publisher-less вход в обход пояса § 1.4 (находка
+    локального ревью: пояс ищет имена `LocalVolumeStore`/`_build_store`, а
+    `ADAPTERS["…"](root).put(...)` он не увидел бы).
+    """
+
+    #: Применим ли TLS. Источник — атрибут класса адаптера, снятый здесь
+    #: один раз: два места для одного факта разошлись бы молча.
+    tls_applies: bool
+
+
+#: Декларации адаптеров по имени. `False` у тома: у пути на диске
+#: транспорта нет, и это говорит адаптер, а не оператор в YAML.
+ADAPTER_DECLARATIONS: dict[str, AdapterDeclaration] = {
+    "local_volume": AdapterDeclaration(tls_applies=LocalVolumeStore.TLS_APPLIES),
+}
+#: Имена известных адаптеров — как и прежде, кортеж, без классов.
+ADAPTERS: tuple[str, ...] = tuple(ADAPTER_DECLARATIONS)
+
+
+def tls_applies(adapter: str) -> bool | None:
+    """Применим ли TLS к адаптеру по имени; `None` — адаптер неизвестен.
+
+    Неизвестный адаптер не заявляет ничего, и за него `n/a` объявить
+    некому — вызывающий читает `None` как отказ (fail-closed, BEH-28).
+    """
+    declared = ADAPTER_DECLARATIONS.get(adapter)
+    return None if declared is None else declared.tls_applies
 
 
 def _build_store(

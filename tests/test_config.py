@@ -847,3 +847,143 @@ class TestUnknownStoreAdapterIsRefusedAtLoad:
             encoding="utf-8",
         )
         assert any("s3" in e for e in validate_config(cfg).errors)
+
+
+class TestBEH28TlsIsDeclaredNotAsserted:
+    """BEH-28 после решения владельца 2026-09-22: `tls` — объявляемое свойство
+    с тремя значениями, а не требование объявить его истинным.
+
+    Единственный поставленный адаптер (`local_volume`) нельзя было объявить
+    правдиво: у пути на диске транспорта нет, а гейт требовал `tls: true`.
+    Применимость TLS заявляет АДАПТЕР своими capabilities; оператор в YAML
+    лишь объявляет `n/a`, и оно проходит ровно тогда, когда адаптер сам
+    говорит «неприменимо». Сетевой адаптер обойти TLS строкой не может.
+    """
+
+    def _write(self, tmp_path, body: str) -> Path:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(f"executor:\n  durability:\n    store:\n{body}")
+        return cfg
+
+    def test_na_on_a_transport_less_adapter_loads(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n"
+            "      options:\n        root: durable-store\n"
+            "      tls: n/a\n"
+            "      encryption_at_rest: true\n"
+            "      immutable_put: true\n",
+        )
+
+        result = load_config_from_yaml(cfg)
+
+        assert result["durability_store_adapter"] == "local_volume"
+        assert result["durability_store_tls"] is None, "n/a обязано остаться трёхзначным, не False"
+
+    def test_na_on_an_adapter_with_a_transport_is_refused_by_name(self, tmp_path, monkeypatch):
+        """Сетевой адаптер: capabilities говорят, что TLS применим. `n/a` в
+        YAML — попытка обойти требование, и отказ называет причину."""
+        from spec_runner import artifact_store
+        from spec_runner.config import ConfigError
+
+        monkeypatch.setitem(
+            artifact_store.ADAPTER_DECLARATIONS,
+            "fake_net",
+            artifact_store.AdapterDeclaration(tls_applies=True),
+        )
+        cfg = self._write(
+            tmp_path,
+            "      adapter: fake_net\n      tls: n/a\n"
+            "      encryption_at_rest: true\n      immutable_put: true\n",
+        )
+
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+
+        msg = str(exc.value)
+        assert "fake_net" in msg and "tls" in msg, msg
+        assert "transport" in msg.lower(), f"причина не названа: {msg}"
+
+    def test_na_on_an_unknown_adapter_is_refused(self, tmp_path):
+        """Неизвестный адаптер применимость не заявляет — значит `n/a` за
+        него объявить некому (fail-closed)."""
+        from spec_runner.config import ConfigError
+
+        cfg = self._write(
+            tmp_path,
+            "      adapter: nobody_knows\n      tls: n/a\n"
+            "      encryption_at_rest: true\n      immutable_put: true\n",
+        )
+
+        with pytest.raises(ConfigError) as exc:
+            load_config_from_yaml(cfg)
+
+        assert "nobody_knows" in str(exc.value) and "tls" in str(exc.value)
+
+    def test_false_is_still_refused_and_undeclared_is_still_missing(self, tmp_path):
+        """Три значения, не два: `false` — отказ, отсутствие — «не объявлено»,
+        и ни одно из них не читается как `n/a`."""
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError) as false_exc:
+            load_config_from_yaml(
+                self._write(
+                    tmp_path,
+                    "      adapter: local_volume\n      tls: false\n"
+                    "      encryption_at_rest: true\n      immutable_put: true\n",
+                )
+            )
+        with pytest.raises(ConfigError) as absent_exc:
+            load_config_from_yaml(
+                self._write(
+                    tmp_path,
+                    "      adapter: local_volume\n"
+                    "      encryption_at_rest: true\n      immutable_put: true\n",
+                )
+            )
+
+        assert "tls" in str(false_exc.value) and "tls" in str(absent_exc.value)
+
+    def test_true_still_loads_on_any_adapter(self, tmp_path):
+        cfg = self._write(
+            tmp_path,
+            "      adapter: local_volume\n      options:\n        root: d\n"
+            "      tls: true\n      encryption_at_rest: true\n      immutable_put: true\n",
+        )
+
+        assert load_config_from_yaml(cfg)["durability_store_tls"] is True
+
+    def test_the_local_volume_declares_no_transport_and_no_class_is_exported(self):
+        """Факт «у тома транспорта нет» читается из декларации, а не из класса:
+        реестр не раздаёт пишущий `LocalVolumeStore` — иначе появился бы
+        второй Publisher-less вход в обход пояса § 1.4."""
+        from spec_runner import artifact_store
+
+        assert artifact_store.tls_applies("local_volume") is False
+        assert artifact_store.tls_applies("nobody_knows") is None
+        assert all(not isinstance(v, type) for v in artifact_store.ADAPTER_DECLARATIONS.values())
+        assert isinstance(artifact_store.ADAPTERS, tuple)
+
+    def test_the_second_gate_site_refuses_too(self, tmp_path, monkeypatch):
+        """`__post_init__` — второй сайт того же гейта (прямое построение
+        `ExecutorConfig`, минуя `read_durability`). Мутация «снять отказ там»
+        выживала: YAML-путь его не проходит."""
+        from spec_runner import artifact_store
+        from spec_runner.config import ConfigError, ExecutorConfig
+
+        monkeypatch.setitem(
+            artifact_store.ADAPTER_DECLARATIONS,
+            "fake_net",
+            artifact_store.AdapterDeclaration(tls_applies=True),
+        )
+
+        with pytest.raises(ConfigError) as exc:
+            ExecutorConfig(
+                project_root=tmp_path,
+                durability_store_adapter="fake_net",
+                durability_store_tls=None,
+                durability_store_encryption_at_rest=True,
+                durability_store_immutable_put=True,
+            )
+
+        assert "transport" in str(exc.value).lower(), str(exc.value)
