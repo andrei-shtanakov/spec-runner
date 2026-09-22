@@ -800,7 +800,7 @@ runtime-state по инварианту конвейера «нужное для
       audit, calls и closure; durable call-start подтверждается до траты, а
       run-closure пишется на каждом orderly exit, включая ранние отказы без
       task/attempt.
-- [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export
+- [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export @epic:eco.spec-toolchain
       Реализовать принятый механизм. До него инвариант не выполнен: `tasks.md`
       восстанавливает очередь, но не claims, authority decisions, стоимость и
       результаты неуспешных вызовов; planning вообще не имеет task-attempt
@@ -1060,7 +1060,7 @@ PR-ом, что этот пункт; реализация придёт с DT-02/
 заявкой #528** — по объёму, решением владельца: усиление трогало все
 инварианты бандла и не сходилось за одиннадцать кругов ревью.
 
-- [ ] **bundle-480-doctor-site-scope** (spec-runner#525, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-doctor-site-scope
+- [ ] **bundle-480-doctor-site-scope** (spec-runner#525, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-doctor-site-scope @epic:eco.spec-toolchain
       P0, блокер DT-02: `doctor` был объявлен покрытым seam-ом «без правок»,
       хотя его платный вызов исполняется в эфемерном scratch, а следы уходили
       в учёт вызывающего. Решение владельца — разделить две области
@@ -1082,7 +1082,7 @@ PR-ом, что этот пункт; реализация придёт с DT-02/
       решение зафиксировано в бандле этим PR-ом, код — в общей реализации
       #480 (`runtime-state-artifact-export`), DT-02/DT-03/DT-04/DT-05.
 
-- [ ] **bundle-480-narrow-checkpoint-delivery-window** (spec-runner#527, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-narrow-checkpoint-delivery-window
+- [ ] **bundle-480-narrow-checkpoint-delivery-window** (spec-runner#527, from devtools) @owner:github:andrei-shtanakov @id:bundle-480-narrow-checkpoint-delivery-window @epic:eco.spec-toolchain
       P1, release-блокер снятия experimental-статуса `restore`. Предикат шага
       5 проверки (6) не меняется (fail-closed сделал бы недостижимым путь
       «дверь `close-call` → restore»); окно сужается **гейтом**: drain перед
@@ -1225,7 +1225,7 @@ tasks-артефакта и семь раундов подряд честно н
       amend. Без `commands.format` дрейфующий red отказывается ДО freeze с
       именем недостающего ключа. Тесты: `tests/test_red_absorb_format.py`.
 
-- [ ] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override
+- [ ] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override @epic:eco.spec-toolchain
       `SPEC_RUNNER_BUDGET_USD` / `SPEC_RUNNER_TASK_BUDGET_USD` перекрывают
       конфиг (CLI-флаг > env > файл > дефолт), действующий кап и его источник
       печатаются на старте. Ничего из этого нет: в `src/` env-переменных
@@ -1235,7 +1235,7 @@ tasks-артефакта и семь раундов подряд честно н
       Смежное: единица бюджета —
       `docs/plans/2026-09-01-token-accounting-proposals.md`.
 
-- [ ] **repo-local-stage-profiles** (spec-runner#338, from devtools) @owner:github:andrei-shtanakov @id:repo-local-stage-profiles
+- [ ] **repo-local-stage-profiles** (spec-runner#338, from devtools) @owner:github:andrei-shtanakov @id:repo-local-stage-profiles @epic:eco.spec-toolchain
       `load_profile` читает только bundled `profiles/*.yaml`, `stage_path`
       жёстко `spec/<prefix><stage>.md`; `spec approve tasks` деривит
       `traces_to` из вшитого lite и дописывает несуществующий `design`.
@@ -1246,7 +1246,7 @@ tasks-артефакта и семь раундов подряд честно н
       без пост-обработки. Дизайн-объём: трогает `spec.py`, `prompt.py`,
       `validate.py` — все три читают стадии из профиля (C1).
 
-- [ ] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard
+- [ ] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard @epic:eco.spec-toolchain
       Минимум из запроса частично есть: `validate` сообщает о несуществующем
       файле в группе `verify_first` (`validate.py:745`) — но как
       **предупреждение**, а не отказ: рабочее дерево ≠ коммит, который
@@ -1256,7 +1256,7 @@ tasks-артефакта и семь раундов подряд честно н
       сожжённый прогон. Боевой случай: 11 из 14 сценариев семи verify-задач
       не были покрыты ничем, валидация прошла.
 
-- [ ] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver
+- [ ] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver @epic:eco.spec-toolchain
       Найдено при закрытии #335: `**Mode:** verify_first` и `**TDD-waiver:**`
       не описаны ни в `spec/FORMAT.md`, ни в README — только в
       `docs/architecture.md` / `docs/state-schema.md`. FORMAT.md теперь
