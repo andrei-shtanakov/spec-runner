@@ -96,17 +96,20 @@ def format_check_instrument_error(returncode: int) -> bool:
 WAIVER_REVIEW_OBLIGATIONS: dict[str, str] = {
     "characterisation": (
         "This task ran under an addressed TDD waiver: it was NOT required to "
-        "show a failing baseline test first. The one guarantee that a "
-        "no-baseline test is worth anything is its NEGATIVE CONTROL — "
-        "evidence, in the diff or the task record, that the new test FAILS "
-        "when the property it claims to check is broken (e.g. the assertion "
-        "was inverted, or the code under test was temporarily reverted, and "
-        "the test went red).\n"
-        "Verify that this evidence is present and that it actually "
-        "demonstrates the test is substantive. If it is absent, or it does "
-        "not demonstrate that, report REVIEW_FAILED and say so. A test that "
-        "cannot fail is not coverage, and no gate anywhere checks this — you "
-        "are the only check."
+        "show a failing baseline test first. In its place the task declared a "
+        "NEGATIVE CONTROL — a patch, committed with the work, that breaks the "
+        "property the new test claims to check — and the harness has already "
+        "executed it before this review: the declared test passed on the "
+        "clean candidate and failed with the mutant applied. You are reading "
+        "this because that discrimination was shown; a task whose control "
+        "was not satisfied never reaches review.\n"
+        "What the machine cannot judge is the SUBJECT of your review: whether "
+        "the mutant really breaks the property the task claims to cover, "
+        "rather than something incidental (a syntax error, a deleted import, "
+        "a change the test would fail on for the wrong reason). Read the "
+        "declared patch against the task's stated property. If the mutant "
+        "does not correspond to that property, the red it produced proves "
+        "nothing about the test, and you report REVIEW_FAILED and say so."
     ),
 }
 

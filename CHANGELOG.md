@@ -10,6 +10,62 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+> **Next release is a MAJOR bump (3.0.0).** The `negative_controls` table
+> extends the SQLite state surface, and `AGENTS.md` (Testing Guidelines)
+> makes any change to that surface a major-version change. Confirmed by the
+> owner for #428 (AP-12.3): the minor bump that shipped `waivers_applied` in
+> v2.36.0 was a precedent, not a repeal of the rule. Consumer compatibility
+> is unaffected — the table is additive and `--json-result` is untouched —
+> so the goldens in `tests/test_json_result_contract.py` do not change; the
+> declaration is about the rule, not about a broken reader.
+
+### Added
+
+- **Executable negative control for `characterisation` tasks under
+  `Mode: standard`** (#428, DT-01…DT-05). A task carrying
+  `**TDD-waiver:** characterisation · sanction: <id>` is no longer trusted
+  on its word that the new test can fail. It declares
+  `**Negative-control:** <path to patch> :: <selector>` — a patch committed
+  with the work that breaks the property the test claims to check — and
+  before the paid review the harness replays the selector twice against the
+  candidate commit in a disposable worktree: as committed (must be green)
+  and with the patch applied (must be red). Only a **satisfied** control
+  reaches the reviewer and the pre-terminal gate; `unsatisfied` refuses on
+  the spot (exit 1, the work), an exhausted `instrument_error` refuses as
+  infrastructure (exit 2, the machine). The declaration is checked
+  statically by `validate` (unparseable line, waiver without control or the
+  reverse, a path outside the tree or one git ignores, a selector the
+  project's adapter cannot read) and refused **before the first paid call**
+  for the structurally impossible configurations (`auto_commit: false`,
+  composite `test_command`, unresolvable adapter). Every execution — either
+  verdict — leaves a row in the new **`negative_controls`** table
+  (`docs/state-schema.md`), surfaced by `tdd status` / `--json` through one
+  reader. The path is judged as a whole (absolute, `..`, symlinked file or
+  directory all refuse), the control judges only a commit that carries the
+  task's work (a failed candidate commit, or an unreadable `git status`,
+  stops it), and review fixes are committed **before** the gates so the
+  verdict describes the tree that will be merged. A project with no waived
+  task pays nothing: measured — same git calls, test runs and state-DB opens
+  as a run with the mechanism absent (`tests/test_negative_control_dormancy.py`).
+  The RED replay (`verify_red`) is now a thin wrapper over the same seam
+  (`_replay_selector`); its existing tests pass with no expectation changed.
+  Canonical patch location `spec/negative-controls/<TASK-ID>.patch` is carved
+  out of this repo's `.gitignore` — a gitignored path can never reach the
+  candidate commit. `tests/test_negative_control_verdicts.py` runs in the
+  mandatory ExUnit CI job (`SPEC_RUNNER_REQUIRE_EXUNIT=1` makes a missing
+  toolchain a collection error, not a skip).
+
+### Changed
+
+- **The reviewer's waiver obligation no longer says "you are the only
+  check"** (#428, FR-08). With the control executed by the harness before
+  review, that sentence would state as absent a check that has already
+  happened. The block now says the machine showed discrimination against the
+  *applied* mutant and names the subject of review: whether the mutant
+  corresponds to the property the task claims — a mutant that merely breaks
+  the build produces a red that proves nothing about the test. The text
+  still comes from the class, never from the marker's own words.
+
 ### Fixed
 
 - **One defect, one line: `validate` no longer reports a mode typo twice**

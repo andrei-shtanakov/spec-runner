@@ -257,6 +257,42 @@ per-task waivers the unqualified word would read as a claim about every task.
 
 Experimental: shape may change; external consumers should not depend on it yet.
 
+### `negative_controls` (experimental, #428)
+
+One row per **executed negative control** of a waived `characterisation`
+task — written on **every** verdict, not only on success. Columns:
+`task_id`, `namespace`, `commit_sha`, `selector`, `patch_blob_sha`,
+`clean_outcome`, `mutated_outcome`, `verdict`, `environment_id`,
+`config_hash`, `timestamp`.
+
+A waived task declares `**Negative-control:** <path to patch> :: <selector>`
+in `tasks.md`: a patch **committed with the work** that breaks the property
+the new test claims to check. Before the paid review the harness replays the
+declared selector twice against the candidate commit in a disposable
+worktree — once as committed (the *clean* half) and once with the patch
+applied (the *mutated* half) — and only a **satisfied** control (green
+clean, red mutated) lets the task reach the reviewer and the pre-terminal
+gate.
+
+| Column | Says |
+|---|---|
+| `commit_sha` | the candidate commit both halves judged — empty when there was none to judge |
+| `patch_blob_sha` | git blob hash of the patch **in that commit**; empty when the commit has no such path (never the index blob) |
+| `clean_outcome` / `mutated_outcome` | each half separately (`RunOutcome` value or empty when that half never ran) — a merged field could not tell a control that skipped its second half from one that ran it |
+| `verdict` | `satisfied` / `unsatisfied` / `instrument_error` |
+| `environment_id`, `config_hash` | the pin (Q-D): a verdict obtained under another adapter or another policy configuration is not this verdict |
+
+The two halves are recorded apart on purpose: "the mutant went red" and "the
+original was green" are different facts, and `unsatisfied` /
+`instrument_error` rows explain a blocked task where `attempts.error` alone
+would only say that it stopped.
+
+Surfaced by `spec-runner tdd status --json` under the `negative_controls`
+key, and in the human view as three lines per record (candidate, halves,
+verdict) — one reader feeds both surfaces, so they cannot drift.
+
+Experimental: shape may change; external consumers should not depend on it yet.
+
 ### `gate_verdicts` (experimental, #164)
 
 One row per pre-terminal policy gate evaluation. Columns: `task_id`,
@@ -611,11 +647,18 @@ A change is **breaking** if it:
 - changes a stored value format (e.g. ISO 8601 → Unix epoch)
 - drops a previously-documented `ErrorCode` or `ReviewVerdict` value
 
-A change is **non-breaking** if it:
+A change is **non-breaking** for *consumers* if it:
 
 - adds a new column, table, JSON key, or CLI flag
 - adds a new `ErrorCode` or `ReviewVerdict` value (consumers must tolerate unknowns)
 - improves internal storage (indexes, triggers) without touching the surface above
+
+The list above describes what a consumer must tolerate; it is **not** the
+versioning rule. `AGENTS.md` (Testing Guidelines) is stricter and prevails:
+*any* change to the SQLite state surface — an added table included — bumps
+the major version. Confirmed by the owner for the `negative_controls` table
+(#428, AP-12.3): the minor bump that shipped `waivers_applied` in v2.36.0 was
+a precedent, not a repeal of the rule.
 
 Breaking changes require:
 
