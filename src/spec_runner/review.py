@@ -205,10 +205,14 @@ def append_waiver_obligation(prompt: str, config: ExecutorConfig, task: Task) ->
     never from the marker's own words: the declaration names a class, it does
     not get to write the terms it is judged by.
 
-    Why the reviewer at all: negative control is the one condition of the
-    class with no executable gate anywhere (#428). The waiver removes the
-    baseline-RED requirement, and the only thing left standing between "no
-    baseline" and "a test that cannot fail" is this reader.
+    Why the reviewer at all, after #428: the harness now EXECUTES the
+    negative control before this call (`_run_negative_control_before_review`)
+    and only a satisfied verdict reaches the reviewer. What the machine cannot
+    judge is whether the mutant corresponds to the property the task claims —
+    a mutant that breaks the build produces a red that proves nothing about
+    the test. That correspondence is what the obligation now asks for; the
+    old text ("you are the only check") would state as absent a check that
+    has already happened.
     """
     from .config import WAIVER_REVIEW_OBLIGATIONS, ConfigError
 
