@@ -81,6 +81,13 @@ class TestAdmission:
             ("no frontmatter at all\n", 0, "approved"),
             ("---\nstatus: [unclosed\n---\nx\n", 1, "malformed"),
             ("---\n- a list\n---\nx\n", 1, "malformed"),
+            # Acceptance review, round 2: a `---`-prefixed key is not the
+            # closing delimiter; the status after it must still be read.
+            (
+                "---\nspec_stage: decomposition\n---note: example\nstatus: draft\n---\nbody\n",
+                1,
+                "draft",
+            ),
         ],
     )
     def test_the_admission_table(self, tmp_path, capsys, decomposition, expect_rc, needle):

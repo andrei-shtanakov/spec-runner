@@ -795,13 +795,16 @@ def read_frontmatter_strict(path: Path) -> dict | None:
     mapping raises instead of reading as "no frontmatter" — for an external
     stage that would silently turn "malformed" into "no status" (#338 §6).
     """
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith(_FM_DELIM + "\n"):
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if lines[0].rstrip() != _FM_DELIM:
         return None
-    end = text.find("\n" + _FM_DELIM, len(_FM_DELIM))
-    if end == -1:
+    # The closing delimiter is a whole line (#338 acceptance review): a YAML
+    # key that merely starts with `---` must not end the block, or whatever
+    # follows it — `status: draft` — silently drops out.
+    closing = next((i for i in range(1, len(lines)) if lines[i].rstrip() == _FM_DELIM), None)
+    if closing is None:
         raise ExternalStageError(f"{path}: malformed frontmatter — no closing `---`")
-    block = text[len(_FM_DELIM) + 1 : end]
+    block = "\n".join(lines[1:closing])
     try:
         loaded = yaml.safe_load(block)
     except yaml.YAMLError as exc:

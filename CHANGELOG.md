@@ -17,8 +17,10 @@ is a **breaking change** and requires a major version bump plus an entry here.
   stage may be `external: true` with a `path` (`{prefix}`, `{ws}`), resolved
   against the project root and never allowed to share a file with another
   stage (symlinks resolved). An external upstream admits `spec approve` of
-  its downstream when its file exists and its frontmatter `status`, if any,
-  is `approved`; malformed frontmatter is refused with the YAML error.
+  its downstream — and an `approved` `spec adopt`, which otherwise adopts as
+  draft (`--force` does not lift it) — when its file exists and its
+  frontmatter `status`, if any, is `approved`; the closing `---` is a whole
+  line; malformed frontmatter is refused with the YAML error.
   spec-runner never writes an external stage: `approve`/`reject`/`adopt`/
   `check`/`plan --gated` refuse it as a target, `spec status` shows it as
   `external`, `plan --gated` reports `waiting`, and the stale cascade skips
