@@ -24,13 +24,16 @@ meaning. Classified now so the release does not have to rediscover it.
   task's **standing** confirmed red (an abandoned one proves nothing; a
   superseded one needs `resume` first) holds an active claim and is an
   ancestor of `<sha>`, `<sha>` is on HEAD's line, the red's own
-  selector passes when replayed against `<sha>` — everything it selected ran
+  selector, replayed alone against `<sha>` (the scoped builder, so a
+  `test_command` naming `tests/` does not run the whole suite), passes — everything it selected ran
   and passed, so a skip is not a green and a parametrized red still counts
   (new adapter method `passed_in_full`) — and this task's claims are
   intact there. Then, in one transaction: lifecycle DONE, the task's claims
   released, a `complete` remedy row with actor and reason. It does **not**
   check the review verdict or the other pre-terminal gates, and says so on
-  success: going around them is recorded as the operator's decision. Exit 0
+  success: going around them is recorded as the operator's decision.
+  `tasks.md` is not changed; when it still shows the task open, the output
+  says so and names `spec-runner task done <id> --force`. Exit 0
   closed, 1 refused, 2 replay without a verdict (nothing recorded).
 
 ### Fixed

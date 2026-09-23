@@ -186,7 +186,10 @@ against what the operator last saw silently applies to whatever arrived since.
   all run before anything is written: the confirmed red is an ancestor of
   `<sha>` and `<sha>` is an ancestor of HEAD (on HEAD's line — whether its
   content survived a later revert is not looked for); the red's selector **passes**
-  when replayed against `<sha>`, **all of it** — everything the selector
+  when replayed **alone** against `<sha>` (the scoped builder verify-first
+  uses: the red-replay builder only appends the selector, so `pytest tests/
+  -m "not slow" <node>` would judge the whole directory's summary), **all
+  of it** — everything the selector
   selected ran and passed, nothing skipped or expected-to-fail beside it
   (the adapter's `passed_in_full`: a skip also exits 0, and `verify_red`
   reads it as "not red", which here is the success; "exactly one test ran"
@@ -201,7 +204,8 @@ against what the operator last saw silently applies to whatever arrived since.
   **What it does not attest:** the review verdict and the other pre-terminal
   gates are not checked, and the command does not confirm that any external
   review took place. The actor and the reason record who answers for going
-  around them. A repeat on the same lineage is `already applied`; any other
+  around them. `tasks.md` is not touched — `run` selects by it, so the
+  command says so when the task is still open there. A repeat on the same lineage is `already applied`; any other
   DONE — the ordinary one, or a new red after a completion — is sent to
   `release`.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a

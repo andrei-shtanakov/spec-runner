@@ -588,8 +588,15 @@ def complete(
     # negative control's clean half: "exactly one test ran" locks out every
     # parametrized red (local review). The green is "everything the selector
     # selected ran and passed" — the adapter's `passed_in_full`.
+    # Scoped: the red-replay builder only appends the selector, so a real
+    # `test_command` (`pytest tests/ -m "not slow"`) would run the directory,
+    # and the rest of the suite's summary is not this selector's green.
     attempt = _replay_selector(
-        config, sha=sha, selector=evidence.selector, baseline_sha=evidence.baseline_sha
+        config,
+        sha=sha,
+        selector=evidence.selector,
+        baseline_sha=evidence.baseline_sha,
+        scoped=True,
     )
     if (
         attempt.stage == "run"
@@ -1106,7 +1113,28 @@ def _cmd_complete(args, config: ExecutorConfig) -> int:
         f"commit; released {result.released} claim(s)"
     )
     print("   Not checked: the review verdict and other pre-terminal gates — recorded as yours.")
+    status = _tasks_md_status(config, args.task_id)
+    if status != "done":
+        # `run` selects by tasks.md, not by the lifecycle: a task left open
+        # there is sent to a paid agent again (local review).
+        shown = status or "absent"
+        print(f"   tasks.md is not changed (it shows {args.task_id} as {shown}); if the task")
+        print(f"   is done there too: `spec-runner task done {args.task_id} --force`")
     return 0
+
+
+def _tasks_md_status(config: ExecutorConfig, task_id: str) -> str | None:
+    """The task's status in tasks.md, or None when it cannot be read there."""
+    from .task import parse_tasks
+
+    # `parse_tasks` exits the process on a missing file; a hint must not.
+    if not config.tasks_file.exists():
+        return None
+    try:
+        tasks = parse_tasks(config.tasks_file)
+    except (OSError, ValueError):
+        return None
+    return next((t.status for t in tasks if t.id == task_id), None)
 
 
 def _cmd_resume(args, config: ExecutorConfig) -> int:

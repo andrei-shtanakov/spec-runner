@@ -305,6 +305,7 @@ def _replay_selector(
     mutate: Path | None = None,
     preflight_only: bool = False,
     order: int = 0,
+    scoped: bool = False,
 ) -> ReplayAttempt:
     """Один прогон `selector` против коммита `sha` в одноразовом worktree.
 
@@ -519,7 +520,7 @@ def _replay_selector(
         if isinstance(prepared, ReplayEnvironmentRefusal):
             return attempt("environment", prepared.message)
         env_id = prepared.environment_id or env_id
-        result = _run_selector(config, worktree, adapter, parsed, prepared.env)
+        result = _run_selector(config, worktree, adapter, parsed, prepared.env, scoped=scoped)
         output = f"{result.stdout}\n{result.stderr}"
         return attempt(
             "run",
@@ -644,13 +645,25 @@ def _run_selector(
     adapter: TddRunnerAdapter,
     selector: Selector,
     env: Mapping[str, str] | None = None,
+    *,
+    scoped: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Run the project's test command, narrowed to one test, in ``worktree``."""
+    """Run the project's test command, narrowed to one test, in ``worktree``.
+
+    ``scoped`` swaps the frozen red-replay builder (which only *appends* the
+    selector, so `pytest tests/ <node>` still runs the directory) for
+    `build_scoped_command`, which runs the selector alone. `tdd complete`
+    needs that (#576): it judges a green by the whole run's summary.
+    """
     # argv, not a shell string. The selector comes from an agent's output, and
     # `tests/x.py::t; rm -rf ~` must be an argument rather than a command. The
     # previous form quoted it correctly and was one edit away from not doing so;
     # composite commands are refused before this point, so nothing needs a shell.
-    argv = adapter.build_command(config.test_command, selector)
+    argv = (
+        adapter.build_scoped_command(config.test_command, selector)
+        if scoped
+        else adapter.build_command(config.test_command, selector)
+    )
     logger.info("Replaying claimed red", selector=str(selector.locator), worktree=str(worktree))
     return subprocess.run(
         argv,

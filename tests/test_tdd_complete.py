@@ -418,6 +418,27 @@ class TestASelectorThatRunsSeveralTests:
         assert _recorded(cfg) == before
 
 
+class TestARealTestCommand:
+    """Local review, round 3: the red-replay builder only *appends* the node
+    id, so `pytest tests/ -q -m "not slow" <node>` ran the whole directory and
+    `deselected` in the summary refused every completion — for this very
+    repository's config. `complete` replays the selector alone, through the
+    scoped builder verify-first already uses."""
+
+    def test_a_path_and_marker_filter_in_test_command_still_completes(self, tmp_path):
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        (root / "tests" / "test_heavy.py").write_text(
+            "import pytest\n\n\n@pytest.mark.slow\ndef test_heavy():\n    assert True\n"
+        )
+        (root / "tests" / "test_other.py").write_text("def test_other():\n    assert True\n")
+        head = _commit(root, "the rest of the suite")
+        real = _cfg(root, test_command="python -m pytest tests/ -q -m 'not slow'")
+        with ExecutorState(real) as state:
+            result = complete(real, state, TASK, head, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED
+        assert result.released == 1
+
+
 class TestASecondLineage:
     """Local review, round 2: idempotency keyed on the task, not the
     lineage, reported a new red's completion as already applied and left its
@@ -538,6 +559,24 @@ class TestTheCommand:
         out = capsys.readouterr().out
         assert code == 0
         assert "Completed" in out and "1 claim" in out
+
+    def test_it_says_tasks_md_is_left_to_the_operator(self, tmp_path, capsys):
+        """Local review, round 3: `run` selects by tasks.md status, and
+        `complete` closes only the lifecycle and the claims — a task left
+        open there would be sent to a paid agent again."""
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.tasks_file.write_text(f"# Tasks\n\n### {TASK}: demo\nP1 | TODO   Est: 1h\n")
+        assert self._run(cfg, TASK, "--commit", green_sha, "--reason", REASON) == 0
+        out = capsys.readouterr().out
+        assert "tasks.md" in out and f"task done {TASK}" in out
+
+    def test_no_tasks_md_hint_when_the_task_is_already_done_there(self, tmp_path, capsys):
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.tasks_file.write_text(f"# Tasks\n\n### {TASK}: demo\nP1 | DONE   Est: 1h\n")
+        assert self._run(cfg, TASK, "--commit", green_sha, "--reason", REASON) == 0
+        assert "task done" not in capsys.readouterr().out
 
     def test_a_refusal_exits_one_without_a_traceback(self, tmp_path, capsys):
         root, cfg, _cp, _green = _wedged(tmp_path)
