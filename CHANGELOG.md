@@ -10,6 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+**Major, by the state-surface rule.** `tdd_remedies.operation` gains a new
+value, `complete`; no table or column changes, and nothing existing changes
+meaning. Classified now so the release does not have to rediscover it.
+
+### Added
+
+- **`spec-runner tdd complete TASK-ID --commit <sha> --reason …` (#576).**
+  Closes a tdd task the terminal gate refused and a person then finished by
+  hand. Until now no door fitted: `release` demands DONE, which only the
+  ordinary path writes, and `abandon` would record a red that shipped as no
+  good. The command proves the completion before writing anything: the
+  confirmed red is an ancestor of `<sha>`, `<sha>` is in HEAD, the red's own
+  selector passes when replayed against `<sha>`, and this task's claims are
+  intact there. Then, in one transaction: lifecycle DONE, the task's claims
+  released, a `complete` remedy row with actor and reason. It does **not**
+  check the review verdict or the other pre-terminal gates, and says so on
+  success: going around them is recorded as the operator's decision. Exit 0
+  closed, 1 refused, 2 replay without a verdict (nothing recorded).
+
 ### Fixed
 
 - **The harness guard no longer tells the agent how to lift it.** Under

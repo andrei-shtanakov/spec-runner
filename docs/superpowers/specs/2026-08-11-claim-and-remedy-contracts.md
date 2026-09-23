@@ -179,6 +179,21 @@ against what the operator last saw silently applies to whatever arrived since.
   task. `tdd release` is the same act performed by an operator on state written
   before this rule, and it is admissible only once the lifecycle reached DONE:
   releasing a live task's lock is the laundering the lock exists to prevent.
+- `tdd complete TASK-ID --commit <sha> --reason <text>` (#576) closes a task
+  the terminal gate refused and a person then finished by hand. Its
+  lifecycle never reached DONE, so `release` refuses, and `abandon` would
+  record the red as no good. It is a door with **checks**, not with trust,
+  all run before anything is written: the confirmed red is an ancestor of
+  `<sha>` and `<sha>` is an ancestor of HEAD; the red's selector **passes**
+  when replayed against `<sha>`; and **this task's** claims are intact there
+  (a neighbour's broken lock does not stop it). Then, in **one transaction**,
+  lifecycle DONE (its detail names `<sha>`), the task's claims `released`, and
+  a `complete` remedy row. A replay with no verdict writes nothing (exit 2).
+  **What it does not attest:** the review verdict and the other pre-terminal
+  gates are not checked, and the command does not confirm that any external
+  review took place. The actor and the reason record who answers for going
+  around them. A repeat is `already applied`; an ordinary DONE is sent to
+  `release`.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
   superseded and linked.

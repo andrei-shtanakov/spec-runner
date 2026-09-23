@@ -2238,6 +2238,22 @@ def _build_parser() -> argparse.ArgumentParser:
     tdd_release.add_argument("--reason", required=True, help="Why — recorded, and not optional")
     tdd_release.add_argument("--actor", help="Who (default: git user.email)")
 
+    tdd_complete = tdd_sub.add_parser(
+        "complete",
+        parents=[common],
+        help="Finished by hand after the gate refused: prove it, close the task, unlock (#576)",
+    )
+    tdd_complete.add_argument("task_id", help="Task whose hand-made completion is being proved")
+    tdd_complete.add_argument(
+        "--commit", required=True, help="Commit carrying the work (must be in HEAD)"
+    )
+    tdd_complete.add_argument(
+        "--checkpoint",
+        help="Which confirmed red to prove against; required only when the task has more than one",
+    )
+    tdd_complete.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    tdd_complete.add_argument("--actor", help="Who (default: git user.email)")
+
     tdd_status = tdd_sub.add_parser(
         "status", parents=[common], help="Show checkpoints, claims and remedies (#141)"
     )
