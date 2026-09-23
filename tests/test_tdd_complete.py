@@ -458,6 +458,22 @@ class TestTasksMdMustAgree:
             complete(cfg, state, TASK, green_sha, reason=REASON)
         assert _recorded(cfg) == before
 
+    def test_an_unreadable_tasks_md_is_refused(self, tmp_path):
+        """Acceptance review, round 2: a read error must not read as "the task
+        is not listed" — agreement not established is not agreement."""
+        import os
+
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        self._tasks(cfg, "TODO")
+        before = _recorded(cfg)
+        os.chmod(cfg.tasks_file, 0o000)
+        try:
+            with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="cannot be read"):
+                complete(cfg, state, TASK, green_sha, reason=REASON)
+        finally:
+            os.chmod(cfg.tasks_file, 0o644)
+        assert _recorded(cfg) == before
+
     def test_a_done_task_in_tasks_md_completes(self, tmp_path):
         root, cfg, _cp, green_sha = _wedged(tmp_path)
         self._tasks(cfg, "DONE")

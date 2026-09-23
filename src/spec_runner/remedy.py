@@ -1131,16 +1131,25 @@ def _cmd_complete(args, config: ExecutorConfig) -> int:
 
 
 def _tasks_md_status(config: ExecutorConfig, task_id: str) -> str | None:
-    """The task's status in tasks.md, or None when it cannot be read there."""
+    """The task's status in tasks.md, or None when tasks.md does not list it.
+
+    None means **established** absence — no file, or a file without the task
+    — where `run` cannot select it. A file that exists but cannot be read is
+    not absence, and raises: agreement not established is not agreement
+    (acceptance review).
+    """
     from .task import parse_tasks
 
-    # `parse_tasks` exits the process on a missing file; a hint must not.
+    # `parse_tasks` exits the process on a missing file; this must not.
     if not config.tasks_file.exists():
         return None
     try:
         tasks = parse_tasks(config.tasks_file)
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as exc:
+        raise RemedyError(
+            f"{config.tasks_file} cannot be read ({exc}); `complete` cannot establish "
+            f"that {task_id} is closed there"
+        ) from exc
     return next((t.status for t in tasks if t.id == task_id), None)
 
 
