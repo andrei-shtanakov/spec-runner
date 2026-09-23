@@ -199,13 +199,18 @@ against what the operator last saw silently applies to whatever arrived since.
   hold an active claim: a retired red's claims are retired with it, and an
   empty claims check would read as an intact one. For a red superseded after
   green, `resume` first. Then, in **one transaction**,
-  lifecycle DONE (its detail names `<sha>`), the task's claims `released`, and
+  lifecycle DONE (its detail names `<sha>`), the proven lineage's claims `released`, and
   a `complete` remedy row. A replay with no verdict writes nothing (exit 2).
   **What it does not attest:** the review verdict and the other pre-terminal
   gates are not checked, and the command does not confirm that any external
   review took place. The actor and the reason record who answers for going
-  around them. `tasks.md` is not touched — `run` selects by it, so the
-  command says so when the task is still open there. A repeat on the same lineage is `already applied`; any other
+  around them. `tasks.md` is not written, but it must **agree**: while it
+  still shows the task open the command refuses and names `spec-runner task
+  done <id> --force`, because `run` selects by `tasks.md`, and a standing red
+  with its lock released on a selectable task would let the next run reuse
+  the red and implement green over an unprotected test. Only the proven
+  lineage's claims are released (as `abandon`/`repair` scope theirs); other
+  lineages stay locked until `release`, which the DONE now admits. A repeat on the same lineage is `already applied`; any other
   DONE — the ordinary one, or a new red after a completion — is sent to
   `release`.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a

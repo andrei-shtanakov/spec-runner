@@ -439,6 +439,56 @@ class TestARealTestCommand:
         assert result.released == 1
 
 
+class TestTasksMdMustAgree:
+    """Local review, round 4: `run` selects by tasks.md. Closing the lifecycle
+    and releasing the claims while tasks.md still shows the task open leaves
+    a standing red, no lock and a selectable task — the next run reuses the
+    red without a paid call and implements green over an unprotected test.
+    `complete` refuses until tasks.md agrees."""
+
+    def _tasks(self, cfg: ExecutorConfig, status: str) -> None:
+        cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.tasks_file.write_text(f"# Tasks\n\n### {TASK}: demo\nP1 | {status}   Est: 1h\n")
+
+    def test_an_open_task_in_tasks_md_is_refused(self, tmp_path):
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        self._tasks(cfg, "TODO")
+        before = _recorded(cfg)
+        with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="task done"):
+            complete(cfg, state, TASK, green_sha, reason=REASON)
+        assert _recorded(cfg) == before
+
+    def test_a_done_task_in_tasks_md_completes(self, tmp_path):
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        self._tasks(cfg, "DONE")
+        with ExecutorState(cfg) as state:
+            assert complete(cfg, state, TASK, green_sha, reason=REASON).released == 1
+
+
+class TestTheReleaseIsScopedToTheProvenLineage:
+    """Local review, round 4: only one lineage is replayed, so only its lock
+    goes — like `abandon`/`repair` (F-3). Other lineages' claims stay until
+    `release`, which the DONE this writes now admits."""
+
+    def test_another_lineage_keeps_its_lock(self, tmp_path):
+        root, cfg, first, green_sha = _wedged(tmp_path)
+        (root / "tests" / "test_b.py").write_text(
+            "from app import value\n\n\ndef test_b():\n    assert value() == 2\n"
+        )
+        other_red = _commit(root, "a second lineage")
+        other = _checkpoint(cfg, other_red, "tests/test_b.py::test_b")
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(other)
+            record_claims(cfg, state, other)
+            result = complete(
+                cfg, state, TASK, other_red, reason=REASON, checkpoint_id=first.checkpoint_id
+            )
+            remaining = state.active_claims(resolve_namespace(cfg))
+            assert result.released == 1
+            assert [c.checkpoint_id for c in remaining] == [other.checkpoint_id]
+            assert release(cfg, state, TASK, reason="the rest").released == 1
+
+
 class TestASecondLineage:
     """Local review, round 2: idempotency keyed on the task, not the
     lineage, reported a new red's completion as already applied and left its
@@ -559,24 +609,6 @@ class TestTheCommand:
         out = capsys.readouterr().out
         assert code == 0
         assert "Completed" in out and "1 claim" in out
-
-    def test_it_says_tasks_md_is_left_to_the_operator(self, tmp_path, capsys):
-        """Local review, round 3: `run` selects by tasks.md status, and
-        `complete` closes only the lifecycle and the claims — a task left
-        open there would be sent to a paid agent again."""
-        root, cfg, _cp, green_sha = _wedged(tmp_path)
-        cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
-        cfg.tasks_file.write_text(f"# Tasks\n\n### {TASK}: demo\nP1 | TODO   Est: 1h\n")
-        assert self._run(cfg, TASK, "--commit", green_sha, "--reason", REASON) == 0
-        out = capsys.readouterr().out
-        assert "tasks.md" in out and f"task done {TASK}" in out
-
-    def test_no_tasks_md_hint_when_the_task_is_already_done_there(self, tmp_path, capsys):
-        root, cfg, _cp, green_sha = _wedged(tmp_path)
-        cfg.tasks_file.parent.mkdir(parents=True, exist_ok=True)
-        cfg.tasks_file.write_text(f"# Tasks\n\n### {TASK}: demo\nP1 | DONE   Est: 1h\n")
-        assert self._run(cfg, TASK, "--commit", green_sha, "--reason", REASON) == 0
-        assert "task done" not in capsys.readouterr().out
 
     def test_a_refusal_exits_one_without_a_traceback(self, tmp_path, capsys):
         root, cfg, _cp, _green = _wedged(tmp_path)

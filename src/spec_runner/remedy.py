@@ -558,6 +558,18 @@ def complete(
             f"{task_id} already reached DONE; to unlock the files its claims still hold "
             "use `spec-runner tdd release`"
         )
+    # `run` selects by tasks.md, not by the lifecycle. Released claims on a
+    # standing red, with the task still open there, would let the next run
+    # reuse the red without a paid call and implement green over a test
+    # nothing protects (local review). tasks.md must agree first. A task
+    # tasks.md does not list (or no tasks.md) cannot be selected at all.
+    listed = _tasks_md_status(config, task_id)
+    if listed is not None and listed != "done":
+        raise RemedyError(
+            f"tasks.md still shows {task_id} as {listed}: the next run would select it and "
+            "reuse this red with its lock released. Mark it done there first: "
+            f"`spec-runner task done {task_id} --force`"
+        )
     if not any(
         c.checkpoint_id == evidence.checkpoint_id and c.task_id == task_id
         for c in state.active_claims(namespace)
@@ -649,7 +661,9 @@ def complete(
     )
     detail = f"completed by operator at {sha}; the red passes there"
     try:
-        released = state.complete_with_release(namespace, task_id, detail, record)
+        released = state.complete_with_release(
+            namespace, task_id, evidence.checkpoint_id, detail, record
+        )
     except Exception as exc:
         raise RemedyError(
             f"the completion could not be stored; nothing was recorded: {exc}"
@@ -1113,13 +1127,6 @@ def _cmd_complete(args, config: ExecutorConfig) -> int:
         f"commit; released {result.released} claim(s)"
     )
     print("   Not checked: the review verdict and other pre-terminal gates — recorded as yours.")
-    status = _tasks_md_status(config, args.task_id)
-    if status != "done":
-        # `run` selects by tasks.md, not by the lifecycle: a task left open
-        # there is sent to a paid agent again (local review).
-        shown = status or "absent"
-        print(f"   tasks.md is not changed (it shows {args.task_id} as {shown}); if the task")
-        print(f"   is done there too: `spec-runner task done {args.task_id} --force`")
     return 0
 
 

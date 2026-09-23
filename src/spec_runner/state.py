@@ -1911,10 +1911,17 @@ class ExecutorState:
         return checkpoints, claims
 
     def complete_with_release(
-        self, namespace: str, task_id: str, detail: str, remedy: "RemedyRecordT"
+        self,
+        namespace: str,
+        task_id: str,
+        checkpoint_id: str,
+        detail: str,
+        remedy: "RemedyRecordT",
     ) -> int:
-        """Lifecycle DONE, this task's claims released, the remedy recorded —
-        in **one transaction** (#576). Returns how many claims were released.
+        """Lifecycle DONE, the proven lineage's claims released, the remedy
+        recorded — in **one transaction** (#576). Returns how many claims were
+        released. Scoped to ``checkpoint_id`` like `supersede_claims` (F-3):
+        only that lineage was proven; others stay locked until `release`.
 
         Three writes that only mean something together. DONE without the
         remedy row is a completion nobody can attribute; a release without
@@ -1935,8 +1942,14 @@ class ExecutorState:
             )
             cursor = self._conn.execute(
                 "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? "
-                "AND status = ?",
-                (ClaimStatus.RELEASED.value, namespace, task_id, ClaimStatus.ACTIVE.value),
+                "AND checkpoint_id = ? AND status = ?",
+                (
+                    ClaimStatus.RELEASED.value,
+                    namespace,
+                    task_id,
+                    checkpoint_id,
+                    ClaimStatus.ACTIVE.value,
+                ),
             )
             self._conn.execute(
                 "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, "

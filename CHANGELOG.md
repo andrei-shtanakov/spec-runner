@@ -28,12 +28,15 @@ meaning. Classified now so the release does not have to rediscover it.
   `test_command` naming `tests/` does not run the whole suite), passes — everything it selected ran
   and passed, so a skip is not a green and a parametrized red still counts
   (new adapter method `passed_in_full`) — and this task's claims are
-  intact there. Then, in one transaction: lifecycle DONE, the task's claims
-  released, a `complete` remedy row with actor and reason. It does **not**
+  intact there. Then, in one transaction: lifecycle DONE, the proven
+  lineage's claims released, a `complete` remedy row with actor and reason. It does **not**
   check the review verdict or the other pre-terminal gates, and says so on
   success: going around them is recorded as the operator's decision.
-  `tasks.md` is not changed; when it still shows the task open, the output
-  says so and names `spec-runner task done <id> --force`. Exit 0
+  `tasks.md` is not written, but while it still shows the task open the
+  command refuses and names `spec-runner task done <id> --force` — `run`
+  selects by it, and a selectable task with its lock released would reuse
+  the red over an unprotected test. Only the proven lineage's claims are
+  released; any other lineage's stay until `tdd release`. Exit 0
   closed, 1 refused, 2 replay without a verdict (nothing recorded).
 
 ### Fixed
