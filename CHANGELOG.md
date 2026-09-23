@@ -10,6 +10,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **The budget from the environment (#388).** `SPEC_RUNNER_BUDGET_USD` and
+  `SPEC_RUNNER_TASK_BUDGET_USD` set `budget_usd` / `task_budget_usd`, with
+  CLI flag > environment > config file > default. A cap in an untracked
+  config file goes stale between phases; the environment belongs to the
+  launch. `run`, `retry` and `watch` print on stderr which cap is in force
+  and where it came from (stdout stays the `--json-result` contract). A
+  value that is not a positive finite number is refused at startup, naming
+  the variable. The default stays **no cap** (owner's option (b)); $30 is
+  the documented recommendation. Minor: new inputs, nothing existing changes
+  meaning.
+
 ## [4.0.0] - 2026-09-23
 
 **Major, by rule rather than by breakage.** Measured against v3.0.0:

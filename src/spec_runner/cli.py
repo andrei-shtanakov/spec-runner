@@ -819,6 +819,28 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
+def _announce_budget(config: ExecutorConfig) -> None:
+    """One stderr line naming each cap in force and where it came from (#388).
+
+    stderr, because stdout carries `--json-result` (the Maestro contract).
+    Silent when no cap is set: an unguarded run behaves exactly as before.
+    """
+    run_cap = getattr(config, "budget_usd", None)
+    task_cap = getattr(config, "task_budget_usd", None)
+    if run_cap is None and task_cap is None:
+        return
+    sources = getattr(config, "budget_sources", {}) or {}
+
+    def describe(label: str, key: str, value: float | None) -> str:
+        if value is None:
+            return f"{label}: no cap"
+        return f"{label}: ${value:.2f} ({sources.get(key, 'config')})"
+
+    run = describe("run", "budget_usd", run_cap)
+    task = describe("task", "task_budget_usd", task_cap)
+    print(f"💰 Budget — {run}; {task}", file=sys.stderr)
+
+
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
@@ -829,6 +851,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
@@ -1474,6 +1497,7 @@ def cmd_retry(args, config: ExecutorConfig):
     # automation hooks, so it must not bypass the guard either.
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     tasks = parse_tasks(config.tasks_file)
 
@@ -1550,6 +1574,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # before the loop starts (mid-run DONE writes dirty tasks.md by design).
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     # Pre-run validation
     pre_result = validate_all(
@@ -2511,7 +2536,10 @@ def main():
         # under `validate`, so the empty config below cannot start a run on
         # defaults.
         yaml_config = {}
-    config = build_config(yaml_config, args)
+    try:
+        config = build_config(yaml_config, args)
+    except ConfigError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
     config.config_found = config_path.exists()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile,
