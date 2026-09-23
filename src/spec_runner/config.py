@@ -988,16 +988,21 @@ class ExecutorConfig:
             ConfigError: If the name matches no bundled profile; the message
                 lists the available profile names (no traceback for the CLI).
         """
-        from .spec import ProfileGraphError, available_profiles, load_profile
+        from .spec import ProfileError, available_profiles, load_profile, resolve_stage_paths
 
         try:
-            return load_profile(self.spec_profile)
-        except ProfileGraphError as exc:
-            # The profile exists but its dependency graph is invalid — surface
-            # the real cycle/unknown-stage message, not "unknown profile".
+            profile = load_profile(self.spec_profile, self.project_root)
+            # Paths are checked with the config in hand (#338): the prefix is
+            # needed to substitute them, and a collision must stop every
+            # command before one reads or writes a stage.
+            resolve_stage_paths(profile, self)
+            return profile
+        except ProfileError as exc:
+            # Refused content, including a graph error — the real message,
+            # not "unknown profile".
             raise ConfigError(str(exc)) from exc
         except ValueError:
-            available = ", ".join(available_profiles())
+            available = ", ".join(available_profiles(self.project_root))
             raise ConfigError(
                 f"unknown spec_profile: {self.spec_profile!r}; available: {available}"
             ) from None

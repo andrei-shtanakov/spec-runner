@@ -670,7 +670,55 @@ def stage_readiness(
     return result
 
 
-def stage_path(config: ExecutorConfig, stage: str) -> Path:
+def _default_stage_path(config: ExecutorConfig, stage: str) -> Path:
+    return config.spec_dir / f"{config.spec_prefix}{stage}.md"
+
+
+def resolve_stage_paths(profile: StageProfile, config: ExecutorConfig) -> dict[str, Path]:
+    """Every stage's file, with #338's rules applied (design §4, §4.2).
+
+    External paths: placeholders substituted, resolved against
+    ``project_root`` (never ``spec_dir``), required to stay inside it. Then no
+    two stages may resolve to the same file — an external path landing on a
+    managed stage's file would let ``plan``/``approve`` write into it.
+
+    Raises:
+        ProfileError: An empty prefix under a placeholder, an escape from the
+            project, or two stages sharing a file.
+    """
+    root = Path(config.project_root).resolve()
+    prefix = config.spec_prefix or ""
+    ws = prefix[:-1] if prefix.endswith("-") else prefix
+    out: dict[str, Path] = {}
+    for sd in profile.stages:
+        if not sd.external:
+            out[sd.name] = _default_stage_path(config, sd.name)
+            continue
+        assert sd.path is not None
+        if _PLACEHOLDER.search(sd.path) and not prefix:
+            raise ProfileError(
+                f"stage {sd.name!r}: path {sd.path!r} uses a placeholder, which "
+                "requires --spec-prefix"
+            )
+        resolved = (root / sd.path.format(prefix=prefix, ws=ws)).resolve()
+        if not resolved.is_relative_to(root):
+            raise ProfileError(
+                f"stage {sd.name!r}: path {sd.path!r} resolves outside the project ({resolved})"
+            )
+        out[sd.name] = resolved
+    seen: dict[Path, str] = {}
+    for name, p in out.items():
+        key = p.resolve()
+        if key in seen:
+            raise ProfileError(
+                f"stages {seen[key]!r} and {name!r} resolve to the same file ({key}); "
+                "an external stage must not share a file with any other stage"
+            )
+        seen[key] = name
+    return out
+
+
+def stage_path(config: ExecutorConfig, stage: str, profile: StageProfile | None = None) -> Path:
     """Map a stage name to its spec file path via the ``spec/<prefix><name>.md``
     convention (M4).
 
@@ -678,9 +726,21 @@ def stage_path(config: ExecutorConfig, stage: str) -> Path:
     (``requirements`` / ``design`` / ``tasks`` all follow this convention on
     ``config``), and it now resolves custom-profile stage names too. Builds
     on ``config.spec_dir`` so a change-scoped config (``--change``, M2)
-    redirects stages into ``spec/changes/<id>/``.
+    redirects stages into ``spec/changes/<id>/``. An external stage (#338)
+    comes from its declared ``path``, resolved against the project root.
     """
-    return config.spec_dir / f"{config.spec_prefix}{stage}.md"
+    graph = profile if profile is not None else _profile_for(config)
+    sd = graph.get(stage) if graph is not None else None
+    if graph is not None and sd is not None and sd.external:
+        return resolve_stage_paths(graph, config)[stage]
+    return _default_stage_path(config, stage)
+
+
+def _profile_for(config: ExecutorConfig) -> StageProfile | None:
+    """The config's profile, or None when it cannot be resolved here (a bare
+    config stand-in in a test)."""
+    resolver = getattr(config, "resolve_spec_profile", None)
+    return resolver() if resolver is not None else None
 
 
 def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
