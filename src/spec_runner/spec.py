@@ -42,11 +42,15 @@ class StageDef:
     """
 
     name: str
-    template: str
-    marker_prefix: str
-    validator_key: str
+    template: str = ""
+    marker_prefix: str = ""
+    validator_key: str = ""
     upstream: tuple[str, ...] = ()
     prompt_text: str = ""
+    #: #338: a stage produced outside spec-runner. It has a ``path`` and no
+    #: template/marker/validator; spec-runner reads it, never writes it.
+    path: str | None = None
+    external: bool = False
 
     @property
     def requires(self) -> tuple[str, ...]:
@@ -75,49 +79,105 @@ class StageProfile:
         """Return ``{stage: direct requires}`` for every stage."""
         return {s.name: s.upstream for s in self.stages}
 
-
-def load_profile(name: str) -> StageProfile:
-    """Load a bundled stage profile by name from ``spec_runner/profiles``.
-
-    Args:
-        name: Profile name (e.g. ``"lite"``); resolves ``profiles/{name}.yaml``.
-
-    Returns:
-        The parsed :class:`StageProfile`.
-
-    Raises:
-        ValueError: If the profile file cannot be found.
-    """
-    resource = files("spec_runner") / "profiles" / f"{name}.yaml"
-    try:
-        raw = resource.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError) as exc:
-        raise ValueError(f"unknown stage profile: {name!r}") from exc
-    data = yaml.safe_load(raw) or {}
-    stages = tuple(
-        StageDef(
-            name=s["name"],
-            template=s["template"],
-            marker_prefix=s["marker_prefix"],
-            validator_key=s["validator"],
-            # Accept both spellings; ``requires`` is the M4 canonical key,
-            # ``upstream`` the historical one.
-            upstream=tuple(s.get("requires") or s.get("upstream") or ()),
-            prompt_text=s.get("prompt_text", ""),
-        )
-        for s in data.get("stages", [])
-    )
-    profile = StageProfile(name=data.get("profile", name), stages=stages)
-    validate_profile_graph(profile)
-    return profile
+    def get(self, name: str) -> StageDef | None:
+        """The stage named ``name``, or None."""
+        return next((s for s in self.stages if s.name == name), None)
 
 
-class ProfileGraphError(ValueError):
+_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
+_KNOWN_PLACEHOLDERS = frozenset({"prefix", "ws"})
+
+
+class ProfileError(ValueError):
+    """A profile was found but its content is refused (#338): stage fields,
+    placeholders, name shadowing, file collisions."""
+
+
+class ProfileGraphError(ProfileError):
     """A profile exists but its ``requires`` graph is invalid (cycle/unknown ref).
 
     Distinct from the "profile not found" ``ValueError`` so callers can tell a
     genuine graph error from an unknown-profile-name error (M4).
     """
+
+
+def _local_profiles_dir(project_root: Path | None) -> Path | None:
+    return None if project_root is None else Path(project_root) / "spec" / "profiles"
+
+
+def load_profile(name: str, project_root: Path | None = None) -> StageProfile:
+    """Load profile ``name`` from ``<project_root>/spec/profiles`` or the bundle.
+
+    A name found in both places is refused (#338): there is no precedence to
+    remember.
+
+    Raises:
+        ValueError: The name exists nowhere ("unknown stage profile").
+        ProfileError: The profile exists but is refused (fields, graph, shadowing).
+    """
+    bundled = files("spec_runner") / "profiles" / f"{name}.yaml"
+    local_dir = _local_profiles_dir(project_root)
+    local = local_dir / f"{name}.yaml" if local_dir is not None else None
+    bundled_exists = bundled.is_file()
+    local_exists = local is not None and local.is_file()
+    if bundled_exists and local_exists:
+        raise ProfileError(
+            f"profile {name!r} exists in spec/profiles/ and is bundled; rename the local one"
+        )
+    if local_exists:
+        assert local is not None
+        raw = local.read_text(encoding="utf-8")
+    elif bundled_exists:
+        raw = bundled.read_text(encoding="utf-8")
+    else:
+        raise ValueError(f"unknown stage profile: {name!r}")
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        raise ProfileError(f"profile {name!r} is not a mapping")
+    stages = tuple(_stage_def_from(s, name) for s in data.get("stages", []))
+    profile = StageProfile(name=data.get("profile", data.get("name", name)), stages=stages)
+    validate_profile_graph(profile)
+    return profile
+
+
+def _stage_def_from(s: dict, profile: str) -> StageDef:
+    """One stage entry → :class:`StageDef`, enforcing the #338 field rules."""
+    name = s["name"]
+    external = bool(s.get("external", False))
+    path = s.get("path")
+    # Accept both spellings; ``requires`` is the M4 canonical key,
+    # ``upstream`` the historical one.
+    upstream = tuple(s.get("requires") or s.get("upstream") or ())
+    where = f"stage {name!r} in profile {profile!r}"
+    if external:
+        if not path:
+            raise ProfileError(f"{where}: an external stage must declare `path`")
+        declared = [k for k in ("template", "marker_prefix", "validator") if k in s]
+        if declared:
+            raise ProfileError(
+                f"{where}: an external stage must not declare {', '.join(declared)} — "
+                "it is never generated or validated here"
+            )
+        _check_path_template(path, where)
+        return StageDef(name=name, upstream=upstream, path=path, external=True)
+    if path is not None:
+        raise ProfileError(f"{where}: `path` is allowed only on an external stage in this release")
+    return StageDef(
+        name=name,
+        template=s["template"],
+        marker_prefix=s["marker_prefix"],
+        validator_key=s["validator"],
+        upstream=upstream,
+        prompt_text=s.get("prompt_text", ""),
+    )
+
+
+def _check_path_template(path: str, where: str) -> None:
+    unknown = [p for p in _PLACEHOLDER.findall(path) if p not in _KNOWN_PLACEHOLDERS]
+    if unknown:
+        raise ProfileError(f"{where}: unknown placeholder {{{unknown[0]}}} in path {path!r}")
+    if Path(path).is_absolute():
+        raise ProfileError(f"{where}: path {path!r} must be relative to the project root")
 
 
 def validate_profile_graph(profile: StageProfile) -> None:
@@ -131,7 +191,7 @@ def validate_profile_graph(profile: StageProfile) -> None:
     for stage, deps in edges.items():
         for dep in deps:
             if dep not in names:
-                raise ValueError(
+                raise ProfileGraphError(
                     f"stage {stage!r} requires unknown stage {dep!r} in profile {profile.name!r}"
                 )
 
@@ -143,7 +203,9 @@ def validate_profile_graph(profile: StageProfile) -> None:
         color[node] = GREY
         for dep in edges.get(node, ()):
             if color[dep] == GREY:
-                raise ValueError(f"dependency cycle through {dep!r} in profile {profile.name!r}")
+                raise ProfileGraphError(
+                    f"dependency cycle through {dep!r} in profile {profile.name!r}"
+                )
             if color[dep] == WHITE:
                 visit(dep)
         color[node] = BLACK
@@ -153,12 +215,13 @@ def validate_profile_graph(profile: StageProfile) -> None:
             visit(node)
 
 
-def available_profiles() -> list[str]:
-    """Return the sorted names of bundled stage profiles (``profiles/*.yaml``)."""
+def available_profiles(project_root: Path | None = None) -> list[str]:
+    """Sorted names of bundled profiles plus ``<project_root>/spec/profiles``."""
     prof_dir = files("spec_runner") / "profiles"
-    names = [
-        entry.name[: -len(".yaml")] for entry in prof_dir.iterdir() if entry.name.endswith(".yaml")
-    ]
+    names = {e.name[: -len(".yaml")] for e in prof_dir.iterdir() if e.name.endswith(".yaml")}
+    local_dir = _local_profiles_dir(project_root)
+    if local_dir is not None and local_dir.is_dir():
+        names |= {p.stem for p in local_dir.glob("*.yaml")}
     return sorted(names)
 
 
