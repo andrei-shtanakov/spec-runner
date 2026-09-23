@@ -135,7 +135,7 @@ def load_profile(name: str, project_root: Path | None = None) -> StageProfile:
     if not isinstance(data, dict):
         raise ProfileError(f"profile {name!r} is not a mapping")
     stages = tuple(_stage_def_from(s, name) for s in data.get("stages", []))
-    profile = StageProfile(name=data.get("profile", data.get("name", name)), stages=stages)
+    profile = StageProfile(name=str(data.get("profile") or data.get("name") or name), stages=stages)
     validate_profile_graph(profile)
     return profile
 
