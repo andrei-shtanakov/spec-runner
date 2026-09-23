@@ -819,26 +819,53 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
-def _announce_budget(config: ExecutorConfig) -> None:
-    """One stderr line naming each cap in force and where it came from (#388).
+#: Commands that start paid calls — the only ones a broken budget variable
+#: may stop (#388 review).
+SPENDING_COMMANDS = frozenset({"run", "retry", "watch"})
 
-    stderr, because stdout carries `--json-result` (the Maestro contract).
-    Silent when no cap is set: an unguarded run behaves exactly as before.
+
+def _announce_budget(config: ExecutorConfig) -> None:
+    """One stderr line naming the caps and where they came from (#388).
+
+    The run ceiling is the one **in force** — an operator authorization wins
+    over the configured value and is displayed as one, the same reader
+    enforcement and the overshoot announcement use (#256). The task axis is
+    shown as configured: a task's own authorization is resolved when that
+    task is selected. stderr, because stdout carries `--json-result`.
+    Silent when there is no cap at all.
     """
     run_cap = getattr(config, "budget_usd", None)
     task_cap = getattr(config, "task_budget_usd", None)
-    if run_cap is None and task_cap is None:
-        return
     sources = getattr(config, "budget_sources", {}) or {}
+    run_row = None
+    state_file = getattr(config, "state_file", None)
+    if state_file is not None and Path(state_file).exists():
+        with ExecutorState.for_read(config) as state:
+            run_row = state.latest_budget_authorization("run")
+    if run_cap is None and task_cap is None and run_row is None:
+        return
 
-    def describe(label: str, key: str, value: float | None) -> str:
-        if value is None:
-            return f"{label}: no cap"
-        return f"{label}: ${value:.2f} ({sources.get(key, 'config')})"
+    def configured(key: str, value: float | None) -> str:
+        return "none" if value is None else f"${value:.2f} ({sources.get(key, 'config')})"
 
-    run = describe("run", "budget_usd", run_cap)
-    task = describe("task", "task_budget_usd", task_cap)
-    print(f"💰 Budget — {run}; {task}", file=sys.stderr)
+    if run_row is not None:
+        run = (
+            f"run: ${float(run_row['new_limit_usd']):.2f} in force (authorization "
+            f"#{run_row['id']}, over configured {configured('budget_usd', run_cap)})"
+        )
+    elif run_cap is None:
+        run = "run: no cap"
+    else:
+        run = f"run: {configured('budget_usd', run_cap)}"
+    task = (
+        "task: no cap configured"
+        if task_cap is None
+        else f"task: {configured('task_budget_usd', task_cap)} configured"
+    )
+    print(
+        f"💰 Budget — {run}; {task} (a task's own authorization applies when it is selected)",
+        file=sys.stderr,
+    )
 
 
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
@@ -2536,8 +2563,18 @@ def main():
         # under `validate`, so the empty config below cannot start a run on
         # defaults.
         yaml_config = {}
+    from .config import BudgetEnvError
+
     try:
         config = build_config(yaml_config, args)
+    except BudgetEnvError as exc:
+        # Only a command that spends may refuse on it: `stop` is the brake on
+        # a paid run in another shell, and a typo in this shell's profile must
+        # not disable it (#388 review). The rest warn and ignore the variable.
+        if args.command in SPENDING_COMMANDS:
+            raise SystemExit(f"⛔ {exc}") from None
+        print(f"⚠️  {exc} — ignored: `{args.command}` spends nothing", file=sys.stderr)
+        config = build_config(yaml_config, args, read_budget_env=False)
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
     config.config_found = config_path.exists()

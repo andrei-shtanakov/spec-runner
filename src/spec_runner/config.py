@@ -1515,6 +1515,14 @@ BUDGET_ENV: dict[str, str] = {
 }
 
 
+class BudgetEnvError(ConfigError):
+    """A budget environment variable holds something that is not a cap.
+
+    Its own class because only a command that spends may refuse on it
+    (#388 review): `stop`, `status` and `costs` warn and run without it.
+    """
+
+
 def _budget_from_env(variable: str) -> float | None:
     """The cap ``variable`` sets, or None when it is unset or blank.
 
@@ -1528,9 +1536,9 @@ def _budget_from_env(variable: str) -> float | None:
     try:
         value = float(raw)
     except ValueError:
-        raise ConfigError(f"{variable}={raw!r} is not a number of USD") from None
+        raise BudgetEnvError(f"{variable}={raw!r} is not a number of USD") from None
     if not math.isfinite(value) or value <= 0:
-        raise ConfigError(
+        raise BudgetEnvError(
             f"{variable}={raw!r} is not a usable cap; give a positive amount in USD, "
             "or unset it for no cap"
         )
@@ -1538,7 +1546,11 @@ def _budget_from_env(variable: str) -> float | None:
 
 
 def build_config(
-    yaml_config: dict, args: argparse.Namespace, *, detect_subdir: bool = True
+    yaml_config: dict,
+    args: argparse.Namespace,
+    *,
+    detect_subdir: bool = True,
+    read_budget_env: bool = True,
 ) -> ExecutorConfig:
     """Build ExecutorConfig from YAML and CLI arguments.
 
@@ -1571,7 +1583,7 @@ def build_config(
     budget_sources: dict[str, str] = {
         key: "config" for key in BUDGET_ENV if config_kwargs.get(key) is not None
     }
-    for key, variable in BUDGET_ENV.items():
+    for key, variable in BUDGET_ENV.items() if read_budget_env else ():
         from_env = _budget_from_env(variable)
         if from_env is not None:
             config_kwargs[key] = from_env

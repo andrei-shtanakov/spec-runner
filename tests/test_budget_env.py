@@ -75,16 +75,36 @@ class TestRefusals:
         with pytest.raises(ConfigError, match=TASK_ENV):
             build_config({}, _args(), detect_subdir=False)
 
-    def test_the_cli_says_so_without_a_traceback(self, monkeypatch, tmp_path, capsys):
+    @pytest.mark.parametrize("command", ["run", "retry", "watch"])
+    def test_a_spending_command_refuses_without_a_traceback(self, monkeypatch, tmp_path, command):
         from spec_runner.cli import main
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(RUN_ENV, "thirty")
-        monkeypatch.setattr("sys.argv", ["spec-runner", "status"])
+        argv = ["spec-runner", command] + (["TASK-001"] if command == "retry" else [])
+        monkeypatch.setattr("sys.argv", argv)
         with pytest.raises(SystemExit) as exc:
             main()
         assert RUN_ENV in str(exc.value)
         assert str(exc.value).startswith("⛔")
+
+    @pytest.mark.parametrize("command", ["status", "stop", "costs"])
+    def test_a_command_that_spends_nothing_warns_and_runs(
+        self, monkeypatch, tmp_path, capsys, command
+    ):
+        """Local review: `stop` is the brake on a paid run in another shell;
+        a typo in this shell's profile must not disable it, and the refusal's
+        own reason ("would run unguarded") applies only to spending."""
+        from spec_runner.cli import main
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(RUN_ENV, "1,82")
+        monkeypatch.setattr("sys.argv", ["spec-runner", command])
+        try:
+            main()
+        except SystemExit as exc:
+            assert RUN_ENV not in str(exc.code or "")
+        assert f"{RUN_ENV}" in capsys.readouterr().err
 
 
 class TestTheStartupLine:
@@ -113,6 +133,50 @@ class TestTheStartupLine:
 
         _announce_budget(build_config({}, _args(), detect_subdir=False))
         assert capsys.readouterr() == ("", "")
+
+    def test_an_authorized_ceiling_is_the_one_shown_in_force(self, tmp_path, capsys):
+        """Local review: the line read the config's $1.82 while enforcement
+        and the overshoot announcement used the authorised $9.00 — the
+        two-numbers defect #256 removed. One reader: the authorization wins
+        and is displayed as one, with the configured value beside it."""
+        from spec_runner.budget_cmd import authorize
+        from spec_runner.cli import _announce_budget
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.state import ExecutorState
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "spec" / ".executor-state.db",
+            logs_dir=tmp_path / "spec" / ".logs",
+            budget_usd=1.82,
+            budget_sources={"budget_usd": "config"},
+        )
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        with ExecutorState(cfg) as state:
+            authorize(cfg, state, reason="raised on the record", run_budget_usd=9.00)
+        _announce_budget(cfg)
+        err = capsys.readouterr().err
+        assert "run: $9.00 in force (authorization #1" in err
+        assert "configured $1.82 (config)" in err
+
+    def test_an_authorization_alone_is_announced(self, tmp_path, capsys):
+        from spec_runner.budget_cmd import authorize
+        from spec_runner.cli import _announce_budget
+        from spec_runner.config import ExecutorConfig
+        from spec_runner.state import ExecutorState
+
+        cfg = ExecutorConfig(
+            project_root=tmp_path,
+            state_file=tmp_path / "spec" / ".executor-state.db",
+            logs_dir=tmp_path / "spec" / ".logs",
+            budget_usd=1.0,
+        )
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+        with ExecutorState(cfg) as state:
+            authorize(cfg, state, reason="raised", run_budget_usd=5.00)
+        cfg.budget_usd = None  # the config cap removed; the authorization stands
+        _announce_budget(cfg)
+        assert "run: $5.00 in force" in capsys.readouterr().err
 
     @pytest.mark.parametrize("command", ["cmd_run", "cmd_retry", "cmd_watch"])
     def test_every_command_that_spends_announces_it(self, command):

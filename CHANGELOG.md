@@ -16,10 +16,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `SPEC_RUNNER_TASK_BUDGET_USD` set `budget_usd` / `task_budget_usd`, with
   CLI flag > environment > config file > default. A cap in an untracked
   config file goes stale between phases; the environment belongs to the
-  launch. `run`, `retry` and `watch` print on stderr which cap is in force
-  and where it came from (stdout stays the `--json-result` contract). A
-  value that is not a positive finite number is refused at startup, naming
-  the variable. The default stays **no cap** (owner's option (b)); $30 is
+  launch. `run`, `retry` and `watch` print on stderr the run ceiling in
+  force — an operator authorization shown as one, beside the configured
+  value and its source — and the configured task cap (stdout stays the
+  `--json-result` contract). A value that is not a positive finite number
+  stops those three commands at startup, naming the variable; `stop`,
+  `status`, `costs` and the rest warn and run without it. The default stays **no cap** (owner's option (b)); $30 is
   the documented recommendation. Minor: new inputs, nothing existing changes
   meaning.
 
