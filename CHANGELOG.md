@@ -21,7 +21,9 @@ meaning. Classified now so the release does not have to rediscover it.
   hand. Until now no door fitted: `release` demands DONE, which only the
   ordinary path writes, and `abandon` would record a red that shipped as no
   good. The command proves the completion before writing anything: the
-  confirmed red is an ancestor of `<sha>`, `<sha>` is in HEAD, the red's own
+  task's **standing** confirmed red (an abandoned one proves nothing; a
+  superseded one needs `resume` first) holds an active claim and is an
+  ancestor of `<sha>`, `<sha>` is in HEAD, the red's own
   selector passes when replayed against `<sha>`, and this task's claims are
   intact there. Then, in one transaction: lifecycle DONE, the task's claims
   released, a `complete` remedy row with actor and reason. It does **not**

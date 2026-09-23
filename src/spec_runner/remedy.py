@@ -504,7 +504,9 @@ def complete(
     3. this task's claims are intact in ``commit`` — a green that weakened
        its own evidence is the laundering the byte-lock exists to catch.
        Only *this* task's: a neighbour's broken lock is not a reason this one
-       cannot close.
+       cannot close. The red must be **standing** and hold at least one active
+       claim; a retired red, or one with nothing locked, leaves this check
+       nothing to look at, and an empty check is not an intact one.
 
     What it does **not** check is the review verdict and the other
     pre-terminal gates. The review happened outside, in the PR that carried
@@ -531,13 +533,35 @@ def complete(
             f"{task_id} already reached DONE through the ordinary path; to unlock its files "
             "use `spec-runner tdd release`"
         )
-    candidates = state.confirmed_reds(namespace, task_id)
-    if not candidates:
+    confirmed = state.confirmed_reds(namespace, task_id)
+    if not confirmed:
         raise RemedyError(
             f"{task_id} has no confirmed red in this workstream — `complete` proves a green "
             "against a red, and there is none to prove against"
         )
+    # Only a **standing** red is evidence — the rule abandon/repair already
+    # apply through `_swap`. `confirmed_reds` returns retired ones on purpose
+    # (resume needs them), but a retired red's claims are retired with it, and
+    # the claims check below would then pass over nothing: an abandoned red
+    # plus a test weakened afterwards read as "evidence intact".
+    active = {cp.checkpoint_id for cp in state.active_checkpoints(namespace, task_id)}
+    candidates = [cp for cp in confirmed if cp.checkpoint_id in active]
+    if not candidates:
+        retired = ", ".join(cp.checkpoint_id for cp in confirmed)
+        raise RemedyError(
+            f"{task_id} has no standing confirmed red ({retired} retired). An abandoned red "
+            "proves nothing; if green was established on a superseded one, "
+            "`spec-runner tdd resume` reinstates it with its claims first"
+        )
     evidence = _pick_confirmed_red(candidates, task_id, checkpoint_id)
+    if not any(
+        c.checkpoint_id == evidence.checkpoint_id and c.task_id == task_id
+        for c in state.active_claims(namespace)
+    ):
+        raise RemedyError(
+            f"{evidence.checkpoint_id} holds no active claim, so there is no frozen evidence "
+            "to prove the green against — an empty check is not an intact one"
+        )
 
     if not _resolves(config, commit):
         raise RemedyError(f"{commit} does not resolve to a commit in this repository")

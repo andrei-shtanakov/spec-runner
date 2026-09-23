@@ -15,6 +15,11 @@ transaction: lifecycle DONE, claims released, remedy recorded.
 What it deliberately does not check is the review verdict and the other
 pre-terminal gates — the review happened outside, in the PR. The actor and the
 reason record who answers for that (owner decision, 2026-09-23).
+
+Not marked `slow`, unlike the replay-driving classes of
+`test_post_green_resume.py`, and deliberately: this file is the only
+coverage of an authority door that writes DONE and unlocks files, the `slow`
+lane never runs in CI, and the whole file costs about ten seconds.
 """
 
 import subprocess
@@ -285,6 +290,60 @@ class TestRefusalsWriteNothing:
                 complete(cfg, state, TASK, green_sha, reason=REASON)
         finally:
             lock.release()
+
+
+class TestOnlyAStandingRedIsEvidence:
+    """Local review of this PR: `confirmed_reds` returns reds of any status
+    (deliberately — `resume` needs the retired ones). Proving against a red
+    the operator gave up, whose claims `abandon` already retired, made the
+    claims check vacuous: nothing active, so nothing violated, so "intact" —
+    and a test weakened after the abandon went through."""
+
+    def test_an_abandoned_red_is_refused_even_with_a_weakened_test(self, tmp_path):
+        from spec_runner.remedy import abandon
+
+        root, cfg, checkpoint, _green = _wedged(tmp_path)
+        with ExecutorState(cfg) as state:
+            abandon(cfg, state, TASK, checkpoint.checkpoint_id, reason="gave up on this red")
+        (root / "tests" / "test_x.py").write_text("def test_y():\n    assert True\n")
+        weakened = _commit(root, "weaken the test after the abandon")
+        before = _recorded(cfg)
+        with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="no standing"):
+            complete(cfg, state, TASK, weakened, reason=REASON)
+        assert _recorded(cfg) == before
+
+    def test_a_superseded_red_points_to_resume_and_works_after_it(self, tmp_path):
+        from spec_runner.remedy import CheckpointStatus, resume
+
+        root, cfg, checkpoint, green_sha = _wedged(tmp_path)
+        namespace = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            state.set_checkpoint_status(
+                namespace, checkpoint.checkpoint_id, CheckpointStatus.SUPERSEDED
+            )
+            state.supersede_claims(
+                namespace, TASK, ClaimStatus.SUPERSEDED, checkpoint_id=checkpoint.checkpoint_id
+            )
+            with pytest.raises(RemedyError, match="tdd resume"):
+                complete(cfg, state, TASK, green_sha, reason=REASON)
+            resume(cfg, state, TASK, reason="green was established on this red")
+            assert complete(cfg, state, TASK, green_sha, reason=REASON).released == 1
+
+    def test_a_standing_red_with_no_active_claim_is_refused(self, tmp_path):
+        """No lock means no byte evidence to prove anything against — an empty
+        check must not read as an intact one."""
+        root, cfg, checkpoint, green_sha = _wedged(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.supersede_claims(
+                resolve_namespace(cfg),
+                TASK,
+                ClaimStatus.SUPERSEDED,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+        before = _recorded(cfg)
+        with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="no active claim"):
+            complete(cfg, state, TASK, green_sha, reason=REASON)
+        assert _recorded(cfg) == before
 
 
 class TestWhichClaimsCount:

@@ -186,7 +186,11 @@ against what the operator last saw silently applies to whatever arrived since.
   all run before anything is written: the confirmed red is an ancestor of
   `<sha>` and `<sha>` is an ancestor of HEAD; the red's selector **passes**
   when replayed against `<sha>`; and **this task's** claims are intact there
-  (a neighbour's broken lock does not stop it). Then, in **one transaction**,
+  (a neighbour's broken lock does not stop it). The red must be **standing**
+  (active, the rule `abandon`/`repair` apply through compare-and-swap) and
+  hold an active claim: a retired red's claims are retired with it, and an
+  empty claims check would read as an intact one. For a red superseded after
+  green, `resume` first. Then, in **one transaction**,
   lifecycle DONE (its detail names `<sha>`), the task's claims `released`, and
   a `complete` remedy row. A replay with no verdict writes nothing (exit 2).
   **What it does not attest:** the review verdict and the other pre-terminal
