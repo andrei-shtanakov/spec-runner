@@ -13,7 +13,9 @@ from .spec import (
     SpecMeta,
     StageProfile,
     apply_approval,
+    external_status_line,
     external_upstream_refusal,
+    profile_metas,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -66,8 +68,7 @@ def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
 
 def _metas(config: ExecutorConfig) -> dict[str, SpecMeta | None]:
     """Read the frontmatter meta for every stage in the configured profile."""
-    names = _stage_names(config)
-    return {stage: read_spec_meta(stage_path(config, stage), names) for stage in names}
+    return profile_metas(config, _profile(config))
 
 
 def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
@@ -75,6 +76,10 @@ def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
     profile = config.resolve_spec_profile()
     metas = _metas(config)
     for stage in profile.names():
+        sd = profile.get(stage)
+        if sd is not None and sd.external:
+            print(f"{stage:12} external  {external_status_line(config, profile, stage)}")
+            continue
         meta = metas[stage]
         if meta is None:
             print(f"{stage:12} —        unmanaged")

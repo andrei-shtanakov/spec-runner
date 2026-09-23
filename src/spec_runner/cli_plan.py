@@ -28,6 +28,8 @@ from .spec import (
     SpecMeta,
     ancestor_stages,
     atomic_write_bytes,
+    external_admission,
+    profile_metas,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -113,6 +115,10 @@ def _generate_stage_draft(
         generation.
     """
     profile = config.resolve_spec_profile()
+    external = profile.get(stage)
+    if external is not None and external.external:
+        print(f"⛔ {stage} is external — produced outside spec-runner; not generated here")
+        return 1
     stage_def = _stage_def(stage, profile)
     stage_names = profile.names()
 
@@ -122,6 +128,13 @@ def _generate_stage_draft(
     # below: approving a stage's immediate prerequisite doesn't require every
     # ancestor further back to still be approved.
     for upstream in stage_def.upstream:
+        up = profile.get(upstream)
+        if up is not None and up.external:
+            refusal = external_admission(config, profile, upstream)
+            if refusal is not None:
+                print(f"⛔ cannot generate {stage}: {refusal}")
+                return 2
+            continue
         meta = read_spec_meta(stage_path(config, upstream), stage_names)
         if meta is None or meta.status != "approved":
             print(f"⛔ cannot generate {stage}: {upstream} must be APPROVED first")
@@ -135,8 +148,13 @@ def _generate_stage_draft(
     context: dict[str, str] = {}
     statuses: dict[str, str] = {}
     for ancestor in ancestor_stages(stage, profile):
-        context[ancestor] = read_spec_body(stage_path(config, ancestor))
-        ancestor_meta = read_spec_meta(stage_path(config, ancestor), stage_names)
+        ancestor_path = stage_path(config, ancestor, profile)
+        context[ancestor] = read_spec_body(ancestor_path)
+        anc = profile.get(ancestor)
+        if anc is not None and anc.external:
+            statuses[ancestor] = "external"
+            continue
+        ancestor_meta = read_spec_meta(ancestor_path, stage_names)
         statuses[ancestor] = ancestor_meta.status if ancestor_meta is not None else "unmanaged"
 
     path = stage_path(config, stage)
@@ -309,6 +327,9 @@ def _print_gate_status(action: str, stage: str) -> bool:
     blocked); False when `action == "generate"` (the caller should proceed to
     generate it).
     """
+    if action == "waiting":
+        print(f"waiting for external {stage} — produced outside spec-runner")
+        return True
     if action == "await_approval":
         print(f"{stage} is DRAFT — approve or edit it before continuing")
         return True
@@ -332,8 +353,7 @@ def _print_gate_status(action: str, stage: str) -> bool:
 
 def _current_metas(config) -> dict[str, SpecMeta | None]:
     """Read the current `SpecMeta` for every stage of the configured profile."""
-    names = config.resolve_spec_profile().names()
-    return {s: read_spec_meta(stage_path(config, s), names) for s in names}
+    return profile_metas(config, config.resolve_spec_profile())
 
 
 def resolve_plan_description(

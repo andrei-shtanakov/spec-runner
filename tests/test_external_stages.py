@@ -118,3 +118,64 @@ class TestExternalTargetsAreRefused:
         assert rc == 1
         assert "is external" in capsys.readouterr().out
         assert ext.read_bytes() == before
+
+
+class TestTheRestOfTheLifecycle:
+    def test_status_shows_the_external_stage(self, tmp_path, capsys):
+        from argparse import Namespace
+
+        from spec_runner.spec_commands import cmd_spec_status
+
+        cfg, _ = _project(tmp_path, "---\nstatus: draft\n---\nx\n")
+        cmd_spec_status(Namespace(), cfg)
+        out = capsys.readouterr().out
+        assert "decomposition" in out and "external" in out and "status: draft" in out
+        assert "next: waiting → decomposition" in out
+
+    def test_next_stage_is_never_generate_for_an_external_stage(self, tmp_path):
+        from spec_runner.spec import profile_metas, resolve_next_stage
+
+        cfg, _ = _project(tmp_path, None)
+        profile = cfg.resolve_spec_profile()
+        assert resolve_next_stage(profile_metas(cfg, profile), profile) == (
+            "waiting",
+            "decomposition",
+        )
+
+    def test_the_stale_cascade_never_writes_into_an_external_file(self, tmp_path):
+        """An external stage *downstream* of a managed one: approving the
+        managed stage cascades `stale` to its dependents, and must skip the
+        external file rather than stamp a status into it."""
+        from spec_runner.config import ExecutorLock
+        from spec_runner.spec import mark_downstream_stale
+
+        cfg, _ = _project(tmp_path, APPROVED)
+        (tmp_path / "spec" / "profiles" / "workstream.yaml").write_text(
+            WORKSTREAM
+            + "  - name: audit\n    external: true\n"
+            + '    path: "workstreams/{ws}/spec/40-audit.md"\n    upstream: [tasks]\n'
+        )
+        audit = tmp_path / "workstreams" / "ws" / "spec" / "40-audit.md"
+        audit.write_text("---\nspec_stage: audit\nstatus: approved\n---\nbody\n")
+        before = audit.read_bytes()
+        profile = cfg.resolve_spec_profile()
+        mark_downstream_stale(cfg, "tasks", ExecutorLock(cfg.spec_lock_file), profile)
+        assert audit.read_bytes() == before
+
+    def test_plan_gated_refuses_an_external_target(self, tmp_path, capsys):
+        from spec_runner.cli_plan import run_gated_stage
+
+        cfg, ext = _project(tmp_path, APPROVED)
+        assert run_gated_stage("decomposition", "d", cfg, invoke=_never) == 1
+        assert "is external" in capsys.readouterr().out
+
+    def test_plan_gated_gates_on_admission(self, tmp_path, capsys):
+        from spec_runner.cli_plan import run_gated_stage
+
+        cfg, ext = _project(tmp_path, "---\nstatus: draft\n---\nx\n")
+        assert run_gated_stage("tasks", "d", cfg, invoke=_never) == 2
+        assert "draft" in capsys.readouterr().out
+
+
+def _never(*_a, **_k):
+    raise AssertionError("no generation may run")

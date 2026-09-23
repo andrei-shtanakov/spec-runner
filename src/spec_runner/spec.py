@@ -622,6 +622,12 @@ def resolve_next_stage(
     for stage in names:
         m = metas.get(stage)
         if m is None:
+            # #338: an external stage is never generated here; not admitted
+            # means spec-runner waits for whoever produces it.
+            if isinstance(graph, StageProfile):
+                sd = graph.get(stage)
+                if sd is not None and sd.external:
+                    return ("waiting", stage)
             deps = edges.get(stage, ()) if edges is not None else ()
             if edges is None or _deps_satisfied(deps, metas):
                 return ("generate", stage)
@@ -801,6 +807,40 @@ def external_upstream_refusal(
     return None
 
 
+def profile_metas(config: ExecutorConfig, profile: StageProfile) -> dict[str, SpecMeta | None]:
+    """Per-stage metas for ``profile`` (#338).
+
+    An external stage reads as a synthetic ``approved`` meta when admitted
+    and None otherwise, so readiness, next-stage and gates keep their logic.
+    Nothing is written.
+    """
+    names = profile.names()
+    out: dict[str, SpecMeta | None] = {}
+    for sd in profile.stages:
+        if sd.external:
+            admitted = external_admission(config, profile, sd.name) is None
+            out[sd.name] = (
+                SpecMeta(spec_stage=sd.name, status="approved", version=1) if admitted else None
+            )
+        else:
+            out[sd.name] = read_spec_meta(stage_path(config, sd.name, profile), names)
+    return out
+
+
+def external_status_line(config: ExecutorConfig, profile: StageProfile, stage: str) -> str:
+    """What ``spec status`` shows for an external stage (#338)."""
+    path = stage_path(config, stage, profile)
+    if not path.is_file():
+        return "missing"
+    try:
+        meta = read_frontmatter_strict(path)
+    except ExternalStageError:
+        return "malformed frontmatter"
+    if meta and "status" in meta:
+        return f"status: {meta['status']}"
+    return "present"
+
+
 def _profile_for(config: ExecutorConfig) -> StageProfile | None:
     """The config's profile, or None when it cannot be resolved here (a bare
     config stand-in in a test)."""
@@ -830,6 +870,9 @@ def mark_downstream_stale(
     """
     names, _ = _order_and_edges(graph)
     for ds in downstream_stages(stage, graph):
+        # #338: never write into an external stage's file.
+        if isinstance(graph, StageProfile) and (sd := graph.get(ds)) is not None and sd.external:
+            continue
         ds_path = stage_path(config, ds)
         ds_meta = read_spec_meta(ds_path, names)
         if ds_meta is not None and ds_meta.status != "stale":
