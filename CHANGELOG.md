@@ -10,6 +10,35 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+**Major, by the state-surface rule.** `tdd_remedies.operation` gains a new
+value, `complete`; no table or column changes, and nothing existing changes
+meaning. Classified now so the release does not have to rediscover it.
+
+### Added
+
+- **`spec-runner tdd complete TASK-ID --commit <sha> --reason …` (#576).**
+  Closes a tdd task the terminal gate refused and a person then finished by
+  hand. Until now no door fitted: `release` demands DONE, which only the
+  ordinary path writes, and `abandon` would record a red that shipped as no
+  good. The command proves the completion before writing anything: the
+  task's **standing** confirmed red (an abandoned one proves nothing; a
+  superseded one needs `resume` first) holds an active claim and is an
+  ancestor of `<sha>`, `<sha>` is on HEAD's line, the red's own
+  selector, replayed alone against `<sha>` (the scoped builder, so a
+  `test_command` naming `tests/` does not run the whole suite), passes — everything it selected ran
+  and passed, so a skip is not a green and a parametrized red still counts
+  (new adapter method `passed_in_full`) — and this task's claims are
+  intact there. Then, in one transaction: lifecycle DONE, the proven
+  lineage's claims released, a `complete` remedy row with actor and reason. It does **not**
+  check the review verdict or the other pre-terminal gates, and says so on
+  success: going around them is recorded as the operator's decision.
+  `tasks.md` is not written, but while it still shows the task open the
+  command refuses and names `spec-runner task done <id> --force` — `run`
+  selects by it, and a selectable task with its lock released would reuse
+  the red over an unprotected test. Only the proven lineage's claims are
+  released; any other lineage's stay until `tdd release`. Exit 0
+  closed, 1 refused, 2 replay without a verdict (nothing recorded).
+
 ### Fixed
 
 - **The harness guard no longer tells the agent how to lift it.** Under

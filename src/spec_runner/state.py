@@ -1910,6 +1910,63 @@ class ExecutorState:
             claims = int(cur.rowcount or 0)
         return checkpoints, claims
 
+    def complete_with_release(
+        self,
+        namespace: str,
+        task_id: str,
+        checkpoint_id: str,
+        detail: str,
+        remedy: "RemedyRecordT",
+    ) -> int:
+        """Lifecycle DONE, the proven lineage's claims released, the remedy
+        recorded — in **one transaction** (#576). Returns how many claims were
+        released. Scoped to ``checkpoint_id`` like `supersede_claims` (F-3):
+        only that lineage was proven; others stay locked until `release`.
+
+        Three writes that only mean something together. DONE without the
+        remedy row is a completion nobody can attribute; a release without
+        DONE is the laundering `release` refuses; a remedy row without either
+        claims a completion that did not happen. Any failure raises and rolls
+        all three back — unlike `record_tdd_phase`, which is best-effort
+        because it only remembers what a gate decided, this *is* the decision.
+        """
+        from .claims import ClaimStatus
+        from .lifecycle import TddPhase
+
+        assert self._conn is not None
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO tdd_phases (task_id, namespace, phase, detail, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, namespace, TddPhase.DONE.value, detail, datetime.now().isoformat()),
+            )
+            cursor = self._conn.execute(
+                "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status = ?",
+                (
+                    ClaimStatus.RELEASED.value,
+                    namespace,
+                    task_id,
+                    checkpoint_id,
+                    ClaimStatus.ACTIVE.value,
+                ),
+            )
+            self._conn.execute(
+                "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, "
+                "reason, actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    remedy.namespace,
+                    remedy.task_id,
+                    remedy.checkpoint_id,
+                    getattr(remedy.operation, "value", remedy.operation),
+                    remedy.reason,
+                    remedy.actor,
+                    remedy.timestamp,
+                    remedy.new_checkpoint_id,
+                ),
+            )
+        return int(cursor.rowcount or 0)
+
     def claims_of_checkpoint(self, namespace: str, checkpoint_id: str) -> list[dict]:
         """Every claim recorded for one lineage, whatever its status."""
         assert self._conn is not None

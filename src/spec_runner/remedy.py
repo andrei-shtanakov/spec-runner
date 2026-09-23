@@ -65,6 +65,10 @@ class RemedyOperation(str, Enum):
     #: no remedy that fitted, reached for `repair`, and superseded the very
     #: evidence that would have let the task finish.
     RESUME = "resume"
+    #: #576: a task finished by hand after the terminal gate refused it. The
+    #: lifecycle never reached DONE, so `release` refuses, and `abandon` would
+    #: record a lie. This door proves the completion instead of trusting it.
+    COMPLETE = "complete"
 
 
 class CheckpointStatus(str, Enum):
@@ -420,25 +424,7 @@ def resume(
             f"{task_id} has no confirmed red in this workstream — there is no green to resume "
             "past, and `resume` cannot invent the evidence a red is"
         )
-    if checkpoint_id:
-        matches = [cp for cp in candidates if cp.checkpoint_id == checkpoint_id]
-        if not matches:
-            listed = ", ".join(cp.checkpoint_id for cp in candidates)
-            raise RemedyError(
-                f"{checkpoint_id} is not a confirmed red of {task_id} in this workstream "
-                f"(have: {listed})"
-            )
-        evidence = matches[0]
-    elif len(candidates) > 1:
-        # The same rule the other remedies follow (F-5): "probably that one" is
-        # not a thing to guess about an authority decision, and reinstating the
-        # wrong lineage reinstates the wrong byte-lock with it.
-        listed = ", ".join(cp.checkpoint_id for cp in candidates)
-        raise RemedyError(
-            f"{task_id} has {len(candidates)} confirmed reds ({listed}); name one with --checkpoint"
-        )
-    else:
-        evidence = candidates[0]
+    evidence = _pick_confirmed_red(candidates, task_id, checkpoint_id)
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=config.project_root,
@@ -490,6 +476,243 @@ def resume(
         conflicts=len(conflicts),
     )
     return RemedyResult(RemedyOperation.RESUME, evidence.checkpoint_id), conflicts
+
+
+def complete(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task_id: str,
+    commit: str,
+    *,
+    reason: str,
+    actor: str | None = None,
+    checkpoint_id: str | None = None,
+) -> RemedyResult:
+    """The task was finished by hand; prove it, then close it (#576).
+
+    For a task the terminal gate refused and a person then carried to the
+    main line: the lifecycle stopped short of DONE, so `release` refuses, and
+    `abandon` would record the red as no good — a lie about work that shipped.
+
+    A door with **checks**, not with trust. Before anything is written:
+
+    1. the confirmed red's commit is an ancestor of ``commit``, and ``commit``
+       is an ancestor of HEAD — the work was built on that red and lies on
+       HEAD's line. Not that its content survived into HEAD: a later revert
+       is not looked for, and the attestation is about ``commit``;
+    2. the red's own selector **passes** when replayed against ``commit``,
+       all of it: everything it selected ran and passed (`passed_in_full`)
+       — a skip exits 0 too, and would close the task over broken work;
+    3. this task's claims are intact in ``commit`` — a green that weakened
+       its own evidence is the laundering the byte-lock exists to catch.
+       Only *this* task's: a neighbour's broken lock is not a reason this one
+       cannot close. The red must be **standing** and hold at least one active
+       claim; a retired red, or one with nothing locked, leaves this check
+       nothing to look at, and an empty check is not an intact one.
+
+    What it does **not** check is the review verdict and the other
+    pre-terminal gates. The review happened outside, in the PR that carried
+    the work; the actor and the reason record who answers for going around
+    them. The command attests the evidence above, not that a review exists.
+
+    Then, in one transaction: lifecycle DONE, claims released, remedy row.
+    A replay that cannot reach a verdict writes nothing and is returned with
+    ``outcome=UNVERIFIABLE`` — "cannot tell" is not "passed".
+    """
+    from .claims import ClaimCheckError, check_claims
+    from .lifecycle import TddPhase, has_reached
+    from .tdd import _replay_selector
+    from .tdd_runners import RunOutcome, SelectionProof
+
+    namespace = _guard(config, reason)
+    confirmed = state.confirmed_reds(namespace, task_id)
+    if not confirmed:
+        raise RemedyError(
+            f"{task_id} has no confirmed red in this workstream — `complete` proves a green "
+            "against a red, and there is none to prove against"
+        )
+    # Only a **standing** red is evidence — the rule abandon/repair already
+    # apply through `_swap`. `confirmed_reds` returns retired ones on purpose
+    # (resume needs them), but a retired red's claims are retired with it, and
+    # the claims check below would then pass over nothing: an abandoned red
+    # plus a test weakened afterwards read as "evidence intact".
+    active = {cp.checkpoint_id for cp in state.active_checkpoints(namespace, task_id)}
+    candidates = [cp for cp in confirmed if cp.checkpoint_id in active]
+    if not candidates:
+        retired = ", ".join(cp.checkpoint_id for cp in confirmed)
+        raise RemedyError(
+            f"{task_id} has no standing confirmed red ({retired} retired). An abandoned red "
+            "proves nothing; if green was established on a superseded one, "
+            "`spec-runner tdd resume` reinstates it with its claims first"
+        )
+    evidence = _pick_confirmed_red(candidates, task_id, checkpoint_id)
+    # Before the DONE refusal (owner decision): a repeat of a successful
+    # complete is the same fact, not an ordinary DONE to send to `release`.
+    # Keyed on the lineage, like every sibling door: a *new* red after a
+    # completion is a different fact, and "already applied" would leave its
+    # claims frozen while reporting success.
+    if _existing(state, namespace, task_id, evidence.checkpoint_id, RemedyOperation.COMPLETE):
+        return RemedyResult(RemedyOperation.COMPLETE, evidence.checkpoint_id, already_applied=True)
+    if has_reached(state, namespace, task_id, TddPhase.DONE):
+        raise RemedyError(
+            f"{task_id} already reached DONE; to unlock the files its claims still hold "
+            "use `spec-runner tdd release`"
+        )
+    # `run` selects by tasks.md, not by the lifecycle. Released claims on a
+    # standing red, with the task still open there, would let the next run
+    # reuse the red without a paid call and implement green over a test
+    # nothing protects (local review). tasks.md must agree first. A task
+    # tasks.md does not list (or no tasks.md) cannot be selected at all.
+    listed = _tasks_md_status(config, task_id)
+    if listed is not None and listed != "done":
+        raise RemedyError(
+            f"tasks.md still shows {task_id} as {listed}: the next run would select it and "
+            "reuse this red with its lock released. Mark it done there first: "
+            f"`spec-runner task done {task_id} --force`"
+        )
+    if not any(
+        c.checkpoint_id == evidence.checkpoint_id and c.task_id == task_id
+        for c in state.active_claims(namespace)
+    ):
+        raise RemedyError(
+            f"{evidence.checkpoint_id} holds no active claim, so there is no frozen evidence "
+            "to prove the green against — an empty check is not an intact one"
+        )
+
+    if not _resolves(config, commit):
+        raise RemedyError(f"{commit} does not resolve to a commit in this repository")
+    sha = _rev_parse(config, commit)
+    head = _rev_parse(config, "HEAD")
+    if not _is_ancestor(config, evidence.commit_sha, sha):
+        raise RemedyError(
+            f"the confirmed red {evidence.checkpoint_id} ({evidence.commit_sha[:12]}) is not an "
+            f"ancestor of {sha[:12]} — that commit was not built on this red"
+        )
+    if not _is_ancestor(config, sha, head):
+        raise RemedyError(
+            f"{sha[:12]} is not in HEAD ({head[:12]}) — complete the task from the tree that "
+            "carries the work"
+        )
+
+    # Not `verify_red`: it answers "is this red?", and for that a skipped test
+    # is safely "not red". Here "not red" is the success, so a skip would close
+    # the task over a broken implementation (acceptance review). Nor the
+    # negative control's clean half: "exactly one test ran" locks out every
+    # parametrized red (local review). The green is "everything the selector
+    # selected ran and passed" — the adapter's `passed_in_full`.
+    # Scoped: the red-replay builder only appends the selector, so a real
+    # `test_command` (`pytest tests/ -m "not slow"`) would run the directory,
+    # and the rest of the suite's summary is not this selector's green.
+    attempt = _replay_selector(
+        config,
+        sha=sha,
+        selector=evidence.selector,
+        baseline_sha=evidence.baseline_sha,
+        scoped=True,
+    )
+    if (
+        attempt.stage == "run"
+        and attempt.outcome is RunOutcome.TESTS_FAILED
+        and attempt.proof is SelectionProof.PROVEN
+    ):
+        raise RemedyError(
+            f"{evidence.selector} still fails at {sha[:12]} — the work this red asks for is not "
+            "in that commit"
+        )
+    if not (
+        attempt.stage == "run"
+        and attempt.outcome is RunOutcome.TESTS_PASSED
+        and attempt.passed_in_full
+    ):
+        detail = attempt.detail or "the replay reached no verdict"
+        if attempt.stage == "run" and attempt.outcome is RunOutcome.TESTS_PASSED:
+            detail = (
+                "the run exited cleanly, but not everything the selector selected ran and "
+                f"passed (a skip, an xfail, or nothing collected?): {detail}"
+            )
+        return RemedyResult(
+            RemedyOperation.COMPLETE,
+            evidence.checkpoint_id,
+            outcome=RedOutcome.UNVERIFIABLE,
+            note=detail,
+        )
+
+    try:
+        violations = [
+            v for v in check_claims(config, state, namespace, sha) if v.task_id == task_id
+        ]
+    except ClaimCheckError as exc:
+        raise RemedyError(f"the claims could not be checked: {exc}") from exc
+    if violations:
+        listed = ", ".join(f"{v.path} ({v.kind.value})" for v in violations)
+        raise RemedyError(
+            f"{task_id}'s frozen evidence changed in {sha[:12]}: {listed}. A green that edits "
+            "its own test proves nothing; restore the bytes or `repair` the red first"
+        )
+
+    record = RemedyRecord(
+        namespace=namespace,
+        task_id=task_id,
+        checkpoint_id=evidence.checkpoint_id,
+        operation=RemedyOperation.COMPLETE,
+        reason=reason.strip(),
+        actor=resolve_actor(config, actor),
+        timestamp=datetime.now().isoformat(),
+    )
+    detail = f"completed by operator at {sha}; the red passes there"
+    try:
+        released = state.complete_with_release(
+            namespace, task_id, evidence.checkpoint_id, detail, record
+        )
+    except Exception as exc:
+        raise RemedyError(
+            f"the completion could not be stored; nothing was recorded: {exc}"
+        ) from exc
+    logger.info("Task completed by operator", task_id=task_id, commit=sha, released=released)
+    return RemedyResult(
+        RemedyOperation.COMPLETE,
+        evidence.checkpoint_id,
+        outcome=RedOutcome.NOT_RED,
+        released=released,
+    )
+
+
+def _pick_confirmed_red(
+    candidates: list[RedCheckpoint], task_id: str, checkpoint_id: str | None
+) -> RedCheckpoint:
+    """The confirmed red a post-green remedy acts on.
+
+    The same rule the other remedies follow (F-5): "probably that one" is not
+    a thing to guess about an authority decision, and acting on the wrong
+    lineage acts on the wrong byte-lock with it.
+    """
+    if checkpoint_id:
+        matches = [cp for cp in candidates if cp.checkpoint_id == checkpoint_id]
+        if not matches:
+            listed = ", ".join(cp.checkpoint_id for cp in candidates)
+            raise RemedyError(
+                f"{checkpoint_id} is not a confirmed red of {task_id} in this workstream "
+                f"(have: {listed})"
+            )
+        return matches[0]
+    if len(candidates) > 1:
+        listed = ", ".join(cp.checkpoint_id for cp in candidates)
+        raise RemedyError(
+            f"{task_id} has {len(candidates)} confirmed reds ({listed}); name one with --checkpoint"
+        )
+    return candidates[0]
+
+
+def _rev_parse(config: ExecutorConfig, ref: str) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RemedyError(f"cannot resolve {ref}: {result.stderr.strip()[:200]}")
+    return result.stdout.strip()
 
 
 def _claim_conflicts(
@@ -770,6 +993,8 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         return _cmd_resume(args, config)
     if args.tdd_command == "release":
         return _cmd_release(args, config)
+    if args.tdd_command == "complete":
+        return _cmd_complete(args, config)
 
     try:
         with ExecutorState(config) as state:
@@ -869,6 +1094,65 @@ def _cmd_release(args, config: ExecutorConfig) -> int:
     return 0
 
 
+def _cmd_complete(args, config: ExecutorConfig) -> int:
+    """`spec-runner tdd complete`. 0 when the task is closed, 1 on a refusal,
+    2 when the replay could not reach a verdict — nothing recorded then."""
+    from .state import ExecutorState
+
+    try:
+        with ExecutorState(config) as state:
+            result = complete(
+                config,
+                state,
+                args.task_id,
+                args.commit,
+                reason=args.reason,
+                actor=getattr(args, "actor", None),
+                checkpoint_id=getattr(args, "checkpoint", None),
+            )
+    except RemedyError as exc:
+        print(f"⛔ {exc}")
+        return 1
+
+    if result.already_applied:
+        print(f"✔️  Already applied — complete on {args.task_id} ({result.checkpoint_id})")
+        return 0
+    if result.outcome is RedOutcome.UNVERIFIABLE:
+        print(f"⛔ Not completed: the replay of {result.checkpoint_id} reached no verdict.")
+        print(f"   {result.note}")
+        print("   Nothing was recorded.")
+        return 2
+    print(
+        f"✔️  Completed {args.task_id}: the red {result.checkpoint_id} passes at the named "
+        f"commit; released {result.released} claim(s)"
+    )
+    print("   Not checked: the review verdict and other pre-terminal gates — recorded as yours.")
+    return 0
+
+
+def _tasks_md_status(config: ExecutorConfig, task_id: str) -> str | None:
+    """The task's status in tasks.md, or None when tasks.md does not list it.
+
+    None means **established** absence — no file, or a file without the task
+    — where `run` cannot select it. A file that exists but cannot be read is
+    not absence, and raises: agreement not established is not agreement
+    (acceptance review).
+    """
+    from .task import parse_tasks
+
+    # `parse_tasks` exits the process on a missing file; this must not.
+    if not config.tasks_file.exists():
+        return None
+    try:
+        tasks = parse_tasks(config.tasks_file)
+    except (OSError, ValueError) as exc:
+        raise RemedyError(
+            f"{config.tasks_file} cannot be read ({exc}); `complete` cannot establish "
+            f"that {task_id} is closed there"
+        ) from exc
+    return next((t.status for t in tasks if t.id == task_id), None)
+
+
 def _cmd_resume(args, config: ExecutorConfig) -> int:
     """`spec-runner tdd resume`. 0 when the task can proceed, 2 when the
     decision is recorded but the claimed bytes no longer match.
@@ -937,6 +1221,7 @@ __all__ = [
     "RemedyResult",
     "abandon",
     "cmd_tdd",
+    "complete",
     "resolve_checkpoint",
     "repair",
     "resolve_actor",

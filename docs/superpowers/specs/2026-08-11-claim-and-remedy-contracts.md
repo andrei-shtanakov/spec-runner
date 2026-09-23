@@ -179,6 +179,40 @@ against what the operator last saw silently applies to whatever arrived since.
   task. `tdd release` is the same act performed by an operator on state written
   before this rule, and it is admissible only once the lifecycle reached DONE:
   releasing a live task's lock is the laundering the lock exists to prevent.
+- `tdd complete TASK-ID --commit <sha> --reason <text>` (#576) closes a task
+  the terminal gate refused and a person then finished by hand. Its
+  lifecycle never reached DONE, so `release` refuses, and `abandon` would
+  record the red as no good. It is a door with **checks**, not with trust,
+  all run before anything is written: the confirmed red is an ancestor of
+  `<sha>` and `<sha>` is an ancestor of HEAD (on HEAD's line — whether its
+  content survived a later revert is not looked for); the red's selector **passes**
+  when replayed **alone** against `<sha>` (the scoped builder verify-first
+  uses: the red-replay builder only appends the selector, so `pytest tests/
+  -m "not slow" <node>` would judge the whole directory's summary), **all
+  of it** — everything the selector
+  selected ran and passed, nothing skipped or expected-to-fail beside it
+  (the adapter's `passed_in_full`: a skip also exits 0, and `verify_red`
+  reads it as "not red", which here is the success; "exactly one test ran"
+  would lock out every parametrized red); and **this task's** claims are intact there
+  (a neighbour's broken lock does not stop it). The red must be **standing**
+  (active, the rule `abandon`/`repair` apply through compare-and-swap) and
+  hold an active claim: a retired red's claims are retired with it, and an
+  empty claims check would read as an intact one. For a red superseded after
+  green, `resume` first. Then, in **one transaction**,
+  lifecycle DONE (its detail names `<sha>`), the proven lineage's claims `released`, and
+  a `complete` remedy row. A replay with no verdict writes nothing (exit 2).
+  **What it does not attest:** the review verdict and the other pre-terminal
+  gates are not checked, and the command does not confirm that any external
+  review took place. The actor and the reason record who answers for going
+  around them. `tasks.md` is not written, but it must **agree**: while it
+  still shows the task open the command refuses and names `spec-runner task
+  done <id> --force`, because `run` selects by `tasks.md`, and a standing red
+  with its lock released on a selectable task would let the next run reuse
+  the red and implement green over an unprotected test. Only the proven
+  lineage's claims are released (as `abandon`/`repair` scope theirs); other
+  lineages stay locked until `release`, which the DONE now admits. A repeat on the same lineage is `already applied`; any other
+  DONE — the ordinary one, or a new red after a completion — is sent to
+  `release`.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
   superseded and linked.
