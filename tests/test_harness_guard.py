@@ -156,6 +156,39 @@ class TestExecuteTaskIntegration:
         assert "Harness guard" in (ts.attempts[-1].error or "")
         assert "created pytest.ini" in (ts.attempts[-1].error or "")
 
+    def test_the_agent_is_not_told_how_to_exempt_itself(self, tmp_path):
+        """harness-guard-companions #2: the attempt's error becomes the next
+        attempt's prompt (`RetryContext.previous_error`), so naming the
+        exemption knob there taught the author agent how to lift the very
+        barrier that just stopped it. The operator still gets the hint —
+        on the progress line, which no prompt reads."""
+        from spec_runner.prompt import build_task_prompt
+        from spec_runner.state import ErrorCode, RetryContext
+
+        cfg = _cfg(tmp_path, harness_guard="strict")
+        cfg.logs_dir.mkdir()
+        progress: list[str] = []
+        with patch(
+            "spec_runner.execution.log_progress",
+            side_effect=lambda line, *_a, **_k: progress.append(line),
+        ):
+            result, ts = self._run(cfg, tmp_path)
+        assert result is False
+        error = ts.attempts[-1].error or ""
+        assert "created pytest.ini" in error
+        assert "harness_allow" not in error
+
+        retry = RetryContext(
+            attempt_number=2,
+            max_attempts=3,
+            previous_error_code=ErrorCode.TASK_FAILED,
+            previous_error=error,
+            what_was_tried="attempt 1",
+            test_failures=None,
+        )
+        assert "harness_allow" not in build_task_prompt(_task(), cfg, retry_context=retry)
+        assert any("harness_allow" in line for line in progress)
+
     def test_warn_logs_but_succeeds(self, tmp_path):
         cfg = _cfg(tmp_path, harness_guard="warn")
         cfg.logs_dir.mkdir()

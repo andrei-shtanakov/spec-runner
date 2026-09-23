@@ -1058,13 +1058,23 @@ def _execute_task(
         if violations:
             summary = ", ".join(violations)
             if config.harness_guard == "strict":
+                # `error` becomes the next attempt's prompt, so it must not
+                # name the exemption: that taught the author agent how to lift
+                # the barrier that just stopped it. The operator's way out
+                # goes on the progress line, which no prompt carries. That is
+                # the whole guarantee: the knob is no secret (README documents
+                # it, and the progress file sits in the tree); keeping the
+                # agent from *using* it is companion #1 (config under guard).
                 error = (
                     "Harness guard: the agent modified verification files: "
                     f"{summary}. These files define how the task is verified "
-                    "and must not be changed by the task. Revert them or, if "
-                    "the change is intentional, exempt it via harness_allow."
+                    "and must not be changed by the task. Revert them."
                 )
-                log_progress(f"⛔ Harness guard: {summary}", task_id)
+                log_progress(
+                    f"⛔ Harness guard: {summary} (operator: exempt an intended "
+                    "change via harness_allow in the config)",
+                    task_id,
+                )
                 logger.error("Harness files mutated by agent", violations=violations)
                 state.record_attempt(
                     task_id,
