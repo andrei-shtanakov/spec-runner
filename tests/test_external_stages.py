@@ -179,3 +179,59 @@ class TestTheRestOfTheLifecycle:
 
 def _never(*_a, **_k):
     raise AssertionError("no generation may run")
+
+
+class TestCliStageNames:
+    def test_a_profile_stage_name_is_accepted_by_the_cli(self, tmp_path, monkeypatch, capsys):
+        from spec_runner.cli import main
+
+        cfg, _ = _project(tmp_path, APPROVED)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "spec-runner",
+                "spec",
+                "approve",
+                "decomposition",
+                "--spec-prefix",
+                "ws-",
+                "--profile",
+                "workstream",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        assert "is external" in capsys.readouterr().out
+
+    def test_an_unknown_stage_names_the_profile_stages(self, tmp_path, monkeypatch):
+        from spec_runner.cli import main
+
+        _project(tmp_path, APPROVED)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "spec-runner",
+                "spec",
+                "approve",
+                "design",
+                "--spec-prefix",
+                "ws-",
+                "--profile",
+                "workstream",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert "decomposition" in str(exc.value) and "tasks" in str(exc.value)
+
+    def test_lite_still_rejects_an_unknown_stage(self, tmp_path, monkeypatch):
+        from spec_runner.cli import main
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["spec-runner", "spec", "approve", "decomposition"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert "requirements" in str(exc.value)

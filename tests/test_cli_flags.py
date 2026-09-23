@@ -102,10 +102,18 @@ class TestSpecSubparser:
         ns = parser.parse_args(["spec", "adopt", "requirements"])
         assert ns.force is False
 
-    def test_spec_invalid_stage_rejected(self):
-        parser = _build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["spec", "approve", "bogus"])
+    def test_spec_invalid_stage_rejected(self, tmp_path, monkeypatch):
+        """#338: stage names come from the resolved profile, so the parser
+        takes any name and `main` refuses one the profile does not have."""
+        from spec_runner.cli import main
+
+        assert _build_parser().parse_args(["spec", "approve", "bogus"]).stage == "bogus"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["spec-runner", "spec", "approve", "bogus"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert "unknown stage 'bogus'" in str(exc.value)
+        assert "requirements, design, tasks" in str(exc.value)
 
     def test_spec_no_subcommand(self):
         parser = _build_parser()
