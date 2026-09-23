@@ -1061,7 +1061,10 @@ def _execute_task(
                 # `error` becomes the next attempt's prompt, so it must not
                 # name the exemption: that taught the author agent how to lift
                 # the barrier that just stopped it. The operator's way out
-                # goes on the progress line, which no prompt reads.
+                # goes on the progress line, which no prompt carries. That is
+                # the whole guarantee: the knob is no secret (README documents
+                # it, and the progress file sits in the tree); keeping the
+                # agent from *using* it is companion #1 (config under guard).
                 error = (
                     "Harness guard: the agent modified verification files: "
                     f"{summary}. These files define how the task is verified "

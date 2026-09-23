@@ -18,7 +18,9 @@ is a **breaking change** and requires a major version bump plus an entry here.
   harness_allow", handing the author agent the exemption knob for the barrier
   that had just stopped it. The error now says only what changed and that it
   must be reverted; the `harness_allow` hint moved to the operator's progress
-  line, which no prompt reads (harness-guard-companions #2).
+  line, which no prompt carries (harness-guard-companions #2). The knob is
+  not hidden — it is documented, and the progress file lives in the project
+  tree; what changed is that the prompt no longer offers it.
 
 ## [3.0.0] - 2026-09-22
 
