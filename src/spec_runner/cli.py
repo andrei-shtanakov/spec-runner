@@ -819,9 +819,11 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
-#: Commands that start paid calls — the only ones a broken budget variable
-#: may stop (#388 review).
-SPENDING_COMMANDS = frozenset({"run", "retry", "watch"})
+#: Commands `budget_usd`/`task_budget_usd` govern — the only ones a broken
+#: budget variable may stop (#388 review). Not "every command that pays":
+#: `plan`, `doctor` and `review-pr` make paid calls under their own limits,
+#: and the variable does not govern them.
+BUDGETED_COMMANDS = frozenset({"run", "retry", "watch"})
 
 
 def _announce_budget(config: ExecutorConfig) -> None:
@@ -832,18 +834,21 @@ def _announce_budget(config: ExecutorConfig) -> None:
     enforcement and the overshoot announcement use (#256). The task axis is
     shown as configured: a task's own authorization is resolved when that
     task is selected. stderr, because stdout carries `--json-result`.
-    Silent when there is no cap at all.
+    Silent when no cap is configured: the guard is dormant then, whatever
+    authorizations the state holds (#257).
     """
     run_cap = getattr(config, "budget_usd", None)
     task_cap = getattr(config, "task_budget_usd", None)
+    # The dormancy question every enforcing reader asks first (#257): with no
+    # configured cap nothing applies an authorization, so none is "in force".
+    if run_cap is None and task_cap is None:
+        return
     sources = getattr(config, "budget_sources", {}) or {}
     run_row = None
     state_file = getattr(config, "state_file", None)
     if state_file is not None and Path(state_file).exists():
         with ExecutorState.for_read(config) as state:
             run_row = state.latest_budget_authorization("run")
-    if run_cap is None and task_cap is None and run_row is None:
-        return
 
     def configured(key: str, value: float | None) -> str:
         return "none" if value is None else f"${value:.2f} ({sources.get(key, 'config')})"
@@ -2568,12 +2573,16 @@ def main():
     try:
         config = build_config(yaml_config, args)
     except BudgetEnvError as exc:
-        # Only a command that spends may refuse on it: `stop` is the brake on
-        # a paid run in another shell, and a typo in this shell's profile must
-        # not disable it (#388 review). The rest warn and ignore the variable.
-        if args.command in SPENDING_COMMANDS:
+        # Only a command the budget governs may refuse on it: `stop` is the
+        # brake on a paid run in another shell, and a typo in this shell's
+        # profile must not disable it (#388 review). The rest warn and ignore
+        # the variable.
+        if args.command in BUDGETED_COMMANDS:
             raise SystemExit(f"⛔ {exc}") from None
-        print(f"⚠️  {exc} — ignored: `{args.command}` spends nothing", file=sys.stderr)
+        print(
+            f"⚠️  {exc} — ignored: the budget does not govern `{args.command}`",
+            file=sys.stderr,
+        )
         config = build_config(yaml_config, args, read_budget_env=False)
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None

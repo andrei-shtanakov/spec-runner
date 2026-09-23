@@ -1515,6 +1515,10 @@ BUDGET_ENV: dict[str, str] = {
 }
 
 
+#: The CLI argument that overrides each cap, by config key.
+_BUDGET_FLAG_ARG: dict[str, str] = {"budget_usd": "budget", "task_budget_usd": "task_budget"}
+
+
 class BudgetEnvError(ConfigError):
     """A budget environment variable holds something that is not a cap.
 
@@ -1584,6 +1588,10 @@ def build_config(
         key: "config" for key in BUDGET_ENV if config_kwargs.get(key) is not None
     }
     for key, variable in BUDGET_ENV.items() if read_budget_env else ():
+        # "CLI > env" literally: a flag for this cap means the variable is not
+        # read at all, so its typo cannot stop a run whose cap is explicit.
+        if getattr(args, _BUDGET_FLAG_ARG[key], None) is not None:
+            continue
         from_env = _budget_from_env(variable)
         if from_env is not None:
             config_kwargs[key] = from_env

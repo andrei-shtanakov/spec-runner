@@ -88,6 +88,30 @@ class TestRefusals:
         assert RUN_ENV in str(exc.value)
         assert str(exc.value).startswith("⛔")
 
+    def test_a_cli_flag_overrides_even_a_broken_variable(self, monkeypatch):
+        """Local review, round 2: "CLI > env" is literal — with `--budget`
+        given, the variable is not read at all, so its typo cannot stop a
+        run whose cap is stated explicitly."""
+        monkeypatch.setenv(RUN_ENV, "thirty")
+        cfg = build_config({}, _args(budget=10.0), detect_subdir=False)
+        assert cfg.budget_usd == 10.0
+        assert cfg.budget_sources == {"budget_usd": "--budget"}
+
+    def test_the_warning_does_not_claim_a_paid_command_spends_nothing(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        """Local review, round 2: `plan` and `doctor` make paid calls; what
+        is true of them is that `budget_usd` does not govern them."""
+        from spec_runner.cli import main
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(RUN_ENV, "1,82")
+        monkeypatch.setattr("sys.argv", ["spec-runner", "status"])
+        main()
+        err = capsys.readouterr().err
+        assert "spends nothing" not in err
+        assert "does not govern `status`" in err
+
     @pytest.mark.parametrize("command", ["status", "stop", "costs"])
     def test_a_command_that_spends_nothing_warns_and_runs(
         self, monkeypatch, tmp_path, capsys, command
@@ -159,7 +183,12 @@ class TestTheStartupLine:
         assert "run: $9.00 in force (authorization #1" in err
         assert "configured $1.82 (config)" in err
 
-    def test_an_authorization_alone_is_announced(self, tmp_path, capsys):
+    def test_an_authorization_without_a_configured_cap_is_dormant(self, tmp_path, capsys):
+        """Local review, round 2: with no cap configured the guard is dormant
+        (#257) — `stop_cause` and `check_before_call` apply no authorization.
+        Announcing one as "in force" would tell the operator $5 bounds a run
+        that nothing bounds. The line asks the same question and stays
+        silent."""
         from spec_runner.budget_cmd import authorize
         from spec_runner.cli import _announce_budget
         from spec_runner.config import ExecutorConfig
@@ -175,8 +204,9 @@ class TestTheStartupLine:
         with ExecutorState(cfg) as state:
             authorize(cfg, state, reason="raised", run_budget_usd=5.00)
         cfg.budget_usd = None  # the config cap removed; the authorization stands
+        capsys.readouterr()  # drop authorize's own log line
         _announce_budget(cfg)
-        assert "run: $5.00 in force" in capsys.readouterr().err
+        assert "Budget" not in capsys.readouterr().err
 
     @pytest.mark.parametrize("command", ["cmd_run", "cmd_retry", "cmd_watch"])
     def test_every_command_that_spends_announces_it(self, command):

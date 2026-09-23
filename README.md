@@ -552,11 +552,14 @@ file (`budget_usd`, `task_budget_usd`) > default, which is **no cap**. The
 environment is a property of the launch rather than of the file, so it does
 not go stale between phases the way a cap in an untracked config does. A
 value that is not a positive number stops `run`, `retry` and `watch` at
-startup, naming the variable; every other command (`stop`, `status`,
-`costs`, …) warns and runs without it. Blank means unset. When any cap is
-set, the spending commands print one line on stderr naming the caps and
-their sources — the run ceiling **in force**, so an operator authorization
-is shown as one:
+startup, naming the variable — unless the matching CLI flag is given, in
+which case the variable is not read at all. Every other command (`stop`,
+`status`, `costs`, `plan`, …) warns that the budget does not govern it and
+runs without it. Blank means unset. When a cap is configured, the three
+budgeted commands print one line on stderr naming the caps and their
+sources — the run ceiling **in force**, so an operator authorization is
+shown as one. With no cap configured the guard is dormant and the line is
+not printed, whatever authorizations the state holds.
 
 ```
 💰 Budget — run: $30.00 (SPEC_RUNNER_BUDGET_USD); task: $10.00 (config) configured (a task's own authorization applies when it is selected)

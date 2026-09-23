@@ -19,9 +19,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   launch. `run`, `retry` and `watch` print on stderr the run ceiling in
   force — an operator authorization shown as one, beside the configured
   value and its source — and the configured task cap (stdout stays the
-  `--json-result` contract). A value that is not a positive finite number
-  stops those three commands at startup, naming the variable; `stop`,
-  `status`, `costs` and the rest warn and run without it. The default stays **no cap** (owner's option (b)); $30 is
+  `--json-result` contract); with no cap configured the guard is dormant and
+  so is the line. A value that is not a positive finite number stops those
+  three commands at startup, naming the variable — unless the matching CLI
+  flag is given, which means the variable is not read at all; `stop`,
+  `status`, `costs`, `plan` and the rest warn that the budget does not
+  govern them and run without it. The default stays **no cap** (owner's option (b)); $30 is
   the documented recommendation. Minor: new inputs, nothing existing changes
   meaning.
 
