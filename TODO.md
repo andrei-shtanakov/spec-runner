@@ -1343,17 +1343,20 @@ A/B — дефекты подтверждённого поведения, C — 
 #### B. Producer/parser: спека проходит валидацию и падает в рантайме
 
 - [ ] **#133 plan-meta-normalizer** — третья наблюдённая форма meta-строки от @owner:github:andrei-shtanakov @id:plan-meta-normalizer @epic:eco.spec-toolchain
+      **Частично, 2026-09-23 сверено:** validate-правило сделано (PR #149 `9564a29`: задача без распознанной TASK_META — ошибка). Открыт остаток — нормализатор на выходе генерации; владелец отложил его как отдельное решение (комментарий закрытия #133).
       `plan --full` за один пилот (`- TASK-023 | 🔄 IN_PROGRESS | P0 | …`, ID и статус
       перед приоритетом). `TASK_META` её не узнаёт → статусы дефолтятся в TODO →
       `update_task_status` fail-closed возвращает False → гейт 2.22.0 честно валит ран.
       Цепочка отработала; корень — producer. Два предложения: канонический
       нормализатор на выходе генерации + validate-правило «задача без распознанной
       TASK_META = error» (сейчас такой файл валидацию проходит).
-- [ ] **#128 task-meta-status-whitelist** — `TASK_META` парсит статус как `(\w+)`: @owner:github:andrei-shtanakov @id:task-meta-status-whitelist @epic:eco.spec-toolchain
+- [x] **#128 task-meta-status-whitelist** — `TASK_META` парсит статус как `(\w+)`: @owner:github:andrei-shtanakov @id:task-meta-status-whitelist @epic:eco.spec-toolchain
+      **Сделано:** PR #149 `9564a29` — статус сужен до известных слов (`TASK_STATUS_WORDS`, `task.py:44`).
       `- P0 | high priority stuff` даст статус `high`. Bullet-допуск 2.22.0 расширил
       поверхность. Сузить до альтернации известных статусов, осторожно с обратной
       совместимостью (см. также #133 — тот же шов с другой стороны).
-- [ ] **#139 scoped-test-command** — `build_scoped_test_command` (`git_ops.py:286`) @owner:github:andrei-shtanakov @id:scoped-test-command @epic:eco.spec-toolchain
+- [x] **#139 scoped-test-command** — `build_scoped_test_command` (`git_ops.py:286`) @owner:github:andrei-shtanakov @id:scoped-test-command @epic:eco.spec-toolchain
+      **Сделано:** PR #150 `8c95c13` — составная команда не сужается (`is_composite_shell_command`, `git_ops.py:421`).
       дописывает пути тестов в конец **всей** shell-цепочки: при
       `pytest -q && pyrefly check` пути уедут в `pyrefly`. Плюс деградация полного
       suite до выборочного не видна в evidence. Оговорка автора: найдено чтением
@@ -1392,7 +1395,8 @@ A/B — дефекты подтверждённого поведения, C — 
       4. **Нет preflight'а** на пересечение declared scope задачи с оракульными
          файлами. TASK-022 была невыполнимым контрактом с самого начала — это
          выявляется статически, за секунды, до запуска агента.
-- [ ] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
+- [x] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
+      **Сделано:** correctness — PR #156 `7bc1360` (нет маркера ≠ passed, таймаут → not_run); политика — `review_policy` (#157, PR #170).
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.
       Три пути: таймаут → `FAILED`, но `hooks.py:415` явным комментарием делает его
       advisory; **нет маркера в выводе → `PASSED`** (`review.py:343` — пустой вывод
@@ -1402,7 +1406,8 @@ A/B — дефекты подтверждённого поведения, C — 
       за советы, которых не было, все шесть задач закрыты DONE.
       Решить: различать в evidence «прошло / не состоялось / нашло проблемы»,
       блокирующий режим вне HITL, порядок ревью относительно commit.
-- [ ] **#140 terminal-refusal-no-retry** (inbox, from disputatio) — ретраи не отличают @owner:github:andrei-shtanakov @id:terminal-refusal-no-retry @epic:eco.spec-toolchain
+- [x] **#140 terminal-refusal-no-retry** (inbox, from disputatio) — ретраи не отличают @owner:github:andrei-shtanakov @id:terminal-refusal-no-retry @epic:eco.spec-toolchain
+      **Сделано:** PR #152 `d7de6b6` — `TASK_BLOCKED: <причина>`, терминален, не ретраится.
       переходный сбой от осознанной эскалации к оператору: агент, честно
       остановившийся по конституции проекта, получает попытки 2-3 с припиской
       «Do not repeat the same mistake», хотя единственный неошибочный путь ему
@@ -1464,7 +1469,8 @@ A/B — дефекты подтверждённого поведения, C — 
 значило бы, что при провале непонятно, что сломалось. Объём каждой — уровень
 minor-релиза, а не багфикса.
 
-- [ ] **#141 D7-A tdd-execution-mode** — `execution_mode: standard | tdd` @owner:TBD @id:tdd-execution-mode @epic:eco.spec-toolchain
+- [x] **#141 D7-A tdd-execution-mode** — `execution_mode: standard | tdd` @owner:TBD @id:tdd-execution-mode @epic:eco.spec-toolchain
+      **Сделано:** #141 закрыт 2026-08-14 как функционально выполненный — срезы 0–4a (PR #167, #171–#173, #181, #183, #188) плюс hardening; `REFACTORING` пишется как `skipped`.
       как контракт исполнителя: фазы `RED_AUTHORING → RED_VERIFYING → GREEN_* →
       REFACTORING`, переход в green запрещён без **подтверждённого** red (селектор
       реально прогонялся и упал), типизированные per-phase вердикты
@@ -1483,6 +1489,7 @@ minor-релиза, а не багфикса.
       Известный блокирующий вход: `post_done` срабатывает **после** commit/merge,
       т.е. фазовая проверка не может стоять до коммита (пересекается с #138 п.3).
 - [ ] **#142 D7-B greenfield-preflight-bootstrap** — нулевого этапа у spec-runner нет. @owner:TBD @id:greenfield-preflight-bootstrap @epic:eco.spec-toolchain
+      **Частично, 2026-09-23 сверено:** read-only `preflight` отгружен (PR #158 `b8995b0`). Остаток — `bootstrap`, вынесен владельцем отдельно (комментарий закрытия #142); сертификация оракула — пункт `certify-oracle`.
       Две раздельные команды: `preflight` (только диагностика, JSON-вывод для
       оркестратора) и `bootstrap --check|--plan|--apply` (создание, стековые detectors
       + **явные** presets, не эвристика). Главное из пилота: bootstrap обязан оставить
@@ -1516,7 +1523,8 @@ minor-релиза, а не багфикса.
       `review_policy` случайно становилась бы правкой TDD-контракта.
       Порядок: дизайн → Slice 0 (общий PhaseOutcome) → код #164 → #157 → #141.
       Код не начинать раньше Slice 0, иначе появится второй временный словарь.
-- [ ] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @epic:eco.spec-toolchain
+- [x] **review-policy-required** (#157) — политика принята владельцем @owner:github:andrei-shtanakov @id:review-policy-required @epic:eco.spec-toolchain
+      **Сделано:** PR #170 `a9f7bc3` — `review_policy: advisory|required`, гейт на пре-терминальном сайте.
       2026-08-11: блокер #164 снят (PR #168 влит). Дизайн-док на ревью — PR #169,
       `docs/superpowers/specs/2026-08-11-review-policy-design.md`. Три решения,
       которых в принятой политике нет и которые нужны до кода: (1) гейт судит
@@ -1535,7 +1543,8 @@ minor-релиза, а не багфикса.
       `test_command`, baseline принадлежит проекту (spec-runner его не
       создаёт), проверяются и mutation, и восстановление, evidence несёт SHA,
       команду, идентичность окружения и результат. Не запланировано.
-- [ ] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design @epic:eco.spec-toolchain
+- [x] **tdd-lifecycle-design** — #141 принят как **дизайн-трек**, не minor-релиз: @owner:github:andrei-shtanakov @id:tdd-lifecycle-design @epic:eco.spec-toolchain
+      **Сделано:** шаги (0)–(3) и машина (4a) отгружены (см. #141 выше); агента-рефакторера нет, `REFACTORING` материализуется как `skipped`.
       `execution_mode: tdd` добавляет state machine, durable-чекпоинты, модель
       evidence, replay, операторские remedy, миграцию состояния и новую
       терминальную семантику — каждый пункт со своим радиусом поражения.
