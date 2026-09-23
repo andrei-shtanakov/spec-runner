@@ -10,6 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The harness guard no longer tells the agent how to lift it.** Under
+  `harness_guard: strict` the attempt's error — which becomes the next
+  attempt's prompt — ended with "if the change is intentional, exempt it via
+  harness_allow", handing the author agent the exemption knob for the barrier
+  that had just stopped it. The error now says only what changed and that it
+  must be reverted; the `harness_allow` hint moved to the operator's progress
+  line, which no prompt reads (harness-guard-companions #2).
+
 ## [3.0.0] - 2026-09-22
 
 **Major, by rule rather than by breakage.** Measured against v2.36.0:
