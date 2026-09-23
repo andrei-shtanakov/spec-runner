@@ -146,7 +146,10 @@ Refusals on an external target exit 1 without a traceback.
 ## 6. Admission of an external upstream
 
 Evaluated by `spec approve <stage>` for each **external** direct upstream of
-`<stage>`, and by `plan --gated` where it gates on upstreams today:
+`<stage>`, by `spec adopt <stage>` (the other door into `approved`: a stage
+whose external upstream is not admitted is adopted as `draft`, and `--force`
+does not lift that — it waives validation, not admission), and by
+`plan --gated` where it gates on upstreams today:
 
 1. file missing → refused: "external upstream `<name>` not found at `<path>`";
 2. file present, frontmatter malformed (a `---` block that is not valid YAML,

@@ -164,7 +164,14 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
     result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
     force = getattr(args, "force", False)
-    if verdict == "fail" and not force:
+    # `adopt` is the other door into APPROVED (#338 acceptance review): an
+    # external upstream that does not admit approval keeps it a draft, and
+    # `--force` does not lift that — it waives validation, not admission.
+    upstream_refusal = external_upstream_refusal(config, _profile(config), stage)
+    if upstream_refusal is not None:
+        status = "draft"
+        print(f"{stage}: {upstream_refusal} → adopted as DRAFT (approve once it is admitted)")
+    elif verdict == "fail" and not force:
         status = "draft"
         print(f"{stage}: validation failed → adopted as DRAFT (fix + approve)")
     else:

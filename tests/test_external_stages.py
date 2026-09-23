@@ -246,3 +246,38 @@ class TestCrlfFrontmatter:
         ext.write_bytes(b"---\r\nspec_stage: decomposition\r\nstatus: draft\r\n---\r\nx\r\n")
         assert _approve(cfg, "tasks") == 1
         assert "draft" in capsys.readouterr().out
+
+
+class TestAdoptIsTheOtherDoor:
+    """Acceptance review: `adopt` stamps `approved` too, and it skipped the
+    external admission `approve` applies — a draft upstream got a tasks
+    stage approved and pinned."""
+
+    def _adopt(self, cfg, force=False):
+        from argparse import Namespace
+
+        from spec_runner.spec_commands import cmd_spec_adopt
+
+        return cmd_spec_adopt(Namespace(stage="tasks", force=force), cfg)
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_a_draft_external_upstream_adopts_as_draft_even_with_force(
+        self, tmp_path, capsys, force
+    ):
+        cfg, ext = _project(tmp_path, "---\nspec_stage: decomposition\nstatus: draft\n---\nx\n")
+        tasks = tmp_path / "spec" / "ws-tasks.md"
+        tasks.write_text(TASKS.split("---\n", 2)[2])  # unmanaged: no frontmatter
+        assert self._adopt(cfg, force=force) == 0
+        meta, _ = split_frontmatter(tasks.read_text())
+        assert meta["status"] == "draft"
+        assert "upstream_hashes" not in meta
+        assert "draft" in capsys.readouterr().out
+
+    def test_an_admitted_external_upstream_adopts_as_approved(self, tmp_path):
+        cfg, ext = _project(tmp_path, APPROVED)
+        tasks = tmp_path / "spec" / "ws-tasks.md"
+        tasks.write_text(TASKS.split("---\n", 2)[2])
+        assert self._adopt(cfg) == 0
+        meta, _ = split_frontmatter(tasks.read_text())
+        assert meta["status"] == "approved"
+        assert "decomposition" in meta["upstream_hashes"]
