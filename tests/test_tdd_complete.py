@@ -856,3 +856,113 @@ def _respell(cfg: ExecutorConfig, checkpoint: RedCheckpoint, selector: str) -> N
             (respelled.checkpoint_id, checkpoint.checkpoint_id),
         )
         state._conn.commit()
+
+
+def _manifest(tmp_path: Path, *records: dict) -> Path:
+    import json
+
+    path = tmp_path / "manifest.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    return path
+
+
+_ROOT = {"phase": "root", "rootdir": "/w", "invocation": "/w"}
+_DONE = {"phase": "done"}
+_WANTED = "tests/test_x.py::test_y"
+
+
+@pytest.mark.parametrize(
+    ("records", "refused_with"),
+    [
+        # Presence: the selected test itself ran and passed.
+        (
+            [
+                _ROOT,
+                {"phase": "collected", "members": [_WANTED]},
+                {"phase": "outcome", "nodeid": _WANTED, "outcome": "passed"},
+                _DONE,
+            ],
+            None,
+        ),
+        # Parametrized: every case under the node id, all passed.
+        (
+            [
+                _ROOT,
+                {"phase": "collected", "members": [f"{_WANTED}[1]", f"{_WANTED}[2]"]},
+                {"phase": "outcome", "nodeid": f"{_WANTED}[1]", "outcome": "passed"},
+                {"phase": "outcome", "nodeid": f"{_WANTED}[2]", "outcome": "passed"},
+                _DONE,
+            ],
+            None,
+        ),
+        # Empty manifest for a non-empty selector: nothing ran.
+        ([_ROOT, {"phase": "collected", "members": []}, _DONE], "collected nothing"),
+        # No collection record at all — the run never reached collection.
+        ([_ROOT, _DONE], "collected nothing"),
+        # Only other tests ran: the node id itself is absent.
+        (
+            [
+                _ROOT,
+                {"phase": "collected", "members": ["tests/test_other.py::test_other"]},
+                {
+                    "phase": "outcome",
+                    "nodeid": "tests/test_other.py::test_other",
+                    "outcome": "passed",
+                },
+                _DONE,
+            ],
+            "outside the selector",
+        ),
+        # Collected, but no outcome recorded for it — it never finished.
+        (
+            [_ROOT, {"phase": "collected", "members": [_WANTED]}, _DONE],
+            "not every selected test passed",
+        ),
+        # Collected and deselected by a filter — present, never executed.
+        (
+            [
+                _ROOT,
+                {"phase": "collected", "members": [_WANTED]},
+                {"phase": "outcome", "nodeid": _WANTED, "outcome": "deselected"},
+                _DONE,
+            ],
+            "not every selected test passed",
+        ),
+        # A run that did not finish: no closing record.
+        (
+            [
+                _ROOT,
+                {"phase": "collected", "members": [_WANTED]},
+                {"phase": "outcome", "nodeid": _WANTED, "outcome": "passed"},
+            ],
+            "missing or incomplete",
+        ),
+        # Nothing written at all — the reporter never loaded.
+        ([], "missing or incomplete"),
+    ],
+    ids=[
+        "present-and-passed",
+        "parametrized-all-passed",
+        "empty-collection",
+        "no-collection-record",
+        "only-other-tests",
+        "collected-never-reported",
+        "deselected",
+        "unfinished-run",
+        "reporter-never-loaded",
+    ],
+)
+def test_attribution_requires_the_selected_test_itself(tmp_path, records, refused_with):
+    """Owner's completeness check on #583: "every executed test is under the
+    selector and passed" must not be satisfiable by an empty or foreign run.
+    The selected node id has to be present, executed and passed."""
+    from spec_runner.tdd_runners import PytestAdapter
+
+    adapter = PytestAdapter()
+    selector = adapter.parse_selector(_WANTED)
+    manifest = _manifest(tmp_path, *records) if records else tmp_path / "absent.jsonl"
+    refusal = adapter.attribution_refusal(selector, manifest)
+    if refused_with is None:
+        assert refusal is None
+    else:
+        assert refusal is not None and refused_with in refusal
