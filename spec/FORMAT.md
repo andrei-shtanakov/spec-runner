@@ -86,6 +86,53 @@ field: `Traces to` accepts `[A-Z]+-\d+`; `Depends on` and `Blocks` accept
 `[A-Z][A-Z0-9]*-\d+` (digits allowed in the prefix, e.g. `[KAP2-001]`) and
 then keep only prefixes that task headers actually use.
 
+### Execution Declarations (optional)
+
+```markdown
+### TASK-007: Re-verify login after the refactor
+**Mode:** verify_first
+**Verifies:** tests/test_login.py::test_ok, tests/test_login.py::test_locked
+
+### TASK-008: Pin current login behaviour
+**TDD-waiver:** characterisation · sanction: spec-runner#428
+**Negative-control:** tests/controls/break_login.patch :: tests/test_login.py::test_ok
+```
+
+Each is its own line in the task body. The two tasks above show the two
+combinations that belong together; a `TDD-waiver` on a `tdd` or
+`verify_first` task is an error. Values are stored as written and
+judged later, so a typo is refused with the declared text quoted back
+instead of being mapped to something plausible.
+
+- `Mode` — per-task override of the project's `execution_mode`:
+  `standard`, `tdd` or `verify_first`. It works both ways: opt in while the
+  project is `standard`, or opt out while it is `tdd`. Case-insensitive; an
+  unknown word is an error that names the task.
+- `Verifies` — the group of checks a `verify_first` task runs live before
+  any paid agent call. Selectors are pytest node ids (`path::test`). Two
+  forms: comma-separated on the same line, or a `- <selector>` bulleted
+  block on the following lines when nothing follows the marker. A node id
+  whose parametrize suffix contains a comma (`test_y[a,b]`) must use the
+  block form; in the comma form it is refused, not split. Required
+  (non-empty) under `verify_first`, and never inferred from `Traces to`,
+  filenames or the checklist.
+- `TDD-waiver` — `<class> · sanction: <id>`. Valid only on a task whose
+  resolved mode is `standard`. It removes the baseline-RED requirement and
+  nothing else: active claims and the frozen-files block still apply. The
+  class is a closed vocabulary (`characterisation` today). The sanction must
+  be `batch-approve-<YYYY-MM-DD>` or `<repo>#<number>`; only its form is
+  checked.
+- `Negative-control` — `<path to patch> :: <selector>`. The separator is
+  ` :: ` with spaces (the `::` inside a pytest node id has none). The patch
+  is committed with the work and breaks the property the test claims to
+  check. The harness requires the selector to pass on the clean commit and
+  fail with the patch applied before review. Required on every task that
+  is not yet done and carries a `TDD-waiver`; an error on any task that
+  does not carry one.
+
+Details: `docs/architecture.md` (execution modes, verify-first) and
+`docs/state-schema.md` (tables `waivers_applied`, `negative_controls`).
+
 ### Milestone Grouping (optional)
 
 ```markdown
