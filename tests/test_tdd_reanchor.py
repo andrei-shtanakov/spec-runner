@@ -280,6 +280,19 @@ class TestRefusalsWriteNothing:
         root, cfg, old, new_red, _green = _rebased(tmp_path, master_change=implement)
         self._refused(cfg, old.checkpoint_id, new_red, "passes at")
 
+    def test_a_missing_red_object_is_named_as_missing(self, tmp_path):
+        """git could not read the commit is not "the commit has 0 parents"
+        (the confusion `_is_ancestor` was fixed to avoid)."""
+        root, cfg, _old, new_red, _green = _rebased(tmp_path)
+        ghost = _record_ghost(cfg)
+        self._refused(cfg, ghost.checkpoint_id, new_red, "could not read")
+
+    def test_a_non_utf8_diff_is_a_refusal_not_a_traceback(self, tmp_path):
+        root, cfg, old, _new_red, _green = _rebased(tmp_path)
+        (root / "latin1.txt").write_bytes("caf\xe9\n".encode("latin-1"))
+        odd = _commit(root, "a latin-1 file")
+        self._refused(cfg, old.checkpoint_id, odd, "patch-id")
+
     def test_refused_inside_an_agent(self, tmp_path, monkeypatch):
         root, cfg, old, new_red, _green = _rebased(tmp_path)
         monkeypatch.setenv(AGENT_MARKER, "1")
@@ -383,3 +396,22 @@ def _patch_id(root: Path, commit: str) -> str:
         ["git", "patch-id", "--stable"], cwd=root, input=shown, capture_output=True, text=True
     ).stdout
     return out.split()[0] if out.strip() else ""
+
+
+def _record_ghost(cfg: ExecutorConfig) -> RedCheckpoint:
+    """An active checkpoint whose commit this clone does not have."""
+    ghost = RedCheckpoint(
+        task_id=TASK,
+        namespace=resolve_namespace(cfg),
+        commit_sha="0badc0de" * 5,
+        baseline_sha="0badc0de" * 5,
+        selector=SELECTOR,
+        environment_id="unpinned",
+        execution_mode="tdd",
+        config_hash=_config_hash(cfg),
+        outcome=RedOutcome.EXPECTED_FAIL,
+        timestamp="2026-09-19T00:00:00",
+    )
+    with ExecutorState(cfg) as state:
+        state.record_red_checkpoint(ghost)
+    return ghost

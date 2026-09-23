@@ -834,8 +834,15 @@ def _single_parent(config: ExecutorConfig, sha: str) -> str:
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        # "git could not read it" is not "it has 0 parents" — the same split
+        # `_is_ancestor` keeps, so a missing object sends the operator to fetch.
+        raise RemedyError(
+            f"git could not read {sha[:12]}: "
+            f"{result.stderr.strip()[:200] or f'exit {result.returncode}'}"
+        )
     parts = result.stdout.split()
-    if result.returncode != 0 or len(parts) != 2:
+    if len(parts) != 2:
         count = max(len(parts) - 1, 0)
         raise RemedyError(
             f"{sha[:12]} has {count} parents; reanchor needs a single parent so the change "
@@ -846,22 +853,20 @@ def _single_parent(config: ExecutorConfig, sha: str) -> str:
 
 def _patch_id(config: ExecutorConfig, sha: str) -> str:
     """`git patch-id --stable` of ``sha``'s own change, or "" when it has none."""
-    shown = subprocess.run(
-        ["git", "show", sha],
-        cwd=config.project_root,
-        capture_output=True,
-        text=True,
-    )
+    # Bytes end to end: a diff is not text in any codec, and decoding one
+    # with the locale would turn a latin-1 file into a traceback.
+    shown = subprocess.run(["git", "show", sha], cwd=config.project_root, capture_output=True)
     if shown.returncode != 0:
-        raise RemedyError(f"cannot read {sha[:12]}: {shown.stderr.strip()[:200]}")
+        detail = shown.stderr.decode(errors="replace").strip()[:200]
+        raise RemedyError(f"git could not read {sha[:12]}: {detail}")
     out = subprocess.run(
         ["git", "patch-id", "--stable"],
         cwd=config.project_root,
         input=shown.stdout,
         capture_output=True,
-        text=True,
     )
-    return out.stdout.split()[0] if out.returncode == 0 and out.stdout.strip() else ""
+    text = out.stdout.decode(errors="replace")
+    return text.split()[0] if out.returncode == 0 and text.strip() else ""
 
 
 def _blob_at(config: ExecutorConfig, sha: str, path: str) -> str | None:
