@@ -185,7 +185,10 @@ against what the operator last saw silently applies to whatever arrived since.
   record the red as no good. It is a door with **checks**, not with trust,
   all run before anything is written: the confirmed red is an ancestor of
   `<sha>` and `<sha>` is an ancestor of HEAD; the red's selector **passes**
-  when replayed against `<sha>`; and **this task's** claims are intact there
+  when replayed against `<sha>` **and the run shows that very test
+  executed** — the negative control's clean-half rule, because a skip also
+  exits 0 and `verify_red` would read it as "not red", which here is the
+  success; and **this task's** claims are intact there
   (a neighbour's broken lock does not stop it). The red must be **standing**
   (active, the rule `abandon`/`repair` apply through compare-and-swap) and
   hold an active claim: a retired red's claims are retired with it, and an

@@ -499,8 +499,9 @@ def complete(
     1. the confirmed red's commit is an ancestor of ``commit``, and ``commit``
        is an ancestor of HEAD — the work was built on that red and is in the
        tree in hand;
-    2. the red's own selector **passes** when replayed against ``commit``
-       (`verify_red` answers `not_red` only for a proven, passing selection);
+    2. the red's own selector **passes** when replayed against ``commit``,
+       and the run shows that very test executed (`clean_half_is_green`) —
+       a skip passes too, and would close the task over broken work;
     3. this task's claims are intact in ``commit`` — a green that weakened
        its own evidence is the laundering the byte-lock exists to catch.
        Only *this* task's: a neighbour's broken lock is not a reason this one
@@ -519,6 +520,9 @@ def complete(
     """
     from .claims import ClaimCheckError, check_claims
     from .lifecycle import TddPhase, has_reached
+    from .negative_control import clean_half_is_green
+    from .tdd import _replay_selector
+    from .tdd_runners import RunOutcome, SelectionProof
 
     namespace = _guard(config, reason)
     # Before the DONE refusal (owner decision): a repeat of a successful
@@ -578,20 +582,35 @@ def complete(
             "carries the work"
         )
 
-    verification = verify_red(
+    # Not `verify_red`: it answers "is this red?", and for that a skipped test
+    # is safely "not red". Here "not red" is the success, so a skip would close
+    # the task over a broken implementation (acceptance review). The green is
+    # judged by the one definition that demands the selected test actually
+    # ran — the negative control's clean half.
+    attempt = _replay_selector(
         config, sha=sha, selector=evidence.selector, baseline_sha=evidence.baseline_sha
     )
-    if verification.outcome is RedOutcome.EXPECTED_FAIL:
+    if (
+        attempt.stage == "run"
+        and attempt.outcome is RunOutcome.TESTS_FAILED
+        and attempt.proof is SelectionProof.PROVEN
+    ):
         raise RemedyError(
             f"{evidence.selector} still fails at {sha[:12]} — the work this red asks for is not "
             "in that commit"
         )
-    if verification.outcome is RedOutcome.UNVERIFIABLE:
+    if not clean_half_is_green(attempt):
+        detail = attempt.detail or "the replay reached no verdict"
+        if attempt.stage == "run" and attempt.outcome is RunOutcome.TESTS_PASSED:
+            detail = (
+                "the run passed, but nothing shows the selected test itself executed "
+                f"(skipped, xfail, or not collected?): {detail}"
+            )
         return RemedyResult(
             RemedyOperation.COMPLETE,
             evidence.checkpoint_id,
             outcome=RedOutcome.UNVERIFIABLE,
-            note=verification.detail or "the replay reached no verdict",
+            note=detail,
         )
 
     try:

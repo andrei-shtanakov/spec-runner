@@ -24,7 +24,8 @@ meaning. Classified now so the release does not have to rediscover it.
   task's **standing** confirmed red (an abandoned one proves nothing; a
   superseded one needs `resume` first) holds an active claim and is an
   ancestor of `<sha>`, `<sha>` is in HEAD, the red's own
-  selector passes when replayed against `<sha>`, and this task's claims are
+  selector passes when replayed against `<sha>` and the run shows that test
+  actually executed (a skip is not a green), and this task's claims are
   intact there. Then, in one transaction: lifecycle DONE, the task's claims
   released, a `complete` remedy row with actor and reason. It does **not**
   check the review verdict or the other pre-terminal gates, and says so on

@@ -257,6 +257,28 @@ class TestRefusalsWriteNothing:
         assert result.note
         assert _recorded(cfg) == before
 
+    def test_a_skipped_test_is_not_a_green(self, tmp_path):
+        """Acceptance review of this PR: `verify_red` reads a skipped test as
+        `not_red` — safe for a red, where "not red" refuses, and exactly wrong
+        here, where "not red" is the success. A `conftest.py` is not claimed,
+        so an autouse skip leaves the frozen file untouched while the broken
+        implementation stays broken. Passing is not enough; the selected test
+        has to be shown to have run."""
+        root, cfg, _cp, _green = _wedged(tmp_path, green="def value():\n    return 3\n")
+        (root / "tests" / "conftest.py").write_text(
+            "import pytest\n\n\n@pytest.fixture(autouse=True)\n"
+            "def _skip():\n    pytest.skip('not today')\n"
+        )
+        skipped = _commit(root, "skip it instead")
+        # `-v` prints the node id beside SKIPPED, which is what makes the
+        # selection "proven" and the skip otherwise indistinguishable.
+        verbose = _cfg(root, test_command="python -m pytest -v")
+        before = _recorded(cfg)
+        with ExecutorState(verbose) as state:
+            result = complete(verbose, state, TASK, skipped, reason=REASON)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert _recorded(cfg) == before
+
     def test_no_confirmed_red_is_refused(self, tmp_path):
         root = tmp_path / "repo"
         root.mkdir()
