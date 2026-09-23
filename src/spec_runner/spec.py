@@ -736,6 +736,71 @@ def stage_path(config: ExecutorConfig, stage: str, profile: StageProfile | None 
     return _default_stage_path(config, stage)
 
 
+class ExternalStageError(Exception):
+    """An external stage's file cannot be read the way admission needs (#338)."""
+
+
+def read_frontmatter_strict(path: Path) -> dict | None:
+    """The leading frontmatter mapping; None when there is none.
+
+    Unlike :func:`split_frontmatter`, a block that is not valid YAML or not a
+    mapping raises instead of reading as "no frontmatter" — for an external
+    stage that would silently turn "malformed" into "no status" (#338 §6).
+    """
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith(_FM_DELIM + "\n"):
+        return None
+    end = text.find("\n" + _FM_DELIM, len(_FM_DELIM))
+    if end == -1:
+        raise ExternalStageError(f"{path}: malformed frontmatter — no closing `---`")
+    block = text[len(_FM_DELIM) + 1 : end]
+    try:
+        loaded = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        raise ExternalStageError(f"{path}: malformed frontmatter — {exc}") from exc
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ExternalStageError(f"{path}: malformed frontmatter — not a mapping")
+    return loaded
+
+
+def external_admission(config: ExecutorConfig, profile: StageProfile, stage: str) -> str | None:
+    """None when external ``stage`` admits its downstream; otherwise why not.
+
+    The rule (#338 §6): the file exists; if its frontmatter carries
+    ``status`` it must be ``approved``; no ``status`` means existence
+    suffices; malformed frontmatter refuses. Reads only — spec-runner never
+    writes an external stage.
+    """
+    path = stage_path(config, stage, profile)
+    if not path.exists():
+        return f"external upstream {stage!r} not found at {path}"
+    if not path.is_file():
+        return f"external upstream {stage!r} at {path} is not a file"
+    try:
+        meta = read_frontmatter_strict(path)
+    except ExternalStageError as exc:
+        return f"external upstream {stage!r}: {exc}"
+    if meta is not None and "status" in meta and meta["status"] != "approved":
+        return f"external upstream {stage!r} has status {meta['status']!r}, not 'approved'"
+    return None
+
+
+def external_upstream_refusal(
+    config: ExecutorConfig, profile: StageProfile, stage: str
+) -> str | None:
+    """The first refusal among ``stage``'s **external** direct upstreams."""
+    sd = profile.get(stage)
+    for up in sd.upstream if sd is not None else ():
+        up_def = profile.get(up)
+        if up_def is not None and up_def.external:
+            refusal = external_admission(config, profile, up)
+            if refusal is not None:
+                return refusal
+    return None
+
+
 def _profile_for(config: ExecutorConfig) -> StageProfile | None:
     """The config's profile, or None when it cannot be resolved here (a bare
     config stand-in in a test)."""

@@ -1,0 +1,120 @@
+"""#338: external stages — admission, refusals, the issue's observable."""
+
+from pathlib import Path
+
+import pytest
+
+from spec_runner.config import ExecutorConfig
+from spec_runner.spec import git_blob_hash, split_frontmatter
+
+WORKSTREAM = """\
+name: workstream
+stages:
+  - name: decomposition
+    external: true
+    path: "workstreams/{ws}/spec/30-decomposition.md"
+    upstream: []
+  - name: tasks
+    template: tasks.template.md
+    marker_prefix: SPEC_TASKS
+    validator: tasks
+    upstream: [decomposition]
+"""
+
+TASKS = """\
+---
+spec_stage: tasks
+status: draft
+version: 1
+---
+# Tasks
+
+### TASK-001: demo
+P1 | TODO   Est: 1h
+
+**Traces to:** [DT-01]
+"""
+
+
+def _project(tmp_path: Path, decomposition: str | None) -> tuple[ExecutorConfig, Path]:
+    (tmp_path / "spec" / "profiles").mkdir(parents=True)
+    (tmp_path / "spec" / "profiles" / "workstream.yaml").write_text(WORKSTREAM)
+    (tmp_path / "spec" / "ws-tasks.md").write_text(TASKS)
+    ext = tmp_path / "workstreams" / "ws" / "spec" / "30-decomposition.md"
+    if decomposition is not None:
+        ext.parent.mkdir(parents=True)
+        ext.write_text(decomposition)
+    cfg = ExecutorConfig(project_root=tmp_path, spec_prefix="ws-", spec_profile="workstream")
+    return cfg, ext
+
+
+def _approve(cfg: ExecutorConfig, stage: str) -> int:
+    from argparse import Namespace
+
+    from spec_runner.spec_commands import cmd_spec_approve
+
+    return cmd_spec_approve(Namespace(stage=stage), cfg)
+
+
+APPROVED = "---\nspec_stage: decomposition\nstatus: approved\n---\n## DT-01\nbody\n"
+
+
+class TestTheIssuesObservable:
+    def test_approve_tasks_traces_and_pins_the_external_upstream(self, tmp_path):
+        cfg, ext = _project(tmp_path, APPROVED)
+        before = ext.read_bytes()
+        assert _approve(cfg, "tasks") == 0
+        meta, _ = split_frontmatter((tmp_path / "spec" / "ws-tasks.md").read_text())
+        assert meta["traces_to"][0] == "decomposition"
+        assert "design" not in meta["traces_to"]
+        assert meta["upstream_hashes"] == {"decomposition": git_blob_hash(before)}
+        assert ext.read_bytes() == before
+
+
+class TestAdmission:
+    @pytest.mark.parametrize(
+        ("decomposition", "expect_rc", "needle"),
+        [
+            ("---\nspec_stage: decomposition\nstatus: draft\n---\nx\n", 1, "draft"),
+            ("---\nstatus: true\n---\nx\n", 1, "True"),
+            ("---\nspec_stage: decomposition\n---\nx\n", 0, "approved"),
+            ("no frontmatter at all\n", 0, "approved"),
+            ("---\nstatus: [unclosed\n---\nx\n", 1, "malformed"),
+            ("---\n- a list\n---\nx\n", 1, "malformed"),
+        ],
+    )
+    def test_the_admission_table(self, tmp_path, capsys, decomposition, expect_rc, needle):
+        cfg, ext = _project(tmp_path, decomposition)
+        before = ext.read_bytes()
+        rc = _approve(cfg, "tasks")
+        out = capsys.readouterr().out
+        assert rc == expect_rc
+        assert needle in out
+        assert ext.read_bytes() == before
+
+    def test_a_missing_external_file_is_refused_naming_the_path(self, tmp_path, capsys):
+        cfg, ext = _project(tmp_path, None)
+        assert _approve(cfg, "tasks") == 1
+        assert "30-decomposition.md" in capsys.readouterr().out
+
+    def test_an_external_path_that_is_a_directory_is_refused(self, tmp_path, capsys):
+        cfg, ext = _project(tmp_path, None)
+        ext.mkdir(parents=True)
+        assert _approve(cfg, "tasks") == 1
+        assert "not a file" in capsys.readouterr().out
+
+
+class TestExternalTargetsAreRefused:
+    @pytest.mark.parametrize("command", ["approve", "reject", "adopt", "check"])
+    def test_every_spec_command_refuses_an_external_target(self, tmp_path, capsys, command):
+        from argparse import Namespace
+
+        import spec_runner.spec_commands as sc
+
+        cfg, ext = _project(tmp_path, APPROVED)
+        before = ext.read_bytes()
+        handler = getattr(sc, f"cmd_spec_{command}")
+        rc = handler(Namespace(stage="decomposition", force=False), cfg)
+        assert rc == 1
+        assert "is external" in capsys.readouterr().out
+        assert ext.read_bytes() == before
