@@ -311,7 +311,12 @@ REPRESENTABLE_RUN: dict[str, tuple[str, ...]] = {
 #: (§2.2). `config_found` is stamped by the CLI's own loader after
 #: `build_config` returns, not by `build_config` itself; `mcp_ready_timeout_seconds`
 #: is parent-only -- the child never waits on its own ready file.
-PARENT_ONLY_FIELDS: frozenset[str] = frozenset({"config_found", "mcp_ready_timeout_seconds"})
+#: `budget_sources` (#388) is provenance, not policy: the caps themselves are
+#: compared (and carried by `--budget`/`--task-budget`), while the child
+#: rightly reports its own source for them — the flag, not the parent's env.
+PARENT_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"config_found", "mcp_ready_timeout_seconds", "budget_sources"}
+)
 
 _REPRESENTABLE_FIELD_NAMES: frozenset[str] = frozenset(
     row.config_field for row in REPRESENTABLE

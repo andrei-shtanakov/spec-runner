@@ -228,6 +228,17 @@ def acceptance_profile() -> StageProfile:
 
 
 @pytest.fixture(autouse=True)
+def _no_budget_from_the_shell(monkeypatch):
+    """A budget exported in the developer's shell (#388) must not reach a
+    test's config: every `build_config` would silently gain a cap, and the
+    budget guard would change behaviour only on that machine."""
+    from spec_runner.config import BUDGET_ENV
+
+    for variable in BUDGET_ENV.values():
+        monkeypatch.delenv(variable, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_gate_registry():
     """Restore the process-wide gate registry after every test.
 

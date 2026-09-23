@@ -819,6 +819,60 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
+#: Commands `budget_usd`/`task_budget_usd` govern — the only ones a broken
+#: budget variable may stop (#388 review). Not "every command that pays":
+#: `plan`, `doctor` and `review-pr` make paid calls under their own limits,
+#: and the variable does not govern them.
+BUDGETED_COMMANDS = frozenset({"run", "retry", "watch"})
+
+
+def _announce_budget(config: ExecutorConfig) -> None:
+    """One stderr line naming the caps and where they came from (#388).
+
+    The run ceiling is the one **in force** — an operator authorization wins
+    over the configured value and is displayed as one, the same reader
+    enforcement and the overshoot announcement use (#256). The task axis is
+    shown as configured: a task's own authorization is resolved when that
+    task is selected. stderr, because stdout carries `--json-result`.
+    Silent when no cap is configured: the guard is dormant then, whatever
+    authorizations the state holds (#257).
+    """
+    run_cap = getattr(config, "budget_usd", None)
+    task_cap = getattr(config, "task_budget_usd", None)
+    # The dormancy question every enforcing reader asks first (#257): with no
+    # configured cap nothing applies an authorization, so none is "in force".
+    if run_cap is None and task_cap is None:
+        return
+    sources = getattr(config, "budget_sources", {}) or {}
+    run_row = None
+    state_file = getattr(config, "state_file", None)
+    if state_file is not None and Path(state_file).exists():
+        with ExecutorState.for_read(config) as state:
+            run_row = state.latest_budget_authorization("run")
+
+    def configured(key: str, value: float | None) -> str:
+        return "none" if value is None else f"${value:.2f} ({sources.get(key, 'config')})"
+
+    if run_row is not None:
+        run = (
+            f"run: ${float(run_row['new_limit_usd']):.2f} in force (authorization "
+            f"#{run_row['id']}, over configured {configured('budget_usd', run_cap)})"
+        )
+    elif run_cap is None:
+        run = "run: no cap"
+    else:
+        run = f"run: {configured('budget_usd', run_cap)}"
+    task = (
+        "task: no cap configured"
+        if task_cap is None
+        else f"task: {configured('task_budget_usd', task_cap)} configured"
+    )
+    print(
+        f"💰 Budget — {run}; {task} (a task's own authorization applies when it is selected)",
+        file=sys.stderr,
+    )
+
+
 def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
@@ -829,6 +883,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
 
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     # Clear any leftover stop file from previous runs
     clear_stop_file(config)
@@ -1474,6 +1529,7 @@ def cmd_retry(args, config: ExecutorConfig):
     # automation hooks, so it must not bypass the guard either.
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     tasks = parse_tasks(config.tasks_file)
 
@@ -1550,6 +1606,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # before the loop starts (mid-run DONE writes dirty tasks.md by design).
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
+    _announce_budget(config)
 
     # Pre-run validation
     pre_result = validate_all(
@@ -2511,7 +2568,24 @@ def main():
         # under `validate`, so the empty config below cannot start a run on
         # defaults.
         yaml_config = {}
-    config = build_config(yaml_config, args)
+    from .config import BudgetEnvError
+
+    try:
+        config = build_config(yaml_config, args)
+    except BudgetEnvError as exc:
+        # Only a command the budget governs may refuse on it: `stop` is the
+        # brake on a paid run in another shell, and a typo in this shell's
+        # profile must not disable it (#388 review). The rest warn and ignore
+        # the variable.
+        if args.command in BUDGETED_COMMANDS:
+            raise SystemExit(f"⛔ {exc}") from None
+        print(
+            f"⚠️  {exc} — ignored: the budget does not govern `{args.command}`",
+            file=sys.stderr,
+        )
+        config = build_config(yaml_config, args, read_budget_env=False)
+    except ConfigError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
     config.config_found = config_path.exists()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile,

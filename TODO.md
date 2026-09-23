@@ -1230,10 +1230,12 @@ tasks-артефакта и семь раундов подряд честно н
       amend. Без `commands.format` дрейфующий red отказывается ДО freeze с
       именем недостающего ключа. Тесты: `tests/test_red_absorb_format.py`.
 
-- [ ] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override @epic:eco.spec-toolchain
+- [x] **budget-env-override** (spec-runner#388, from devtools) @owner:github:andrei-shtanakov @id:budget-env-override @epic:eco.spec-toolchain
       `SPEC_RUNNER_BUDGET_USD` / `SPEC_RUNNER_TASK_BUDGET_USD` перекрывают
       конфиг (CLI-флаг > env > файл > дефолт), действующий кап и его источник
-      печатаются на старте. Ничего из этого нет: в `src/` env-переменных
+      печатаются на старте. **Сделано 2026-09-23** (вариант (б): дефолт — без
+      лимита, $30 — рекомендация в README); `tests/test_budget_env.py`.
+      Было: ничего из этого нет: в `src/` env-переменных
       бюджета не существует. **Дефолт — решение владельца, не часть пункта:**
       (а) кап $30 вместо unlimited — fail-closed, breaking для конфигов без
       бюджета; (б) unlimited остаётся, $30 — рекомендация в docs/шаблоне.

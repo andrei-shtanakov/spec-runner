@@ -546,6 +546,30 @@ any other exit code is an instrument failure and blocks even advisory lint.
 
 ### Budgets: what the caps actually guarantee
 
+**Where a cap comes from.** CLI flag (`--budget`, `--task-budget`) >
+environment (`SPEC_RUNNER_BUDGET_USD`, `SPEC_RUNNER_TASK_BUDGET_USD`) > config
+file (`budget_usd`, `task_budget_usd`) > default, which is **no cap**. The
+environment is a property of the launch rather than of the file, so it does
+not go stale between phases the way a cap in an untracked config does. A
+value that is not a positive number stops `run`, `retry` and `watch` at
+startup, naming the variable — unless the matching CLI flag is given, in
+which case the variable is not read at all. Every other command (`stop`,
+`status`, `costs`, `plan`, …) warns that the budget does not govern it and
+runs without it. Blank means unset. When a cap is configured, the three
+budgeted commands print one line on stderr naming the caps and their
+sources — the run ceiling **in force**, so an operator authorization is
+shown as one. With no cap configured the guard is dormant and the line is
+not printed, whatever authorizations the state holds.
+
+```
+💰 Budget — run: $30.00 (SPEC_RUNNER_BUDGET_USD); task: $10.00 (config) configured (a task's own authorization applies when it is selected)
+💰 Budget — run: $9.00 in force (authorization #1, over configured $1.82 (config)); task: no cap configured (…)
+```
+
+Recommended starting point for a workstream: `SPEC_RUNNER_BUDGET_USD=30`.
+It is a recommendation, not a default — a default cap would fail-close every
+existing configuration that sets none.
+
 `budget_usd` and `task_budget_usd` are **pre-call guards, not hard caps.** The
 guarantee, exactly:
 

@@ -7,6 +7,7 @@ from YAML, and config building from CLI arguments.
 import argparse
 import contextlib
 import fcntl
+import math
 import os
 import re
 import shlex
@@ -441,6 +442,9 @@ class ExecutorConfig:
     max_concurrent: int = 3  # Max parallel tasks
     budget_usd: float | None = None  # Global budget limit (None = unlimited)
     task_budget_usd: float | None = None  # Total per-task budget (includes attempt 1)
+    #: Where each set cap came from (#388): "config", the environment variable's
+    #: name, or the CLI flag. Keys only for caps that are set.
+    budget_sources: dict[str, str] = field(default_factory=dict)
     # Cap on cumulative cost of retry attempts only (attempt 2+). None = unlimited.
     # Use when you want the initial attempt to always run but want to stop a
     # flaky task from burning budget on repeated retries. LABS-41.
@@ -1504,8 +1508,53 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
         raise ConfigError(f"{config_path}: cannot be read as a config: {e}") from e
 
 
+#: The budget caps an environment variable may set (#388), by config key.
+BUDGET_ENV: dict[str, str] = {
+    "budget_usd": "SPEC_RUNNER_BUDGET_USD",
+    "task_budget_usd": "SPEC_RUNNER_TASK_BUDGET_USD",
+}
+
+
+#: The CLI argument that overrides each cap, by config key.
+_BUDGET_FLAG_ARG: dict[str, str] = {"budget_usd": "budget", "task_budget_usd": "task_budget"}
+
+
+class BudgetEnvError(ConfigError):
+    """A budget environment variable holds something that is not a cap.
+
+    Its own class because only a command that spends may refuse on it
+    (#388 review): `stop`, `status` and `costs` warn and run without it.
+    """
+
+
+def _budget_from_env(variable: str) -> float | None:
+    """The cap ``variable`` sets, or None when it is unset or blank.
+
+    Refuses what cannot be a cap rather than ignoring it: a typo read as
+    "no cap" would run unguarded while the operator believes it is capped,
+    and `0` would refuse every paid call — unset the variable for no cap.
+    """
+    raw = os.environ.get(variable, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise BudgetEnvError(f"{variable}={raw!r} is not a number of USD") from None
+    if not math.isfinite(value) or value <= 0:
+        raise BudgetEnvError(
+            f"{variable}={raw!r} is not a usable cap; give a positive amount in USD, "
+            "or unset it for no cap"
+        )
+    return value
+
+
 def build_config(
-    yaml_config: dict, args: argparse.Namespace, *, detect_subdir: bool = True
+    yaml_config: dict,
+    args: argparse.Namespace,
+    *,
+    detect_subdir: bool = True,
+    read_budget_env: bool = True,
 ) -> ExecutorConfig:
     """Build ExecutorConfig from YAML and CLI arguments.
 
@@ -1531,6 +1580,22 @@ def build_config(
     for key, value in yaml_config.items():
         if value is not None:
             config_kwargs[key] = value
+
+    # #388: CLI flag > environment > config file > default (no cap). The
+    # environment is a property of the launch; a cap in an untracked config
+    # file goes stale between phases.
+    budget_sources: dict[str, str] = {
+        key: "config" for key in BUDGET_ENV if config_kwargs.get(key) is not None
+    }
+    for key, variable in BUDGET_ENV.items() if read_budget_env else ():
+        # "CLI > env" literally: a flag for this cap means the variable is not
+        # read at all, so its typo cannot stop a run whose cap is explicit.
+        if getattr(args, _BUDGET_FLAG_ARG[key], None) is not None:
+            continue
+        from_env = _budget_from_env(variable)
+        if from_env is not None:
+            config_kwargs[key] = from_env
+            budget_sources[key] = variable
 
     # Override with CLI arguments
     if hasattr(args, "max_retries") and args.max_retries is not None:
@@ -1559,8 +1624,11 @@ def build_config(
         config_kwargs["max_concurrent"] = args.max_concurrent
     if hasattr(args, "budget") and getattr(args, "budget", None) is not None:
         config_kwargs["budget_usd"] = args.budget
+        budget_sources["budget_usd"] = "--budget"
     if hasattr(args, "task_budget") and getattr(args, "task_budget", None) is not None:
         config_kwargs["task_budget_usd"] = args.task_budget
+        budget_sources["task_budget_usd"] = "--task-budget"
+    config_kwargs["budget_sources"] = budget_sources
     if hasattr(args, "hitl_review") and getattr(args, "hitl_review", False):
         config_kwargs["hitl_review"] = True
     if getattr(args, "strict", False):
