@@ -1127,6 +1127,9 @@ class PytestAdapter:
                 "or the reporter was never loaded (a value flag in test_command swallowing "
                 "the node id?)"
             )
+        # Not vacuous: with no members "every member is under the selector"
+        # holds trivially. Non-empty + all-under is what makes the selected
+        # node id itself present (or its parametrized cases).
         if not composition.members:
             return "the run collected nothing"
         wanted = _rootdir_relative_node_id(selector, composition)
