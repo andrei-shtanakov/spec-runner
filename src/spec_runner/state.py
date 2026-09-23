@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -247,6 +248,16 @@ def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
         CompositionMember(member=e["member"], outcome=e["outcome"], reason=e.get("reason"))
         for e in json.loads(raw)
     )
+
+
+class LineageMoved(RuntimeError):
+    """A remedy's lineage changed between its checks and its write.
+
+    Raised from inside the write transaction, which rolls back: the checks
+    and the replay run outside it, so another process may have completed,
+    moved or retired the lineage meanwhile. The caller decides whether that
+    is its own write already landed (idempotent) or a refusal.
+    """
 
 
 class ExecutorState:
@@ -1023,6 +1034,26 @@ class ExecutorState:
         return self.tasks[task_id]
 
     # === Phase results (slice 0; nothing gates on these yet) ===
+
+    @contextlib.contextmanager
+    def _immediate(self) -> Iterator[None]:
+        """A write transaction that holds the lock from its first read.
+
+        `with self._conn` begins lazily, at the first write, so a check read
+        before it can be stale by the time the write lands. `BEGIN IMMEDIATE`
+        takes the write lock up front: what is checked inside is what is
+        written against. Commits on success, rolls back on any exception.
+        """
+        assert self._conn is not None
+        if self._conn.in_transaction:
+            self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
 
     def _insert_phase_row(self, sql: str, params: tuple) -> None:
         """Single write seam, so recording can be faulted in tests."""
@@ -1934,7 +1965,14 @@ class ExecutorState:
         from .lifecycle import TddPhase
 
         assert self._conn is not None
-        with self._conn:
+        with self._immediate():
+            already = self._conn.execute(
+                "SELECT COUNT(*) FROM tdd_remedies WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND operation = ?",
+                (namespace, task_id, checkpoint_id, "complete"),
+            ).fetchone()[0]
+            if already:
+                raise LineageMoved("completed by another writer")
             self._conn.execute(
                 "INSERT INTO tdd_phases (task_id, namespace, phase, detail, timestamp) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -2012,12 +2050,23 @@ class ExecutorState:
         if not old_ids:
             raise ValueError(f"no checkpoint {old_checkpoint_id} for {task_id} in {namespace}")
         now = datetime.now().isoformat()
-        with self._conn:
+        with self._immediate():
+            # Re-checked under the write lock: the caller's checks and replay
+            # ran outside it (acceptance review — two writers moved one red).
+            standing = self._conn.execute(
+                f"SELECT COUNT(*) FROM red_checkpoints WHERE status = 'active' "
+                f"AND id IN ({','.join('?' * len(old_ids))})",
+                old_ids,
+            ).fetchone()[0]
             moving = self._conn.execute(
                 "SELECT path, blob_sha FROM tdd_claims WHERE namespace = ? AND task_id = ? "
                 "AND checkpoint_id = ? AND status = ? ORDER BY id",
                 (namespace, task_id, old_checkpoint_id, ClaimStatus.ACTIVE.value),
             ).fetchall()
+            if not standing or not moving:
+                raise LineageMoved(
+                    "no longer active" if not standing else "its claims are no longer active"
+                )
             for row_id in old_ids:
                 self._conn.execute(
                     "UPDATE red_checkpoints SET status = 'superseded' WHERE id = ?", (row_id,)

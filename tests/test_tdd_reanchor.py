@@ -343,6 +343,70 @@ class TestAtomicity:
         assert _recorded(cfg) == before
 
 
+class TestAConcurrentWriter:
+    """Acceptance review: the checks and the replay run outside the
+    transaction, so another process can move or retire the lineage in
+    between. A second writer then inserted another checkpoint with no claims
+    and a second remedy row, and reported success. The write re-checks the
+    lineage inside an IMMEDIATE transaction."""
+
+    def _interleave(self, monkeypatch, cfg, between):
+        """Run ``between`` on its own connection while the replay is in
+        flight — the window the review found."""
+        import spec_runner.remedy as remedy_module
+
+        real = remedy_module.verify_red
+        fired = {"done": False}
+
+        def replay_then_interleave(*args, **kwargs):
+            verdict = real(*args, **kwargs)
+            if not fired["done"]:
+                fired["done"] = True
+                with ExecutorState(cfg) as other:
+                    between(other)
+            return verdict
+
+        monkeypatch.setattr(remedy_module, "verify_red", replay_then_interleave)
+
+    def test_a_reanchor_that_landed_meanwhile_reads_as_already_applied(self, tmp_path, monkeypatch):
+        root, cfg, old, new_red, _green = _rebased(tmp_path)
+        landed = {}
+
+        def first_writer(other):
+            monkeypatch.undo()  # the concurrent writer runs the real replay
+            landed["r"] = reanchor(cfg, other, TASK, old.checkpoint_id, new_red, reason=REASON)
+
+        self._interleave(monkeypatch, cfg, first_writer)
+        with ExecutorState(cfg) as state:
+            second = reanchor(cfg, state, TASK, old.checkpoint_id, new_red, reason=REASON)
+        assert second.already_applied
+        assert second.new_checkpoint_id == landed["r"].new_checkpoint_id
+        namespace = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            assert len(state.active_checkpoints(namespace, TASK)) == 1
+            assert len(state.remedies(TASK, namespace)) == 1
+            active = [c for c in state.claims_for(namespace, TASK) if c[3] == "active"]
+            assert len(active) == 1
+
+    def test_a_lineage_retired_meanwhile_is_refused_without_a_write(self, tmp_path, monkeypatch):
+        from spec_runner.remedy import abandon
+
+        root, cfg, old, new_red, _green = _rebased(tmp_path)
+
+        def retire(other):
+            abandon(cfg, other, TASK, old.checkpoint_id, reason="given up meanwhile")
+
+        self._interleave(monkeypatch, cfg, retire)
+        with ExecutorState(cfg) as state, pytest.raises(RemedyError, match="changed while"):
+            reanchor(cfg, state, TASK, old.checkpoint_id, new_red, reason=REASON)
+        namespace = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            assert state.active_checkpoints(namespace, TASK) == []
+            assert [r.operation for r in state.remedies(TASK, namespace)] == [
+                RemedyOperation.ABANDON
+            ]
+
+
 class TestTheCommand:
     def _run(self, cfg: ExecutorConfig, *argv: str) -> int:
         from spec_runner.cli import _build_parser

@@ -29,7 +29,10 @@ existing changes meaning. Classified now so the release does not have to redisco
   transaction: the new checkpoint with claims on the same bytes, the old
   checkpoint and claims superseded, a `reanchor` remedy row. The lifecycle
   is not touched. Exit 0 moved, 1 refused, 2 replay without a verdict
-  (nothing recorded).
+  (nothing recorded). The write re-checks the lineage under `BEGIN
+  IMMEDIATE` — the checks and replay run outside it — so a concurrent
+  reanchor reads as already applied and a lineage retired meanwhile is
+  refused; `tdd complete` got the same re-check.
 - **`spec-runner tdd complete TASK-ID --commit <sha> --reason …` (#576).**
   Closes a tdd task the terminal gate refused and a person then finished by
   hand. Until now no door fitted: `release` demands DONE, which only the

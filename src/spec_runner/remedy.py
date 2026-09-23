@@ -38,7 +38,15 @@ from .claims import (
     selector_of,
 )
 from .logging import get_logger
-from .tdd import RedCheckpoint, RedOutcome, RedVerification, resolve_namespace, verify_red
+from .state import LineageMoved
+from .tdd import (
+    RedCheckpoint,
+    RedOutcome,
+    RedVerification,
+    _replay_selector,
+    resolve_namespace,
+    verify_red,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
@@ -525,7 +533,6 @@ def complete(
     """
     from .claims import ClaimCheckError, check_claims
     from .lifecycle import TddPhase, has_reached
-    from .tdd import _replay_selector
     from .tdd_runners import RunOutcome, SelectionProof
 
     namespace = _guard(config, reason)
@@ -668,6 +675,9 @@ def complete(
         released = state.complete_with_release(
             namespace, task_id, evidence.checkpoint_id, detail, record
         )
+    except LineageMoved:
+        # Another operator completed this lineage while the replay ran.
+        return RemedyResult(RemedyOperation.COMPLETE, evidence.checkpoint_id, already_applied=True)
     except Exception as exc:
         raise RemedyError(
             f"the completion could not be stored; nothing was recorded: {exc}"
@@ -814,6 +824,21 @@ def reanchor(
     )
     try:
         state.reanchor_lineage(namespace, task_id, old.checkpoint_id, lineage, record)
+    except LineageMoved as race:
+        # The lineage changed while the replay ran. The same move landing is
+        # the same fact; anything else is a state this call never checked.
+        landed = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REANCHOR)
+        if landed is not None:
+            return RemedyResult(
+                RemedyOperation.REANCHOR,
+                checkpoint_id,
+                new_checkpoint_id=landed.new_checkpoint_id,
+                outcome=RedOutcome.EXPECTED_FAIL,
+                already_applied=True,
+            )
+        raise RemedyError(
+            f"{checkpoint_id} changed while its replay ran ({race}); nothing was recorded"
+        ) from race
     except Exception as exc:
         raise RemedyError(f"the reanchor could not be stored; nothing was recorded: {exc}") from exc
     logger.info("Red reanchored", task_id=task_id, old=old.checkpoint_id, new=lineage.checkpoint_id)

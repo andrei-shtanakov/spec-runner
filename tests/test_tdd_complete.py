@@ -611,6 +611,36 @@ class TestAtomicity:
             assert current_phase(state, resolve_namespace(cfg), TASK) is TddPhase.GREEN_VERIFYING
 
 
+class TestAConcurrentComplete:
+    """The same window as reanchor's (acceptance review of the reanchor PR):
+    a complete that landed while this one replayed must not be written twice."""
+
+    def test_a_complete_that_landed_meanwhile_reads_as_already_applied(self, tmp_path, monkeypatch):
+        import spec_runner.remedy as remedy_module
+
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        real = remedy_module._replay_selector
+        fired = {"done": False}
+
+        def replay_then_interleave(*args, **kwargs):
+            attempt = real(*args, **kwargs)
+            if not fired["done"]:
+                fired["done"] = True
+                with ExecutorState(cfg) as other:
+                    complete(cfg, other, TASK, green_sha, reason="the other operator")
+            return attempt
+
+        monkeypatch.setattr(remedy_module, "_replay_selector", replay_then_interleave)
+        with ExecutorState(cfg) as state:
+            second = complete(cfg, state, TASK, green_sha, reason=REASON)
+        assert second.already_applied
+        namespace = resolve_namespace(cfg)
+        with ExecutorState(cfg) as state:
+            assert len(state.remedies(TASK, namespace)) == 1
+            done = [h for h in state.tdd_phase_history(TASK, namespace) if h["phase"] == "done"]
+            assert len(done) == 1
+
+
 class TestTheCommand:
     def _run(self, cfg: ExecutorConfig, *argv: str) -> int:
         from spec_runner.cli import _build_parser

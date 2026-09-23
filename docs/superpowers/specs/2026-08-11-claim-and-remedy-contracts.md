@@ -227,6 +227,12 @@ against what the operator last saw silently applies to whatever arrived since.
   `<sha>` against its parent, still fails. Then, in one transaction, the new
   checkpoint with claims on the same bytes, the old checkpoint and claims
   `superseded`, and a `reanchor` row. The lifecycle is not touched.
+- The checks and the replay of `complete` and `reanchor` run **outside**
+  the write, so another operator may land the same remedy — or retire the
+  lineage — meanwhile. Both writes therefore open with `BEGIN IMMEDIATE`
+  and re-check under the write lock: the same remedy already recorded reads
+  as `already applied`; a lineage no longer standing (or with nothing left
+  to move) is refused with nothing written.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
   superseded and linked.
