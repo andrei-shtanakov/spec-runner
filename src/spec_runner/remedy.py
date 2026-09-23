@@ -630,17 +630,24 @@ def complete(
             f"{evidence.selector} still fails at {sha[:12]} — the work this red asks for is not "
             "in that commit"
         )
+    # Attribution (#583) is required unless the adapter attributes by
+    # construction (`attributed is None` only when no attribution was asked).
+    attributed = attempt.attributed is not False
     if not (
         attempt.stage == "run"
         and attempt.outcome is RunOutcome.TESTS_PASSED
         and attempt.passed_in_full
+        and attributed
     ):
         detail = attempt.detail or "the replay reached no verdict"
         if attempt.stage == "run" and attempt.outcome is RunOutcome.TESTS_PASSED:
-            detail = (
-                "the run exited cleanly, but not everything the selector selected ran and "
-                f"passed (a skip, an xfail, or nothing collected?): {detail}"
-            )
+            if attempt.attribution_refusal:
+                detail = f"the run is not this selector's green: {attempt.attribution_refusal}"
+            else:
+                detail = (
+                    "the run exited cleanly, but not everything the selector selected ran "
+                    f"and passed (a skip, an xfail, or nothing collected?): {detail}"
+                )
         return RemedyResult(
             RemedyOperation.COMPLETE,
             evidence.checkpoint_id,

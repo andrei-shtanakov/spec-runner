@@ -52,6 +52,7 @@ from .lifecycle import TddPhase
 from .logging import get_logger
 from .prompts_log import append_not_started, append_output
 from .tdd_runners import (
+    ReplayAttribution,
     ReplayEnvironmentRefusal,
     RunOutcome,
     SelectionProof,
@@ -292,6 +293,10 @@ class ReplayAttempt:
     #: Everything the selector selected ran and passed (#576) — the green
     #: `tdd complete` needs; see `TddRunnerAdapter.passed_in_full`.
     passed_in_full: bool | None = None
+    #: #583, scoped replays only: whether the run was shown to be the
+    #: selector's own (`attributed`), or what it ran instead.
+    attributed: bool | None = None
+    attribution_refusal: str | None = None
     selector_identity: str | None = None
     returncode: int | None = None
 
@@ -400,6 +405,7 @@ def _replay_selector(
         return attempt("worktree", f"could not check out {sha[:12]}: {added.stderr.strip()[:200]}")
 
     prepared = None
+    attribution: ReplayAttribution | None = None
     try:
         if mutate is not None:
             # Патч берётся ИЗ КАНДИДАТ-КОММИТА и применяется к нему же
@@ -520,8 +526,26 @@ def _replay_selector(
         if isinstance(prepared, ReplayEnvironmentRefusal):
             return attempt("environment", prepared.message)
         env_id = prepared.environment_id or env_id
-        result = _run_selector(config, worktree, adapter, parsed, prepared.env, scoped=scoped)
+        if scoped:
+            # #583: a scoped green must be shown to be the selector's own.
+            asked = adapter.attribution(config.test_command, parsed)
+            if isinstance(asked, ReplayEnvironmentRefusal):
+                return attempt("environment", asked.message)
+            attribution = asked
+        env = {**prepared.env, **(attribution.env if attribution else {})}
+        result = _run_selector(
+            config,
+            worktree,
+            adapter,
+            parsed,
+            env,
+            scoped=scoped,
+            argv=attribution.argv if attribution else None,
+        )
         output = f"{result.stdout}\n{result.stderr}"
+        attribution_refusal = (
+            adapter.attribution_refusal(parsed, attribution.manifest) if attribution else None
+        )
         return attempt(
             "run",
             _tail(output),
@@ -530,6 +554,10 @@ def _replay_selector(
             proof=adapter.prove_selected(parsed, result),
             execution_proven=adapter.execution_proven(parsed, result),
             passed_in_full=adapter.passed_in_full(parsed, result),
+            # None when no attribution was asked (red replay, or an adapter
+            # that attributes by construction) — not False, which refuses.
+            attributed=None if attribution is None else attribution_refusal is None,
+            attribution_refusal=attribution_refusal,
             selector_identity=identity,
             returncode=result.returncode,
         )
@@ -549,6 +577,9 @@ def _replay_selector(
         # state the next replay could read.
         if prepared is not None and not isinstance(prepared, ReplayEnvironmentRefusal):
             for path in prepared.cleanup_paths:
+                shutil.rmtree(path, ignore_errors=True)
+        if attribution is not None:
+            for path in attribution.cleanup_paths:
                 shutil.rmtree(path, ignore_errors=True)
         # Always, including on the exception path: a leaked worktree makes the
         # next `git worktree add` fail and the branch un-deletable. Removal can
@@ -647,6 +678,7 @@ def _run_selector(
     env: Mapping[str, str] | None = None,
     *,
     scoped: bool = False,
+    argv: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run the project's test command, narrowed to one test, in ``worktree``.
 
@@ -659,11 +691,12 @@ def _run_selector(
     # `tests/x.py::t; rm -rf ~` must be an argument rather than a command. The
     # previous form quoted it correctly and was one edit away from not doing so;
     # composite commands are refused before this point, so nothing needs a shell.
-    argv = (
-        adapter.build_scoped_command(config.test_command, selector)
-        if scoped
-        else adapter.build_command(config.test_command, selector)
-    )
+    if argv is None:
+        argv = (
+            adapter.build_scoped_command(config.test_command, selector)
+            if scoped
+            else adapter.build_command(config.test_command, selector)
+        )
     logger.info("Replaying claimed red", selector=str(selector.locator), worktree=str(worktree))
     return subprocess.run(
         argv,

@@ -186,7 +186,11 @@ against what the operator last saw silently applies to whatever arrived since.
   all run before anything is written: the confirmed red is an ancestor of
   `<sha>` and `<sha>` is an ancestor of HEAD (on HEAD's line — whether its
   content survived a later revert is not looked for); the red's selector **passes**
-  when replayed **alone** against `<sha>` (the scoped builder verify-first
+  when replayed **alone** against `<sha>` — and the run is **attributed**
+  to it: the verify reporter's manifest must name only members under the
+  selector, each `passed` (#583: an unknown value flag in `test_command`
+  could swallow the node id, and the default collection's summary read as
+  the selector's green) — (the scoped builder verify-first
   uses: the red-replay builder only appends the selector, so `pytest tests/
   -m "not slow" <node>` would judge the whole directory's summary), **all
   of it** — everything the selector

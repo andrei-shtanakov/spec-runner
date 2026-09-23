@@ -210,6 +210,25 @@ class ReplayEnvironmentRefusal:
     message: str
 
 
+@dataclass(frozen=True)
+class ReplayAttribution:
+    """How to learn **which tests a scoped replay actually ran** (#583).
+
+    A green read off the run's summary alone is only as good as the argv:
+    an unknown value-taking flag in `test_command` can swallow the selector,
+    and the default collection runs in its place. `argv` replaces the
+    scoped command, `env` is overlaid for the run, and the adapter reads
+    `manifest` afterwards to judge whether every executed test was the
+    selector's (`TddRunnerAdapter.attribution_refusal`). `cleanup_paths` go with the
+    replay on every path.
+    """
+
+    argv: list[str]
+    env: Mapping[str, str]
+    manifest: Path
+    cleanup_paths: tuple[Path, ...] = ()
+
+
 #: Lockfiles that identify an environment, most specific first. The order is
 #: fixed so the answer is deterministic when a repo carries more than one.
 LOCKFILES = (
@@ -356,6 +375,20 @@ class TddRunnerAdapter(Protocol):
         failure" (a skip exits 0 too). At least one test, all of them passed,
         nothing skipped, deselected or expected-to-fail beside them.
         """
+        ...
+
+    def attribution(
+        self, test_command: str, selector: Selector
+    ) -> ReplayAttribution | ReplayEnvironmentRefusal | None:
+        """How to attribute a scoped run to ``selector`` (#583), or None when
+        the run is attributed by construction (`passed_in_full` already
+        proves the selected test itself ran)."""
+        ...
+
+    def attribution_refusal(self, selector: Selector, manifest: Path) -> str | None:
+        """None when the run recorded in ``manifest`` ran ``selector`` and
+        nothing else, and every test it ran passed; otherwise what the
+        manifest showed instead (#583) — the operator's diagnosis."""
         ...
 
 
@@ -579,6 +612,19 @@ def _append(record):
         pass
 
 
+def pytest_configure(config):
+    # #583: node ids are rootdir-relative; a reader comparing them with a
+    # repo-relative selector needs both directories.
+    try:
+        _append({{
+            "phase": "root",
+            "rootdir": str(config.rootpath),
+            "invocation": str(config.invocation_params.dir),
+        }})
+    except Exception:
+        pass
+
+
 def pytest_collection_modifyitems(items):
     try:
         members = [item.nodeid for item in items]
@@ -640,6 +686,50 @@ def pytest_sessionfinish():
 """
 
 
+def _rootdir_relative_node_id(selector: Selector, composition: FileComposition) -> str | None:
+    """``selector`` as pytest will name it: the **normalised** path (no
+    `./`), made relative to pytest's rootdir when that sits below the
+    invocation directory. None when the rootdir does not contain it."""
+    assert isinstance(selector.locator, PytestNodeId)
+    tail = selector.locator.value.split("::", 1)[1]
+    path = str(selector.path)
+    if composition.rootdir and composition.invocation:
+        rel = os.path.relpath(composition.rootdir, composition.invocation)
+        if rel.startswith(".."):
+            return None
+        if rel != ".":
+            prefix = rel.replace(os.sep, "/") + "/"
+            if not path.startswith(prefix):
+                return None
+            path = path[len(prefix) :]
+    return f"{path}::{tail}"
+
+
+def _deploy_reporter() -> Path | ReplayEnvironmentRefusal:
+    """Write the verify reporter plugin into its own temp directory."""
+    plugin_dir = Path(tempfile.mkdtemp(prefix="spec-runner-verify-reporter-"))
+    try:
+        (plugin_dir / f"{_REPORTER_PLUGIN_MODULE}.py").write_text(_VERIFY_REPORTER_PLUGIN)
+    except OSError as exc:
+        # Review finding: an unguarded write left `plugin_dir` orphaned on
+        # disk whenever it failed — nothing had registered it for cleanup
+        # yet, and this is the only place that can still remove it before
+        # the caller ever sees it.
+        shutil.rmtree(plugin_dir, ignore_errors=True)
+        return ReplayEnvironmentRefusal(
+            "reporter_plugin_unwritable",
+            f"could not write the verify reporter plugin: {exc}",
+        )
+    return plugin_dir
+
+
+def _reporter_env(plugin_dir: Path) -> dict[str, str]:
+    """`PYTHONPATH` with ``plugin_dir`` first, so `-p` can import the plugin
+    without the project depending on spec_runner."""
+    existing = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": f"{plugin_dir}{os.pathsep}{existing}" if existing else str(plugin_dir)}
+
+
 @dataclass(frozen=True)
 class FileComposition:
     """What a file target's reporter manifest said about one run (DT-02).
@@ -660,6 +750,10 @@ class FileComposition:
     outcomes: Mapping[str, str]
     complete: bool
     reasons: Mapping[str, str] = field(default_factory=dict)
+    #: pytest's rootdir and the invocation directory (#583), when recorded:
+    #: node ids are relative to the first, selectors to the second.
+    rootdir: str | None = None
+    invocation: str | None = None
 
 
 def read_file_composition(path: Path) -> FileComposition | None:
@@ -690,6 +784,8 @@ def read_file_composition(path: Path) -> FileComposition | None:
     outcomes: dict[str, str] = {}
     reasons: dict[str, str] = {}
     complete = False
+    rootdir: str | None = None
+    invocation: str | None = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -716,8 +812,16 @@ def read_file_composition(path: Path) -> FileComposition | None:
                     reasons.pop(nodeid, None)
         elif phase == "done":
             complete = True
+        elif phase == "root":
+            rootdir = str(record.get("rootdir") or "") or None
+            invocation = str(record.get("invocation") or "") or None
     return FileComposition(
-        members=tuple(members), outcomes=outcomes, complete=complete, reasons=reasons
+        members=tuple(members),
+        outcomes=outcomes,
+        complete=complete,
+        reasons=reasons,
+        rootdir=rootdir,
+        invocation=invocation,
     )
 
 
@@ -981,30 +1085,72 @@ class PytestAdapter:
         """
         if not isinstance(selector.locator, FileTarget):
             return ReplayEnvironment(env={}, environment_id=lockfile_identity(canonical_root))
-        plugin_dir = Path(tempfile.mkdtemp(prefix="spec-runner-verify-reporter-"))
-        try:
-            (plugin_dir / f"{_REPORTER_PLUGIN_MODULE}.py").write_text(_VERIFY_REPORTER_PLUGIN)
-        except OSError as exc:
-            # Review finding: an unguarded write left `plugin_dir` orphaned
-            # on disk whenever it failed — nothing had registered it for
-            # cleanup yet, and this is the only place that can still remove
-            # it before the caller ever sees a `ReplayEnvironment`.
-            shutil.rmtree(plugin_dir, ignore_errors=True)
-            return ReplayEnvironmentRefusal(
-                "reporter_plugin_unwritable",
-                f"could not write the verify reporter plugin: {exc}",
-            )
-        existing_pythonpath = os.environ.get("PYTHONPATH", "")
-        pythonpath = (
-            f"{plugin_dir}{os.pathsep}{existing_pythonpath}"
-            if existing_pythonpath
-            else str(plugin_dir)
-        )
+        deployed = _deploy_reporter()
+        if isinstance(deployed, ReplayEnvironmentRefusal):
+            return deployed
         return ReplayEnvironment(
-            env={"PYTHONPATH": pythonpath},
+            env=_reporter_env(deployed),
             environment_id=lockfile_identity(canonical_root),
-            cleanup_paths=(plugin_dir,),
+            cleanup_paths=(deployed,),
         )
+
+    def attribution(
+        self, test_command: str, selector: Selector
+    ) -> ReplayAttribution | ReplayEnvironmentRefusal | None:
+        """The verify reporter, loaded by flag in front of the node id.
+
+        The run's own summary cannot tell "the selector ran" from "an unknown
+        value flag swallowed the selector and the default collection ran"
+        (#583, measured with `--junit-prefix`). The manifest names every
+        member the run collected and how each ended.
+        """
+        if not isinstance(selector.locator, PytestNodeId):
+            return None
+        deployed = _deploy_reporter()
+        if isinstance(deployed, ReplayEnvironmentRefusal):
+            return deployed
+        manifest = deployed / "manifest.jsonl"
+        scoped = self.build_scoped_command(test_command, selector)
+        return ReplayAttribution(
+            argv=[*scoped[:-1], "-p", _REPORTER_PLUGIN_MODULE, scoped[-1]],
+            env={**_reporter_env(deployed), FILE_TARGET_MANIFEST_ENV: str(manifest)},
+            manifest=manifest,
+            cleanup_paths=(deployed,),
+        )
+
+    def attribution_refusal(self, selector: Selector, manifest: Path) -> str | None:
+        assert isinstance(selector.locator, PytestNodeId)
+        composition = read_file_composition(manifest)
+        if composition is None or not composition.complete:
+            return (
+                "the reporter's manifest is missing or incomplete — the run did not finish, "
+                "or the reporter was never loaded (a value flag in test_command swallowing "
+                "the node id?)"
+            )
+        if not composition.members:
+            return "the run collected nothing"
+        wanted = _rootdir_relative_node_id(selector, composition)
+        if wanted is None:
+            return (
+                f"pytest's rootdir ({composition.rootdir}) does not contain "
+                f"{selector.path}, so the run cannot have been this selector's"
+            )
+        outside = [
+            m
+            for m in composition.members
+            if not (m == wanted or m.startswith((f"{wanted}[", f"{wanted}::")))
+        ]
+        if outside:
+            shown = ", ".join(outside[:3]) + (" …" if len(outside) > 3 else "")
+            return f"the run also executed {len(outside)} test(s) outside the selector: {shown}"
+        unpassed = [
+            f"{m}: {composition.outcomes.get(m, 'no outcome')}"
+            for m in composition.members
+            if composition.outcomes.get(m) != "passed"
+        ]
+        if unpassed:
+            return f"not every selected test passed: {', '.join(unpassed[:3])}"
+        return None
 
     def build_command(self, test_command: str, selector: Selector) -> list[str]:
         assert isinstance(selector.locator, PytestNodeId)
@@ -1586,6 +1732,16 @@ class ExUnitAdapter:
             selector, result
         )
 
+    def attribution(
+        self, test_command: str, selector: Selector
+    ) -> ReplayAttribution | ReplayEnvironmentRefusal | None:
+        """None: an ExUnit run is attributed by construction — `passed_in_full`
+        demands the requested line's own trace entry."""
+        return None
+
+    def attribution_refusal(self, selector: Selector, manifest: Path) -> str | None:
+        return "not applicable: ExUnit runs are attributed by construction"
+
 
 _PREFLIGHT_MESSAGES = {
     "missing_test_file": "{path} does not exist in the tree being replayed",
@@ -1628,6 +1784,7 @@ __all__ = [
     "ExUnitAdapter",
     "ExUnitDefinitionLine",
     "FILE_TARGET_MANIFEST_ENV",
+    "ReplayAttribution",
     "FileComposition",
     "FileTarget",
     "PytestAdapter",
