@@ -10,9 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-**Major, by the state-surface rule.** `tdd_remedies.operation` gains two new
-values, `complete` and `reanchor`; no table or column changes, and nothing
-existing changes meaning. Classified now so the release does not have to rediscover it.
+## [4.0.0] - 2026-09-23
+
+**Major, by rule rather than by breakage.** Measured against v3.0.0:
+`schemas/` and the `--json-result` goldens are untouched, and the state DB
+gains no table and no column — `tdd_remedies.operation` gains two values,
+`complete` and `reanchor`, and the CLI gains the two `tdd` subcommands that
+write them. By the additive list in `docs/release-runbook.md` that reads as
+minor; it is major because `AGENTS.md` makes any change to the SQLite state
+surface a major-version change, the rule the owner confirmed for 3.0.0
+(#428, AP-12.3) and again for this release. Expect **no** migration and
+**no** consumer breakage.
 
 ### Added
 
@@ -3830,7 +3838,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...v3.0.0
 [2.36.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...v2.36.0
 [2.35.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.34.0...v2.35.0
