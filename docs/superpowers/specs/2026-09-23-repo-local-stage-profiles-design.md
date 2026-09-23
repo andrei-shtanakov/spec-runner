@@ -42,7 +42,8 @@ Measured facts this design rests on (read-only survey, 2026-09-23):
 
 1. Profiles may live in the repository; a name that collides with a bundled
    profile is **refused**, never silently shadowed.
-2. A stage may declare a `path` and may be `external`.
+2. A stage may be `external`, and an external stage declares its `path`.
+   A **managed** stage keeps its default path in this release (§4.1).
 3. An external upstream **admits** approval of a downstream stage when its file
    exists and
    - its frontmatter has `status` → it must equal `approved`;
@@ -84,13 +85,14 @@ stages:
     upstream: [decomposition]
 ```
 
-- **`path`** — relative to `project_root`. Two placeholders:
+- **`path`** — allowed **only** on an external stage (§4.1). Relative to
+  `project_root`. Two placeholders:
   - `{prefix}` — `spec_prefix` as given;
   - `{ws}` — `spec_prefix` without one trailing `-` (the devtools workstream
     id: prefix `durable-…-20260915-` → `durable-…-20260915`).
 
   Any other `{…}` is a load-time error. An absolute path, or one that resolves
-  outside `project_root`, is refused. Without `path` a stage keeps
+  outside `project_root`, is refused. A managed stage keeps
   `spec_dir/<prefix><stage>.md`.
 - **`external: true`** — produced outside spec-runner. `template`,
   `marker_prefix` and `validator` become **optional**; if given they are
@@ -102,7 +104,30 @@ stages:
   validation, the four required keys for non-external stages.
 
 `StageDef` gains `path: str | None = None` and `external: bool = False`.
-`stage_path(config, stage)` consults the profile's `StageDef.path` first.
+`stage_path(config, stage)` consults the profile's `StageDef.path` first —
+which, by §4.1, only an external stage has.
+
+### 4.1 Managed stages keep their default path
+
+`path` on a **managed** (non-external) stage is refused at load in this
+release. The execution side does not read `stage_path`: `run`, `watch`,
+`retry` and every `task` operation use `config.tasks_file`
+(`spec_dir/<prefix>tasks.md`), and so do the `requirements_file` /
+`design_file` readers. Letting the profile move `tasks` would split one
+stage across two files — generated and approved at one path, executed at
+another. The issue does not need it; if it is ever wanted, it comes with
+`config.tasks_file` reading the profile, as its own change.
+
+### 4.2 No two stages share a file
+
+After the placeholders are substituted and symlinks resolved
+(`Path.resolve()` under `project_root`), every stage's path must be distinct —
+external against external, and external against every managed stage's
+default path. A collision is refused when the profile is resolved for a
+config (the prefix is needed to substitute), before any command reads or
+writes a stage: an external path that lands on `spec/<prefix>tasks.md` would
+otherwise let `plan --gated` or `approve` write into the external file,
+which §2.5 forbids. The refusal names both stages and the resolved path.
 
 ## 5. What each command does with an external stage
 
@@ -171,6 +196,11 @@ In a fixture repo with `spec/profiles/workstream.yaml` as in §4,
   missing → refused naming the path;
 - the external file's bytes are unchanged after every command;
 - `spec approve decomposition` → refused as external;
+- an external stage whose `path` resolves — directly, or through a symlink —
+  to `spec/<prefix>tasks.md` → refused when the profile is resolved, naming
+  both stages; `spec approve tasks` and `plan --gated` then write nothing, and
+  both files' bytes are unchanged;
+- `path` on a managed stage → refused at load;
 - a local profile named `lite` → refused at load;
 - a cyclic local profile → reported as a graph error.
 
@@ -179,5 +209,5 @@ In a fixture repo with `spec/profiles/workstream.yaml` as in §4,
 - devtools adopting it (declaring the profile, dropping `--conform-approve`) is
   their change: an issue to devtools after merge, no edit to their repo.
 - Generating external stages, or validating them, is not spec-runner's job.
-- Per-stage `path` for non-external stages is supported by the same field but
-  not needed by the issue; no further conventions are added for it.
+- `path` for managed stages (§4.1) — not in this release; would require
+  `config.tasks_file` and the other stage-file readers to follow the profile.

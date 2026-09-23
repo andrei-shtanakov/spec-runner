@@ -73,9 +73,11 @@ What spec-runner has today:
 ## 4. What counts as coverage
 
 For each declared scenario id, at least one **file** of the verify group must
-carry it as a whole token: `(?<![A-Za-z0-9])BEH-09(?![0-9a-z])` — so `BEH-09`
-matches `BEH-09:` and `TestBEH09…` does **not** (it has no hyphen; see below),
-`BEH-091` and `BEH-09a` do not match `BEH-09`.
+carry it as a whole token, with symmetric boundaries:
+`(?<![A-Za-z0-9_])BEH-09(?![A-Za-z0-9_])` (the id `re.escape`d). So `BEH-09`
+matches `BEH-09:`, `(BEH-09)` and `BEH-09,`; it does **not** match `BEH-091`,
+`BEH-09a`, `BEH-09A`, `BEH-09_extra`, `xBEH-09` or `TestBEH09…` (no hyphen;
+see below).
 
 - The group's files are the paths of its elements — a file target's own path,
   a node id's file (`path::…` → `path`). Coverage is judged **per file**, not
@@ -143,7 +145,8 @@ Early feedback only — it cannot refuse on the tree (FR-07):
   made (the agent seam is never reached) and no retry.
 - The same group carrying `BEH-09` in a docstring → proceeds as today.
 - A group covering `BEH-09` but not `BEH-10` → refused naming `BEH-10` only.
-- `BEH-091` / `BEH-09a` / `TestBEH09` in the file do not cover `BEH-09`.
+- `BEH-091` / `BEH-09a` / `BEH-09A` / `BEH-09_extra` / `xBEH-09` /
+  `TestBEH09` in the file do not cover `BEH-09`.
 - Coverage read at the commit: a label present only in the uncommitted working
   tree does not count at entry (but silences the `validate` warning).
 - No `**Scenarios:**` → today's behaviour (existing verify-first tests pass
