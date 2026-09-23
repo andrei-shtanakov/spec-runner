@@ -58,6 +58,17 @@ existing changes meaning. Classified now so the release does not have to redisco
 
 ### Fixed
 
+- **`tdd complete` attributes the green to the selector (#583).** The
+  scoped replay's argv recognises value-taking flags only from a curated
+  list, so an unknown one (`--junit-prefix smoke`, a plugin's `--html
+  report.html`) lost its value as a "stray positional" and swallowed the
+  node id; pytest ran its default collection and `N passed` read as this
+  selector's green — a task could close without its red test ever running.
+  The replay now loads the verify reporter (`-p`, in front of the node id)
+  and accepts only a run whose manifest is complete and whose every
+  collected member is under the selector and passed. The `-p` in front also
+  turns an orphaned value flag into a parse error (exit 4) instead of a
+  silent re-bind. The red-replay argv is unchanged.
 - **The harness guard no longer tells the agent how to lift it.** Under
   `harness_guard: strict` the attempt's error — which becomes the next
   attempt's prompt — ended with "if the change is intentional, exempt it via

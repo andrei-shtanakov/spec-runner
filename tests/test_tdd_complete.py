@@ -505,6 +505,130 @@ class TestTheReleaseIsScopedToTheProvenLineage:
             assert release(cfg, state, TASK, reason="the rest").released == 1
 
 
+class TestTheRunIsAttributedToTheSelector:
+    """#583: `build_scoped_command` knows value-taking flags only from a
+    curated list, so an unknown one (`--junit-prefix smoke`) lost its value
+    as a "stray positional" and swallowed the node id as its own. pytest then
+    ran its default collection, and a single `N passed` read as this
+    selector's green. `complete` now reads which tests actually ran — the
+    verify reporter's manifest — and accepts only a run whose every member
+    is under the selector and passed."""
+
+    def _suite(self, root: Path) -> str:
+        (root / "tests" / "test_other.py").write_text("def test_other():\n    assert True\n")
+        return _commit(root, "the rest of the suite")
+
+    def test_a_swallowed_node_id_is_unverifiable(self, tmp_path):
+        root, cfg, _cp, _green = _wedged(tmp_path)
+        head = self._suite(root)
+        swallowing = _cfg(root, test_command="python -m pytest -q --junit-prefix smoke")
+        before = _recorded(cfg)
+        with ExecutorState(swallowing) as state:
+            result = complete(swallowing, state, TASK, head, reason=REASON)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert _recorded(cfg) == before
+
+    def test_a_red_outside_the_default_collection_is_unverifiable(self, tmp_path):
+        """The dangerous case: the default collection does not contain the
+        red at all, so the swallowed run says nothing about it."""
+        root, cfg, _cp, _green = _wedged(tmp_path)
+        (root / "unit").mkdir()
+        (root / "unit" / "test_unit.py").write_text("def test_unit():\n    assert True\n")
+        (root / "pytest.ini").write_text("[pytest]\ntestpaths = unit\n")
+        head = _commit(root, "default collection is unit/ only")
+        swallowing = _cfg(root, test_command="python -m pytest -q --junit-prefix smoke")
+        before = _recorded(cfg)
+        with ExecutorState(swallowing) as state:
+            result = complete(swallowing, state, TASK, head, reason=REASON)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert _recorded(cfg) == before
+
+    def test_extra_tests_beside_the_selector_are_not_its_green(self, tmp_path):
+        """The case only the manifest catches: the argv is intact, the run
+        passes, but `addopts` adds a path, so the summary's `2 passed` is
+        not the selector's. (In the swallow cases above the `-p` placed in
+        front of the node id already breaks the orphaned flag's parse, exit
+        4 — this test is what keeps the manifest check honest.)"""
+        root, cfg, _cp, _green = _wedged(tmp_path)
+        self._suite(root)
+        (root / "pytest.ini").write_text("[pytest]\naddopts = tests/test_other.py\n")
+        head = _commit(root, "addopts pulls in another file")
+        before = _recorded(cfg)
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, head, reason=REASON)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert "outside the selector" in (result.note or "")
+        assert "tests/test_other.py::test_other" in (result.note or "")
+        assert _recorded(cfg) == before
+
+    def test_a_dot_slash_spelled_selector_still_completes(self, tmp_path):
+        """Local review: the stored selector keeps the agent's spelling, and
+        pytest's node ids never carry `./` — the comparison is made on the
+        normalised path, as everywhere else in the pipeline."""
+        root, cfg, checkpoint, green_sha = _wedged(tmp_path)
+        _respell(cfg, checkpoint, "./tests/test_x.py::test_y")
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, green_sha, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED
+
+    def test_a_rootdir_below_the_invocation_still_completes(self, tmp_path):
+        """Local review: with pytest's config in `backend/`, node ids are
+        rootdir-relative while the selector is repo-relative. The reporter
+        records both directories, so the expected node id is exact."""
+        root = tmp_path / "repo"
+        (root / "backend" / "tests").mkdir(parents=True)
+        _git(root, "init", "-q")
+        _git(root, "config", "user.email", "operator@example.com")
+        _git(root, "config", "user.name", "Operator")
+        (root / "README.md").write_text("base\n")
+        _commit(root, "base")
+        (root / "backend" / "pytest.ini").write_text("[pytest]\n")
+        (root / "backend" / "app.py").write_text("def value():\n    return 1\n")
+        (root / "backend" / "tests" / "__init__.py").write_text("")
+        (root / "backend" / "tests" / "test_x.py").write_text(
+            "from app import value\n\n\ndef test_y():\n    assert value() == 2\n"
+        )
+        red = _commit(root, "red")
+        cfg = _cfg(root)
+        checkpoint = _checkpoint(cfg, red, "backend/tests/test_x.py::test_y")
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(checkpoint)
+            record_claims(cfg, state, checkpoint)
+        (root / "backend" / "app.py").write_text("def value():\n    return 2\n")
+        green = _commit(root, "green")
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, green, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED, result.note
+
+    def test_a_verbose_command_still_completes(self, tmp_path):
+        root, cfg, _cp, _green = _wedged(tmp_path)
+        head = self._suite(root)
+        verbose = _cfg(root, test_command="python -m pytest -vv")
+        with ExecutorState(verbose) as state:
+            result = complete(verbose, state, TASK, head, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED
+
+    def test_an_adapter_that_attributes_by_construction_is_not_refused(self, tmp_path, monkeypatch):
+        """ExUnit returns no attribution — its green is proven by the traced
+        line itself. That must read as "not asked", never as "refused"."""
+        from spec_runner.tdd_runners import PytestAdapter
+
+        root, cfg, _cp, green_sha = _wedged(tmp_path)
+        monkeypatch.setattr(PytestAdapter, "attribution", lambda self, *_a: None)
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, green_sha, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED
+
+    def test_the_red_replay_path_is_unchanged(self, tmp_path):
+        """Only the scoped replay `complete` uses is attributed; the frozen
+        red-replay argv carries no reporter flag."""
+        from spec_runner.tdd_runners import PytestAdapter
+
+        adapter = PytestAdapter()
+        selector = adapter.parse_selector("tests/test_x.py::test_y")
+        assert "-p" not in adapter.build_command("python -m pytest -q", selector)
+
+
 class TestASecondLineage:
     """Local review, round 2: idempotency keyed on the task, not the
     lineage, reported a new red's completion as already applied and left its
@@ -712,3 +836,23 @@ def test_pytest_passed_in_full_reads_the_whole_summary(summary, returncode, full
     selector = adapter.parse_selector("tests/test_x.py::test_y")
     result = subprocess.CompletedProcess([], returncode, f"===== {summary} =====\n", "")
     assert adapter.passed_in_full(selector, result) is full
+
+
+def _respell(cfg: ExecutorConfig, checkpoint: RedCheckpoint, selector: str) -> None:
+    """Rewrite the stored selector's spelling in place — what an agent that
+    reported `./tests/...` would have left in the checkpoint row."""
+    from dataclasses import replace
+
+    respelled = replace(checkpoint, selector=selector)
+    with ExecutorState(cfg) as state:
+        assert state._conn is not None
+        state._conn.execute(
+            "UPDATE red_checkpoints SET selector = ? WHERE commit_sha = ?",
+            (selector, checkpoint.commit_sha),
+        )
+        # The id derives from the selector; the claim follows its lineage.
+        state._conn.execute(
+            "UPDATE tdd_claims SET checkpoint_id = ? WHERE checkpoint_id = ?",
+            (respelled.checkpoint_id, checkpoint.checkpoint_id),
+        )
+        state._conn.commit()
