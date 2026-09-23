@@ -2254,6 +2254,21 @@ def _build_parser() -> argparse.ArgumentParser:
     tdd_complete.add_argument("--reason", required=True, help="Why — recorded, and not optional")
     tdd_complete.add_argument("--actor", help="Who (default: git user.email)")
 
+    tdd_reanchor = tdd_sub.add_parser(
+        "reanchor",
+        parents=[common],
+        help="Carry a confirmed red to its rebased copy (same change, same claimed bytes)",
+    )
+    tdd_reanchor.add_argument("task_id", help="Task whose red lineage is being moved")
+    tdd_reanchor.add_argument(
+        "--checkpoint", required=True, help="The active checkpoint to move (compare-and-swap)"
+    )
+    tdd_reanchor.add_argument(
+        "--commit", required=True, help="The rebased copy of the red commit (must be in HEAD)"
+    )
+    tdd_reanchor.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    tdd_reanchor.add_argument("--actor", help="Who (default: git user.email)")
+
     tdd_status = tdd_sub.add_parser(
         "status", parents=[common], help="Show checkpoints, claims and remedies (#141)"
     )

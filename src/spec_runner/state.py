@@ -1967,6 +1967,120 @@ class ExecutorState:
             )
         return int(cursor.rowcount or 0)
 
+    def reanchor_lineage(
+        self,
+        namespace: str,
+        task_id: str,
+        old_checkpoint_id: str,
+        lineage: "RedCheckpointT",
+        remedy: "RemedyRecordT",
+    ) -> int:
+        """Move a confirmed red to its rebased copy in **one transaction**.
+
+        The old checkpoint and its active claims become `superseded`; the new
+        checkpoint is recorded with claims on the **same** paths and bytes,
+        now pointing at the new commit; the remedy row is written. Returns
+        how many claims moved. Any failure raises and rolls everything back:
+        a superseded red with no successor, or a successor with no lock, is
+        the state every other door refuses to leave behind.
+        """
+        from .claims import ClaimStatus
+        from .tdd import RedCheckpoint
+
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchall()
+        old_ids = [
+            row[0]
+            for row in rows
+            if RedCheckpoint(
+                task_id=row[1],
+                namespace=namespace,
+                commit_sha=row[2],
+                baseline_sha="",
+                selector=row[3],
+                environment_id="",
+                execution_mode="",
+                config_hash="",
+                timestamp=row[4],
+            ).checkpoint_id
+            == old_checkpoint_id
+        ]
+        if not old_ids:
+            raise ValueError(f"no checkpoint {old_checkpoint_id} for {task_id} in {namespace}")
+        now = datetime.now().isoformat()
+        with self._conn:
+            moving = self._conn.execute(
+                "SELECT path, blob_sha FROM tdd_claims WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status = ? ORDER BY id",
+                (namespace, task_id, old_checkpoint_id, ClaimStatus.ACTIVE.value),
+            ).fetchall()
+            for row_id in old_ids:
+                self._conn.execute(
+                    "UPDATE red_checkpoints SET status = 'superseded' WHERE id = ?", (row_id,)
+                )
+            self._conn.execute(
+                "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status = ?",
+                (
+                    ClaimStatus.SUPERSEDED.value,
+                    namespace,
+                    task_id,
+                    old_checkpoint_id,
+                    ClaimStatus.ACTIVE.value,
+                ),
+            )
+            for path, blob in moving:
+                self._conn.execute(
+                    "INSERT INTO tdd_claims (namespace, task_id, checkpoint_id, checkpoint_sha, "
+                    "path, blob_sha, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        namespace,
+                        task_id,
+                        lineage.checkpoint_id,
+                        lineage.commit_sha,
+                        path,
+                        blob,
+                        now,
+                        ClaimStatus.ACTIVE.value,
+                    ),
+                )
+            self._conn.execute(
+                "INSERT INTO red_checkpoints (task_id, namespace, commit_sha, baseline_sha, "
+                "selector, environment_id, execution_mode, config_hash, outcome, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    lineage.task_id,
+                    lineage.namespace,
+                    lineage.commit_sha,
+                    lineage.baseline_sha,
+                    lineage.selector,
+                    lineage.environment_id,
+                    lineage.execution_mode,
+                    lineage.config_hash,
+                    getattr(lineage.outcome, "value", lineage.outcome),
+                    lineage.timestamp,
+                ),
+            )
+            self._conn.execute(
+                "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, "
+                "reason, actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    remedy.namespace,
+                    remedy.task_id,
+                    remedy.checkpoint_id,
+                    getattr(remedy.operation, "value", remedy.operation),
+                    remedy.reason,
+                    remedy.actor,
+                    remedy.timestamp,
+                    remedy.new_checkpoint_id,
+                ),
+            )
+        return len(moving)
+
     def claims_of_checkpoint(self, namespace: str, checkpoint_id: str) -> list[dict]:
         """Every claim recorded for one lineage, whatever its status."""
         assert self._conn is not None
