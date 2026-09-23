@@ -1261,12 +1261,14 @@ tasks-артефакта и семь раундов подряд честно н
       сожжённый прогон. Боевой случай: 11 из 14 сценариев семи verify-задач
       не были покрыты ничем, валидация прошла.
 
-- [ ] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver @epic:eco.spec-toolchain
+- [x] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver @epic:eco.spec-toolchain
       Найдено при закрытии #335: `**Mode:** verify_first` и `**TDD-waiver:**`
       не описаны ни в `spec/FORMAT.md`, ни в README — только в
       `docs/architecture.md` / `docs/state-schema.md`. FORMAT.md теперь
       часть base-контекста ревью (#474), и ревьюер судит по нему; поле,
-      которого там нет, для него не существует.
+      которого там нет, для него не существует. **Сделано 2026-09-23:**
+      раздел «Execution Declarations» в FORMAT.md — `Mode`, `Verifies`,
+      `TDD-waiver`, `Negative-control`; пример проверен парсером.
 
 ### Триаж 2026-08-10 — 17 открытых issues (10 inbox + 7 собственных)
 
