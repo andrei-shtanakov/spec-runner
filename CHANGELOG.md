@@ -10,12 +10,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
-**Major, by the state-surface rule.** `tdd_remedies.operation` gains a new
-value, `complete`; no table or column changes, and nothing existing changes
-meaning. Classified now so the release does not have to rediscover it.
+**Major, by the state-surface rule.** `tdd_remedies.operation` gains two new
+values, `complete` and `reanchor`; no table or column changes, and nothing
+existing changes meaning. Classified now so the release does not have to rediscover it.
 
 ### Added
 
+- **`spec-runner tdd reanchor TASK-ID --checkpoint <id> --commit <sha> --reason …`.**
+  Carries a confirmed red across a rebase. A branch rebased before merge
+  re-creates its red commit under a new SHA; `complete` and `resume` need the
+  red to be an ancestor of the work, and `repair` needs the old red to be an
+  ancestor of its new commit, so after a rebase no door could close a
+  delivered task (measured on TASK-001 of #480, PR #556). The lineage moves
+  only when the new commit is provably the same change: the old red is not
+  already its ancestor, it is in HEAD, both commits have a single parent and
+  equal non-empty `git patch-id --stable`, every claimed path has the same
+  blob, and the red's selector still fails there on replay. Then, in one
+  transaction: the new checkpoint with claims on the same bytes, the old
+  checkpoint and claims superseded, a `reanchor` remedy row. The lifecycle
+  is not touched. Exit 0 moved, 1 refused, 2 replay without a verdict
+  (nothing recorded). The write re-checks the lineage under `BEGIN
+  IMMEDIATE` — the checks and replay run outside it — so a concurrent
+  reanchor reads as already applied and a lineage retired meanwhile is
+  refused; `tdd complete` got the same re-check.
 - **`spec-runner tdd complete TASK-ID --commit <sha> --reason …` (#576).**
   Closes a tdd task the terminal gate refused and a person then finished by
   hand. Until now no door fitted: `release` demands DONE, which only the

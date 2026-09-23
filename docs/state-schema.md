@@ -378,13 +378,19 @@ Experimental: the remedies that retire a claim are slice 3.
 ### `tdd_remedies` (experimental, #141)
 
 One row per operator remedy. Columns: `namespace`, `task_id`, `checkpoint_id`,
-`operation` (`abandon` / `repair` / `resume` / `release` / `complete`),
+`operation` (`abandon` / `repair` / `resume` / `release` / `complete` /
+`reanchor`),
 `reason`, `actor`, `timestamp`, `new_checkpoint_id`. `release` stores `""` as
 `checkpoint_id` (a completed task's claims go as a set). `complete` (#576) is
 written in the same transaction as the task's lifecycle `done` row and the
 release of its claims, so none of the three exists without the others; the
 commit it proved is named in that `done` row's `detail`. Adding `complete` to
 this column is a change to the state surface and is classified **major**.
+`reanchor` moves a confirmed red to its rebased copy: its row names the old
+checkpoint and, in `new_checkpoint_id`, the new one; the new `red_checkpoints`
+row, the old one's `superseded` status, the moved claims (same `path` and
+`blob_sha`, new `checkpoint_id`/`checkpoint_sha`) and this row are written in
+one transaction. Also **major**.
 
 A remedy is an **authority decision**, not an observation — hence the mandatory
 `actor` and `reason`, and hence the row being written fail-closed like a claim:

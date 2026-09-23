@@ -213,6 +213,26 @@ against what the operator last saw silently applies to whatever arrived since.
   lineages stay locked until `release`, which the DONE now admits. A repeat on the same lineage is `already applied`; any other
   DONE — the ordinary one, or a new red after a completion — is sent to
   `release`.
+- `tdd reanchor TASK-ID --checkpoint <id> --commit <sha> --reason <text>`
+  carries a confirmed red across a **rebase**. After a branch is rebased the
+  red is re-created under a new SHA, and every ancestry-based door refuses:
+  `complete`/`resume` need the red to be an ancestor of the work, `repair`
+  needs the old red to be an ancestor of its new commit. `reanchor` is not
+  `repair` — unchanged bytes are its **condition**, not its subject. It
+  moves the lineage only when all of these hold, checked before any write:
+  `--checkpoint` is active (compare-and-swap); the old red is **not**
+  already an ancestor of `<sha>`; `<sha>` is in HEAD; both commits have a
+  **single parent** and equal, **non-empty** `git patch-id --stable`; every
+  claimed path has the same blob in `<sha>`; and the selector, replayed on
+  `<sha>` against its parent, still fails. Then, in one transaction, the new
+  checkpoint with claims on the same bytes, the old checkpoint and claims
+  `superseded`, and a `reanchor` row. The lifecycle is not touched.
+- The checks and the replay of `complete` and `reanchor` run **outside**
+  the write, so another operator may land the same remedy — or retire the
+  lineage — meanwhile. Both writes therefore open with `BEGIN IMMEDIATE`
+  and re-check under the write lock: the same remedy already recorded reads
+  as `already applied`; a lineage no longer standing (or with nothing left
+  to move) is refused with nothing written.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
   superseded and linked.

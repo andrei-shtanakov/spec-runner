@@ -38,7 +38,15 @@ from .claims import (
     selector_of,
 )
 from .logging import get_logger
-from .tdd import RedCheckpoint, RedOutcome, RedVerification, resolve_namespace, verify_red
+from .state import LineageMoved
+from .tdd import (
+    RedCheckpoint,
+    RedOutcome,
+    RedVerification,
+    _replay_selector,
+    resolve_namespace,
+    verify_red,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import ExecutorConfig
@@ -69,6 +77,10 @@ class RemedyOperation(str, Enum):
     #: lifecycle never reached DONE, so `release` refuses, and `abandon` would
     #: record a lie. This door proves the completion instead of trusting it.
     COMPLETE = "complete"
+    #: A confirmed red carried across a rebase: the same change on a new
+    #: commit. Every other door asks about ancestry, and after a rebase the
+    #: recorded red is an ancestor of nothing that shipped.
+    REANCHOR = "reanchor"
 
 
 class CheckpointStatus(str, Enum):
@@ -521,7 +533,6 @@ def complete(
     """
     from .claims import ClaimCheckError, check_claims
     from .lifecycle import TddPhase, has_reached
-    from .tdd import _replay_selector
     from .tdd_runners import RunOutcome, SelectionProof
 
     namespace = _guard(config, reason)
@@ -664,6 +675,9 @@ def complete(
         released = state.complete_with_release(
             namespace, task_id, evidence.checkpoint_id, detail, record
         )
+    except LineageMoved:
+        # Another operator completed this lineage while the replay ran.
+        return RemedyResult(RemedyOperation.COMPLETE, evidence.checkpoint_id, already_applied=True)
     except Exception as exc:
         raise RemedyError(
             f"the completion could not be stored; nothing was recorded: {exc}"
@@ -675,6 +689,219 @@ def complete(
         outcome=RedOutcome.NOT_RED,
         released=released,
     )
+
+
+def reanchor(
+    config: ExecutorConfig,
+    state: ExecutorState,
+    task_id: str,
+    checkpoint_id: str,
+    commit: str,
+    *,
+    reason: str,
+    actor: str | None = None,
+) -> RemedyResult:
+    """Carry a confirmed red to its rebased copy.
+
+    A branch rebased before merge re-creates its red commit under a new SHA.
+    The evidence is unchanged, but `complete` and `resume` need the red to be
+    an ancestor of the work, and `repair` needs the old red to be an ancestor
+    of its new commit — after a rebase none of them is, so a delivered task
+    had no way to close (measured on TASK-001 of #480, PR #556).
+
+    Not `repair`: that door says the bytes under the lock changed
+    legitimately and freezes new ones. Here unchanged bytes are the
+    **condition**, and the lock carries over as it was. All checked before
+    anything is written:
+
+    1. ``checkpoint_id`` is an active checkpoint (compare-and-swap);
+    2. the old red is **not** already an ancestor of ``commit`` — otherwise
+       there is nothing to move, and the ordinary doors apply;
+    3. ``commit`` is an ancestor of HEAD;
+    4. both commits have a single parent and equal, non-empty
+       `git patch-id --stable` — the same change, and an unambiguous base;
+    5. every path the old lineage claims has the same blob in ``commit``;
+    6. the red's selector, replayed on ``commit`` against its parent, still
+       fails (`expected_fail`). A passing test is refused; a replay with no
+       verdict writes nothing and comes back ``UNVERIFIABLE``.
+
+    Then, in one transaction: the new checkpoint and its claims, the old ones
+    superseded, the remedy row. The lifecycle is not touched — whatever the
+    task reached, it reached on the same change.
+    """
+    namespace = _guard(config, reason)
+    prior = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REANCHOR)
+    if prior is not None:
+        return RemedyResult(
+            RemedyOperation.REANCHOR,
+            checkpoint_id,
+            new_checkpoint_id=prior.new_checkpoint_id,
+            outcome=RedOutcome.EXPECTED_FAIL,
+            already_applied=True,
+        )
+    old = _swap(state, namespace, task_id, checkpoint_id)
+    if not _resolves(config, commit):
+        raise RemedyError(f"{commit} does not resolve to a commit in this repository")
+    sha = _rev_parse(config, commit)
+    old_parent = _single_parent(config, old.commit_sha)
+    new_parent = _single_parent(config, sha)
+    if _is_ancestor(config, old.commit_sha, sha):
+        raise RemedyError(
+            f"the red {old.commit_sha[:12]} is already an ancestor of {sha[:12]} — nothing to "
+            "reanchor; use `tdd complete` (or `tdd repair` if the test changed)"
+        )
+    head = _rev_parse(config, "HEAD")
+    if not _is_ancestor(config, sha, head):
+        raise RemedyError(f"{sha[:12]} is not in HEAD ({head[:12]}) — reanchor onto what shipped")
+
+    old_patch = _patch_id(config, old.commit_sha)
+    new_patch = _patch_id(config, sha)
+    if not old_patch or not new_patch:
+        empty = old.commit_sha if not old_patch else sha
+        raise RemedyError(
+            f"{empty[:12]} has an empty patch-id — a commit that changes nothing cannot be "
+            "shown to carry the red"
+        )
+    if old_patch != new_patch:
+        raise RemedyError(
+            f"patch-id differs ({old_patch[:12]} vs {new_patch[:12]}): {sha[:12]} is not the "
+            f"same change as the red {old.commit_sha[:12]}"
+        )
+
+    moved = [
+        c
+        for c in state.claims_of_checkpoint(namespace, old.checkpoint_id)
+        if c["status"] == ClaimStatus.ACTIVE.value
+    ]
+    if not moved:
+        raise RemedyError(
+            f"{old.checkpoint_id} holds no active claim — there are no frozen bytes to prove "
+            "the rebased copy against"
+        )
+    changed = [c["path"] for c in moved if _blob_at(config, sha, c["path"]) != c["blob_sha"]]
+    if changed:
+        raise RemedyError(
+            f"the claimed bytes differ in {sha[:12]}: {', '.join(changed)} — the same diff "
+            "landed on a different file, so this is not the evidence that was frozen"
+        )
+
+    verification = verify_red(config, sha=sha, selector=old.selector, baseline_sha=new_parent)
+    if verification.outcome is RedOutcome.NOT_RED:
+        raise RemedyError(
+            f"{old.selector} passes at {sha[:12]} — the rebased copy is not a red, and a "
+            "lineage cannot stand on it"
+        )
+    if verification.outcome is RedOutcome.UNVERIFIABLE:
+        return RemedyResult(
+            RemedyOperation.REANCHOR,
+            checkpoint_id,
+            outcome=RedOutcome.UNVERIFIABLE,
+            note=verification.detail or "the replay reached no verdict",
+        )
+    del old_parent  # checked for its single-parent refusal; the base is the new one's
+
+    lineage = RedCheckpoint(
+        task_id=task_id,
+        namespace=namespace,
+        commit_sha=sha,
+        baseline_sha=new_parent,
+        selector=old.selector,
+        environment_id=verification.environment_id,
+        execution_mode=old.execution_mode,
+        config_hash=old.config_hash,
+        outcome=RedOutcome.EXPECTED_FAIL,
+        timestamp=datetime.now().isoformat(),
+    )
+    record = RemedyRecord(
+        namespace=namespace,
+        task_id=task_id,
+        checkpoint_id=checkpoint_id,
+        operation=RemedyOperation.REANCHOR,
+        reason=reason.strip(),
+        actor=resolve_actor(config, actor),
+        timestamp=datetime.now().isoformat(),
+        new_checkpoint_id=lineage.checkpoint_id,
+    )
+    try:
+        state.reanchor_lineage(namespace, task_id, old.checkpoint_id, lineage, record)
+    except LineageMoved as race:
+        # The lineage changed while the replay ran. The same move landing is
+        # the same fact; anything else is a state this call never checked.
+        landed = _existing(state, namespace, task_id, checkpoint_id, RemedyOperation.REANCHOR)
+        if landed is not None:
+            return RemedyResult(
+                RemedyOperation.REANCHOR,
+                checkpoint_id,
+                new_checkpoint_id=landed.new_checkpoint_id,
+                outcome=RedOutcome.EXPECTED_FAIL,
+                already_applied=True,
+            )
+        raise RemedyError(
+            f"{checkpoint_id} changed while its replay ran ({race}); nothing was recorded"
+        ) from race
+    except Exception as exc:
+        raise RemedyError(f"the reanchor could not be stored; nothing was recorded: {exc}") from exc
+    logger.info("Red reanchored", task_id=task_id, old=old.checkpoint_id, new=lineage.checkpoint_id)
+    return RemedyResult(
+        RemedyOperation.REANCHOR,
+        checkpoint_id,
+        new_checkpoint_id=lineage.checkpoint_id,
+        outcome=RedOutcome.EXPECTED_FAIL,
+    )
+
+
+def _single_parent(config: ExecutorConfig, sha: str) -> str:
+    """The one parent of ``sha`` — the base a replay and a patch-id compare
+    against. A root commit or a merge has no single answer, so it is refused."""
+    result = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", sha],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # "git could not read it" is not "it has 0 parents" — the same split
+        # `_is_ancestor` keeps, so a missing object sends the operator to fetch.
+        raise RemedyError(
+            f"git could not read {sha[:12]}: "
+            f"{result.stderr.strip()[:200] or f'exit {result.returncode}'}"
+        )
+    parts = result.stdout.split()
+    if len(parts) != 2:
+        count = max(len(parts) - 1, 0)
+        raise RemedyError(
+            f"{sha[:12]} has {count} parents; reanchor needs a single parent so the change "
+            "and its base are unambiguous"
+        )
+    return parts[1]
+
+
+def _patch_id(config: ExecutorConfig, sha: str) -> str:
+    """`git patch-id --stable` of ``sha``'s own change, or "" when it has none."""
+    # Bytes end to end: a diff is not text in any codec, and decoding one
+    # with the locale would turn a latin-1 file into a traceback.
+    shown = subprocess.run(["git", "show", sha], cwd=config.project_root, capture_output=True)
+    if shown.returncode != 0:
+        detail = shown.stderr.decode(errors="replace").strip()[:200]
+        raise RemedyError(f"git could not read {sha[:12]}: {detail}")
+    out = subprocess.run(
+        ["git", "patch-id", "--stable"],
+        cwd=config.project_root,
+        input=shown.stdout,
+        capture_output=True,
+    )
+    text = out.stdout.decode(errors="replace")
+    return text.split()[0] if out.returncode == 0 and text.strip() else ""
+
+
+def _blob_at(config: ExecutorConfig, sha: str, path: str) -> str | None:
+    found = subprocess.run(
+        ["git", "rev-parse", f"{sha}:{path}"],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    return found.stdout.strip() if found.returncode == 0 else None
 
 
 def _pick_confirmed_red(
@@ -995,6 +1222,8 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         return _cmd_release(args, config)
     if args.tdd_command == "complete":
         return _cmd_complete(args, config)
+    if args.tdd_command == "reanchor":
+        return _cmd_reanchor(args, config)
 
     try:
         with ExecutorState(config) as state:
@@ -1091,6 +1320,42 @@ def _cmd_release(args, config: ExecutorConfig) -> int:
         print(f"✔️  {args.task_id} held no active claims; nothing to release")
         return 0
     print(f"✔️  Released {result.released} claim(s) held by {args.task_id}; the files are open")
+    return 0
+
+
+def _cmd_reanchor(args, config: ExecutorConfig) -> int:
+    """`spec-runner tdd reanchor`. 0 moved, 1 refused, 2 replay without a
+    verdict — nothing recorded then."""
+    from .state import ExecutorState
+
+    try:
+        with ExecutorState(config) as state:
+            result = reanchor(
+                config,
+                state,
+                args.task_id,
+                args.checkpoint,
+                args.commit,
+                reason=args.reason,
+                actor=getattr(args, "actor", None),
+            )
+    except RemedyError as exc:
+        print(f"⛔ {exc}")
+        return 1
+    if result.already_applied:
+        print(
+            f"✔️  Already applied — reanchor of {result.checkpoint_id} → {result.new_checkpoint_id}"
+        )
+        return 0
+    if result.outcome is RedOutcome.UNVERIFIABLE:
+        print("⛔ Not reanchored: the replay on the new commit reached no verdict.")
+        print(f"   {result.note}")
+        print("   Nothing was recorded.")
+        return 2
+    print(
+        f"✔️  Reanchored {args.task_id}: {result.checkpoint_id} → {result.new_checkpoint_id} "
+        "(same change, same claimed bytes, red confirmed); the lifecycle is unchanged"
+    )
     return 0
 
 
@@ -1222,6 +1487,7 @@ __all__ = [
     "abandon",
     "cmd_tdd",
     "complete",
+    "reanchor",
     "resolve_checkpoint",
     "repair",
     "resolve_actor",

@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -247,6 +248,16 @@ def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
         CompositionMember(member=e["member"], outcome=e["outcome"], reason=e.get("reason"))
         for e in json.loads(raw)
     )
+
+
+class LineageMoved(RuntimeError):
+    """A remedy's lineage changed between its checks and its write.
+
+    Raised from inside the write transaction, which rolls back: the checks
+    and the replay run outside it, so another process may have completed,
+    moved or retired the lineage meanwhile. The caller decides whether that
+    is its own write already landed (idempotent) or a refusal.
+    """
 
 
 class ExecutorState:
@@ -1023,6 +1034,26 @@ class ExecutorState:
         return self.tasks[task_id]
 
     # === Phase results (slice 0; nothing gates on these yet) ===
+
+    @contextlib.contextmanager
+    def _immediate(self) -> Iterator[None]:
+        """A write transaction that holds the lock from its first read.
+
+        `with self._conn` begins lazily, at the first write, so a check read
+        before it can be stale by the time the write lands. `BEGIN IMMEDIATE`
+        takes the write lock up front: what is checked inside is what is
+        written against. Commits on success, rolls back on any exception.
+        """
+        assert self._conn is not None
+        if self._conn.in_transaction:
+            self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
 
     def _insert_phase_row(self, sql: str, params: tuple) -> None:
         """Single write seam, so recording can be faulted in tests."""
@@ -1934,7 +1965,14 @@ class ExecutorState:
         from .lifecycle import TddPhase
 
         assert self._conn is not None
-        with self._conn:
+        with self._immediate():
+            already = self._conn.execute(
+                "SELECT COUNT(*) FROM tdd_remedies WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND operation = ?",
+                (namespace, task_id, checkpoint_id, "complete"),
+            ).fetchone()[0]
+            if already:
+                raise LineageMoved("completed by another writer")
             self._conn.execute(
                 "INSERT INTO tdd_phases (task_id, namespace, phase, detail, timestamp) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -1966,6 +2004,131 @@ class ExecutorState:
                 ),
             )
         return int(cursor.rowcount or 0)
+
+    def reanchor_lineage(
+        self,
+        namespace: str,
+        task_id: str,
+        old_checkpoint_id: str,
+        lineage: "RedCheckpointT",
+        remedy: "RemedyRecordT",
+    ) -> int:
+        """Move a confirmed red to its rebased copy in **one transaction**.
+
+        The old checkpoint and its active claims become `superseded`; the new
+        checkpoint is recorded with claims on the **same** paths and bytes,
+        now pointing at the new commit; the remedy row is written. Returns
+        how many claims moved. Any failure raises and rolls everything back:
+        a superseded red with no successor, or a successor with no lock, is
+        the state every other door refuses to leave behind.
+        """
+        from .claims import ClaimStatus
+        from .tdd import RedCheckpoint
+
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchall()
+        old_ids = [
+            row[0]
+            for row in rows
+            if RedCheckpoint(
+                task_id=row[1],
+                namespace=namespace,
+                commit_sha=row[2],
+                baseline_sha="",
+                selector=row[3],
+                environment_id="",
+                execution_mode="",
+                config_hash="",
+                timestamp=row[4],
+            ).checkpoint_id
+            == old_checkpoint_id
+        ]
+        if not old_ids:
+            raise ValueError(f"no checkpoint {old_checkpoint_id} for {task_id} in {namespace}")
+        now = datetime.now().isoformat()
+        with self._immediate():
+            # Re-checked under the write lock: the caller's checks and replay
+            # ran outside it (acceptance review — two writers moved one red).
+            standing = self._conn.execute(
+                f"SELECT COUNT(*) FROM red_checkpoints WHERE status = 'active' "
+                f"AND id IN ({','.join('?' * len(old_ids))})",
+                old_ids,
+            ).fetchone()[0]
+            moving = self._conn.execute(
+                "SELECT path, blob_sha FROM tdd_claims WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status = ? ORDER BY id",
+                (namespace, task_id, old_checkpoint_id, ClaimStatus.ACTIVE.value),
+            ).fetchall()
+            if not standing or not moving:
+                raise LineageMoved(
+                    "no longer active" if not standing else "its claims are no longer active"
+                )
+            for row_id in old_ids:
+                self._conn.execute(
+                    "UPDATE red_checkpoints SET status = 'superseded' WHERE id = ?", (row_id,)
+                )
+            self._conn.execute(
+                "UPDATE tdd_claims SET status = ? WHERE namespace = ? AND task_id = ? "
+                "AND checkpoint_id = ? AND status = ?",
+                (
+                    ClaimStatus.SUPERSEDED.value,
+                    namespace,
+                    task_id,
+                    old_checkpoint_id,
+                    ClaimStatus.ACTIVE.value,
+                ),
+            )
+            for path, blob in moving:
+                self._conn.execute(
+                    "INSERT INTO tdd_claims (namespace, task_id, checkpoint_id, checkpoint_sha, "
+                    "path, blob_sha, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        namespace,
+                        task_id,
+                        lineage.checkpoint_id,
+                        lineage.commit_sha,
+                        path,
+                        blob,
+                        now,
+                        ClaimStatus.ACTIVE.value,
+                    ),
+                )
+            self._conn.execute(
+                "INSERT INTO red_checkpoints (task_id, namespace, commit_sha, baseline_sha, "
+                "selector, environment_id, execution_mode, config_hash, outcome, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    lineage.task_id,
+                    lineage.namespace,
+                    lineage.commit_sha,
+                    lineage.baseline_sha,
+                    lineage.selector,
+                    lineage.environment_id,
+                    lineage.execution_mode,
+                    lineage.config_hash,
+                    getattr(lineage.outcome, "value", lineage.outcome),
+                    lineage.timestamp,
+                ),
+            )
+            self._conn.execute(
+                "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, "
+                "reason, actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    remedy.namespace,
+                    remedy.task_id,
+                    remedy.checkpoint_id,
+                    getattr(remedy.operation, "value", remedy.operation),
+                    remedy.reason,
+                    remedy.actor,
+                    remedy.timestamp,
+                    remedy.new_checkpoint_id,
+                ),
+            )
+        return len(moving)
 
     def claims_of_checkpoint(self, namespace: str, checkpoint_id: str) -> list[dict]:
         """Every claim recorded for one lineage, whatever its status."""
