@@ -289,6 +289,9 @@ class ReplayAttempt:
     outcome: RunOutcome | None = None
     proof: SelectionProof | None = None
     execution_proven: bool | None = None
+    #: Everything the selector selected ran and passed (#576) — the green
+    #: `tdd complete` needs; see `TddRunnerAdapter.passed_in_full`.
+    passed_in_full: bool | None = None
     selector_identity: str | None = None
     returncode: int | None = None
 
@@ -525,6 +528,7 @@ def _replay_selector(
             outcome=adapter.classify(result),
             proof=adapter.prove_selected(parsed, result),
             execution_proven=adapter.execution_proven(parsed, result),
+            passed_in_full=adapter.passed_in_full(parsed, result),
             selector_identity=identity,
             returncode=result.returncode,
         )

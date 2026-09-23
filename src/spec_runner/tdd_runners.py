@@ -347,6 +347,17 @@ class TddRunnerAdapter(Protocol):
         """
         ...
 
+    def passed_in_full(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        """Whether everything ``selector`` selected **ran and passed** (#576).
+
+        What `tdd complete` needs of a green: not "exactly one test ran"
+        (`execution_proven` — a parametrized or class-level red selects
+        several, and `2 passed` would be locked out forever), and not "no
+        failure" (a skip exits 0 too). At least one test, all of them passed,
+        nothing skipped, deselected or expected-to-fail beside them.
+        """
+        ...
+
 
 # === pytest ===
 
@@ -1113,6 +1124,17 @@ class PytestAdapter:
         number, word = counts[0]
         return number == "1" and word in self._PROVEN_EXECUTION_WORDS
 
+    def passed_in_full(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        if result.returncode != 0:
+            return False
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        counts = [
+            (number, word)
+            for number, word in pytest_summary_counts(output)
+            if word not in self._NEUTRAL_CATEGORIES
+        ]
+        return len(counts) == 1 and counts[0][1] == "passed" and int(counts[0][0]) >= 1
+
 
 # === ExUnit ===
 
@@ -1555,6 +1577,14 @@ class ExUnitAdapter:
         shortcut would leak through that this needs to catch separately.
         """
         return self.prove_selected(selector, result) is SelectionProof.PROVEN
+
+    def passed_in_full(self, selector: Selector, result: subprocess.CompletedProcess) -> bool:
+        """An ExUnit selector is `path:line`, one test by construction (the
+        preflight proves the line defines one), so "all of it passed" is
+        "that test was traced and the run passed"."""
+        return self.classify(result) is RunOutcome.TESTS_PASSED and self.execution_proven(
+            selector, result
+        )
 
 
 _PREFLIGHT_MESSAGES = {

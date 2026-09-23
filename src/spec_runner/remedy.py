@@ -497,11 +497,12 @@ def complete(
     A door with **checks**, not with trust. Before anything is written:
 
     1. the confirmed red's commit is an ancestor of ``commit``, and ``commit``
-       is an ancestor of HEAD — the work was built on that red and is in the
-       tree in hand;
+       is an ancestor of HEAD — the work was built on that red and lies on
+       HEAD's line. Not that its content survived into HEAD: a later revert
+       is not looked for, and the attestation is about ``commit``;
     2. the red's own selector **passes** when replayed against ``commit``,
-       and the run shows that very test executed (`clean_half_is_green`) —
-       a skip passes too, and would close the task over broken work;
+       all of it: everything it selected ran and passed (`passed_in_full`)
+       — a skip exits 0 too, and would close the task over broken work;
     3. this task's claims are intact in ``commit`` — a green that weakened
        its own evidence is the laundering the byte-lock exists to catch.
        Only *this* task's: a neighbour's broken lock is not a reason this one
@@ -520,23 +521,10 @@ def complete(
     """
     from .claims import ClaimCheckError, check_claims
     from .lifecycle import TddPhase, has_reached
-    from .negative_control import clean_half_is_green
     from .tdd import _replay_selector
     from .tdd_runners import RunOutcome, SelectionProof
 
     namespace = _guard(config, reason)
-    # Before the DONE refusal (owner decision): a repeat of a successful
-    # complete is the same fact, not an ordinary DONE to send to `release`.
-    for record in state.remedies(task_id, namespace):
-        if record.operation is RemedyOperation.COMPLETE:
-            return RemedyResult(
-                RemedyOperation.COMPLETE, record.checkpoint_id, already_applied=True
-            )
-    if has_reached(state, namespace, task_id, TddPhase.DONE):
-        raise RemedyError(
-            f"{task_id} already reached DONE through the ordinary path; to unlock its files "
-            "use `spec-runner tdd release`"
-        )
     confirmed = state.confirmed_reds(namespace, task_id)
     if not confirmed:
         raise RemedyError(
@@ -558,6 +546,18 @@ def complete(
             "`spec-runner tdd resume` reinstates it with its claims first"
         )
     evidence = _pick_confirmed_red(candidates, task_id, checkpoint_id)
+    # Before the DONE refusal (owner decision): a repeat of a successful
+    # complete is the same fact, not an ordinary DONE to send to `release`.
+    # Keyed on the lineage, like every sibling door: a *new* red after a
+    # completion is a different fact, and "already applied" would leave its
+    # claims frozen while reporting success.
+    if _existing(state, namespace, task_id, evidence.checkpoint_id, RemedyOperation.COMPLETE):
+        return RemedyResult(RemedyOperation.COMPLETE, evidence.checkpoint_id, already_applied=True)
+    if has_reached(state, namespace, task_id, TddPhase.DONE):
+        raise RemedyError(
+            f"{task_id} already reached DONE; to unlock the files its claims still hold "
+            "use `spec-runner tdd release`"
+        )
     if not any(
         c.checkpoint_id == evidence.checkpoint_id and c.task_id == task_id
         for c in state.active_claims(namespace)
@@ -584,9 +584,10 @@ def complete(
 
     # Not `verify_red`: it answers "is this red?", and for that a skipped test
     # is safely "not red". Here "not red" is the success, so a skip would close
-    # the task over a broken implementation (acceptance review). The green is
-    # judged by the one definition that demands the selected test actually
-    # ran — the negative control's clean half.
+    # the task over a broken implementation (acceptance review). Nor the
+    # negative control's clean half: "exactly one test ran" locks out every
+    # parametrized red (local review). The green is "everything the selector
+    # selected ran and passed" — the adapter's `passed_in_full`.
     attempt = _replay_selector(
         config, sha=sha, selector=evidence.selector, baseline_sha=evidence.baseline_sha
     )
@@ -599,12 +600,16 @@ def complete(
             f"{evidence.selector} still fails at {sha[:12]} — the work this red asks for is not "
             "in that commit"
         )
-    if not clean_half_is_green(attempt):
+    if not (
+        attempt.stage == "run"
+        and attempt.outcome is RunOutcome.TESTS_PASSED
+        and attempt.passed_in_full
+    ):
         detail = attempt.detail or "the replay reached no verdict"
         if attempt.stage == "run" and attempt.outcome is RunOutcome.TESTS_PASSED:
             detail = (
-                "the run passed, but nothing shows the selected test itself executed "
-                f"(skipped, xfail, or not collected?): {detail}"
+                "the run exited cleanly, but not everything the selector selected ran and "
+                f"passed (a skip, an xfail, or nothing collected?): {detail}"
             )
         return RemedyResult(
             RemedyOperation.COMPLETE,

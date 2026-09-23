@@ -368,6 +368,88 @@ class TestOnlyAStandingRedIsEvidence:
         assert _recorded(cfg) == before
 
 
+class TestASelectorThatRunsSeveralTests:
+    """Local review, round 2: judging the green by "exactly one test ran"
+    locked every parametrized red out of the only door #576 adds — `2 passed`
+    is not `1 passed` — and blamed a skip for it."""
+
+    def _parametrized(self, tmp_path: Path, green: str, extra_case: str = ""):
+        root = tmp_path / "repo"
+        root.mkdir(parents=True)
+        _git(root, "init", "-q")
+        _git(root, "config", "user.email", "operator@example.com")
+        _git(root, "config", "user.name", "Operator")
+        (root / "README.md").write_text("base\n")
+        _commit(root, "base")
+        (root / "app.py").write_text("def value(n):\n    return 0\n")
+        (root / "tests").mkdir()
+        (root / "tests" / "__init__.py").write_text("")
+        (root / "tests" / "test_x.py").write_text(
+            "import pytest\n\nfrom app import value\n\n\n"
+            "@pytest.mark.parametrize('n', [1, 2" + extra_case + "])\n"
+            "def test_y(n):\n    assert value(n) == n\n"
+        )
+        red = _commit(root, "red")
+        cfg = _cfg(root)
+        checkpoint = _checkpoint(cfg, red, "tests/test_x.py::test_y")
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(checkpoint)
+            record_claims(cfg, state, checkpoint)
+        (root / "app.py").write_text(green)
+        return root, cfg, _commit(root, "green")
+
+    def test_a_parametrized_red_can_be_completed(self, tmp_path):
+        root, cfg, green = self._parametrized(tmp_path, "def value(n):\n    return n\n")
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, green, reason=REASON)
+        assert result.outcome is RedOutcome.NOT_RED
+        assert result.released == 1
+
+    def test_one_skipped_case_is_not_a_full_green(self, tmp_path):
+        root, cfg, green = self._parametrized(
+            tmp_path,
+            "def value(n):\n    return n\n",
+            extra_case=", pytest.param(3, marks=pytest.mark.skip)",
+        )
+        before = _recorded(cfg)
+        with ExecutorState(cfg) as state:
+            result = complete(cfg, state, TASK, green, reason=REASON)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert _recorded(cfg) == before
+
+
+class TestASecondLineage:
+    """Local review, round 2: idempotency keyed on the task, not the
+    lineage, reported a new red's completion as already applied and left its
+    claims frozen. Keyed on (checkpoint, operation) like every sibling door."""
+
+    def test_a_new_lineage_after_completion_is_sent_to_release(self, tmp_path):
+        root, cfg, first, green_sha = _wedged(tmp_path)
+        with ExecutorState(cfg) as state:
+            complete(cfg, state, TASK, green_sha, reason=REASON)
+        (root / "tests" / "test_again.py").write_text(
+            "from app import value\n\n\ndef test_again():\n    assert value() == 3\n"
+        )
+        second_red = _commit(root, "a second red")
+        second = _checkpoint(cfg, second_red, "tests/test_again.py::test_again")
+        with ExecutorState(cfg) as state:
+            state.record_red_checkpoint(second)
+            record_claims(cfg, state, second)
+            with pytest.raises(RemedyError, match="tdd release"):
+                complete(
+                    cfg,
+                    state,
+                    TASK,
+                    second_red,
+                    reason=REASON,
+                    checkpoint_id=second.checkpoint_id,
+                )
+            again = complete(
+                cfg, state, TASK, green_sha, reason=REASON, checkpoint_id=first.checkpoint_id
+            )
+        assert again.already_applied
+
+
 class TestWhichClaimsCount:
     def test_another_tasks_broken_claim_does_not_block(self, tmp_path):
         """Owner decision: only this task's claims are checked. A neighbour's
@@ -490,3 +572,26 @@ class TestTheCommand:
         assert "done" in lifecycle_of(data, TASK)
         assert "🔒" not in text
         assert "complete" in text
+
+
+@pytest.mark.parametrize(
+    ("summary", "returncode", "full"),
+    [
+        ("1 passed in 0.01s", 0, True),
+        ("2 passed in 0.01s", 0, True),
+        ("1 passed, 1 warning in 0.01s", 0, True),
+        ("1 passed, 1 skipped in 0.01s", 0, False),
+        ("1 skipped in 0.01s", 0, False),
+        ("1 xfailed in 0.01s", 0, False),
+        ("2 passed, 1 deselected in 0.01s", 0, False),
+        ("1 failed, 1 passed in 0.01s", 1, False),
+        ("no tests ran in 0.01s", 5, False),
+    ],
+)
+def test_pytest_passed_in_full_reads_the_whole_summary(summary, returncode, full):
+    from spec_runner.tdd_runners import PytestAdapter
+
+    adapter = PytestAdapter()
+    selector = adapter.parse_selector("tests/test_x.py::test_y")
+    result = subprocess.CompletedProcess([], returncode, f"===== {summary} =====\n", "")
+    assert adapter.passed_in_full(selector, result) is full

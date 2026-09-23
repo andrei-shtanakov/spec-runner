@@ -184,11 +184,13 @@ against what the operator last saw silently applies to whatever arrived since.
   lifecycle never reached DONE, so `release` refuses, and `abandon` would
   record the red as no good. It is a door with **checks**, not with trust,
   all run before anything is written: the confirmed red is an ancestor of
-  `<sha>` and `<sha>` is an ancestor of HEAD; the red's selector **passes**
-  when replayed against `<sha>` **and the run shows that very test
-  executed** — the negative control's clean-half rule, because a skip also
-  exits 0 and `verify_red` would read it as "not red", which here is the
-  success; and **this task's** claims are intact there
+  `<sha>` and `<sha>` is an ancestor of HEAD (on HEAD's line — whether its
+  content survived a later revert is not looked for); the red's selector **passes**
+  when replayed against `<sha>`, **all of it** — everything the selector
+  selected ran and passed, nothing skipped or expected-to-fail beside it
+  (the adapter's `passed_in_full`: a skip also exits 0, and `verify_red`
+  reads it as "not red", which here is the success; "exactly one test ran"
+  would lock out every parametrized red); and **this task's** claims are intact there
   (a neighbour's broken lock does not stop it). The red must be **standing**
   (active, the rule `abandon`/`repair` apply through compare-and-swap) and
   hold an active claim: a retired red's claims are retired with it, and an
@@ -199,7 +201,8 @@ against what the operator last saw silently applies to whatever arrived since.
   **What it does not attest:** the review verdict and the other pre-terminal
   gates are not checked, and the command does not confirm that any external
   review took place. The actor and the reason record who answers for going
-  around them. A repeat is `already applied`; an ordinary DONE is sent to
+  around them. A repeat on the same lineage is `already applied`; any other
+  DONE — the ordinary one, or a new red after a completion — is sent to
   `release`.
 - `repair` is **not** "allow these new bytes". It opens a **new lineage**: a
   fresh checkpoint descending from the repaired commit, with the previous one
