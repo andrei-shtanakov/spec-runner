@@ -235,3 +235,14 @@ class TestCliStageNames:
         with pytest.raises(SystemExit) as exc:
             main()
         assert "requirements" in str(exc.value)
+
+
+class TestCrlfFrontmatter:
+    def test_a_draft_saved_with_crlf_is_not_admitted(self, tmp_path, capsys):
+        """Final review: `---\\r\\n` read as "no frontmatter" admitted a draft —
+        the admission rule failing open."""
+        cfg, ext = _project(tmp_path, None)
+        ext.parent.mkdir(parents=True)
+        ext.write_bytes(b"---\r\nspec_stage: decomposition\r\nstatus: draft\r\n---\r\nx\r\n")
+        assert _approve(cfg, "tasks") == 1
+        assert "draft" in capsys.readouterr().out

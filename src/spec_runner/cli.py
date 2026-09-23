@@ -837,6 +837,17 @@ def _check_stage_name(config: ExecutorConfig, stage: str | None) -> None:
         )
 
 
+def _check_stage_files(config: ExecutorConfig) -> None:
+    """Stage path rules (#338 §4.2), checked by the commands that touch stage
+    files — a `⛔` line, never a traceback."""
+    from .config import ConfigError
+
+    try:
+        config.resolve_stage_files()
+    except ConfigError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
+
+
 def _announce_budget(config: ExecutorConfig) -> None:
     """One stderr line naming the caps and where they came from (#388).
 
@@ -2731,6 +2742,7 @@ def main():
             from . import spec_commands
 
             _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
             handler = {
                 "status": spec_commands.cmd_spec_status,
                 "approve": spec_commands.cmd_spec_approve,
@@ -2745,6 +2757,7 @@ def main():
 
         if args.command == "plan":
             _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
         cmd_func = commands.get(args.command)
         if cmd_func:
             cmd_func(args, config)

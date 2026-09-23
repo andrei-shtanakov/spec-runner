@@ -956,6 +956,26 @@ class ExecutorConfig:
             )
         return AppliedWaiver(node_class=node_class, sanction=sanction)
 
+    def resolve_stage_files(self) -> dict[str, Path]:
+        """Every stage's file for this config, with #338's path rules applied.
+
+        Called by the commands that read or write stage files (`spec`,
+        `plan`), not at startup: a profile whose paths need `--spec-prefix`
+        must not stop `run` or `costs`, which never touch a stage file.
+
+        Raises:
+            ConfigError: An empty prefix under a placeholder, a path escaping
+                the project, or two stages (or a stage and a fixed stage file)
+                sharing a file.
+        """
+        from .spec import ProfileError, resolve_stage_paths
+
+        profile = self.resolve_spec_profile()
+        try:
+            return resolve_stage_paths(profile, self)
+        except ProfileError as exc:
+            raise ConfigError(str(exc)) from exc
+
     def resolve_tdd_runner(self) -> str | None:
         """The adapter name that verifies a RED here, or None to refuse.
 
@@ -988,15 +1008,10 @@ class ExecutorConfig:
             ConfigError: If the name matches no bundled profile; the message
                 lists the available profile names (no traceback for the CLI).
         """
-        from .spec import ProfileError, available_profiles, load_profile, resolve_stage_paths
+        from .spec import ProfileError, available_profiles, load_profile
 
         try:
-            profile = load_profile(self.spec_profile, self.project_root)
-            # Paths are checked with the config in hand (#338): the prefix is
-            # needed to substitute them, and a collision must stop every
-            # command before one reads or writes a stage.
-            resolve_stage_paths(profile, self)
-            return profile
+            return load_profile(self.spec_profile, self.project_root)
         except ProfileError as exc:
             # Refused content, including a graph error — the real message,
             # not "unknown profile".

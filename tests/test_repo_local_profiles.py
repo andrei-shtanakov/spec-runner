@@ -139,7 +139,7 @@ class TestPathResolution:
     def test_an_empty_prefix_with_a_placeholder_is_refused(self, tmp_path):
         _write_profile(tmp_path, "workstream", WORKSTREAM)
         with pytest.raises(ConfigError, match="requires --spec-prefix"):
-            _cfg(tmp_path, prefix="").resolve_spec_profile()
+            _cfg(tmp_path, prefix="").resolve_stage_files()
 
     def test_a_path_escaping_the_project_is_refused(self, tmp_path):
         _write_profile(
@@ -148,7 +148,7 @@ class TestPathResolution:
             WORKSTREAM.replace("workstreams/{ws}/spec/30-decomposition.md", "../outside.md"),
         )
         with pytest.raises(ConfigError, match="outside the project"):
-            _cfg(tmp_path).resolve_spec_profile()
+            _cfg(tmp_path).resolve_stage_files()
 
     def test_an_external_path_on_a_managed_file_is_refused(self, tmp_path):
         _write_profile(
@@ -159,7 +159,7 @@ class TestPathResolution:
             ),
         )
         with pytest.raises(ConfigError, match="decomposition.*tasks|tasks.*decomposition"):
-            _cfg(tmp_path).resolve_spec_profile()
+            _cfg(tmp_path).resolve_stage_files()
 
     def test_a_symlink_onto_a_managed_file_is_a_collision(self, tmp_path):
         _write_profile(tmp_path, "workstream", WORKSTREAM)
@@ -169,7 +169,7 @@ class TestPathResolution:
         link.parent.mkdir(parents=True)
         link.symlink_to(tmp_path / "spec" / "ws-tasks.md")
         with pytest.raises(ConfigError, match="same file"):
-            _cfg(tmp_path).resolve_spec_profile()
+            _cfg(tmp_path).resolve_stage_files()
 
     def test_a_change_folder_still_finds_the_profile_and_the_root_path(self, tmp_path):
         """`--change` excludes `--spec-prefix`, so the profile here has no
@@ -198,3 +198,78 @@ class TestPathResolution:
         with pytest.raises(ConfigError, match="cycle") as exc:
             _cfg(tmp_path).resolve_spec_profile()
         assert "unknown spec_profile" not in str(exc.value)
+
+
+class TestFinalReviewFixes:
+    """Whole-branch review of #338: what reached every command, and two
+    fail-open holes."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "name: w\nstages:\n  - name: t\n    template: t\n    marker_prefix: T\n",
+            "name: w\nstages:\n  - template: t\n    marker_prefix: T\n    validator: tasks\n",
+            "name: w\nstages: [unclosed\n",
+            "name: w\nstages: foo\n",
+            "name: w\nstages:\n  - {name: t, template: t, marker_prefix: T, validator: tasks,"
+            " upstream: decomposition}\n",
+        ],
+        ids=["no-validator", "no-name", "yaml-error", "stages-not-a-list", "upstream-not-a-list"],
+    )
+    def test_a_malformed_profile_is_a_config_error_not_a_traceback(self, tmp_path, text):
+        _write_profile(tmp_path, "workstream", text)
+        with pytest.raises(ConfigError, match="profile 'workstream'"):
+            _cfg(tmp_path).resolve_spec_profile()
+
+    def test_the_cli_refuses_a_malformed_profile_with_a_line(self, tmp_path, monkeypatch):
+        from spec_runner.cli import main
+
+        _write_profile(tmp_path, "workstream", "name: w\nstages: [unclosed\n")
+        (tmp_path / "spec-runner.config.yaml").write_text("spec_profile: workstream\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["spec-runner", "costs"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert str(exc.value).startswith("⛔")
+
+    def test_a_placeholder_profile_without_a_prefix_only_stops_stage_commands(
+        self, tmp_path, monkeypatch
+    ):
+        """`run`, `costs`, `task list` read no stage file; only the commands
+        that do are refused for a missing prefix (design §4.2)."""
+        from spec_runner.cli import main
+
+        _write_profile(tmp_path, "workstream", WORKSTREAM)
+        cfg = _cfg(tmp_path, prefix="")
+        cfg.resolve_spec_profile()  # loads — no refusal here
+        with pytest.raises(ConfigError, match="requires --spec-prefix"):
+            cfg.resolve_stage_files()
+        (tmp_path / "spec-runner.config.yaml").write_text("spec_profile: workstream\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["spec-runner", "spec", "status"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert "requires --spec-prefix" in str(exc.value)
+
+    @pytest.mark.parametrize("path", ["a{b.md", "a}b.md", "a{{prefix}}.md"])
+    def test_a_stray_brace_is_refused_at_load(self, tmp_path, path):
+        _write_profile(
+            tmp_path,
+            "workstream",
+            WORKSTREAM.replace("workstreams/{ws}/spec/30-decomposition.md", path),
+        )
+        with pytest.raises(ProfileError, match="brace"):
+            load_profile("workstream", tmp_path)
+
+    def test_an_external_path_on_the_fixed_tasks_file_is_refused(self, tmp_path):
+        """A profile without a `tasks` stage still has `config.tasks_file`:
+        `run` writes there, so an external stage must not live on it."""
+        _write_profile(
+            tmp_path,
+            "solo",
+            "name: solo\nstages:\n  - name: decomposition\n    external: true\n"
+            '    path: "spec/{prefix}tasks.md"\n',
+        )
+        cfg = ExecutorConfig(project_root=tmp_path, spec_prefix="ws-", spec_profile="solo")
+        with pytest.raises(ConfigError, match="tasks_file"):
+            cfg.resolve_stage_files()

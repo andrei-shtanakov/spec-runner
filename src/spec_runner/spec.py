@@ -131,24 +131,39 @@ def load_profile(name: str, project_root: Path | None = None) -> StageProfile:
         raw = bundled.read_text(encoding="utf-8")
     else:
         raise ValueError(f"unknown stage profile: {name!r}")
-    data = yaml.safe_load(raw) or {}
+    try:
+        data = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as exc:
+        raise ProfileError(f"profile {name!r}: not valid YAML — {exc}") from exc
     if not isinstance(data, dict):
         raise ProfileError(f"profile {name!r} is not a mapping")
-    stages = tuple(_stage_def_from(s, name) for s in data.get("stages", []))
+    raw_stages = data.get("stages", [])
+    if not isinstance(raw_stages, list) or not all(isinstance(x, dict) for x in raw_stages):
+        raise ProfileError(f"profile {name!r}: `stages` must be a list of mappings")
+    stages = tuple(_stage_def_from(s, name) for s in raw_stages)
     profile = StageProfile(name=str(data.get("profile") or data.get("name") or name), stages=stages)
     validate_profile_graph(profile)
     return profile
 
 
 def _stage_def_from(s: dict, profile: str) -> StageDef:
-    """One stage entry → :class:`StageDef`, enforcing the #338 field rules."""
+    """One stage entry → :class:`StageDef`, enforcing the #338 field rules.
+
+    A hand-written profile reaches here now, so a missing key or a wrong type
+    is a :class:`ProfileError` naming the profile, never a bare ``KeyError``.
+    """
+    if "name" not in s:
+        raise ProfileError(f"profile {profile!r}: a stage has no `name`")
     name = s["name"]
     external = bool(s.get("external", False))
     path = s.get("path")
     # Accept both spellings; ``requires`` is the M4 canonical key,
     # ``upstream`` the historical one.
-    upstream = tuple(s.get("requires") or s.get("upstream") or ())
+    declared_upstream = s.get("requires") or s.get("upstream") or []
     where = f"stage {name!r} in profile {profile!r}"
+    if not isinstance(declared_upstream, list):
+        raise ProfileError(f"{where}: `upstream`/`requires` must be a list")
+    upstream = tuple(str(u) for u in declared_upstream)
     if external:
         if not path:
             raise ProfileError(f"{where}: an external stage must declare `path`")
@@ -162,6 +177,9 @@ def _stage_def_from(s: dict, profile: str) -> StageDef:
         return StageDef(name=name, upstream=upstream, path=path, external=True)
     if path is not None:
         raise ProfileError(f"{where}: `path` is allowed only on an external stage in this release")
+    missing = [k for k in ("template", "marker_prefix", "validator") if k not in s]
+    if missing:
+        raise ProfileError(f"{where}: missing {', '.join(missing)}")
     return StageDef(
         name=name,
         template=s["template"],
@@ -176,6 +194,10 @@ def _check_path_template(path: str, where: str) -> None:
     unknown = [p for p in _PLACEHOLDER.findall(path) if p not in _KNOWN_PLACEHOLDERS]
     if unknown:
         raise ProfileError(f"{where}: unknown placeholder {{{unknown[0]}}} in path {path!r}")
+    # A brace left once the known placeholders are removed is unbalanced or
+    # escaped (`{{`); `str.format` would misread it, so it is refused here.
+    if "{" in _PLACEHOLDER.sub("", path) or "}" in _PLACEHOLDER.sub("", path):
+        raise ProfileError(f"{where}: unbalanced or stray brace in path {path!r}")
     if Path(path).is_absolute():
         raise ProfileError(f"{where}: path {path!r} must be relative to the project root")
 
@@ -713,8 +735,19 @@ def resolve_stage_paths(profile: StageProfile, config: ExecutorConfig) -> dict[s
             )
         out[sd.name] = resolved
     seen: dict[Path, str] = {}
+    # The fixed stage files the execution side writes (#338 review): an
+    # external stage must not land on one even when the profile does not
+    # declare that stage.
+    for label in ("tasks_file", "requirements_file", "design_file"):
+        fixed = getattr(config, label, None)
+        if fixed is not None:
+            seen.setdefault(Path(fixed).resolve(), f"config.{label}")
     for name, p in out.items():
         key = p.resolve()
+        owner = seen.get(key)
+        if owner is not None and owner.startswith("config.") and not _is_external(profile, name):
+            # A managed stage on its own fixed file is the normal case.
+            continue
         if key in seen:
             raise ProfileError(
                 f"stages {seen[key]!r} and {name!r} resolve to the same file ({key}); "
@@ -722,6 +755,11 @@ def resolve_stage_paths(profile: StageProfile, config: ExecutorConfig) -> dict[s
             )
         seen[key] = name
     return out
+
+
+def _is_external(profile: StageProfile, name: str) -> bool:
+    sd = profile.get(name)
+    return sd is not None and sd.external
 
 
 def stage_path(config: ExecutorConfig, stage: str, profile: StageProfile | None = None) -> Path:
@@ -736,9 +774,13 @@ def stage_path(config: ExecutorConfig, stage: str, profile: StageProfile | None 
     comes from its declared ``path``, resolved against the project root.
     """
     graph = profile if profile is not None else _profile_for(config)
-    sd = graph.get(stage) if graph is not None else None
-    if graph is not None and sd is not None and sd.external:
-        return resolve_stage_paths(graph, config)[stage]
+    # With an external stage in the profile every stage path goes through the
+    # checks (#338 §4.2): no stage file is read or written before a collision
+    # or an escape is refused.
+    if graph is not None and any(sd.external for sd in graph.stages):
+        paths = resolve_stage_paths(graph, config)
+        if stage in paths:
+            return paths[stage]
     return _default_stage_path(config, stage)
 
 
