@@ -1242,7 +1242,7 @@ tasks-артефакта и семь раундов подряд честно н
       Смежное: единица бюджета —
       `docs/plans/2026-09-01-token-accounting-proposals.md`.
 
-- [ ] **repo-local-stage-profiles** (spec-runner#338, from devtools) @owner:github:andrei-shtanakov @id:repo-local-stage-profiles @epic:eco.spec-toolchain
+- [x] **repo-local-stage-profiles** (spec-runner#338, from devtools) @owner:github:andrei-shtanakov @id:repo-local-stage-profiles @epic:eco.spec-toolchain
       `load_profile` читает только bundled `profiles/*.yaml`, `stage_path`
       жёстко `spec/<prefix><stage>.md`; `spec approve tasks` деривит
       `traces_to` из вшитого lite и дописывает несуществующий `design`.
@@ -1252,8 +1252,12 @@ tasks-артефакта и семь раундов подряд честно н
       `traces_to: [behaviour-spec]` и пинует `upstream_hashes` на этот файл
       без пост-обработки. Дизайн-объём: трогает `spec.py`, `prompt.py`,
       `validate.py` — все три читают стадии из профиля (C1).
+      **Сделано 2026-09-23** (PR #589, `125ab40`): `spec/profiles/*.yaml`,
+      стадия `external: true` + `path` (`{prefix}`/`{ws}`), допуск внешнего
+      upstream при approve/adopt, во внешний файл не пишем. Внедрение у
+      devtools — devtools#386 (их решение, не наше ожидание).
 
-- [ ] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard @epic:eco.spec-toolchain
+- [x] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard @epic:eco.spec-toolchain
       Минимум из запроса частично есть: `validate` сообщает о несуществующем
       файле в группе `verify_first` (`validate.py:745`) — но как
       **предупреждение**, а не отказ: рабочее дерево ≠ коммит, который
@@ -1262,6 +1266,10 @@ tasks-артефакта и семь раундов подряд честно н
       `delivers` задачи), иначе отказ на валидации с именем сценария, а не
       сожжённый прогон. Боевой случай: 11 из 14 сценариев семи verify-задач
       не были покрыты ничем, валидация прошла.
+      **Сделано 2026-09-24** (PR #590, `4d10e5b`): поле `**Scenarios:**`;
+      непокрытый сценарий на коммите входного прогона — терминальный отказ
+      до первого платного вызова (не на validate: он судит дерево, FR-07);
+      validate предупреждает. Вывод поля мостом — devtools#388.
 
 - [x] **format-doc-verify-first-waiver** @owner:github:andrei-shtanakov @id:format-doc-verify-first-waiver @epic:eco.spec-toolchain
       Найдено при закрытии #335: `**Mode:** verify_first` и `**TDD-waiver:**`
