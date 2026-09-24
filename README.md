@@ -281,6 +281,36 @@ fails with a clear error listing the available profiles. Profiles live in
 `src/spec_runner/profiles/*.yaml`, each stage declaring its template, marker
 prefix, validator, and upstream stages.
 
+**Repo-local profiles and external stages (#338).** A repository may declare
+its own profile in `spec/profiles/<name>.yaml` (a name that is also bundled is
+refused, never shadowed). A stage marked `external: true` is produced outside
+spec-runner — for example a devtools bundle node — and declares where it
+lives:
+
+```yaml
+name: workstream
+stages:
+  - name: decomposition
+    external: true
+    path: "workstreams/{ws}/spec/30-decomposition.md"   # {prefix}, {ws} = prefix minus trailing "-"
+    upstream: []
+  - name: tasks
+    template: tasks.template.md
+    marker_prefix: SPEC_TASKS
+    validator: tasks
+    upstream: [decomposition]
+```
+
+`spec approve tasks --profile workstream --spec-prefix <ws>-` then traces and
+pins the external file (`traces_to: [decomposition, …]`, `upstream_hashes`
+on its bytes) and admits approval only when that file exists and, if its
+frontmatter has `status`, it is `approved`; malformed frontmatter is an error.
+spec-runner never generates, validates, approves or writes an external
+stage — `spec status` lists it as `external`, and `plan --gated` waits for
+it. `path` is allowed only on external stages; no two stages may resolve to
+the same file (symlinks included). Stage names on the CLI come from the
+resolved profile.
+
 > **Guardrail, not an enforcement boundary.** `strict` mode only blocks tasks.md
 > files that carry gated-spec frontmatter. Deleting the frontmatter (or never
 > adopting it) makes the file "unmanaged," which always passes the gate for

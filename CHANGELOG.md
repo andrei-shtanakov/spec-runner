@@ -12,6 +12,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Repo-local stage profiles and external stages (#338).** Profiles may live
+  in `spec/profiles/<name>.yaml`; a name that is also bundled is refused. A
+  stage may be `external: true` with a `path` (`{prefix}`, `{ws}`), resolved
+  against the project root and never allowed to share a file with another
+  stage (symlinks resolved). An external upstream admits `spec approve` of
+  its downstream — and an `approved` `spec adopt`, which otherwise adopts as
+  draft (`--force` does not lift it) — when its file exists and its
+  frontmatter `status`, if any, is `approved`; the closing `---` is a whole
+  line; malformed frontmatter is refused with the YAML error.
+  spec-runner never writes an external stage: `approve`/`reject`/`adopt`/
+  `check`/`plan --gated` refuse it as a target, `spec status` shows it as
+  `external`, `plan --gated` reports `waiting`, and the stale cascade skips
+  it. Traces and pins follow the declared path, so a devtools workstream
+  gets `traces_to: [decomposition]` and a pin on the bundle node without
+  post-processing. Stage names on the CLI now come from the resolved
+  profile; a graph error in a profile is reported as one instead of as an
+  unknown profile. `lite` is unchanged. Minor.
+
 - **The budget from the environment (#388).** `SPEC_RUNNER_BUDGET_USD` and
   `SPEC_RUNNER_TASK_BUDGET_USD` set `budget_usd` / `task_budget_usd`, with
   CLI flag > environment > config file > default. A cap in an untracked

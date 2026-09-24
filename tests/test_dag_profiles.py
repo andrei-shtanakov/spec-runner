@@ -212,7 +212,7 @@ class TestResolveSpecProfileGraphError:
         from spec_runner import spec as spec_mod
         from spec_runner.config import ConfigError, ExecutorConfig
 
-        def _raise(_name):
+        def _raise(_name, _project_root=None):
             raise spec_mod.ProfileGraphError("dependency cycle through 'b'")
 
         monkeypatch.setattr(spec_mod, "load_profile", _raise)

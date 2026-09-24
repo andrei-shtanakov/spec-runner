@@ -42,11 +42,15 @@ class StageDef:
     """
 
     name: str
-    template: str
-    marker_prefix: str
-    validator_key: str
+    template: str = ""
+    marker_prefix: str = ""
+    validator_key: str = ""
     upstream: tuple[str, ...] = ()
     prompt_text: str = ""
+    #: #338: a stage produced outside spec-runner. It has a ``path`` and no
+    #: template/marker/validator; spec-runner reads it, never writes it.
+    path: str | None = None
+    external: bool = False
 
     @property
     def requires(self) -> tuple[str, ...]:
@@ -75,49 +79,135 @@ class StageProfile:
         """Return ``{stage: direct requires}`` for every stage."""
         return {s.name: s.upstream for s in self.stages}
 
-
-def load_profile(name: str) -> StageProfile:
-    """Load a bundled stage profile by name from ``spec_runner/profiles``.
-
-    Args:
-        name: Profile name (e.g. ``"lite"``); resolves ``profiles/{name}.yaml``.
-
-    Returns:
-        The parsed :class:`StageProfile`.
-
-    Raises:
-        ValueError: If the profile file cannot be found.
-    """
-    resource = files("spec_runner") / "profiles" / f"{name}.yaml"
-    try:
-        raw = resource.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError) as exc:
-        raise ValueError(f"unknown stage profile: {name!r}") from exc
-    data = yaml.safe_load(raw) or {}
-    stages = tuple(
-        StageDef(
-            name=s["name"],
-            template=s["template"],
-            marker_prefix=s["marker_prefix"],
-            validator_key=s["validator"],
-            # Accept both spellings; ``requires`` is the M4 canonical key,
-            # ``upstream`` the historical one.
-            upstream=tuple(s.get("requires") or s.get("upstream") or ()),
-            prompt_text=s.get("prompt_text", ""),
-        )
-        for s in data.get("stages", [])
-    )
-    profile = StageProfile(name=data.get("profile", name), stages=stages)
-    validate_profile_graph(profile)
-    return profile
+    def get(self, name: str) -> StageDef | None:
+        """The stage named ``name``, or None."""
+        return next((s for s in self.stages if s.name == name), None)
 
 
-class ProfileGraphError(ValueError):
+_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
+_KNOWN_PLACEHOLDERS = frozenset({"prefix", "ws"})
+
+
+class ProfileError(ValueError):
+    """A profile was found but its content is refused (#338): stage fields,
+    placeholders, name shadowing, file collisions."""
+
+
+class ProfileGraphError(ProfileError):
     """A profile exists but its ``requires`` graph is invalid (cycle/unknown ref).
 
     Distinct from the "profile not found" ``ValueError`` so callers can tell a
     genuine graph error from an unknown-profile-name error (M4).
     """
+
+
+def _local_profiles_dir(project_root: Path | None) -> Path | None:
+    return None if project_root is None else Path(project_root) / "spec" / "profiles"
+
+
+def load_profile(name: str, project_root: Path | None = None) -> StageProfile:
+    """Load profile ``name`` from ``<project_root>/spec/profiles`` or the bundle.
+
+    A name found in both places is refused (#338): there is no precedence to
+    remember.
+
+    Raises:
+        ValueError: The name exists nowhere ("unknown stage profile").
+        ProfileError: The profile exists but is refused (fields, graph, shadowing).
+    """
+    bundled = files("spec_runner") / "profiles" / f"{name}.yaml"
+    local_dir = _local_profiles_dir(project_root)
+    local = local_dir / f"{name}.yaml" if local_dir is not None else None
+    bundled_exists = bundled.is_file()
+    local_exists = local is not None and local.is_file()
+    if bundled_exists and local_exists:
+        raise ProfileError(
+            f"profile {name!r} exists in spec/profiles/ and is bundled; rename the local one"
+        )
+    if local_exists:
+        assert local is not None
+        raw = local.read_text(encoding="utf-8")
+    elif bundled_exists:
+        raw = bundled.read_text(encoding="utf-8")
+    else:
+        raise ValueError(f"unknown stage profile: {name!r}")
+    try:
+        data = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as exc:
+        raise ProfileError(f"profile {name!r}: not valid YAML — {exc}") from exc
+    if not isinstance(data, dict):
+        raise ProfileError(f"profile {name!r} is not a mapping")
+    raw_stages = data.get("stages", [])
+    if not isinstance(raw_stages, list) or not all(isinstance(x, dict) for x in raw_stages):
+        raise ProfileError(f"profile {name!r}: `stages` must be a list of mappings")
+    stages = tuple(_stage_def_from(s, name) for s in raw_stages)
+    seen_names: set[str] = set()
+    for sd in stages:
+        # One name, one stage (#338 acceptance review): `get` answers the first
+        # declaration and the path map the last, so a repeat let a command aimed
+        # at the managed stage write into the external one's file.
+        if sd.name in seen_names:
+            raise ProfileError(f"profile {name!r}: stage {sd.name!r} is declared more than once")
+        seen_names.add(sd.name)
+    profile = StageProfile(name=str(data.get("profile") or data.get("name") or name), stages=stages)
+    validate_profile_graph(profile)
+    return profile
+
+
+def _stage_def_from(s: dict, profile: str) -> StageDef:
+    """One stage entry → :class:`StageDef`, enforcing the #338 field rules.
+
+    A hand-written profile reaches here now, so a missing key or a wrong type
+    is a :class:`ProfileError` naming the profile, never a bare ``KeyError``.
+    """
+    if "name" not in s:
+        raise ProfileError(f"profile {profile!r}: a stage has no `name`")
+    name = s["name"]
+    external = bool(s.get("external", False))
+    path = s.get("path")
+    # Accept both spellings; ``requires`` is the M4 canonical key,
+    # ``upstream`` the historical one.
+    declared_upstream = s.get("requires") or s.get("upstream") or []
+    where = f"stage {name!r} in profile {profile!r}"
+    if not isinstance(declared_upstream, list):
+        raise ProfileError(f"{where}: `upstream`/`requires` must be a list")
+    upstream = tuple(str(u) for u in declared_upstream)
+    if external:
+        if not path:
+            raise ProfileError(f"{where}: an external stage must declare `path`")
+        declared = [k for k in ("template", "marker_prefix", "validator") if k in s]
+        if declared:
+            raise ProfileError(
+                f"{where}: an external stage must not declare {', '.join(declared)} — "
+                "it is never generated or validated here"
+            )
+        _check_path_template(path, where)
+        return StageDef(name=name, upstream=upstream, path=path, external=True)
+    if path is not None:
+        raise ProfileError(f"{where}: `path` is allowed only on an external stage in this release")
+    missing = [k for k in ("template", "marker_prefix", "validator") if k not in s]
+    if missing:
+        raise ProfileError(f"{where}: missing {', '.join(missing)}")
+    return StageDef(
+        name=name,
+        template=s["template"],
+        marker_prefix=s["marker_prefix"],
+        validator_key=s["validator"],
+        upstream=upstream,
+        prompt_text=s.get("prompt_text", ""),
+    )
+
+
+def _check_path_template(path: str, where: str) -> None:
+    unknown = [p for p in _PLACEHOLDER.findall(path) if p not in _KNOWN_PLACEHOLDERS]
+    if unknown:
+        raise ProfileError(f"{where}: unknown placeholder {{{unknown[0]}}} in path {path!r}")
+    # A brace left once the known placeholders are removed is unbalanced or
+    # escaped (`{{`); `str.format` would misread it, so it is refused here.
+    if "{" in _PLACEHOLDER.sub("", path) or "}" in _PLACEHOLDER.sub("", path):
+        raise ProfileError(f"{where}: unbalanced or stray brace in path {path!r}")
+    if Path(path).is_absolute():
+        raise ProfileError(f"{where}: path {path!r} must be relative to the project root")
 
 
 def validate_profile_graph(profile: StageProfile) -> None:
@@ -131,7 +221,7 @@ def validate_profile_graph(profile: StageProfile) -> None:
     for stage, deps in edges.items():
         for dep in deps:
             if dep not in names:
-                raise ValueError(
+                raise ProfileGraphError(
                     f"stage {stage!r} requires unknown stage {dep!r} in profile {profile.name!r}"
                 )
 
@@ -143,7 +233,9 @@ def validate_profile_graph(profile: StageProfile) -> None:
         color[node] = GREY
         for dep in edges.get(node, ()):
             if color[dep] == GREY:
-                raise ValueError(f"dependency cycle through {dep!r} in profile {profile.name!r}")
+                raise ProfileGraphError(
+                    f"dependency cycle through {dep!r} in profile {profile.name!r}"
+                )
             if color[dep] == WHITE:
                 visit(dep)
         color[node] = BLACK
@@ -153,12 +245,13 @@ def validate_profile_graph(profile: StageProfile) -> None:
             visit(node)
 
 
-def available_profiles() -> list[str]:
-    """Return the sorted names of bundled stage profiles (``profiles/*.yaml``)."""
+def available_profiles(project_root: Path | None = None) -> list[str]:
+    """Sorted names of bundled profiles plus ``<project_root>/spec/profiles``."""
     prof_dir = files("spec_runner") / "profiles"
-    names = [
-        entry.name[: -len(".yaml")] for entry in prof_dir.iterdir() if entry.name.endswith(".yaml")
-    ]
+    names = {e.name[: -len(".yaml")] for e in prof_dir.iterdir() if e.name.endswith(".yaml")}
+    local_dir = _local_profiles_dir(project_root)
+    if local_dir is not None and local_dir.is_dir():
+        names |= {p.stem for p in local_dir.glob("*.yaml")}
     return sorted(names)
 
 
@@ -559,6 +652,12 @@ def resolve_next_stage(
     for stage in names:
         m = metas.get(stage)
         if m is None:
+            # #338: an external stage is never generated here; not admitted
+            # means spec-runner waits for whoever produces it.
+            if isinstance(graph, StageProfile):
+                sd = graph.get(stage)
+                if sd is not None and sd.external:
+                    return ("waiting", stage)
             deps = edges.get(stage, ()) if edges is not None else ()
             if edges is None or _deps_satisfied(deps, metas):
                 return ("generate", stage)
@@ -607,7 +706,71 @@ def stage_readiness(
     return result
 
 
-def stage_path(config: ExecutorConfig, stage: str) -> Path:
+def _default_stage_path(config: ExecutorConfig, stage: str) -> Path:
+    return config.spec_dir / f"{config.spec_prefix}{stage}.md"
+
+
+def resolve_stage_paths(profile: StageProfile, config: ExecutorConfig) -> dict[str, Path]:
+    """Every stage's file, with #338's rules applied (design §4, §4.2).
+
+    External paths: placeholders substituted, resolved against
+    ``project_root`` (never ``spec_dir``), required to stay inside it. Then no
+    two stages may resolve to the same file — an external path landing on a
+    managed stage's file would let ``plan``/``approve`` write into it.
+
+    Raises:
+        ProfileError: An empty prefix under a placeholder, an escape from the
+            project, or two stages sharing a file.
+    """
+    root = Path(config.project_root).resolve()
+    prefix = config.spec_prefix or ""
+    ws = prefix[:-1] if prefix.endswith("-") else prefix
+    out: dict[str, Path] = {}
+    for sd in profile.stages:
+        if not sd.external:
+            out[sd.name] = _default_stage_path(config, sd.name)
+            continue
+        assert sd.path is not None
+        if _PLACEHOLDER.search(sd.path) and not prefix:
+            raise ProfileError(
+                f"stage {sd.name!r}: path {sd.path!r} uses a placeholder, which "
+                "requires --spec-prefix"
+            )
+        resolved = (root / sd.path.format(prefix=prefix, ws=ws)).resolve()
+        if not resolved.is_relative_to(root):
+            raise ProfileError(
+                f"stage {sd.name!r}: path {sd.path!r} resolves outside the project ({resolved})"
+            )
+        out[sd.name] = resolved
+    seen: dict[Path, str] = {}
+    # The fixed stage files the execution side writes (#338 review): an
+    # external stage must not land on one even when the profile does not
+    # declare that stage.
+    for label in ("tasks_file", "requirements_file", "design_file"):
+        fixed = getattr(config, label, None)
+        if fixed is not None:
+            seen.setdefault(Path(fixed).resolve(), f"config.{label}")
+    for name, p in out.items():
+        key = p.resolve()
+        owner = seen.get(key)
+        if owner is not None and owner.startswith("config.") and not _is_external(profile, name):
+            # A managed stage on its own fixed file is the normal case.
+            continue
+        if key in seen:
+            raise ProfileError(
+                f"stages {seen[key]!r} and {name!r} resolve to the same file ({key}); "
+                "an external stage must not share a file with any other stage"
+            )
+        seen[key] = name
+    return out
+
+
+def _is_external(profile: StageProfile, name: str) -> bool:
+    sd = profile.get(name)
+    return sd is not None and sd.external
+
+
+def stage_path(config: ExecutorConfig, stage: str, profile: StageProfile | None = None) -> Path:
     """Map a stage name to its spec file path via the ``spec/<prefix><name>.md``
     convention (M4).
 
@@ -615,9 +778,127 @@ def stage_path(config: ExecutorConfig, stage: str) -> Path:
     (``requirements`` / ``design`` / ``tasks`` all follow this convention on
     ``config``), and it now resolves custom-profile stage names too. Builds
     on ``config.spec_dir`` so a change-scoped config (``--change``, M2)
-    redirects stages into ``spec/changes/<id>/``.
+    redirects stages into ``spec/changes/<id>/``. An external stage (#338)
+    comes from its declared ``path``, resolved against the project root.
     """
-    return config.spec_dir / f"{config.spec_prefix}{stage}.md"
+    graph = profile if profile is not None else _profile_for(config)
+    # With an external stage in the profile every stage path goes through the
+    # checks (#338 §4.2): no stage file is read or written before a collision
+    # or an escape is refused.
+    if graph is not None and any(sd.external for sd in graph.stages):
+        paths = resolve_stage_paths(graph, config)
+        if stage in paths:
+            return paths[stage]
+    return _default_stage_path(config, stage)
+
+
+class ExternalStageError(Exception):
+    """An external stage's file cannot be read the way admission needs (#338)."""
+
+
+def read_frontmatter_strict(path: Path) -> dict | None:
+    """The leading frontmatter mapping; None when there is none.
+
+    Unlike :func:`split_frontmatter`, a block that is not valid YAML or not a
+    mapping raises instead of reading as "no frontmatter" — for an external
+    stage that would silently turn "malformed" into "no status" (#338 §6).
+    """
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if lines[0].rstrip() != _FM_DELIM:
+        return None
+    # The closing delimiter is a whole line (#338 acceptance review): a YAML
+    # key that merely starts with `---` must not end the block, or whatever
+    # follows it — `status: draft` — silently drops out.
+    closing = next((i for i in range(1, len(lines)) if lines[i].rstrip() == _FM_DELIM), None)
+    if closing is None:
+        raise ExternalStageError(f"{path}: malformed frontmatter — no closing `---`")
+    block = "\n".join(lines[1:closing])
+    try:
+        loaded = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        raise ExternalStageError(f"{path}: malformed frontmatter — {exc}") from exc
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ExternalStageError(f"{path}: malformed frontmatter — not a mapping")
+    return loaded
+
+
+def external_admission(config: ExecutorConfig, profile: StageProfile, stage: str) -> str | None:
+    """None when external ``stage`` admits its downstream; otherwise why not.
+
+    The rule (#338 §6): the file exists; if its frontmatter carries
+    ``status`` it must be ``approved``; no ``status`` means existence
+    suffices; malformed frontmatter refuses. Reads only — spec-runner never
+    writes an external stage.
+    """
+    path = stage_path(config, stage, profile)
+    if not path.exists():
+        return f"external upstream {stage!r} not found at {path}"
+    if not path.is_file():
+        return f"external upstream {stage!r} at {path} is not a file"
+    try:
+        meta = read_frontmatter_strict(path)
+    except ExternalStageError as exc:
+        return f"external upstream {stage!r}: {exc}"
+    if meta is not None and "status" in meta and meta["status"] != "approved":
+        return f"external upstream {stage!r} has status {meta['status']!r}, not 'approved'"
+    return None
+
+
+def external_upstream_refusal(
+    config: ExecutorConfig, profile: StageProfile, stage: str
+) -> str | None:
+    """The first refusal among ``stage``'s **external** direct upstreams."""
+    sd = profile.get(stage)
+    for up in sd.upstream if sd is not None else ():
+        up_def = profile.get(up)
+        if up_def is not None and up_def.external:
+            refusal = external_admission(config, profile, up)
+            if refusal is not None:
+                return refusal
+    return None
+
+
+def profile_metas(config: ExecutorConfig, profile: StageProfile) -> dict[str, SpecMeta | None]:
+    """Per-stage metas for ``profile`` (#338).
+
+    An external stage reads as a synthetic ``approved`` meta when admitted
+    and None otherwise, so readiness, next-stage and gates keep their logic.
+    Nothing is written.
+    """
+    names = profile.names()
+    out: dict[str, SpecMeta | None] = {}
+    for sd in profile.stages:
+        if sd.external:
+            admitted = external_admission(config, profile, sd.name) is None
+            out[sd.name] = (
+                SpecMeta(spec_stage=sd.name, status="approved", version=1) if admitted else None
+            )
+        else:
+            out[sd.name] = read_spec_meta(stage_path(config, sd.name, profile), names)
+    return out
+
+
+def external_status_line(config: ExecutorConfig, profile: StageProfile, stage: str) -> str:
+    """What ``spec status`` shows for an external stage (#338)."""
+    path = stage_path(config, stage, profile)
+    if not path.is_file():
+        return "missing"
+    try:
+        meta = read_frontmatter_strict(path)
+    except ExternalStageError:
+        return "malformed frontmatter"
+    if meta and "status" in meta:
+        return f"status: {meta['status']}"
+    return "present"
+
+
+def _profile_for(config: ExecutorConfig) -> StageProfile | None:
+    """The config's profile, or None when it cannot be resolved here (a bare
+    config stand-in in a test)."""
+    resolver = getattr(config, "resolve_spec_profile", None)
+    return resolver() if resolver is not None else None
 
 
 def _spec_lock(config: ExecutorConfig) -> ExecutorLock:
@@ -642,6 +923,9 @@ def mark_downstream_stale(
     """
     names, _ = _order_and_edges(graph)
     for ds in downstream_stages(stage, graph):
+        # #338: never write into an external stage's file.
+        if isinstance(graph, StageProfile) and (sd := graph.get(ds)) is not None and sd.external:
+            continue
         ds_path = stage_path(config, ds)
         ds_meta = read_spec_meta(ds_path, names)
         if ds_meta is not None and ds_meta.status != "stale":

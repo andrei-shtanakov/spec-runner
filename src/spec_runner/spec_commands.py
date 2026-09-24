@@ -13,6 +13,9 @@ from .spec import (
     SpecMeta,
     StageProfile,
     apply_approval,
+    external_status_line,
+    external_upstream_refusal,
+    profile_metas,
     read_spec_body,
     read_spec_meta,
     resolve_next_stage,
@@ -49,6 +52,15 @@ def _profile(config: ExecutorConfig) -> StageProfile:
     return config.resolve_spec_profile()
 
 
+def _refuse_external(config: ExecutorConfig, stage: str) -> int | None:
+    """1 (after printing why) when ``stage`` is external, else None (#338)."""
+    sd = _profile(config).get(stage)
+    if sd is not None and sd.external:
+        print(f"⛔ {stage} is external — produced outside spec-runner; nothing to do here")
+        return 1
+    return None
+
+
 def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
     """Stage names of the configured profile, for profile-aware meta reads."""
     return _profile(config).names()
@@ -56,8 +68,7 @@ def _stage_names(config: ExecutorConfig) -> tuple[str, ...]:
 
 def _metas(config: ExecutorConfig) -> dict[str, SpecMeta | None]:
     """Read the frontmatter meta for every stage in the configured profile."""
-    names = _stage_names(config)
-    return {stage: read_spec_meta(stage_path(config, stage), names) for stage in names}
+    return profile_metas(config, _profile(config))
 
 
 def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
@@ -65,6 +76,10 @@ def cmd_spec_status(args: argparse.Namespace, config: ExecutorConfig) -> int:
     profile = config.resolve_spec_profile()
     metas = _metas(config)
     for stage in profile.names():
+        sd = profile.get(stage)
+        if sd is not None and sd.external:
+            print(f"{stage:12} external  {external_status_line(config, profile, stage)}")
+            continue
         meta = metas[stage]
         if meta is None:
             print(f"{stage:12} —        unmanaged")
@@ -85,11 +100,18 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
     last ``check``/``adopt`` stamped the cache.
     """
     stage = args.stage
+    refused = _refuse_external(config, stage)
+    if refused is not None:
+        return refused
     path = stage_path(config, stage)
     meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
         print(f"{stage}: unmanaged (no frontmatter); run `spec adopt` first")
         return 2
+    upstream_refusal = external_upstream_refusal(config, _profile(config), stage)
+    if upstream_refusal is not None:
+        print(f"⛔ {stage}: not approved — {upstream_refusal}")
+        return 1
     result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
     if verdict == "fail":
@@ -107,6 +129,9 @@ def cmd_spec_approve(args: argparse.Namespace, config: ExecutorConfig) -> int:
 def cmd_spec_reject(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Reopen ``args.stage`` as ``draft``."""
     stage = args.stage
+    refused = _refuse_external(config, stage)
+    if refused is not None:
+        return refused
     path = stage_path(config, stage)
     meta = read_spec_meta(path, _stage_names(config))
     if meta is None:
@@ -127,6 +152,9 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
     silently stamps APPROVED over an invalid spec.
     """
     stage = args.stage
+    refused = _refuse_external(config, stage)
+    if refused is not None:
+        return refused
     path = stage_path(config, stage)
     if not path.exists():
         print(f"{stage}: no file to adopt at {path}")
@@ -136,7 +164,14 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
     result = validate_spec_stage(stage, config, _profile(config))
     verdict = verdict_from_result(result)
     force = getattr(args, "force", False)
-    if verdict == "fail" and not force:
+    # `adopt` is the other door into APPROVED (#338 acceptance review): an
+    # external upstream that does not admit approval keeps it a draft, and
+    # `--force` does not lift that — it waives validation, not admission.
+    upstream_refusal = external_upstream_refusal(config, _profile(config), stage)
+    if upstream_refusal is not None:
+        status = "draft"
+        print(f"{stage}: {upstream_refusal} → adopted as DRAFT (approve once it is admitted)")
+    elif verdict == "fail" and not force:
         status = "draft"
         print(f"{stage}: validation failed → adopted as DRAFT (fix + approve)")
     else:
@@ -168,6 +203,9 @@ def cmd_spec_adopt(args: argparse.Namespace, config: ExecutorConfig) -> int:
 def cmd_spec_check(args: argparse.Namespace, config: ExecutorConfig) -> int:
     """Refresh the cached ``validation`` field for ``args.stage``."""
     stage = args.stage
+    refused = _refuse_external(config, stage)
+    if refused is not None:
+        return refused
     path = stage_path(config, stage)
     meta = read_spec_meta(path, _stage_names(config))
     if meta is None:

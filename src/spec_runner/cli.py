@@ -826,6 +826,28 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
 BUDGETED_COMMANDS = frozenset({"run", "retry", "watch"})
 
 
+def _check_stage_name(config: ExecutorConfig, stage: str | None) -> None:
+    """Stage names come from the resolved profile (#338), not a fixed list."""
+    if stage is None:
+        return
+    names = config.resolve_spec_profile().names()
+    if stage not in names:
+        raise SystemExit(
+            f"⛔ unknown stage {stage!r}; profile {config.spec_profile!r} has: {', '.join(names)}"
+        )
+
+
+def _check_stage_files(config: ExecutorConfig) -> None:
+    """Stage path rules (#338 §4.2), checked by the commands that touch stage
+    files — a `⛔` line, never a traceback."""
+    from .config import ConfigError
+
+    try:
+        config.resolve_stage_files()
+    except ConfigError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
+
+
 def _announce_budget(config: ExecutorConfig) -> None:
     """One stderr line naming the caps and where they came from (#388).
 
@@ -2072,9 +2094,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     plan_parser.add_argument(
         "--stage",
-        choices=["requirements", "design", "tasks"],
         default=None,
-        help="Stage to generate with --gated (default: auto-resolved next stage)",
+        help=(
+            "Stage to generate with --gated (default: auto-resolved next stage); "
+            "names come from the profile"
+        ),
     )
     plan_parser.add_argument(
         "--no-interactive",
@@ -2421,22 +2445,22 @@ def _build_parser() -> argparse.ArgumentParser:
     spec_approve = spec_sub.add_parser(
         "approve", parents=[profile_parent, common], help="Approve a spec stage"
     )
-    spec_approve.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_approve.add_argument("stage", help="Stage name from the configured profile")
 
     spec_reject = spec_sub.add_parser(
         "reject", parents=[profile_parent, common], help="Reopen a spec stage as draft"
     )
-    spec_reject.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_reject.add_argument("stage", help="Stage name from the configured profile")
 
     spec_check = spec_sub.add_parser(
         "check", parents=[profile_parent, common], help="Refresh cached validation for a stage"
     )
-    spec_check.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_check.add_argument("stage", help="Stage name from the configured profile")
 
     spec_adopt = spec_sub.add_parser(
         "adopt", parents=[profile_parent, common], help="Adopt an unmanaged spec file"
     )
-    spec_adopt.add_argument("stage", choices=["requirements", "design", "tasks"])
+    spec_adopt.add_argument("stage", help="Stage name from the configured profile")
     spec_adopt.add_argument(
         "--force", action="store_true", help="Adopt as approved even if validation fails"
     )
@@ -2717,6 +2741,8 @@ def main():
         if args.command == "spec":
             from . import spec_commands
 
+            _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
             handler = {
                 "status": spec_commands.cmd_spec_status,
                 "approve": spec_commands.cmd_spec_approve,
@@ -2729,6 +2755,9 @@ def main():
                 raise SystemExit(spec_commands.cmd_spec_status(args, config))
             raise SystemExit(handler(args, config))
 
+        if args.command == "plan":
+            _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
         cmd_func = commands.get(args.command)
         if cmd_func:
             cmd_func(args, config)
