@@ -245,6 +245,11 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
         if task.verifies_error:
             result.errors.append(f"{task.id}: {task.verifies_error}")
 
+        # #402: same contract as `verifies_error` — marked by `parse_tasks`,
+        # named here, quoted, no traceback.
+        if task.scenarios_error:
+            result.errors.append(f"{task.id}: {task.scenarios_error}")
+
         # --- Warnings ---
         if not task.estimate:
             result.warnings.append(f"{task.id}: missing estimate")
