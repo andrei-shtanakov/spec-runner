@@ -30,6 +30,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
   profile; a graph error in a profile is reported as one instead of as an
   unknown profile. `lite` is unchanged. Minor.
 
+- **Verify-first scenario coverage (#402).** A `verify_first` task may
+  declare `**Scenarios:** BEH-09, BEH-10`. After the live entry run reaches a
+  verdict and before any paid call, every declared id must appear as a whole
+  token in at least one file of the `**Verifies:**` group at the judged
+  commit; otherwise the task is refused terminally (exit 1, no retry),
+  naming the uncovered ids and the files searched. `validate` warns about the
+  same gap in the working tree, about the field outside `verify_first`, and
+  now also about a node id whose file is missing; a malformed line is an
+  error. Tasks without the line are unchanged.
+
 - **The budget from the environment (#388).** `SPEC_RUNNER_BUDGET_USD` and
   `SPEC_RUNNER_TASK_BUDGET_USD` set `budget_usd` / `task_budget_usd`, with
   CLI flag > environment > config file > default. A cap in an untracked

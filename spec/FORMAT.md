@@ -92,6 +92,7 @@ then keep only prefixes that task headers actually use.
 ### TASK-007: Re-verify login after the refactor
 **Mode:** verify_first
 **Verifies:** tests/test_login.py::test_ok, tests/test_login.py::test_locked
+**Scenarios:** BEH-09, BEH-10
 
 ### TASK-008: Pin current login behaviour
 **TDD-waiver:** characterisation · sanction: spec-runner#428
@@ -116,6 +117,17 @@ instead of being mapped to something plausible.
   block form; in the comma form it is refused, not split. Required
   (non-empty) under `verify_first`, and never inferred from `Traces to`,
   filenames or the checklist.
+- `Scenarios` — optional, `verify_first` only: comma-separated scenario ids
+  (`BEH-09`, `BEH-09a`) the `Verifies` group must carry. At the live entry
+  run, before any paid call, every id must appear as a whole token
+  (`BEH-09` does not match `BEH-091`, `BEH-09a` or `TestBEH09`) in at least
+  one of the group's files **as committed**; otherwise the task is refused
+  terminally, naming the uncovered ids. Coverage is per file, not per test,
+  and ids are unqualified: a foreign file carrying its own `BEH-09`
+  satisfies it — the check catches a group that claims nothing about the
+  task's scenarios, not one that claims them falsely. `validate` only
+  warns (the working tree is not the commit); an empty or malformed line is
+  an error. Without the line nothing changes.
 - `TDD-waiver` — `<class> · sanction: <id>`. Valid only on a task whose
   resolved mode is `standard`. It removes the baseline-RED requirement and
   nothing else: active claims and the frozen-files block still apply. The

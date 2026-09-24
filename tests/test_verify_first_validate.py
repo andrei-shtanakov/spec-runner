@@ -97,6 +97,11 @@ class TestAdapterRefusedSelectorRefuses:
             "**Verifies:** tests/test_a.py::test_x, tests/test_b.py\n"
             "Est: 1d\n",
         )
+        # #402 §6: a node id whose file is missing now warns too, so the
+        # accepted selector's file must exist for "only the file target is
+        # flagged" to be the claim under test.
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_a.py").write_text("def test_x():\n    pass\n")
 
         # Hermetic (sr397 review): judged against tmp_path, not whatever cwd
         # pytest happens to run from — "missing" must be a property of the

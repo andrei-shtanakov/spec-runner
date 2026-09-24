@@ -102,6 +102,13 @@ ESTIMATE = re.compile(r"Est: (\d+(?:\.\d+)?(?:[-–]\d+(?:\.\d+)?)?[dh])")
 # along with `validate`), and `validate_task_fields` turns the per-task
 # marker into a named, quoted error.
 VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
+
+# #402: the scenarios a verify_first group must carry. One line,
+# comma-separated, stored as written and judged by `validate` — never
+# guessed. The id shape is BEH-style with the one suffix seen in practice
+# (`BEH-09a`); qualified ids (`<ws>#BEH-09`) are deliberately not accepted.
+SCENARIOS = re.compile(r"\*\*Scenarios:\*\*(.*)$")
+SCENARIO_ID = re.compile(r"[A-Z]+-\d+[a-z]?")
 # The block form's final design (#372, five review rounds — documented here
 # in full so a sixth round doesn't rediscover the same dead ends):
 #
@@ -197,6 +204,20 @@ def _parse_negative_control(declared: str) -> "tuple[NegativeControl | None, str
     return NegativeControl(patch=PurePosixPath(patch), selector=selector), None
 
 
+def _parse_scenarios(line: str, declared: str) -> tuple[list[str] | None, str | None]:
+    """(ids, None) for a valid `**Scenarios:**` line, (None, refusal) otherwise."""
+    items = [item.strip() for item in declared.split(",")]
+    if items == [""]:
+        return None, f"**Scenarios:** line is empty. Declared line: {line!r}"
+    bad = [item for item in items if not SCENARIO_ID.fullmatch(item)]
+    if bad:
+        return None, (
+            f"**Scenarios:** {bad!r} not of the form BEH-09 / BEH-09a "
+            f"(comma-separated [A-Z]+-<digits>[a-z]). Declared line: {line!r}"
+        )
+    return items, None
+
+
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
     """True when splitting ``trailing`` on commas would break a pytest
     parametrize suffix, e.g. ``test_y[a,b]``, into fragments the operator
@@ -290,6 +311,14 @@ class Task:
     #: второй. `parse_tasks` на этом не падает: задача помечается, файл
     #: читается дальше, а называет дефект `validate`.
     negative_control_error: str | None = None
+    #: Scenario ids a verify_first group must carry (#402), in declared
+    #: order; `None` when no `**Scenarios:**` line is present.
+    scenarios: list[str] | None = None
+    #: The `**Scenarios:**` line as written, for quoting.
+    scenarios_raw: str | None = None
+    #: Named refusal when the line is present but unusable; `scenarios` stays
+    #: `None` then, the same split `verifies_error` makes.
+    scenarios_error: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -471,6 +500,14 @@ def parse_tasks(filepath: Path) -> list[Task]:
             parsed, refusal = _parse_negative_control(control_match.group(1))
             current_task.negative_control = parsed
             current_task.negative_control_error = refusal
+            continue
+
+        scenarios_match = SCENARIOS.search(line)
+        if scenarios_match:
+            current_task.scenarios_raw = line
+            current_task.scenarios, current_task.scenarios_error = _parse_scenarios(
+                line, scenarios_match.group(1).strip()
+            )
             continue
 
         verifies_match = VERIFIES.search(line)
