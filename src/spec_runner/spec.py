@@ -141,6 +141,14 @@ def load_profile(name: str, project_root: Path | None = None) -> StageProfile:
     if not isinstance(raw_stages, list) or not all(isinstance(x, dict) for x in raw_stages):
         raise ProfileError(f"profile {name!r}: `stages` must be a list of mappings")
     stages = tuple(_stage_def_from(s, name) for s in raw_stages)
+    seen_names: set[str] = set()
+    for sd in stages:
+        # One name, one stage (#338 acceptance review): `get` answers the first
+        # declaration and the path map the last, so a repeat let a command aimed
+        # at the managed stage write into the external one's file.
+        if sd.name in seen_names:
+            raise ProfileError(f"profile {name!r}: stage {sd.name!r} is declared more than once")
+        seen_names.add(sd.name)
     profile = StageProfile(name=str(data.get("profile") or data.get("name") or name), stages=stages)
     validate_profile_graph(profile)
     return profile

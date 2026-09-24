@@ -273,3 +273,21 @@ class TestFinalReviewFixes:
         cfg = ExecutorConfig(project_root=tmp_path, spec_prefix="ws-", spec_profile="solo")
         with pytest.raises(ConfigError, match="tasks_file"):
             cfg.resolve_stage_files()
+
+
+class TestDuplicateStageNames:
+    def test_a_repeated_stage_name_is_refused_at_load(self, tmp_path):
+        """Acceptance review, round 3: `get` picked the first `tasks` (managed),
+        the path map kept the last (external), and `spec reject tasks`
+        rewrote the external file. Names must be unique before anything
+        resolves or writes."""
+        _write_profile(
+            tmp_path,
+            "workstream",
+            "name: workstream\nstages:\n"
+            "  - {name: tasks, template: tasks.template.md, marker_prefix: SPEC_TASKS,"
+            " validator: tasks}\n"
+            "  - {name: tasks, external: true, path: workstreams/imported.md}\n",
+        )
+        with pytest.raises(ProfileError, match="more than once"):
+            load_profile("workstream", tmp_path)
