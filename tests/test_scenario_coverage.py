@@ -18,7 +18,7 @@ from spec_runner.scenarios import (
     uncovered_scenarios,
 )
 from spec_runner.task import Task, parse_tasks
-from spec_runner.validate import validate_task_fields
+from spec_runner.validate import validate_all, validate_task_fields
 
 HEADER = "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\nEst: 1d\n"
 
@@ -183,3 +183,58 @@ class TestAtCommit:
         assert refusal is not None
         assert refusal.kind is RefusalKind.INSTRUMENT
         assert "tests/missing.py" in refusal
+
+
+def _validate(tmp_path, body: str, files: dict[str, str] | None = None):
+    for rel, text in (files or {}).items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    tasks = tmp_path / "tasks.md"
+    tasks.write_text(HEADER + body)
+    return validate_all(tasks_file=tasks, config_file=None, project_root=tmp_path)
+
+
+class TestValidateWarnings:
+    def test_outside_verify_first_is_a_warning(self, tmp_path):
+        result = _validate(tmp_path, "**Scenarios:** BEH-09\n")
+        assert result.ok
+        assert any(
+            "TASK-001" in w and "not checked outside verify_first" in w for w in result.warnings
+        )
+
+    def test_uncovered_in_the_tree_is_a_warning(self, tmp_path):
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
+            "**Scenarios:** BEH-09, BEH-10\n",
+            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
+        assert result.ok
+        joined = "\n".join(result.warnings)
+        assert "BEH-10" in joined and "uncovered" in joined
+        assert "BEH-09," not in joined
+
+    def test_covered_in_the_tree_is_silent(self, tmp_path):
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
+        assert not any("uncovered" in w for w in result.warnings)
+
+    def test_missing_node_id_file_is_a_warning(self, tmp_path):
+        result = _validate(
+            tmp_path, "**Mode:** verify_first\n**Verifies:** tests/nope.py::test_x\n"
+        )
+        assert result.ok
+        assert any("tests/nope.py" in w and "does not exist" in w for w in result.warnings)
+
+    def test_unparseable_verifies_does_not_add_coverage_noise(self, tmp_path):  # Review Focus 5
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/a.py::t[a,b\n**Scenarios:** BEH-09\n",
+        )
+        assert any("unclosed" in e for e in result.errors)
+        assert not any("uncovered" in w for w in result.warnings)

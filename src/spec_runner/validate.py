@@ -868,6 +868,11 @@ def _validate_verify_first_declarations(
             continue
 
         if mode != "verify_first":
+            if task.scenarios is not None:
+                result.warnings.append(
+                    f"{task.id}: **Scenarios:** {task.scenarios!r} declared but the "
+                    f"resolved execution mode is {mode!r} — not checked outside verify_first"
+                )
             if task.verifies is not None:
                 result.errors.append(
                     f"{task.id}: **Verifies:** {task.verifies!r} is declared "
@@ -902,6 +907,14 @@ def _validate_verify_first_declarations(
             # node id" (the retired boundary BEH-09 lifts).
             parsed = parse_group_element(adapter, raw, config.project_root)
             if not isinstance(parsed, SelectorRefusal):
+                # #402 §6: a node id's file gets the same working-tree warning
+                # a missing file target already gets (FR-07) — never an error.
+                if not (config.project_root / str(parsed.path)).is_file():
+                    result.warnings.append(
+                        f"{task.id}: mode is verify_first, declared group "
+                        f"{task.verifies!r} — file {str(parsed.path)!r} of {raw!r} "
+                        "does not exist in the working tree yet"
+                    )
                 continue
             if parsed.code == "not_a_regular_file":
                 # `validate` judges the working tree, not the commit a live
@@ -919,7 +932,30 @@ def _validate_verify_first_declarations(
                 f"{adapter.name} adapter ({parsed.code}): {parsed.message}"
             )
 
+        result.warnings.extend(_scenario_warnings(task, config.project_root))
+
     return result
+
+
+def _scenario_warnings(task: Task, root: Path) -> list[str]:
+    """#402 §6: early notice of a declared scenario the group's files in the
+    WORKING TREE do not carry. A warning only — the live entry run judges the
+    commit and is the one that refuses. Missing files are skipped: they carry
+    their own warning above."""
+    from spec_runner.scenarios import group_files, uncovered_scenarios
+
+    if not task.scenarios:
+        return []
+    files = [root / str(path) for path in group_files(task.verifies or [])]
+    texts = [f.read_text(errors="replace") for f in files if f.is_file()]
+    missing = uncovered_scenarios(task.scenarios, texts)
+    if not missing:
+        return []
+    return [
+        f"{task.id}: **Scenarios:** {', '.join(missing)} uncovered by the declared "
+        "group's files in the working tree — the live entry run will refuse "
+        "unless the committed files carry them"
+    ]
 
 
 def validate_all(
