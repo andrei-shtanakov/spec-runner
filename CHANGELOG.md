@@ -10,6 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-24
+
+Minor: every change is additive. No `--json-result`, state-DB or `schemas/`
+change. Stage arguments of `plan --stage` and `spec approve|reject|check|adopt`
+now come from the resolved profile instead of a hardcoded `choices` list —
+under the default `lite` profile the accepted names are the same, and an
+unknown name is refused by spec-runner (exit 1, naming the profile's stages)
+rather than by argparse (exit 2); a changed exit code is minor by precedent.
+A `**Scenarios:**` line only takes effect on a task that declares it.
+
 ### Added
 
 - **Repo-local stage profiles and external stages (#338).** Profiles may live
@@ -3884,7 +3894,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...v3.0.0
 [2.36.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.35.0...v2.36.0
