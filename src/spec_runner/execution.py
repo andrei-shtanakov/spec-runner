@@ -26,6 +26,7 @@ from .runner import (
     send_callback,
     terminal_markers,
 )
+from .scenarios import coverage_refusal
 from .stages import StageReporter
 from .state import (
     ErrorCode,
@@ -507,13 +508,18 @@ def _run_verify_first_phase(
             ),
             None,
         )
-    if result.passed:
-        reporter.record(PhaseOutcome.PASS, detail)
-        return None, result
     if result.ran:
-        reporter.record(PhaseOutcome.UNEXPECTED_FAIL, detail)
-        log_progress(f"\U0001f7e5 verify-first: {detail}", task.id)
-        return None, result
+        if result.passed:
+            reporter.record(PhaseOutcome.PASS, detail)
+        else:
+            reporter.record(PhaseOutcome.UNEXPECTED_FAIL, detail)
+            log_progress(f"\U0001f7e5 verify-first: {detail}", task.id)
+        # #402 §5: a run that reached a verdict must also be ABOUT the task's
+        # declared scenarios. Asked here — after the verdict, before the
+        # freeze and before the first paid call on either path (the
+        # implementation pass on green, RED authoring on test_failure) —
+        # against the judged commit, never the working tree.
+        return coverage_refusal(task, config.project_root, result.sha), result
     reporter.record(PhaseOutcome.ERROR, detail)
     return (
         Refusal(
