@@ -710,7 +710,7 @@ class ExecutorConfig:
             elif not isinstance(value, list):
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
         # An empty entry is a typo, and `Path.match("")` raises: the guard
-        # would crash on the first violation it compares (review of #600).
+        # would crash on the first violation it compares (review of #601).
         for attr in ("harness_files", "harness_allow"):
             if any(not str(entry).strip() for entry in getattr(self, attr)):
                 raise ConfigError(f"{attr} has an empty entry: {getattr(self, attr)!r}")

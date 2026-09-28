@@ -589,6 +589,20 @@
 #147/#148), #136 (PR #144), #137 (PR #145, с явным перечислением четырёх несделанных
 сопутствующих пунктов в теле ответа). Открытыми остаются #138, #139, #140, #141, #142.
 
+- [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
+      Исполнитель запускается с `skip_permissions: true` по умолчанию
+      (`config.py`, → `--dangerously-skip-permissions` у claude) и может писать
+      по абсолютному пути куда угодно, в том числе в
+      `devtools/out/governance-runs/<run>/edge-check/`, где действующий PASS
+      подавляет платную перепроверку (devtools#445). Наш `harness_guard` видит
+      только поверхность обвязки **внутри** `project_root`; запись за его
+      пределами не видит никто. Нужна граница записи исполнителя рабочим
+      деревом задачи: sandbox-профиль (Seatbelt на macOS, контейнер/uid на VPS)
+      или режим без `skip_permissions` с явным allowlist. Решение — дизайн
+      владельца (затрагивает все CLI-пресеты, не только claude); devtools
+      параллельно привязывает reuse PASS к хэшу леджера (devtools#469 п.1) —
+      это сужение, не граница.
+
 - [x] **executable-of-flag-values** (inbox spec-runner#593, from devtools) @owner:github:andrei-shtanakov @id:executable-of-flag-values @epic:eco.spec-toolchain
       `executable_of` пропускал флаги обёртки, но не их значения:
       `uv run --frozen --group governance pytest -q` → `governance`, адаптер не
