@@ -52,7 +52,9 @@ class LaunchScope:
             config=config,
             project_root=config.project_root,
             namespace=namespace,
-            config_path=_resolve_config_path(config.project_root),
+            # The file the parent loaded (stamped by `main()`), not the one
+            # under `project_root`: `paths.root` moves the root away from it.
+            config_path=config.config_path or _resolve_config_path(config.project_root),
         )
 
 
@@ -87,8 +89,9 @@ def _rebuild_for_namespace(scope: LaunchScope, *, spec_prefix: str) -> ExecutorC
     DT-02): the launch config's representable overrides (`--no-tests`,
     `--budget`, `--strict`, ...) are serialized by `config_flags`, the
     namespace flag is appended, and `_build_parser()` + `build_config`
-    rebuild the config from that argv and the YAML the launch scope read
-    (by `project_root`, not CWD). A hand-built `argparse.Namespace` with
+    rebuild the config from that argv and the file the parent loaded
+    (`scope.config_path` — outside `project_root` when `paths.root` moved
+    it). A hand-built `argparse.Namespace` with
     every flag at "not set" silently dropped those overrides (review of the
     DT-02 integration PR) -- the refined config was a degraded copy, and
     the reproducibility check then validated that copy against itself.
@@ -412,7 +415,7 @@ class FieldDiff:
 
 class Irreproducible(Exception):
     """`scope.config` cannot be reproduced by a child rebuilt from `argv` +
-    the YAML the parent read (BEH-13) -- the one check that also clears
+    the YAML the child will find (BEH-13) -- the one check that also clears
     BEH-14 when it finds nothing.
 
     The rendered text and dict name the field and the reason only, never
@@ -439,8 +442,8 @@ class Irreproducible(Exception):
 
 
 def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig | Irreproducible:
-    """Build the config a child would get from `argv` + the YAML the parent
-    read, and compare it with `scope.config` field by field (§2.2) -- the one
+    """Build the config a child would get from `argv` + the YAML it will find
+    by its `--project-root` (not necessarily the file the parent loaded), and compare it with `scope.config` field by field (§2.2) -- the one
     check that answers both BEH-13 (refuse) and BEH-14 (proceed): a non-empty
     diff is `Irreproducible`, naming every field, both values, and why.
 
@@ -463,21 +466,6 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
     point of this check is to answer before `Popen`, not to replace one
     crash with another.
     """
-    yaml_missing = not scope.config_path.exists()
-    try:
-        yaml_config = load_config_from_yaml(scope.config_path)
-    except ConfigError as exc:
-        return Irreproducible(
-            [
-                FieldDiff(
-                    "<yaml>",
-                    None,
-                    None,
-                    f"the parent's own config file at {scope.config_path} could not "
-                    f"be re-read: {exc}",
-                )
-            ]
-        )
     try:
         args = _build_parser().parse_args(argv)
     except SystemExit:
@@ -490,6 +478,23 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
                     "the serialized argv was rejected by the child's own CLI parser "
                     f"(argv={argv!r}) -- a field's current value cannot be represented "
                     "as a valid CLI flag for the child to parse",
+                )
+            ]
+        )
+    # The child finds its YAML the way `main()` does — by `--project-root` —
+    # which is not the parent's file when `paths.root` moved the root.
+    child_yaml = _resolve_config_path(Path(args.project_root) if args.project_root else None)
+    yaml_missing = not child_yaml.exists()
+    try:
+        yaml_config = load_config_from_yaml(child_yaml)
+    except ConfigError as exc:
+        return Irreproducible(
+            [
+                FieldDiff(
+                    "<yaml>",
+                    None,
+                    None,
+                    f"the config file the child will read at {child_yaml} could not be read: {exc}",
                 )
             ]
         )
@@ -531,9 +536,15 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
                 "the child reads by project_root can set it, and that YAML "
                 "does not agree with the parent's value"
             )
-        if yaml_missing:
+        if yaml_missing and child_yaml.resolve() != scope.config_path.resolve():
             reason += (
-                f"; no YAML config exists at {scope.config_path} now, so the "
+                f"; the parent loaded {scope.config_path}, but the child looks "
+                f"for its YAML by --project-root at {child_yaml}, where none "
+                "exists (paths.root moved the root away from the config)"
+            )
+        elif yaml_missing:
+            reason += (
+                f"; no YAML config exists at {child_yaml} now, so the "
                 "child would read class defaults for it (if the parent read "
                 "one there, it has since vanished)"
             )

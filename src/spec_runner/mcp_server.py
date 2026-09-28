@@ -12,7 +12,7 @@ import json
 from mcp.server import MCPServer
 
 from . import mcp_launch
-from .config import ExecutorConfig, build_config, load_config_from_yaml
+from .config import ExecutorConfig, _resolve_config_path, build_config, load_config_from_yaml
 from .mcp_launch import LaunchScope, ScopeContradiction
 from .state import ExecutorState
 from .task import parse_tasks, resolve_dependencies
@@ -33,7 +33,8 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
     """
     import argparse
 
-    yaml_config = load_config_from_yaml()
+    config_path = _resolve_config_path()
+    yaml_config = load_config_from_yaml(config_path)
     args = argparse.Namespace(
         spec_prefix=spec_prefix,
         project_root="",
@@ -49,7 +50,11 @@ def _build_config(spec_prefix: str = "") -> ExecutorConfig:
         budget=None,
         task_budget=None,
     )
-    return build_config(yaml_config, args)
+    config = build_config(yaml_config, args)
+    # Stamped as `main()` does, so the launch scope rebuilds from this file
+    # even when `paths.root` moved `project_root` away from it.
+    config.config_path = config_path.resolve()
+    return config
 
 
 def _tool_config(spec_prefix: str = "") -> ExecutorConfig:
