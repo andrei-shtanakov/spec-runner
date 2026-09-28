@@ -10,6 +10,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-09-28
+
+Patch: defect fixes that move no public surface — no change to `schemas/`,
+`docs/state-schema.md` or any CLI argument (checked by diff against v4.1.1).
+Under `harness_guard: warn`/`strict` an agent's edit to the spec-runner config
+is now reported like any other harness edit; a project whose tasks legitimately
+edit that file will see the new violation.
+
 ### Fixed
 
 - **The MCP launch scope reads the config the parent loaded (review of
@@ -3942,7 +3950,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...HEAD
+[4.1.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...v4.0.0
