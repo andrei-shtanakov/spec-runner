@@ -942,10 +942,10 @@ def _scenario_warnings(task: Task, root: Path) -> list[str]:
     WORKING TREE do not carry. A warning only — the live entry run judges the
     commit and is the one that refuses.
 
-    Coverage is judged only when every group file is present inside the
-    project root: a missing file carries its own warning above and may be the
-    one that will carry the scenario, and a file past the root (a node id may
-    spell `..`) is named, never read."""
+    Missing files are skipped — they carry their own warning above — and when
+    no group file is present at all nothing is judged: "uncovered" over zero
+    files only restates that warning (PR #590 minor). A file past the root (a
+    node id may spell `..`) is named, never read."""
     from spec_runner.scenarios import group_files, uncovered_scenarios
 
     if not task.scenarios:
@@ -959,9 +959,10 @@ def _scenario_warnings(task: Task, root: Path) -> list[str]:
             "project root — not read for coverage"
             for path in outside
         ]
-    if not all(f.is_file() for _, f in files):
+    texts = [f.read_text(errors="replace") for _, f in files if f.is_file()]
+    if not texts:
         return []
-    missing = uncovered_scenarios(task.scenarios, [f.read_text(errors="replace") for _, f in files])
+    missing = uncovered_scenarios(task.scenarios, texts)
     if not missing:
         return []
     return [

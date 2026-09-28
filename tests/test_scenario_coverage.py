@@ -183,8 +183,9 @@ class TestAtCommit:
         assert refusal is not None
         assert refusal.kind is RefusalKind.INSTRUMENT
         assert "tests/missing.py" in refusal
-        # PR #590 deferred minor: git's own words, not only "cannot be read".
-        assert "(git: " in refusal and "does not exist" in refusal
+        # PR #590 deferred minor: git's own words, not only "cannot be read"
+        # (their wording is locale-dependent, so only the wrapper is pinned).
+        assert "(git: " in refusal
 
 
 def _validate(tmp_path, body: str, files: dict[str, str] | None = None):
@@ -279,13 +280,22 @@ class TestValidateWarningMinors:
         assert any("tests/nope.py" in w and "does not exist" in w for w in result.warnings)
         assert not any("uncovered" in w for w in result.warnings)
 
-    def test_a_partly_missing_group_is_not_judged(self, tmp_path):
-        """The scenario may live in the file that is not there yet."""
+    def test_a_partly_missing_group_is_still_judged(self, tmp_path):
+        """Design §6: the files that are there are read — the measured #402
+        shape is a group mixing a foreign green file with a missing one."""
         result = _validate(
             tmp_path,
             "**Mode:** verify_first\n"
             "**Verifies:** tests/test_a.py::test_x, tests/nope.py::test_y\n"
             "**Scenarios:** BEH-10\n",
             {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
+        assert any("BEH-10" in w and "uncovered" in w for w in result.warnings)
+
+    def test_a_group_naming_no_file_is_not_judged(self, tmp_path):
+        """`**Verifies:** .` is refused as an element; coverage over no file
+        at all must not add an "uncovered" line beside that error."""
+        result = _validate(
+            tmp_path, "**Mode:** verify_first\n**Verifies:** .\n**Scenarios:** BEH-09\n"
         )
         assert not any("uncovered" in w for w in result.warnings)
