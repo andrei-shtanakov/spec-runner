@@ -137,7 +137,9 @@ instead of being mapped to something plausible.
   scope reaches the harness (`pyproject.toml`, `.github/workflows`, the
   spec-runner config, `harness_files`, …) as a blocker, since the guard would
   refuse every attempt; `harness_allow` exempts ordinary harness files, never
-  the config. It declares scope; it does not grant permission, and nothing is
+  the config. A declared directory that merely contains a harness path is
+  reported as undecidable (`unavailable`), not as a blocker — declare the
+  files to check exactly. It declares scope; it does not grant permission, and nothing is
   inferred from the task's prose.
 - `TDD-waiver` — `<class> · sanction: <id>`. Valid only on a task whose
   resolved mode is `standard`. It removes the baseline-RED requirement and

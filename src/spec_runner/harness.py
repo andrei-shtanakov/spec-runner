@@ -24,6 +24,7 @@ never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .config import CONFIG_FILE, LEGACY_CONFIG_FILE, ExecutorConfig
@@ -48,6 +49,10 @@ HARNESS_CANDIDATES = (
     "Makefile",
     ".github/workflows",
 )
+
+# The candidates that are directories — known without the tree, where a
+# declared scope may name one before it exists.
+_DIR_CANDIDATES = frozenset({".github/workflows"})
 
 # The policy an attempt is judged by — `review_policy`, the budget,
 # `execution_mode`, this guard's own mode (harness-guard-companions #1). Watched
@@ -86,31 +91,55 @@ def _covers(outer: PurePosixPath, inner: PurePosixPath) -> bool:
     return outer == inner or outer in inner.parents
 
 
-def touch_conflicts(config: ExecutorConfig, touches: list[PurePosixPath]) -> list[str]:
-    """The harness paths a declared write scope would change, not exempt.
+@dataclass(frozen=True)
+class TouchConflicts:
+    """What a declared write scope does to the harness surface.
 
-    Overlap in either direction: a touched directory holding a harness file,
-    or a touched file inside a harness directory. The exemption is matched,
-    like the guard's, against the more specific of the two paths, and never
-    reaches the config (`CONTROL_PLANE`).
+    ``definite`` — the guard would refuse it: the task names a harness file
+    (or a path inside a harness directory) that no `harness_allow` pattern
+    exempts. ``possible`` — it cannot be told from the declaration: a declared
+    directory *contains* a harness path the task may never write, or a
+    harness directory is declared while exemptions depend on file names.
+    """
+
+    definite: list[str]
+    possible: list[str]
+
+
+def touch_conflicts(config: ExecutorConfig, touches: list[PurePosixPath]) -> TouchConflicts:
+    """Compare a declared scope with the harness surface the guard watches.
+
+    The exemption is matched, like the guard's, against concrete file paths;
+    it never reaches the config (`CONTROL_PLANE`).
     """
     control = _control_plane_keys(config)
     surface = [PurePosixPath(p) for p in (*HARNESS_CANDIDATES, *control, *config.harness_files)]
-    conflicts: list[str] = []
+    definite: list[str] = []
+    possible: list[str] = []
+
+    def exempt(path: PurePosixPath) -> bool:
+        return str(path) not in control and any(
+            Path(path).match(pattern) for pattern in config.harness_allow
+        )
+
     for touched in touches:
         for harness in surface:
             if _covers(harness, touched):
-                specific = touched
-            elif _covers(touched, harness):
-                specific = harness
-            else:
-                continue
-            exempt = str(harness) not in control and any(
-                Path(specific).match(pattern) for pattern in config.harness_allow
-            )
-            if not exempt and str(specific) not in conflicts:
-                conflicts.append(str(specific))
-    return conflicts
+                names_a_dir = (config.project_root / touched).is_dir() or (
+                    touched == harness and str(harness) in _DIR_CANDIDATES
+                )
+                if names_a_dir and str(harness) not in control:
+                    # Which files land under it decides the exemptions.
+                    bucket = possible if config.harness_allow else definite
+                    bucket.append(str(touched))
+                elif not exempt(touched):
+                    definite.append(str(touched))
+            elif _covers(touched, harness) and not exempt(harness):
+                possible.append(str(harness))
+    return TouchConflicts(
+        definite=list(dict.fromkeys(definite)),
+        possible=[p for p in dict.fromkeys(possible) if p not in definite],
+    )
 
 
 def _hash_file(path: Path) -> str:

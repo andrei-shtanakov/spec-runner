@@ -104,17 +104,57 @@ class TestThePreflightCheck:
     @pytest.mark.parametrize(
         "touches,surface",
         [
-            (".github/", ".github/workflows"),  # the task's dir holds oracle files
-            (".github/workflows/ci.yml", ".github/workflows"),  # a file in an oracle dir
+            (".github/workflows", ".github/workflows"),  # the harness dir itself
+            (".github/workflows/ci.yml", ".github/workflows/ci.yml"),  # a file in it
             ("spec-runner.config.yaml", "spec-runner.config.yaml"),  # the policy itself
             ("scripts/verify.sh", "scripts/verify.sh"),  # harness_files
         ],
     )
-    def test_overlap_in_either_direction(self, tmp_path, touches, surface):
+    def test_a_definite_conflict_blocks(self, tmp_path, touches, surface):
         _write_tasks(tmp_path, _task_md("TASK-001", TODO, f"**Touches:** {touches}\n"))
         check = _touches_check(tmp_path, harness_files=["scripts/verify.sh"])
-        assert check.status == "broken", check.detail
+        assert check.status == "broken" and check.blocking, check.detail
         assert surface in check.detail
+
+    @pytest.mark.parametrize(
+        "touches,reached",
+        [
+            (".github/", ".github/workflows"),  # may edit only CODEOWNERS
+            ("spec/", "spec/executor.config.yaml"),  # legacy config, v2 project
+        ],
+    )
+    def test_a_directory_holding_harness_paths_is_not_a_verdict(self, tmp_path, touches, reached):
+        """Review of this change: a declared directory that merely contains a
+        harness path says nothing about whether the task writes it — not a
+        blocker, and says so."""
+        _write_tasks(tmp_path, _task_md("TASK-001", TODO, f"**Touches:** {touches}\n"))
+        check = _touches_check(tmp_path)
+        assert check.status == "unavailable" and not check.blocking, check.detail
+        assert reached in check.detail
+
+    def test_a_harness_dir_under_a_file_glob_is_not_a_verdict(self, tmp_path):
+        """Review of this change: the guard matches `harness_allow` against
+        concrete files; for a declared harness directory that depends on the
+        names the task will write."""
+        (tmp_path / ".github" / "workflows").mkdir(parents=True)
+        _write_tasks(tmp_path, _task_md("TASK-001", TODO, "**Touches:** .github/workflows\n"))
+        check = _touches_check(tmp_path, harness_allow=[".github/workflows/*.yml"])
+        assert check.status == "unavailable" and not check.blocking, check.detail
+
+    def test_a_file_under_the_glob_is_exempt(self, tmp_path):
+        _write_tasks(
+            tmp_path, _task_md("TASK-001", TODO, "**Touches:** .github/workflows/ci.yml\n")
+        )
+        check = _touches_check(tmp_path, harness_allow=[".github/workflows/*.yml"])
+        assert check.status == "ok", check.detail
+
+    def test_an_empty_allow_entry_is_refused_at_load(self, tmp_path):
+        """Review of this change: `Path.match("")` raises — in preflight and
+        in the guard's first comparison alike."""
+        from spec_runner.config import ConfigError
+
+        with pytest.raises(ConfigError, match="harness_allow has an empty entry"):
+            _cfg(tmp_path, harness_allow="")
 
     def test_a_scope_clear_of_the_harness_is_ok(self, tmp_path):
         _write_tasks(tmp_path, _task_md("TASK-001", TODO, "**Touches:** src/, docs/guide.md\n"))

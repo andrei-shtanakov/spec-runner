@@ -36,14 +36,15 @@ A new optional task field, stated by the author, checked by `preflight`:
 |---|---|---|
 | `harness_guard` is not `strict` | `skipped` | no — nothing would refuse the edit |
 | no open task declares `**Touches:**` | `skipped` | no — nothing was declared, nothing is guessed |
-| an open task touches the harness surface and no `harness_allow` exempts it | `broken` | yes |
+| an open task names a harness file, or a path inside a harness directory, and no `harness_allow` exempts it (definite) | `broken` | yes |
+| only possible reach: a declared directory *contains* a harness path (`spec/` holds the legacy config), or a declared harness directory whose exemptions depend on the file names written under it | `unavailable` | no — cannot be told from a directory |
 | otherwise | `ok` | no |
 
-"Touches the surface" is prefix overlap in either direction: `pyproject.toml`
-against `pyproject.toml`, `.github/` against `.github/workflows`,
-`.github/workflows/ci.yml` against `.github/workflows`. The exemption is
-matched, like the guard's, against the more specific of the two paths. Open =
-any status but `done`.
+The exemption is matched, like the guard's, against concrete file paths, and
+never reaches the spec-runner config. A blocker must be something the guard
+would certainly refuse: a directory says only that the task *may* write there.
+Open = any status but `done`. An empty `harness_files`/`harness_allow` entry is
+refused when the config loads (`Path.match("")` raises — in the guard too).
 
 The `--json` shape is unchanged: a new check id is data, not a schema change.
 

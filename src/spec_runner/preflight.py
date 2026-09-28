@@ -406,23 +406,36 @@ def _check_touches(config: ExecutorConfig) -> Check:
     declared = [t for t in tasks if t.status != "done" and t.touches]
     if not declared:
         return Check("harness.touches", "skipped", False, "no open task declares **Touches:**")
-    found = [(t.id, touch_conflicts(config, t.touches or [])) for t in declared]
-    found = [(task_id, paths) for task_id, paths in found if paths]
-    if not found:
+    results = [(t.id, touch_conflicts(config, t.touches or [])) for t in declared]
+    definite = [(task_id, r.definite) for task_id, r in results if r.definite]
+    possible = [(task_id, r.possible) for task_id, r in results if r.possible]
+
+    def listed(pairs: list[tuple[str, list[str]]]) -> str:
+        return "; ".join(f"{task_id}: {', '.join(paths)}" for task_id, paths in pairs)
+
+    if definite:
+        detail = (
+            f"{listed(definite)} — harness_guard: strict refuses these edits, so the "
+            "task cannot complete; re-scope it, or exempt the file via harness_allow "
+            "(the spec-runner config cannot be exempted)"
+        )
+        if possible:
+            detail += f"; may also reach {listed(possible)}"
+        return Check("harness.touches", "broken", True, detail)
+    if possible:
         return Check(
             "harness.touches",
-            "ok",
+            "unavailable",
             False,
-            f"{len(declared)} declared scope(s) clear of the harness",
+            f"{listed(possible)} — a declared directory reaches these harness paths; "
+            "whether the task changes them cannot be told from a directory — "
+            "declare the files to check exactly",
         )
-    listed = "; ".join(f"{task_id} touches {', '.join(paths)}" for task_id, paths in found)
     return Check(
         "harness.touches",
-        "broken",
-        True,
-        f"{listed} — harness_guard: strict refuses these edits, so the task cannot "
-        "complete; re-scope it, or exempt the file via harness_allow (the "
-        "spec-runner config cannot be exempted)",
+        "ok",
+        False,
+        f"{len(declared)} declared scope(s) clear of the harness",
     )
 
 
