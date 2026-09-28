@@ -825,6 +825,12 @@ def _enforce_untracked_state(config: ExecutorConfig) -> None:
 #: and the variable does not govern them.
 BUDGETED_COMMANDS = frozenset({"run", "retry", "watch"})
 
+#: Commands that start an agent (#600): only these are refused at startup when
+#: `executor_sandbox: required` has no backend — `status`, `costs` and the
+#: `stop` brake must keep working. `mcp` serves read tools and hands `run_task`
+#: to a `run` child, which checks for itself.
+AGENT_COMMANDS = BUDGETED_COMMANDS | {"plan", "review-pr", "doctor"}
+
 
 def _check_stage_name(config: ExecutorConfig, stage: str | None) -> None:
     """Stage names come from the resolved profile (#338), not a fixed list."""
@@ -2639,7 +2645,8 @@ def main():
     from .sandbox import SandboxUnavailable, require_backend
 
     try:
-        require_backend(config)
+        if args.command in AGENT_COMMANDS:
+            require_backend(config)
     except SandboxUnavailable as exc:
         print(f"⛔ {exc}", file=sys.stderr)
         raise SystemExit(2) from None

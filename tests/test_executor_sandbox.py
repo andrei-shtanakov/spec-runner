@@ -38,6 +38,16 @@ def _inv(*argv: str) -> CliInvocation:
     return CliInvocation(list(argv), "text")
 
 
+def _fake(tmp_path: Path, name: str, body: str = "exit 0") -> str:
+    """An executable named like an agent CLI, so identity and `which` hold
+    without the real binary on the machine."""
+    path = tmp_path / "bin" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return str(path)
+
+
 class TestConfig:
     def test_default_is_off(self, tmp_path):
         assert _cfg(tmp_path).executor_sandbox == "off"
@@ -103,7 +113,7 @@ class TestNoBackend:
         (tmp_path / "spec-runner.config.yaml").write_text("executor_sandbox: required\n")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(sandbox, "backend", lambda: None)
-        monkeypatch.setattr("sys.argv", ["spec-runner", "validate"])
+        monkeypatch.setattr("sys.argv", ["spec-runner", "run"])
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code == 2
@@ -113,13 +123,11 @@ class TestNoBackend:
 @pytest.mark.skipif(not HAS_SEATBELT, reason="needs macOS sandbox-exec")
 class TestTheWrappedCall:
     def test_argv_env_and_temp_dir(self, tmp_path):
-        call = sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv("claude", "-p", "x"), {})
+        claude = _fake(tmp_path, "claude")
+        call = sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv(claude, "-p", "x"), {})
         try:
-            assert call.argv[:2] == ["sandbox-exec", "-p"] and call.argv[3:] == [
-                "claude",
-                "-p",
-                "x",
-            ]
+            assert call.argv[:2] == ["sandbox-exec", "-p"]
+            assert call.argv[3:] == [claude, "-p", "x"]
             assert call.tmpdir is not None and call.tmpdir.is_dir()
             assert call.env is not None
             assert call.env["TMPDIR"] == call.env["CLAUDE_CODE_TMPDIR"] == str(call.tmpdir)
@@ -129,10 +137,11 @@ class TestTheWrappedCall:
 
     def test_codex_gets_its_external_sandbox_mode(self, tmp_path):
         """codex's own Seatbelt cannot nest inside ours (measured)."""
-        call = sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv("codex", "exec", "x"))
+        codex = _fake(tmp_path, "codex")
+        call = sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv(codex, "exec", "x"))
         try:
             assert call.argv[3:] == [
-                "codex",
+                codex,
                 "exec",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "x",
@@ -290,6 +299,66 @@ def test_env_is_not_mutated(tmp_path):
         pytest.skip("needs macOS sandbox-exec")
     env = dict(os.environ)
     before = dict(env)
-    call = sandboxed(ExecutorConfig(project_root=tmp_path, executor_sandbox="on"), _inv("x"), env)
+    call = sandboxed(
+        ExecutorConfig(project_root=tmp_path, executor_sandbox="on"),
+        _inv(_fake(tmp_path, "x")),
+        env,
+    )
     call.cleanup()
     assert env == before
+
+
+@pytest.mark.skipif(not HAS_SEATBELT, reason="needs macOS sandbox-exec")
+class TestLocalReviewFindings:
+    def test_a_missing_binary_still_fails_to_launch(self, tmp_path):
+        """Under the wrapper argv[0] is `sandbox-exec`, which exists; a typo in
+        the agent's name must still be a launch failure, not a recorded call."""
+        with pytest.raises(FileNotFoundError):
+            sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv("claud-typo", "-p", "x"))
+
+    def test_codex_inside_a_template_is_named_and_warned(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(sandbox, "_warned", set())
+        call = sandboxed(
+            _cfg(tmp_path, executor_sandbox="on"), _inv("/bin/sh", "-c", "codex exec 'x'")
+        )
+        try:
+            assert call.argv[3:] == ["/bin/sh", "-c", "codex exec 'x'"]  # not rewritten
+            assert Path("~/.codex").expanduser().resolve().as_posix() in call.argv[2]
+        finally:
+            call.cleanup()
+        assert "--dangerously-bypass-approvals-and-sandbox" in capsys.readouterr().err
+
+    def test_an_unknown_cli_is_warned_as_unmeasured(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(sandbox, "_warned", set())
+        call = sandboxed(_cfg(tmp_path, executor_sandbox="on"), _inv(_fake(tmp_path, "gemini")))
+        call.cleanup()
+        assert "gemini: writable state not measured" in capsys.readouterr().err
+
+
+class TestIdentity:
+    @pytest.mark.parametrize(
+        "argv,expected",
+        [
+            (["codex", "exec", "x"], ("codex", True)),
+            (["/opt/bin/claude", "-p", "x"], ("claude", True)),
+            (["bash", "-lc", "codex exec 'x'"], ("codex", False)),
+            (["curl", "-s", "http://x"], ("curl", True)),
+        ],
+    )
+    def test_the_cli_is_found_past_a_wrapper(self, argv, expected):
+        assert sandbox.cli_identity(argv) == expected
+
+
+def test_read_only_commands_are_not_refused(tmp_path, monkeypatch):
+    """`required` without a backend refuses only commands that start an agent:
+    `status` must keep working (local review of this change)."""
+    from spec_runner import cli
+
+    (tmp_path / "spec-runner.config.yaml").write_text("executor_sandbox: required\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sandbox, "backend", lambda: None)
+    seen = []
+    monkeypatch.setattr(cli, "cmd_status", lambda args, config: seen.append(True))
+    monkeypatch.setattr("sys.argv", ["spec-runner", "status"])
+    cli.main()
+    assert seen == [True]

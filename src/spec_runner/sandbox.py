@@ -3,8 +3,11 @@
 An agent runs with `skip_permissions` and may write anywhere by absolute path —
 devtools#445 is a planted PASS in a sibling repo's run directory. The harness
 guard sees only the harness surface inside `project_root`. This module wraps the
-agent's argv so the OS refuses every write outside the task's tree, a per-call
-temp dir, and the state its own CLI needs.
+agent's argv so the OS refuses the agent's own writes outside the task's tree, a
+per-call temp dir, and the state its own CLI needs. It bounds writes by the
+agent's process tree only: a write delegated to a process outside it (an app
+driven over launchd/Apple Events, a local daemon over a socket) is not covered —
+design §5.
 
 Design and measurements: docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md.
 Phase 1 is macOS (`sandbox-exec`, Seatbelt); on a platform without a backend,
@@ -18,6 +21,7 @@ invocation through it and hands the returned argv/env to `subprocess`. Under
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -121,9 +125,21 @@ def sandboxed(
         _warn_once("no-backend", f"executor_sandbox: on, but no backend on {sys.platform}")
         return SandboxedCall(argv=list(invocation.argv), env=env)
 
-    name = PurePosixPath(invocation.argv[0]).name if invocation.argv else ""
-    if name in UNMEASURED:
+    argv = list(invocation.argv)
+    # Under the wrapper argv[0] is `sandbox-exec`, which always exists: a
+    # missing agent binary must still fail as it did unwrapped, or a launch
+    # that never happened is recorded as a call (the ledger's invariant).
+    if argv and shutil.which(argv[0]) is None:
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+    name, direct = cli_identity(argv)
+    if name not in STATE_DIRS:
         _warn_once(name, f"{name}: writable state not measured; running with the base set")
+    elif name == "codex" and not direct:
+        _warn_once(
+            "codex-wrapped",
+            "codex inside a command template: add --dangerously-bypass-approvals-and-sandbox "
+            "to the template (its own sandbox cannot nest)",
+        )
     tmpdir = Path(tempfile.mkdtemp(prefix="spec-runner-agent-")).resolve()
     call_env = dict(env if env is not None else os.environ)
     call_env["TMPDIR"] = str(tmpdir)
@@ -134,8 +150,30 @@ def sandboxed(
     logger.info(
         "Agent call sandboxed", backend="seatbelt", cli=name, writable=[str(p) for p in writable]
     )
-    argv = ["sandbox-exec", "-p", profile, *_adapt_argv(name, list(invocation.argv))]
+    argv = ["sandbox-exec", "-p", profile, *(_adapt_argv(name, argv) if direct else argv)]
     return SandboxedCall(argv=argv, env=call_env, tmpdir=tmpdir)
+
+
+def cli_identity(argv: list[str]) -> tuple[str, bool]:
+    """The agent CLI an argv runs, and whether it is argv[0] itself.
+
+    A command template can wrap the CLI (`bash -lc '{cmd} …'`), so argv[0] is
+    not its identity: every element is lexed and the first measured name wins.
+    Nothing measured → argv[0]'s basename, reported as unmeasured by the caller.
+    """
+    known = set(STATE_DIRS) | UNMEASURED
+    first = PurePosixPath(argv[0]).name if argv else ""
+    if first in known:
+        return first, True
+    for element in argv[1:]:
+        try:
+            tokens = shlex.split(element)
+        except ValueError:
+            tokens = element.split()
+        for token in tokens:
+            if PurePosixPath(token).name in known:
+                return PurePosixPath(token).name, False
+    return first, True
 
 
 def writable_paths(config: ExecutorConfig, cli_name: str, tmpdir: Path) -> list[Path]:

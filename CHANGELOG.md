@@ -23,8 +23,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   uv's cache when the project's commands run uv, and `sandbox_allow`. codex is
   started in its "externally sandboxed" mode (its own Seatbelt cannot nest),
   and claude's Bash tool gets `CLAUDE_CODE_TMPDIR`. Without a backend (Linux,
-  until phase 2), `on` warns and runs unwrapped and `required` refuses at
-  startup with exit 2, before any paid call. Default `off`. A bare YAML `on`/
+  until phase 2), `on` warns and runs unwrapped and `required` refuses a
+  command that starts an agent (`run`/`retry`/`watch`/`plan`/`review-pr`/
+  `doctor`) at startup with exit 2, before any paid call; `status`, `costs` and
+  `stop` keep working. The boundary covers the agent's own process tree: a write
+  delegated to a process outside it (an app over Apple Events, a local daemon)
+  is not refused (design §5). Default `off`. A bare YAML `on`/
   `off` (read as a boolean) is taken as written. Design and per-preset
   measurements: `docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md`.
 
