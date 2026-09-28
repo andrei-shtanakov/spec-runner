@@ -148,3 +148,43 @@ class TestAnAgentRewritingItsPolicy:
         guard_lines = [line for line in progress if "Harness guard" in line]
         assert guard_lines and all("harness_allow" not in line for line in guard_lines)
         assert any("cannot be exempted" in line for line in guard_lines)
+
+
+class TestTheLoadedConfigOutsideTheRoot:
+    """Local review of this change: `paths.root` in the YAML moves
+    `project_root` away from the directory the config was read from. The file
+    that decides the next run is then the loaded one, not a namesake under the
+    root — so the guard watches the path the CLI actually loaded."""
+
+    def _setup(self, tmp_path: Path, **overrides):
+        app = tmp_path / "app"
+        app.mkdir()
+        loaded = tmp_path / CONFIG
+        loaded.write_text('paths:\n  root: "./app"\nreview_policy: required\n')
+        return loaded, _cfg(app, config_path=loaded, **overrides)
+
+    def test_an_edit_to_the_loaded_file_is_a_violation(self, tmp_path):
+        loaded, cfg = self._setup(tmp_path)
+        before = snapshot_harness(cfg)
+        loaded.write_text('paths:\n  root: "./app"\nreview_policy: advisory\n')
+        assert harness_violations(cfg, before) == [f"modified {loaded.as_posix()}"]
+
+    def test_no_glob_exempts_it(self, tmp_path):
+        loaded, cfg = self._setup(tmp_path, harness_allow=["*", "*.yaml", "**/*.yaml"])
+        before = snapshot_harness(cfg)
+        loaded.write_text("harness_guard: off\n")
+        assert harness_violations(cfg, before) == [f"modified {loaded.as_posix()}"]
+
+    def test_the_cli_stamps_the_loaded_path(self, tmp_path, monkeypatch):
+        """`main()` resolves the config against the CWD and records it."""
+        from spec_runner import cli
+
+        (tmp_path / "app").mkdir()
+        (tmp_path / CONFIG).write_text('paths:\n  root: "./app"\n')
+        monkeypatch.chdir(tmp_path)
+        seen: list = []
+        monkeypatch.setattr(cli, "cmd_validate", lambda args, config: seen.append(config))
+        monkeypatch.setattr("sys.argv", ["spec-runner", "validate"])
+        cli.main()
+        assert seen and seen[0].config_path == (tmp_path / CONFIG).resolve()
+        assert seen[0].project_root == (tmp_path / "app").resolve()

@@ -22,7 +22,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
   now a harness violation under `warn`/`strict`, and no `harness_allow` glob
   exempts it (the list is global: a pattern written for one task would open the
   policy to every task after it). The operator's hint on the progress line says
-  so instead of pointing at `harness_allow`.
+  so instead of pointing at `harness_allow`. The file the run actually loaded
+  is watched too, even when `paths.root` puts it outside `project_root`.
 
 ## [4.1.1] - 2026-09-28
 

@@ -56,9 +56,30 @@ HARNESS_CANDIDATES = (
 CONTROL_PLANE = (CONFIG_FILE.as_posix(), LEGACY_CONFIG_FILE.as_posix())
 
 
-def is_control_plane(violation: str) -> bool:
+def _surface_key(config: ExecutorConfig, path: Path) -> str:
+    """Project-root-relative when inside the root, absolute otherwise."""
+    try:
+        return str(path.relative_to(config.project_root))
+    except ValueError:
+        return path.as_posix()
+
+
+def _control_plane_keys(config: ExecutorConfig) -> set[str]:
+    """Both config locations under the root, plus the file actually loaded.
+
+    The loaded file can sit outside `project_root` — `paths.root` in the YAML
+    moves the root away from the directory the config was read from — and it
+    is that file, not its namesake under the root, that the next run loads.
+    """
+    keys = set(CONTROL_PLANE)
+    if config.config_path is not None:
+        keys.add(_surface_key(config, config.config_path))
+    return keys
+
+
+def is_control_plane(config: ExecutorConfig, violation: str) -> bool:
     """Whether a ``"<kind> <path>"`` violation line names the config."""
-    return violation.split(" ", 1)[1] in CONTROL_PLANE
+    return violation.split(" ", 1)[1] in _control_plane_keys(config)
 
 
 def _hash_file(path: Path) -> str:
@@ -80,13 +101,14 @@ def _iter_files(root: Path) -> list[Path]:
 def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
     """Hash every harness file. Returns None when the guard is off.
 
-    Keys are project-root-relative paths; values are content hashes.
+    Keys are project-root-relative paths (absolute for a loaded config outside
+    the root); values are content hashes.
     A file absent from the snapshot did not exist at snapshot time.
     """
     if config.harness_guard == "off":
         return None
     snapshot: dict[str, str] = {}
-    candidates = [*HARNESS_CANDIDATES, *CONTROL_PLANE, *config.harness_files]
+    candidates = [*HARNESS_CANDIDATES, *_control_plane_keys(config), *config.harness_files]
     for rel in candidates:
         for f in _iter_files(config.project_root / rel):
             try:
@@ -96,7 +118,7 @@ def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
                 # otherwise creating a chmod-000 file would bypass the
                 # guard entirely (Copilot finding on #90).
                 digest = "unreadable"
-            snapshot[str(f.relative_to(config.project_root))] = digest
+            snapshot[_surface_key(config, f)] = digest
     return snapshot
 
 
@@ -155,7 +177,7 @@ def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) ->
         violations = [
             v
             for v in violations
-            if is_control_plane(v)
+            if is_control_plane(config, v)
             or not any(Path(v.split(" ", 1)[1]).match(pattern) for pattern in config.harness_allow)
         ]
     return violations

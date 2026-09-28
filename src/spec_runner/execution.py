@@ -1078,7 +1078,7 @@ def _execute_task(
                 )
                 hint = (
                     "the spec-runner config cannot be exempted; revert it"
-                    if any(is_control_plane(v) for v in violations)
+                    if any(is_control_plane(config, v) for v in violations)
                     else "exempt an intended change via harness_allow in the config"
                 )
                 log_progress(f"⛔ Harness guard: {summary} (operator: {hint})", task_id)
