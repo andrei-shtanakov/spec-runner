@@ -109,6 +109,12 @@ VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # (`BEH-09a`); qualified ids (`<ws>#BEH-09`) are deliberately not accepted.
 SCENARIOS = re.compile(r"\*\*Scenarios:\*\*(.*)$")
 SCENARIO_ID = re.compile(r"[A-Z]+-\d+[a-z]?")
+# harness-guard-companions #4: the files a task declares it will change —
+# comma-separated project-relative paths (a directory covers everything under
+# it), checked by `preflight` against the harness surface. Paths, not globs:
+# the check compares what was stated and guesses nothing.
+TOUCHES = re.compile(r"\*\*Touches:\*\*(.*)$")
+_GLOB_CHARS = "*?["
 # The block form's final design (#372, five review rounds — documented here
 # in full so a sixth round doesn't rediscover the same dead ends):
 #
@@ -218,6 +224,30 @@ def _parse_scenarios(line: str, declared: str) -> tuple[list[str] | None, str | 
     return items, None
 
 
+def _parse_touches(line: str, declared: str) -> tuple[list[PurePosixPath] | None, str | None]:
+    """(paths, None) for a valid `**Touches:**` line, (None, refusal) otherwise."""
+    items = [item.strip() for item in declared.split(",")]
+    if "" in items:
+        return None, f"**Touches:** has an empty entry. Declared line: {line!r}"
+    paths: list[PurePosixPath] = []
+    for item in items:
+        path = PurePosixPath(item)
+        if path.is_absolute():
+            why = "absolute — paths are project-root-relative"
+        elif ".." in path.parts:
+            why = "has a '..' segment — the scope stays inside the project"
+        elif any(char in _GLOB_CHARS for char in item):
+            why = "is a glob — name paths; a directory covers everything under it"
+        else:
+            parts = [part for part in path.parts if part != "."]
+            if parts:
+                paths.append(PurePosixPath(*parts))
+                continue
+            why = "names the project root itself"
+        return None, f"**Touches:** {item!r} {why}. Declared line: {line!r}"
+    return paths, None
+
+
 def _verifies_comma_split_is_ambiguous(trailing: str) -> bool:
     """True when splitting ``trailing`` on commas would break a pytest
     parametrize suffix, e.g. ``test_y[a,b]``, into fragments the operator
@@ -319,6 +349,11 @@ class Task:
     #: Named refusal when the line is present but unusable; `scenarios` stays
     #: `None` then, the same split `verifies_error` makes.
     scenarios_error: str | None = None
+    #: Paths the task declares it will change (harness-guard-companions #4);
+    #: `None` when no `**Touches:**` line is present.
+    touches: list[PurePosixPath] | None = None
+    #: Named refusal when the line is present but unusable (`touches` None).
+    touches_error: str | None = None
     line_number: int = 0
     # "priority and status are what someone actually stated". Defaults True
     # because a Task built in code carries values its caller supplied; only
@@ -500,6 +535,13 @@ def parse_tasks(filepath: Path) -> list[Task]:
             parsed, refusal = _parse_negative_control(control_match.group(1))
             current_task.negative_control = parsed
             current_task.negative_control_error = refusal
+            continue
+
+        touches_match = TOUCHES.search(line)
+        if touches_match:
+            current_task.touches, current_task.touches_error = _parse_touches(
+                line, touches_match.group(1).strip()
+            )
             continue
 
         scenarios_match = SCENARIOS.search(line)

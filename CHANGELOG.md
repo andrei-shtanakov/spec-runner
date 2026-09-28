@@ -10,6 +10,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`**Touches:**` — a task's declared write scope, checked by `preflight`
+  (harness-guard-companions #4).** A task under `harness_guard: strict` whose
+  job is to change a harness file (TASK-022 had to edit `pyproject.toml`)
+  could only fail, after every paid attempt. A task may now state which paths
+  it will change; `preflight` gains a `harness.touches` check that reports an
+  open task whose declared scope reaches the harness surface as `broken` and
+  blocking; a declared directory that only *contains* a harness path is
+  `unavailable` (non-blocking — it cannot be told from a directory); the check
+  is `skipped` outside `strict` or when no task declares the line — nothing is
+  read out of a task's prose. An empty `harness_files`/`harness_allow` entry is
+  now refused when the config loads (`Path.match("")` raised in the guard). `harness_allow` exempts
+  ordinary harness files, never the spec-runner config. An empty entry, an
+  absolute path, `..` or a glob is a named `validate` error. The `--json`
+  schema is unchanged: a new check id is data. Design:
+  `docs/superpowers/specs/2026-09-28-touches-preflight-design.md`.
+
 ## [4.1.2] - 2026-09-28
 
 Patch: defect fixes that move no public surface — no change to `schemas/`,

@@ -93,6 +93,7 @@ then keep only prefixes that task headers actually use.
 **Mode:** verify_first
 **Verifies:** tests/test_login.py::test_ok, tests/test_login.py::test_locked
 **Scenarios:** BEH-09, BEH-10
+**Touches:** src/auth/login.py
 
 ### TASK-008: Pin current login behaviour
 **TDD-waiver:** characterisation · sanction: spec-runner#428
@@ -128,6 +129,18 @@ instead of being mapped to something plausible.
   task's scenarios, not one that claims them falsely. `validate` only
   warns (the working tree is not the commit); an empty or malformed line is
   an error. Without the line nothing changes.
+- `Touches` — optional, any mode: comma-separated project-relative paths
+  the task declares it will change (`src/app/entry.py, pyproject.toml,
+  docs/`); a directory covers everything under it. No globs, no absolute
+  paths, no `..` — each is an error naming the entry. Under
+  `harness_guard: strict`, `spec-runner preflight` reports an open task whose
+  scope reaches the harness (`pyproject.toml`, `.github/workflows`, the
+  spec-runner config, `harness_files`, …) as a blocker, since the guard would
+  refuse every attempt; `harness_allow` exempts ordinary harness files, never
+  the config. A declared directory that merely contains a harness path is
+  reported as undecidable (`unavailable`), not as a blocker — declare the
+  files to check exactly. It declares scope; it does not grant permission, and nothing is
+  inferred from the task's prose.
 - `TDD-waiver` — `<class> · sanction: <id>`. Valid only on a task whose
   resolved mode is `standard`. It removes the baseline-RED requirement and
   nothing else: active claims and the frozen-files block still apply. The

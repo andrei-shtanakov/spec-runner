@@ -385,6 +385,60 @@ def _check_state_dir(config: ExecutorConfig) -> Check:
     return Check("state.writable", "ok", False, f"{target} can be created under {probe}")
 
 
+def _check_touches(config: ExecutorConfig) -> Check:
+    """harness-guard-companions #4: an open task whose declared `**Touches:**`
+    scope reaches the harness under `strict` cannot be completed — every
+    attempt would be refused after it was paid for."""
+    if config.harness_guard != "strict":
+        return Check(
+            "harness.touches",
+            "skipped",
+            False,
+            f"harness_guard is {config.harness_guard}: no harness edit is refused",
+        )
+    try:
+        from .harness import touch_conflicts
+        from .task import parse_tasks
+
+        tasks = parse_tasks(config.tasks_file) if config.tasks_file.exists() else []
+    except Exception as exc:  # spec.validation already reports an unparseable file
+        return Check("harness.touches", "unavailable", False, f"cannot parse tasks: {exc}")
+    declared = [t for t in tasks if t.status != "done" and t.touches]
+    if not declared:
+        return Check("harness.touches", "skipped", False, "no open task declares **Touches:**")
+    results = [(t.id, touch_conflicts(config, t.touches or [])) for t in declared]
+    definite = [(task_id, r.definite) for task_id, r in results if r.definite]
+    possible = [(task_id, r.possible) for task_id, r in results if r.possible]
+
+    def listed(pairs: list[tuple[str, list[str]]]) -> str:
+        return "; ".join(f"{task_id}: {', '.join(paths)}" for task_id, paths in pairs)
+
+    if definite:
+        detail = (
+            f"{listed(definite)} — harness_guard: strict refuses these edits, so the "
+            "task cannot complete; re-scope it, or exempt the file via harness_allow "
+            "(the spec-runner config cannot be exempted)"
+        )
+        if possible:
+            detail += f"; may also reach {listed(possible)}"
+        return Check("harness.touches", "broken", True, detail)
+    if possible:
+        return Check(
+            "harness.touches",
+            "unavailable",
+            False,
+            f"{listed(possible)} — a declared directory reaches these harness paths; "
+            "whether the task changes them cannot be told from a directory — "
+            "declare the files to check exactly",
+        )
+    return Check(
+        "harness.touches",
+        "ok",
+        False,
+        f"{len(declared)} declared scope(s) clear of the harness",
+    )
+
+
 def run_preflight(config: ExecutorConfig) -> PreflightReport:
     """Collect every check. Writes nothing, raises nothing."""
     checks: list[Check] = list(_check_spec(config))
@@ -420,6 +474,7 @@ def run_preflight(config: ExecutorConfig) -> PreflightReport:
     else:
         checks.append(Check("lint.runner", "skipped", False, "run_lint_on_done is false"))
 
+    checks.append(_check_touches(config))
     checks.append(_check_git(config))
     checks.append(_check_state_dir(config))
     return PreflightReport(checks=checks)
