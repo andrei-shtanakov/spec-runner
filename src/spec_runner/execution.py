@@ -1076,12 +1076,13 @@ def _execute_task(
                     f"{summary}. These files define how the task is verified "
                     "and must not be changed by the task. Revert them."
                 )
-                hint = (
-                    "the spec-runner config cannot be exempted; revert it"
-                    if any(is_control_plane(config, v) for v in violations)
-                    else "exempt an intended change via harness_allow in the config"
-                )
-                log_progress(f"⛔ Harness guard: {summary} (operator: {hint})", task_id)
+                policy = [v for v in violations if is_control_plane(config, v)]
+                hints = []
+                if policy:
+                    hints.append("the spec-runner config cannot be exempted; revert it")
+                if len(policy) < len(violations):
+                    hints.append("exempt an intended change via harness_allow in the config")
+                log_progress(f"⛔ Harness guard: {summary} (operator: {'; '.join(hints)})", task_id)
                 logger.error("Harness files mutated by agent", violations=violations)
                 state.record_attempt(
                     task_id,

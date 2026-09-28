@@ -10,6 +10,7 @@ is global, so a pattern written for one task would open the policy to every
 task after it.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -188,3 +189,55 @@ class TestTheLoadedConfigOutsideTheRoot:
         cli.main()
         assert seen and seen[0].config_path == (tmp_path / CONFIG).resolve()
         assert seen[0].project_root == (tmp_path / "app").resolve()
+
+
+class TestLocalReviewRound2:
+    def test_doctor_does_not_watch_the_real_config(self, tmp_path):
+        """The probe runs in a tempdir; the operator's config is not its
+        oracle, and editing it mid-probe must not fail the probe."""
+        from spec_runner.doctor import build_scratch
+
+        real = tmp_path / CONFIG
+        real.write_text("a: 1\n")
+        base = _cfg(tmp_path, config_path=real)
+        cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=None)
+        try:
+            assert cfg.config_path is None
+            before = snapshot_harness(cfg)
+            real.write_text("a: 2\n")
+            assert harness_violations(cfg, before) == []
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_mixed_violation_keeps_both_hints(self, tmp_path):
+        """`uv add` plus a config edit: the config cannot be exempted, but
+        `harness_allow` still applies to the lockfile — both are said."""
+        cfg = _cfg(tmp_path, harness_guard="strict")
+        cfg.logs_dir.mkdir()
+        _write(tmp_path, CONFIG, "review_policy: required\n")
+
+        def fake_agent(config, invocation, **kwargs):
+            _write(tmp_path, CONFIG, "review_policy: advisory\n")
+            _write(tmp_path, "uv.lock", "v2\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        progress: list[str] = []
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            patch(
+                "spec_runner.execution.log_progress",
+                side_effect=lambda line, *_a, **_k: progress.append(line),
+            ),
+            ExecutorState(cfg) as state,
+        ):
+            assert execute_task(_task(), cfg, state) is False
+        (line,) = [entry for entry in progress if "Harness guard" in entry]
+        assert "cannot be exempted" in line and "harness_allow" in line

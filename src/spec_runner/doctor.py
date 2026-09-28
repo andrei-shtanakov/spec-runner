@@ -292,6 +292,10 @@ def build_scratch(
     cfg.state_file = Path("spec/.executor-state.db")
     cfg.logs_dir = Path("spec/.executor-logs")
     cfg.plugins_dir = Path("spec/plugins")
+    # The operator's config is not the sandbox's: left in place, the harness
+    # guard would watch a file outside the scratch root and blame the probe
+    # for an edit made in the real project while it ran.
+    cfg.config_path = None
     cfg.__post_init__()
 
     # Hook flags
