@@ -589,6 +589,18 @@
 #147/#148), #136 (PR #144), #137 (PR #145, с явным перечислением четырёх несделанных
 сопутствующих пунктов в теле ответа). Открытыми остаются #138, #139, #140, #141, #142.
 
+- [x] **executable-of-flag-values** (inbox spec-runner#593, from devtools) @owner:github:andrei-shtanakov @id:executable-of-flag-values @epic:eco.spec-toolchain
+      `executable_of` пропускал флаги обёртки, но не их значения:
+      `uv run --frozen --group governance pytest -q` → `governance`, адаптер не
+      выводился (verify_first отказывал на validate), объявленный
+      `tdd_runner: pytest` отказывал «does not run pytest». Та же слепота в
+      `strip_positional_paths`: scoped-команда выбрасывала `governance` как путь.
+      Фикс: курируемый allowlist `_WRAPPER_VALUE_FLAGS` (uv run / poetry / python
+      `--help`), читается только **до** исполняемого раннера — после него флаг
+      принадлежит раннеру (у uv `-p` — версия Python, у pytest — плагин). Тесты:
+      `tests/test_wrapper_flag_values.py`. Не покрыто: флаги-с-значением прочих
+      обёрток (tox/nox/hatch/pdm) — по-прежнему boolean по умолчанию.
+
 - [x] **review-pr-json-purity** (inbox spec-runner#116, from maestro#post-pr-command): @owner:github:andrei-shtanakov @id:review-pr-json-purity
       при `--json` stdout несёт ровно один JSON-документ на всех путях выхода (0/1/2),
       диагностика — только в stderr. Было: пути лимитов (`_apply_phase`) и fail-closed
