@@ -10,6 +10,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The harness guard now watches the spec-runner config itself
+  (harness-guard-companions #1).** `spec-runner.config.yaml` (and the legacy
+  `spec/executor.config.yaml`) decides how an attempt is judged —
+  `review_policy`, budgets, `execution_mode`, `harness_guard` — but was on
+  neither `HARNESS_CANDIDATES` nor the default `harness_files`, so an agent
+  could loosen the policy it is checked by and, under `auto_commit`, hand the
+  next run the weakened config. Creating, modifying or deleting either file is
+  now a harness violation under `warn`/`strict`, and no `harness_allow` glob
+  exempts it (the list is global: a pattern written for one task would open the
+  policy to every task after it). The operator's hint on the progress line says
+  so instead of pointing at `harness_allow`.
+
 ## [4.1.1] - 2026-09-28
 
 Patch: a defect fix that moves no public surface — no change to `schemas/`,

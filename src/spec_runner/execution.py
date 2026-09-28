@@ -935,7 +935,7 @@ def _execute_task(
         # pre_start_hook — so `uv sync` rewriting uv.lock is not an agent
         # mutation. #137: the snapshot belongs to the task, not the attempt,
         # so a retry cannot re-baseline a forbidden edit into legitimacy.
-        from .harness import harness_violations
+        from .harness import harness_violations, is_control_plane
 
         harness_before = (harness_baseline or HarnessBaseline()).capture(config)
 
@@ -1076,11 +1076,12 @@ def _execute_task(
                     f"{summary}. These files define how the task is verified "
                     "and must not be changed by the task. Revert them."
                 )
-                log_progress(
-                    f"⛔ Harness guard: {summary} (operator: exempt an intended "
-                    "change via harness_allow in the config)",
-                    task_id,
+                hint = (
+                    "the spec-runner config cannot be exempted; revert it"
+                    if any(is_control_plane(v) for v in violations)
+                    else "exempt an intended change via harness_allow in the config"
                 )
+                log_progress(f"⛔ Harness guard: {summary} (operator: {hint})", task_id)
                 logger.error("Harness files mutated by agent", violations=violations)
                 state.record_attempt(
                     task_id,

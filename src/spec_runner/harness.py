@@ -18,12 +18,15 @@ after: created/modified/deleted files are violations. Modes
   feeds the retry prompt so the next attempt knows not to touch the
   harness. Operators opting in can exempt paths via ``harness_allow``.
 - ``off`` — no snapshotting at all.
+
+The spec-runner config itself (`CONTROL_PLANE`) is always on the surface and
+never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
 from pathlib import Path
 
-from .config import ExecutorConfig
+from .config import CONFIG_FILE, LEGACY_CONFIG_FILE, ExecutorConfig
 from .logging import get_logger
 
 logger = get_logger("harness")
@@ -45,6 +48,17 @@ HARNESS_CANDIDATES = (
     "Makefile",
     ".github/workflows",
 )
+
+# The policy an attempt is judged by — `review_policy`, the budget,
+# `execution_mode`, this guard's own mode (harness-guard-companions #1). Watched
+# in both config locations and never exempt: `harness_allow` is global, so a
+# glob written for one task would open the policy to every task after it.
+CONTROL_PLANE = (CONFIG_FILE.as_posix(), LEGACY_CONFIG_FILE.as_posix())
+
+
+def is_control_plane(violation: str) -> bool:
+    """Whether a ``"<kind> <path>"`` violation line names the config."""
+    return violation.split(" ", 1)[1] in CONTROL_PLANE
 
 
 def _hash_file(path: Path) -> str:
@@ -72,7 +86,7 @@ def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
     if config.harness_guard == "off":
         return None
     snapshot: dict[str, str] = {}
-    candidates = list(HARNESS_CANDIDATES) + list(config.harness_files)
+    candidates = [*HARNESS_CANDIDATES, *CONTROL_PLANE, *config.harness_files]
     for rel in candidates:
         for f in _iter_files(config.project_root / rel):
             try:
@@ -119,7 +133,8 @@ def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) ->
     """Compare the harness surface against `before`; return violation lines.
 
     Each entry is ``"<created|modified|deleted> <path>"``. Paths matching a
-    ``harness_allow`` glob (project-root-relative) are exempt.
+    ``harness_allow`` glob (project-root-relative) are exempt, except the
+    config (`CONTROL_PLANE`).
     """
     if before is None:
         return []
@@ -140,6 +155,7 @@ def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) ->
         violations = [
             v
             for v in violations
-            if not any(Path(v.split(" ", 1)[1]).match(pattern) for pattern in config.harness_allow)
+            if is_control_plane(v)
+            or not any(Path(v.split(" ", 1)[1]).match(pattern) for pattern in config.harness_allow)
         ]
     return violations
