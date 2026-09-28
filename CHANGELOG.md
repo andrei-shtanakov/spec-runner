@@ -10,6 +10,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-09-28
+
+Patch: a defect fix that moves no public surface — no change to `schemas/`,
+`docs/state-schema.md` or any CLI argument (checked by diff against v4.1.0).
+
 ### Fixed
 
 - **A wrapper's flag value is no longer read as the test runner (#593).**
@@ -3905,7 +3910,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v2.36.0...v3.0.0
