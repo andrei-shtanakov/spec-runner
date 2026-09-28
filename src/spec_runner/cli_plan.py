@@ -20,10 +20,12 @@ from .prompt import (
     template_hash,
 )
 from .runner import (
+    CliInvocation,
     build_cli_command,
     check_error_patterns,
     log_progress,
 )
+from .sandbox import sandboxed
 from .spec import (
     SpecMeta,
     ancestor_stages,
@@ -185,13 +187,18 @@ def _generate_stage_draft(
             template=config.command_template,
             skip_permissions=config.skip_permissions,
         )
-        result = invoke(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.task_timeout_minutes * 60,
-            cwd=config.project_root,
-        )
+        call = sandboxed(config, CliInvocation(cmd, "text"))
+        try:
+            result = invoke(
+                call.argv,
+                capture_output=True,
+                text=True,
+                timeout=config.task_timeout_minutes * 60,
+                cwd=config.project_root,
+                env=call.env,
+            )
+        finally:
+            call.cleanup()
         if result.returncode != 0:
             print(f"generation failed at {stage}: {result.stderr[:300]}")
             _restore(path, previous)
@@ -677,13 +684,18 @@ def cmd_plan(args, config: ExecutorConfig):
                 template=config.command_template,
                 skip_permissions=config.skip_permissions,
             )
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=config.task_timeout_minutes * 60,
-                cwd=config.project_root,
-            )
+            call = sandboxed(config, CliInvocation(cmd, "text"))
+            try:
+                result = subprocess.run(
+                    call.argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=config.task_timeout_minutes * 60,
+                    cwd=config.project_root,
+                    env=call.env,
+                )
+            finally:
+                call.cleanup()
 
             if result.returncode != 0:
                 logger.error(
@@ -814,13 +826,18 @@ When done, respond with: PLAN_READY
 
             print("\n🤖 Claude is analyzing...")
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=config.task_timeout_minutes * 60,
-                cwd=config.project_root,
-            )
+            call = sandboxed(config, CliInvocation(cmd, "text"))
+            try:
+                result = subprocess.run(
+                    call.argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=config.task_timeout_minutes * 60,
+                    cwd=config.project_root,
+                    env=call.env,
+                )
+            finally:
+                call.cleanup()
 
             output = result.stdout
 

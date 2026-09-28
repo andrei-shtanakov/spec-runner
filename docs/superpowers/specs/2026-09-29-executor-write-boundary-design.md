@@ -117,9 +117,11 @@ preset needed an argv change.
 
 ### 4.3 One seam
 
-Five sites build and launch an agent argv today (`execution`, `review`, `tdd`, two
-in `review_pr`), and `build_cli_invocation` knows neither `project_root` nor the
-config. So the seam is one new function over the finished invocation, not a change
+Eight sites build and launch an agent argv today (`execution`, `review`, `tdd`,
+two in `review_pr`, three in `cli_plan` — the last found during implementation),
+and `build_cli_invocation` knows neither `project_root` nor the config. The public
+`runner.run_claude_async` is library API with no internal caller and is not
+wrapped. A bare YAML `on`/`off` is read as a boolean and taken as written. So the seam is one new function over the finished invocation, not a change
 inside the builder:
 
 ```python
@@ -148,6 +150,13 @@ default changes.
   (which #596 guards inside the project).
 - **Reads and network are open.** This bounds writes (#600's case). Exfiltration and
   reads of secrets are out of scope.
+- **Only the agent's own process tree is bounded.** The profile denies
+  `file-write*` and keeps `(allow default)` for everything else (Mach lookups,
+  process launch, network), because the CLIs need them (keychain, DNS). A write
+  *delegated* to a process outside the tree — an app driven over launchd/Apple
+  Events (`osascript`, `open`), a local daemon over a socket — is not refused.
+  This closes the direct write #600 reports; it is not a defence against an agent
+  deliberately routing around it.
 - **`sandbox-exec` is deprecated.** If Apple removes it, `on` degrades to a warning
   and `required` refuses — loudly, never silently open.
 - **claude's own session logs are lost** under the sandbox (`~/.claude` not

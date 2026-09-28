@@ -2180,14 +2180,20 @@ def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
-    result = subprocess.run(
-        invocation.argv,
-        capture_output=True,
-        text=True,
-        timeout=config.task_timeout_minutes * 60,
-        cwd=config.project_root,
-        env=agent_env(),
-    )
+    from .sandbox import sandboxed
+
+    call = sandboxed(config, invocation, agent_env())
+    try:
+        result = subprocess.run(
+            call.argv,
+            capture_output=True,
+            text=True,
+            timeout=config.task_timeout_minutes * 60,
+            cwd=config.project_root,
+            env=call.env,
+        )
+    finally:
+        call.cleanup()
     parsed = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )

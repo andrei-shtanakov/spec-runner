@@ -550,14 +550,20 @@ def _run_agent_process(
     `conftest._no_real_agent_calls` guards it the same way, refusing a bare
     paid-agent `claude_command` before this reaches `subprocess.run`.
     """
-    return subprocess.run(
-        invocation.argv,
-        capture_output=True,
-        text=True,
-        timeout=config.task_timeout_minutes * 60,
-        cwd=config.project_root,
-        env=agent_env(),
-    )
+    from .sandbox import sandboxed
+
+    call = sandboxed(config, invocation, agent_env())
+    try:
+        return subprocess.run(
+            call.argv,
+            capture_output=True,
+            text=True,
+            timeout=config.task_timeout_minutes * 60,
+            cwd=config.project_root,
+            env=call.env,
+        )
+    finally:
+        call.cleanup()
 
 
 def execute_task(

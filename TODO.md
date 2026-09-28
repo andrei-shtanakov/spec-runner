@@ -617,6 +617,10 @@
       **Дизайн 2026-09-29:** `docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md`
       — Seatbelt/bubblewrap вокруг каждого вызова агента, замеры путей состояния
       по пресетам (macOS 26.7), три открытых вопроса владельцу (§8).
+      **Фаза 1 реализована 2026-09-29** (macOS, дефолт `off`; на вопросы §8
+      приняты предложения документа — `off`, uv-кэш автоматически, незамеренные
+      CLI с предупреждением). Живая проверка: `doctor --cli=claude` под `on` —
+      READY. Осталось: фаза 2 (bubblewrap, замер на VPS), фаза 3 (дефолт `on`).
 
 - [x] **executable-of-flag-values** (inbox spec-runner#593, from devtools) @owner:github:andrei-shtanakov @id:executable-of-flag-values @epic:eco.spec-toolchain
       `executable_of` пропускал флаги обёртки, но не их значения:
