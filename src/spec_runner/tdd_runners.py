@@ -401,6 +401,69 @@ _RUNNER_WRAPPERS = frozenset(
 )
 _PYTHONS = re.compile(r"^python(\d(\.\d+)?)?$")
 
+#: Wrapper flags that take their value as the NEXT token (#593), so that
+#: value is neither the executable nor a stray test path. A curated allowlist
+#: under `_flag_takes_separate_value`'s terminal policy — a flag not named here
+#: is boolean. Sourced from `uv run --help` (uv 0.11), `poetry --help` and
+#: `python --help`. Read only BEFORE the runner executable: past it, a flag is
+#: the runner's (uv's `-p` is a Python version, pytest's is a plugin).
+_WRAPPER_VALUE_FLAGS = frozenset(
+    {
+        # uv run
+        "--extra",
+        "--no-extra",
+        "--group",
+        "--no-group",
+        "--only-group",
+        "--no-editable-package",
+        "--env-file",
+        "-w",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--package",
+        "--python-platform",
+        "--index",
+        "--default-index",
+        "-i",
+        "--index-url",
+        "--extra-index-url",
+        "-f",
+        "--find-links",
+        "--index-strategy",
+        "--keyring-provider",
+        "-P",
+        "--upgrade-package",
+        "--upgrade-group",
+        "--resolution",
+        "--prerelease",
+        "--fork-strategy",
+        "--exclude-newer",
+        "--exclude-newer-package",
+        "--no-sources-package",
+        "--reinstall-package",
+        "--link-mode",
+        "-C",
+        "--config-setting",
+        "--config-settings-package",
+        "--no-build-isolation-package",
+        "--no-build-package",
+        "--no-binary-package",
+        "--cache-dir",
+        "--refresh-package",
+        "-p",
+        "--python",
+        "--color",
+        "--allow-insecure-host",
+        "--directory",
+        "--project",
+        "--config-file",
+        # python
+        "-W",
+        "-X",
+    }
+)
+
 #: pytest's final line, e.g. `===== 1 failed, 2 passed, 1 skipped in 0.01s =====`.
 #: Matched whole, and every count in it is read — an earlier version anchored on
 #: the *first* count and so read `1 failed, 97 passed` as "one test ran"
@@ -513,10 +576,13 @@ def strip_positional_paths(
       policy (rounds 2-4): a flag is BOOLEAN BY DEFAULT (its next token is
       free to be read as a stray path and dropped) unless it is in the
       curated ``value_flags`` allowlist for this adapter, or its value is
-      visibly attached already.
+      visibly attached already. Before the runner executable the allowlist
+      is the wrappers' own, `_WRAPPER_VALUE_FLAGS` (#593): `uv run --group
+      governance pytest` used to lose `governance` as a stray path.
     """
     kept: list[str] = []
     protect_next = False
+    past_executable = False
     once_remaining = set(keep_once)
     for token in tokens:
         if protect_next:
@@ -525,13 +591,14 @@ def strip_positional_paths(
             continue
         if token.startswith("-"):
             kept.append(token)
-            protect_next = _flag_takes_separate_value(token, value_flags)
+            flags = value_flags if past_executable else _WRAPPER_VALUE_FLAGS
+            protect_next = _flag_takes_separate_value(token, flags)
             continue
-        if (
-            token in keep_exact
-            or PurePosixPath(token).name in executable_names
-            or _PYTHONS.match(PurePosixPath(token).name)
-        ):
+        if PurePosixPath(token).name in executable_names:
+            past_executable = True
+            kept.append(token)
+            continue
+        if token in keep_exact or _PYTHONS.match(PurePosixPath(token).name):
             kept.append(token)
             continue
         if token in once_remaining:
@@ -545,9 +612,14 @@ def strip_positional_paths(
 
 
 def executable_of(test_command: str) -> str | None:
-    """The program a command actually runs, past any wrappers."""
+    """The program a command actually runs, past any wrappers and their flags."""
+    skip_next = False
     for token in command_tokens(test_command):
+        if skip_next:
+            skip_next = False
+            continue
         if token.startswith("-") and token != "-m":
+            skip_next = _flag_takes_separate_value(token, _WRAPPER_VALUE_FLAGS)
             continue
         name = PurePosixPath(token).name
         if name in _RUNNER_WRAPPERS or _PYTHONS.match(name):

@@ -10,6 +10,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A wrapper's flag value is no longer read as the test runner (#593).**
+  `uv run --frozen --group governance pytest -q` resolved to `governance`: no
+  adapter was inferred, so a `verify_first` task was refused at `validate`, and
+  a declared `tdd_runner: pytest` was refused as "does not run pytest". The
+  scoped verify command dropped the same `governance` as a stray test path.
+  Flags of `uv run`, `poetry` and `python` known to take a separate value are
+  now skipped with it, before the runner executable only; any other flag is
+  still read as boolean. The `--group=governance` spelling was never affected.
+
 ## [4.1.0] - 2026-09-24
 
 Minor: every change is additive. No `--json-result`, state-DB or `schemas/`
