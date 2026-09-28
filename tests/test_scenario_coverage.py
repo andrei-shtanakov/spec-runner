@@ -183,6 +183,8 @@ class TestAtCommit:
         assert refusal is not None
         assert refusal.kind is RefusalKind.INSTRUMENT
         assert "tests/missing.py" in refusal
+        # PR #590 deferred minor: git's own words, not only "cannot be read".
+        assert "(git: " in refusal and "does not exist" in refusal
 
 
 def _validate(tmp_path, body: str, files: dict[str, str] | None = None):
@@ -237,4 +239,53 @@ class TestValidateWarnings:
             "**Mode:** verify_first\n**Verifies:** tests/a.py::t[a,b\n**Scenarios:** BEH-09\n",
         )
         assert any("unclosed" in e for e in result.errors)
+        assert not any("uncovered" in w for w in result.warnings)
+
+
+class TestValidateWarningMinors:
+    """Deferred minors of PR #590, closed."""
+
+    def test_a_group_file_outside_the_root_is_not_read(self, tmp_path, monkeypatch):
+        """A node id may spell `..`; `validate` must not read past the project
+        root to judge coverage — it says the file is outside and stops."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        (tmp_path / "outside_test.py").write_text('"""BEH-09"""\ndef test_x():\n    pass\n')
+        read: list[Path] = []
+        real_read_text = Path.read_text
+
+        def spy(self, *args, **kwargs):
+            read.append(self.resolve())
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", spy)
+        result = _validate(
+            project,
+            "**Mode:** verify_first\n**Verifies:** ../outside_test.py::test_x\n"
+            "**Scenarios:** BEH-09\n",
+        )
+        assert (tmp_path / "outside_test.py").resolve() not in read
+        joined = "\n".join(result.warnings)
+        assert "outside the project root" in joined
+        assert "uncovered" not in joined
+
+    def test_a_missing_only_file_warns_once(self, tmp_path):
+        """The missing-file warning already says it; "uncovered" beside it
+        judged coverage over no files at all."""
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/nope.py::test_x\n**Scenarios:** BEH-09\n",
+        )
+        assert any("tests/nope.py" in w and "does not exist" in w for w in result.warnings)
+        assert not any("uncovered" in w for w in result.warnings)
+
+    def test_a_partly_missing_group_is_not_judged(self, tmp_path):
+        """The scenario may live in the file that is not there yet."""
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n"
+            "**Verifies:** tests/test_a.py::test_x, tests/nope.py::test_y\n"
+            "**Scenarios:** BEH-10\n",
+            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
         assert not any("uncovered" in w for w in result.warnings)

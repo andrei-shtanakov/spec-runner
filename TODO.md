@@ -933,7 +933,7 @@ workstream не писался; все шесть узлов бандла — `s
 `spec approve` (`apply_approval`) и `spec adopt`
 (`spec_commands.py:160`, `pin_upstream=status == "approved"`), — а ручная
 перепиновка черновика есть ровно тот дефект, который заведён как
-spec-runner#426. Узлы не одобрены, каскад `stale` статусом не
+spec-runner#426 (передан владельцу моста 2026-09-28: devtools#467). Узлы не одобрены, каскад `stale` статусом не
 срабатывает, и пины встанут на место при первом approve цепочки.
 
 - [x] **restore-step5-excludes-only-doors** (spec-runner#480, из ревью PR #522) @owner:TBD @id:restore-step5-excludes-only-doors
@@ -1270,6 +1270,13 @@ tasks-артефакта и семь раундов подряд честно н
       devtools — devtools#386 (их решение, не наше ожидание).
 
 - [x] **verify-task-baseline-evidence-guard** (spec-runner#402, from devtools) @owner:github:andrei-shtanakov @id:verify-task-baseline-evidence-guard @epic:eco.spec-toolchain
+      **Отложенные minor PR #590 закрыты 2026-09-28:** `validate` не читает
+      файл группы за корнем проекта (`..` в node id), а называет его; покрытие
+      в дереве судится только при всех файлах группы на месте (без двойного
+      предупреждения); INSTRUMENT-отказ по нечитаемому файлу цитирует git.
+      Оставлены осознанно: INSTRUMENT (exit 2) по отсутствующему в коммите
+      файлу — это прописано в спеке §5; `verify: pass` у green, отказанного по
+      покрытию, правда о прогоне, и на него ничто не гейтит.
       Минимум из запроса частично есть: `validate` сообщает о несуществующем
       файле в группе `verify_first` (`validate.py:745`) — но как
       **предупреждение**, а не отказ: рабочее дерево ≠ коммит, который
@@ -1743,7 +1750,7 @@ Maestro может дропнуть per-workstream workaround со `spec/.gitign
 - [x] `docs/CONTRACTS.md` создан: матрица полей, семантика `approved_by`/`generated_by`, политика бампа (`bede398`)
 - [x] Golden-фикстура в package data (`spec_runner.contract_fixtures`) + round-trip тест (`bede398`)
 - [x] `upstream_hashes` и любые чужие ключи сохраняются через `SpecMeta.extra` losslessly — шире, чем просили (`d3626c5`, `b1346d2`)
-- [ ] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI) @owner:github:andrei-shtanakov @id:steward-specmeta-v2-handoff @epic:eco.spec-toolchain
+- [x] Отправить steward handoff `../prograph-vault/authored/notes/2026-07-26-steward-specmeta-v2-shipped.md` — написан, блокер снят (v2.11.0 на PyPI). Сверено 2026-09-28: применён — steward ре-вендорил SpecMeta v2 2026-08-09 от тега v2.22.0 (`steward/CLAUDE.md`, `src/steward/_vendor/spec_meta.py`: `CONTRACT: SPEC_META_CONTRACT v2`) @owner:github:andrei-shtanakov @id:steward-specmeta-v2-handoff @epic:eco.spec-toolchain
 
 #### Follow-up: форма `owner_role` устарела по DEC-007 (найдено 2026-07-26, после релиза)
 
