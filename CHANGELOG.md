@@ -10,6 +10,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-09-29
+
+Minor: one additive task field (`**Touches:**`) and one new `preflight` check
+id. No `--json-result`, state-DB or `schemas/` change, no CLI argument change
+(checked by diff against v4.1.2). A config with an empty `harness_files` or
+`harness_allow` entry is now refused at load — it already crashed the harness
+guard at its first comparison. The new check stays silent until tasks declare
+the line: devtools' task bridge does not emit it yet (devtools#474).
+
 ### Added
 
 - **`**Touches:**` — a task's declared write scope, checked by `preflight`
@@ -22,8 +31,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `unavailable` (non-blocking — it cannot be told from a directory); the check
   is `skipped` outside `strict` or when no task declares the line — nothing is
   read out of a task's prose. An empty `harness_files`/`harness_allow` entry is
-  now refused when the config loads (`Path.match("")` raised in the guard). `harness_allow` exempts
-  ordinary harness files, never the spec-runner config. An empty entry, an
+  now refused when the config loads (`Path.match("")` raised in the guard).
+  `harness_allow` exempts ordinary harness files, never the spec-runner config. An empty entry, an
   absolute path, `..` or a glob is a named `validate` error. The `--json`
   schema is unchanged: a new check id is data. Design:
   `docs/superpowers/specs/2026-09-28-touches-preflight-design.md`.
@@ -3968,7 +3977,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...v4.2.0
 [4.1.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.0.0...v4.1.0
