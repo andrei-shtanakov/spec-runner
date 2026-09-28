@@ -589,6 +589,18 @@
 #147/#148), #136 (PR #144), #137 (PR #145, с явным перечислением четырёх несделанных
 сопутствующих пунктов в теле ответа). Открытыми остаются #138, #139, #140, #141, #142.
 
+- [ ] **criteria-closure-verify** (inbox spec-runner#603, from devtools — DarkFactory E) @owner:github:andrei-shtanakov @id:criteria-closure-verify @epic:eco.spec-toolchain
+      `spec-runner verify --criteria --request <file.json> --json` по контракту
+      `criteria-closure/v1` (производитель — spec-runner, devtools вендорит):
+      квалифицированный токен `CODE:BEH-NN` в `scenarios.py` (засчитывается
+      только внутри определения теста), гейт задачи по `**Scenarios:**` на
+      коммите, прогон на `product_sha` в свежем клоне (G0 исполнение продукта
+      в фазе `call`, G1 окружение из lock, G3 два зелёных прогона подряд),
+      схемы запроса/ответа + минимальная версия. Норма — devtools
+      `docs/superpowers/specs/2026-09-28-bundle-criteria-oracle-design.md`
+      (коммит `5727151`, ветка ещё не влита), приложение-механизм не норма.
+      Большая работа: сначала свой дизайн против их §4–5.
+
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
       Исполнитель запускается с `skip_permissions: true` по умолчанию
       (`config.py`, → `--dangerously-skip-permissions` у claude) и может писать
@@ -602,6 +614,9 @@
       владельца (затрагивает все CLI-пресеты, не только claude); devtools
       параллельно привязывает reuse PASS к хэшу леджера (devtools#469 п.1) —
       это сужение, не граница.
+      **Дизайн 2026-09-29:** `docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md`
+      — Seatbelt/bubblewrap вокруг каждого вызова агента, замеры путей состояния
+      по пресетам (macOS 26.7), три открытых вопроса владельцу (§8).
 
 - [x] **executable-of-flag-values** (inbox spec-runner#593, from devtools) @owner:github:andrei-shtanakov @id:executable-of-flag-values @epic:eco.spec-toolchain
       `executable_of` пропускал флаги обёртки, но не их значения:
