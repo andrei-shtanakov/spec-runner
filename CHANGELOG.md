@@ -12,6 +12,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The MCP launch scope reads the config the parent loaded (review of
+  #596).** With `paths.root` in the YAML, `project_root` differs from the
+  directory the config was read from, and `LaunchScope` looked for the YAML
+  under `project_root`: the flat-launch `spec_prefix` refinement rebuilt the
+  parent's config from a file that does not exist (defaults), and the
+  reproducibility check compared that degraded copy with a child built the
+  same way. The parent's rebuild now reads the file `main()` loaded; the child
+  simulation reads the YAML the child will find by its `--project-root`, so a
+  child that would miss the parent's policy is refused as irreproducible,
+  naming that path.
+
 - **`validate`'s scenario-coverage warning (#402 follow-up).** A group file
   whose node id spells `..` past the project root is named, not read; when no
   group file is present at all (or the group names none), no second
