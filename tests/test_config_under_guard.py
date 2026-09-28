@@ -1,0 +1,243 @@
+"""harness-guard-companions #1: the policy file is part of the oracle.
+
+`spec-runner.config.yaml` decides how a task is judged — `review_policy`, the
+budget, `execution_mode`, `harness_guard` itself — yet it was on neither
+`HARNESS_CANDIDATES` nor any default `harness_files`. An agent in the tree
+could rewrite the policy it is checked by; under `auto_commit` the edit rode
+into the candidate and the next run loaded it. The config is now guarded in
+both its locations, and no `harness_allow` glob exempts it: the exemption list
+is global, so a pattern written for one task would open the policy to every
+task after it.
+"""
+
+import shutil
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from spec_runner.config import ExecutorConfig
+from spec_runner.execution import execute_task
+from spec_runner.harness import harness_violations, snapshot_harness
+from spec_runner.runner import CliInvocation
+from spec_runner.state import ExecutorState
+from spec_runner.task import Task
+
+CONFIG = "spec-runner.config.yaml"
+LEGACY = "spec/executor.config.yaml"
+
+
+def _cfg(tmp_path: Path, **overrides) -> ExecutorConfig:
+    """No hook shells out: this suite is about the guard, not the gates."""
+    return ExecutorConfig(
+        project_root=tmp_path,
+        state_file=tmp_path / "state.db",
+        logs_dir=tmp_path / "logs",
+        create_git_branch=False,
+        sync_deps=False,
+        run_tests_on_done=False,
+        run_lint_on_done=False,
+        auto_commit=False,
+        run_review=False,
+        **overrides,
+    )
+
+
+def _task() -> Task:
+    return Task(id="TASK-001", name="demo", priority="p0", status="todo", estimate="")
+
+
+def _write(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+class TestTheConfigIsOnTheSurface:
+    @pytest.mark.parametrize("rel", [CONFIG, LEGACY])
+    def test_a_modified_config_is_a_violation(self, tmp_path, rel):
+        _write(tmp_path, rel, "review_policy: required\n")
+        cfg = _cfg(tmp_path)
+        before = snapshot_harness(cfg)
+        _write(tmp_path, rel, "review_policy: advisory\n")
+        assert harness_violations(cfg, before) == [f"modified {rel}"]
+
+    @pytest.mark.parametrize("rel", [CONFIG, LEGACY])
+    def test_a_created_config_is_a_violation(self, tmp_path, rel):
+        """A project running on defaults has no file to modify — creating
+        one is the same move."""
+        cfg = _cfg(tmp_path)
+        before = snapshot_harness(cfg)
+        _write(tmp_path, rel, "harness_guard: off\n")
+        assert harness_violations(cfg, before) == [f"created {rel}"]
+
+    def test_a_deleted_config_is_a_violation(self, tmp_path):
+        _write(tmp_path, CONFIG, "execution_mode: tdd\n")
+        cfg = _cfg(tmp_path)
+        before = snapshot_harness(cfg)
+        (tmp_path / CONFIG).unlink()
+        assert harness_violations(cfg, before) == [f"deleted {CONFIG}"]
+
+
+class TestNoExemptionReachesIt:
+    @pytest.mark.parametrize("allow", [["*.yaml"], [CONFIG], ["*"], ["spec/*.yaml", LEGACY]])
+    def test_harness_allow_does_not_exempt_the_config(self, tmp_path, allow):
+        _write(tmp_path, CONFIG, "a: 1\n")
+        _write(tmp_path, LEGACY, "a: 1\n")
+        cfg = _cfg(tmp_path, harness_allow=allow)
+        before = snapshot_harness(cfg)
+        _write(tmp_path, CONFIG, "a: 2\n")
+        _write(tmp_path, LEGACY, "a: 2\n")
+        assert harness_violations(cfg, before) == [f"modified {CONFIG}", f"modified {LEGACY}"]
+
+    def test_the_same_glob_still_exempts_other_files(self, tmp_path):
+        _write(tmp_path, CONFIG, "a: 1\n")
+        cfg = _cfg(tmp_path, harness_allow=["*.yaml", "uv.lock"])
+        before = snapshot_harness(cfg)
+        _write(tmp_path, "uv.lock", "v2\n")
+        _write(tmp_path, CONFIG, "a: 2\n")
+        assert harness_violations(cfg, before) == [f"modified {CONFIG}"]
+
+
+class TestAnAgentRewritingItsPolicy:
+    """Through `execute_task`: the agent reports success after loosening the
+    review policy. Strict fails the attempt before the gates run."""
+
+    def _run(self, cfg, tmp_path):
+        _write(tmp_path, CONFIG, "review_policy: required\n")
+
+        def fake_agent(config, invocation, **kwargs):
+            _write(tmp_path, CONFIG, "review_policy: advisory\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            ExecutorState(cfg) as state,
+        ):
+            result = execute_task(_task(), cfg, state)
+            return result, state.get_task_state("TASK-001")
+
+    def test_strict_fails_attempt_before_gates(self, tmp_path):
+        cfg = _cfg(tmp_path, harness_guard="strict")
+        cfg.logs_dir.mkdir()
+        result, ts = self._run(cfg, tmp_path)
+        assert result is False
+        assert f"modified {CONFIG}" in (ts.attempts[-1].error or "")
+
+    def test_the_agent_is_not_told_how_to_exempt_itself(self, tmp_path):
+        """The operator's hint must not offer `harness_allow` for a change it
+        cannot exempt."""
+        cfg = _cfg(tmp_path, harness_guard="strict")
+        cfg.logs_dir.mkdir()
+        progress: list[str] = []
+        with patch(
+            "spec_runner.execution.log_progress",
+            side_effect=lambda line, *_a, **_k: progress.append(line),
+        ):
+            result, ts = self._run(cfg, tmp_path)
+        assert result is False
+        assert "harness_allow" not in (ts.attempts[-1].error or "")
+        guard_lines = [line for line in progress if "Harness guard" in line]
+        assert guard_lines and all("harness_allow" not in line for line in guard_lines)
+        assert any("cannot be exempted" in line for line in guard_lines)
+
+
+class TestTheLoadedConfigOutsideTheRoot:
+    """Local review of this change: `paths.root` in the YAML moves
+    `project_root` away from the directory the config was read from. The file
+    that decides the next run is then the loaded one, not a namesake under the
+    root — so the guard watches the path the CLI actually loaded."""
+
+    def _setup(self, tmp_path: Path, **overrides):
+        app = tmp_path / "app"
+        app.mkdir()
+        loaded = tmp_path / CONFIG
+        loaded.write_text('paths:\n  root: "./app"\nreview_policy: required\n')
+        return loaded, _cfg(app, config_path=loaded, **overrides)
+
+    def test_an_edit_to_the_loaded_file_is_a_violation(self, tmp_path):
+        loaded, cfg = self._setup(tmp_path)
+        before = snapshot_harness(cfg)
+        loaded.write_text('paths:\n  root: "./app"\nreview_policy: advisory\n')
+        assert harness_violations(cfg, before) == [f"modified {loaded.as_posix()}"]
+
+    def test_no_glob_exempts_it(self, tmp_path):
+        loaded, cfg = self._setup(tmp_path, harness_allow=["*", "*.yaml", "**/*.yaml"])
+        before = snapshot_harness(cfg)
+        loaded.write_text("harness_guard: off\n")
+        assert harness_violations(cfg, before) == [f"modified {loaded.as_posix()}"]
+
+    def test_the_cli_stamps_the_loaded_path(self, tmp_path, monkeypatch):
+        """`main()` resolves the config against the CWD and records it."""
+        from spec_runner import cli
+
+        (tmp_path / "app").mkdir()
+        (tmp_path / CONFIG).write_text('paths:\n  root: "./app"\n')
+        monkeypatch.chdir(tmp_path)
+        seen: list = []
+        monkeypatch.setattr(cli, "cmd_validate", lambda args, config: seen.append(config))
+        monkeypatch.setattr("sys.argv", ["spec-runner", "validate"])
+        cli.main()
+        assert seen and seen[0].config_path == (tmp_path / CONFIG).resolve()
+        assert seen[0].project_root == (tmp_path / "app").resolve()
+
+
+class TestLocalReviewRound2:
+    def test_doctor_does_not_watch_the_real_config(self, tmp_path):
+        """The probe runs in a tempdir; the operator's config is not its
+        oracle, and editing it mid-probe must not fail the probe."""
+        from spec_runner.doctor import build_scratch
+
+        real = tmp_path / CONFIG
+        real.write_text("a: 1\n")
+        base = _cfg(tmp_path, config_path=real)
+        cfg, root = build_scratch(base, with_review=False, budget=0.5, timeout_min=None)
+        try:
+            assert cfg.config_path is None
+            before = snapshot_harness(cfg)
+            real.write_text("a: 2\n")
+            assert harness_violations(cfg, before) == []
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_mixed_violation_keeps_both_hints(self, tmp_path):
+        """`uv add` plus a config edit: the config cannot be exempted, but
+        `harness_allow` still applies to the lockfile — both are said."""
+        cfg = _cfg(tmp_path, harness_guard="strict")
+        cfg.logs_dir.mkdir()
+        _write(tmp_path, CONFIG, "review_policy: required\n")
+
+        def fake_agent(config, invocation, **kwargs):
+            _write(tmp_path, CONFIG, "review_policy: advisory\n")
+            _write(tmp_path, "uv.lock", "v2\n")
+            return subprocess.CompletedProcess(
+                args=invocation.argv, returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        progress: list[str] = []
+        with (
+            patch("spec_runner.execution._run_agent_process", side_effect=fake_agent),
+            patch(
+                "spec_runner.execution.build_cli_invocation",
+                return_value=CliInvocation(["fake"], "text"),
+            ),
+            patch("spec_runner.execution.build_task_prompt", return_value="p"),
+            patch("spec_runner.execution.update_task_status"),
+            patch(
+                "spec_runner.execution.log_progress",
+                side_effect=lambda line, *_a, **_k: progress.append(line),
+            ),
+            ExecutorState(cfg) as state,
+        ):
+            assert execute_task(_task(), cfg, state) is False
+        (line,) = [entry for entry in progress if "Harness guard" in entry]
+        assert "cannot be exempted" in line and "harness_allow" in line

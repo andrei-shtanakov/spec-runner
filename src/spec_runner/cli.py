@@ -2611,6 +2611,7 @@ def main():
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
     config.config_found = config_path.exists()
+    config.config_path = config_path.resolve()
 
     # Fail fast with a clean message (no traceback) on an unknown spec profile,
     # or on a `tdd_runner` that does not exist or that the test command cannot

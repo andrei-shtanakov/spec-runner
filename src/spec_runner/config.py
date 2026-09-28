@@ -686,6 +686,10 @@ class ExecutorConfig:
     # commands warn on it (#63) — a silently vanished config once flipped a
     # run to self-merge + pytest on an Elixir repo.
     config_found: bool = True
+    # The config file this run loaded, stamped by main() beside `config_found`
+    # (None outside the CLI). The harness guard watches it even when
+    # `paths.root` puts it outside `project_root`.
+    config_path: Path | None = None
 
     def __post_init__(self):
         """Resolve project_root and namespace state/log paths by spec_prefix/change_id."""

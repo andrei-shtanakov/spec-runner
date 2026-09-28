@@ -1405,6 +1405,11 @@ A/B — дефекты подтверждённого поведения, C — 
       1. **Control-plane не защищён** — `spec-runner.config.yaml` не входит ни в
          `HARNESS_CANDIDATES`, ни в дефолтный `harness_files`: агент, работающий в
          worktree, может изменить саму политику, которой его проверяют.
+         **Сделано 2026-09-28:** оба расположения конфига — `CONTROL_PLANE` в
+         `harness.py`, всегда на поверхности и не исключаемы `harness_allow`;
+         режимы не менялись (`warn` предупреждает). Регресс —
+         `tests/test_config_under_guard.py`. Не охвачено: `spec/plugins/`
+         и `spec/profiles/` — тоже control-plane, решать отдельно.
       2. **Текст гейта предлагает себя обойти** — «...or, if the change is
          intentional, exempt it via `harness_allow`» уходит в retry-промпт
          author-агенту. Самый дешёвый из четырёх и, пожалуй, самый неприятный: мы
