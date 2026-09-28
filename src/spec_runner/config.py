@@ -661,6 +661,13 @@ class ExecutorConfig:
     harness_files: list[str] = field(default_factory=list)
     # Glob patterns exempt from strict-mode violations (e.g. ["uv.lock"]).
     harness_allow: list[str] = field(default_factory=list)
+    # Executor write boundary (#600): an OS sandbox around every agent call.
+    # off | on (wrap where a backend exists, warn otherwise) | required (refuse
+    # at startup without a backend). Design:
+    # docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md.
+    executor_sandbox: str = "off"
+    # Extra writable paths under the sandbox (tool caches: ~/.npm, ~/.mix ...).
+    sandbox_allow: list[str] = field(default_factory=list)
 
     # Durable continuation checkpoint/evidence store (#480, BEH-28, design
     # §1.1). Declared here so `run`/`validate` both refuse an adapter that
@@ -703,7 +710,15 @@ class ExecutorConfig:
                 f"invalid harness_guard {self.harness_guard!r}: "
                 "expected one of 'off', 'warn', 'strict'"
             )
-        for attr in ("harness_files", "harness_allow"):
+        # YAML 1.1 reads a bare `on`/`off` as a boolean; take the operator's word.
+        if isinstance(self.executor_sandbox, bool):
+            self.executor_sandbox = "on" if self.executor_sandbox else "off"
+        if self.executor_sandbox not in ("off", "on", "required"):
+            raise ConfigError(
+                f"invalid executor_sandbox {self.executor_sandbox!r}: "
+                "expected one of 'off', 'on', 'required'"
+            )
+        for attr in ("harness_files", "harness_allow", "sandbox_allow"):
             value = getattr(self, attr)
             if isinstance(value, str):
                 setattr(self, attr, [value])
@@ -711,7 +726,7 @@ class ExecutorConfig:
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
         # An empty entry is a typo, and `Path.match("")` raises: the guard
         # would crash on the first violation it compares (review of #601).
-        for attr in ("harness_files", "harness_allow"):
+        for attr in ("harness_files", "harness_allow", "sandbox_allow"):
             if any(not str(entry).strip() for entry in getattr(self, attr)):
                 raise ConfigError(f"{attr} has an empty entry: {getattr(self, attr)!r}")
 
@@ -1490,6 +1505,8 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "harness_guard": executor_config.get("harness_guard"),
             "harness_files": executor_config.get("harness_files"),
             "harness_allow": executor_config.get("harness_allow"),
+            "executor_sandbox": executor_config.get("executor_sandbox"),
+            "sandbox_allow": executor_config.get("sandbox_allow"),
             "spec_profile": executor_config.get("spec_profile"),
             "spec_context": executor_config.get("spec_context"),
             "spec_rules": executor_config.get("spec_rules"),

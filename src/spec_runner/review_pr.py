@@ -683,13 +683,17 @@ def verify_comment(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
+    from .sandbox import sandboxed
+
+    call = sandboxed(config, invocation)
     try:
         result = subprocess.run(
-            invocation.argv,
+            call.argv,
             capture_output=True,
             text=True,
             timeout=config.review_timeout_minutes * 60,
             cwd=config.project_root,
+            env=call.env,
         )
     except subprocess.TimeoutExpired:
         # The process started and was billed for the time it ran, so it is a
@@ -700,6 +704,8 @@ def verify_comment(
             f"Verifier timed out after {config.review_timeout_minutes}m",
             None,
         )
+    finally:
+        call.cleanup()
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )
@@ -874,17 +880,23 @@ def run_fix_agent(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
+    from .sandbox import sandboxed
+
+    call = sandboxed(config, invocation)
     try:
         result = subprocess.run(
-            invocation.argv,
+            call.argv,
             capture_output=True,
             text=True,
             timeout=config.task_timeout_minutes * 60,
             cwd=config.project_root,
+            env=call.env,
         )
     except subprocess.TimeoutExpired:
         _record_pr_call(ledger, repo, pr_number, comment.comment_id, "fix", "timeout", head_sha)
         return False, f"Fix agent timed out after {config.task_timeout_minutes}m", None
+    finally:
+        call.cleanup()
     cli_result = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode
     )

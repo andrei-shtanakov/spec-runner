@@ -538,6 +538,9 @@ harness_guard: warn          # Harness-mutation tripwire: off | warn | strict
 harness_files: []            # Extra harness paths to watch
 harness_allow: []            # Globs exempt from strict-mode violations
                              # (never exempts this config file)
+executor_sandbox: "off"      # OS write boundary for agent calls: off | on | required
+                             # (macOS sandbox-exec; quote the word — bare YAML `on` is a bool)
+sandbox_allow: []            # Extra writable paths under the sandbox (~/.npm, ~/.mix, ...)
 
 commands:
   test: "uv run pytest tests/ -v"

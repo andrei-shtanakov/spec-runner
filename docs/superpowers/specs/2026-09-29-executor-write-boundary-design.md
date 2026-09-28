@@ -117,9 +117,11 @@ preset needed an argv change.
 
 ### 4.3 One seam
 
-Five sites build and launch an agent argv today (`execution`, `review`, `tdd`, two
-in `review_pr`), and `build_cli_invocation` knows neither `project_root` nor the
-config. So the seam is one new function over the finished invocation, not a change
+Eight sites build and launch an agent argv today (`execution`, `review`, `tdd`,
+two in `review_pr`, three in `cli_plan` — the last found during implementation),
+and `build_cli_invocation` knows neither `project_root` nor the config. The public
+`runner.run_claude_async` is library API with no internal caller and is not
+wrapped. A bare YAML `on`/`off` is read as a boolean and taken as written. So the seam is one new function over the finished invocation, not a change
 inside the builder:
 
 ```python

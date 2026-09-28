@@ -10,6 +10,24 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`executor_sandbox: off|on|required` — an OS write boundary around every
+  agent call (#600, from devtools#469).** An agent runs with
+  `skip_permissions` and could write anywhere by absolute path (devtools#445:
+  a planted PASS in a sibling repo's run directory). Under `on`, every agent
+  argv — execution, review, the TDD passes, `review-pr`, `plan` — runs under
+  macOS `sandbox-exec` with writes allowed only to the project, a fresh
+  per-call `TMPDIR`, the git common dir when it lies outside the project, the
+  CLI's own measured state dir (`~/.codex`, `~/.local/share/opencode`, `~/.pi`),
+  uv's cache when the project's commands run uv, and `sandbox_allow`. codex is
+  started in its "externally sandboxed" mode (its own Seatbelt cannot nest),
+  and claude's Bash tool gets `CLAUDE_CODE_TMPDIR`. Without a backend (Linux,
+  until phase 2), `on` warns and runs unwrapped and `required` refuses at
+  startup with exit 2, before any paid call. Default `off`. A bare YAML `on`/
+  `off` (read as a boolean) is taken as written. Design and per-preset
+  measurements: `docs/superpowers/specs/2026-09-29-executor-write-boundary-design.md`.
+
 ## [4.2.0] - 2026-09-29
 
 Minor: one additive task field (`**Touches:**`) and one new `preflight` check

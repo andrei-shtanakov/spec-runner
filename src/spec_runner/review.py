@@ -475,14 +475,17 @@ def _run_reviewer(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
+    from .sandbox import sandboxed
+
+    call = sandboxed(config, invocation, agent_env())
     try:
         result = subprocess.run(
-            invocation.argv,
+            call.argv,
             capture_output=True,
             text=True,
             timeout=config.review_timeout_minutes * 60,
             cwd=config.project_root,
-            env=agent_env(),
+            env=call.env,
         )
     except subprocess.TimeoutExpired:
         # It ran, and it was billed for as long as it ran. The cost is
@@ -498,6 +501,8 @@ def _run_reviewer(
             error=str(exc),
         )
         raise
+    finally:
+        call.cleanup()
 
     parsed = parse_cli_result(
         invocation.result_format, result.stdout, result.stderr, result.returncode

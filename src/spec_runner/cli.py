@@ -2634,6 +2634,16 @@ def main():
             "runs can only ever block"
         )
 
+    # #600: `executor_sandbox: required` without a backend refuses here, before
+    # any paid call — an instrument error (exit 2), like a gate that cannot answer.
+    from .sandbox import SandboxUnavailable, require_backend
+
+    try:
+        require_backend(config)
+    except SandboxUnavailable as exc:
+        print(f"⛔ {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
     # Attach the gates this config asks for, once per process. Under the
     # default `review_policy: advisory` nothing is registered at all, so the
     # pre-terminal site stays dormant (#164 criterion 8).
