@@ -940,14 +940,28 @@ def _validate_verify_first_declarations(
 def _scenario_warnings(task: Task, root: Path) -> list[str]:
     """#402 §6: early notice of a declared scenario the group's files in the
     WORKING TREE do not carry. A warning only — the live entry run judges the
-    commit and is the one that refuses. Missing files are skipped: they carry
-    their own warning above."""
+    commit and is the one that refuses.
+
+    Missing files are skipped — they carry their own warning above — and when
+    no group file is present at all nothing is judged: "uncovered" over zero
+    files only restates that warning (PR #590 minor). A file past the root (a
+    node id may spell `..`) is named, never read."""
     from spec_runner.scenarios import group_files, uncovered_scenarios
 
     if not task.scenarios:
         return []
-    files = [root / str(path) for path in group_files(task.verifies or [])]
-    texts = [f.read_text(errors="replace") for f in files if f.is_file()]
+    base = root.resolve()
+    files = [(path, root / str(path)) for path in group_files(task.verifies or [])]
+    outside = [path for path, f in files if not f.resolve().is_relative_to(base)]
+    if outside:
+        return [
+            f"{task.id}: **Scenarios:** group file {str(path)!r} is outside the "
+            "project root — not read for coverage"
+            for path in outside
+        ]
+    texts = [f.read_text(errors="replace") for _, f in files if f.is_file()]
+    if not texts:
+        return []
     missing = uncovered_scenarios(task.scenarios, texts)
     if not missing:
         return []

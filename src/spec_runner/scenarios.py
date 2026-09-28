@@ -61,9 +61,13 @@ def uncovered_scenarios(scenarios: Sequence[str], texts: Iterable[str]) -> list[
     return missing
 
 
+def _show(root: Path, sha: str, path: PurePosixPath) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "show", f"{sha}:./{path}"], cwd=root, capture_output=True)
+
+
 def read_at_commit(root: Path, sha: str, path: PurePosixPath) -> str | None:
     """`path` (relative to `root`) as committed in `sha`; None if git cannot show it."""
-    shown = subprocess.run(["git", "show", f"{sha}:./{path}"], cwd=root, capture_output=True)
+    shown = _show(root, sha, path)
     if shown.returncode != 0:
         return None
     return shown.stdout.decode("utf-8", errors="replace")
@@ -82,13 +86,15 @@ def coverage_refusal(task: Task, root: Path, sha: str) -> Refusal | None:
     files = group_files(task.verifies or [])
     texts: list[str] = []
     for path in files:
-        text = read_at_commit(root, sha, path)
-        if text is None:
+        shown = _show(root, sha, path)
+        if shown.returncode != 0:
+            said = shown.stderr.decode("utf-8", errors="replace").strip()
             return Refusal(
-                f"scenario coverage: {path} cannot be read at {sha[:12]}",
+                f"scenario coverage: {path} cannot be read at {sha[:12]}"
+                + (f" (git: {said})" if said else ""),
                 RefusalKind.INSTRUMENT,
             )
-        texts.append(text)
+        texts.append(shown.stdout.decode("utf-8", errors="replace"))
     missing = uncovered_scenarios(task.scenarios, texts)
     if not missing:
         return None

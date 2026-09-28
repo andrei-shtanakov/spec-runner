@@ -12,6 +12,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`validate`'s scenario-coverage warning (#402 follow-up).** A group file
+  whose node id spells `..` past the project root is named, not read; when no
+  group file is present at all (or the group names none), no second
+  "uncovered" warning is added beside the missing-file one; the
+  live run's INSTRUMENT refusal for a file git cannot show quotes git's words.
+
 - **The harness guard now watches the spec-runner config itself
   (harness-guard-companions #1).** `spec-runner.config.yaml` (and the legacy
   `spec/executor.config.yaml`) decides how an attempt is judged —
