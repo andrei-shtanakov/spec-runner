@@ -24,7 +24,7 @@ never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .config import CONFIG_FILE, LEGACY_CONFIG_FILE, ExecutorConfig
 from .logging import get_logger
@@ -80,6 +80,37 @@ def _control_plane_keys(config: ExecutorConfig) -> set[str]:
 def is_control_plane(config: ExecutorConfig, violation: str) -> bool:
     """Whether a ``"<kind> <path>"`` violation line names the config."""
     return violation.split(" ", 1)[1] in _control_plane_keys(config)
+
+
+def _covers(outer: PurePosixPath, inner: PurePosixPath) -> bool:
+    return outer == inner or outer in inner.parents
+
+
+def touch_conflicts(config: ExecutorConfig, touches: list[PurePosixPath]) -> list[str]:
+    """The harness paths a declared write scope would change, not exempt.
+
+    Overlap in either direction: a touched directory holding a harness file,
+    or a touched file inside a harness directory. The exemption is matched,
+    like the guard's, against the more specific of the two paths, and never
+    reaches the config (`CONTROL_PLANE`).
+    """
+    control = _control_plane_keys(config)
+    surface = [PurePosixPath(p) for p in (*HARNESS_CANDIDATES, *control, *config.harness_files)]
+    conflicts: list[str] = []
+    for touched in touches:
+        for harness in surface:
+            if _covers(harness, touched):
+                specific = touched
+            elif _covers(touched, harness):
+                specific = harness
+            else:
+                continue
+            exempt = str(harness) not in control and any(
+                Path(specific).match(pattern) for pattern in config.harness_allow
+            )
+            if not exempt and str(specific) not in conflicts:
+                conflicts.append(str(specific))
+    return conflicts
 
 
 def _hash_file(path: Path) -> str:

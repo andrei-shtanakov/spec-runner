@@ -1429,6 +1429,10 @@ A/B — дефекты подтверждённого поведения, C — 
       4. **Нет preflight'а** на пересечение declared scope задачи с оракульными
          файлами. TASK-022 была невыполнимым контрактом с самого начала — это
          выявляется статически, за секунды, до запуска агента.
+         **Сделано 2026-09-28:** поле `**Touches:**` (объявленный scope, без
+         угадывания по прозе) + preflight-проверка `harness.touches` (blocking
+         при `strict`). Дизайн — `docs/superpowers/specs/2026-09-28-touches-preflight-design.md`,
+         тесты — `tests/test_touches.py`. Выводить поле мостом — запрос в devtools.
 - [x] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
       **Сделано:** correctness — PR #156 `7bc1360` (нет маркера ≠ passed, таймаут → not_run); политика — `review_policy` (#157, PR #170).
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.

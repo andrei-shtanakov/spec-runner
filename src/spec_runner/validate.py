@@ -250,6 +250,10 @@ def validate_task_fields(tasks: list[Task]) -> ValidationResult:
         if task.scenarios_error:
             result.errors.append(f"{task.id}: {task.scenarios_error}")
 
+        # harness-guard-companions #4: same contract.
+        if task.touches_error:
+            result.errors.append(f"{task.id}: {task.touches_error}")
+
         # --- Warnings ---
         if not task.estimate:
             result.warnings.append(f"{task.id}: missing estimate")
