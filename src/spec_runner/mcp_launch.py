@@ -89,8 +89,9 @@ def _rebuild_for_namespace(scope: LaunchScope, *, spec_prefix: str) -> ExecutorC
     DT-02): the launch config's representable overrides (`--no-tests`,
     `--budget`, `--strict`, ...) are serialized by `config_flags`, the
     namespace flag is appended, and `_build_parser()` + `build_config`
-    rebuild the config from that argv and the YAML the launch scope read
-    (by `project_root`, not CWD). A hand-built `argparse.Namespace` with
+    rebuild the config from that argv and the file the parent loaded
+    (`scope.config_path` — outside `project_root` when `paths.root` moved
+    it). A hand-built `argparse.Namespace` with
     every flag at "not set" silently dropped those overrides (review of the
     DT-02 integration PR) -- the refined config was a degraded copy, and
     the reproducibility check then validated that copy against itself.
@@ -535,7 +536,13 @@ def simulate_child_config(scope: LaunchScope, argv: list[str]) -> ExecutorConfig
                 "the child reads by project_root can set it, and that YAML "
                 "does not agree with the parent's value"
             )
-        if yaml_missing:
+        if yaml_missing and child_yaml.resolve() != scope.config_path.resolve():
+            reason += (
+                f"; the parent loaded {scope.config_path}, but the child looks "
+                f"for its YAML by --project-root at {child_yaml}, where none "
+                "exists (paths.root moved the root away from the config)"
+            )
+        elif yaml_missing:
             reason += (
                 f"; no YAML config exists at {child_yaml} now, so the "
                 "child would read class defaults for it (if the parent read "

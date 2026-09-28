@@ -66,9 +66,26 @@ class TestTheChildIsSimulatedFromWhatItWillFind:
         assert isinstance(result, Irreproducible)
         (diff,) = [d for d in result.diffs if d.field == "review_policy"]
         assert str((tmp_path / "app" / CONFIG).resolve()) in diff.reason
+        assert str((tmp_path / CONFIG).resolve()) in diff.reason
+        assert "vanished" not in diff.reason
 
     def test_a_child_that_finds_the_same_policy_proceeds(self, tmp_path, monkeypatch):
         parent = _parent(tmp_path, monkeypatch)
         (tmp_path / "app" / CONFIG).write_text("review_policy: required\n")
         result = simulate_child_config(LaunchScope.of(parent), child_argv(parent, "TASK-001"))
         assert not isinstance(result, Irreproducible), result
+
+
+class TestTheProgrammaticEntryPoint:
+    def test_build_config_stamps_the_file_it_read(self, tmp_path, monkeypatch):
+        """`run_server(None)` builds its scope from `_build_config("")`; the
+        refinement there must keep the YAML-only policy too."""
+        from spec_runner.mcp_server import _build_config
+
+        (tmp_path / "app").mkdir()
+        (tmp_path / CONFIG).write_text('paths:\n  root: "./app"\nreview_policy: required\n')
+        monkeypatch.chdir(tmp_path)
+        config = _build_config("")
+        assert config.config_path == (tmp_path / CONFIG).resolve()
+        rebuilt = resolve_tool_config(LaunchScope.of(config), "p-")
+        assert rebuilt.review_policy == "required"
