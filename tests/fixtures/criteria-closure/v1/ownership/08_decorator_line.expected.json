@@ -1,0 +1,17 @@
+{
+  "case": "08_decorator_line",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 4,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

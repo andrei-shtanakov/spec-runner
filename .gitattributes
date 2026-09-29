@@ -6,3 +6,7 @@
 # мержа, снятие — сразу): объявить файл generated и спрятать его тем же
 # патчем нельзя. Не объявлено — ревьюируется построчно.
 uv.lock linguist-generated=true
+
+# criteria-closure/v1 shared ownership fixtures (#603 design §6.3): the bytes
+# ARE the cases (CRLF, lone CR, BOM, NUL, form feed) — never normalise them.
+tests/fixtures/criteria-closure/** -text

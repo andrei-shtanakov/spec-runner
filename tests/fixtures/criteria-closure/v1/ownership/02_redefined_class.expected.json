@@ -1,0 +1,17 @@
+{
+  "case": "02_redefined_class",
+  "owned": [
+    {
+      "qualname": "TestA.test_new",
+      "line": 7,
+      "tokens": [
+        "ENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "TestA.test_new"
+    ]
+  }
+}

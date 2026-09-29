@@ -1,0 +1,22 @@
+{
+  "case": "19_module_helper_with_token",
+  "owned": [
+    {
+      "qualname": "make_x",
+      "line": 1,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    },
+    {
+      "qualname": "test_a",
+      "line": 5,
+      "tokens": []
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

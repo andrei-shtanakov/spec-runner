@@ -1,0 +1,17 @@
+{
+  "case": "07_test_nested_in_test_function",
+  "owned": [
+    {
+      "qualname": "test_x",
+      "line": 1,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_x"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "case": "14_crlf",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 1,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    },
+    {
+      "qualname": "test_b",
+      "line": 5,
+      "tokens": [
+        "ENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a",
+      "test_b"
+    ]
+  }
+}

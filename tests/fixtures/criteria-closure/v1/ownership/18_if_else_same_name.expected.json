@@ -1,0 +1,17 @@
+{
+  "case": "18_if_else_same_name",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 7,
+      "tokens": [
+        "ENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

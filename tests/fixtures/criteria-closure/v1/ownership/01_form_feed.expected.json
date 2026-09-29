@@ -1,0 +1,17 @@
+{
+  "case": "01_form_feed",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 2,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

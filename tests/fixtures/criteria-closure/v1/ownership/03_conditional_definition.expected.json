@@ -1,0 +1,25 @@
+{
+  "case": "03_conditional_definition",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 4,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    },
+    {
+      "qualname": "test_b",
+      "line": 12,
+      "tokens": [
+        "ENC:BEH-03"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a",
+      "test_b"
+    ]
+  }
+}

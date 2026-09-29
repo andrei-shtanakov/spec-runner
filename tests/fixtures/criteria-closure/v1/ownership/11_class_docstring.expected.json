@@ -1,0 +1,26 @@
+{
+  "case": "11_class_docstring",
+  "owned": [
+    {
+      "qualname": "TestK.test_m",
+      "line": 4,
+      "tokens": [
+        "ENC:BEH-01",
+        "ENC:BEH-02"
+      ]
+    },
+    {
+      "qualname": "TestK.test_n",
+      "line": 7,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "TestK.test_m",
+      "TestK.test_n"
+    ]
+  }
+}

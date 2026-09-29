@@ -1,0 +1,18 @@
+{
+  "case": "04_nested_class_outer_token",
+  "owned": [
+    {
+      "qualname": "TestOuter.TestInner.test_c",
+      "line": 5,
+      "tokens": [
+        "ENC:BEH-01",
+        "ENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "TestOuter.TestInner.test_c"
+    ]
+  }
+}
