@@ -114,8 +114,10 @@ def group_coverage(
                 "(a generated or inherited test cannot be read statically)"
             )
             continue
-        except (SyntaxError, ValueError) as exc:
-            problems.append(f"{path} cannot be parsed as Python ({exc})")
+        except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+            # RecursionError/MemoryError: `ast.parse` on a pathologically deep
+            # file — "does not parse" for our purposes, never a traceback.
+            problems.append(f"{path} cannot be parsed as Python ({type(exc).__name__}: {exc})")
             continue
         carried.update(carried_ids(text, definitions, scenarios))
     missing = [s for s in dict.fromkeys(scenarios) if s not in carried]

@@ -200,3 +200,14 @@ class TestFinalReviewInputs:
         text = 'import sys\nif sys.platform:\n    def test_a():\n        """BEH-01"""\n'
         coverage = group_coverage(["BEH-01"], ["tests/test_x.py::test_a"], {F: text})
         assert coverage.problems == [] and coverage.missing == []
+
+
+DEEP = "x = " + "+".join(["1"] * 200_000) + "\n"  # ast construction recurses past the limit
+
+
+class TestPathologicalFile:
+    """#603 follow-up: RecursionError from ast.parse is "cannot be parsed", not a traceback."""
+
+    def test_group_coverage_reports_it(self):
+        coverage = group_coverage(["BEH-03"], ["tests/test_x.py::test_a"], {F: DEEP})
+        assert coverage.problems and "tests/test_x.py cannot be parsed" in coverage.problems[0]
