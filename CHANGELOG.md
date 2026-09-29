@@ -10,6 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-09-29
+
+Minor: slice A of #603 — a tightened `verify_first` scenario gate and a newly
+accepted `**Scenarios:**` id form. No `--json-result`, state-DB or `schemas/`
+change and no CLI argument change (checked by diff against v4.3.0). Minor
+rather than patch because the gate now refuses labels it used to accept (see
+Changed). This release does **not** set the minimum spec-runner version of the
+`criteria-closure/v1` contract — that is the release carrying
+`verify --criteria` (slice B).
+
 ### Changed
 
 - **`**Scenarios:**` labels in a Python group file must sit inside the test
@@ -4032,7 +4042,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...v4.2.0
 [4.1.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...v4.1.2
