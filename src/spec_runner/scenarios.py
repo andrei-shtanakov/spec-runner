@@ -138,9 +138,10 @@ def coverage_refusal(task: Task, root: Path, sha: str) -> Refusal | None:
     """Refuse a declared scenario the group does not carry at `sha`.
 
     Terminal POLICY: the same commit gives the same answer, so a retry would
-    only repeat it. A file git cannot show at `sha`, a `.py` file that does not
-    parse, or a qualname the file does not define is an INSTRUMENT refusal —
-    coverage could not be judged. A task without `**Scenarios:**` is not
+    only repeat it. A `.py` file that does not parse, or a qualname the file
+    does not define, is a terminal INSTRUMENT refusal — coverage cannot be
+    judged, and the commit will not change. A file git cannot show at `sha` is
+    a retryable INSTRUMENT refusal. A task without `**Scenarios:**` is not
     checked at all (#402 decision 3).
     """
     if task.scenarios is None:
@@ -160,9 +161,14 @@ def coverage_refusal(task: Task, root: Path, sha: str) -> Refusal | None:
         texts[path] = shown.stdout.decode("utf-8", errors="replace")
     coverage = group_coverage(task.scenarios, entries, texts)
     if coverage.problems:
+        # Terminal, kind unchanged: a `.py` file that does not parse, or a
+        # qualname its AST does not define, is a fact about this commit — a
+        # retry would re-run the group for the same answer. A git read failing
+        # (above) stays retryable: its causes can be transient.
         return Refusal(
             f"scenario coverage at {sha[:12]} cannot be judged: {'; '.join(coverage.problems)}",
             RefusalKind.INSTRUMENT,
+            terminal=True,
         )
     if not coverage.missing:
         return None

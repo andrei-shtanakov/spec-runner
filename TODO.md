@@ -617,7 +617,7 @@
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
       (CPython ≥ 3.12, без settrace), корни продукта объявляются в конфиге.
 
-- [ ] **scenarios-deterministic-refusal-retries** (из локального ревью #612) @owner:github:andrei-shtanakov @id:scenarios-deterministic-refusal-retries @epic:eco.spec-toolchain
+- [x] **scenarios-deterministic-refusal-retries** (из локального ревью #612) @owner:github:andrei-shtanakov @id:scenarios-deterministic-refusal-retries @epic:eco.spec-toolchain
       `scenarios.coverage_refusal`: INSTRUMENT-отказы «не определён qualname» и
       «`.py` не разбирается» (срез A #603), как и #402-й «файл не читается на
       коммите», детерминированы на данном коммите, но не `terminal` — повторы
@@ -626,6 +626,9 @@
       отказ вместо терминального POLICY. Семантику повторов INSTRUMENT неявно
       не менять: сначала решение владельца (terminal при том же `kind`, как
       `execution.py:482`, или иначе), затем регрессия на число попыток.
+      **Сделано 2026-09-29 (решение владельца):** оба отказа `terminal=True`,
+      вид INSTRUMENT сохранён; сбой чтения git остаётся повторяемым;
+      регрессия — группа запускается один раз при `max_retries=3`.
 - [ ] **validate-scenarios-recursion-crash** (из финального ревью #612) @owner:github:andrei-shtanakov @id:validate-scenarios-recursion-crash @epic:eco.spec-toolchain
       `ast.parse` на патологическом `.py` (сотни тысяч членов выражения)
       бросает `RecursionError` (возможно `MemoryError`) мимо
