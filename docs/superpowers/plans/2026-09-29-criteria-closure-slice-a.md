@@ -269,6 +269,47 @@ class TestFileEntry:
         assert carried_ids(source, select_tests(source, "test_x"), ["ENC:BEH-01"]) == set()
 
 
+REDEFINED_CLASS = (
+    "class TestA:\n"
+    "    def test_old(self):\n"
+    '        """BEH-01"""\n'
+    "\n"
+    "\n"
+    "class TestA:\n"
+    "    def test_new(self):\n"
+    "        pass\n"
+)
+
+CLASS_REPLACED_BY_FUNCTION = (
+    "class TestA:\n"
+    "    def test_old(self):\n"
+    '        """BEH-01"""\n'
+    "\n"
+    "\n"
+    "def TestA():\n"
+    "    pass\n"
+)
+
+
+class TestRedefinedClass:
+    """A replaced class takes its methods with it (plan review, P1)."""
+
+    @pytest.mark.parametrize("source", [REDEFINED_CLASS, CLASS_REPLACED_BY_FUNCTION])
+    def test_file_selection_excludes_obsolete_methods(self, source):
+        assert carried_ids(source, select_tests(source), ["BEH-01"]) == set()
+        assert all(d.qualname != "TestA.test_old" for d in select_tests(source))
+
+    def test_class_selection_excludes_obsolete_methods(self):
+        selected = select_tests(REDEFINED_CLASS, "TestA")
+        assert [d.qualname for d in selected] == ["TestA.test_new"]
+        assert carried_ids(REDEFINED_CLASS, selected, ["BEH-01"]) == set()
+
+    @pytest.mark.parametrize("source", [REDEFINED_CLASS, CLASS_REPLACED_BY_FUNCTION])
+    def test_explicit_obsolete_method_is_unresolved(self, source):
+        with pytest.raises(UnresolvedQualname):
+            select_tests(source, "TestA.test_old")
+
+
 class TestLineAlignment:
     def test_form_feed_does_not_shift_lines(self):
         # str.splitlines() would split at \x0c and read the label from the
@@ -426,7 +467,11 @@ def _index(tree: ast.Module) -> dict[str, _Indexed]:
         for node in body:
             if isinstance(node, _DEFINITIONS):
                 name = f"{prefix}{node.name}"
-                found.pop(name, None)  # re-insert: the last definition wins, in order
+                # The last definition wins, as in Python: the replaced one and
+                # everything nested in it are gone — a redefined class's old
+                # methods must not keep carrying labels.
+                for stale in [k for k in found if k == name or k.startswith(f"{name}.")]:
+                    del found[stale]
                 found[name] = (node, enclosing)
                 if isinstance(node, ast.ClassDef):
                     visit(node.body, f"{name}.", (*enclosing, node))
