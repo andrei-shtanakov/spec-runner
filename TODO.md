@@ -638,7 +638,7 @@
       **Сделано 2026-09-29:** `RecursionError`/`MemoryError` → «cannot be parsed»
       (замерено одинаково на 3.11/3.12/3.13); регрессии на `validate` и гейт.
 
-- [ ] **verify-first-terminal-refusal-bookkeeping** (из локального ревью PR с follow-up'ами #603) @owner:github:andrei-shtanakov @id:verify-first-terminal-refusal-bookkeeping @epic:eco.spec-toolchain
+- [x] **verify-first-terminal-refusal-bookkeeping** (из локального ревью PR с follow-up'ами #603) @owner:github:andrei-shtanakov @id:verify-first-terminal-refusal-bookkeeping @epic:eco.spec-toolchain
       Терминальный отказ на ветке verify-first (`execution.py` ~799: POLICY
       «uncovered» из #402, `auto_commit: false` из #380, а теперь и два
       детерминированных INSTRUMENT покрытия) возвращает `TERMINAL_REFUSAL` мимо
@@ -648,6 +648,11 @@
       незакоммиченный флип `in_progress`. Давнее свойство всех терминальных
       отказов этой ветки; решить, что должен оставлять терминальный отказ
       (blocked + коммит флипа + уведомление?), затем регрессия.
+      **Сделано 2026-09-29 (решение владельца):** одна попытка с исходной
+      классификацией; `ExecutorState.mark_failed` (без новой попытки) выводит
+      задачу из `running`; дальше общий хвост провала — одно уведомление,
+      `blocked` с коммитом флипа, `on_task_failure`; для терминального отказа
+      нет пункта Retry. При `skip` результат — `"SKIP"`, как у любого провала.
 
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
       Исполнитель запускается с `skip_permissions: true` по умолчанию

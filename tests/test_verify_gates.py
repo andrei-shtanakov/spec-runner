@@ -686,7 +686,9 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             result = run_with_retries(task, cfg, state)
             ts = state.get_task_state(task.id)
 
-        assert result is False
+        assert (
+            result == "SKIP"
+        )  # a terminal refusal now ends like any failure (on_task_failure: skip)
         mock_verify.assert_not_called()
         mock_agent.assert_not_called()
         assert len(ts.attempts) == 1, (
@@ -734,7 +736,9 @@ class TestCandidateEvidenceRefreshesBeforeTheGate:
             result = run_with_retries(task, cfg, state)
             ts = state.get_task_state(task.id)
 
-        assert result is False
+        assert (
+            result == "SKIP"
+        )  # a terminal refusal now ends like any failure (on_task_failure: skip)
         mock_verify.assert_not_called()
         mock_agent.assert_not_called()
         assert len(ts.attempts) == 1
@@ -1143,7 +1147,9 @@ class TestWaiverStaysASeparateAuthorityTool:
             result = run_with_retries(task, cfg, state)
             ts = state.get_task_state(task.id)
 
-        assert result is False
+        assert (
+            result == "SKIP"
+        )  # a terminal refusal now ends like any failure (on_task_failure: skip)
         mock_agent.assert_not_called()
         last = ts.attempts[-1]
         assert last.error_code is ErrorCode.INFRASTRUCTURE

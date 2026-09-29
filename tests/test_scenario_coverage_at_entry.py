@@ -12,12 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from spec_runner import tdd
+from spec_runner import execution, tdd
 from spec_runner.config import ExecutorConfig
 from spec_runner.execution import run_with_retries
 from spec_runner.executor import execute_task
 from spec_runner.runner import CliInvocation
-from spec_runner.state import ExecutorState
+from spec_runner.state import ErrorCode, ExecutorState
 from spec_runner.task import Task
 
 FOREIGN = 'def test_it():\n    """kind: e2e — BEH-03 (another workstream)"""\n    assert True\n'
@@ -121,7 +121,9 @@ class TestForeignGreenGroupIsRefused:
         cfg = _cfg(_repo(tmp_path, FOREIGN), max_retries=3)
         state = ExecutorState(cfg)
 
-        assert run_with_retries(_task(["BEH-09"]), cfg, state) is False
+        assert (
+            run_with_retries(_task(["BEH-09"]), cfg, state) == "SKIP"
+        )  # a terminal refusal ends like any failure
         assert state.get_task_state("TASK-001").attempt_count == 1
 
 
@@ -209,12 +211,12 @@ class TestUnresolvableGroupIsNotRetried:
         task = _task(["BEH-09"])
         task.verifies = ["tests/test_group.py::TestSub::test_it"]
 
-        from spec_runner import execution
-
         with patch(
             "spec_runner.execution.run_live_verify", wraps=execution.run_live_verify
         ) as live:
-            assert run_with_retries(task, cfg, state) is False
+            assert (
+                run_with_retries(task, cfg, state) == "SKIP"
+            )  # a terminal refusal ends like any failure
 
         assert live.call_count == 1
         assert state.get_task_state("TASK-001").attempt_count == 1
@@ -222,3 +224,77 @@ class TestUnresolvableGroupIsNotRetried:
         assert red_calls == []
         error = state.get_task_state("TASK-001").last_error or ""
         assert "TestSub::test_it is not defined" in error
+
+
+# --- Terminal refusal bookkeeping ----------------------------------------
+# A terminal refusal finishes the task's bookkeeping exactly once (TODO
+# `verify-first-terminal-refusal-bookkeeping`, owner's decision 2026-09-29).
+#
+# One failed attempt with its original classification; the state leaves
+# `running` for `failed`; tasks.md gets `blocked`; the configured notification
+# goes out once; no retry and no Retry offer; finalisation records no second
+# attempt.
+
+
+@pytest.fixture
+def bookkeeping():
+    with (
+        patch("spec_runner.notifications.notify_task_failed") as notified,
+        patch("spec_runner.execution.commit_status_flip_quietly") as flipped,
+    ):
+        yield notified, flipped
+
+
+def _blocked_writes(update_mock) -> list:
+    return [c for c in update_mock.call_args_list if c.args[2:3] == ("blocked",)]
+
+
+class TestTerminalRefusalFinishesTheTask:
+    def test_one_attempt_failed_state_blocked_one_notification(self, tmp_path, paid, bookkeeping):
+        impl, red_calls = paid
+        notified, flipped = bookkeeping
+        cfg = _cfg(_repo(tmp_path, FOREIGN), max_retries=3)
+        state = ExecutorState(cfg)
+        failed_before = state.total_failed
+
+        with patch("spec_runner.execution.update_task_status") as update:
+            result = run_with_retries(_task(["BEH-09"]), cfg, state)
+            assert result in (False, "SKIP")
+            assert len(_blocked_writes(update)) == 1
+
+        ts = state.get_task_state("TASK-001")
+        assert ts.attempt_count == 1  # finalisation records no second attempt
+        assert ts.attempts[-1].error_code is ErrorCode.HOOK_FAILURE  # original classification
+        assert ts.status == "failed"  # no longer "running"
+        assert state.total_failed == failed_before + 1
+        assert notified.call_count == 1
+        assert flipped.call_count == 1
+        impl.assert_not_called()
+        assert red_calls == []
+
+    def test_ask_offers_no_retry_and_never_reruns(self, tmp_path, paid, bookkeeping, capsys):
+        cfg = _cfg(_repo(tmp_path, FOREIGN), max_retries=3)
+        cfg.on_task_failure = "ask"
+        state = ExecutorState(cfg)
+        with (
+            patch("spec_runner.execution.update_task_status"),
+            patch("builtins.input", return_value="r") as asked,
+            patch(
+                "spec_runner.execution.execute_task",
+                wraps=execution.execute_task,
+            ) as executed,
+        ):
+            run_with_retries(_task(["BEH-09"]), cfg, state)
+        assert executed.call_count == 1  # "r" is not an option for a terminal refusal
+        assert asked.call_count <= 1
+        assert "[r]" not in capsys.readouterr().out
+        assert state.get_task_state("TASK-001").attempt_count == 1
+
+    def test_stop_still_stops_with_blocked(self, tmp_path, paid, bookkeeping):
+        cfg = _cfg(_repo(tmp_path, FOREIGN), max_retries=3)
+        cfg.on_task_failure = "stop"
+        state = ExecutorState(cfg)
+        with patch("spec_runner.execution.update_task_status") as update:
+            assert run_with_retries(_task(["BEH-09"]), cfg, state) is False
+            assert len(_blocked_writes(update)) == 1
+        assert bookkeeping[0].call_count == 1
