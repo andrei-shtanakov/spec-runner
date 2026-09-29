@@ -1,0 +1,15 @@
+{
+  "case": "10_module_header",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 6,
+      "tokens": []
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

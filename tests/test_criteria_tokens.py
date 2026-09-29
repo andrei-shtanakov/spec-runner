@@ -8,8 +8,10 @@ from __future__ import annotations
 import pytest
 
 from spec_runner.criteria_tokens import (
+    OwnedDefinition,
     UnresolvedQualname,
     carried_ids,
+    owned_definitions,
     select_tests,
     token_pattern,
 )
@@ -200,3 +202,41 @@ class TestConditionalDefinitions:
     def test_the_condition_line_owns_nothing(self):
         source = "if True:  # ENC:BEH-02\n    def test_a():\n        pass\n"
         assert carried_ids(source, select_tests(source, "test_a"), ["ENC:BEH-02"]) == set()
+
+
+class TestOwnedDefinitions:
+    """B1 (design §6.3): every indexed function/method with its qualified tokens."""
+
+    def test_every_function_and_method_with_line_and_tokens(self):
+        assert owned_definitions(SOURCE) == [
+            OwnedDefinition("helper", 7, ("ENC:BEH-03",)),
+            OwnedDefinition("test_top", 11, ("ENC:BEH-04", "ENC:BEH-05")),
+            OwnedDefinition("TestGroup.test_a", 24, ("ENC:BEH-07", "ENC:BEH-08")),
+            OwnedDefinition("TestGroup.test_b", 27, ("ENC:BEH-07",)),
+            OwnedDefinition("TestGroup.helper", 30, ("ENC:BEH-07", "ENC:BEH-09")),
+            OwnedDefinition("TestGroup.TestInner.test_c", 34, ("ENC:BEH-07", "ENC:BEH-10")),
+            OwnedDefinition("Helper.test_d", 39, ("ENC:BEH-11",)),
+            OwnedDefinition("test_async", 43, ("ENC:BEH-12",)),
+        ]
+
+    def test_bare_ids_are_not_qualified_tokens(self):  # Review Focus 3
+        source = 'def test_a():\n    """BEH-01 ENC:BEH-02"""\n'
+        assert owned_definitions(source) == [OwnedDefinition("test_a", 1, ("ENC:BEH-02",))]
+
+    def test_other_codes_are_reported_with_boundaries(self):  # Review Focus 2
+        source = 'def test_a():\n    """XENC:BEH-01 ENC:BEH-01 ENC:BEH-01xy _AB:BEH-02"""\n'
+        assert owned_definitions(source) == [
+            OwnedDefinition("test_a", 1, ("ENC:BEH-01", "XENC:BEH-01"))
+        ]
+
+    def test_only_criterion_ids_are_tokens(self):  # final review, Important 1
+        # norm §1.3: qualified ids are criteria — BEH and AC — not any CODE:X-N
+        source = 'def test_a():\n    """ENC:AC-07 ENC:REQ-01 ENC:TASK-3 ENC:BEH-01"""\n'
+        assert owned_definitions(source) == [
+            OwnedDefinition("test_a", 1, ("ENC:AC-07", "ENC:BEH-01"))
+        ]
+
+    def test_unparseable_source_raises(self):
+        with pytest.raises(Exception) as raised:
+            owned_definitions("def (:\n")
+        assert isinstance(raised.value, SyntaxError | ValueError)

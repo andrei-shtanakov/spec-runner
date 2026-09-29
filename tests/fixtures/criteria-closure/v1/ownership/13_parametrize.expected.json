@@ -1,0 +1,18 @@
+{
+  "case": "13_parametrize",
+  "owned": [
+    {
+      "qualname": "test_p",
+      "line": 4,
+      "tokens": [
+        "ENC:BEH-01",
+        "ENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_p"
+    ]
+  }
+}

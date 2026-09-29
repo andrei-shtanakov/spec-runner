@@ -84,8 +84,12 @@ rules, pinned by the shared ownership fixtures (§6.3): lines split on
 definition of a name wins and removes the earlier one with everything nested in
 it — including one name in both branches of an `if/else`, where the survivor is
 the last in source order; a definition under a module- or class-level
-`if`/`try`/`with`/loop is indexed, and the compound statement's own lines own
-nothing; a method gets the regions of **every** enclosing class (the chain up to
+`if`/`try`/`with`/loop is indexed — at module level the compound statement's own
+lines are module header and own nothing, while inside a class they are class
+body outside nested definitions and so, by norm §1.4's class region, count for
+every method of the class (corrected after B1's review: rev 3 said "own nothing"
+for both levels); a qualified token is `CODE:(BEH|AC)-<digits>[a-z]?` — only
+criterion ids, as in norm §1.3; a method gets the regions of **every** enclosing class (the chain up to
 the first non-class), never the reverse; a `def` nested in a function is not a
 definition and is subtracted from its region. Whether a definition is a *test*
 is decided by pytest's collection (§3.5), not by the parser's naming.
@@ -536,7 +540,12 @@ Produced here, vendored by devtools under `PIN` with `manifest.json` (their path
   nested helper, module header, class docstring, `async def`, parametrize, CRLF,
   lone `\r`, syntax error, NUL — and devtools' two additions: one name in both
   branches of an `if/else` (only the survivor in `owned`), and a module-level
-  non-`test` helper carrying a token (it owns it; it is not a collected item).
+  non-`test` helper carrying a token (it owns it; it is not a collected item);
+  and two added after B1's review: the token grammar with its boundaries
+  (`AC` ids, one-letter suffix, other codes, `REQ`/`TASK` ids and a 7-letter code
+  rejected), and a class-level `if/else` with module-level `with`/`for` (the
+  class-level compound lines count for the methods; the module-level ones own
+  nothing) — 21 cases in all.
 - Response-verification cases (pytest collected the definition from the other
   `if/else` branch → `line` mismatch; a parametrized case's `node_id` lost →
   completeness failure) are devtools' verdicts and live in devtools. This repo

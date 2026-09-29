@@ -1,0 +1,21 @@
+{
+  "case": "20_token_grammar",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 1,
+      "tokens": [
+        "ENC:AC-07",
+        "ENC:BEH-01",
+        "ENC:BEH-010",
+        "ENC:BEH-01a",
+        "XENC:BEH-02"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "case": "06_test_method_of_non_test_class",
+  "owned": [
+    {
+      "qualname": "Helper.test_d",
+      "line": 2,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": []
+  }
+}

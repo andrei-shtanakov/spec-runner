@@ -60,6 +60,9 @@ spec_runner = ["skills/**/*", "presets/*.yaml", "profiles/*.yaml", "contract_fix
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Shared ownership fixtures: deliberate syntax errors, NUL and CR-only line
+# endings — data for criteria_tokens, not code to lint or format.
+extend-exclude = ["tests/fixtures/criteria-closure"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]

@@ -10,6 +10,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **Shared token-ownership fixtures** (#603, design §6.3):
+  `tests/fixtures/criteria-closure/v1/ownership/` — 21 byte-exact cases with
+  hand-checked expectations, agreed with devtools in devtools#491, and
+  `criteria_tokens.owned_definitions` — every function and method with the
+  qualified criterion tokens (`CODE:(BEH|AC)-NN`) it owns. devtools vendors them for parser parity before
+  `verify --criteria` (slice B2).
+
 ## [4.4.0] - 2026-09-29
 
 Minor: slice A of #603 — a tightened `verify_first` scenario gate and a newly

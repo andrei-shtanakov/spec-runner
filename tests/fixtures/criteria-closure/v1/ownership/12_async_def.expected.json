@@ -1,0 +1,17 @@
+{
+  "case": "12_async_def",
+  "owned": [
+    {
+      "qualname": "test_a",
+      "line": 1,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_a"
+    ]
+  }
+}
