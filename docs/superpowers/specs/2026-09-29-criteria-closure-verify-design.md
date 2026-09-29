@@ -1,6 +1,6 @@
 # `verify --criteria` — the producer side of `criteria-closure/v1`
 
-Status: **revision 2, for owner review**, 2026-09-29. Inbox spec-runner#603
+Status: **revision 2 (review round 1 applied), for owner review**, 2026-09-29. Inbox spec-runner#603
 (from devtools, DarkFactory E), TODO `criteria-closure-verify`. Revision 1 (PR
 #609) was a draft with open questions; this revision records the owner's
 decisions from the design session of 2026-09-29, closes its §8, and replaces the
@@ -141,7 +141,7 @@ applies. Flags: `--selector-timeout` (per isolated pytest process, default
 |---|---|
 | 0 | an answer is given; per-BEH statuses may be `unconfirmed` or `error` |
 | 2 | request or environment error, retryable: unreadable or schema-invalid request; `owner_repo` ≠ the source repo's `origin`; `product_sha` absent locally ("fetch and retry"); clone or checkout failed, or the checkout does not resolve to exactly `product_sha`; `uv sync` failed on network/cache; the product environment's interpreter is not CPython ≥ 3.12 (`unsupported-runtime` — a property of the machine, another host may run it); collection infrastructure failure, collection timeout, or missing/malformed collection evidence; the global timeout |
-| 3 | response-level error (`blocked`), a property of the product at `product_sha`: `uv.lock` missing or stale (`uv sync --locked` refuses); a collection error reported by pytest in the provisioned environment (syntax, import); product-roots errors (§3.4); an unresolved definition of a Python test item (§3.5); an isolated run whose **valid** report shows its requested selector absent (inventory inconsistency) |
+| 3 | response-level error (`blocked`), a property of the product at `product_sha`: `uv.lock` missing or stale (`uv sync --locked` refuses); a collection error reported by pytest in the provisioned environment (syntax, import); product-roots errors (§3.4); an unresolved definition of a Python test item (§3.5); an isolated run whose **valid** report shows its requested selector absent (inventory inconsistency); test execution observed outside the designated process (`distributed-execution`, §3.6) |
 
 A successful collection with zero tests is a valid inventory: every BEH is
 `unconfirmed: no-test`, exit 0.
@@ -169,7 +169,9 @@ A successful collection with zero tests is a valid inventory: every BEH is
 to the product's lock and nothing is added to it. What is added is one
 stdlib-only file of ours — the probe plugin (§3.6) — on `PYTHONPATH`, loaded with
 `-p`, never through the project's `conftest.py`. The project's own pytest
-configuration is part of the product and is used as is.
+configuration is part of the product and is used as is, **except distribution**:
+every test must run inside the designated probe process (§3.6), so
+distribution the project configures is disabled or refused there.
 
 ### 3.4 Product roots — declared, read at `product_sha`
 
@@ -245,13 +247,41 @@ fresh per-invocation `TMPDIR`. After every invocation, the measured files
 `product_sha`. Anything else a test may alter (the environment directory,
 `$HOME`) is outside this guarantee and named as a boundary.
 
+**The designated process.** The orchestrator starts the environment's
+interpreter directly (`<env>/bin/python -m pytest …`, not through `uv run`), so
+the pytest process is its direct child, and passes its own PID in
+`SPEC_RUNNER_PROBE_PARENT`. At plugin load a process is the **report owner**
+only if `os.getppid()` equals that PID; it then records its own PID. Every other
+process that loads the plugin — a distribution worker, whose parent is the
+pytest controller, or a fork, whose parent is the owner — is not the owner,
+however it captured its own PID. Only the owner records and writes (see the PID
+guard below).
+
+**Distribution.** Project configuration (`addopts`, ini options, plugins in the
+lock) can move test execution out of the designated process.
+
+- *Supported and disabled:* pytest-xdist. When the collection pass reports
+  `xdist` among the loaded plugins, every isolated invocation appends `-n 0
+  --dist no`, which xdist documents as running in-process and which overrides a
+  configured `-n` (later arguments win over `addopts`). `-p no:xdist` is not
+  used: a configured `-n` would then be an unrecognised argument.
+- *Everything else is detected and refused.* The owner's hookwrapper around
+  `pytest_runtest_call` marks that `call` ran **in the owner**. If the owner
+  receives a `call`-phase report (`pytest_runtest_logreport`) for the item
+  without that mark — `--forked`, an unknown distribution plugin, or xdist
+  somehow still active — execution left the designated process: response-level
+  error `distributed-execution`, exit 3. It is a property of the product's
+  configuration, so a retry would repeat it.
+
 **The probe plugin** (`criteria_probe.py`, stdlib only, deployed to its own temp
 dir like #583's verify reporter):
 
 - **Collection check.** The process must collect exactly the requested node id,
   parametrization included; the manifest records what it collected.
-- **Phases.** Outcomes of setup, call and teardown. A legitimate skip before
-  `call` is `not-passed`.
+- **Phases.** Outcomes of setup, call and teardown, as pytest reports them. A
+  `call` that did not occur because setup failed or skipped is recorded as
+  `not-reached` — a known outcome, distinct from an unknown one, which only an
+  error run can express (§4).
 - **G0 lines.** `sys.monitoring` (a dedicated tool id, `LINE` events,
   interpreter-wide, so worker threads created before `call` are seen) is enabled
   only inside a hookwrapper around `pytest_runtest_call`, so setup and teardown
@@ -272,26 +302,36 @@ dir like #583's verify reporter):
   `subprocess.Popen`, `os.posix_spawn`, `os.exec`, `os.system` and `os.fork`.
   An event proves a process operation was attempted, not that a child executed
   product code.
-- **PID guard.** The PID is recorded at plugin load; the monitoring callback, the
-  audit hook and the manifest writer all do nothing when `os.getpid()` differs.
-  A forked child inherits the tracer and the hooks but never records into, and
-  never writes or overwrites, the parent's manifest. Its lines are not observed —
-  a named boundary.
-- **Manifest.** Written once at session end by atomic rename. A missing or
-  malformed manifest, a crash or a `--selector-timeout` is `error: runner` for
-  that run.
+- **PID guard.** Recording (the monitoring callback, the audit hook, the phase
+  and call-mark hooks) and report writing all do nothing unless the process is
+  the owner **and** `os.getpid()` still equals the owner PID. A fork of the
+  owner inherits the tracer and hooks but never records into, and never writes
+  or overwrites, the owner's manifest. The child's lines are not observed — a
+  named boundary.
+- **Manifest.** Written once at session end by the owner, by atomic rename, to a
+  per-invocation path. A missing or malformed manifest, a crash or a
+  `--selector-timeout` makes that run an **error run** (§4) — `error: runner`.
 
 ### 3.7 Status per selector and per BEH (§4.2)
 
 **Per run** the evidence is: collection status, phase outcomes, qualifying
-product lines, process operations. **Both runs must satisfy every check**; no
-union or count across runs may let one good run hide an empty second run.
+product lines, process operations — or an error (§4). **Both runs must satisfy
+every check**; no union or count across runs may let one good run hide an empty
+second run.
+
+**A run's test outcome** is computed over all three phases, the way pytest
+decides whether a test passed: `passed` only if setup, call and teardown all
+passed. A test that executes the product in `call` and then fails fixture
+teardown is **not** passed. Otherwise the outcome is `failed` (any phase
+failed) or `skipped` (setup skipped, nothing failed).
 
 Per selector, in this order (the first that applies decides):
 
-1. either run is `error` (runner/io, mutated files) → `error`, that run's reason;
-2. both runs `call: passed`? — no, and the outcomes differ → `unconfirmed:
-   nondeterministic`; no, and they agree → `unconfirmed: not-passed`;
+1. either run is an error run (runner/io, mutated files) → `error`, that run's
+   reason;
+2. both runs' test outcome `passed`? — no, and the two outcomes (as the full
+   triple of phase results) differ → `unconfirmed: nondeterministic`; no, and
+   they agree → `unconfirmed: not-passed`;
 3. either run has zero qualifying lines → `unconfirmed: subprocess-only` if that
    run recorded a process operation during `call`, else
    `unconfirmed: no-product-execution`;
@@ -321,7 +361,7 @@ beside `v1`, never an edit of `v1`. The release PR for X writes
 `verify_task` is echoed and has no effect: the `verify-human` path it served was
 removed in norm rev 8.
 
-**Response — two branches**, so no field is ever filled with an invented value:
+**Response — two emitted branches** (and one reserved, below), so no field is ever filled with an invented value:
 
 - **Answer** (exit 0): `protocol`, `request` (verbatim echo),
   `spec_runner_version`, `product_roots: {declared, files}`, `test_files` (the
@@ -329,19 +369,40 @@ removed in norm rev 8.
   pytest_plugins}`, `content_sha256`, `beh[]`. Per BEH: `id`, `status`,
   `reason` (required iff not `traced`, absent when `traced`), `selectors[]`.
   Per selector: `node_id`, `definition: {file, qualname, line}`, `status`,
-  `reason`, `runs` — exactly two, each `{collected, phases: {setup, call,
-  teardown}, product_lines: [{file, lines[]}], product_line_count,
-  child_process, process_operations[]}`. Lines are listed, not only counted, so
-  devtools' AST check (§5.3) has something to check.
+  `reason`, `runs` — exactly two, each one of two shapes:
+  - **complete run:** `{result: "complete", collected: [node ids],
+    phases: {setup, call, teardown}, outcome, product_lines: [{file, lines[]}],
+    product_line_count, child_process, process_operations[]}` — every field
+    required. `setup` ∈ `passed|failed|skipped`; `call` ∈
+    `passed|failed|skipped|not-reached`; `teardown` ∈ `passed|failed`;
+    `outcome` ∈ `passed|failed|skipped` (§3.7). When `call` is `not-reached`,
+    the empty line and operation lists are true statements — no call window
+    existed.
+  - **error run:** `{result: "error", reason: runner|io, detail}` plus only the
+    evidence established before the failure, each field optional: what the
+    orchestrator observed itself (`exit_status`, `timed_out`,
+    `mutated_paths`) and, when a manifest exists but is incomplete or
+    malformed, none of its contents — a manifest that fails validation is not
+    evidence. A `call` outcome is never inferred: if it is unknown (timeout
+    mid-call, crash, no manifest), the run is an error run, never a complete run
+    with a guessed `call`.
+
+  Lines are listed, not only counted, so devtools' AST check (§5.3) has
+  something to check.
 - **Error** (exit 2 or 3): `protocol`, `request` (when it parsed),
   `spec_runner_version`, `error: {kind, retryable, detail}` — and **only** the
   fields the measurement established truthfully before failing (`environment`
   after a successful sync, `product_roots` after resolution, and so on), each
   optional. Never `beh`.
 
-We do not emit `not_applicable` in v1: its three reasons (§3.6 there) are
-devtools' to decide. The field is not in the v1 response schema; adding it later
-is additive.
+**Reserved: not applicable.** The v1 response schema also defines a third branch,
+`{protocol, request, spec_runner_version, not_applicable: {reason: "language"}}`
+(no `beh`, no `error`), which v1 **never emits**: the three reasons of norm §3.6
+are devtools' to decide today. It is reserved now because `additionalProperties:
+false` and a closed `oneOf` would make adding it later a breaking change that
+existing validators reject; reserving it keeps a future producer-side
+`not_applicable: language` within v1. Any other reason, or any other new branch,
+is `v2`.
 
 The optional thread split (lines on the call thread vs other threads) is **not**
 in v1; per-run evidence is the essential addition.
@@ -371,10 +432,13 @@ frozen. They will be raised in a devtools issue after this document is reviewed.
    repository-relative, sorted by UTF-8 bytes. Path normalisation and duplicate
    handling as in §3.4. A declaration change changes the digest even when the
    resolved file set does not.
-2. **Response shape details**: per-run evidence (`runs[]` objects rather than two
-   `call` outcomes), selector-level `status`/`reason`, `definition.line`,
-   `product_roots.{declared,files}`, `test_files`, `spec_runner_version`.
-3. **Aggregation precedence** in §3.7.
+2. **Response shape details**: per-run evidence (`runs[]` as complete-run or
+   error-run objects rather than two `call` outcomes; `not-reached`; the
+   three-phase `outcome`), selector-level `status`/`reason`, `definition.line`,
+   `product_roots.{declared,files}`, `test_files`, `spec_runner_version`, and the
+   reserved, never-emitted `not_applicable: language` branch.
+3. **Aggregation precedence** in §3.7, including that "passed" means all three
+   phases passed, so a teardown failure is `not-passed`.
 4. **The error branch**: `error.{kind, retryable, detail}`, its kinds, and the
    partial fields it may carry.
 5. **Exit 2 on a JSON document**: stdout carries the error branch on exit 2 as
@@ -398,7 +462,15 @@ frozen. They will be raised in a devtools issue after this document is reviewed.
   inside a function; `os.fork` (the child neither
   records nor writes); a skip before `call`; a test mutating a product file
   (`measured-files-mutated`); an inherited test method and a decorated test
-  resolving to their real definitions; a selector absent in its isolated run.
+  resolving to their real definitions; a selector absent in its isolated run;
+  a test that executes the product and passes `call` but fails fixture
+  teardown (`not-passed`, and `nondeterministic` when only one run's teardown
+  fails); a setup failure (`call: not-reached`, a complete run); a timeout
+  mid-call (an error run with no `call` outcome); a product whose `addopts`
+  configures `-n 2` with xdist in its lock (runs in-process via `-n 0`, still
+  `traced`); a product configured with `--forked` or an equivalent
+  distribution (`distributed-execution`, exit 3, and no worker or forked
+  child ever writing the owner's manifest).
   Run in its own workflow pinned to CPython 3.12 (the `exunit-contract.yml`
   precedent) and merged only on a green run; on 3.11 the bench is skipped with
   a stated reason, never silently.
