@@ -286,7 +286,8 @@ class TestTerminalRefusalFinishesTheTask:
         ):
             run_with_retries(_task(["BEH-09"]), cfg, state)
         assert executed.call_count == 1  # "r" is not an option for a terminal refusal
-        assert asked.call_count <= 1
+        assert asked.call_count == 1  # the menu is shown…
+        assert asked.call_args.args[0].strip().endswith("[s/q]:")  # …without Retry
         assert "[r]" not in capsys.readouterr().out
         assert state.get_task_state("TASK-001").attempt_count == 1
 

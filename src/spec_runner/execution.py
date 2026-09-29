@@ -1651,9 +1651,12 @@ def _finish_failed_task(
     *,
     terminal: bool,
 ) -> bool | str:
-    """The one end of a failed task: notify once, log, then `on_task_failure`.
+    """Finish a failed task: notify once, log, then `on_task_failure`.
 
-    `terminal` removes the Retry choice: the same refusal would come back.
+    Reached when the retry loop is exhausted and on a terminal refusal
+    (`terminal=True`, which removes the Retry choice — the same refusal would
+    come back). Not yet reached by the `fatal` error-code branch and the budget
+    paths, which return earlier (pre-existing; not changed here).
     """
     task_state = state.get_task_state(task.id)
 
@@ -1671,7 +1674,7 @@ def _finish_failed_task(
             task_id=task.id,
             error=task_state.last_error,
             error_code=error_code,
-            attempts=config.max_retries,
+            attempts=task_state.attempt_count,
         )
 
     # Handle based on on_task_failure setting
