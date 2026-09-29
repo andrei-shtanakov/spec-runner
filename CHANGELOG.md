@@ -10,6 +10,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-09-29
+
+Minor: two additive config keys (`executor_sandbox`, default `off`, and
+`sandbox_allow`) and one new module. No `--json-result`, state-DB or `schemas/`
+change, no CLI argument change (checked by diff against v4.2.0). Nothing changes
+until a project sets `executor_sandbox: on` or `required`.
+
 ### Added
 
 - **`executor_sandbox: off|on|required` — an OS write boundary around every
@@ -4000,7 +4007,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...v4.2.0
 [4.1.2]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.0...v4.1.1

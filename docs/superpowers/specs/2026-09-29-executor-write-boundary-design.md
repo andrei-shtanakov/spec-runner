@@ -48,6 +48,7 @@ per-call dir only).
 | ollama | (homebrew) | none (the server is a separate process) | `OK` |
 | qwen | (homebrew) | none | `OK` |
 | copilot | 0.0.353 | `~/.copilot` — without it: EPERM writing `~/.copilot/config.json` (re-measured 2026-09-29 after the account was re-authenticated) | past the filesystem; the call then fails `quota_exceeded`, identically **without** the sandbox. This install predates the preset's `-s`/`--no-ask-user`, so it was driven with `-p … --allow-all-tools` only |
+| copilot | 1.0.89 | `~/.copilot` (session-store.db, logs, session-state) — without it the CLI exits 1 with **no output at all**, even without `-s` | with the preset's own flags (`-s --no-ask-user --allow-all-tools`): past the filesystem, then `You have no quota`, as unsandboxed |
 | llama-cli | — | **not measured** — not installed | — |
 
 Tools the agent runs itself, same method (a uv project, `uv run pytest`, `git commit`):
