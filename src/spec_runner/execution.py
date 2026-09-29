@@ -1586,7 +1586,13 @@ def run_with_retries(
         # same paid attempt against a verdict `execute_task` already
         # determined cannot change on any retry.
         if result == "TERMINAL_REFUSAL":
-            return False
+            # Owner's decision (TODO verify-first-terminal-refusal-bookkeeping):
+            # the attempt is recorded with its classification; finish the task
+            # like any failure — failed state, blocked, one notification — but
+            # never retried and never offered for Retry.
+            state.mark_failed(task.id)
+            log_progress("\u26d4 Terminal refusal -- not retried", task.id)
+            return _finish_failed_task(task, config, state, harness_baseline, terminal=True)
 
         # #219: a successful attempt stays successful. This check used to run
         # first, so a task that finished, committed, merged and deleted its
@@ -1634,6 +1640,25 @@ def run_with_retries(
 
     # Task failed after all retries
     log_progress(f"\u274c Failed after {config.max_retries} attempts", task.id)
+    return _finish_failed_task(task, config, state, harness_baseline, terminal=False)
+
+
+def _finish_failed_task(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    harness_baseline: HarnessBaseline,
+    *,
+    terminal: bool,
+) -> bool | str:
+    """Finish a failed task: notify once, log, then `on_task_failure`.
+
+    Reached when the retry loop is exhausted and on a terminal refusal
+    (`terminal=True`, which removes the Retry choice — the same refusal would
+    come back). Not yet reached by the `fatal` error-code branch and the budget
+    paths, which return earlier (pre-existing; not changed here).
+    """
+    task_state = state.get_task_state(task.id)
 
     # Notify on task failure
     from .notifications import notify_task_failed
@@ -1649,7 +1674,7 @@ def run_with_retries(
             task_id=task.id,
             error=task_state.last_error,
             error_code=error_code,
-            attempts=config.max_retries,
+            attempts=task_state.attempt_count,
         )
 
     # Handle based on on_task_failure setting
@@ -1661,11 +1686,13 @@ def run_with_retries(
         # Interactive prompt -- keep print() for user-facing menu
         print(f"\nTask {task.id} failed. What to do?")
         print("   [s] Skip and continue to next task")
-        print("   [r] Retry this task")
+        if not terminal:
+            print("   [r] Retry this task")
         print("   [q] Quit executor")
-        choice = input("\nYour choice [s/r/q]: ").strip().lower()
+        prompt = "[s/q]" if terminal else "[s/r/q]"
+        choice = input(f"\nYour choice {prompt}: ").strip().lower()
 
-        if choice == "r":
+        if choice == "r" and not terminal:
             # Reset attempts and retry
             task_state.attempts = []
             state._save()

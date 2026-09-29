@@ -12,6 +12,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Changed
 
+- **A terminal refusal now finishes the task like any failure** (#603
+  follow-up). A refusal no retry can change (#402's uncovered scenarios,
+  #380's `auto_commit: false`, the deterministic coverage refusals above) used
+  to return before the end-of-task bookkeeping: the state DB kept the task
+  `running`, tasks.md kept an uncommitted `in_progress` flip, and no failure
+  notification went out. Now its one attempt keeps its classification, the task
+  moves to `failed` without a second attempt being recorded, tasks.md gets a
+  committed `blocked` flip, the configured notification is sent once, and
+  `on_task_failure` applies — except that `ask` offers no Retry for it. Under the
+  default `skip` the run loop now sees `"SKIP"` for such a task, as for any
+  exhausted failure.
+
 - **Deterministic scenario-coverage refusals are no longer retried** (#603).
   A `.py` group file that does not parse at the commit, or a `**Verifies:**`
   node id whose definition the file's AST does not contain (an inherited test,

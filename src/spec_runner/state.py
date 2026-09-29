@@ -2630,6 +2630,49 @@ class ExecutorState:
                 error_code=attempt.error_code.value if attempt.error_code else None,
             )
 
+    def mark_failed(self, task_id: str) -> None:
+        """End a task as failed WITHOUT recording another attempt.
+
+        For a terminal refusal: its one attempt is already recorded (with its
+        own classification), but `record_attempt` flips `failed` only once
+        `max_retries` attempts exist, so the task would stay `running`.
+        Idempotent — a task already `failed` is left as is and counted once.
+        """
+        state = self.get_task_state(task_id)
+        if state.status == "failed":
+            return
+        state.status = "failed"
+        state.completed_at = datetime.now().isoformat()
+        self.total_failed += 1
+        assert self._conn is not None
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (task_id, status, started_at, completed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = excluded.started_at, "
+                    "completed_at = excluded.completed_at",
+                    (task_id, state.status, state.started_at, state.completed_at),
+                )
+                self._save_meta()
+        except sqlite3.OperationalError as e:
+            self._enter_degraded_mode("mark_failed", e, task_id=task_id)
+
+        from .audit_log import EVENT_TASK_FAILED
+
+        last = state.attempts[-1] if state.attempts else None
+        self.audit_logger.record(
+            EVENT_TASK_FAILED,
+            task_id=task_id,
+            attempts=state.attempt_count,
+            cost_usd=round(self.task_cost(task_id), 4),
+            last_error=last.error if last else None,
+            error_code=last.error_code.value if last and last.error_code else None,
+            terminal=True,
+        )
+
     def mark_running(self, task_id: str) -> None:
         """Mark task as running with atomic SQLite persistence."""
         state = self.get_task_state(task_id)
