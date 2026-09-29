@@ -178,3 +178,16 @@ class TestCoverageRefusal:
         root, sha = _commit(tmp_path, TWO_TESTS)
         task = _task(["tests/test_x.py::test_a"], ["ENC:BEH-03"])
         assert coverage_refusal(task, root, sha) is None
+
+
+class TestFinalReviewInputs:
+    def test_bom_file_is_judged_not_refused(self):
+        coverage = group_coverage(
+            ["BEH-01"], ["tests/test_x.py::test_a"], {F: '﻿def test_a():\n    "BEH-01"\n'}
+        )
+        assert coverage.problems == [] and coverage.missing == []
+
+    def test_conditional_test_is_found(self):
+        text = 'import sys\nif sys.platform:\n    def test_a():\n        """BEH-01"""\n'
+        coverage = group_coverage(["BEH-01"], ["tests/test_x.py::test_a"], {F: text})
+        assert coverage.problems == [] and coverage.missing == []

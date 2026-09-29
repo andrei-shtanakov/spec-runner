@@ -170,3 +170,33 @@ class TestTokenPattern:
     @pytest.mark.parametrize("text", ["XENC:BEH-03", "ENC:BEH-030", "ENC:BEH-03a", "_ENC:BEH-03"])
     def test_does_not_match(self, text):
         assert not token_pattern("ENC:BEH-03").search(text)
+
+
+class TestByteOrderMark:
+    """Final review: a UTF-8 BOM is valid Python; decoding keeps it as U+FEFF."""
+
+    def test_bom_source_is_read(self):
+        source = '﻿def test_a():\n    """ENC:BEH-01"""\n'
+        assert carried_ids(source, select_tests(source, "test_a"), ["ENC:BEH-01"]) == {"ENC:BEH-01"}
+
+
+class TestConditionalDefinitions:
+    """Final review: pytest collects tests defined under module-level if/try/with."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'import sys\nif sys.platform:\n    def test_a():\n        """ENC:BEH-01"""\n',
+            'try:\n    import x\nexcept ImportError:\n    def test_a():\n        """ENC:BEH-01"""\n',
+            'with open(__file__):\n    def test_a():\n        """ENC:BEH-01"""\n',
+            'class TestK:\n    if True:\n        def test_a(self):\n            """ENC:BEH-01"""\n',
+        ],
+    )
+    def test_conditional_test_is_indexed(self, source):
+        qualname = "TestK.test_a" if source.startswith("class") else "test_a"
+        assert carried_ids(source, select_tests(source, qualname), ["ENC:BEH-01"])
+        assert carried_ids(source, select_tests(source), ["ENC:BEH-01"])
+
+    def test_the_condition_line_owns_nothing(self):
+        source = "if True:  # ENC:BEH-02\n    def test_a():\n        pass\n"
+        assert carried_ids(source, select_tests(source, "test_a"), ["ENC:BEH-02"]) == set()

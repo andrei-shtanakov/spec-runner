@@ -63,9 +63,12 @@ def select_tests(source: str, qualname: str | None = None) -> list[TestDefinitio
 
     Raises `SyntaxError`/`ValueError` when `source` does not parse and
     `UnresolvedQualname` when `qualname` is not defined in it. A redefined
-    name keeps its last definition, as Python and pytest do.
+    name keeps its last definition, as Python and pytest do. A definition
+    under a module- or class-level `if`/`try`/`with`/loop is indexed like any
+    other — pytest collects it — but the compound statement's own lines own
+    nothing.
     """
-    index = _index(ast.parse(source))
+    index = _index(ast.parse(_without_bom(source)))
     if qualname is None:
         chosen = [
             (name, node, enclosing)
@@ -92,7 +95,7 @@ def select_tests(source: str, qualname: str | None = None) -> list[TestDefinitio
 
 def carried_ids(source: str, definitions: Sequence[TestDefinition], ids: Sequence[str]) -> set[str]:
     """The `ids` that stand, as whole tokens, on a carrier line of any definition."""
-    lines = _LINE_BREAK.split(source)
+    lines = _LINE_BREAK.split(_without_bom(source))
     carrier: set[int] = set()
     for definition in definitions:
         carrier |= definition.carrier_lines
@@ -102,7 +105,9 @@ def carried_ids(source: str, definitions: Sequence[TestDefinition], ids: Sequenc
 
 def _index(tree: ast.Module) -> dict[str, _Indexed]:
     """Every module-level definition and every definition nested in a class,
-    by dotted qualname, with the classes that enclose it (outermost first)."""
+    by dotted qualname, with the classes that enclose it (outermost first).
+    Compound statements (`if`, `try`, `with`, loops, `match`) are looked
+    through: what they define is still a module or class attribute."""
     found: dict[str, _Indexed] = {}
 
     def visit(body: list[ast.stmt], prefix: str, enclosing: tuple[ast.ClassDef, ...]) -> None:
@@ -117,9 +122,33 @@ def _index(tree: ast.Module) -> dict[str, _Indexed]:
                 found[name] = (node, enclosing)
                 if isinstance(node, ast.ClassDef):
                     visit(node.body, f"{name}.", (*enclosing, node))
+            else:
+                for inner in _statement_bodies(node):
+                    visit(inner, prefix, enclosing)
 
     visit(tree.body, "", ())
     return found
+
+
+def _statement_bodies(node: ast.stmt) -> list[list[ast.stmt]]:
+    """The statement lists nested in a compound statement, in source order."""
+    bodies: list[list[ast.stmt]] = []
+    for field in ("body", "handlers", "cases", "orelse", "finalbody"):
+        value = getattr(node, field, None)
+        if not isinstance(value, list):
+            continue
+        if field in ("handlers", "cases"):  # except clauses / match cases
+            bodies.extend(item.body for item in value)
+        else:
+            bodies.append(value)
+    return bodies
+
+
+def _without_bom(source: str) -> str:
+    """`source` without a leading U+FEFF: a UTF-8 BOM is valid Python, but a
+    plain UTF-8 decode keeps it and `ast.parse` then refuses the text. Line
+    numbers are unchanged."""
+    return source.removeprefix("\ufeff")
 
 
 def _span(node: _Definition) -> range:
