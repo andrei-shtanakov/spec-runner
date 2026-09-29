@@ -875,7 +875,8 @@ def _validate_verify_first_declarations(
             if task.scenarios is not None:
                 result.warnings.append(
                     f"{task.id}: **Scenarios:** {task.scenarios!r} declared but the "
-                    f"resolved execution mode is {mode!r} — not checked outside verify_first"
+                    f"resolved execution mode is {mode!r} — task-level token ownership "
+                    "is not checked outside verify_first"
                 )
             if task.verifies is not None:
                 result.errors.append(
@@ -942,15 +943,16 @@ def _validate_verify_first_declarations(
 
 
 def _scenario_warnings(task: Task, root: Path) -> list[str]:
-    """#402 §6: early notice of a declared scenario the group's files in the
-    WORKING TREE do not carry. A warning only — the live entry run judges the
-    commit and is the one that refuses.
+    """#402 §6 / #603: early notice of a declared scenario the group's files in
+    the WORKING TREE do not carry, by the gate's own rule (`group_coverage`).
+    A warning only — the live entry run judges the commit and is the one that
+    refuses.
 
     Missing files are skipped — they carry their own warning above — and when
     no group file is present at all nothing is judged: "uncovered" over zero
     files only restates that warning (PR #590 minor). A file past the root (a
     node id may spell `..`) is named, never read."""
-    from spec_runner.scenarios import group_files, uncovered_scenarios
+    from spec_runner.scenarios import group_coverage, group_files
 
     if not task.scenarios:
         return []
@@ -963,17 +965,23 @@ def _scenario_warnings(task: Task, root: Path) -> list[str]:
             "project root — not read for coverage"
             for path in outside
         ]
-    texts = [f.read_text(errors="replace") for _, f in files if f.is_file()]
+    texts = {path: f.read_text(errors="replace") for path, f in files if f.is_file()}
     if not texts:
         return []
-    missing = uncovered_scenarios(task.scenarios, texts)
-    if not missing:
-        return []
-    return [
-        f"{task.id}: **Scenarios:** {', '.join(missing)} uncovered by the declared "
-        "group's files in the working tree — the live entry run will refuse "
-        "unless the committed files carry them"
+    coverage = group_coverage(task.scenarios, task.verifies or [], texts)
+    warnings = [
+        f"{task.id}: **Scenarios:** coverage cannot be judged in the working tree: "
+        f"{problem} — the live entry run will refuse it as an instrument error"
+        for problem in coverage.problems
     ]
+    if coverage.missing:
+        warnings.append(
+            f"{task.id}: **Scenarios:** {', '.join(coverage.missing)} uncovered by the "
+            "declared group's files in the working tree (in a Python test file only the "
+            "test definition the group names or its containing test class counts) — the "
+            "live entry run will refuse unless the committed files carry them"
+        )
+    return warnings
 
 
 def validate_all(

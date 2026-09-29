@@ -21,6 +21,7 @@ from spec_runner.task import Task, parse_tasks
 from spec_runner.validate import validate_all, validate_task_fields
 
 HEADER = "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\nEst: 1d\n"
+OWNED = 'def test_x():\n    """BEH-09"""\n'
 
 
 def _tasks(tmp_path: Path, body: str):
@@ -238,7 +239,7 @@ class TestValidateWarnings:
             tmp_path,
             "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
             "**Scenarios:** BEH-09, BEH-10\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert result.ok
         joined = "\n".join(result.warnings)
@@ -250,7 +251,7 @@ class TestValidateWarnings:
             tmp_path,
             "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
             "**Scenarios:** BEH-09\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert not any("uncovered" in w for w in result.warnings)
 
@@ -260,6 +261,38 @@ class TestValidateWarnings:
         )
         assert result.ok
         assert any("tests/nope.py" in w and "does not exist" in w for w in result.warnings)
+
+    def test_module_header_label_now_warns(self, tmp_path):  # #603 Changed
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
+        assert result.ok
+        joined = "\n".join(result.warnings)
+        assert "BEH-09" in joined and "uncovered" in joined and "test definition" in joined
+
+    def test_unresolved_qualname_warns(self, tmp_path):
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_nope\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": OWNED},
+        )
+        assert result.ok
+        assert any("test_nope is not defined" in w for w in result.warnings)
+
+    def test_qualified_ids_outside_verify_first_warn_without_failing(self, tmp_path):
+        # default mode (standard), as in test_outside_verify_first_is_a_warning
+        result = _validate(tmp_path, "**Scenarios:** ENC:BEH-09, ENC:BEH-10\n")
+        assert result.ok
+        assert any(
+            "TASK-001" in w
+            and "task-level token ownership" in w
+            and "not checked outside verify_first" in w
+            for w in result.warnings
+        )
 
     def test_unparseable_verifies_does_not_add_coverage_noise(self, tmp_path):  # Review Focus 5
         result = _validate(
@@ -278,7 +311,7 @@ class TestValidateWarningMinors:
         root to judge coverage — it says the file is outside and stops."""
         project = tmp_path / "proj"
         project.mkdir()
-        (tmp_path / "outside_test.py").write_text('"""BEH-09"""\ndef test_x():\n    pass\n')
+        (tmp_path / "outside_test.py").write_text(OWNED)
         read: list[Path] = []
         real_read_text = Path.read_text
 
@@ -315,7 +348,7 @@ class TestValidateWarningMinors:
             "**Mode:** verify_first\n"
             "**Verifies:** tests/test_a.py::test_x, tests/nope.py::test_y\n"
             "**Scenarios:** BEH-10\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert any("BEH-10" in w and "uncovered" in w for w in result.warnings)
 
