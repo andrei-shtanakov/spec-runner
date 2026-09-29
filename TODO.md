@@ -604,11 +604,13 @@
             (design §2; plan `docs/superpowers/plans/2026-09-29-criteria-closure-slice-a.md`)
       - [x] slice B1 — shared ownership fixtures + `owned_definitions`
             (plan `docs/superpowers/plans/2026-09-29-criteria-closure-b1-ownership-fixtures.md`)
-      - [ ] slice B2 — `verify --criteria` + schemas `criteria-closure/v1`; release = X
-            @blocked_by:devtools#491
+      - [ ] slice B2 — `verify --criteria` + schemas `criteria-closure/v1`; release = X @owner:github:andrei-shtanakov @id:criteria-closure-b2 @epic:eco.spec-toolchain @blocked_by:todo://devtools/criteria-closure-v1-parity
             Контракт согласован в devtools#491 (дизайн rev 3, #614).
             Предусловие: devtools подтвердил паритет своего парсера с фикстурами B1
-            (не только наличие наших фикстур).
+            (`57447fd`, 21 кейс) — не только наличие наших фикстур. Ждём отдельный
+            пункт devtools, НЕ заблокированный на релиз X: их
+            `criteria-closure-v1-signoff` стартует от X, и ожидание на него было бы
+            циклом (B2 ← паритет ← X ← B2).
             Релиз A (4.4.0) минимальную версию `criteria-closure/v1` НЕ задаёт.
       **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
       решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
