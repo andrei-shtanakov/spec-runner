@@ -45,6 +45,7 @@ def test_the_agreed_case_set_is_present():
         "19_module_helper_with_token",
         "20_token_grammar",
         "21_class_level_compound",
+        "22_except_finally_case",
     ]
 
 

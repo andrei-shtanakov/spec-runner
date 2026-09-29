@@ -41,7 +41,7 @@ is a **breaking change** and requires a major version bump plus an entry here.
 ### Added
 
 - **Shared token-ownership fixtures** (#603, design §6.3):
-  `tests/fixtures/criteria-closure/v1/ownership/` — 21 byte-exact cases with
+  `tests/fixtures/criteria-closure/v1/ownership/` — 22 byte-exact cases with
   hand-checked expectations, agreed with devtools in devtools#491, and
   `criteria_tokens.owned_definitions` — every function and method with the
   qualified criterion tokens (`CODE:(BEH|AC)-NN`) it owns. devtools vendors them for parser parity before
