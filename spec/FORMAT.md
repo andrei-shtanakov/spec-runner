@@ -129,9 +129,13 @@ instead of being mapped to something plausible.
   id counts only inside the test definition the entry names — from its first
   decorator to its end, not in nested helpers — or in the body of a class
   containing it (outside its methods); the module header, module constants
-  and helper functions do not count. A file-only entry uses a **static
-  approximation of default pytest collection** (module-level `test*`
-  functions, `test*` methods of `Test*` classes); custom `python_functions`
+  and helper functions do not count. A definition's region ends at its last
+  statement (`end_lineno`): a comment placed after that statement — even one
+  indented as part of the test or class — is outside the region and carries
+  no label. A file-only entry uses a **static approximation of default
+  pytest collection** (module-level `test*` functions, also under a
+  module-level `if`/`try`/`with`, and `test*` methods of `Test*` classes);
+  custom `python_functions`
   / `python_classes`, collection hooks and runtime behaviour are not read.
   A `.py` file that does not parse, or a node id naming a definition the
   file does not contain, is an instrument refusal. In any other file
