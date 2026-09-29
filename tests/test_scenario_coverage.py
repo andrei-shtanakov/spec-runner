@@ -48,6 +48,11 @@ class TestParsing:
         assert task.verifies == ["tests/test_a.py::test_x"]
         assert task.scenarios == ["BEH-09"]
 
+    def test_qualified_ids_accepted(self, tmp_path):
+        (task,) = _tasks(tmp_path, "**Scenarios:** ENC:BEH-03, ENC:BEH-04a, AB:X-1\n")
+        assert task.scenarios == ["ENC:BEH-03", "ENC:BEH-04a", "AB:X-1"]
+        assert task.scenarios_error is None
+
 
 class TestMalformedLineIsAValidateError:
     def _errors(self, tmp_path, line: str) -> str:
@@ -68,6 +73,26 @@ class TestMalformedLineIsAValidateError:
             joined = self._errors(tmp_path, f"**Scenarios:** {bad}")
             assert "TASK-001" in joined, bad
             assert bad in joined, bad
+
+    def test_wrong_qualified_shape(self, tmp_path):
+        for bad in (
+            "E:BEH-09",  # code too short
+            "ENCODES:BEH-09",  # code too long
+            "enc:BEH-09",
+            "ENC:beh-09",
+            "ENC::BEH-09",
+            "ENC:BEH-09:x",
+            "ENC#BEH-09",
+        ):
+            joined = self._errors(tmp_path, f"**Scenarios:** {bad}")
+            assert "TASK-001" in joined, bad
+            assert bad in joined, bad
+
+    def test_mixed_line_is_refused_naming_both_kinds(self, tmp_path):
+        joined = self._errors(tmp_path, "**Scenarios:** ENC:BEH-03, BEH-04")
+        assert "TASK-001" in joined
+        assert "mixes" in joined
+        assert "ENC:BEH-03" in joined and "BEH-04" in joined
 
 
 # --- Task 2: the coverage core -------------------------------------------

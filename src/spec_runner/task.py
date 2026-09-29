@@ -106,9 +106,11 @@ VERIFIES = re.compile(r"\*\*Verifies:\*\*\s*(.*)$")
 # #402: the scenarios a verify_first group must carry. One line,
 # comma-separated, stored as written and judged by `validate` — never
 # guessed. The id shape is BEH-style with the one suffix seen in practice
-# (`BEH-09a`); qualified ids (`<ws>#BEH-09`) are deliberately not accepted.
+# (`BEH-09a`), optionally qualified by a workstream code (#603, criteria
+# norm §1.1/§1.3: `ENC:BEH-09`, code of 2-6 capitals). A line is all
+# qualified or all bare: a mixed line has no single matching rule.
 SCENARIOS = re.compile(r"\*\*Scenarios:\*\*(.*)$")
-SCENARIO_ID = re.compile(r"[A-Z]+-\d+[a-z]?")
+SCENARIO_ID = re.compile(r"(?:[A-Z]{2,6}:)?[A-Z]+-\d+[a-z]?")
 # harness-guard-companions #4: the files a task declares it will change —
 # comma-separated project-relative paths (a directory covers everything under
 # it), checked by `preflight` against the harness surface. Paths, not globs:
@@ -218,8 +220,17 @@ def _parse_scenarios(line: str, declared: str) -> tuple[list[str] | None, str | 
     bad = [item for item in items if not SCENARIO_ID.fullmatch(item)]
     if bad:
         return None, (
-            f"**Scenarios:** {bad!r} not of the form BEH-09 / BEH-09a "
-            f"(comma-separated [A-Z]+-<digits>[a-z]). Declared line: {line!r}"
+            f"**Scenarios:** {bad!r} not of the form BEH-09 / BEH-09a / ENC:BEH-09 "
+            f"(comma-separated [A-Z]+-<digits>[a-z], optionally prefixed by a "
+            f"2-6 capital workstream code and ':'). Declared line: {line!r}"
+        )
+    qualified = [item for item in items if ":" in item]
+    if qualified and len(qualified) != len(items):
+        bare = [item for item in items if ":" not in item]
+        return None, (
+            f"**Scenarios:** mixes qualified ids ({', '.join(qualified)}) with bare "
+            f"ones ({', '.join(bare)}) — one line is all CODE:ID or all bare. "
+            f"Declared line: {line!r}"
         )
     return items, None
 
