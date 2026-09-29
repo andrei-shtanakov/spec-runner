@@ -151,8 +151,10 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
-    (root / "tests" / "test_a.py").write_text('"""kind: e2e — BEH-09"""\n')
-    (root / "tests" / "test_bin.py").write_bytes(b"# \xff\xfe BEH-10\n")
+    (root / "tests" / "test_a.py").write_text('def test_x():\n    """kind: e2e — BEH-09"""\n')
+    (root / "tests" / "test_bin.py").write_bytes(
+        b"def test_x():\n    # \xff\xfe BEH-10\n    pass\n"
+    )
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "base")
     return root
@@ -198,7 +200,7 @@ class TestAtCommit:
 
     def test_working_tree_label_does_not_count(self, repo):
         sha = _git(repo, "rev-parse", "HEAD")
-        (repo / "tests" / "test_a.py").write_text('"""BEH-09 BEH-10"""\n')
+        (repo / "tests" / "test_a.py").write_text('def test_x():\n    """BEH-09 BEH-10"""\n')
         refusal = coverage_refusal(_task(["tests/test_a.py::test_x"], ["BEH-10"]), repo, sha)
         assert refusal is not None and "BEH-10" in refusal
 

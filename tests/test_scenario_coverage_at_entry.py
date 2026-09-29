@@ -165,3 +165,22 @@ class TestRedEntryRunIsCheckedToo:  # Review Focus 4
         assert execute_task(_task(["BEH-09"]), cfg, state) == "TERMINAL_REFUSAL"
         assert red_calls == []
         impl.assert_not_called()
+
+
+MODULE_LABEL = '"""kind: e2e — BEH-09"""\n\n\ndef test_it():\n    assert True\n'
+
+
+class TestModuleLabelNoLongerCounts:
+    """#603 Changed: a label in the module header is refused at the entry run."""
+
+    def test_refused_terminally_before_any_paid_call(self, tmp_path, paid):
+        impl, red_calls = paid
+        cfg = _cfg(_repo(tmp_path, MODULE_LABEL))
+        state = ExecutorState(cfg)
+
+        assert execute_task(_task(["BEH-09"]), cfg, state) == "TERMINAL_REFUSAL"
+
+        impl.assert_not_called()
+        assert red_calls == []
+        error = state.get_task_state("TASK-001").last_error or ""
+        assert "BEH-09" in error and "test definition" in error
