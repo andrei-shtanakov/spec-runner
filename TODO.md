@@ -617,7 +617,7 @@
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
       (CPython ≥ 3.12, без settrace), корни продукта объявляются в конфиге.
 
-- [ ] **scenarios-deterministic-refusal-retries** (из локального ревью #612) @owner:github:andrei-shtanakov @id:scenarios-deterministic-refusal-retries @epic:eco.spec-toolchain
+- [x] **scenarios-deterministic-refusal-retries** (из локального ревью #612) @owner:github:andrei-shtanakov @id:scenarios-deterministic-refusal-retries @epic:eco.spec-toolchain
       `scenarios.coverage_refusal`: INSTRUMENT-отказы «не определён qualname» и
       «`.py` не разбирается» (срез A #603), как и #402-й «файл не читается на
       коммите», детерминированы на данном коммите, но не `terminal` — повторы
@@ -626,12 +626,28 @@
       отказ вместо терминального POLICY. Семантику повторов INSTRUMENT неявно
       не менять: сначала решение владельца (terminal при том же `kind`, как
       `execution.py:482`, или иначе), затем регрессия на число попыток.
-- [ ] **validate-scenarios-recursion-crash** (из финального ревью #612) @owner:github:andrei-shtanakov @id:validate-scenarios-recursion-crash @epic:eco.spec-toolchain
+      **Сделано 2026-09-29 (решение владельца):** оба отказа `terminal=True`,
+      вид INSTRUMENT сохранён; сбой чтения git остаётся повторяемым;
+      регрессия — группа запускается один раз при `max_retries=3`.
+- [x] **validate-scenarios-recursion-crash** (из финального ревью #612) @owner:github:andrei-shtanakov @id:validate-scenarios-recursion-crash @epic:eco.spec-toolchain
       `ast.parse` на патологическом `.py` (сотни тысяч членов выражения)
       бросает `RecursionError` (возможно `MemoryError`) мимо
       `except (SyntaxError, ValueError)` в `scenarios.group_coverage` →
       трейсбек из `validate`. В гейте недостижимо (pytest падает раньше).
       Ловить и отдавать как «не разбирается», регрессия на `validate`.
+      **Сделано 2026-09-29:** `RecursionError`/`MemoryError` → «cannot be parsed»
+      (замерено одинаково на 3.11/3.12/3.13); регрессии на `validate` и гейт.
+
+- [ ] **verify-first-terminal-refusal-bookkeeping** (из локального ревью PR с follow-up'ами #603) @owner:github:andrei-shtanakov @id:verify-first-terminal-refusal-bookkeeping @epic:eco.spec-toolchain
+      Терминальный отказ на ветке verify-first (`execution.py` ~799: POLICY
+      «uncovered» из #402, `auto_commit: false` из #380, а теперь и два
+      детерминированных INSTRUMENT покрытия) возвращает `TERMINAL_REFUSAL` мимо
+      завершающей бухгалтерии: статус в state-DB остаётся `running` (флип в
+      `failed` только при `attempt_count >= max_retries`), `notify_task_failed`
+      не шлётся, `_record_blocked` не зовётся — в tasks.md остаётся
+      незакоммиченный флип `in_progress`. Давнее свойство всех терминальных
+      отказов этой ветки; решить, что должен оставлять терминальный отказ
+      (blocked + коммит флипа + уведомление?), затем регрессия.
 
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
       Исполнитель запускается с `skip_permissions: true` по умолчанию

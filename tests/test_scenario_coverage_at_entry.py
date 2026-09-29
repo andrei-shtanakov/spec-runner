@@ -184,3 +184,41 @@ class TestModuleLabelNoLongerCounts:
         assert red_calls == []
         error = state.get_task_state("TASK-001").last_error or ""
         assert "BEH-09" in error and "test definition" in error
+
+
+INHERITED = (
+    "class Base:\n"
+    "    def test_it(self):\n"
+    '        """kind: e2e — BEH-09"""\n'
+    "        assert True\n"
+    "\n"
+    "\n"
+    "class TestSub(Base):\n"
+    "    pass\n"
+)
+
+
+class TestUnresolvableGroupIsNotRetried:
+    """#603 follow-up: a qualname the AST cannot resolve at the commit is a
+    deterministic INSTRUMENT refusal — terminal, so the group runs once."""
+
+    def test_group_runs_once_with_retries_left(self, tmp_path, paid):
+        impl, red_calls = paid
+        cfg = _cfg(_repo(tmp_path, INHERITED), max_retries=3)
+        state = ExecutorState(cfg)
+        task = _task(["BEH-09"])
+        task.verifies = ["tests/test_group.py::TestSub::test_it"]
+
+        from spec_runner import execution
+
+        with patch(
+            "spec_runner.execution.run_live_verify", wraps=execution.run_live_verify
+        ) as live:
+            assert run_with_retries(task, cfg, state) is False
+
+        assert live.call_count == 1
+        assert state.get_task_state("TASK-001").attempt_count == 1
+        impl.assert_not_called()
+        assert red_calls == []
+        error = state.get_task_state("TASK-001").last_error or ""
+        assert "TestSub::test_it is not defined" in error

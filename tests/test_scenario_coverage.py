@@ -303,6 +303,19 @@ class TestValidateWarnings:
         assert not any("uncovered" in w for w in result.warnings)
 
 
+class TestValidateSurvivesAPathologicalFile:  # #603 follow-up
+    def test_recursion_is_a_warning_not_a_traceback(self, tmp_path):
+        deep = "x = " + "+".join(["1"] * 200_000) + "\n"
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": deep},
+        )
+        assert result.ok
+        assert any("cannot be parsed" in w for w in result.warnings)
+
+
 class TestValidateWarningMinors:
     """Deferred minors of PR #590, closed."""
 

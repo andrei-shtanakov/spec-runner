@@ -166,13 +166,22 @@ class TestCoverageRefusal:
         root, sha = _commit(tmp_path, TWO_TESTS)
         refusal = coverage_refusal(_task(["tests/test_x.py::test_nope"], ["BEH-03"]), root, sha)
         assert refusal is not None and refusal.kind is RefusalKind.INSTRUMENT
+        assert refusal.terminal  # the same commit gives the same answer
         assert "test_nope" in refusal and sha[:12] in refusal
 
     def test_unparseable_file_is_instrument(self, tmp_path):  # Review Focus 3
         root, sha = _commit(tmp_path, "def (:\n")
         refusal = coverage_refusal(_task(["tests/test_x.py::test_a"], ["BEH-03"]), root, sha)
         assert refusal is not None and refusal.kind is RefusalKind.INSTRUMENT
+        assert refusal.terminal
         assert "cannot be parsed" in refusal
+
+    def test_unreadable_file_stays_retryable(self, tmp_path):
+        # a git read can fail for transient reasons — not made terminal
+        root, sha = _commit(tmp_path, TWO_TESTS)
+        refusal = coverage_refusal(_task(["tests/missing.py::test_a"], ["BEH-03"]), root, sha)
+        assert refusal is not None and refusal.kind is RefusalKind.INSTRUMENT
+        assert not refusal.terminal
 
     def test_owned_label_passes(self, tmp_path):
         root, sha = _commit(tmp_path, TWO_TESTS)
@@ -191,3 +200,14 @@ class TestFinalReviewInputs:
         text = 'import sys\nif sys.platform:\n    def test_a():\n        """BEH-01"""\n'
         coverage = group_coverage(["BEH-01"], ["tests/test_x.py::test_a"], {F: text})
         assert coverage.problems == [] and coverage.missing == []
+
+
+DEEP = "x = " + "+".join(["1"] * 200_000) + "\n"  # ast construction recurses past the limit
+
+
+class TestPathologicalFile:
+    """#603 follow-up: RecursionError from ast.parse is "cannot be parsed", not a traceback."""
+
+    def test_group_coverage_reports_it(self):
+        coverage = group_coverage(["BEH-03"], ["tests/test_x.py::test_a"], {F: DEEP})
+        assert coverage.problems and "tests/test_x.py cannot be parsed" in coverage.problems[0]

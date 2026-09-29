@@ -10,6 +10,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Deterministic scenario-coverage refusals are no longer retried** (#603).
+  A `.py` group file that does not parse at the commit, or a `**Verifies:**`
+  node id whose definition the file's AST does not contain (an inherited test,
+  say), stays an INSTRUMENT refusal but is now terminal: the live group runs
+  once instead of `max_retries` times for the same answer. A group file git
+  cannot read at the commit stays retryable.
+
+### Fixed
+
+- **`validate` no longer crashes on a pathologically deep group file** (#603).
+  `ast.parse` raises `RecursionError` on, e.g., a 200 000-term expression; it
+  now reads as "cannot be parsed" (a warning in `validate`, a terminal
+  INSTRUMENT refusal at the gate) instead of a traceback.
+
 ### Added
 
 - **Shared token-ownership fixtures** (#603, design §6.3):
