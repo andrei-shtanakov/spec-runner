@@ -604,11 +604,31 @@
             (design §2; plan `docs/superpowers/plans/2026-09-29-criteria-closure-slice-a.md`)
       - [ ] slice B — `verify --criteria` + schemas `criteria-closure/v1`; release = X
             @blocked_by:devtools#491
-      **Дизайн 2026-09-29:** `docs/superpowers/specs/2026-09-29-criteria-closure-verify-design.md`
-      — против нормы на `b7edcca` (влита, rev 10), не `5727151` из заявки.
-      Срез A первым: `_parse_scenarios` сейчас ОТКЛОНЯЕТ `ENC:BEH-03`, а мост
-      devtools будет их выводить (их §2.1). Отступление от приложения: G0 через
-      `-p`-плагин (`sys.monitoring`/`settrace`), не coverage.py. Три вопроса §8.
+            Предусловие (решение владельца 2026-09-29): паритет парсера владения
+            токеном — общие фикстуры `tests/fixtures/criteria-closure/v1/ownership/`
+            с ожидаемыми `owned`/`selection`, согласованные в devtools#491 (7
+            измеренных расхождений). Финальная сверка §5.3 паритет не решает.
+            Релиз A (minor) минимальную версию `criteria-closure/v1` НЕ задаёт.
+      **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
+      решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
+      `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
+      (CPython ≥ 3.12, без settrace), корни продукта объявляются в конфиге.
+
+- [ ] **scenarios-deterministic-refusal-retries** (из локального ревью #612) @owner:github:andrei-shtanakov @id:scenarios-deterministic-refusal-retries @epic:eco.spec-toolchain
+      `scenarios.coverage_refusal`: INSTRUMENT-отказы «не определён qualname» и
+      «`.py` не разбирается» (срез A #603), как и #402-й «файл не читается на
+      коммите», детерминированы на данном коммите, но не `terminal` — повторы
+      жгут `max_retries` с живым прогоном группы каждый раз; `problems`
+      проверяются раньше `missing`, так что группа с обоими даёт повторяемый
+      отказ вместо терминального POLICY. Семантику повторов INSTRUMENT неявно
+      не менять: сначала решение владельца (terminal при том же `kind`, как
+      `execution.py:482`, или иначе), затем регрессия на число попыток.
+- [ ] **validate-scenarios-recursion-crash** (из финального ревью #612) @owner:github:andrei-shtanakov @id:validate-scenarios-recursion-crash @epic:eco.spec-toolchain
+      `ast.parse` на патологическом `.py` (сотни тысяч членов выражения)
+      бросает `RecursionError` (возможно `MemoryError`) мимо
+      `except (SyntaxError, ValueError)` в `scenarios.group_coverage` →
+      трейсбек из `validate`. В гейте недостижимо (pytest падает раньше).
+      Ловить и отдавать как «не разбирается», регрессия на `validate`.
 
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
       Исполнитель запускается с `skip_permissions: true` по умолчанию
