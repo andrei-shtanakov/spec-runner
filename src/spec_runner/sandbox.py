@@ -47,10 +47,12 @@ STATE_DIRS: dict[str, tuple[str, ...]] = {
     "pi": ("~/.pi",),
     "ollama": (),
     "qwen": (),
+    # 0.0.353, measured 2026-09-29: without it, EPERM on ~/.copilot/config.json.
+    "copilot": ("~/.copilot",),
 }
 
 #: Presets not measured (design §3): run with the base set and a warning.
-UNMEASURED = frozenset({"copilot", "llama-cli"})
+UNMEASURED = frozenset({"llama-cli"})
 
 #: codex runs its own shell commands in Seatbelt, which cannot nest inside ours
 #: (`sandbox_apply: Operation not permitted`, measured). Its documented mode for
