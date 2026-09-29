@@ -362,3 +362,12 @@ def test_read_only_commands_are_not_refused(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["spec-runner", "status"])
     cli.main()
     assert seen == [True]
+
+
+def test_every_preset_but_llama_cli_is_measured():
+    """The table is the measurement (design §3); llama-cli was not installed."""
+    from spec_runner.preset_cmd import list_presets
+
+    assert set(list_presets()) - set(sandbox.STATE_DIRS) == {"llama-cli"}
+    assert {"llama-cli"} == sandbox.UNMEASURED
+    assert sandbox.STATE_DIRS["copilot"] == ("~/.copilot",)

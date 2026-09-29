@@ -47,7 +47,7 @@ per-call dir only).
 | pi | (npm) | `~/.pi` — without it: `EPERM mkdir ~/.pi/agent/sessions/…` | past the filesystem; the call then fails 401 on the local API key, identically **without** the sandbox — not a sandbox effect |
 | ollama | (homebrew) | none (the server is a separate process) | `OK` |
 | qwen | (homebrew) | none | `OK` |
-| copilot | 0.0.353 | **not measured** — the local install predates the preset's `-s`/`--no-ask-user` and hangs for 90 s without the sandbox too | — |
+| copilot | 0.0.353 | `~/.copilot` — without it: EPERM writing `~/.copilot/config.json` (re-measured 2026-09-29 after the account was re-authenticated) | past the filesystem; the call then fails `quota_exceeded`, identically **without** the sandbox. This install predates the preset's `-s`/`--no-ask-user`, so it was driven with `-p … --allow-all-tools` only |
 | llama-cli | — | **not measured** — not installed | — |
 
 Tools the agent runs itself, same method (a uv project, `uv run pytest`, `git commit`):
@@ -103,8 +103,8 @@ after a release of use.
    fails;
 5. the CLI's state dirs from a measured table keyed by the executable's basename
    (§3): `codex → ~/.codex`, `opencode → ~/.local/share/opencode`, `pi → ~/.pi`;
-   none for claude, ollama, qwen; copilot and llama-cli unmeasured → none, and a
-   warning names them as unmeasured;
+   `copilot → ~/.copilot`; none for claude, ollama, qwen; llama-cli unmeasured →
+   none, and a warning names it (and any CLI outside the table) as unmeasured;
 6. the uv cache dir when the project's `test_command`/`sync_command` runs `uv`
    (measured necessity), resolved by `uv cache dir`;
 7. `sandbox_allow`.
