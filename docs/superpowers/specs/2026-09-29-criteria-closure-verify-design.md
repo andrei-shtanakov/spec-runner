@@ -1,10 +1,11 @@
 # `verify --criteria` — the producer side of `criteria-closure/v1`
 
-Status: **revision 2 (review round 1 applied), for owner review**, 2026-09-29. Inbox spec-runner#603
-(from devtools, DarkFactory E), TODO `criteria-closure-verify`. Revision 1 (PR
-#609) was a draft with open questions; this revision records the owner's
-decisions from the design session of 2026-09-29, closes its §8, and replaces the
-choices that session overturned (§9 lists them).
+Status: **revision 3 — contract agreed with devtools**, 2026-09-29. Inbox
+spec-runner#603 (from devtools, DarkFactory E), TODO `criteria-closure-verify`.
+Revision 1 (PR #609) was a draft with open questions; revision 2 (PR #610)
+recorded the owner's decisions and closed its §8; revision 3 records devtools'
+sign-off in devtools#491 (the §6 addendum is now agreed, with their three
+freeze conditions and four requests accepted — §9). Slice A shipped in PR #612.
 
 ## 0. What is asked, and against which text
 
@@ -77,6 +78,18 @@ invisible to `ast`:
   method's token is not lifted to the class and does not reach its siblings;
 - the module header and neighbouring definitions own nothing.
 
+**Agreed with devtools (devtools#491 D), rev 3.** Both parsers follow these
+rules, pinned by the shared ownership fixtures (§6.3): lines split on
+`\r\n|\r|\n` as `ast` numbers them; a leading U+FEFF is dropped; the last
+definition of a name wins and removes the earlier one with everything nested in
+it — including one name in both branches of an `if/else`, where the survivor is
+the last in source order; a definition under a module- or class-level
+`if`/`try`/`with`/loop is indexed, and the compound statement's own lines own
+nothing; a method gets the regions of **every** enclosing class (the chain up to
+the first non-class), never the reverse; a `def` nested in a function is not a
+definition and is subtracted from its region. Whether a definition is a *test*
+is decided by pytest's collection (§3.5), not by the parser's naming.
+
 The gate (A) and the measurement (B) both call this module, so "which test
 definitions carry `ENC:BEH-09`" has one answer in this repo — the lesson of
 #270/#241. devtools re-derives it with its own parser (§5.3 completeness); the
@@ -135,13 +148,33 @@ every exit path. No agent is called, so no budget, ledger or `executor_sandbox`
 applies. Flags: `--selector-timeout` (per isolated pytest process, default
 300 s) and `--timeout` (whole measurement).
 
-### 3.2 Exit codes (§5.1)
+### 3.2 Exit codes and error kinds (§5.1)
 
-| exit | when |
-|---|---|
-| 0 | an answer is given; per-BEH statuses may be `unconfirmed` or `error` |
-| 2 | request or environment error, retryable: unreadable or schema-invalid request; `owner_repo` ≠ the source repo's `origin`; `product_sha` absent locally ("fetch and retry"); clone or checkout failed, or the checkout does not resolve to exactly `product_sha`; `uv sync` failed on network/cache; the product environment's interpreter is not CPython ≥ 3.12 (`unsupported-runtime` — a property of the machine, another host may run it); collection infrastructure failure, collection timeout, or missing/malformed collection evidence; the global timeout |
-| 3 | response-level error (`blocked`), a property of the product at `product_sha`: `uv.lock` missing or stale (`uv sync --locked` refuses); a collection error reported by pytest in the provisioned environment (syntax, import); product-roots errors (§3.4); an unresolved definition of a Python test item (§3.5); an isolated run whose **valid** report shows its requested selector absent (inventory inconsistency); test execution observed outside the designated process (`distributed-execution`, §3.6) |
+`error.kind` is a **closed enum** in the response schema, and the kind fixes
+both `retryable` and the exit code: `retryable` is `true` exactly for the exit-2
+kinds. A response whose `retryable` contradicts its kind, or a kind outside the
+enum, fails the schema; a new kind is a schema change (devtools#491 A).
+
+| kind | exit | `retryable` | when |
+|---|---|---|---|
+| `request-invalid` | 2 | true | request unreadable or schema-invalid |
+| `owner-repo-mismatch` | 2 | true | `owner_repo` ≠ the source repo's `origin` (SSH/HTTPS normalised) |
+| `product-sha-absent` | 2 | true | `product_sha` not in the local object store ("fetch and retry") |
+| `clone-failed` | 2 | true | clone or checkout failed, or `HEAD` ≠ `product_sha` after checkout |
+| `environment-sync-failed` | 2 | true | `uv sync --locked` failed on network or cache |
+| `unsupported-runtime` | 2 | true | the product environment is not CPython ≥ 3.12 (a machine property) |
+| `collection-config-outside-checkout` | 2 | true | the pytest config actually read (`config.inipath`) lies outside the checkout (a machine property) |
+| `collection-failed` | 2 | true | collection infrastructure failure, collection timeout, or missing/malformed collection evidence |
+| `timeout` | 2 | true | the global `--timeout` |
+| `lock-not-current` | 3 | false | `uv.lock` missing or stale (`uv sync --locked` refuses) |
+| `collection-error` | 3 | false | pytest reported a collection error in the provisioned environment (syntax, import) |
+| `product-roots-undeclared` / `-empty` / `-invalid` / `-no-python` / `-overlap-tests` | 3 | false | §3.4 |
+| `definition-unresolved` | 3 | false | a `pytest.Function` whose definition does not resolve inside the checkout (§3.5) |
+| `selector-absent` | 3 | false | an isolated run's **valid** report shows its requested selector absent |
+| `distributed-execution` | 3 | false | test execution observed outside the designated process (§3.6) |
+
+Exit 0 is an answer (per-BEH statuses may be `unconfirmed` or `error`); any
+other exit code is a failed step.
 
 A successful collection with zero tests is a valid inventory: every BEH is
 `unconfirmed: no-test`, exit 0.
@@ -218,7 +251,17 @@ is the authoritative inventory. For every item the plugin reports the **actual
 definition identity** from collection, not from the node id — inherited methods
 and decorators make the two differ: the underlying function after
 `inspect.unwrap`, its source file (`inspect.getsourcefile`), `__qualname__` and
-first line. The inventory also lists every loaded `conftest.py`.
+first line. The first line is `__code__.co_firstlineno` of the unwrapped
+function, which is **the line of the first decorator, else of `def`** — the
+same line where the §2.2 region starts (measured on CPython 3.11 and 3.12,
+through `@pytest.mark.parametrize` and a `functools.wraps` decorator). The
+inventory also lists every loaded `conftest.py` and the pytest configuration
+file actually read (`config.inipath`, when there is one).
+
+Every collected `pytest.Function` is reported in the response as `test_items`
+(§4), not only the selected ones: devtools checks completeness per `node_id`
+against it (devtools#491 B.6) — comparing definitions alone would miss a lost
+parametrized case, whose definition stays the same.
 
 - A `pytest.Function` item whose definition cannot be resolved to a source file
   inside the checkout is a response-level error (`definition-unresolved`,
@@ -365,15 +408,22 @@ removed in norm rev 8.
 
 - **Answer** (exit 0): `protocol`, `request` (verbatim echo),
   `spec_runner_version`, `product_roots: {declared, files}`, `test_files` (the
-  inventory, `conftest.py` included), `environment: {lock_sha256, python,
-  pytest_plugins}`, `content_sha256`, `beh[]`. Per BEH: `id`, `status`,
+  inventory's files, `conftest.py` and the read pytest config included),
+  `test_items: [{node_id, definition: {file, qualname, line}}]` (every collected
+  `pytest.Function`, `node_id` unique; each selector's `definition` equals the
+  one its `node_id` has here), `environment: {lock_sha256, python,
+  pytest_plugins}`, `content_sha256`, `beh[]`. `definition.line` is the line of
+  the first decorator, else of `def` — stated in the schema, since devtools
+  matches definitions by `(file, qualname, line)`. Per BEH: `id`, `status`,
   `reason` (required iff not `traced`, absent when `traced`), `selectors[]`.
   Per selector: `node_id`, `definition: {file, qualname, line}`, `status`,
   `reason`, `runs` — exactly two, each one of two shapes:
   - **complete run:** `{result: "complete", collected: [node ids],
     phases: {setup, call, teardown}, outcome, product_lines: [{file, lines[]}],
-    product_line_count, child_process, process_operations[]}` — every field
-    required. `setup` ∈ `passed|failed|skipped`; `call` ∈
+    product_line_count, process_operations[]}` — every field required.
+    `product_line_count` is the total length of the `lines` lists. The norm's
+    "child-process indicator" (§4.3) is `process_operations` being non-empty;
+    there is no separate boolean, so the two cannot disagree (devtools#491 A). `setup` ∈ `passed|failed|skipped`; `call` ∈
     `passed|failed|skipped|not-reached`; `teardown` ∈ `passed|failed`;
     `outcome` ∈ `passed|failed|skipped` (§3.7). When `call` is `not-reached`,
     the empty line and operation lists are true statements — no call window
@@ -416,33 +466,81 @@ in v1; per-run evidence is the essential addition.
 | M1 `--collect-only` authoritative | followed; definition identity from collection, ownership in one shared module |
 | M2 coverage.py with `--cov-context=test` | **not followed**: stdlib `-p` plugin, `sys.monitoring`, CPython ≥ 3.12; audit hooks for process operations |
 | M3 two runs | followed, per selector in fresh processes, with per-run evidence |
-| M4 `content_sha256` | followed; definition extended to the declaration (addendum below) |
+| M4 `content_sha256` | followed; definition extended to the declaration, the lock and the read pytest config (§6.1) |
 
-## 6. Addendum — pending devtools sign-off
+## 6. Agreed with devtools (devtools#491, 2026-09-29)
 
-These points go beyond the pinned text or define what it leaves open; devtools
-recomputes or consumes them, so they need their agreement before B's schemas are
-frozen. They will be raised in a devtools issue after this document is reviewed.
+Rev 2 carried these as an addendum pending devtools' sign-off. devtools agreed
+to every row and point, and devtools adapts its consumer (`criteria_check.py`,
+`criteria_close.py`, `criteria_tokens.py`) to our schemas and fixtures — their
+TODO `criteria-closure-v1-signoff`, blocked on release X.
 
-1. **`content_sha256`** = hex sha256 of the ASCII bytes of
-   `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
-   where `obj = {"v": 1, "product_roots": <sorted normalised declared paths>,
-   "files": [[<path>, <hex sha256 of the file's bytes at product_sha>], …]}`,
-   `files` = resolved product files ∪ `test_files`, each path once, POSIX,
-   repository-relative, sorted by UTF-8 bytes. Path normalisation and duplicate
-   handling as in §3.4. A declaration change changes the digest even when the
-   resolved file set does not.
-2. **Response shape details**: per-run evidence (`runs[]` as complete-run or
-   error-run objects rather than two `call` outcomes; `not-reached`; the
-   three-phase `outcome`), selector-level `status`/`reason`, `definition.line`,
-   `product_roots.{declared,files}`, `test_files`, `spec_runner_version`, and the
-   reserved, never-emitted `not_applicable: language` branch.
-3. **Aggregation precedence** in §3.7, including that "passed" means all three
-   phases passed, so a teardown failure is `not-passed`.
-4. **The error branch**: `error.{kind, retryable, detail}`, its kinds, and the
-   partial fields it may carry.
-5. **Exit 2 on a JSON document**: stdout carries the error branch on exit 2 as
-   well as 3.
+### 6.1 `content_sha256`
+
+Hex sha256 of the ASCII bytes of
+`json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`, where
+
+```
+obj = {"v": 1,
+       "product_roots": <sorted normalised declared paths>,
+       "lock": <environment.lock_sha256>,
+       "files": [[<path>, <hex sha256 of the file's bytes at product_sha>], …]}
+```
+
+`files` = resolved product files ∪ `test_files` (collected test modules, loaded
+`conftest.py`, and the pytest config file actually read — `config.inipath` —
+when there is one), each path once, POSIX, repository-relative, sorted by UTF-8
+bytes; normalisation and duplicate handling as in §3.4. A declaration change, a
+lock change or a collection-config change each change the digest even when the
+other inputs do not (devtools#491 C.1–C.2). Non-`.py` test data (fixture JSON
+files) is **not** in the digest — a boundary devtools names in its own spec
+(C.3). How devtools pre-checks G6 before a measurement is theirs to decide (C.4);
+it places no requirement on this contract today.
+
+### 6.2 Response and aggregation
+
+- The shape of §4: `request` echo; `product_roots.{declared,files}`;
+  `test_files`; `test_items`; exactly two runs per selector, complete or error;
+  `not-reached`; the three-phase `outcome`; `process_operations` as the only
+  child-process evidence; selector-level `status`/`reason`; `definition.line` as
+  stated; `spec_runner_version`; the reserved, never-emitted
+  `not_applicable: language` branch.
+- The aggregation and precedence of §3.7 ("passed" = all three phases passed).
+  devtools recomputes `outcome` and every status from the evidence and does not
+  trust the producer's values.
+- The error branch with the closed `kind` enum and the kind → `retryable` → exit
+  mapping of §3.2; a JSON document on exit 2 as well as 3 (devtools treats 2 as a
+  retryable step failure, 3 as `blocked`).
+
+### 6.3 Shared ownership fixtures
+
+Produced here, vendored by devtools under `PIN` with `manifest.json` (their path
+`contracts/criteria-closure/v1/fixtures/ownership/`). Parity is a
+**prerequisite** of slice B, not something the final §5.3 cross-check resolves.
+
+- `tests/fixtures/criteria-closure/v1/ownership/<case>.py` + `<case>.expected.json`:
+  - `owned`: a list of `{qualname, line, tokens}` sorted by `line`, one entry for
+    every function and method `criteria_tokens` indexes (including non-`test*`
+    ones; no classes; no `def` nested in a function), `tokens` including the
+    regions of every enclosing class; `(qualname, line)` is the key devtools
+    matches `definition.line` against;
+  - `{"error": "syntax"}` instead of `owned` for an unparseable file;
+  - `selection` (entry → selected qualnames) — ours, for the task gate; devtools
+    does not read it.
+- The fixture bytes are the cases (CRLF, lone `\r`, BOM, NUL, `\x0c`):
+  `.gitattributes` marks `tests/fixtures/criteria-closure/** -text`, and the
+  manifest catches any drift.
+- Cases: the seven measured differences (form feed, redefined class, conditional
+  definition, nested class with an outer-class token, BOM, a `test_*` method of a
+  non-`Test*` class, a `test_*` nested in a test function) plus decorator line,
+  nested helper, module header, class docstring, `async def`, parametrize, CRLF,
+  lone `\r`, syntax error, NUL — and devtools' two additions: one name in both
+  branches of an `if/else` (only the survivor in `owned`), and a module-level
+  non-`test` helper carrying a token (it owns it; it is not a collected item).
+- Response-verification cases (pytest collected the definition from the other
+  `if/else` branch → `line` mismatch; a parametrized case's `node_id` lost →
+  completeness failure) are devtools' verdicts and live in devtools. This repo
+  ships positive golden responses in its schema contract tests.
 
 ## 7. Proof
 
@@ -479,6 +577,12 @@ frozen. They will be raised in a devtools issue after this document is reviewed.
   environment, roots refusals, both response branches validating against the
   schema, one JSON document on every exit path. Clone + `uv sync --locked` on a
   mini-product offline from the cache is `@slow`.
+- **Shared fixtures (every CI Python):** every `tests/fixtures/criteria-closure/v1/ownership/`
+  case against `criteria_tokens` — `owned` and `selection` — byte-exact
+  (`-text`); the answer's `test_items` agreeing with the selectors'
+  definitions; `content_sha256` recomputed from its definition, including
+  `lock` and the read pytest config; a `retryable` contradicting its `kind`
+  rejected by the schema.
 - **Live (devtools' acceptance):** `criteria-close` on a schema-2 bundle against
   released X: Must with no test → `no-test`; docstring reader (incl. lazy import)
   → `no-product-execution`; executing green test → `traced`.
@@ -492,6 +596,15 @@ frozen. They will be raised in a devtools issue after this document is reviewed.
   (§3.6) are visible in the response, not closed.
 
 ## 9. Decisions (owner, 2026-09-29) — rev 1 questions closed
+
+**Rev 3 (devtools#491 sign-off, accepted by the owner):** `test_items` with
+per-`node_id` completeness; `lock` and the read pytest config in
+`content_sha256`; `child_process` removed in favour of `process_operations`; a
+closed `error.kind` enum with a fixed kind → `retryable` → exit mapping;
+`definition.line` = first decorator else `def`, stated in the schema; the
+shared ownership fixture form with `-text`; devtools' negative
+response-verification cases stay in devtools. The parser rules devtools adopts
+are §2.2's, as shipped in slice A.
 
 - **q1 (gate outside `verify_first`)**: `verify_first` only in v1; qualified ids
   accepted in every mode; `tdd`/`standard` get a non-failing warning. Closure is
