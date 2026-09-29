@@ -88,6 +88,7 @@ class TestBytesAreTheCases:  # Review Focus 1
             capture_output=True,
             text=True,
             check=True,
+            cwd=ROOT,
         ).stdout
         assert out.strip().endswith(": text: unset"), out
 

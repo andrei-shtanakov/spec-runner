@@ -81,8 +81,9 @@ def select_tests(source: str, qualname: str | None = None) -> list[TestDefinitio
     `UnresolvedQualname` when `qualname` is not defined in it. A redefined
     name keeps its last definition, as Python and pytest do. A definition
     under a module- or class-level `if`/`try`/`with`/loop is indexed like any
-    other — pytest collects it — but the compound statement's own lines own
-    nothing.
+    other — pytest collects it. At module level the compound statement's own
+    lines are module header and own nothing; inside a class they are class body
+    outside nested definitions, so they count for every method (§1.4).
     """
     index = _index(ast.parse(_without_bom(source)))
     if qualname is None:
