@@ -43,6 +43,8 @@ def test_the_agreed_case_set_is_present():
         "17_nul",
         "18_if_else_same_name",
         "19_module_helper_with_token",
+        "20_token_grammar",
+        "21_class_level_compound",
     ]
 
 

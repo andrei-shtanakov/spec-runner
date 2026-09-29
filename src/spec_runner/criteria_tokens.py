@@ -37,9 +37,11 @@ def token_pattern(token: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])")
 
 
-#: A qualified scenario token (§1.3): a workstream code of 2-6 capitals, `:`,
-#: then the id — with the same whole-token boundaries as `token_pattern`.
-QUALIFIED_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Z]{2,6}:[A-Z]+-\d+[a-z]?(?![A-Za-z0-9_])")
+#: A qualified criterion token (§1.3): a workstream code of 2-6 capitals, `:`,
+#: then a criterion id — `BEH-NN` or `AC-NN`, optional one-letter suffix — with
+#: the same whole-token boundaries as `token_pattern`. Other ids (`REQ-01`) are
+#: not criteria and are not tokens; agreed with devtools' parser (devtools#491).
+QUALIFIED_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Z]{2,6}:(?:BEH|AC)-\d+[a-z]?(?![A-Za-z0-9_])")
 
 
 @dataclass(frozen=True)

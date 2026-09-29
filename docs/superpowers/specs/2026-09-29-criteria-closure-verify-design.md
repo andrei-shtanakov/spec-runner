@@ -84,8 +84,12 @@ rules, pinned by the shared ownership fixtures (§6.3): lines split on
 definition of a name wins and removes the earlier one with everything nested in
 it — including one name in both branches of an `if/else`, where the survivor is
 the last in source order; a definition under a module- or class-level
-`if`/`try`/`with`/loop is indexed, and the compound statement's own lines own
-nothing; a method gets the regions of **every** enclosing class (the chain up to
+`if`/`try`/`with`/loop is indexed — at module level the compound statement's own
+lines are module header and own nothing, while inside a class they are class
+body outside nested definitions and so, by norm §1.4's class region, count for
+every method of the class (corrected after B1's review: rev 3 said "own nothing"
+for both levels); a qualified token is `CODE:(BEH|AC)-<digits>[a-z]?` — only
+criterion ids, as in norm §1.3; a method gets the regions of **every** enclosing class (the chain up to
 the first non-class), never the reverse; a `def` nested in a function is not a
 definition and is subtracted from its region. Whether a definition is a *test*
 is decided by pytest's collection (§3.5), not by the parser's naming.

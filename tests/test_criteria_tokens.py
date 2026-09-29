@@ -229,6 +229,13 @@ class TestOwnedDefinitions:
             OwnedDefinition("test_a", 1, ("ENC:BEH-01", "XENC:BEH-01"))
         ]
 
+    def test_only_criterion_ids_are_tokens(self):  # final review, Important 1
+        # norm §1.3: qualified ids are criteria — BEH and AC — not any CODE:X-N
+        source = 'def test_a():\n    """ENC:AC-07 ENC:REQ-01 ENC:TASK-3 ENC:BEH-01"""\n'
+        assert owned_definitions(source) == [
+            OwnedDefinition("test_a", 1, ("ENC:AC-07", "ENC:BEH-01"))
+        ]
+
     def test_unparseable_source_raises(self):
         with pytest.raises(Exception) as raised:
             owned_definitions("def (:\n")

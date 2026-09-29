@@ -1,0 +1,35 @@
+{
+  "case": "21_class_level_compound",
+  "owned": [
+    {
+      "qualname": "TestK.test_a",
+      "line": 6,
+      "tokens": [
+        "ENC:BEH-01",
+        "ENC:BEH-02",
+        "ENC:BEH-03"
+      ]
+    },
+    {
+      "qualname": "test_w",
+      "line": 13,
+      "tokens": [
+        "ENC:BEH-05"
+      ]
+    },
+    {
+      "qualname": "test_f",
+      "line": 17,
+      "tokens": [
+        "ENC:BEH-07"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "TestK.test_a",
+      "test_w",
+      "test_f"
+    ]
+  }
+}
