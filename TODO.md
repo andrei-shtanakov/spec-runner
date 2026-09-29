@@ -600,6 +600,11 @@
       `docs/superpowers/specs/2026-09-28-bundle-criteria-oracle-design.md`
       (коммит `5727151`, ветка ещё не влита), приложение-механизм не норма.
       Большая работа: сначала свой дизайн против их §4–5.
+      **Дизайн 2026-09-29:** `docs/superpowers/specs/2026-09-29-criteria-closure-verify-design.md`
+      — против нормы на `b7edcca` (влита, rev 10), не `5727151` из заявки.
+      Срез A первым: `_parse_scenarios` сейчас ОТКЛОНЯЕТ `ENC:BEH-03`, а мост
+      devtools будет их выводить (их §2.1). Отступление от приложения: G0 через
+      `-p`-плагин (`sys.monitoring`/`settrace`), не coverage.py. Три вопроса §8.
 
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
       Исполнитель запускается с `skip_permissions: true` по умолчанию
