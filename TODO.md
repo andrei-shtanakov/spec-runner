@@ -598,8 +598,12 @@
       в фазе `call`, G1 окружение из lock, G3 два зелёных прогона подряд),
       схемы запроса/ответа + минимальная версия. Норма — devtools
       `docs/superpowers/specs/2026-09-28-bundle-criteria-oracle-design.md`
-      (коммит `5727151`, ветка ещё не влита), приложение-механизм не норма.
-      Большая работа: сначала свой дизайн против их §4–5.
+      (`b7edcca`, rev 10), приложение-механизм не норма. Дизайн:
+      `docs/superpowers/specs/2026-09-29-criteria-closure-verify-design.md`.
+      - [x] slice A — qualified ids + AST token ownership in the verify_first gate
+            (design §2; plan `docs/superpowers/plans/2026-09-29-criteria-closure-slice-a.md`)
+      - [ ] slice B — `verify --criteria` + schemas `criteria-closure/v1`; release = X
+            @blocked_by:devtools#491
       **Дизайн 2026-09-29:** `docs/superpowers/specs/2026-09-29-criteria-closure-verify-design.md`
       — против нормы на `b7edcca` (влита, rev 10), не `5727151` из заявки.
       Срез A первым: `_parse_scenarios` сейчас ОТКЛОНЯЕТ `ENC:BEH-03`, а мост

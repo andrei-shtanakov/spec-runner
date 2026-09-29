@@ -10,6 +10,31 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`**Scenarios:**` labels in a Python group file must sit inside the test
+  definition** (#603). A declared id used to count anywhere in a group file;
+  in a `.py` file it now counts only inside the test definition the
+  `**Verifies:**` entry names (from its first decorator to its end, minus
+  nested helpers) or in the body of a class containing it. **Labels in a
+  module docstring, module header, module constant or helper function no
+  longer satisfy the gate — move them into the test definition or its test
+  class.** A file-only entry uses a static approximation of default pytest
+  collection. Non-Python group files (ExUnit `path:line`) keep the per-file
+  match. A `.py` group file that does not parse, or a node id naming an
+  absent definition, is an instrument refusal. `validate` applies the same
+  rule to the working tree as warnings.
+
+### Added
+
+- **Qualified scenario ids** (#603): `**Scenarios:** ENC:BEH-03, ENC:BEH-04`
+  — a workstream code of 2-6 capitals and `:` before the id (criteria-closure
+  norm §1.1/§1.3). A line is all qualified or all bare; a mixed line is a
+  named error. Qualified ids are accepted on `tdd`/`standard` tasks with a
+  non-failing warning that task-level token ownership is not checked there.
+- `criteria_tokens.py`: the token-ownership rule (norm §1.4) as one module,
+  shared by the gate and, in slice B, `verify --criteria`.
+
 ## [4.3.0] - 2026-09-29
 
 Minor: two additive config keys (`executor_sandbox`, default `off`, and

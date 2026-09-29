@@ -21,6 +21,7 @@ from spec_runner.task import Task, parse_tasks
 from spec_runner.validate import validate_all, validate_task_fields
 
 HEADER = "### TASK-001: t\n\U0001f7e0 P1 | ⬜ TODO\nEst: 1d\n"
+OWNED = 'def test_x():\n    """BEH-09"""\n'
 
 
 def _tasks(tmp_path: Path, body: str):
@@ -48,6 +49,11 @@ class TestParsing:
         assert task.verifies == ["tests/test_a.py::test_x"]
         assert task.scenarios == ["BEH-09"]
 
+    def test_qualified_ids_accepted(self, tmp_path):
+        (task,) = _tasks(tmp_path, "**Scenarios:** ENC:BEH-03, ENC:BEH-04a, AB:X-1\n")
+        assert task.scenarios == ["ENC:BEH-03", "ENC:BEH-04a", "AB:X-1"]
+        assert task.scenarios_error is None
+
 
 class TestMalformedLineIsAValidateError:
     def _errors(self, tmp_path, line: str) -> str:
@@ -68,6 +74,26 @@ class TestMalformedLineIsAValidateError:
             joined = self._errors(tmp_path, f"**Scenarios:** {bad}")
             assert "TASK-001" in joined, bad
             assert bad in joined, bad
+
+    def test_wrong_qualified_shape(self, tmp_path):
+        for bad in (
+            "E:BEH-09",  # code too short
+            "ENCODES:BEH-09",  # code too long
+            "enc:BEH-09",
+            "ENC:beh-09",
+            "ENC::BEH-09",
+            "ENC:BEH-09:x",
+            "ENC#BEH-09",
+        ):
+            joined = self._errors(tmp_path, f"**Scenarios:** {bad}")
+            assert "TASK-001" in joined, bad
+            assert bad in joined, bad
+
+    def test_mixed_line_is_refused_naming_both_kinds(self, tmp_path):
+        joined = self._errors(tmp_path, "**Scenarios:** ENC:BEH-03, BEH-04")
+        assert "TASK-001" in joined
+        assert "mixes" in joined
+        assert "ENC:BEH-03" in joined and "BEH-04" in joined
 
 
 # --- Task 2: the coverage core -------------------------------------------
@@ -126,8 +152,10 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
-    (root / "tests" / "test_a.py").write_text('"""kind: e2e — BEH-09"""\n')
-    (root / "tests" / "test_bin.py").write_bytes(b"# \xff\xfe BEH-10\n")
+    (root / "tests" / "test_a.py").write_text('def test_x():\n    """kind: e2e — BEH-09"""\n')
+    (root / "tests" / "test_bin.py").write_bytes(
+        b"def test_x():\n    # \xff\xfe BEH-10\n    pass\n"
+    )
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "base")
     return root
@@ -173,7 +201,7 @@ class TestAtCommit:
 
     def test_working_tree_label_does_not_count(self, repo):
         sha = _git(repo, "rev-parse", "HEAD")
-        (repo / "tests" / "test_a.py").write_text('"""BEH-09 BEH-10"""\n')
+        (repo / "tests" / "test_a.py").write_text('def test_x():\n    """BEH-09 BEH-10"""\n')
         refusal = coverage_refusal(_task(["tests/test_a.py::test_x"], ["BEH-10"]), repo, sha)
         assert refusal is not None and "BEH-10" in refusal
 
@@ -211,7 +239,7 @@ class TestValidateWarnings:
             tmp_path,
             "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
             "**Scenarios:** BEH-09, BEH-10\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert result.ok
         joined = "\n".join(result.warnings)
@@ -223,7 +251,7 @@ class TestValidateWarnings:
             tmp_path,
             "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
             "**Scenarios:** BEH-09\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert not any("uncovered" in w for w in result.warnings)
 
@@ -233,6 +261,38 @@ class TestValidateWarnings:
         )
         assert result.ok
         assert any("tests/nope.py" in w and "does not exist" in w for w in result.warnings)
+
+    def test_module_header_label_now_warns(self, tmp_path):  # #603 Changed
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_x\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+        )
+        assert result.ok
+        joined = "\n".join(result.warnings)
+        assert "BEH-09" in joined and "uncovered" in joined and "test definition" in joined
+
+    def test_unresolved_qualname_warns(self, tmp_path):
+        result = _validate(
+            tmp_path,
+            "**Mode:** verify_first\n**Verifies:** tests/test_a.py::test_nope\n"
+            "**Scenarios:** BEH-09\n",
+            {"tests/test_a.py": OWNED},
+        )
+        assert result.ok
+        assert any("test_nope is not defined" in w for w in result.warnings)
+
+    def test_qualified_ids_outside_verify_first_warn_without_failing(self, tmp_path):
+        # default mode (standard), as in test_outside_verify_first_is_a_warning
+        result = _validate(tmp_path, "**Scenarios:** ENC:BEH-09, ENC:BEH-10\n")
+        assert result.ok
+        assert any(
+            "TASK-001" in w
+            and "task-level token ownership" in w
+            and "not checked outside verify_first" in w
+            for w in result.warnings
+        )
 
     def test_unparseable_verifies_does_not_add_coverage_noise(self, tmp_path):  # Review Focus 5
         result = _validate(
@@ -251,7 +311,7 @@ class TestValidateWarningMinors:
         root to judge coverage — it says the file is outside and stops."""
         project = tmp_path / "proj"
         project.mkdir()
-        (tmp_path / "outside_test.py").write_text('"""BEH-09"""\ndef test_x():\n    pass\n')
+        (tmp_path / "outside_test.py").write_text(OWNED)
         read: list[Path] = []
         real_read_text = Path.read_text
 
@@ -288,7 +348,7 @@ class TestValidateWarningMinors:
             "**Mode:** verify_first\n"
             "**Verifies:** tests/test_a.py::test_x, tests/nope.py::test_y\n"
             "**Scenarios:** BEH-10\n",
-            {"tests/test_a.py": '"""BEH-09"""\ndef test_x():\n    pass\n'},
+            {"tests/test_a.py": OWNED},
         )
         assert any("BEH-10" in w and "uncovered" in w for w in result.warnings)
 

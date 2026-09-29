@@ -119,16 +119,27 @@ instead of being mapped to something plausible.
   (non-empty) under `verify_first`, and never inferred from `Traces to`,
   filenames or the checklist.
 - `Scenarios` — optional, `verify_first` only: comma-separated scenario ids
-  (`BEH-09`, `BEH-09a`) the `Verifies` group must carry. At the live entry
-  run, before any paid call, every id must appear as a whole token
-  (`BEH-09` does not match `BEH-091`, `BEH-09a` or `TestBEH09`) in at least
-  one of the group's files **as committed**; otherwise the task is refused
-  terminally, naming the uncovered ids. Coverage is per file, not per test,
-  and ids are unqualified: a foreign file carrying its own `BEH-09`
-  satisfies it — the check catches a group that claims nothing about the
-  task's scenarios, not one that claims them falsely. `validate` only
-  warns (the working tree is not the commit); an empty or malformed line is
-  an error. Without the line nothing changes.
+  the `Verifies` group must carry — bare (`BEH-09`, `BEH-09a`) or qualified
+  by a workstream code of 2-6 capitals (`ENC:BEH-09`). One line is all bare
+  or all qualified; a mixed line is an error. At the live entry run, before
+  any paid call, every id must appear as a whole token (`BEH-09` does not
+  match `BEH-091`, `BEH-09a` or `TestBEH09`; `ENC:BEH-09` does not match
+  `XENC:BEH-09`) in the group **as committed**; otherwise the task is refused
+  terminally, naming the uncovered ids. In a Python (`.py`) group file the
+  id counts only inside the test definition the entry names — from its first
+  decorator to its end, not in nested helpers — or in the body of a class
+  containing it (outside its methods); the module header, module constants
+  and helper functions do not count. A file-only entry uses a **static
+  approximation of default pytest collection** (module-level `test*`
+  functions, `test*` methods of `Test*` classes); custom `python_functions`
+  / `python_classes`, collection hooks and runtime behaviour are not read.
+  A `.py` file that does not parse, or a node id naming a definition the
+  file does not contain, is an instrument refusal. In any other file
+  (ExUnit `path:line`) the id may stand anywhere in the file. A bare id
+  also matches its qualified spelling (`BEH-09` in `ENC:BEH-09`). `validate`
+  only warns (the working tree is not the commit), and warns without
+  failing when the line appears on a `tdd`/`standard` task; an empty or
+  malformed line is an error. Without the line nothing changes.
 - `Touches` — optional, any mode: comma-separated project-relative paths
   the task declares it will change (`src/app/entry.py, pyproject.toml,
   docs/`); a directory covers everything under it. No globs, no absolute
