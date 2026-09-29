@@ -37,6 +37,11 @@ def token_pattern(token: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])")
 
 
+#: A qualified scenario token (§1.3): a workstream code of 2-6 capitals, `:`,
+#: then the id — with the same whole-token boundaries as `token_pattern`.
+QUALIFIED_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Z]{2,6}:[A-Z]+-\d+[a-z]?(?![A-Za-z0-9_])")
+
+
 @dataclass(frozen=True)
 class TestDefinition:
     """One test and the source lines whose tokens count for it."""
@@ -45,6 +50,15 @@ class TestDefinition:
 
     qualname: str
     carrier_lines: frozenset[int]
+
+
+@dataclass(frozen=True)
+class OwnedDefinition:
+    """One function or method and the qualified tokens it owns (design §6.3)."""
+
+    qualname: str
+    line: int
+    tokens: tuple[str, ...]
 
 
 class UnresolvedQualname(LookupError):
@@ -101,6 +115,34 @@ def carried_ids(source: str, definitions: Sequence[TestDefinition], ids: Sequenc
         carrier |= definition.carrier_lines
     texts = [lines[number - 1] for number in sorted(carrier) if 0 < number <= len(lines)]
     return {token for token in ids if any(token_pattern(token).search(t) for t in texts)}
+
+
+def owned_definitions(source: str) -> list[OwnedDefinition]:
+    """Every function and method the index holds, with the qualified tokens it owns.
+
+    The shared-fixture view of §1.4 (devtools#491): not only tests — whether a
+    definition is a test is pytest's collection's call — and no classes or
+    functions nested in functions. `line` is the first decorator's, else the
+    `def`'s, which is what `co_firstlineno` reports for the collected function.
+    `tokens` are the qualified tokens on the definition's carrier lines (its own
+    region and every enclosing class's), sorted, each once. Sorted by
+    `(line, qualname)`. Raises `SyntaxError`/`ValueError` on unparseable source.
+    """
+    text = _without_bom(source)
+    lines = _LINE_BREAK.split(text)
+    owned: list[OwnedDefinition] = []
+    for name, (node, enclosing) in _index(ast.parse(text)).items():
+        if not isinstance(node, _FUNCTIONS):
+            continue
+        carrier = sorted(_carriers(node, enclosing))
+        tokens = {
+            match.group(0)
+            for number in carrier
+            if 0 < number <= len(lines)
+            for match in QUALIFIED_TOKEN.finditer(lines[number - 1])
+        }
+        owned.append(OwnedDefinition(name, _span(node).start, tuple(sorted(tokens))))
+    return sorted(owned, key=lambda d: (d.line, d.qualname))
 
 
 def _index(tree: ast.Module) -> dict[str, _Indexed]:
