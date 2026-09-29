@@ -545,7 +545,9 @@ Produced here, vendored by devtools under `PIN` with `manifest.json` (their path
   (`AC` ids, one-letter suffix, other codes, `REQ`/`TASK` ids and a 7-letter code
   rejected), and a class-level `if/else` with module-level `with`/`for` (the
   class-level compound lines count for the methods; the module-level ones own
-  nothing) — 21 cases in all.
+  nothing); and case 22, proposed by devtools after mutation-testing their
+  parser — definitions inside `except`, `finally` and `match case` bodies —
+  22 cases in all.
 - Response-verification cases (pytest collected the definition from the other
   `if/else` branch → `line` mismatch; a parametrized case's `node_id` lost →
   completeness failure) are devtools' verdicts and live in devtools. This repo

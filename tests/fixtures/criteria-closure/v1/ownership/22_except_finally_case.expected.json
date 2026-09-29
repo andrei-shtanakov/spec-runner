@@ -1,0 +1,33 @@
+{
+  "case": "22_except_finally_case",
+  "owned": [
+    {
+      "qualname": "test_in_except",
+      "line": 4,
+      "tokens": [
+        "ENC:BEH-01"
+      ]
+    },
+    {
+      "qualname": "test_in_finally",
+      "line": 7,
+      "tokens": [
+        "ENC:BEH-02"
+      ]
+    },
+    {
+      "qualname": "test_in_case",
+      "line": 12,
+      "tokens": [
+        "ENC:BEH-03"
+      ]
+    }
+  ],
+  "selection": {
+    "file_only": [
+      "test_in_except",
+      "test_in_finally",
+      "test_in_case"
+    ]
+  }
+}
