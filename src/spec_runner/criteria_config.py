@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, Finished, run_bounded
+from spec_runner.criteria_process import Deadline, Finished, c_locale_env, run_bounded
 
 _CONFIG_LOCATIONS = ("spec-runner.config.yaml", "spec/executor.config.yaml")
 _REGULAR_MODES = frozenset({"100644", "100755"})
@@ -80,7 +80,7 @@ def _show(checkout: Path, sha: str, path: str, deadline: Deadline) -> bytes | No
     done = run_bounded(
         ["git", "show", f"{sha}:{path}"],
         cwd=checkout,
-        env=None,
+        env=c_locale_env(),
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
     )
@@ -229,7 +229,7 @@ def _ls_tree(checkout: Path, sha: str, root: str, deadline: Deadline) -> list[st
     done = run_bounded(
         ["git", "ls-tree", "-r", "-z", sha, "--", root],
         cwd=checkout,
-        env=None,
+        env=c_locale_env(),
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
     )

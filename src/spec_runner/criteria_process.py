@@ -120,6 +120,15 @@ def _read(handle: IO[bytes]) -> bytes:
     return handle.read()
 
 
+def c_locale_env() -> dict[str, str]:
+    """A copy of the process environment with an untranslated (C) locale.
+
+    git's and uv's stderr is matched by wording; a translated message would turn a
+    product property (exit 3) into a retryable machine failure (exit 2).
+    """
+    return {**os.environ, "LC_ALL": "C", "LANG": "C"}
+
+
 def run_or_raise(
     argv: Sequence[str],
     *,
