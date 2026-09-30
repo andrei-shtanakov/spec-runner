@@ -148,7 +148,7 @@ class TestSemanticRules:
 - `Request.raw` stays the request verbatim (including `bundle_pin`); `owner_matches`'s docstring states the boundary: "a bare name checks the name only — a repository of that name under any owner matches".
 - A skipped-teardown check: a copy of `answer.json` with one run's `teardown: "skipped"`, `outcome: "skipped"` validates.
 
-- [ ] Steps: failing tests (RED: module missing) → schemas + goldens + module → GREEN (`uv run pytest tests/test_criteria_contract.py -q`, ruff, mypy) → commit `feat(#603): criteria-closure/v1 schemas, error-kind table, request parsing`.
+- [x] Steps: failing tests (RED: module missing) → schemas + goldens + module → GREEN (`uv run pytest tests/test_criteria_contract.py -q`, ruff, mypy) → commit `feat(#603): criteria-closure/v1 schemas, error-kind table, request parsing`.
 
 ---
 
