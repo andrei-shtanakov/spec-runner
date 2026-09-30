@@ -1,11 +1,14 @@
 # `verify --criteria` — the producer side of `criteria-closure/v1`
 
-Status: **revision 3 — contract agreed with devtools**, 2026-09-29. Inbox
-spec-runner#603 (from devtools, DarkFactory E), TODO `criteria-closure-verify`.
-Revision 1 (PR #609) was a draft with open questions; revision 2 (PR #610)
-recorded the owner's decisions and closed its §8; revision 3 records devtools'
-sign-off in devtools#491 (the §6 addendum is now agreed, with their three
-freeze conditions and four requests accepted — §9). Slice A shipped in PR #612.
+Status: **revision 4 — contract additions pending devtools' confirmation by
+SHA**, 2026-09-30. Inbox spec-runner#603 (from devtools, DarkFactory E), TODO
+`criteria-closure-verify`. Revision 1 (PR #609) was a draft with open questions;
+revision 2 (PR #610) recorded the owner's decisions and closed its §8; revision 3
+records devtools' sign-off in devtools#491 (the §6 addendum is now agreed, with
+their three freeze conditions and four requests accepted — §9). Slice A shipped
+in PR #612. Revision 4 carries the deltas of the B2 plans (PR #620) and
+devtools' conditions on them (spec-runner#623) — §9 "Rev 4" lists them; the v1
+schemas freeze only after devtools confirms this revision.
 
 ## 0. What is asked, and against which text
 
@@ -165,13 +168,15 @@ enum, fails the schema; a new kind is a schema change (devtools#491 A).
 | `owner-repo-mismatch` | 2 | true | `owner_repo` ≠ the source repo's `origin` (SSH/HTTPS normalised) |
 | `product-sha-absent` | 2 | true | `product_sha` not in the local object store ("fetch and retry") |
 | `clone-failed` | 2 | true | clone or checkout failed, or `HEAD` ≠ `product_sha` after checkout |
-| `environment-sync-failed` | 2 | true | `uv sync --locked` failed on network or cache |
+| `environment-sync-failed` | 2 | true | `uv sync` failed on network or cache (or for a reason §3.3 does not recognise) |
 | `unsupported-runtime` | 2 | true | the product environment is not CPython ≥ 3.12 (a machine property) |
 | `collection-config-outside-checkout` | 2 | true | the pytest config actually read (`config.inipath`) lies outside the checkout (a machine property) |
 | `collection-failed` | 2 | true | collection infrastructure failure, collection timeout, or missing/malformed collection evidence |
 | `timeout` | 2 | true | the global `--timeout` |
 | `lock-not-current` | 3 | false | `uv.lock` missing or stale (`uv sync --locked` refuses) |
+| `environment-selection-invalid` | 3 | false | the declared environment selection is unusable (§3.3): `criteria.environment` malformed, a name not defined in `pyproject.toml`, uv refusing the selection, or `pytest` not importable in the selected environment |
 | `collection-error` | 3 | false | pytest reported a collection error in the provisioned environment (syntax, import) |
+| `collection-mutated-checkout` | 3 | false | collection changed a tracked file of the checkout (§3.5) |
 | `product-roots-undeclared` / `-empty` / `-invalid` / `-no-python` / `-overlap-tests` | 3 | false | §3.4 |
 | `definition-unresolved` | 3 | false | a `pytest.Function` whose definition does not resolve inside the checkout (§3.5) |
 | `selector-absent` | 3 | false | an isolated run's **valid** report shows its requested selector absent |
@@ -194,13 +199,65 @@ A successful collection with zero tests is a valid inventory: every BEH is
    `git checkout --detach <product_sha>`, then `git rev-parse HEAD` must equal
    `product_sha`. The clone is taken from the local object store, not the
    network.
-4. `uv sync --locked` with `UV_PROJECT_ENVIRONMENT` pointing **outside** the
+4. **Environment selection is the product's.** It is read from the product's
+   spec-runner config at `product_sha` (the reader of §3.4):
+
+   ```yaml
+   criteria:
+     environment:
+       groups: [test]      # optional; absent → uv's default groups
+       extras: [cli]       # optional; absent → none
+   ```
+
+   Each name must be a valid PEP 735/685 name and is **normalised** — lower
+   case, every run of `-`, `_`, `.` replaced by one `-` — before anything else
+   uses it (measured, uv 0.11.23: for a group `Gov_X`, `--group` accepts `gov-x`,
+   `GOV.X`, `Gov_X` and `gov_x` alike, and `uv.lock` stores `gov-x`). Two
+   declared names equal after normalisation are refused, as a duplicate in §3.4
+   is. Normalised names are sorted by code point (they are ASCII, so this equals
+   §6.1's UTF-8 byte order). Undeclared groups (`groups` absent) and an explicit
+   `groups: []` are different selections: the first is whatever `[tool.uv]
+   default-groups` of the product's `pyproject.toml` names, the second is no
+   group at all.
+5. **Pre-check against `pyproject.toml` at `product_sha`**, before uv runs:
+   every declared group must be a key of `[dependency-groups]` (or `dev`, when
+   the legacy `[tool.uv] dev-dependencies` is present), every declared extra a
+   key of `[project.optional-dependencies]`, compared after normalisation. A
+   miss is `environment-selection-invalid` (exit 3) from our own reading, not
+   from uv's wording.
+6. `uv sync --locked` with `UV_PROJECT_ENVIRONMENT` pointing **outside** the
    checkout (so the checkout can be reset, §3.6), the shared uv cache (the
    annex's choice), and every `PYTEST_*` variable removed from the environment.
-   `--locked` refuses a missing or stale lock without updating it; `--frozen`
-   would silently skip the freshness check and is not used.
-5. The environment's interpreter must be CPython ≥ 3.12, else exit 2
+   Undeclared groups → no group flags; declared groups → `--no-default-groups`
+   and `--group g` per group; declared extras → `--extra e` each. Never
+   `--all-groups` / `--all-extras`: measured, uv refuses a pair declared in
+   `[tool.uv] conflicts` when both are selected, so "everything" is not an
+   environment a product can be required to have. `--locked` refuses a missing
+   or stale lock without updating it; `--frozen` would silently skip the
+   freshness check and is not used. uv's refusal of the selection itself — the
+   conflicts refusal ("are incompatible with the conflicts") — is
+   `environment-selection-invalid`; the pre-check (5) makes that stderr match
+   the only one left, and a changed uv wording degrades it to
+   `environment-sync-failed` (exit 2), a named boundary.
+7. The environment's interpreter must be CPython ≥ 3.12, else exit 2
    `unsupported-runtime`. spec-runner's own `requires-python` stays `>=3.11`.
+8. `pytest` must be importable in the selected environment (`<env>/bin/python
+   -P -c "import pytest"`, same child environment as below), else
+   `environment-selection-invalid` (exit 3): a selection without pytest is a
+   property of the product's configuration, and reporting it as a retryable
+   `collection-failed` would make the consumer retry forever.
+
+**Mechanics shared by every step.** Every blocking operation — git, uv, the
+interpreter checks, the product's pytest — runs in its own process group,
+bounded by the smaller of its own timeout and what remains of `--timeout`; the
+group is killed on timeout **and** after a normal exit, so a background process
+started by a test survives neither into cleanup nor into the next run. Reference
+data is read from `product_sha`, never from the working tree after product code
+has run: the config via `git show <sha>:<path>`, measured bytes via
+`git cat-file --batch`. The product's Python runs with every `PYTHON*`,
+`PYTEST_*` and `VIRTUAL_ENV` variable removed, then `PYTHONPATH=<probe dir>`
+(nothing else), `PYTHONNOUSERSITE=1` and the interpreter flag `-P` — the
+`sys.path` the product's own `pytest` entry point would get.
 
 **Injected instrumentation, stated plainly:** dependency installation is frozen
 to the product's lock and nothing is added to it. What is added is one
@@ -277,6 +334,41 @@ parametrized case, whose definition stays the same.
 - A BEH's selectors are every item whose resolved definition owns its token by
   §2.2 (a parametrized function's token applies to all its collected ids). None
   → `unconfirmed: no-test`.
+
+**Collection must not change the checkout.** After collection the tracked files
+are compared with `product_sha` (`git status --porcelain --untracked-files=no`).
+A difference is restored first (`git reset --hard`) and then reported as
+`collection-mutated-checkout` (exit 3): the inventory was taken from a tree
+that was no longer `product_sha`. Untracked files that collection creates are
+not detected — a named boundary; they are removed by the `git clean` before
+every run (§3.6).
+
+**What collection left out** (devtools, spec-runner#623 condition 4). The
+product's configuration and the environment selection can narrow the inventory
+without an error, and a test that is never collected cannot fail a BEH that
+another, collected test traces. The probe reports every such exclusion and the
+response carries it as `collection_excluded` (§4), in three measured forms
+(pytest 9.1.1):
+
+- `skipped` — a module skipped at collection (`pytest.importorskip`, a
+  module-level `pytest.skip(allow_module_level=True)`): a `CollectReport` with
+  `skipped`, with its reason.
+- `ignored` — a path an `pytest_ignore_collect` implementation refused
+  (`collect_ignore`, `collect_ignore_glob`, `--ignore`, `norecursedirs`). This
+  produces **no** report at all, so the probe observes it with a hookwrapper
+  around `pytest_ignore_collect`; only paths that are tracked at `product_sha`,
+  or directories containing tracked files, are reported (the environment,
+  `__pycache__` and `.git` are not).
+- `deselected` — a node id removed from the collected items in
+  `pytest_collection_modifyitems` (`-k`/`-m` in `addopts`, a conftest). A
+  conftest may remove items **without** calling `pytest_deselected`, so the
+  probe does not rely on that hook: a hookwrapper around
+  `pytest_collection_modifyitems` compares the node ids before and after.
+
+Paths outside `testpaths` are never visited and are not reported — the
+declared test roots are part of the product's configuration, a named boundary.
+What the consumer does with an exclusion is the consumer's (devtools does not
+give `traced` to a BEH whose token owner lies in an excluded file).
 
 ### 3.6 Isolated runs, twice (G0, G3)
 
@@ -370,7 +462,9 @@ second run.
 decides whether a test passed: `passed` only if setup, call and teardown all
 passed. A test that executes the product in `call` and then fails fixture
 teardown is **not** passed. Otherwise the outcome is `failed` (any phase
-failed) or `skipped` (setup skipped, nothing failed).
+failed) or `skipped` (setup or teardown skipped, nothing failed — a teardown
+may report `skipped` when a finalizer calls `pytest.skip`). A skipped teardown
+therefore never yields `traced`.
 
 Per selector, in this order (the first that applies decides):
 
@@ -406,7 +500,9 @@ beside `v1`, never an edit of `v1`. The release PR for X writes
 **Request (§5.1, as pinned):** `protocol: 1`, `owner_repo`, `workstream`,
 `code`, `bundle_pin`, `product_sha`, `test_criteria: [{id, verify_task}]`.
 `verify_task` is echoed and has no effect: the `verify-human` path it served was
-removed in norm rev 8.
+removed in norm rev 8. `owner_repo` is `name` or `owner/name`; **a bare name
+does not check the owner** (a named boundary — devtools always sends
+`owner/name`). `bundle_pin` is a 40-hex SHA, echoed verbatim.
 
 **Response — two emitted branches** (and one reserved, below), so no field is ever filled with an invented value:
 
@@ -415,8 +511,13 @@ removed in norm rev 8.
   inventory's files, `conftest.py` and the read pytest config included),
   `test_items: [{node_id, definition: {file, qualname, line}}]` (every collected
   `pytest.Function`, `node_id` unique; each selector's `definition` equals the
-  one its `node_id` has here), `environment: {lock_sha256, python,
-  pytest_plugins}`, `content_sha256`, `beh[]`. `definition.line` is the line of
+  one its `node_id` has here), `collection_excluded` (§3.5; every entry one of
+  `{how: "skipped", path, reason}`, `{how: "ignored", path}`,
+  `{how: "deselected", node_id}`; sorted by `how`, then path or node id; `[]`
+  when nothing was left out), `environment: {lock_sha256, python,
+  pytest_plugins, groups, extras}` (`groups`: the sorted normalised declared
+  names, or `null` when undeclared; `extras`: sorted normalised names, `[]` when
+  undeclared — §3.3), `content_sha256`, `beh[]`. `definition.line` is the line of
   the first decorator, else of `def` — stated in the schema, since devtools
   matches definitions by `(file, qualname, line)`. Per BEH: `id`, `status`,
   `reason` (required iff not `traced`, absent when `traced`), `selectors[]`.
@@ -428,7 +529,7 @@ removed in norm rev 8.
     `product_line_count` is the total length of the `lines` lists. The norm's
     "child-process indicator" (§4.3) is `process_operations` being non-empty;
     there is no separate boolean, so the two cannot disagree (devtools#491 A). `setup` ∈ `passed|failed|skipped`; `call` ∈
-    `passed|failed|skipped|not-reached`; `teardown` ∈ `passed|failed`;
+    `passed|failed|skipped|not-reached`; `teardown` ∈ `passed|failed|skipped`;
     `outcome` ∈ `passed|failed|skipped` (§3.7). When `call` is `not-reached`,
     the empty line and operation lists are true statements — no call window
     existed.
@@ -488,15 +589,29 @@ Hex sha256 of the ASCII bytes of
 obj = {"v": 1,
        "product_roots": <sorted normalised declared paths>,
        "lock": <environment.lock_sha256>,
+       "environment": {"groups": <environment.groups>, "extras": <environment.extras>},
        "files": [[<path>, <hex sha256 of the file's bytes at product_sha>], …]}
 ```
 
 `files` = resolved product files ∪ `test_files` (collected test modules, loaded
 `conftest.py`, and the pytest config file actually read — `config.inipath` —
-when there is one), each path once, POSIX, repository-relative, sorted by UTF-8
-bytes; normalisation and duplicate handling as in §3.4. A declaration change, a
-lock change or a collection-config change each change the digest even when the
-other inputs do not (devtools#491 C.1–C.2). Non-`.py` test data (fixture JSON
+when there is one) ∪ `pyproject.toml` (always) ∪ the tracked `.py` files under
+every `skipped` or `ignored` path of `collection_excluded`, each path once,
+POSIX, repository-relative, sorted by UTF-8 bytes; normalisation and duplicate
+handling as in §3.4. A declaration change, a lock change or a collection-config
+change each change the digest even when the other inputs do not (devtools#491
+C.1–C.2).
+
+Rev 4 (spec-runner#623): `environment` is the normalised selection of §3.3 —
+`null` and `[]` are different environments and hash differently.
+`pyproject.toml` is in `files` even when it is not the pytest config: with
+undeclared groups the environment is fixed by `[tool.uv] default-groups`, and
+measured (uv 0.11.23) a change of it leaves `uv.lock` byte-identical and
+`uv lock --check` passing, so the lock alone would not see it; the same holds
+for `conflicts` and the group definitions. A test module left out of the
+inventory is still part of what the measurement depended on, so its bytes are
+in the digest: editing a skipped or ignored flaky test changes the digest
+instead of buying the workstream a second measurement. Non-`.py` test data (fixture JSON
 files) is **not** in the digest — a boundary devtools names in its own spec
 (C.3). How devtools pre-checks G6 before a measurement is theirs to decide (C.4);
 it places no requirement on this contract today.
@@ -607,6 +722,44 @@ Produced here, vendored by devtools under `PIN` with `manifest.json` (their path
   (§3.6) are visible in the response, not closed.
 
 ## 9. Decisions (owner, 2026-09-29) — rev 1 questions closed
+
+**Rev 4 (B2 plans PR #620; devtools' conditions spec-runner#623) — pending
+devtools' confirmation by SHA.** From the plans, owner-decided: the environment
+selection is the product's declaration, and `--all-groups --all-extras` is
+rejected (§3.3); two new kinds, both exit 3 and not retryable —
+`environment-selection-invalid` and `collection-mutated-checkout` (§3.2, the
+closed enum grows to 21); `teardown` may be `skipped` (§4, §3.7); the request
+forms of `owner_repo` and `bundle_pin` (§4); the shared mechanics of bounded
+process groups, reference data from `product_sha` and the child environment
+(§3.3, no contract change). devtools signed off the kinds, `teardown: skipped`
+and the request forms without conditions, and the environment selection under
+four conditions and one recommendation, answered here:
+
+1. `pyproject.toml` always in the digest's `files` — **accepted** (§6.1), with
+   devtools' measurement reproduced.
+2. Name normalisation — **normalise** (PEP 735/685) in the response and the
+   digest rather than refuse un-normalised spellings; names equal after
+   normalisation are a duplicate; sorted by code point (§3.3). Reproduced: uv
+   accepts four spellings of one group and stores the normalised one.
+3. No pytest in the selected environment — `environment-selection-invalid`,
+   exit 3, checked after sync next to the CPython check (§3.3 step 8). No new
+   kind.
+4. Exclusions at collection — **accepted and widened**. devtools asked for
+   `collection_skipped: [{path, reason}]` from `CollectReport.skipped`;
+   measured, that sees `importorskip` but **not** `collect_ignore`, which
+   produces no report, nor a conftest removing items in
+   `pytest_collection_modifyitems`. The field is therefore
+   `collection_excluded` with three forms, `skipped`/`ignored`/`deselected`
+   (§3.5, §4), and the excluded test files' bytes enter the digest (§6.1). The
+   rename and the two extra forms need devtools' confirmation.
+5. (Recommendation) Pre-check the declared names against `pyproject.toml` at
+   `product_sha` before uv — **accepted** (§3.3 step 5); uv's stderr is then
+   matched only for the conflicts refusal.
+
+Named boundaries added: a bare `owner_repo` checks no owner; untracked files
+created by collection are not detected; paths outside `testpaths` are not
+reported as excluded; a changed uv wording for the conflicts refusal degrades
+to `environment-sync-failed`.
 
 **Rev 3 (devtools#491 sign-off, accepted by the owner):** `test_items` with
 per-`node_id` completeness; `lock` and the read pytest config in

@@ -1,8 +1,10 @@
-# Criteria closure — B2b (probe run mode, isolated runs, aggregation, command) Implementation Plan — rev 3
+# Criteria closure — B2b (probe run mode, isolated runs, aggregation, command) Implementation Plan — rev 4
 
 Rev 1 is this path at `05cf3aa`. Rev 2 follows B2a rev 2 (probe/1 with strict validation, bounded processes, the clean child env, reference data from `product_sha`, `teardown: skipped`) and the owner's review of PR #620; Tasks 2 and 4–6 are given as exact interfaces and checkable criteria rather than full code.
 
 Rev 3 follows B2a rev 3's process cleanup and byte-preserving subprocess transport. An absent selector now keeps `phases == {}`; the probe regression passes the emitted manifest through `valid_run`, and the runner regression requires response-level `SELECTOR_ABSENT`.
+
+Rev 4 (spec-runner#623, design rev 4): Task 4 step 6 also yields `collection_excluded` (an `established` field from there on); step 8 reads blobs of product files ∪ test files ∪ `pyproject.toml` ∪ the tracked `.py` files under `skipped`/`ignored` exclusions. Nothing in the run mode changes; `teardown: skipped` was already rev 2.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

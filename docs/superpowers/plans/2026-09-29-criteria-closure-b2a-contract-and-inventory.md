@@ -1,10 +1,18 @@
-# Criteria closure — B2a (contract, workspace, inventory, selection) Implementation Plan — rev 3
+# Criteria closure — B2a (contract, workspace, inventory, selection) Implementation Plan — rev 4
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Rev 1** of this plan — with the full code this revision refers to as "rev 1" — is this same path at commit **`05cf3aa`**. Rev 2 answers the owner's review of PR #620: rejected `--all-groups --all-extras`, no runtime pytest, strict manifest validation, a deadline that bounds running steps, reference data from `product_sha`, a clean child environment, `teardown: skipped`, and structural vs semantic request validation.
 
 **Rev 3** corrects the process runner: wait for the direct child independently of output capture, then kill its remaining process group; transport subprocess output and Git blobs as bytes. It adds regression criteria for inherited output descriptors and exact blob bytes. B2b rev 3 fixes the absent-selector manifest without changing probe/1.
+
+**Rev 4** (spec-runner#623 — devtools' conditions on the rev-4 contract additions). Task 1 is delivered by its own docs PR (`docs/603-design-rev4`), and the design is the authority for these deltas; where this plan's text below disagrees, the design wins:
+
+- **Task 2** — `response.schema.json` gains required `collection_excluded` in the answer branch (optional in the error branch): an array of `oneOf` `{how: "skipped", path, reason}` / `{how: "ignored", path}` / `{how: "deselected", node_id}`, `additionalProperties: false`, goldens carry `[]`. `environment.groups`/`extras` hold **normalised** names. The kind count stays 21.
+- **Task 4** — `criteria.environment` names validated as PEP 735/685 names and normalised (lower case, `[-_.]+` → `-`); two names equal after normalisation → `environment-selection-invalid`. The pre-check against `pyproject.toml` at `product_sha` (`[dependency-groups]` keys, `dev` under legacy `[tool.uv] dev-dependencies`, `[project.optional-dependencies]` keys; stdlib `tomllib`) lives here, reading the blob, not the tree.
+- **Task 5** — uv's stderr is matched only for "are incompatible with the conflicts" (the undefined-name message is pre-empted by Task 4); after the CPython check, `<env>/bin/python -P -c "import pytest"` in the child environment, failure → `environment-selection-invalid`.
+- **Task 6/7** — the collect manifest gains required `"excluded": [...]` in the response's three forms (paths absolute in the manifest, made repository-relative by the orchestrator, `ignored` filtered to paths tracked at `product_sha` or containing tracked files). The probe gets hookwrappers around `pytest_ignore_collect` and `pytest_collection_modifyitems` (before/after node ids) and records `CollectReport.skipped`. Tests: `importorskip` module, `collect_ignore`, `collect_ignore_glob`, `--ignore`, a conftest removing an item without `pytest_deselected`, `-k` in `addopts`.
+- **Task 8** — `content_sha256`'s `files` add `pyproject.toml` (always) and the tracked `.py` files under every `skipped`/`ignored` exclusion.
 
 **Goal:** Everything `verify --criteria` needs *before* a test is run: the frozen `criteria-closure/v1` schemas, the request and the error-kind table, bounded processes under one deadline, the product's criteria config read at `product_sha`, the fresh clone and the declared environment, the collection inventory (the probe's collect mode, fully validated), selection of BEH selectors and `content_sha256`. B2b adds the probe's run mode, the isolated runs, aggregation and the command.
 
