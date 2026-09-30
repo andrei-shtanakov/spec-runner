@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, run_bounded
+from spec_runner.criteria_process import Deadline, Finished, run_bounded
 
 _CONFIG_LOCATIONS = ("spec-runner.config.yaml", "spec/executor.config.yaml")
 _REGULAR_MODES = frozenset({"100644", "100755"})
@@ -61,8 +61,22 @@ def read_product_criteria(checkout: Path, sha: str, deadline: Deadline) -> Produ
     return ProductCriteria(roots=roots, groups=groups, extras=extras)
 
 
+_ABSENT_MARKERS = ("does not exist in", "exists on disk, but not in")
+
+
+def _git_failure(what: str, done: Finished) -> CriteriaError:
+    """TIMEOUT for the global limit, CLONE_FAILED for anything else that went wrong."""
+    if done.timed_out == "global":
+        return CriteriaError(ErrorKind.TIMEOUT, f"{what}: the measurement deadline expired")
+    if done.timed_out == "local":
+        return CriteriaError(ErrorKind.CLONE_FAILED, f"{what}: no answer within the step limit")
+    tail = done.stderr.decode("utf-8", errors="replace").strip()[-500:]
+    return CriteriaError(ErrorKind.CLONE_FAILED, f"{what}: exit {done.returncode}: {tail}")
+
+
 def _show(checkout: Path, sha: str, path: str, deadline: Deadline) -> bytes | None:
-    """The bytes of `path` at `sha`, or None when the commit has no such file."""
+    """The bytes of `path` at `sha`; None only when the commit has no such path."""
+    what = f"git show {sha[:12]}:{path}"
     done = run_bounded(
         ["git", "show", f"{sha}:{path}"],
         cwd=checkout,
@@ -70,9 +84,12 @@ def _show(checkout: Path, sha: str, path: str, deadline: Deadline) -> bytes | No
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
     )
-    if done.timed_out == "global":
-        raise CriteriaError(ErrorKind.TIMEOUT, f"git show {path}: the measurement deadline expired")
-    return done.stdout if done.returncode == 0 else None
+    if done.timed_out is None and done.returncode == 0:
+        return done.stdout
+    stderr = done.stderr.decode("utf-8", errors="replace")
+    if done.timed_out is None and any(marker in stderr for marker in _ABSENT_MARKERS):
+        return None
+    raise _git_failure(what, done)
 
 
 def _read_config(checkout: Path, sha: str, deadline: Deadline) -> tuple[str, str]:
@@ -134,7 +151,7 @@ def _parse_names(raw: object, what: str) -> tuple[str, ...]:
         raise _invalid_env(f"criteria.environment.{what} is not a list")
     names: list[str] = []
     for entry in raw:
-        if not isinstance(entry, str) or not _NAME_RE.match(entry):
+        if not isinstance(entry, str) or not _NAME_RE.fullmatch(entry):
             raise _invalid_env(f"criteria.environment.{what}: {entry!r} is not a valid name")
         name = normalise_name(entry)
         if name in names:
@@ -150,20 +167,24 @@ def check_selection(
     if criteria.groups is None and not criteria.extras:
         return
     pyproject = _load_pyproject(checkout, sha, deadline)
-    groups_table = pyproject.get("dependency-groups", {})
-    available_groups = {normalise_name(k) for k in _keys(groups_table)}
-    if "dev-dependencies" in pyproject.get("tool", {}).get("uv", {}):
+    groups_table = _table(pyproject, "dependency-groups")
+    available_groups = {normalise_name(k) for k in groups_table}
+    if "dev-dependencies" in _table(_table(pyproject, "tool"), "uv"):
         available_groups.add("dev")
-    extras_table = pyproject.get("project", {}).get("optional-dependencies", {})
-    available_extras = {normalise_name(k) for k in _keys(extras_table)}
+    extras_table = _table(_table(pyproject, "project"), "optional-dependencies")
+    available_extras = {normalise_name(k) for k in extras_table}
     missing = [f"group {g}" for g in criteria.groups or () if g not in available_groups]
     missing += [f"extra {e}" for e in criteria.extras if e not in available_extras]
     if missing:
         raise _invalid_env(f"not defined in pyproject.toml at {sha[:12]}: {', '.join(missing)}")
 
 
-def _keys(table: object) -> list[str]:
-    return list(table) if isinstance(table, dict) else []
+def _table(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    """`parent[key]` as a table; absent is empty, a non-table is an invalid selection."""
+    value = parent.get(key, {})
+    if not isinstance(value, dict):
+        raise _invalid_env(f"pyproject.toml: `{key}` is not a table")
+    return value
 
 
 def _load_pyproject(checkout: Path, sha: str, deadline: Deadline) -> dict[str, Any]:
@@ -212,10 +233,8 @@ def _ls_tree(checkout: Path, sha: str, root: str, deadline: Deadline) -> list[st
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
     )
-    if done.timed_out == "global":
-        raise CriteriaError(ErrorKind.TIMEOUT, "git ls-tree: the measurement deadline expired")
-    if done.returncode != 0:
-        return []
+    if done.timed_out is not None or done.returncode != 0:
+        raise _git_failure(f"git ls-tree {sha[:12]} -- {root}", done)
     return [e for e in done.stdout.decode("utf-8", errors="replace").split("\0") if e]
 
 

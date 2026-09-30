@@ -288,3 +288,104 @@ class TestCheckSelection:
         check_selection(root, sha, _sel(("gov-x",), ("cli",)), _dl())
         (root / "pyproject.toml").unlink()
         check_selection(root, sha, _sel(("gov-x",), ("cli",)), _dl())
+
+
+def _fake_run(monkeypatch, **fields):
+    from spec_runner import criteria_config
+    from spec_runner.criteria_process import Finished
+
+    defaults = {"returncode": 0, "stdout": b"", "stderr": b"", "pid": 1, "timed_out": None}
+    done = Finished(**{**defaults, **fields})
+    monkeypatch.setattr(criteria_config, "run_bounded", lambda *a, **k: done)
+
+
+class TestTimeouts:
+    """R8: an exhausted or expired deadline is TIMEOUT, never a product property."""
+
+    def _calls(self, tmp_path):
+        root, sha = _repo(tmp_path, {**FILES, "pyproject.toml": PYPROJECT}, ROOTS)
+        return {
+            "read": lambda dl: read_product_criteria(root, sha, dl),
+            "resolve": lambda dl: resolve_roots(root, sha, ["pkg"], dl),
+            "select": lambda dl: check_selection(root, sha, _sel(("gov-x",)), dl),
+        }
+
+    @pytest.mark.parametrize("name", ["read", "resolve", "select"])
+    def test_exhausted_deadline(self, tmp_path, name):
+        assert _kind(self._calls(tmp_path)[name], Deadline(0)) is ErrorKind.TIMEOUT
+
+    @pytest.mark.parametrize("name", ["read", "resolve", "select"])
+    def test_global_expiry_mid_step(self, tmp_path, monkeypatch, name):
+        calls = self._calls(tmp_path)
+        _fake_run(monkeypatch, returncode=None, timed_out="global")
+        assert _kind(calls[name], _dl()) is ErrorKind.TIMEOUT
+
+
+class TestGitFailuresAreNotDeclarations:
+    """R9: only 'path absent at sha' is a property of the product."""
+
+    def _calls(self, tmp_path):
+        root, sha = _repo(tmp_path, {**FILES, "pyproject.toml": PYPROJECT}, ROOTS)
+        return root, sha
+
+    @pytest.mark.parametrize("which", ["read", "resolve", "select"])
+    def test_local_timeout_is_clone_failed(self, tmp_path, monkeypatch, which):
+        root, sha = self._calls(tmp_path)
+        _fake_run(monkeypatch, returncode=None, timed_out="local")
+        call = {
+            "read": lambda: read_product_criteria(root, sha, _dl()),
+            "resolve": lambda: resolve_roots(root, sha, ["pkg"], _dl()),
+            "select": lambda: check_selection(root, sha, _sel(("gov-x",)), _dl()),
+        }[which]
+        assert _kind(call) is ErrorKind.CLONE_FAILED
+
+    def test_bad_sha_read(self, tmp_path):
+        root, _ = self._calls(tmp_path)
+        with pytest.raises(CriteriaError) as raised:
+            read_product_criteria(root, "deadbeef", _dl())
+        assert raised.value.kind is ErrorKind.CLONE_FAILED
+        assert "deadbeef" in raised.value.detail
+
+    def test_bad_sha_resolve(self, tmp_path):
+        root, _ = self._calls(tmp_path)
+        assert _kind(resolve_roots, root, "deadbeef", ["pkg"], _dl()) is ErrorKind.CLONE_FAILED
+
+    def test_bad_sha_select(self, tmp_path):
+        root, _ = self._calls(tmp_path)
+        assert (
+            _kind(check_selection, root, "deadbeef", _sel(("gov-x",)), _dl())
+            is ErrorKind.CLONE_FAILED
+        )
+
+    def test_not_a_repository(self, tmp_path):
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert _kind(_read, plain, "HEAD") is ErrorKind.CLONE_FAILED
+
+    def test_absent_path_unchanged(self, tmp_path):
+        root, sha = _repo(tmp_path, FILES, None)
+        assert _kind(_read, root, sha) is ErrorKind.PRODUCT_ROOTS_UNDECLARED
+        assert _kind(resolve_roots, root, sha, ["nope"], _dl()) is ErrorKind.PRODUCT_ROOTS_INVALID
+
+
+class TestNamesAndTables:
+    def test_trailing_newline_name_refused(self, tmp_path):
+        root, sha = _repo(tmp_path, FILES, ROOTS + '  environment:\n    groups: ["x\\n"]\n')
+        assert _kind(_read, root, sha) is ErrorKind.ENVIRONMENT_SELECTION_INVALID
+
+    @pytest.mark.parametrize(
+        "pyproject",
+        [
+            'tool = "x"\n',
+            '[tool]\nuv = "x"\n',
+            'project = "x"\n',
+            '[project]\noptional-dependencies = "x"\n',
+            'dependency-groups = "x"\n',
+        ],
+    )
+    def test_non_table_is_invalid_selection(self, tmp_path, pyproject):
+        root, sha = _repo(tmp_path, {**FILES, "pyproject.toml": pyproject}, ROOTS)
+        assert (
+            _kind(check_selection, root, sha, _sel(("gov-x",)), _dl())
+            is ErrorKind.ENVIRONMENT_SELECTION_INVALID
+        )
