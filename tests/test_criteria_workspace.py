@@ -497,7 +497,16 @@ class TestSyncMapping:
 
     def test_inherited_uv_selection_vars_are_dropped(self, tmp_path: Path, monkeypatch) -> None:
         """R13: the parent's UV_* cannot change the selection, the lock mode or the project."""
-        for name in ("UV_NO_DEFAULT_GROUPS", "UV_FROZEN", "UV_NO_DEV", "UV_LOCKED"):
+        dropped = (
+            "UV_NO_DEFAULT_GROUPS",
+            "UV_FROZEN",
+            "UV_NO_DEV",
+            "UV_LOCKED",
+            "UV_NO_GROUP",
+            "UV_EXCLUDE_NEWER",
+            "UV_NO_BUILD",
+        )
+        for name in dropped:
             monkeypatch.setenv(name, "1")
         monkeypatch.setenv("UV_PROJECT", "/elsewhere")
         monkeypatch.setenv("UV_OFFLINE", "1")
@@ -509,7 +518,7 @@ class TestSyncMapping:
             _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
         )
         uv_env = next(k for a, k in fake.calls if a[0] == "uv")["env"]
-        for name in ("UV_NO_DEFAULT_GROUPS", "UV_FROZEN", "UV_NO_DEV", "UV_LOCKED", "UV_PROJECT"):
+        for name in (*dropped, "UV_PROJECT"):
             assert name not in uv_env, name
         assert uv_env["UV_OFFLINE"] == "1" and uv_env["UV_CACHE_DIR"] == "/shared-cache"
         assert uv_env["UV_PYTHON"] == "3.12"

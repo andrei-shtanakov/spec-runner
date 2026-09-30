@@ -33,8 +33,10 @@ _INTERPRETER_PROBE = (
 )
 _NO_ORIGIN = "No such remote"
 # Inherited UV_* that would change the selection, the lock mode, the install mode,
-# how the lock is judged current, or which project is synced (`uv sync --help`,
-# uv 0.11.23). Cache, network, offline and Python-install variables are kept.
+# how the lock is judged current, or which project is synced. Checked against every
+# name in `uv sync --help | grep -o 'UV_[A-Z_]*' | sort -u` (uv 0.11.23). Kept:
+# cache, index, network, certs, offline, Python-install, config-file and install
+# mechanics (link mode, bytecode, build isolation, progress).
 _UV_OVERRIDES = frozenset(
     {
         # lock mode
@@ -43,11 +45,16 @@ _UV_OVERRIDES = frozenset(
         # selection
         "UV_NO_DEV",
         "UV_NO_DEFAULT_GROUPS",
+        "UV_NO_GROUP",
         # install mode
         "UV_NO_EDITABLE",
         "UV_NO_INSTALL_PROJECT",
         "UV_NO_INSTALL_LOCAL",
         "UV_NO_INSTALL_WORKSPACE",
+        "UV_NO_BINARY",
+        "UV_NO_BINARY_PACKAGE",
+        "UV_NO_BUILD",
+        "UV_NO_BUILD_PACKAGE",
         # resolution settings recorded in the lock (a mismatch reads as a stale lock)
         "UV_EXCLUDE_NEWER",
         "UV_RESOLUTION",
