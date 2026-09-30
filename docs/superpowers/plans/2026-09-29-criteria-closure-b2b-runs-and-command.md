@@ -465,10 +465,10 @@ def measure(project_root: Path, request_data: object, *, selector_timeout: float
 2. `check_origin`;
 3. `clone_at` (temp dir);
 4. `read_product_criteria` at `product_sha` (roots declared, environment selection);
-5. `sync_environment(..., criteria)` → `environment` (with `groups`, `extras`);
+5. `sync_environment(checkout, sha, env_dir, criteria, deadline)` → `environment` (with `groups`, `extras`);
 6. `deploy_probe`; `collect` (validated, mutation-checked, checkout reset) → `test_files`, `test_items`;
 7. `resolve_roots` + `check_overlap` → `product_roots`;
-8. `read_blobs(product files ∪ test files)` at `product_sha` → `content_sha256(roots, lock, groups, extras, blobs)`;
+8. `tracked = tracked_files(...)`, `paths = digest_paths(product files, test_files, inventory.excluded, [p for p in tracked if p.endswith(".py")])`, `blobs = read_blobs(paths)` at `product_sha` → `content_sha256(roots, lock, groups, extras, blobs)`;
 9. `select(items, beh_ids, blobs)`;
 10. for every **distinct** selector node id, in inventory order: `run_selector` twice → `selector_status`; each BEH lists its selectors (a shared node id reuses the same two runs) → `beh_status`;
 11. the answer (design §4, rev 4 `environment`).
