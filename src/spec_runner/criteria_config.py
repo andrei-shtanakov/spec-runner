@@ -18,7 +18,13 @@ from typing import Any
 import yaml
 
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, Finished, c_locale_env, run_bounded
+from spec_runner.criteria_process import (
+    Deadline,
+    Finished,
+    c_locale_env,
+    checkout_git,
+    run_bounded,
+)
 
 _CONFIG_LOCATIONS = ("spec-runner.config.yaml", "spec/executor.config.yaml")
 _REGULAR_MODES = frozenset({"100644", "100755"})
@@ -78,7 +84,7 @@ def _show(checkout: Path, sha: str, path: str, deadline: Deadline) -> bytes | No
     """The bytes of `path` at `sha`; None only when the commit has no such path."""
     what = f"git show {sha[:12]}:{path}"
     done = run_bounded(
-        ["git", "show", f"{sha}:{path}"],
+        [*checkout_git(checkout), "show", f"{sha}:{path}"],
         cwd=checkout,
         env=c_locale_env(),
         deadline=deadline,
@@ -124,6 +130,10 @@ def _normalise_root(entry: object) -> str:
     if not isinstance(entry, str) or not entry.strip():
         raise CriteriaError(ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is not a path")
     path = PurePosixPath(entry.strip())
+    if entry.strip().startswith(":"):
+        raise CriteriaError(
+            ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is git pathspec magic, not a path"
+        )
     if path.is_absolute() or ".." in path.parts:
         raise CriteriaError(ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} escapes the checkout")
     parts = [part for part in path.parts if part not in (".", "")]
@@ -227,7 +237,7 @@ def resolve_roots(checkout: Path, sha: str, roots: Sequence[str], deadline: Dead
 
 def _ls_tree(checkout: Path, sha: str, root: str, deadline: Deadline) -> list[str]:
     done = run_bounded(
-        ["git", "ls-tree", "-r", "-z", sha, "--", root],
+        [*checkout_git(checkout), "ls-tree", "-r", "-z", sha, "--", root],
         cwd=checkout,
         env=c_locale_env(),
         deadline=deadline,

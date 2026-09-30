@@ -139,6 +139,41 @@ class TestDigest:
         assert content_sha256([], "c" * 64, None, [], files) == expected
         assert content_sha256([], "c" * 64, (), [], files) != expected
 
+    # Golden vectors: the exact digests devtools must reproduce (design §6.1). Computed
+    # once, independently of content_sha256, from the canonical expression
+    #   hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":"),
+    #                             ensure_ascii=True).encode("ascii")).hexdigest()
+    # with
+    #   obj = {"v": 1, "product_roots": ["pkg", "tool.py"], "lock": "a" * 64,
+    #          "environment": {"groups": <None | [] | ["dev", "test"]>,
+    #                          "extras": ["alpha", "zeta"]},
+    #          "files": [["pkg/z.py", sha256(b"")],
+    #                    ["pkg/\u00fc.py", sha256("x = '\u00fc'\n".encode())],
+    #                    ["pyproject.toml", sha256(b'[project]\nname = "p"\n')]]}
+    # ("pkg/z.py" < "pkg/ü.py" by UTF-8 bytes: 0x7a < 0xc3; ü is escaped as \u00fc).
+    GOLDEN_FILES = {
+        "pyproject.toml": b'[project]\nname = "p"\n',
+        "pkg/\u00fc.py": "x = '\u00fc'\n".encode(),
+        "pkg/z.py": b"",
+    }
+
+    @pytest.mark.parametrize(
+        ("groups", "digest"),
+        [
+            (None, "1a4b403fe57573449c53f5c343a6b6da391eb3065a4bec5feffbbc5d475c91a8"),
+            ([], "6931968399538f6487ec85a8ee96184e802975e0250d512fdd0b76bca6123a42"),
+            (
+                ["test", "dev"],
+                "50ff65866b463040cc43f5ac835c133f514b31f67120e212b0bbfecbd4af65c5",
+            ),
+        ],
+    )
+    def test_golden_vector(self, groups, digest):
+        got = content_sha256(
+            ["tool.py", "pkg"], "a" * 64, groups, ["zeta", "alpha"], self.GOLDEN_FILES
+        )
+        assert got == digest
+
     def test_each_input_moves_the_digest(self):
         files = {"pkg/mod.py": b"x = 1\n"}
         base = content_sha256(["pkg"], "c" * 64, ["g"], ["e"], files)

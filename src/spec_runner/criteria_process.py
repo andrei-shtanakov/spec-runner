@@ -133,6 +133,22 @@ def c_locale_env() -> dict[str, str]:
     return env
 
 
+def checkout_git(checkout: Path) -> list[str]:
+    """`git` aimed explicitly at `checkout`'s own repository, with literal pathspecs.
+
+    No repository discovery: were `checkout/.git` gone, discovery would walk up to an
+    enclosing repository and `reset --hard`/`clean -ffdx` would act on it; with an
+    explicit `--git-dir` git refuses instead. `--literal-pathspecs` makes every path
+    argument a path, never pathspec magic (`:(top)`, `:!x`).
+    """
+    return [
+        "git",
+        f"--git-dir={checkout / '.git'}",
+        f"--work-tree={checkout}",
+        "--literal-pathspecs",
+    ]
+
+
 def run_or_raise(
     argv: Sequence[str],
     *,

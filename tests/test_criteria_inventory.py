@@ -421,6 +421,37 @@ class TestExcluded:
             Excluded("skipped", "tests/test_skip.py", None, "Skipped: no", None),
         )
 
+    def test_ties_are_ordered_by_every_field(self, fake) -> None:
+        """Same how and path/node_id: reason, then definition decide — never set order."""
+
+        def entries(co: Path, reverse: bool) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = [
+                {
+                    "how": "deselected",
+                    "node_id": "tests/test_d.py::test_d",
+                    "definition": {
+                        "file": str(co / "tests/test_d.py"),
+                        "qualname": "test_d",
+                        "line": line,
+                    },
+                }
+                for line in range(1, 7)
+            ]
+            out += [{"how": "deselected", "node_id": "tests/test_d.py::test_d", "definition": None}]
+            out += [
+                {"how": "skipped", "path": str(co / "tests/test_s.py"), "reason": reason}
+                for reason in ("a", "b", "c", "d", "e", "f")
+            ]
+            return out[::-1] if reverse else out
+
+        want_deselected = [None, *(("tests/test_d.py", "test_d", n) for n in range(1, 7))]
+        want_reasons = ["a", "b", "c", "d", "e", "f"]
+        for reverse in (False, True):
+            run, *_ = fake(lambda co, r=reverse: _manifest(co, excluded=entries(co, r)))
+            got = run().excluded
+            assert [e.definition for e in got if e.how == "deselected"] == want_deselected
+            assert [e.reason for e in got if e.how == "skipped"] == want_reasons
+
 
 # --------------------------------------------------------------------------- probe source
 
@@ -552,6 +583,30 @@ class TestRealInventory:
         files = {**REAL_BASE, "tests/test_b.py": "import parent_only_mod\n"}
         error = _kind(lambda: _real(product_env, tmp_path, files))
         assert error.kind is ErrorKind.COLLECTION_ERROR and "tests/test_b.py" in error.detail
+
+    def test_a_hook_environment_does_not_reach_the_products_git(
+        self, product_env, tmp_path, monkeypatch
+    ) -> None:
+        """A conftest running git sees the temp checkout, not the hook's GIT_DIR."""
+        decoy = tmp_path / "decoy"
+        decoy_root, _ = _repo(decoy, {"d.py": "x = 1\n"})
+        report = tmp_path / "toplevel.txt"
+        conftest = (
+            "import pathlib, subprocess\n"
+            "out = subprocess.run(['git', 'rev-parse', '--show-toplevel'],\n"
+            "                     capture_output=True, text=True).stdout.strip()\n"
+            f"pathlib.Path({str(report)!r}).write_text(out)\n"
+        )
+        files = {**REAL_BASE, "tests/conftest.py": conftest}
+
+        def hook_env(checkout: Path) -> None:
+            monkeypatch.setenv("GIT_DIR", str(decoy_root / ".git"))
+            monkeypatch.setenv("GIT_WORK_TREE", str(decoy_root))
+            monkeypatch.setenv("GIT_INDEX_FILE", str(decoy_root / ".git" / "index"))
+
+        _real(product_env, tmp_path, files, after_commit=hook_env)
+        checkout = (tmp_path / "case" / "checkout").resolve()
+        assert Path(report.read_text()).resolve() == checkout
 
     def test_local_timeout_is_collection_failed(self, product_env, tmp_path) -> None:
         files = {"tests/test_slow.py": "import time\ntime.sleep(30)\n"}

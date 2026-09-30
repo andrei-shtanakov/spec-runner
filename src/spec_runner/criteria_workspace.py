@@ -21,7 +21,7 @@ from pathlib import Path
 from spec_runner import criteria_process
 from spec_runner.criteria_config import ProductCriteria, check_selection
 from spec_runner.criteria_contract import CriteriaError, ErrorKind, owner_matches
-from spec_runner.criteria_process import Deadline, Finished, c_locale_env
+from spec_runner.criteria_process import Deadline, Finished, c_locale_env, checkout_git
 
 MIN_PRODUCT_PYTHON = (3, 12)
 _GIT_STEP_LIMIT = 60.0
@@ -30,6 +30,12 @@ _INTERPRETER_PROBE = (
     "import json, platform, importlib.util; "
     "print(json.dumps([platform.python_implementation(), platform.python_version(), "
     "importlib.util.find_spec('xdist') is not None]))"
+)
+# R24: the probe's hookimpl(wrapper=True) needs pluggy >= 1.2. Prints the version;
+# exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0).
+_PLUGGY_CHECK = (
+    "import sys, pluggy; v = pluggy.__version__; print(v); "
+    "sys.exit(0 if tuple(int(p) for p in v.split('.')[:2]) >= (1, 2) else 3)"
 )
 _NO_ORIGIN = "No such remote"
 # Inherited UV_* that would change the selection, the lock mode, the install mode,
@@ -102,6 +108,7 @@ def _failure(kind: ErrorKind, what: str, done: Finished) -> CriteriaError:
 def _git(
     cwd: Path, args: Sequence[str], deadline: Deadline, stdin: bytes | None = None
 ) -> Finished:
+    """git in `cwd` by repository discovery — only for the source repo and the clone step."""
     return criteria_process.run_bounded(
         ["git", *args],
         cwd=cwd,
@@ -116,6 +123,23 @@ def _git_ok(cwd: Path, args: Sequence[str], deadline: Deadline, kind: ErrorKind)
     done = _git(cwd, args, deadline)
     if done.timed_out is not None or done.returncode != 0:
         raise _failure(kind, f"git {args[0]}", done)
+    return done
+
+
+def _in_checkout(
+    checkout: Path, args: Sequence[str], deadline: Deadline, stdin: bytes | None = None
+) -> Finished:
+    """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure."""
+    done = criteria_process.run_bounded(
+        [*checkout_git(checkout), *args],
+        cwd=checkout,
+        env=c_locale_env(),
+        deadline=deadline,
+        local_timeout=_GIT_STEP_LIMIT,
+        stdin=stdin,
+    )
+    if done.timed_out is not None or done.returncode != 0:
+        raise _failure(ErrorKind.CLONE_FAILED, f"git {args[0]}", done)
     return done
 
 
@@ -147,8 +171,8 @@ def clone_at(project_root: Path, sha: str, into: Path, deadline: Deadline) -> Pa
     into.mkdir(parents=True, exist_ok=True)
     clone = ["clone", "-q", "--no-local", "--no-checkout", str(project_root), str(checkout)]
     _git_ok(into, clone, deadline, ErrorKind.CLONE_FAILED)
-    _git_ok(checkout, ["checkout", "-q", "--detach", sha], deadline, ErrorKind.CLONE_FAILED)
-    head = _git_ok(checkout, ["rev-parse", "HEAD"], deadline, ErrorKind.CLONE_FAILED)
+    _in_checkout(checkout, ["checkout", "-q", "--detach", sha], deadline)
+    head = _in_checkout(checkout, ["rev-parse", "HEAD"], deadline)
     resolved = head.stdout.decode("ascii", errors="replace").strip()
     if resolved != sha:
         raise CriteriaError(ErrorKind.CLONE_FAILED, f"checkout resolved to {resolved}, not {sha}")
@@ -165,16 +189,7 @@ def read_blobs(
     if bad:
         raise CriteriaError(ErrorKind.CLONE_FAILED, f"unreadable in a batch request: {bad[0]!r}")
     request = b"".join(f"{sha}:{path}\n".encode() for path in paths)
-    done = criteria_process.run_bounded(
-        ["git", "cat-file", "--batch"],
-        cwd=checkout,
-        env=c_locale_env(),
-        deadline=deadline,
-        local_timeout=_GIT_STEP_LIMIT,
-        stdin=request,
-    )
-    if done.timed_out is not None or done.returncode != 0:
-        raise _failure(ErrorKind.CLONE_FAILED, "git cat-file --batch", done)
+    done = _in_checkout(checkout, ["cat-file", "--batch"], deadline, stdin=request)
     return _parse_batch(done.stdout, paths, sha)
 
 
@@ -213,15 +228,43 @@ def _malformed(path: str, detail: str) -> CriteriaError:
 
 
 def reset_checkout(checkout: Path, sha: str, deadline: Deadline) -> None:
-    """`reset --hard <sha>` and `clean -ffdx`: the checkout is `sha` and nothing else (§3.6)."""
-    _git_ok(checkout, ["reset", "-q", "--hard", sha], deadline, ErrorKind.CLONE_FAILED)
-    _git_ok(checkout, ["clean", "-q", "-ffdx"], deadline, ErrorKind.CLONE_FAILED)
+    """`reset --hard <sha>` and `clean -ffdx`: the checkout is `sha` and nothing else (§3.6).
+
+    Refuses (CLONE_FAILED) unless repository discovery from the checkout finds the
+    checkout itself: a checkout that lost its `.git` must not reset the repository
+    it happens to sit in.
+    """
+    top = _git(checkout, ["rev-parse", "--show-toplevel"], deadline)
+    if top.timed_out is not None or top.returncode != 0:
+        raise _failure(ErrorKind.CLONE_FAILED, "git rev-parse --show-toplevel", top)
+    found = top.stdout.decode("utf-8", errors="surrogateescape").strip()
+    if Path(found).resolve() != checkout.resolve():
+        raise CriteriaError(
+            ErrorKind.CLONE_FAILED, f"{checkout} is not a repository's top level (found {found})"
+        )
+    _in_checkout(checkout, ["reset", "-q", "--hard", sha], deadline)
+    _in_checkout(checkout, ["clean", "-q", "-ffdx"], deadline)
+
+
+def tracked_files(checkout: Path, sha: str, deadline: Deadline) -> list[str]:
+    """Every path tracked at `sha` (not the working tree), sorted (R25).
+
+    A path that is not UTF-8 is CLONE_FAILED rather than a mangled name in the digest.
+    """
+    done = _in_checkout(checkout, ["ls-tree", "-r", "-z", "--name-only", sha], deadline)
+    try:
+        names = done.stdout.decode("utf-8").split("\0")
+    except UnicodeDecodeError as exc:
+        raise CriteriaError(
+            ErrorKind.CLONE_FAILED, f"git ls-tree {sha[:12]}: a tracked path is not UTF-8: {exc}"
+        ) from None
+    return sorted(name for name in names if name)
 
 
 def tracked_changes(checkout: Path, deadline: Deadline) -> list[str]:
     """Tracked paths whose working-tree state differs from HEAD, sorted."""
     args = ["status", "--porcelain", "--untracked-files=no", "-z"]
-    done = _git_ok(checkout, args, deadline, ErrorKind.CLONE_FAILED)
+    done = _in_checkout(checkout, args, deadline)
     entries = done.stdout.split(b"\0")
     changed: set[str] = set()
     index = 0
@@ -243,7 +286,7 @@ def changed_since(checkout: Path, sha: str, deadline: Deadline) -> list[str]:
     product's code cannot hide a change here. Untracked files are not listed.
     """
     args = ["diff", "--name-only", "--no-renames", "-z", sha, "--"]
-    done = _git_ok(checkout, args, deadline, ErrorKind.CLONE_FAILED)
+    done = _in_checkout(checkout, args, deadline)
     names = done.stdout.decode("utf-8", errors="surrogateescape").split("\0")
     return sorted(name for name in names if name)
 
@@ -263,7 +306,13 @@ def selection_args(criteria: ProductCriteria) -> list[str]:
 def sync_environment(
     checkout: Path, sha: str, env_dir: Path, criteria: ProductCriteria, deadline: Deadline
 ) -> Environment:
-    """`uv sync --locked` with the declared selection into `env_dir`, then read the interpreter."""
+    """`uv sync --locked` with the declared selection into `env_dir`, then read the interpreter.
+
+    `env_dir` must lie outside `checkout` (ValueError otherwise — a programming
+    error): the checkout's `clean -ffdx` between runs would delete it.
+    """
+    if env_dir.resolve().is_relative_to(checkout.resolve()):
+        raise ValueError(f"env_dir {env_dir} is inside the checkout {checkout}")
     check_selection(checkout, sha, criteria, deadline)
     lock = checkout / "uv.lock"
     if not lock.is_file():
@@ -274,6 +323,7 @@ def sync_environment(
     with tempfile.TemporaryDirectory(prefix="criteria-empty-") as empty:
         implementation, version, has_xdist = _interpreter(python, checkout, Path(empty), deadline)
         _require_pytest(python, checkout, Path(empty), deadline)
+        _require_pluggy(python, checkout, Path(empty), deadline)
     return Environment(
         python=python,
         implementation=implementation,
@@ -354,12 +404,30 @@ def _require_pytest(python: Path, checkout: Path, empty: Path, deadline: Deadlin
         )
 
 
+def _require_pluggy(python: Path, checkout: Path, empty: Path, deadline: Deadline) -> None:
+    done = _run_python(python, _PLUGGY_CHECK, checkout, empty, deadline)
+    if done.timed_out is not None:
+        raise _failure(ErrorKind.ENVIRONMENT_SYNC_FAILED, "pluggy version check", done)
+    if done.returncode != 0:
+        found = done.stdout.decode("utf-8", errors="replace").strip()[:80] or "unknown"
+        tail = done.stderr.decode("utf-8", errors="replace").strip()[-300:]
+        raise CriteriaError(
+            ErrorKind.ENVIRONMENT_SELECTION_INVALID,
+            f"the selected environment's pluggy is {found}; the probe needs pluggy >= 1.2"
+            + (f": {tail}" if tail else ""),
+        )
+
+
 def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
-    """The product Python's environment: no PYTHON*/PYTEST_*/VIRTUAL_ENV, the probe dir only."""
+    """The product Python's environment: no PYTHON*/PYTEST_*/GIT_*/VIRTUAL_ENV, the probe dir.
+
+    `GIT_*` goes too: a product conftest or test running git must see the temp
+    checkout, not a hook's `GIT_DIR`/`GIT_WORK_TREE`.
+    """
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("PYTHON", "PYTEST_")) and k != "VIRTUAL_ENV"
+        if not k.startswith(("PYTHON", "PYTEST_", "GIT_")) and k != "VIRTUAL_ENV"
     }
     env["PYTHONPATH"] = str(probe_dir)
     env["PYTHONNOUSERSITE"] = "1"

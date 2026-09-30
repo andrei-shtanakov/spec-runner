@@ -113,6 +113,18 @@ class TestRoots:
         root, sha = _repo(tmp_path, FILES, config)
         assert _kind(_read, root, sha) is kind
 
+    @pytest.mark.parametrize("root_spec", [":", ":(top)", ":(glob)**/*.py", ":!x", ":(icase)PKG"])
+    def test_pathspec_magic_root_is_invalid(self, tmp_path, root_spec):
+        """A root is a path, never a git pathspec: `:` / `:(top)` would list the repo."""
+        config = f"criteria:\n  product_roots: [{root_spec!r}]\n"
+        root, sha = _repo(tmp_path, FILES, config)
+        assert _kind(_read, root, sha) is ErrorKind.PRODUCT_ROOTS_INVALID
+
+    def test_ordinary_roots_unchanged(self, tmp_path):
+        config = "criteria:\n  product_roots: [pkg, 'tool.py', 'a:b']\n"
+        root, sha = _repo(tmp_path, FILES, config)
+        assert _read(root, sha).roots == ("a:b", "pkg", "tool.py")
+
 
 class TestEnvironment:
     def _env(self, tmp_path, env: str) -> ProductCriteria:
@@ -174,6 +186,12 @@ class TestResolve:
         (root / "pkg" / "untracked.py").write_text("")
         got = resolve_roots(root, sha, ["pkg", "tool.py"], _dl())
         assert got == ["pkg/__init__.py", "pkg/mod.py", "tool.py"]
+
+    @pytest.mark.parametrize("magic", [":", ":(top)", ":(glob)**/*.py", ":!x", "pk*"])
+    def test_roots_are_literal_paths_at_ls_tree(self, tmp_path, magic):
+        """`--literal-pathspecs`: a magic spelling names nothing tracked, never the repo."""
+        root, sha = _repo(tmp_path, FILES, "")
+        assert _kind(resolve_roots, root, sha, [magic], _dl()) is ErrorKind.PRODUCT_ROOTS_INVALID
 
     def test_missing_root_is_invalid(self, tmp_path):
         root, sha = _repo(tmp_path, FILES, "")

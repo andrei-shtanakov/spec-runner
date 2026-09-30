@@ -26,6 +26,7 @@ from spec_runner.criteria_workspace import (
     reset_checkout,
     sync_environment,
     tracked_changes,
+    tracked_files,
 )
 
 REAL_RUN = criteria_process.run_bounded
@@ -191,7 +192,8 @@ class TestReadBlobs:
 
         monkeypatch.setattr(criteria_process, "run_bounded", counting)
         got = read_blobs(root, sha, list(SPECIAL_BLOBS), _dl())
-        assert len(calls) == 1 and calls[0][:3] == ["git", "cat-file", "--batch"]
+        assert len(calls) == 1 and calls[0][0] == "git"
+        assert calls[0][-2:] == ["cat-file", "--batch"]
         assert got == SPECIAL_BLOBS
         for rel, data in got.items():
             shown = _git_bytes(root, "show", f"{sha}:{rel}")
@@ -281,6 +283,115 @@ class TestResetAndChanges:
         assert tracked_changes(source, _dl()) == []  # HEAD moved with the change
         assert changed_since(source, sha, _dl()) == ["a.py", "b.py"]
 
+    def test_a_checkout_without_its_git_dir_never_reaches_the_enclosing_repo(
+        self, tmp_path: Path
+    ) -> None:
+        """Repository discovery would walk up to `outer` and reset/clean it."""
+        outer = tmp_path / "outer"
+        _init(outer)
+        (outer / "o.py").write_text("committed\n")
+        outer_head = _commit(outer)
+        checkout = clone_at(outer, outer_head, outer / "ws", _dl())  # nested in outer
+        (outer / "o.py").write_text("dirty, uncommitted\n")
+        (outer / "untracked.txt").write_text("keep me\n")
+        subprocess.run(["rm", "-rf", str(checkout / ".git")], check=True)
+        for call in (
+            lambda: reset_checkout(checkout, outer_head, _dl()),
+            lambda: tracked_changes(checkout, _dl()),
+            lambda: changed_since(checkout, outer_head, _dl()),
+            lambda: tracked_files(checkout, outer_head, _dl()),
+        ):
+            with pytest.raises(CriteriaError) as raised:
+                call()
+            assert raised.value.kind is ErrorKind.CLONE_FAILED
+        assert (outer / "o.py").read_text() == "dirty, uncommitted\n"
+        assert (outer / "untracked.txt").read_text() == "keep me\n"
+        assert (checkout / "o.py").exists()
+        assert _git(outer, "rev-parse", "HEAD") == outer_head
+
+    def test_reset_refuses_a_checkout_that_is_not_its_own_toplevel(
+        self, source: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        sha = _git(source, "rev-parse", "HEAD")
+        checkout = clone_at(source, sha, tmp_path / "ws", _dl())
+        real = criteria_process.run_bounded
+
+        def elsewhere(argv, **kwargs):
+            if list(argv[-2:]) == ["rev-parse", "--show-toplevel"]:
+                return _finished(stdout=f"{tmp_path}\n".encode())
+            return real(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", elsewhere)
+        (checkout / "a.py").write_text("mutated\n")
+        with pytest.raises(CriteriaError) as raised:
+            reset_checkout(checkout, sha, _dl())
+        assert raised.value.kind is ErrorKind.CLONE_FAILED
+        assert (checkout / "a.py").read_text() == "mutated\n"  # nothing was reset
+
+
+class TestTrackedFiles:
+    """R25: the tracked paths at sha, exact, for the digest's excluded `.py` (§6.1)."""
+
+    def test_every_tracked_path_sorted_and_untracked_absent(self, tmp_path: Path) -> None:
+        root = tmp_path / "r"
+        _init(root)
+        for rel in ("b.py", "pkg/ü.py", ":(top)x.py", "a b/c.txt"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("")
+        sha = _commit(root)
+        (root / "untracked.py").write_text("")
+        (root / "b.py").unlink()  # the working tree is not read
+        assert tracked_files(root, sha, _dl()) == sorted(
+            [":(top)x.py", "a b/c.txt", "b.py", "pkg/ü.py"]
+        )
+
+    def test_a_non_utf8_path_is_clone_failed_not_mangled(self, tmp_path: Path) -> None:
+        root = tmp_path / "r"
+        _init(root)
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=root, input=b"", capture_output=True, check=True,
+        ).stdout.strip()  # fmt: skip
+        subprocess.run(
+            [b"git", b"update-index", b"--add", b"--cacheinfo", b"100644," + blob + b",bad\xff.py"],
+            cwd=root, check=True,
+        )  # fmt: skip
+        _git(root, "commit", "-qm", "non-utf8 name")
+        sha = _git(root, "rev-parse", "HEAD")
+        with pytest.raises(CriteriaError) as raised:
+            tracked_files(root, sha, _dl())
+        assert raised.value.kind is ErrorKind.CLONE_FAILED
+
+    def test_unknown_sha_is_clone_failed(self, source: Path) -> None:
+        with pytest.raises(CriteriaError) as raised:
+            tracked_files(source, "deadbeef" * 5, _dl())
+        assert raised.value.kind is ErrorKind.CLONE_FAILED
+
+    def test_global_expiry_is_timeout(self, source: Path, monkeypatch) -> None:
+        monkeypatch.setattr(
+            criteria_process,
+            "run_bounded",
+            lambda *a, **k: _finished(returncode=None, timed_out="global"),
+        )
+        with pytest.raises(CriteriaError) as raised:
+            tracked_files(source, "0" * 40, _dl())
+        assert raised.value.kind is ErrorKind.TIMEOUT
+
+    def test_runs_in_the_c_locale_with_literal_pathspecs(self, source: Path, monkeypatch):
+        sha = _git(source, "rev-parse", "HEAD")
+        monkeypatch.setenv("GIT_DIR", "/decoy/.git")
+        seen: list[tuple[list[str], Any]] = []
+
+        def recording(argv, **kwargs):
+            seen.append((list(argv), kwargs["env"]))
+            return REAL_RUN(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", recording)
+        assert tracked_files(source, sha, _dl()) == ["a.py"]
+        ((argv, env),) = seen
+        assert "--literal-pathspecs" in argv and env["LC_ALL"] == "C"
+        assert not [k for k in env if k.startswith("GIT_")]
+
 
 class TestChildEnv:
     def test_python_pytest_and_virtualenv_vars_removed(self, tmp_path: Path, monkeypatch) -> None:
@@ -298,6 +409,14 @@ class TestChildEnv:
         assert env["PYTHONNOUSERSITE"] == "1"
         assert env["SPEC_RUNNER_PROBE_MODE"] == "collect"
         assert {k for k in env if k.startswith("PYTHON")} == {"PYTHONPATH", "PYTHONNOUSERSITE"}
+
+    def test_inherited_git_vars_removed(self, tmp_path: Path, monkeypatch) -> None:
+        """A product's conftest running git must not act on a hook's repository."""
+        monkeypatch.setenv("GIT_DIR", "/decoy/.git")
+        monkeypatch.setenv("GIT_WORK_TREE", "/decoy")
+        monkeypatch.setenv("GIT_INDEX_FILE", "/decoy/.git/index")
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", "/decoy/.git/objects")
+        assert not [k for k in child_env(tmp_path, {}) if k.startswith("GIT_")]
 
     def test_the_rest_of_the_environment_survives(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("HOME_LIKE_VAR", "kept")
@@ -420,10 +539,12 @@ class _FakeRun:
         uv: Finished | None = None,
         interpreter: bytes = b'["CPython", "3.12.13", false]',
         pytest_rc: int = 0,
+        pluggy: Finished | None = None,
     ) -> None:
         self.uv = uv or _finished()
         self.interpreter = interpreter
         self.pytest_rc = pytest_rc
+        self.pluggy = pluggy or _finished(stdout=b"1.6.0\n")
         self.calls: list[tuple[list[str], dict[str, Any]]] = []
 
     def __call__(self, argv, **kwargs):
@@ -433,6 +554,8 @@ class _FakeRun:
             return self.uv
         if argv[-1] == "import pytest":
             return _finished(returncode=self.pytest_rc, stderr=b"No module named 'pytest'")
+        if "pluggy" in argv[-1]:
+            return self.pluggy
         if argv[0].endswith("python"):
             return _finished(stdout=self.interpreter)
         return REAL_RUN(argv, **kwargs)
@@ -595,8 +718,9 @@ class TestSyncMapping:
         env_dir = tmp_path / "e"
         sync_environment(_locked_checkout(tmp_path / "co"), "0" * 40, env_dir, UNDECLARED, _dl())
         python_calls = [(a, k) for a, k in fake.calls if a[0] != "uv"]
-        assert len(python_calls) == 2
+        assert len(python_calls) == 3
         assert python_calls[1][0][-3:] == ["-P", "-c", "import pytest"]
+        assert "pluggy" in python_calls[2][0][-1]
         for argv, kwargs in python_calls:
             assert argv[0] == str(env_dir / "bin" / "python") and argv[1] == "-P"
             env = kwargs["env"]
@@ -630,6 +754,38 @@ class TestSyncMapping:
                 _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
             )
         assert raised.value.kind is ErrorKind.ENVIRONMENT_SELECTION_INVALID
+
+    def test_old_pluggy_is_selection_invalid(self, tmp_path: Path, monkeypatch) -> None:
+        """R24: the probe's hookimpl(wrapper=True) needs pluggy >= 1.2."""
+        old = _finished(returncode=3, stdout=b"1.0.0\n")
+        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(pluggy=old))
+        with pytest.raises(CriteriaError) as raised:
+            sync_environment(
+                _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
+            )
+        assert raised.value.kind is ErrorKind.ENVIRONMENT_SELECTION_INVALID
+        assert "1.0.0" in raised.value.detail
+
+    def test_pluggy_check_timeout_is_sync_failed(self, tmp_path: Path, monkeypatch) -> None:
+        stuck = _finished(returncode=None, timed_out="local")
+        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(pluggy=stuck))
+        with pytest.raises(CriteriaError) as raised:
+            sync_environment(
+                _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
+            )
+        assert raised.value.kind is ErrorKind.ENVIRONMENT_SYNC_FAILED
+
+    @pytest.mark.parametrize("inside", ["env", ".venv/nested", "."])
+    def test_env_dir_inside_the_checkout_is_refused(
+        self, tmp_path: Path, monkeypatch, inside: str
+    ) -> None:
+        """`clean -ffdx` between runs would delete an environment inside the checkout."""
+        fake = _FakeRun()
+        monkeypatch.setattr(criteria_process, "run_bounded", fake)
+        checkout = _locked_checkout(tmp_path / "co")
+        with pytest.raises(ValueError, match="inside the checkout"):
+            sync_environment(checkout, "0" * 40, checkout / inside, UNDECLARED, _dl())
+        assert not fake.calls
 
     def test_undefined_group_refused_before_uv(self, tmp_path: Path, monkeypatch) -> None:
         root = tmp_path / "co"

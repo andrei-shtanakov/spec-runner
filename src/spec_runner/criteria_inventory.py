@@ -27,7 +27,7 @@ from typing import Any
 
 from spec_runner import criteria_process
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, Finished, c_locale_env
+from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import (
     MANIFEST_ENV,
     MODE_ENV,
@@ -42,10 +42,10 @@ from spec_runner.criteria_workspace import (
     child_env,
     distribution_args,
     reset_checkout,
+    tracked_files,
 )
 
 _TAIL_LINES = 20
-_GIT_STEP_LIMIT = 60.0
 # pytest's wording for an initial conftest that fails to import (exit 4, before any
 # session, so no manifest) — measured on pytest 9.1.1 for import and syntax errors.
 _CONFTEST_FAILURE = "while loading conftest"
@@ -231,7 +231,7 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         rel = _relative(conftest, checkout)
         if rel is not None:
             files.add(rel)
-    tracked = _tracked(checkout, sha, deadline)
+    tracked = frozenset(tracked_files(checkout, sha, deadline))
     items: list[TestItem] = []
     non_function: list[str] = []
     for raw in manifest["items"]:
@@ -287,21 +287,12 @@ def _excluded(
             found.add(Excluded("skipped", path, None, entry["reason"], None))
         elif _is_tracked(path, tracked):
             found.add(Excluded("ignored", path, None, None, None))
-    return tuple(sorted(found, key=lambda e: (e.how, e.path or e.node_id or "")))
+    return tuple(sorted(found, key=_exclusion_order))
 
 
-def _tracked(checkout: Path, sha: str, deadline: Deadline) -> frozenset[str]:
-    done = criteria_process.run_or_raise(
-        ["git", "ls-tree", "-r", "-z", "--name-only", sha],
-        cwd=checkout,
-        env=c_locale_env(),
-        deadline=deadline,
-        kind=ErrorKind.CLONE_FAILED,
-        what="git ls-tree",
-        local_timeout=_GIT_STEP_LIMIT,
-    )
-    names = done.stdout.decode("utf-8", errors="surrogateescape").split("\0")
-    return frozenset(name for name in names if name)
+def _exclusion_order(e: Excluded) -> tuple[str, str, str, tuple[str, str, int]]:
+    """how, then path/node_id, then reason and definition (none first): never set order."""
+    return (e.how, e.path or e.node_id or "", e.reason or "", e.definition or ("", "", -1))
 
 
 def _is_tracked(path: str, tracked: frozenset[str]) -> bool:

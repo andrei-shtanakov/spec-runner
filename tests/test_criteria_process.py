@@ -100,13 +100,14 @@ def test_run_or_raise_returns_on_success(tmp_path: Path) -> None:
 def test_background_descendant_holding_output_is_killed(tmp_path: Path) -> None:
     started = time.monotonic()
     done = run_bounded(
-        _sh("sleep 30 & echo $! > pid; exit 0"),
+        _sh("sleep 60 & echo $! > pid; exit 0"),
         cwd=tmp_path,
         env=None,
-        deadline=Deadline(10),
-        local_timeout=2,
+        deadline=Deadline(90),
+        local_timeout=30,
     )
-    assert time.monotonic() - started < 1
+    # "did not wait for the descendant", not a speed bound: waiting would take >= 30 s
+    assert time.monotonic() - started < 10
     assert done.returncode == 0
     assert done.timed_out is None
     pid = int((tmp_path / "pid").read_text())
