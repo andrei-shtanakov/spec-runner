@@ -40,6 +40,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **`criteria-closure/v1` contract and the measurement's pre-run stages** (#603 B2a).
+  Request/response schemas (frozen per design rev 4, confirmed by devtools) and
+  the stages before any test runs: the error-kind table, bounded process groups
+  under one deadline, the product's criteria config read at `product_sha`, the
+  clone, blobs and declared environment, the probe's collect mode with a
+  validated inventory (collection exclusions included), BEH selection and the
+  rev-4 content digest. No command yet: `verify --criteria` lands with B2b.
+
 - **Shared token-ownership fixtures** (#603, design §6.3):
   `tests/fixtures/criteria-closure/v1/ownership/` — 22 byte-exact cases with
   hand-checked expectations, agreed with devtools in devtools#491, and

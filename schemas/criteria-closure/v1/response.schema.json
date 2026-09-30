@@ -1,0 +1,273 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/criteria-closure/v1/response.schema.json",
+  "title": "criteria-closure/v1 response",
+  "description": "stdout of `spec-runner verify --criteria … --json` on every exit path (spec-runner#603 design rev 4, §3.2, §3.5, §4, §6). Exactly one of three branches; `not_applicable` is reserved and never emitted by v1.",
+  "oneOf": [
+    {"$ref": "#/definitions/answer"},
+    {"$ref": "#/definitions/error_response"},
+    {"$ref": "#/definitions/not_applicable_response"}
+  ],
+  "definitions": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relpath": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!\\./)(?!.*(^|/)\\.\\.(/|$)).+$"},
+    "normalised_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "A PEP 735/685 name after normalisation: lower case, every run of `-`, `_`, `.` replaced by one `-` (design §3.3)."
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "qualname", "line"],
+      "description": "Where pytest's collected function is defined. `line` is the line of the first decorator, else of `def` (co_firstlineno of the unwrapped function) — devtools matches definitions by (file, qualname, line).",
+      "properties": {
+        "file": {"$ref": "#/definitions/relpath"},
+        "qualname": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1}
+      }
+    },
+    "test_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "definition"],
+      "properties": {"node_id": {"type": "string", "minLength": 1}, "definition": {"$ref": "#/definitions/definition"}}
+    },
+    "excluded": {
+      "description": "What collection left out (design §3.5). `skipped`: a module skipped at collection; `ignored`: a tracked path a pytest_ignore_collect implementation refused; `deselected`: an item removed in pytest_collection_modifyitems, with its definition by the test_items rule, null when it is not a Python function or does not resolve inside the checkout.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["how", "path", "reason"],
+          "properties": {"how": {"const": "skipped"}, "path": {"$ref": "#/definitions/relpath"}, "reason": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["how", "path"],
+          "properties": {"how": {"const": "ignored"}, "path": {"$ref": "#/definitions/relpath"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["how", "node_id", "definition"],
+          "properties": {
+            "how": {"const": "deselected"},
+            "node_id": {"type": "string", "minLength": 1},
+            "definition": {"oneOf": [{"type": "null"}, {"$ref": "#/definitions/definition"}]}
+          }
+        }
+      ]
+    },
+    "collection_excluded": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/definitions/excluded"},
+      "description": "Sorted by `how`, then path or node id; [] when nothing was left out."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_sha256", "python", "pytest_plugins", "groups", "extras"],
+      "properties": {
+        "lock_sha256": {"$ref": "#/definitions/sha256"},
+        "python": {"type": "string", "minLength": 1},
+        "pytest_plugins": {"type": "array", "items": {"type": "string"}},
+        "groups": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/normalised_name"}}
+          ],
+          "description": "The declared dependency groups, normalised and sorted; null when undeclared (uv's default groups). null and [] are different environments."
+        },
+        "extras": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/definitions/normalised_name"},
+          "description": "The declared extras, normalised and sorted; [] when undeclared."
+        }
+      }
+    },
+    "product_roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared", "files"],
+      "properties": {
+        "declared": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/definitions/relpath"}},
+        "files": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/definitions/relpath"}}
+      }
+    },
+    "complete_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "collected", "phases", "outcome", "product_lines", "product_line_count", "process_operations"],
+      "properties": {
+        "result": {"const": "complete"},
+        "collected": {"type": "array", "items": {"type": "string"}},
+        "phases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["setup", "call", "teardown"],
+          "properties": {
+            "setup": {"enum": ["passed", "failed", "skipped"]},
+            "call": {"enum": ["passed", "failed", "skipped", "not-reached"]},
+            "teardown": {"enum": ["passed", "failed", "skipped"]}
+          }
+        },
+        "outcome": {"enum": ["passed", "failed", "skipped"], "description": "Over all three phases: passed only if setup, call and teardown all passed; failed if any phase failed; otherwise skipped."},
+        "product_lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "lines"],
+            "properties": {
+              "file": {"$ref": "#/definitions/relpath"},
+              "lines": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}
+            }
+          }
+        },
+        "product_line_count": {"type": "integer", "minimum": 0, "description": "The total length of the `lines` lists."},
+        "process_operations": {"type": "array", "items": {"type": "string"}, "description": "Audit events observed during call; non-empty is the norm's child-process indicator (§4.3). An attempt, not proof a child ran the product."}
+      }
+    },
+    "error_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "reason", "detail"],
+      "properties": {
+        "result": {"const": "error"},
+        "reason": {"enum": ["runner", "io"]},
+        "detail": {"type": "string"},
+        "exit_status": {"type": "integer"},
+        "timed_out": {"type": "boolean"},
+        "mutated_paths": {"type": "array", "items": {"$ref": "#/definitions/relpath"}}
+      }
+    },
+    "run": {"oneOf": [{"$ref": "#/definitions/complete_run"}, {"$ref": "#/definitions/error_run"}]},
+    "status_reason": {
+      "oneOf": [
+        {"properties": {"status": {"const": "traced"}}, "not": {"required": ["reason"]}},
+        {"properties": {"status": {"const": "unconfirmed"}, "reason": {"enum": ["no-test", "no-product-execution", "subprocess-only", "not-passed", "nondeterministic"]}}, "required": ["reason"]},
+        {"properties": {"status": {"const": "error"}, "reason": {"enum": ["io", "runner"]}}, "required": ["reason"]}
+      ]
+    },
+    "selector": {
+      "allOf": [
+        {"$ref": "#/definitions/status_reason"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["node_id", "definition", "status", "runs"],
+          "properties": {
+            "node_id": {"type": "string", "minLength": 1},
+            "definition": {"$ref": "#/definitions/definition"},
+            "status": {"enum": ["traced", "unconfirmed", "error"]},
+            "reason": {"type": "string"},
+            "runs": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/definitions/run"}}
+          }
+        }
+      ]
+    },
+    "beh": {
+      "allOf": [
+        {"$ref": "#/definitions/status_reason"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "status", "selectors"],
+          "properties": {
+            "id": {"type": "string", "pattern": "^[A-Z]{2,6}:BEH-[0-9]+[a-z]?$"},
+            "status": {"enum": ["traced", "unconfirmed", "error"]},
+            "reason": {"type": "string"},
+            "selectors": {"type": "array", "items": {"$ref": "#/definitions/selector"}}
+          }
+        }
+      ]
+    },
+    "error_kind": {
+      "enum": [
+        "request-invalid", "owner-repo-mismatch", "product-sha-absent", "clone-failed",
+        "environment-sync-failed", "unsupported-runtime", "collection-config-outside-checkout",
+        "collection-failed", "timeout", "lock-not-current", "environment-selection-invalid",
+        "collection-error", "collection-mutated-checkout",
+        "product-roots-undeclared", "product-roots-empty", "product-roots-invalid",
+        "product-roots-no-python", "product-roots-overlap-tests", "definition-unresolved",
+        "selector-absent", "distributed-execution"
+      ]
+    },
+    "retryable_kinds": {
+      "enum": [
+        "request-invalid", "owner-repo-mismatch", "product-sha-absent", "clone-failed",
+        "environment-sync-failed", "unsupported-runtime", "collection-config-outside-checkout",
+        "collection-failed", "timeout"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "retryable", "detail"],
+      "properties": {
+        "kind": {"$ref": "#/definitions/error_kind"},
+        "retryable": {"type": "boolean"},
+        "detail": {"type": "string"}
+      },
+      "if": {"properties": {"kind": {"$ref": "#/definitions/retryable_kinds"}}},
+      "then": {"properties": {"retryable": {"const": true}}},
+      "else": {"properties": {"retryable": {"const": false}}},
+      "description": "retryable is true exactly for the exit-2 kinds; exit 3 otherwise (design §3.2)."
+    },
+    "answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "request", "spec_runner_version", "product_roots", "test_files", "test_items", "collection_excluded", "environment", "content_sha256", "beh"],
+      "properties": {
+        "protocol": {"const": 1},
+        "request": {"type": "object", "description": "The request, verbatim."},
+        "spec_runner_version": {"type": "string", "minLength": 1},
+        "product_roots": {"$ref": "#/definitions/product_roots"},
+        "test_files": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/relpath"}},
+        "test_items": {"type": "array", "items": {"$ref": "#/definitions/test_item"}},
+        "collection_excluded": {"$ref": "#/definitions/collection_excluded"},
+        "environment": {"$ref": "#/definitions/environment"},
+        "content_sha256": {"$ref": "#/definitions/sha256"},
+        "beh": {"type": "array", "items": {"$ref": "#/definitions/beh"}}
+      }
+    },
+    "error_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "spec_runner_version", "error"],
+      "description": "Besides the error, only the fields the measurement established before failing, each optional. Never `beh`.",
+      "properties": {
+        "protocol": {"const": 1},
+        "request": {"type": "object"},
+        "spec_runner_version": {"type": "string", "minLength": 1},
+        "error": {"$ref": "#/definitions/error"},
+        "environment": {"$ref": "#/definitions/environment"},
+        "product_roots": {"$ref": "#/definitions/product_roots"},
+        "test_files": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/relpath"}},
+        "test_items": {"type": "array", "items": {"$ref": "#/definitions/test_item"}},
+        "collection_excluded": {"$ref": "#/definitions/collection_excluded"},
+        "content_sha256": {"$ref": "#/definitions/sha256"}
+      }
+    },
+    "not_applicable_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "request", "spec_runner_version", "not_applicable"],
+      "properties": {
+        "protocol": {"const": 1},
+        "request": {"type": "object"},
+        "spec_runner_version": {"type": "string", "minLength": 1},
+        "not_applicable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {"reason": {"const": "language"}}
+        }
+      }
+    }
+  }
+}

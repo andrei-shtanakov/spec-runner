@@ -148,7 +148,7 @@ class TestSemanticRules:
 - `Request.raw` stays the request verbatim (including `bundle_pin`); `owner_matches`'s docstring states the boundary: "a bare name checks the name only — a repository of that name under any owner matches".
 - A skipped-teardown check: a copy of `answer.json` with one run's `teardown: "skipped"`, `outcome: "skipped"` validates.
 
-- [ ] Steps: failing tests (RED: module missing) → schemas + goldens + module → GREEN (`uv run pytest tests/test_criteria_contract.py -q`, ruff, mypy) → commit `feat(#603): criteria-closure/v1 schemas, error-kind table, request parsing`.
+- [x] Steps: failing tests (RED: module missing) → schemas + goldens + module → GREEN (`uv run pytest tests/test_criteria_contract.py -q`, ruff, mypy) → commit `feat(#603): criteria-closure/v1 schemas, error-kind table, request parsing`.
 
 ---
 
@@ -189,7 +189,7 @@ Do not use pipe EOF (`communicate()`) as the signal to start group cleanup: a ba
 
 Callers explicitly decode textual Git metadata, interpreter JSON and diagnostics; diagnostics use UTF-8 with `errors="replace"` (including `run_or_raise` and uv error classification). Blob payloads are never decoded or newline-normalised by the runner.
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
   - within both limits → `returncode 0`, `timed_out None`;
   - `sleep 30`, `local_timeout=1`, deadline 60 → `timed_out == "local"`, returns in < 5 s;
   - `sleep 30`, deadline 1 → `timed_out == "global"`; `run_or_raise` raises `ErrorKind.TIMEOUT`;
@@ -197,7 +197,7 @@ Callers explicitly decode textual Git metadata, interpreter JSON and diagnostics
   - a child that writes more than pipe capacity to both stdout and stderr and reads a similarly large stdin → completes without deadlock, exact bytes returned;
   - stdout containing CRLF, lone CR, NUL, multibyte UTF-8 and invalid UTF-8 → byte-identical output, no decoding error;
   - `Deadline(0).check()` raises `TIMEOUT`.
-- [ ] Steps 2–5; commit `feat(#603): bounded process groups under one measurement deadline`.
+- [x] Steps 2–5; commit `feat(#603): bounded process groups under one measurement deadline`.
 
 ---
 
@@ -221,8 +221,8 @@ def check_overlap(files: Sequence[str], test_files: Sequence[str]) -> None
 
 Reading: `git show <sha>:spec-runner.config.yaml`, else `<sha>:spec/executor.config.yaml`, through `run_bounded` — never the working tree; neither present → `product-roots-undeclared`. Section = `data.get("executor", data)`. `criteria.product_roots`: rev 1's rules (`undeclared` / `empty` / `invalid`, normalisation, duplicates refused). `criteria.environment` (optional): a mapping holding only `groups` and/or `extras`, each a list of names matching `^[A-Za-z0-9][A-Za-z0-9._-]*$` without duplicates; anything else → `environment-selection-invalid`. `resolve_roots` / `check_overlap`: rev 1's (tracked symlink → `invalid`; no `.py` → `no-python`; overlap → `overlap-tests`), `git ls-tree` through `run_bounded`.
 
-- [ ] **Step 1: Failing tests** — rev 1's roots table, each read from a commit whose **working tree was edited after committing** (the edit must not be seen); plus `criteria.environment`: absent → `(None, ())`; `{groups: [governance]}` → `(("governance",), ())`; `{groups: [dev, governance], extras: [cli]}`; `{groups: governance}`, `{groups: ["bad name"]}`, `{groups: [a, a]}`, `{unknown: []}` → `environment-selection-invalid`.
-- [ ] Steps 2–5; commit `feat(#603): product criteria config read at product_sha`.
+- [x] **Step 1: Failing tests** — rev 1's roots table, each read from a commit whose **working tree was edited after committing** (the edit must not be seen); plus `criteria.environment`: absent → `(None, ())`; `{groups: [governance]}` → `(("governance",), ())`; `{groups: [dev, governance], extras: [cli]}`; `{groups: governance}`, `{groups: ["bad name"]}`, `{groups: [a, a]}`, `{unknown: []}` → `environment-selection-invalid`.
+- [x] Steps 2–5; commit `feat(#603): product criteria config read at product_sha`.
 
 ---
 
@@ -263,12 +263,12 @@ def distribution_args(env: Environment) -> list[str]
 
 `child_env`: from `os.environ` drop every key starting with `PYTHON` or `PYTEST_`, and `VIRTUAL_ENV`; set `PYTHONPATH = str(probe_dir)`, `PYTHONNOUSERSITE = "1"`; apply `extra`.
 
-- [ ] **Step 1: Failing tests** — rev 1's origin/clone tests with a `Deadline`, plus:
+- [x] **Step 1: Failing tests** — rev 1's origin/clone tests with a `Deadline`, plus:
   - `read_blobs` returns committed bytes although the working tree was changed; a path absent at `sha` raises;
   - one batch containing blobs with CRLF, lone CR, multibyte UTF-8, invalid UTF-8, NUL, no final newline and an empty blob → every payload equals the committed bytes, and each SHA-256 matches an independently captured binary `git show`; truncated batch output raises `CLONE_FAILED`;
   - `child_env` with `PYTHONPATH=/elsewhere`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTEST_ADDOPTS`, `VIRTUAL_ENV` set → none survive; `PYTHONPATH == str(probe_dir)`, `PYTHONNOUSERSITE == "1"`;
   - `@slow` sync (a dependency-free project; offline where possible): missing lock and stale lock (version bump) → `lock-not-current`; a declared undefined group → `environment-selection-invalid`; a declared conflicting pair in a `[tool.uv] conflicts` project → `environment-selection-invalid`; a declared valid group installs and is reported in `Environment.groups`; `.venv` never created inside the checkout. The global deadline during sync (Review Focus 3): monkeypatch `criteria_process.run_bounded` to record the `deadline` it receives and return `timed_out="global"` → `sync_environment` raises `TIMEOUT` (that the group is then really killed is Task 3's test, not repeated with a live network here).
-- [ ] Steps 2–5; commit `feat(#603): criteria workspace — origin, clone, blobs, declared env, clean child env`.
+- [x] Steps 2–5; commit `feat(#603): criteria workspace — origin, clone, blobs, declared env, clean child env`.
 
 ---
 
@@ -293,8 +293,8 @@ def valid_run(data: object, *, child_pid: int, returncode: int) -> dict[str, Any
 
 A validator returns the manifest only when **every** rule of the probe/1 section holds — fields, types, `probe == 1`, `mode`, `pid == child_pid`, `complete is True`, every consistency rule; otherwise `None`. No partial acceptance, no defaults filled in.
 
-- [ ] **Step 1: Failing tests** — a valid collect and a valid run manifest accepted; then table-driven rejections, one row per rule: each required field removed; each field with a wrong type; `probe: 2`; wrong `mode`; `pid` off by one; `complete: false`; `exitstatus` ≠ return code; `items == []` with `exitstatus 0`; `errors` with `exitstatus 0`; `definition` non-null with `function: false`; run — `call: not-reached` with `setup: passed`, `collected == []` with phases present, `exitstatus 0` with a failed teardown, `exitstatus 1` with no failed phase; `teardown: skipped` **accepted**. Plus the constant-agreement test: parse `criteria_probe.py` with `ast`, read its module-level assignments of the six names, assert equal to `criteria_protocol`'s.
-- [ ] Steps 2–5; commit `feat(#603): probe/1 constants and strict manifest validation`.
+- [x] **Step 1: Failing tests** — a valid collect and a valid run manifest accepted; then table-driven rejections, one row per rule: each required field removed; each field with a wrong type; `probe: 2`; wrong `mode`; `pid` off by one; `complete: false`; `exitstatus` ≠ return code; `items == []` with `exitstatus 0`; `errors` with `exitstatus 0`; `definition` non-null with `function: false`; run — `call: not-reached` with `setup: passed`, `collected == []` with phases present, `exitstatus 0` with a failed teardown, `exitstatus 1` with no failed phase; `teardown: skipped` **accepted**. Plus the constant-agreement test: parse `criteria_probe.py` with `ast`, read its module-level assignments of the six names, assert equal to `criteria_protocol`'s.
+- [x] Steps 2–5; commit `feat(#603): probe/1 constants and strict manifest validation`.
 
 ---
 
@@ -306,7 +306,7 @@ A validator returns the manifest only when **every** rule of the probe/1 section
 
 The probe: rev 1's collect-mode code with its constants literal (Task 6 keeps them equal); a top-level `import pytest` is allowed (it only ever runs inside the product). `collect`: argv per probe/1 (`-P`); `run_bounded`; `global` → `timeout`, `local` → `collection-failed`; `valid_collect(...)` is `None` → `collection-failed` (detail: return code and the last stderr lines); `errors` → `collection-error`; config outside the checkout → `collection-config-outside-checkout`; unresolvable definitions → `definition-unresolved`. **Then** `tracked_changes(checkout)` non-empty → `collection-mutated-checkout` naming the paths — and in every case `reset_checkout` before returning or raising.
 
-- [ ] **Step 1: Failing tests** — rev 1's inventory tests (inherited definition in a helper module, parametrized line = decorator line, zero tests = a valid empty inventory, an import error = `collection-error`, a local timeout = `collection-failed`, config outside), plus:
+- [x] **Step 1: Failing tests** — rev 1's inventory tests (inherited definition in a helper module, parametrized line = decorator line, zero tests = a valid empty inventory, an import error = `collection-error`, a local timeout = `collection-failed`, config outside), plus:
   - a test module that rewrites a tracked product file at import → `collection-mutated-checkout`, the file restored afterwards (Review Focus 2);
   - a probe deployed with its `items` write removed (patch the deployed text) → `collection-failed`, not an empty inventory (Review Focus 1);
   - a module reachable only through the parent's `PYTHONPATH`, imported by a product test → `collection-error` (Review Focus 4).
@@ -338,7 +338,7 @@ def test_orchestrator_modules_import_without_pytest():
 ```
 
 (B2b appends `criteria_run`, `criteria_aggregate`, `criteria_measure`, `cli` to `MODULES`; the release rehearsal of X runs `spec-runner verify --criteria` from the `uv tool` install, which has no pytest.)
-- [ ] Steps 2–5; commit `feat(#603): the probe's collect mode and a validated, mutation-checked inventory`.
+- [x] Steps 2–5; commit `feat(#603): the probe's collect mode and a validated, mutation-checked inventory`.
 
 ---
 
@@ -348,8 +348,8 @@ def test_orchestrator_modules_import_without_pytest():
 
 **Interfaces — Produces:** `select(items, beh_ids, blobs: Mapping[str, bytes]) -> dict[str, list[TestItem]]` — definition text from `product_sha` blobs, decoded UTF-8; unparseable → `definition-unresolved`; `(qualname, line)` not held by `owned_definitions` → `definition-unresolved`. `content_sha256(roots, lock_sha256, groups, extras, files: Mapping[str, bytes]) -> str` over the rev-4 object `{"v": 1, "product_roots": [...], "lock": …, "environment": {"groups": [...] | null, "extras": [...]}, "files": [[path, sha256], …]}` (sorted groups and extras; the canonical JSON of rev 3 §6.1).
 
-- [ ] **Step 1: Failing tests** — rev 1's selection tests (reading from a blobs mapping); the digest recomputed from its definition; each of roots, lock, groups (including `null` vs `[]`), extras and one file byte moving it; otherwise identical CRLF and LF blobs produce different digests.
-- [ ] Steps 2–5; commit `feat(#603): BEH selection by token ownership and the rev-4 content digest`.
+- [x] **Step 1: Failing tests** — rev 1's selection tests (reading from a blobs mapping); the digest recomputed from its definition; each of roots, lock, groups (including `null` vs `[]`), extras and one file byte moving it; otherwise identical CRLF and LF blobs produce different digests.
+- [x] Steps 2–5; commit `feat(#603): BEH selection by token ownership and the rev-4 content digest`.
 
 ---
 

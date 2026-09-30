@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/criteria-closure/v1/request.schema.json",
+  "title": "criteria-closure/v1 request",
+  "description": "The request devtools sends to `spec-runner verify --criteria --request <file> --json` (spec-runner#603 design §4). Two rules JSON Schema cannot express are enforced by the producer: every test_criteria id carries this request's `code`, and no id repeats (whatever its verify_task).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "owner_repo", "workstream", "code", "bundle_pin", "product_sha", "test_criteria"],
+  "properties": {
+    "protocol": {"const": 1},
+    "owner_repo": {
+      "type": "string",
+      "pattern": "^([A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+$",
+      "description": "`name` or `owner/name`, compared with the source repo's origin. A bare name checks the name only — a repository of that name under any owner matches (a named boundary)."
+    },
+    "workstream": {"type": "string", "minLength": 1},
+    "code": {"type": "string", "pattern": "^[A-Z]{2,6}$"},
+    "bundle_pin": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "The bundle's approval commit SHA; echoed verbatim, not used."},
+    "product_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "test_criteria": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "verify_task"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Z]{2,6}:BEH-[0-9]+[a-z]?$", "description": "A qualified BEH id whose code equals `code`."},
+          "verify_task": {"type": "boolean", "description": "Echoed; no effect since norm rev 8."}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+{"protocol": 1, "spec_runner_version": "4.5.0",
+ "request": {"protocol": 1, "owner_repo": "andrei-shtanakov/devtools", "workstream": "ws-20260929", "code": "ENC", "bundle_pin": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "product_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "test_criteria": []},
+ "error": {"kind": "product-sha-absent", "retryable": true, "detail": "bbbbbbbbbbbb is not in the local object store — fetch and retry"}}

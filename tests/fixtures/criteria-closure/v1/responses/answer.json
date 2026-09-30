@@ -1,0 +1,24 @@
+{
+  "protocol": 1,
+  "request": {"protocol": 1, "owner_repo": "andrei-shtanakov/devtools", "workstream": "ws-20260929", "code": "ENC",
+              "bundle_pin": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "product_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "test_criteria": [{"id": "ENC:BEH-01", "verify_task": false}, {"id": "ENC:BEH-02", "verify_task": false}]},
+  "spec_runner_version": "4.5.0",
+  "product_roots": {"declared": ["pkg"], "files": ["pkg/__init__.py", "pkg/mod.py"]},
+  "test_files": ["pyproject.toml", "tests/conftest.py", "tests/test_mod.py"],
+  "test_items": [{"node_id": "tests/test_mod.py::test_run", "definition": {"file": "tests/test_mod.py", "qualname": "test_run", "line": 4}}],
+  "collection_excluded": [],
+  "environment": {"lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "python": "CPython 3.12.13", "pytest_plugins": ["pytest-9.0.2"], "groups": null, "extras": []},
+  "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "beh": [
+    {"id": "ENC:BEH-01", "status": "traced", "selectors": [
+      {"node_id": "tests/test_mod.py::test_run", "definition": {"file": "tests/test_mod.py", "qualname": "test_run", "line": 4},
+       "status": "traced",
+       "runs": [
+         {"result": "complete", "collected": ["tests/test_mod.py::test_run"], "phases": {"setup": "passed", "call": "passed", "teardown": "passed"}, "outcome": "passed", "product_lines": [{"file": "pkg/mod.py", "lines": [3, 4]}], "product_line_count": 2, "process_operations": []},
+         {"result": "complete", "collected": ["tests/test_mod.py::test_run"], "phases": {"setup": "passed", "call": "passed", "teardown": "passed"}, "outcome": "passed", "product_lines": [{"file": "pkg/mod.py", "lines": [3, 4]}], "product_line_count": 2, "process_operations": []}
+       ]}
+    ]},
+    {"id": "ENC:BEH-02", "status": "unconfirmed", "reason": "no-test", "selectors": []}
+  ]
+}
