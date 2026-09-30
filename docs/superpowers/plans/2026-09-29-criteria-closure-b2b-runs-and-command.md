@@ -1,22 +1,24 @@
-# Criteria closure — B2b (probe run mode, isolated runs, aggregation, command) Implementation Plan — rev 2
+# Criteria closure — B2b (probe run mode, isolated runs, aggregation, command) Implementation Plan — rev 3
 
 Rev 1 is this path at `05cf3aa`. Rev 2 follows B2a rev 2 (probe/1 with strict validation, bounded processes, the clean child env, reference data from `product_sha`, `teardown: skipped`) and the owner's review of PR #620; Tasks 2 and 4–6 are given as exact interfaces and checkable criteria rather than full code.
+
+Rev 3 follows B2a rev 3's process cleanup and byte-preserving subprocess transport. An absent selector now keeps `phases == {}`; the probe regression passes the emitted manifest through `valid_run`, and the runner regression requires response-level `SELECTOR_ABSENT`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Finish `spec-runner verify --criteria --request <file> --json`: the probe's run mode (in-process product lines during `call`, process operations, distribution detection), one fresh pytest process per selector run twice with the checkout reset between invocations, the §3.7 aggregation, the answer/error documents on every exit path, and the CPython-3.12 bench. The release carrying this plan is **X**.
 
-**Architecture:** B2a's modules are consumed unchanged. New: run-mode hooks in `criteria_probe.py`; `criteria_run.py` (one isolated invocation → a run object); `criteria_aggregate.py` (pure: run outcome, selector status, BEH status); `criteria_measure.py` (the pipeline, the error branch, the global deadline); the `verify --criteria` flags in `cli.py` / `cli_info.py`. The orchestrator↔probe interface is **probe/1 as fixed in B2a rev 2** — this plan implements its run-mode half and changes nothing in it; run manifests are accepted only through `criteria_protocol.valid_run`.
+**Architecture:** B2a's modules are consumed unchanged. New: run-mode hooks in `criteria_probe.py`; `criteria_run.py` (one isolated invocation → a run object); `criteria_aggregate.py` (pure: run outcome, selector status, BEH status); `criteria_measure.py` (the pipeline, the error branch, the global deadline); the `verify --criteria` flags in `cli.py` / `cli_info.py`. The orchestrator↔probe interface is **probe/1 as fixed in B2a rev 3** — this plan implements its run-mode half and changes nothing in it; run manifests are accepted only through `criteria_protocol.valid_run`.
 
 **Tech Stack:** Python ≥ 3.11 (orchestrator), CPython ≥ 3.12 (`sys.monitoring`, the product environment), pytest, git, uv.
 
-**Spec:** design rev 4 §3.6–3.7, §4; B2a rev 2 (probe/1, Tasks 3–8).
+**Spec:** design rev 4 §3.6–3.7, §4; B2a rev 3 (probe/1, Tasks 3–8).
 
 **Start condition:** after B2a is merged; B2a itself starts after devtools' «паритет подтверждён» in devtools#491.
 
 ## Global Constraints
 
-- probe/1 exactly as B2a rev 2 fixes it: invocation (`-P`), the child-env rule, ownership, manifest written once via temp + `os.replace`, and **strict validation** — a run manifest is evidence only if `valid_run(data, child_pid=…, returncode=…)` accepts it; anything else is an error run (never `selector-absent`, never a complete run).
+- probe/1 exactly as B2a rev 3 fixes it: invocation (`-P`), the child-env rule, ownership, manifest written once via temp + `os.replace`, and **strict validation** — a run manifest is evidence only if `valid_run(data, child_pid=…, returncode=…)` accepts it; anything else is an error run (never `selector-absent`, never a complete run).
 - A qualifying product line: the code object's file is a declared product file **and** `co_flags & CO_OPTIMIZED` (probe side), **and** the line lies in a function body by the rule devtools uses (orchestrator side): for every `FunctionDef`/`AsyncFunctionDef` anywhere in the file, `range(body[0].lineno, end_lineno + 1)` (devtools `criteria_close._function_lines` @ `540564f`, read).
 - Tracing on only inside a hookwrapper around `pytest_runtest_call`; `sys.monitoring` with a free tool id; `DISABLE` after a location's first hit.
 - Each selector: two runs, each a fresh `<env>/bin/python -P -m pytest -p _spec_runner_criteria_probe [-n 0 --dist no] -q <node_id>` through `run_bounded` (own process group, killed after exit), in a checkout reset by `reset_checkout` before the run, a fresh `TMPDIR`, a per-invocation manifest; afterwards the measured files are compared with their bytes **at `product_sha`** (`read_blobs`), not with anything read after product code ran.
@@ -54,19 +56,20 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from spec_runner.criteria_inventory import deploy_probe
+from spec_runner.criteria_process import Deadline, run_bounded
 from spec_runner.criteria_protocol import (
     MANIFEST_ENV,
     MODE_ENV,
     PARENT_ENV,
     PROBE_MODULE,
     PRODUCT_FILES_ENV,
+    valid_run,
 )
 from spec_runner.criteria_workspace import child_env
 
@@ -87,17 +90,27 @@ def _run(tmp_path: Path, files: dict[str, str], node_id: str, product: list[str]
         PARENT_ENV: str(os.getpid()), MODE_ENV: "run",
         MANIFEST_ENV: str(manifest), PRODUCT_FILES_ENV: str(product_json),
     })
-    subprocess.run(
+    finished = run_bounded(
         [sys.executable, "-P", "-m", "pytest", "-p", PROBE_MODULE, *extra, "-q", node_id],
-        cwd=checkout, env=env, capture_output=True, text=True, timeout=120,
+        cwd=checkout, env=env, deadline=Deadline(120),
     )
-    return json.loads(manifest.read_text())
+    assert finished.timed_out is None and finished.returncode is not None
+    result = json.loads(manifest.read_text())
+    assert valid_run(result, child_pid=finished.pid, returncode=finished.returncode) is not None
+    return result
 
 
 PRODUCT = {"pkg/__init__.py": "", "pkg/mod.py": "CONST = 1\n\n\ndef work(x):\n    y = x + 1\n    return y\n"}
 
 
 class TestLinesInCallOnly:
+    def test_missing_selector_has_no_phases(self, tmp_path):
+        files = {"tests/test_a.py": "def test_a():\n    pass\n"}
+        m = _run(tmp_path, files, "tests/test_a.py::test_missing", [])
+        assert m["collected"] == [] and m["phases"] == {}
+        assert m["exitstatus"] == 4
+        assert m["call_in_owner"] is False and m["distributed"] is False
+
     def test_call_lines_recorded_setup_lines_not(self, tmp_path):
         files = {**PRODUCT, "tests/test_a.py": (
             "import pytest\nfrom pkg.mod import work\n\n\n"
@@ -235,7 +248,7 @@ In `pytest_collection_finish`, for run mode record `_run["collected"] = [item.no
 ```python
     if _manifest["mode"] == "run":
         phases = dict(_run["phases"])
-        if phases.get("setup") != "passed":
+        if phases.get("setup") in {"failed", "skipped"}:
             phases["call"] = "not-reached"
         _manifest.update(
             collected=_run["collected"],
@@ -247,7 +260,7 @@ In `pytest_collection_finish`, for run mode record `_run["collected"] = [item.no
         )
 ```
 
-(`call_in_owner` is false when no call report arrived at all — setup failed — and `distributed` stays false then; B2b's orchestrator reads `phases`, not `call_in_owner`, for that case.)
+Only an observed failed/skipped setup establishes `call: not-reached`. No collected item means no setup, so preserve `phases == {}` for the absent-selector manifest (exit 4 or 5); missing phase evidence for a collected item stays invalid. `call_in_owner` is false when no call report arrived — including an absent selector or a failed/skipped setup — and `distributed` stays false then; B2b's orchestrator reads the validated collection and phases for these cases.
 
 - [ ] **Step 5: Run** — `uv run pytest tests/test_criteria_probe_run.py tests/test_criteria_inventory.py -q` → PASS (the collect-mode tests of B2a must stay green). `uv run mypy src && uv run ruff check .` → clean. mypy runs on 3.11 semantics (`python_version = "3.11"`): guard `sys.monitoring` uses with `if sys.version_info >= (3, 12):` blocks so mypy accepts them.
 
@@ -304,10 +317,10 @@ The invocation dir is removed on every path.
   - a complete run with `pkg/mod.py` lines `[2]`, `product_line_count == 1`;
   - a fixture teardown that calls `pytest.skip` → complete run, `teardown: "skipped"`, `outcome: "skipped"`;
   - a test rewriting `pkg/mod.py` → error run, `mutated_paths == ["pkg/mod.py"]`, and the next `run_selector` sees the original bytes (Review Focus 3);
-  - a node id that does not exist → `SELECTOR_ABSENT`;
+  - a node id that does not exist → a real probe manifest with `collected: []`, `phases: {}`, exit 4 passes `valid_run` → `SELECTOR_ABSENT` (not an error run); also cover a valid exit-5 empty manifest;
   - a deployed probe with its manifest write patched to drop `phases` → error run, **not** `SELECTOR_ABSENT` and not complete;
   - `selector_timeout=2` on a sleeping test → error run `timed_out: true`; `Deadline(3)` with `selector_timeout=60` → `CriteriaError(TIMEOUT)`;
-  - a test that starts `sleep 60 &` and passes → after `run_selector` returns, that process is gone.
+  - a test that starts `sleep 60 &` with inherited output descriptors and passes → `run_selector` returns a complete run before its local timeout, the background process is no longer running, and no false timeout/error run is produced.
 - [ ] Step 2 RED; Step 3 implement; Step 4 GREEN + ruff + mypy; Step 5 commit `feat(#603): one isolated, bounded, validated selector run`.
 
 ---

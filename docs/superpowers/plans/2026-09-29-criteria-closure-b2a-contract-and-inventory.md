@@ -1,8 +1,10 @@
-# Criteria closure — B2a (contract, workspace, inventory, selection) Implementation Plan — rev 2
+# Criteria closure — B2a (contract, workspace, inventory, selection) Implementation Plan — rev 3
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Rev 1** of this plan — with the full code this revision refers to as "rev 1" — is this same path at commit **`05cf3aa`**. Rev 2 answers the owner's review of PR #620: rejected `--all-groups --all-extras`, no runtime pytest, strict manifest validation, a deadline that bounds running steps, reference data from `product_sha`, a clean child environment, `teardown: skipped`, and structural vs semantic request validation.
+
+**Rev 3** corrects the process runner: wait for the direct child independently of output capture, then kill its remaining process group; transport subprocess output and Git blobs as bytes. It adds regression criteria for inherited output descriptors and exact blob bytes. B2b rev 3 fixes the absent-selector manifest without changing probe/1.
 
 **Goal:** Everything `verify --criteria` needs *before* a test is run: the frozen `criteria-closure/v1` schemas, the request and the error-kind table, bounded processes under one deadline, the product's criteria config read at `product_sha`, the fresh clone and the declared environment, the collection inventory (the probe's collect mode, fully validated), selection of BEH selectors and `content_sha256`. B2b adds the probe's run mode, the isolated runs, aggregation and the command.
 
@@ -159,27 +161,33 @@ class Deadline:
 @dataclass(frozen=True)
 class Finished:
     returncode: int | None                        # None when killed on a timeout
-    stdout: str
-    stderr: str
+    stdout: bytes                                # exact bytes; no newline conversion
+    stderr: bytes
     pid: int
     timed_out: Literal["local", "global"] | None
 
 def run_bounded(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str] | None,
                 deadline: Deadline, local_timeout: float | None = None,
-                stdin: str | None = None) -> Finished: ...
+                stdin: bytes | None = None) -> Finished: ...
 def run_or_raise(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str] | None,
                  deadline: Deadline, kind: ErrorKind, what: str,
-                 local_timeout: float | None = None, stdin: str | None = None) -> Finished: ...
+                 local_timeout: float | None = None, stdin: bytes | None = None) -> Finished: ...
     # global timeout → CriteriaError(TIMEOUT); local timeout or non-zero exit → CriteriaError(kind, f"{what}: …")
 ```
 
-Behaviour: `deadline.check()` first; `subprocess.Popen(..., start_new_session=True)`; `communicate(timeout=min(local, remaining))`; on `TimeoutExpired` → `os.killpg(pid, SIGKILL)`, `communicate()` to reap, `timed_out` = `"local"` when the local limit was the smaller one, else `"global"`; after **every** exit also `os.killpg(pid, SIGKILL)` guarded by `ProcessLookupError`/`PermissionError`, so no member of the group outlives the call. POSIX only (macOS, Linux).
+Behaviour: `deadline.check()` first; capture stdout and stderr in separate binary temporary files, and, when supplied, stage stdin bytes in another binary temporary file rewound before launch (otherwise `DEVNULL`). `subprocess.Popen(..., start_new_session=True)` receives these file handles, without `text=True`. Wait for the **direct child** with `wait(timeout=min(local remaining, deadline.remaining()))`, tracking the local expiry from process launch. On timeout, record `timed_out = "local"` when the local expiry was earlier, else `"global"`, and return `returncode=None`. In `finally`, after normal exit, timeout or an exception, kill the remaining process group with `os.killpg(pid, SIGKILL)` and reap the direct child; ignore `ProcessLookupError` for an already-gone group, but do not silently accept a cleanup permission failure. Only then rewind/read the output files as bytes and close all handles. POSIX only (macOS, Linux).
+
+Do not use pipe EOF (`communicate()`) as the signal to start group cleanup: a background descendant can retain stdout/stderr after the direct child exits, causing a false timeout. File-backed capture also avoids blocking on a full output pipe or on writing stdin. The guarantee covers members of the launched group; a descendant that deliberately leaves it with `setsid`/`setpgid` is outside this mechanism's containment boundary.
+
+Callers explicitly decode textual Git metadata, interpreter JSON and diagnostics; diagnostics use UTF-8 with `errors="replace"` (including `run_or_raise` and uv error classification). Blob payloads are never decoded or newline-normalised by the runner.
 
 - [ ] **Step 1: Failing tests:**
   - within both limits → `returncode 0`, `timed_out None`;
   - `sleep 30`, `local_timeout=1`, deadline 60 → `timed_out == "local"`, returns in < 5 s;
   - `sleep 30`, deadline 1 → `timed_out == "global"`; `run_or_raise` raises `ErrorKind.TIMEOUT`;
-  - `sh -c 'sleep 30 & echo $! > pid; exit 0'` → after return, `os.kill(<pid>, 0)` raises `ProcessLookupError` (Review Focus 3);
+  - `sh -c 'sleep 30 & echo $! > pid; exit 0'`, with the background process inheriting stdout/stderr, local timeout 2 s and deadline 10 s → return in < 1 s, `returncode == 0`, `timed_out is None`, and the descendant is no longer running (Review Focus 3). Allow an exited zombie pending OS reaping; `kill(pid, 0)` alone does not distinguish it from a live process;
+  - a child that writes more than pipe capacity to both stdout and stderr and reads a similarly large stdin → completes without deadlock, exact bytes returned;
+  - stdout containing CRLF, lone CR, NUL, multibyte UTF-8 and invalid UTF-8 → byte-identical output, no decoding error;
   - `Deadline(0).check()` raises `TIMEOUT`.
 - [ ] Steps 2–5; commit `feat(#603): bounded process groups under one measurement deadline`.
 
@@ -220,7 +228,7 @@ Reading: `git show <sha>:spec-runner.config.yaml`, else `<sha>:spec/executor.con
 def check_origin(project_root: Path, owner_repo: str, deadline: Deadline) -> None
 def clone_at(project_root: Path, sha: str, into: Path, deadline: Deadline) -> Path
 def read_blobs(checkout: Path, sha: str, paths: Sequence[str], deadline: Deadline) -> dict[str, bytes]
-    # one `git cat-file --batch`; a path absent at sha → CriteriaError(CLONE_FAILED)
+    # one binary `git cat-file --batch`; a path absent at sha → CriteriaError(CLONE_FAILED)
 def reset_checkout(checkout: Path, sha: str, deadline: Deadline) -> None      # reset --hard + clean -ffdx
 def tracked_changes(checkout: Path, deadline: Deadline) -> list[str]         # status --porcelain --untracked-files=no -z
 
@@ -241,12 +249,15 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]
 def distribution_args(env: Environment) -> list[str]
 ```
 
-`sync_environment`: no `uv.lock` → `lock-not-current`; argv `uv sync --locked` + the declared selection (Global Constraints), **no `--quiet`** (measured: it hides the stale-lock line); stderr → "`--locked` was provided" → `lock-not-current`; "is not defined in the project's" or "are incompatible with the conflicts" → `environment-selection-invalid`; else `environment-sync-failed`; global timeout → `timeout`. The interpreter check through `run_bounded` with `child_env`; not CPython ≥ 3.12 → `unsupported-runtime`.
+`read_blobs`: encode batch requests explicitly and pass bytes to `run_bounded`; parse each ASCII batch header, consume exactly its declared byte count, then consume the framing newline. Do not split payloads into lines or decode/re-encode them. Return the original blob bytes for hashing and mutation comparisons; source decoding belongs to the later AST consumer. Reject truncated/malformed batch output as `clone-failed`.
+
+`sync_environment`: no `uv.lock` → `lock-not-current`; argv `uv sync --locked` + the declared selection (Global Constraints), **no `--quiet`** (measured: it hides the stale-lock line); decoded stderr → "`--locked` was provided" → `lock-not-current`; "is not defined in the project's" or "are incompatible with the conflicts" → `environment-selection-invalid`; else `environment-sync-failed`; global timeout → `timeout`. The interpreter check through `run_bounded` with `child_env`; not CPython ≥ 3.12 → `unsupported-runtime`.
 
 `child_env`: from `os.environ` drop every key starting with `PYTHON` or `PYTEST_`, and `VIRTUAL_ENV`; set `PYTHONPATH = str(probe_dir)`, `PYTHONNOUSERSITE = "1"`; apply `extra`.
 
 - [ ] **Step 1: Failing tests** — rev 1's origin/clone tests with a `Deadline`, plus:
   - `read_blobs` returns committed bytes although the working tree was changed; a path absent at `sha` raises;
+  - one batch containing blobs with CRLF, lone CR, multibyte UTF-8, invalid UTF-8, NUL, no final newline and an empty blob → every payload equals the committed bytes, and each SHA-256 matches an independently captured binary `git show`; truncated batch output raises `CLONE_FAILED`;
   - `child_env` with `PYTHONPATH=/elsewhere`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTEST_ADDOPTS`, `VIRTUAL_ENV` set → none survive; `PYTHONPATH == str(probe_dir)`, `PYTHONNOUSERSITE == "1"`;
   - `@slow` sync (a dependency-free project; offline where possible): missing lock and stale lock (version bump) → `lock-not-current`; a declared undefined group → `environment-selection-invalid`; a declared conflicting pair in a `[tool.uv] conflicts` project → `environment-selection-invalid`; a declared valid group installs and is reported in `Environment.groups`; `.venv` never created inside the checkout. The global deadline during sync (Review Focus 3): monkeypatch `criteria_process.run_bounded` to record the `deadline` it receives and return `timed_out="global"` → `sync_environment` raises `TIMEOUT` (that the group is then really killed is Task 3's test, not repeated with a live network here).
 - [ ] Steps 2–5; commit `feat(#603): criteria workspace — origin, clone, blobs, declared env, clean child env`.
@@ -329,7 +340,7 @@ def test_orchestrator_modules_import_without_pytest():
 
 **Interfaces — Produces:** `select(items, beh_ids, blobs: Mapping[str, bytes]) -> dict[str, list[TestItem]]` — definition text from `product_sha` blobs, decoded UTF-8; unparseable → `definition-unresolved`; `(qualname, line)` not held by `owned_definitions` → `definition-unresolved`. `content_sha256(roots, lock_sha256, groups, extras, files: Mapping[str, bytes]) -> str` over the rev-4 object `{"v": 1, "product_roots": [...], "lock": …, "environment": {"groups": [...] | null, "extras": [...]}, "files": [[path, sha256], …]}` (sorted groups and extras; the canonical JSON of rev 3 §6.1).
 
-- [ ] **Step 1: Failing tests** — rev 1's selection tests (reading from a blobs mapping); the digest recomputed from its definition; each of roots, lock, groups (including `null` vs `[]`), extras and one file byte moving it.
+- [ ] **Step 1: Failing tests** — rev 1's selection tests (reading from a blobs mapping); the digest recomputed from its definition; each of roots, lock, groups (including `null` vs `[]`), extras and one file byte moving it; otherwise identical CRLF and LF blobs produce different digests.
 - [ ] Steps 2–5; commit `feat(#603): BEH selection by token ownership and the rev-4 content digest`.
 
 ---
