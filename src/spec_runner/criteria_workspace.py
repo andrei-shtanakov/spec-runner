@@ -236,6 +236,18 @@ def tracked_changes(checkout: Path, deadline: Deadline) -> list[str]:
     return sorted(changed)
 
 
+def changed_since(checkout: Path, sha: str, deadline: Deadline) -> list[str]:
+    """Paths whose working-tree content differs from `sha` itself, sorted.
+
+    Unlike `tracked_changes` (against HEAD), a commit or checkout made by the
+    product's code cannot hide a change here. Untracked files are not listed.
+    """
+    args = ["diff", "--name-only", "--no-renames", "-z", sha, "--"]
+    done = _git_ok(checkout, args, deadline, ErrorKind.CLONE_FAILED)
+    names = done.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    return sorted(name for name in names if name)
+
+
 def selection_args(criteria: ProductCriteria) -> list[str]:
     """uv's flags for the product's declared selection (Global Constraints)."""
     args: list[str] = []

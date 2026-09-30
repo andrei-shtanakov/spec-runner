@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from spec_runner import criteria_process
+from spec_runner import criteria_inventory, criteria_process
 from spec_runner.criteria_config import ProductCriteria
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
 from spec_runner.criteria_inventory import Excluded, Inventory, TestItem, collect, deploy_probe
@@ -137,6 +137,8 @@ BASE = {
     "pyproject.toml": "[tool.pytest.ini_options]\n",
     "tests/conftest.py": "",
     "tests/test_a.py": "def test_x():\n    pass\n",
+    "tests/helpers.py": "class Base:\n    def test_i(self):\n        pass\n",
+    "tests/test_d.py": "def test_d():\n    pass\n",
     "tests/data/fixture.txt": "tracked\n",
     "pkg/mod.py": "VALUE = 1\n",
 }
@@ -230,11 +232,19 @@ class TestManifestToInventory:
         )
         assert inv.inipath == "pyproject.toml" and inv.plugins == ("pytest-9.1.1",)
         assert inv.excluded == ()
+        assert inv.non_function == ("pkg/mod.py::pkg.mod",)  # R20: counted, not dropped
 
     def test_zero_items_exit_5_is_an_empty_inventory(self, fake) -> None:
         run, *_ = fake(lambda co: _manifest(co, items=[], exitstatus=5, inipath=None), rc=5)
         inv = run()
         assert inv.items == () and inv.inipath is None
+
+
+CONFTEST_ERR = (
+    b"ImportError while loading conftest '/co/tests/conftest.py'.\n"
+    b"tests/conftest.py:1: in <module>\n    import no_such_mod_xyz\n"
+    b"E   ModuleNotFoundError: No module named 'no_such_mod_xyz'\n"
+)
 
 
 class TestFailures:
@@ -243,7 +253,11 @@ class TestFailures:
         [
             pytest.param(lambda co: None, id="no manifest"),
             pytest.param(lambda co: {**_manifest(co), "pid": FAKE_PID + 1}, id="another pid"),
-            pytest.param(lambda co: _manifest(co, items=[]), id="items missing, exit 0"),
+            pytest.param(lambda co: _manifest(co, items=[]), id="items empty, exit 0"),
+            pytest.param(
+                lambda co: {k: v for k, v in _manifest(co).items() if k != "items"},
+                id="items key missing",
+            ),
             pytest.param(lambda co: {**_manifest(co), "complete": False}, id="incomplete"),
         ],
     )
@@ -278,14 +292,19 @@ class TestFailures:
         assert error.kind is ErrorKind.COLLECTION_CONFIG_OUTSIDE_CHECKOUT
         assert "pytest.ini" in error.detail
 
-    @pytest.mark.parametrize("where", ["null", "outside"])
+    @pytest.mark.parametrize("where", ["null", "outside", "<string>", "untracked"])
     def test_unresolvable_definition(self, fake, tmp_path: Path, where: str) -> None:
         def manifest(co: Path) -> dict[str, Any]:
             item = _function(co, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)
             if where == "null":
                 item["definition"] = None
-            else:
+            elif where == "outside":
                 item["definition"]["file"] = str(tmp_path / "elsewhere.py")
+            elif where == "<string>":  # R19: exec-made code, realpath'd into the checkout
+                item["definition"]["file"] = str(co / "<string>")
+            else:  # R19: inside the checkout, but not a file at sha
+                (co / "tests/generated.py").write_text("def test_x():\n    pass\n")
+                item["definition"]["file"] = str(co / "tests/generated.py")
             return _manifest(co, items=[item])
 
         run, *_ = fake(manifest)
@@ -308,6 +327,40 @@ class TestFailures:
         assert (checkout / "tests/data/fixture.txt").exists()
         assert not (checkout / "untracked.txt").exists()
 
+    def test_a_commit_during_collection_is_a_mutation(self, fake) -> None:
+        def commit(co: Path) -> None:  # HEAD moves with the change: `git status` is clean
+            (co / "pkg/mod.py").write_text("changed\n")
+            _git(co, "commit", "-qam", "made by collection")
+
+        run, _, checkout, sha = fake(lambda co: _manifest(co), touch=commit)
+        error = _kind(run)
+        assert error.kind is ErrorKind.COLLECTION_MUTATED_CHECKOUT and "pkg/mod.py" in error.detail
+        assert _git(checkout, "rev-parse", "HEAD") == sha
+        assert (checkout / "pkg/mod.py").read_text() == "VALUE = 1\n"
+
+    def test_a_reset_failure_does_not_hide_the_error(self, fake, monkeypatch) -> None:
+        def broken_reset(*args: Any) -> None:
+            raise OSError("reset exploded")
+
+        monkeypatch.setattr(criteria_inventory, "reset_checkout", broken_reset)
+        run, *_ = fake(lambda co: None, rc=3)
+        assert _kind(run).kind is ErrorKind.COLLECTION_FAILED
+
+    @pytest.mark.parametrize(
+        ("rc", "stderr", "kind"),
+        [
+            pytest.param(4, CONFTEST_ERR, ErrorKind.COLLECTION_ERROR, id="initial conftest"),
+            pytest.param(4, b"ERROR: usage\n", ErrorKind.COLLECTION_FAILED, id="4 without it"),
+            pytest.param(1, CONFTEST_ERR, ErrorKind.COLLECTION_FAILED, id="marker, not 4"),
+        ],
+    )
+    def test_initial_conftest_failure_without_manifest(self, fake, rc, stderr, kind) -> None:
+        run, *_ = fake(lambda co: None, rc=rc, stderr=stderr)  # R21
+        error = _kind(run)
+        assert error.kind is kind
+        if kind is ErrorKind.COLLECTION_ERROR:
+            assert "no_such_mod_xyz" in error.detail
+
     def test_success_also_resets(self, fake) -> None:
         run, _, checkout, _ = fake(
             lambda co: _manifest(co), touch=lambda co: (co / ".pytest_cache").mkdir()
@@ -323,6 +376,7 @@ class TestExcluded:
         def manifest(co: Path) -> dict[str, Any]:
             inside_def = {"file": str(co / "tests/test_d.py"), "qualname": "test_d", "line": 3}
             outside_def = {"file": outside + "/x.py", "qualname": "test_o", "line": 1}
+            untracked_def = {"file": str(co / "tests/gen.py"), "qualname": "test_u", "line": 1}
             excluded = [
                 {"how": "skipped", "path": str(co / "tests/test_skip.py"), "reason": "Skipped: no"},
                 {"how": "skipped", "path": outside + "/test_s.py", "reason": "r"},
@@ -342,6 +396,11 @@ class TestExcluded:
                     "node_id": "tests/test_o.py::test_o",
                     "definition": outside_def,
                 },
+                {
+                    "how": "deselected",
+                    "node_id": "tests/test_u.py::test_u",
+                    "definition": untracked_def,
+                },
             ]
             return _manifest(co, excluded=excluded)
 
@@ -356,6 +415,7 @@ class TestExcluded:
             ),
             Excluded("deselected", None, "tests/test_d.py::test_z", None, None),
             Excluded("deselected", None, "tests/test_o.py::test_o", None, None),
+            Excluded("deselected", None, "tests/test_u.py::test_u", None, None),
             Excluded("ignored", "tests/data", None, None, None),
             Excluded("ignored", "tests/test_a.py", None, None, None),
             Excluded("skipped", "tests/test_skip.py", None, "Skipped: no", None),
@@ -517,6 +577,39 @@ class TestRealInventory:
         checkout = tmp_path / "case" / "checkout"
         assert (checkout / "pkg" / "mod.py").read_text() == "VALUE = 1\n"
 
+    def test_exec_generated_test_is_definition_unresolved(self, product_env, tmp_path) -> None:
+        generated = "exec('def test_generated():\\n    pass\\n')\n"  # R19: no source file
+        files = {**REAL_BASE, "tests/test_gen.py": generated}
+        error = _kind(lambda: _real(product_env, tmp_path, files))
+        assert error.kind is ErrorKind.DEFINITION_UNRESOLVED
+        assert "tests/test_gen.py::test_generated" in error.detail
+
+    def test_doctest_items_are_counted_as_non_function(self, product_env, tmp_path) -> None:
+        pyproject = (
+            "[tool.pytest.ini_options]\ntestpaths = ['tests', 'pkg']\n"
+            "addopts = '--doctest-modules'\n"
+        )
+        module = '"""Doc.\n\n>>> 1 + 1\n2\n"""\nVALUE = 1\n'
+        files = {**REAL_BASE, "pyproject.toml": pyproject, "pkg/mod.py": module}
+        inv = _real(product_env, tmp_path, files)
+        assert inv.non_function == ("pkg/mod.py::mod",)  # R20
+        assert all(i.node_id.startswith("tests/") for i in inv.items)
+
+    @pytest.mark.parametrize(
+        "conftest",
+        [
+            pytest.param("import no_such_mod_xyz\n", id="import error"),
+            pytest.param("def broken(:\n    pass\n", id="syntax error"),
+        ],
+    )
+    def test_initial_conftest_failure_is_collection_error(
+        self, product_env, tmp_path, conftest
+    ) -> None:  # R21: pytest exits 4 before any session, so no manifest
+        files = {**REAL_BASE, "tests/conftest.py": conftest}
+        error = _kind(lambda: _real(product_env, tmp_path, files))
+        assert error.kind is ErrorKind.COLLECTION_ERROR
+        assert "while loading conftest" in error.detail
+
     def test_probe_without_its_items_write_is_collection_failed(
         self, product_env, tmp_path
     ) -> None:  # Review Focus 1
@@ -596,6 +689,23 @@ class TestRealExclusions:
             ),
         )
         assert "tests/test_a.py::test_p[2]" not in {i.node_id for i in inv.items}
+
+    def test_outer_wrapper_removal_is_deselected(self, product_env, tmp_path) -> None:
+        conftest = (  # R22: runs outside every other wrapper, after its yield
+            "import pytest\n\n"
+            "@pytest.hookimpl(wrapper=True, tryfirst=True)\n"
+            "def pytest_collection_modifyitems(items):\n"
+            "    result = yield\n"
+            "    items[:] = [i for i in items if 'test_p[1]' not in i.nodeid]\n"
+            "    return result\n"
+        )
+        inv = _real(product_env, tmp_path, {**REAL_BASE, "tests/conftest.py": conftest})
+        assert inv.excluded == (
+            Excluded(
+                "deselected", None, "tests/test_a.py::test_p[1]", None,
+                ("tests/test_a.py", "test_p", 5),
+            ),
+        )  # fmt: skip
 
     def test_k_in_addopts_is_deselected(self, product_env, tmp_path) -> None:
         pyproject = (

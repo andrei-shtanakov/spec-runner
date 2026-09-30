@@ -17,6 +17,7 @@ from spec_runner.criteria_contract import CriteriaError, ErrorKind
 from spec_runner.criteria_process import Deadline, Finished, c_locale_env
 from spec_runner.criteria_workspace import (
     Environment,
+    changed_since,
     check_origin,
     child_env,
     clone_at,
@@ -267,6 +268,18 @@ class TestResetAndChanges:
         (source / "b.py").unlink()
         (source / "a.py").write_text("changed\n")
         assert tracked_changes(source, _dl()) == ["a.py", "b.py"]
+
+    def test_changed_since_sees_through_a_new_commit(self, source: Path) -> None:
+        (source / "b.py").write_text("")
+        sha = _commit(source)
+        (source / "untracked.py").write_text("")
+        os.utime(source / "b.py", (1, 1))  # stat-only: not a change
+        assert changed_since(source, sha, _dl()) == []
+        (source / "a.py").write_text("changed\n")
+        (source / "b.py").unlink()
+        _git(source, "commit", "-qam", "made by the product")  # untracked.py stays out
+        assert tracked_changes(source, _dl()) == []  # HEAD moved with the change
+        assert changed_since(source, sha, _dl()) == ["a.py", "b.py"]
 
 
 class TestChildEnv:

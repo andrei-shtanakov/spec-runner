@@ -52,6 +52,7 @@ _manifest: dict[str, Any] = {
     "excluded": [],
 }
 _ignored: set[str] = set()
+_collected: list[Any] = []
 
 
 def _owner() -> bool:
@@ -105,6 +106,7 @@ def pytest_collectreport(report: Any) -> None:
 
 
 def _node_path(node_id: str) -> str:
+    # A skip below module level (a class skipped at collection) names its module's path.
     rootpath = _manifest["rootpath"] or os.getcwd()
     return os.path.abspath(os.path.join(rootpath, node_id.split("::", 1)[0]))
 
@@ -116,25 +118,30 @@ def _reason(report: Any) -> str:
     return str(longrepr)[-_MESSAGE_LIMIT:]
 
 
-@pytest.hookimpl(wrapper=True, tryfirst=True)
-def pytest_collection_modifyitems(session: Any, config: Any, items: list[Any]) -> Any:
-    """Every item removed here, whether or not `pytest_deselected` was called."""
-    before = list(items)
-    result = yield
+def pytest_itemcollected(item: Any) -> None:
     if _owner():
-        kept = {item.nodeid for item in items}
-        for item in before:
-            if item.nodeid not in kept:
-                _manifest["excluded"].append(
-                    {"how": "deselected", "node_id": item.nodeid, "definition": _function_def(item)}
-                )
-    return result
+        _collected.append(item)
 
 
 def pytest_collection_finish(session: Any) -> None:
     if not _owner():
         return
     _record_items(session)
+    _record_deselected(session)
+
+
+def _record_deselected(session: Any) -> None:
+    """Every collected item missing from the final `session.items` (design §3.5).
+
+    Compared at `collection_finish`, after every `modifyitems` implementation and
+    wrapper, whether or not any of them called `pytest_deselected`.
+    """
+    kept = {item.nodeid for item in session.items}
+    for item in _collected:
+        if item.nodeid not in kept:
+            _manifest["excluded"].append(
+                {"how": "deselected", "node_id": item.nodeid, "definition": _function_def(item)}
+            )
 
 
 def _record_items(session: Any) -> None:
@@ -156,7 +163,9 @@ def _function_def(item: Any) -> dict[str, Any] | None:
     try:
         function = inspect.unwrap(item.function)
         code = function.__code__
-        source = inspect.getsourcefile(function) or code.co_filename
+        source = inspect.getsourcefile(function)
+        if source is None:  # exec/compile-made code: no file holds its source
+            return None
         return {
             "file": os.path.realpath(source),
             "qualname": function.__qualname__,

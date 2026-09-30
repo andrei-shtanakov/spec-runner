@@ -121,8 +121,6 @@ class TestConstants:
         assert proto.PRODUCT_FILES_ENV == "SPEC_RUNNER_PROBE_PRODUCT_FILES"
 
     def test_probe_source_agrees(self) -> None:
-        if not PROBE_SOURCE.exists():
-            pytest.skip("criteria_probe.py is not written yet (Task 7)")
         tree = ast.parse(PROBE_SOURCE.read_text(encoding="utf-8"))
         found: dict[str, object] = {}
         for node in tree.body:

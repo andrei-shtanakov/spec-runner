@@ -5,7 +5,7 @@ The probe's manifest counts only after full probe/1 validation
 process's manifest, an inconsistent one, a local timeout — is
 `collection-failed`, never an empty inventory. Then, in order: collection
 errors (`collection-error`), a pytest config read from outside the checkout,
-a `pytest.Function` whose definition does not resolve inside the checkout
+a `pytest.Function` whose definition is not a file tracked at `sha`
 (`definition-unresolved`), and only then whether collection changed a tracked
 file (`collection-mutated-checkout`). The checkout is reset to `sha` in every
 case before `collect` returns or raises.
@@ -38,14 +38,18 @@ from spec_runner.criteria_protocol import (
 )
 from spec_runner.criteria_workspace import (
     Environment,
+    changed_since,
     child_env,
     distribution_args,
     reset_checkout,
-    tracked_changes,
 )
 
 _TAIL_LINES = 20
 _GIT_STEP_LIMIT = 60.0
+# pytest's wording for an initial conftest that fails to import (exit 4, before any
+# session, so no manifest) — measured on pytest 9.1.1 for import and syntax errors.
+_CONFTEST_FAILURE = "while loading conftest"
+_USAGE_ERROR = 4
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ class Excluded:
     """Something collection left out (§3.5): `skipped`, `ignored` or `deselected`.
 
     `path` for skipped/ignored, `node_id` (and `definition` as `(file, qualname,
-    line)` when it resolves inside the checkout) for deselected; `reason` for skipped.
+    line)` when its file is tracked at sha) for deselected; `reason` for skipped.
     """
 
     how: str
@@ -84,6 +88,7 @@ class Inventory:
     inipath: str | None
     plugins: tuple[str, ...]
     excluded: tuple[Excluded, ...]
+    non_function: tuple[str, ...]  # node ids of collected items that are not functions
 
 
 def deploy_probe(into: Path) -> Path:
@@ -110,7 +115,7 @@ def collect(
     except BaseException:
         # The original failure is the answer; a reset that cannot run (an exhausted
         # deadline) must not replace it.
-        with contextlib.suppress(CriteriaError):
+        with contextlib.suppress(Exception):
             reset_checkout(checkout, sha, deadline)
         raise
     reset_checkout(checkout, sha, deadline)
@@ -131,7 +136,7 @@ def _collect(
         where = ", ".join(str(e["node_id"]) or "<session>" for e in manifest["errors"])
         raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"pytest could not collect: {where}")
     inventory = _inventory(manifest, checkout, sha, deadline)
-    changed = tracked_changes(checkout, deadline)
+    changed = changed_since(checkout, sha, deadline)
     if changed:
         raise CriteriaError(
             ErrorKind.COLLECTION_MUTATED_CHECKOUT,
@@ -182,11 +187,19 @@ def _run_probe(
     raw = read_manifest(manifest_path)
     manifest = valid_collect(raw, child_pid=done.pid, returncode=done.returncode)
     if manifest is None:
+        _raise_initial_conftest_failure(done, raw)
         what = "no collection manifest" if raw is None else "an invalid collection manifest"
         raise CriteriaError(
             ErrorKind.COLLECTION_FAILED, f"{what} (exit {done.returncode}): {_tail(done)}"
         )
     return manifest
+
+
+def _raise_initial_conftest_failure(done: Finished, raw: object) -> None:
+    """pytest reports a broken initial conftest only in its output (R21)."""
+    output = (done.stdout + done.stderr).decode("utf-8", errors="replace")
+    if raw is None and done.returncode == _USAGE_ERROR and _CONFTEST_FAILURE in output:
+        raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"a conftest failed to load: {_tail(done)}")
 
 
 def _tail(done: Finished) -> str:
@@ -218,11 +231,14 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         rel = _relative(conftest, checkout)
         if rel is not None:
             files.add(rel)
+    tracked = _tracked(checkout, sha, deadline)
     items: list[TestItem] = []
+    non_function: list[str] = []
     for raw in manifest["items"]:
         if not raw["function"]:
-            continue  # doctests and plugin items own no tokens
-        item = _item(raw, checkout)
+            non_function.append(raw["node_id"])  # doctests and plugin items own no tokens
+            continue
+        item = _item(raw, checkout, tracked)
         files.update({item.file, _relative(raw["module"], checkout) or item.file})
         items.append(item)
     return Inventory(
@@ -230,39 +246,38 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         test_files=tuple(sorted(files)),
         inipath=inipath,
         plugins=tuple(manifest["plugins"]),
-        excluded=_excluded(manifest["excluded"], checkout, sha, deadline),
+        excluded=_excluded(manifest["excluded"], checkout, tracked),
+        non_function=tuple(sorted(non_function)),
     )
 
 
-def _item(raw: dict[str, Any], checkout: Path) -> TestItem:
-    definition = _definition(raw["definition"], checkout)
+def _item(raw: dict[str, Any], checkout: Path, tracked: frozenset[str]) -> TestItem:
+    definition = _definition(raw["definition"], checkout, tracked)
     if definition is None or _relative(raw["module"], checkout) is None:
         raise CriteriaError(
             ErrorKind.DEFINITION_UNRESOLVED,
-            f"{raw['node_id']}: its definition does not resolve to a file inside the checkout",
+            f"{raw['node_id']}: its definition does not resolve to a file tracked at product_sha",
         )
     return TestItem(raw["node_id"], *definition)
 
 
-def _definition(value: dict[str, Any] | None, checkout: Path) -> tuple[str, str, int] | None:
+def _definition(
+    value: dict[str, Any] | None, checkout: Path, tracked: frozenset[str]
+) -> tuple[str, str, int] | None:
+    """`(file, qualname, line)` when the file is tracked at sha (R19), else None."""
     if value is None:
         return None
     file = _relative(value["file"], checkout)
-    return None if file is None else (file, value["qualname"], value["line"])
+    return (file, value["qualname"], value["line"]) if file in tracked else None
 
 
 def _excluded(
-    entries: list[dict[str, Any]], checkout: Path, sha: str, deadline: Deadline
+    entries: list[dict[str, Any]], checkout: Path, tracked: frozenset[str]
 ) -> tuple[Excluded, ...]:
-    tracked = (
-        _tracked(checkout, sha, deadline)
-        if any(e["how"] == "ignored" for e in entries)
-        else frozenset()
-    )
     found: set[Excluded] = set()
     for entry in entries:
         if entry["how"] == "deselected":
-            definition = _definition(entry["definition"], checkout)
+            definition = _definition(entry["definition"], checkout, tracked)
             found.add(Excluded("deselected", None, entry["node_id"], None, definition))
             continue
         path = _relative(entry["path"], checkout)
