@@ -121,12 +121,16 @@ def _read(handle: IO[bytes]) -> bytes:
 
 
 def c_locale_env() -> dict[str, str]:
-    """A copy of the process environment with an untranslated (C) locale.
+    """A copy of the process environment with an untranslated (C) locale and no `GIT_*`.
 
     git's and uv's stderr is matched by wording; a translated message would turn a
-    product property (exit 3) into a retryable machine failure (exit 2).
+    product property (exit 3) into a retryable machine failure (exit 2). Every
+    inherited `GIT_*` is dropped: started from a git hook, `GIT_DIR`/`GIT_WORK_TREE`
+    would point `reset --hard`/`clean -ffdx` at the hook's repository.
     """
-    return {**os.environ, "LC_ALL": "C", "LANG": "C"}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(LC_ALL="C", LANG="C")
+    return env
 
 
 def run_or_raise(

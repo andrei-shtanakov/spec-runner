@@ -31,6 +31,35 @@ _INTERPRETER_PROBE = (
     "print(json.dumps([platform.python_implementation(), platform.python_version(), "
     "importlib.util.find_spec('xdist') is not None]))"
 )
+_NO_ORIGIN = "No such remote"
+# Inherited UV_* that would change the selection, the lock mode, the install mode,
+# how the lock is judged current, or which project is synced (`uv sync --help`,
+# uv 0.11.23). Cache, network, offline and Python-install variables are kept.
+_UV_OVERRIDES = frozenset(
+    {
+        # lock mode
+        "UV_LOCKED",
+        "UV_FROZEN",
+        # selection
+        "UV_NO_DEV",
+        "UV_NO_DEFAULT_GROUPS",
+        # install mode
+        "UV_NO_EDITABLE",
+        "UV_NO_INSTALL_PROJECT",
+        "UV_NO_INSTALL_LOCAL",
+        "UV_NO_INSTALL_WORKSPACE",
+        # resolution settings recorded in the lock (a mismatch reads as a stale lock)
+        "UV_EXCLUDE_NEWER",
+        "UV_RESOLUTION",
+        "UV_PRERELEASE",
+        "UV_FORK_STRATEGY",
+        "UV_NO_SOURCES",
+        "UV_NO_SOURCES_PACKAGE",
+        # which project
+        "UV_PROJECT",
+        "UV_WORKING_DIR",
+    }
+)
 _STALE_LOCK = "`--locked` was provided"
 _CONFLICTING_SELECTION = "are incompatible with the conflicts"
 
@@ -86,9 +115,10 @@ def _git_ok(cwd: Path, args: Sequence[str], deadline: Deadline, kind: ErrorKind)
 def check_origin(project_root: Path, owner_repo: str, deadline: Deadline) -> None:
     """Refuse (retryable) when the source repo's origin is not the requested repo."""
     done = _git(project_root, ["remote", "get-url", "origin"], deadline)
-    if done.timed_out is not None:
+    no_origin = done.returncode != 0 and _NO_ORIGIN.encode() in done.stderr
+    if done.timed_out is not None or (done.returncode != 0 and not no_origin):
         raise _failure(ErrorKind.CLONE_FAILED, "git remote get-url origin", done)
-    url = done.stdout.decode("utf-8", errors="replace").strip() if done.returncode == 0 else ""
+    url = "" if no_origin else done.stdout.decode("utf-8", errors="replace").strip()
     if not url or not owner_matches(owner_repo, url):
         raise CriteriaError(
             ErrorKind.OWNER_REPO_MISMATCH,
@@ -157,7 +187,8 @@ def _parse_batch(out: bytes, paths: Sequence[str], sha: str) -> dict[str, bytes]
             raise _malformed(path, f"header {header[:120]!r}")
         if fields[1] != b"blob":
             raise CriteriaError(
-                ErrorKind.CLONE_FAILED, f"{path} at {sha[:12]} is a {fields[1].decode()}"
+                ErrorKind.CLONE_FAILED,
+                f"{path} at {sha[:12]} is a {fields[1].decode('ascii', errors='replace')}",
             )
         start = end + 1
         stop = start + int(fields[2])
@@ -236,8 +267,11 @@ def sync_environment(
 
 
 def _uv_sync(checkout: Path, env_dir: Path, criteria: ProductCriteria, deadline: Deadline) -> None:
-    env = {k: v for k, v in c_locale_env().items() if not k.startswith("PYTEST_")}
-    env.pop("VIRTUAL_ENV", None)
+    env = {
+        k: v
+        for k, v in c_locale_env().items()
+        if not k.startswith("PYTEST_") and k not in _UV_OVERRIDES and k != "VIRTUAL_ENV"
+    }
     env["UV_PROJECT_ENVIRONMENT"] = str(env_dir)
     # No --quiet: measured (uv 0.11.23) to suppress the "`--locked` was provided"
     # line this classification reads, turning a stale lock into a retryable failure.

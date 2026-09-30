@@ -91,6 +91,14 @@ class TestOrigin:
             check_origin(source, requested, _dl())
         assert raised.value.kind is ErrorKind.OWNER_REPO_MISMATCH
 
+    def test_other_git_failure_is_clone_failed(self, tmp_path: Path) -> None:
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        with pytest.raises(CriteriaError) as raised:
+            check_origin(plain, "devtools", _dl())
+        assert raised.value.kind is ErrorKind.CLONE_FAILED
+        assert "not a git repository" in raised.value.detail
+
     def test_no_origin_is_a_mismatch(self, source: Path) -> None:
         with pytest.raises(CriteriaError) as raised:
             check_origin(source, "devtools", _dl())
@@ -201,6 +209,7 @@ class TestReadBlobs:
             lambda out: b"",  # nothing at all
             lambda out: out.replace(b" blob ", b" blob x", 1),  # malformed size
             lambda out: out + b"extra",  # trailing garbage
+            lambda out: out.replace(b" blob ", b" bl\xffob ", 1),  # non-ASCII type
         ],
     )
     def test_truncated_or_malformed_output_is_clone_failed(
@@ -334,6 +343,7 @@ class TestCLocale:
         )
         sha = _commit(source)
         _git(source, "remote", "add", "origin", "git@github.com:o/devtools.git")
+        monkeypatch.setenv("GIT_TRACE2_HARMLESS_PROBE", "x")
         check_origin(source, "devtools", _dl())
         checkout = clone_at(source, sha, tmp_path / "ws", _dl())
         read_blobs(checkout, sha, ["a.py"], _dl())
@@ -347,6 +357,40 @@ class TestCLocale:
         for argv, env in git_calls:
             assert env is not None, argv
             assert env["LC_ALL"] == "C" and env["LANG"] == "C", argv
+            assert not [k for k in env if k.startswith("GIT_")], argv
+
+    def test_c_locale_env_drops_inherited_git_vars(self, monkeypatch) -> None:
+        monkeypatch.setenv("GIT_DIR", "/decoy/.git")
+        monkeypatch.setenv("GIT_WORK_TREE", "/decoy")
+        monkeypatch.setenv("GIT_INDEX_FILE", "/decoy/.git/index")
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", "/decoy/.git/objects")
+        env = c_locale_env()
+        assert not [k for k in env if k.startswith("GIT_")]
+        assert env["LC_ALL"] == "C"
+
+    def test_a_hook_environment_cannot_redirect_git(self, source: Path, tmp_path, monkeypatch):
+        """R11: started from a git hook, GIT_DIR/GIT_WORK_TREE name the hook's repo."""
+        decoy = tmp_path / "decoy"
+        _init(decoy)
+        (decoy / "d.py").write_text("committed\n")
+        decoy_head = _commit(decoy)
+        (decoy / "d.py").write_text("dirty, uncommitted\n")
+        (decoy / "untracked.txt").write_text("keep me\n")
+        sha = _git(source, "rev-parse", "HEAD")
+        monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+        checkout = clone_at(source, sha, tmp_path / "ws", _dl())
+        (checkout / "a.py").write_text("mutated\n")
+        reset_checkout(checkout, sha, _dl())
+        blobs = read_blobs(checkout, sha, ["a.py"], _dl())
+        monkeypatch.delenv("GIT_DIR")
+        monkeypatch.delenv("GIT_WORK_TREE")
+        assert _git(checkout, "rev-parse", "HEAD") == sha
+        assert (checkout / "a.py").read_text() == "x = 1\n"
+        assert blobs == {"a.py": b"x = 1\n"}
+        assert (decoy / "d.py").read_text() == "dirty, uncommitted\n"
+        assert (decoy / "untracked.txt").read_text() == "keep me\n"
+        assert _git(decoy, "rev-parse", "HEAD") == decoy_head
 
 
 def _locked_checkout(root: Path) -> Path:
@@ -450,6 +494,25 @@ class TestSyncMapping:
             sync_environment(tmp_path / "co", "0" * 40, tmp_path / "e", UNDECLARED, _dl())
         assert raised.value.kind is ErrorKind.LOCK_NOT_CURRENT
         assert not fake.calls
+
+    def test_inherited_uv_selection_vars_are_dropped(self, tmp_path: Path, monkeypatch) -> None:
+        """R13: the parent's UV_* cannot change the selection, the lock mode or the project."""
+        for name in ("UV_NO_DEFAULT_GROUPS", "UV_FROZEN", "UV_NO_DEV", "UV_LOCKED"):
+            monkeypatch.setenv(name, "1")
+        monkeypatch.setenv("UV_PROJECT", "/elsewhere")
+        monkeypatch.setenv("UV_OFFLINE", "1")
+        monkeypatch.setenv("UV_CACHE_DIR", "/shared-cache")
+        monkeypatch.setenv("UV_PYTHON", "3.12")
+        fake = _FakeRun()
+        monkeypatch.setattr(criteria_process, "run_bounded", fake)
+        sync_environment(
+            _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
+        )
+        uv_env = next(k for a, k in fake.calls if a[0] == "uv")["env"]
+        for name in ("UV_NO_DEFAULT_GROUPS", "UV_FROZEN", "UV_NO_DEV", "UV_LOCKED", "UV_PROJECT"):
+            assert name not in uv_env, name
+        assert uv_env["UV_OFFLINE"] == "1" and uv_env["UV_CACHE_DIR"] == "/shared-cache"
+        assert uv_env["UV_PYTHON"] == "3.12"
 
     def test_undeclared_selection_argv_and_env(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("PYTEST_ADDOPTS", "-x")
