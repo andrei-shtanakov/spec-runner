@@ -619,7 +619,11 @@
             условиях 1–4 (+ рекомендация 5). **Сделано 2026-09-30:** условия
             внесены в дизайн rev 4 (Task 1 плана B2a) — PR #624, merge `1d69fc3`;
             п. 4 расширен до `collection_excluded` (skipped/ignored/deselected, замер).
-      - [ ] criteria-closure-rev4-confirmed — подтверждение devtools дизайна rev 4 по SHA `1d69fc3` (в #623), прежде всего расширения `collection_excluded`; до него B2a Task 2 (заморозка схем v1) не начинается @owner:github:andrei-shtanakov @id:criteria-closure-rev4-confirmed @epic:eco.spec-toolchain @blocked_by:todo://devtools/criteria-closure-v1-signoff
+      - [x] criteria-closure-rev4-confirmed — подтверждение devtools дизайна rev 4 по SHA `1d69fc3` (в #623), прежде всего расширения `collection_excluded`; до него B2a Task 2 (заморозка схем v1) не начинается @owner:github:andrei-shtanakov @id:criteria-closure-rev4-confirmed @epic:eco.spec-toolchain
+            **Подтверждено 2026-09-30** (#623): rev 4 целиком, включая
+            `collection_excluded`. Их просьба принята владельцем: `deselected`
+            несёт `definition` по правилу `test_items` (`null`, если не резолвится).
+            Схемы v1 замораживаются — старт B2a Task 2.
       **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
       решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
