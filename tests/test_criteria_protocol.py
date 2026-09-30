@@ -229,7 +229,6 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
     "probe True": (mutated(collect_manifest(), set_key("probe", True)), 0),
     "wrong mode": (mutated(collect_manifest(), set_key("mode", "run")), 0),
     "pid off by one": (mutated(collect_manifest(), set_key("pid", PID + 1)), 0),
-    "pid bool": (mutated(collect_manifest(), set_key("pid", True)), 0),
     "complete false": (mutated(collect_manifest(), set_key("complete", False)), 0),
     "complete 1": (mutated(collect_manifest(), set_key("complete", 1)), 0),
     "exitstatus != rc": (collect_manifest(), 1),
@@ -270,7 +269,7 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
     "plugins non-str": (mutated(collect_manifest(), set_key("plugins", [1])), 0),
     "conftests not list": (mutated(collect_manifest(), set_key("conftests", None)), 0),
     "conftest relative": (mutated(collect_manifest(), set_key("conftests", ["c.py"])), 0),
-    "items not list": (mutated(collect_manifest(), set_key("items", {})), 0),
+    "items not list": (mutated(collect_manifest(), set_key("items", {"a": 1})), 0),
     "item not dict": (mutated(collect_manifest(), set_key("items", ["x"])), 0),
     "item node_id empty": (mutated(collect_manifest(), set_item("node_id", "")), 0),
     "item node_id int": (mutated(collect_manifest(), set_item("node_id", 1)), 0),
@@ -318,7 +317,13 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
         0,
     ),
     "errors not list": (mutated(collect_manifest(), set_key("errors", "x")), 0),
-    "error not dict": (mutated(collect_manifest(), set_key("errors", ["x"])), 1),
+    "error not dict": (
+        mutated(
+            mutated(collect_manifest(), set_key("errors", ["x"])),
+            set_key("exitstatus", 1),
+        ),
+        1,
+    ),
     "error message int": (
         mutated(
             mutated(collect_manifest(), set_key("errors", [{"node_id": "a", "message": 1}])),
@@ -450,6 +455,12 @@ for _key in (
 
 
 class TestValidCollectRejects:
+    def test_pid_bool_is_not_an_int(self) -> None:
+        data = mutated(collect_manifest(), set_key("pid", True))
+        assert proto.valid_collect(data, child_pid=1, returncode=0) is None
+        data["pid"] = 1
+        assert proto.valid_collect(data, child_pid=1, returncode=0) is data
+
     @pytest.mark.parametrize("name", list(COLLECT_REJECTED))
     def test_rejects(self, name: str) -> None:
         data, rc = COLLECT_REJECTED[name]
@@ -490,6 +501,10 @@ RUN_ACCEPTED: dict[str, tuple[dict[str, Any], int]] = {
         0,
     ),
     "selector absent exit 4": (mutated(run_manifest(), absent_selector), 4),
+    "selector absent exit 5": (
+        mutated(run_manifest(), lambda d: (absent_selector(d), d.update(exitstatus=5))),
+        5,
+    ),
     "monitoring_error": (mutated(run_manifest(), set_key("monitoring_error", "why")), 0),
     "distributed": (mutated(run_manifest(), set_key("distributed", True)), 0),
     "no product lines or operations": (
@@ -541,15 +556,18 @@ RUN_REJECTED: dict[str, tuple[Any, int]] = {
     "exit 0 with failed teardown": (mutated(run_manifest(), failed_teardown), 0),
     "exit 1 with no failed phase": (mutated(run_manifest(), set_key("exitstatus", 1)), 1),
     "exit 4 with phases": (mutated(run_manifest(), set_key("exitstatus", 4)), 4),
-    "phase unknown value": (mutated(run_manifest(), set_phase(setup="ok")), 0),
+    "phase unknown value": (mutated(run_manifest(), set_phase(teardown="ok")), 0),
     "teardown not-reached": (mutated(run_manifest(), set_phase(teardown="not-reached")), 0),
-    "setup not-reached": (mutated(run_manifest(), set_phase(setup="not-reached")), 0),
+    "setup not-reached": (
+        mutated(run_manifest(), set_phase(setup="not-reached", call="not-reached")),
+        0,
+    ),
     "phases extra key": (mutated(run_manifest(), set_phase(extra="passed")), 0),
     "phases missing key": (
         mutated(run_manifest(), lambda d: d["phases"].pop("teardown")),
         0,
     ),
-    "phases not dict": (mutated(run_manifest(), set_key("phases", [])), 0),
+    "phases not dict": (mutated(run_manifest(), set_key("phases", "passed")), 0),
     "collected not list": (mutated(run_manifest(), set_key("collected", "x")), 0),
     "collected non-str": (mutated(run_manifest(), set_key("collected", [1])), 0),
     "call_in_owner not bool": (mutated(run_manifest(), set_key("call_in_owner", 1)), 0),
