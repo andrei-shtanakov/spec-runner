@@ -1,14 +1,15 @@
 # `verify --criteria` — the producer side of `criteria-closure/v1`
 
-Status: **revision 4 — contract additions pending devtools' confirmation by
-SHA**, 2026-09-30. Inbox spec-runner#603 (from devtools, DarkFactory E), TODO
+Status: **revision 4 — confirmed by devtools on `1d69fc3`** (spec-runner#623),
+2026-09-30. Inbox spec-runner#603 (from devtools, DarkFactory E), TODO
 `criteria-closure-verify`. Revision 1 (PR #609) was a draft with open questions;
 revision 2 (PR #610) recorded the owner's decisions and closed its §8; revision 3
 records devtools' sign-off in devtools#491 (the §6 addendum is now agreed, with
 their three freeze conditions and four requests accepted — §9). Slice A shipped
 in PR #612. Revision 4 carries the deltas of the B2 plans (PR #620) and
-devtools' conditions on them (spec-runner#623) — §9 "Rev 4" lists them; the v1
-schemas freeze only after devtools confirms this revision.
+devtools' conditions on them (spec-runner#623) — §9 "Rev 4" lists them, with
+devtools' confirmation and the one request accepted after it; the v1 schemas
+freeze on this revision.
 
 ## 0. What is asked, and against which text
 
@@ -364,6 +365,13 @@ response carries it as `collection_excluded` (§4), in three measured forms
   conftest may remove items **without** calling `pytest_deselected`, so the
   probe does not rely on that hook: a hookwrapper around
   `pytest_collection_modifyitems` compares the node ids before and after.
+  Each deselected item also carries its `definition: {file, qualname, line}`,
+  resolved exactly as for `test_items` (the item object is still in hand in
+  the "before" list), so a consumer matches it by `(file, qualname, line)`
+  instead of parsing a parametrized node id. `definition` is `null` for an item
+  that is not a Python function or whose definition does not resolve inside the
+  checkout — a deselected item never raises `definition-unresolved`, since it
+  is not in the inventory; its `node_id` still names the file.
 
 Paths outside `testpaths` are never visited and are not reported — the
 declared test roots are part of the product's configuration, a named boundary.
@@ -513,7 +521,8 @@ does not check the owner** (a named boundary — devtools always sends
   `pytest.Function`, `node_id` unique; each selector's `definition` equals the
   one its `node_id` has here), `collection_excluded` (§3.5; every entry one of
   `{how: "skipped", path, reason}`, `{how: "ignored", path}`,
-  `{how: "deselected", node_id}`; sorted by `how`, then path or node id; `[]`
+  `{how: "deselected", node_id, definition: {file, qualname, line} | null}`;
+  sorted by `how`, then path or node id; `[]`
   when nothing was left out), `environment: {lock_sha256, python,
   pytest_plugins, groups, extras}` (`groups`: the sorted normalised declared
   names, or `null` when undeclared; `extras`: sorted normalised names, `[]` when
@@ -723,8 +732,8 @@ Produced here, vendored by devtools under `PIN` with `manifest.json` (their path
 
 ## 9. Decisions (owner, 2026-09-29) — rev 1 questions closed
 
-**Rev 4 (B2 plans PR #620; devtools' conditions spec-runner#623) — pending
-devtools' confirmation by SHA.** From the plans, owner-decided: the environment
+**Rev 4 (B2 plans PR #620; devtools' conditions spec-runner#623) — confirmed
+(below).** From the plans, owner-decided: the environment
 selection is the product's declaration, and `--all-groups --all-extras` is
 rejected (§3.3); two new kinds, both exit 3 and not retryable —
 `environment-selection-invalid` and `collection-mutated-checkout` (§3.2, the
@@ -752,6 +761,12 @@ four conditions and one recommendation, answered here:
    `collection_excluded` with three forms, `skipped`/`ignored`/`deselected`
    (§3.5, §4), and the excluded test files' bytes enter the digest (§6.1). The
    rename and the two extra forms need devtools' confirmation.
+
+**Confirmed by devtools on `1d69fc3`** (spec-runner#623, 2026-09-30): all of
+rev 4, including the `collection_excluded` widening and the excluded files in
+the digest. Their one request before the freeze, **accepted by the owner**: a
+`deselected` entry carries `definition` by the `test_items` rule, `null` when
+it does not resolve (§3.5, §4). The v1 schemas freeze on this revision.
 5. (Recommendation) Pre-check the declared names against `pyproject.toml` at
    `product_sha` before uv — **accepted** (§3.3 step 5); uv's stderr is then
    matched only for the conflicts refusal.
