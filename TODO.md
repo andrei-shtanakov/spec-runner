@@ -613,6 +613,12 @@
             Старт реализации — после одобрения планов rev 2 (PR #620); схемы v1
             замораживаются после sign-off devtools на контрактные добавки rev 4.
             Релиз A (4.4.0) минимальную версию `criteria-closure/v1` НЕ задаёт.
+            Планы B2a/B2b rev 3 влиты #620 (`b30aff8`).
+      - [ ] criteria-closure-rev4-conditions (inbox spec-runner#623, from devtools#criteria-closure-v1-signoff) @owner:github:andrei-shtanakov @id:criteria-closure-rev4-conditions @epic:eco.spec-toolchain
+            devtools подписали добавки rev 4: п. 2–4 без условий, окружение — при
+            условиях 1–4 (+ рекомендация 5). Условия вносятся в дизайн rev 4
+            (Task 1 плана B2a) до заморозки схем v1; devtools подтверждают rev 4
+            по SHA одной строкой — только после этого B2a Task 2 (схемы).
       **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
       решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
