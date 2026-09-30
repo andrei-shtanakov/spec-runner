@@ -3,8 +3,7 @@
 import subprocess
 import sys
 
-# Task 8 appends "criteria_select" (it does not exist before then); B2b appends
-# criteria_run, criteria_aggregate, criteria_measure and cli.
+# B2b appends criteria_run, criteria_aggregate, criteria_measure and cli.
 MODULES = [
     "criteria_contract",
     "criteria_process",
@@ -12,6 +11,7 @@ MODULES = [
     "criteria_config",
     "criteria_workspace",
     "criteria_inventory",
+    "criteria_select",
 ]
 
 
