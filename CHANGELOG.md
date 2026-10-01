@@ -20,6 +20,18 @@ is a **breaking change** and requires a major version bump plus an entry here.
   no ruleset → runs as before. Without the flag nothing changes and `gh` is
   never called.
 
+### Fixed
+
+- **`verify --criteria`: `pytest-rerunfailures` can no longer hide a flaky
+  test** (#603 B2b tail). This replaces the 4.5.0 boundary note: the collect
+  manifest records whether the plugin is registered (probe/1
+  `rerunfailures_active`), every selector run then passes `--reruns 0`, which
+  overrides a `--reruns N` in addopts, so a test failing once and passing once
+  reads `nondeterministic`. A `@pytest.mark.flaky` marker still reruns under
+  `--reruns 0` (measured on 16.7); the probe refuses any run in which it
+  observes a rerun, so such a selector is `error` (reason `runner`), never
+  `traced`. No response-schema change.
+
 ## [4.5.0] - 2026-10-01
 
 **Minor, by additive surface.** Release X of `criteria-closure/v1`: it adds the

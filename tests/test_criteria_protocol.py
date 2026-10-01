@@ -34,6 +34,7 @@ def collect_manifest() -> dict[str, Any]:
         "inipath": "/abs/checkout/pyproject.toml",
         "plugins": ["pytest-9.0.2"],
         "xdist_active": False,
+        "rerunfailures_active": False,
         "conftests": ["/abs/checkout/tests/conftest.py"],
         "items": [
             {
@@ -269,6 +270,18 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
     "xdist_active int": (mutated(collect_manifest(), set_key("xdist_active", 1)), 0),
     "xdist_active str": (mutated(collect_manifest(), set_key("xdist_active", "yes")), 0),
     "xdist_active null": (mutated(collect_manifest(), set_key("xdist_active", None)), 0),
+    "rerunfailures_active int": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", 0)),
+        0,
+    ),
+    "rerunfailures_active str": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", "no")),
+        0,
+    ),
+    "rerunfailures_active null": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", None)),
+        0,
+    ),
     "conftests not list": (mutated(collect_manifest(), set_key("conftests", None)), 0),
     "conftest relative": (mutated(collect_manifest(), set_key("conftests", ["c.py"])), 0),
     "items not list": (mutated(collect_manifest(), set_key("items", {"a": 1})), 0),
@@ -447,6 +460,7 @@ for _key in (
     "inipath",
     "plugins",
     "xdist_active",
+    "rerunfailures_active",
     "conftests",
     "items",
     "errors",

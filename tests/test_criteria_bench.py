@@ -3,7 +3,7 @@
 Each case is a tiny product committed to a git repository in `tmp_path`, run twice
 through `run_selector` under this interpreter and judged by `selector_status`. The
 bench needs CPython >= 3.12 (`sys.monitoring`) and runs in its own workflow
-(.github/workflows/criteria-probe.yml); the xdist / forked rows need those plugins.
+(.github/workflows/criteria-probe.yml); the xdist / forked / rerunfailures rows need those plugins.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import pytest
 
 from spec_runner.criteria_aggregate import selector_status
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_inventory import collect, deploy_probe
+from spec_runner.criteria_inventory import collect, deploy_probe, plugin_args
 from spec_runner.criteria_process import Deadline
 from spec_runner.criteria_run import product_body_lines, run_selector
 from spec_runner.criteria_select import select
-from spec_runner.criteria_workspace import Environment, distribution_args, read_blobs
+from spec_runner.criteria_workspace import Environment, read_blobs
 from tests.criteria_bench_required import import_plugin, needs_312
 
 pytestmark = needs_312("the bench needs CPython >= 3.12 (sys.monitoring)")
@@ -83,18 +83,33 @@ class Bench:
             product_version=_env().version,
         )
 
-    def run(self, node_id: str, distribution: Sequence[str] = ()) -> dict[str, object]:
+    def run(self, node_id: str, args: Sequence[str] = ()) -> dict[str, object]:
         return run_selector(
             _env(), self.checkout, self.sha, self.probe_dir, self.work, node_id, self.product,
-            self.measured, self.body_lines, Deadline(300), 120.0, distribution=distribution,
+            self.measured, self.body_lines, Deadline(300), 120.0, plugin_args=args,
             rootpath=str(self.checkout), inipath=self.inipath,
         )  # fmt: skip
 
-    def runs(self, node_id: str, distribution: Sequence[str] = ()) -> list[dict[str, object]]:
-        return [self.run(node_id, distribution), self.run(node_id, distribution)]
+    def runs(self, node_id: str, args: Sequence[str] = ()) -> list[dict[str, object]]:
+        return [self.run(node_id, args), self.run(node_id, args)]
+
+    def inventory_args(self) -> list[str]:
+        """The per-run plugin flags `measure` would derive from this product's collection."""
+        inventory = collect(
+            _env(), self.checkout, self.sha, self.probe_dir, self.work, Deadline(120), 60.0
+        )
+        return plugin_args(inventory)
 
     def status(self, node_id: str) -> tuple[str, str | None]:
         return selector_status(self.runs(node_id))
+
+
+FLAKY_BODY = (
+    f"    path = pathlib.Path(os.environ[{COUNTER_ENV!r}])\n"
+    "    first = not path.exists()\n    path.write_text('x')\n"
+    "    work(1)\n    assert not first"
+)
+FLAKY_HEADER = "import os, pathlib\n\nimport pytest\nfrom pkg.mod import work"
 
 
 def _test(name: str, body: str, header: str = "") -> dict[str, str]:
@@ -131,12 +146,7 @@ class TestStatuses:
     def test_flaky_test_is_nondeterministic(self, tmp_path, monkeypatch):
         counter = tmp_path / "counter"  # outside the checkout: checkout and TMPDIR reset per run
         monkeypatch.setenv(COUNTER_ENV, str(counter))
-        body = (
-            f"    path = pathlib.Path(os.environ[{COUNTER_ENV!r}])\n"
-            "    first = not path.exists()\n    path.write_text('x')\n"
-            "    work(1)\n    assert not first"
-        )
-        files = _test("test_a", body, "import os, pathlib\nfrom pkg.mod import work")
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER)
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "nondeterministic")
 
     def test_setup_created_worker_thread_running_product_code_in_call(self, tmp_path):
@@ -258,7 +268,7 @@ class TestDistribution:
             _env(), bench.checkout, bench.sha, bench.probe_dir, bench.work, Deadline(120), 60.0
         )
         assert inventory.xdist_active is True
-        runs = bench.runs(NODE, distribution_args(inventory.xdist_active))
+        runs = bench.runs(NODE, plugin_args(inventory))
         assert selector_status(runs) == TRACED
 
     def test_forked_in_addopts_is_distributed_execution(self, tmp_path):
@@ -270,3 +280,29 @@ class TestDistribution:
         with pytest.raises(CriteriaError) as raised:
             Bench(tmp_path, files).run(NODE)
         assert raised.value.kind is ErrorKind.DISTRIBUTED_EXECUTION
+
+
+class TestRerunfailures:
+    """A retry must never hide flakiness: reruns are switched off, or the run is an error."""
+
+    @pytest.fixture(autouse=True)
+    def _counter(self, tmp_path, monkeypatch):
+        import_plugin("pytest_rerunfailures")
+        monkeypatch.setenv(COUNTER_ENV, str(tmp_path / "counter"))
+
+    def test_reruns_in_addopts_are_neutralised_and_flakiness_shows(self, tmp_path):
+        files = {
+            **_test("test_a", FLAKY_BODY, FLAKY_HEADER),
+            "pytest.ini": "[pytest]\naddopts = --reruns 2\n",
+        }
+        bench = Bench(tmp_path, files)
+        args = bench.inventory_args()
+        assert args[-2:] == ["--reruns", "0"]  # after -n 0 --dist no when xdist is here too
+        assert selector_status(bench.runs(NODE, args)) == ("unconfirmed", "nondeterministic")
+
+    def test_flaky_marker_rerun_is_an_error_run(self, tmp_path):
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER + "\n\n\n@pytest.mark.flaky(reruns=2)")
+        bench = Bench(tmp_path, files)
+        runs = bench.runs(NODE, bench.inventory_args())
+        assert runs[0]["result"] == "error" and "test was rerun" in str(runs[0]["detail"])
+        assert selector_status(runs) == ("error", "runner")

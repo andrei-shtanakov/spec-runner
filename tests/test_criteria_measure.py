@@ -75,13 +75,14 @@ def _env() -> Environment:
     return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, False, None, ())
 
 
-def _inventory(xdist_active: bool = False) -> Inventory:
+def _inventory(xdist_active: bool = False, rerunfailures_active: bool = False) -> Inventory:
     return Inventory(
         items=ITEMS,
         test_files=("pyproject.toml", "tests/conftest.py", "tests/test_a.py"),
         inipath="pyproject.toml",
         plugins=("pytest-9.0.2",),
         xdist_active=xdist_active,
+        rerunfailures_active=rerunfailures_active,
         excluded=EXCLUDED,
         non_function=("tests/test_a.py::TestX",),
         rootpath="/collected/root",
@@ -272,21 +273,27 @@ class TestAnswer:
         assert doc["content_sha256"] == expected
 
     def test_zero_tests_is_every_beh_no_test(self, pipeline: Pipeline) -> None:
-        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, (), (), "/r")
+        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, False, (), (), "/r")
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 0 and doc["beh"][0]["reason"] == "no-test" and not pipeline.runs
 
 
 class TestRunArguments:
     @pytest.mark.parametrize(
-        ("active", "flags"), [(True, ["-n", "0", "--dist", "no"]), (False, [])]
+        ("xdist", "rerun", "flags"),
+        [
+            (True, False, ["-n", "0", "--dist", "no"]),
+            (False, False, []),
+            (False, True, ["--reruns", "0"]),
+            (True, True, ["-n", "0", "--dist", "no", "--reruns", "0"]),
+        ],
     )
-    def test_distribution_from_the_inventory(
-        self, pipeline: Pipeline, active: bool, flags: list[str]
+    def test_plugin_args_from_the_inventory(
+        self, pipeline: Pipeline, xdist: bool, rerun: bool, flags: list[str]
     ) -> None:
-        pipeline.inventory = _inventory(xdist_active=active)
+        pipeline.inventory = _inventory(xdist_active=xdist, rerunfailures_active=rerun)
         pipeline.measure(_request("ABC:BEH-1"))
-        assert pipeline.runs and all(list(c["distribution"]) == flags for c in pipeline.runs)
+        assert pipeline.runs and all(list(c["plugin_args"]) == flags for c in pipeline.runs)
 
     def test_runs_reuse_the_collections_config(self, pipeline: Pipeline) -> None:
         """R-B15: every run gets the collection's rootdir and config file."""
@@ -374,6 +381,7 @@ class TestErrors:
             ("pkg/mod.py", "tests/test_a.py"),
             None,
             ("pytest-9.0.2",),
+            False,
             False,
             (),
             (),

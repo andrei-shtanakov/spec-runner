@@ -97,7 +97,7 @@ class Case:
         *,
         deadline: Deadline | None = None,
         selector_timeout: float = 120.0,
-        distribution: Sequence[str] = (),
+        plugin_args: Sequence[str] = (),
         rootpath: str | None = None,
         inipath: str | None = None,
     ) -> dict[str, object]:
@@ -113,7 +113,7 @@ class Case:
             self.body_lines,
             deadline or Deadline(300),
             selector_timeout,
-            distribution=distribution,
+            plugin_args=plugin_args,
             rootpath=rootpath or str(self.checkout),
             inipath=inipath,
         )
@@ -206,19 +206,20 @@ TESTS = {
 
 
 class TestFakeManifests:
-    def test_distribution_flags_reach_the_pytest_argv(self, tmp_path, monkeypatch) -> None:
+    def test_plugin_args_reach_the_pytest_argv(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)
-        run = case.run(NODE, distribution=["-n", "0", "--dist", "no"])
+        run = case.run(NODE, plugin_args=["-n", "0", "--dist", "no", "--reruns", "0"])
         (argv,) = seen
         ini = argv[9]
         assert argv == [sys.executable, "-P", "-m", "pytest", "-p", PROBE_MODULE] + [
-            "--rootdir", str(case.checkout), "-c", ini, "-n", "0", "--dist", "no", "-q", NODE
+            "--rootdir", str(case.checkout), "-c", ini, "-n", "0", "--dist", "no",
+            "--reruns", "0", "-q", NODE,
         ]  # fmt: skip
         assert run["result"] == "error" and run["reason"] == "runner"
         assert "no run manifest" in str(run["detail"])
 
-    def test_no_distribution_flags_by_default(self, tmp_path, monkeypatch) -> None:
+    def test_no_plugin_args_by_default(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)
         case.run(NODE)

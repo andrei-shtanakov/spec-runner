@@ -198,3 +198,54 @@ class TestOwnership:  # Review Focus 2
         files = {**PRODUCT, "tests/test_a.py": "def test_a():\n    pass\n"}
         m = _run(tmp_path, files, "tests/test_a.py::test_a", ["pkg/mod.py"], ["--forked"])
         assert m["distributed"] is True and m["call_in_owner"] is False
+
+
+FLAKY_BODY = (
+    "    path = pathlib.Path(os.environ['PROBE_FLAKY_COUNTER'])\n"
+    "    first = not path.exists()\n    path.write_text('x')\n"
+    "    work(1)\n    assert not first\n"
+)
+FLAKY_HEADER = "import os, pathlib\n\nimport pytest\nfrom pkg.mod import work\n\n\n"
+CONFTEST = "import sys, os\nsys.path.insert(0, os.path.dirname(__file__))\n"
+
+
+class TestRerunfailures:
+    """pytest-rerunfailures (measured on 16.7): a rerun attempt reports `outcome == "rerun"`."""
+
+    @pytest.fixture(autouse=True)
+    def _counter(self, tmp_path, monkeypatch):
+        import_plugin("pytest_rerunfailures")
+        monkeypatch.setenv("PROBE_FLAKY_COUNTER", str(tmp_path / "counter"))
+
+    def test_a_rerun_is_a_monitoring_error(self, tmp_path):
+        test = FLAKY_HEADER + "@pytest.mark.flaky(reruns=2)\ndef test_a():\n" + FLAKY_BODY
+        files = {**PRODUCT, "conftest.py": CONFTEST, "tests/test_a.py": test}
+        m = _run(tmp_path, files, "tests/test_a.py::test_a", ["pkg/mod.py"])
+        assert m["phases"]["call"] == "passed" and m["exitstatus"] == 0  # the retry hid it
+        assert m["monitoring_error"] == (
+            "test was rerun (pytest-rerunfailures); a retried attempt cannot be measured"
+        )
+
+    def test_a_setup_rerun_is_a_monitoring_error(self, tmp_path):
+        test = FLAKY_HEADER + (
+            "@pytest.fixture\ndef fx():\n"
+            "    path = pathlib.Path(os.environ['PROBE_FLAKY_COUNTER'])\n"
+            "    first = not path.exists()\n    path.write_text('x')\n"
+            "    if first:\n        raise RuntimeError\n\n\n"
+            "@pytest.mark.flaky(reruns=2)\ndef test_a(fx):\n    work(1)\n"
+        )
+        files = {**PRODUCT, "conftest.py": CONFTEST, "tests/test_a.py": test}
+        m = _run(tmp_path, files, "tests/test_a.py::test_a", ["pkg/mod.py"])
+        assert "test was rerun" in m["monitoring_error"]
+
+    def test_reruns_zero_overrides_addopts(self, tmp_path):
+        test = FLAKY_HEADER + "def test_a():\n" + FLAKY_BODY
+        files = {
+            **PRODUCT,
+            "conftest.py": CONFTEST,
+            "pytest.ini": "[pytest]\naddopts = --reruns 2\n",
+            "tests/test_a.py": test,
+        }
+        m = _run(tmp_path, files, "tests/test_a.py::test_a", ["pkg/mod.py"], ["--reruns", "0"])
+        assert m["phases"]["call"] == "failed" and m["exitstatus"] == 1
+        assert "monitoring_error" not in m

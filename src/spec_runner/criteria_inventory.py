@@ -90,9 +90,23 @@ class Inventory:
     inipath: str | None
     plugins: tuple[str, ...]
     xdist_active: bool  # xdist's own plugin is registered (not merely installed)
+    rerunfailures_active: bool  # pytest-rerunfailures' plugin is registered
     excluded: tuple[Excluded, ...]
     non_function: tuple[str, ...]  # node ids of collected items that are not functions
     rootpath: str  # pytest's rootdir (absolute): every run reuses it with `inipath` (R-B15)
+
+
+def plugin_args(inventory: Inventory) -> list[str]:
+    """The per-run flags that neutralise plugins hiding the measured call (§3.6).
+
+    Only the run passes them, and only for a plugin the collect manifest saw
+    registered (an unregistered plugin's flag is a usage error): `-n 0 --dist no`
+    keeps every test in the probe's process under xdist; `--reruns 0` overrides a
+    `--reruns N` in addopts (measured: the later value wins), so a flaky test's
+    first failure is seen. A `flaky` marker still reruns — the probe refuses that run.
+    """
+    args = ["-n", "0", "--dist", "no"] if inventory.xdist_active else []
+    return [*args, "--reruns", "0"] if inventory.rerunfailures_active else args
 
 
 def deploy_probe(into: Path) -> Path:
@@ -258,6 +272,7 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         inipath=inipath,
         plugins=tuple(manifest["plugins"]),
         xdist_active=manifest["xdist_active"],
+        rerunfailures_active=manifest["rerunfailures_active"],
         excluded=_excluded(manifest["excluded"], checkout, tracked),
         non_function=tuple(sorted(non_function)),
         rootpath=manifest["rootpath"],

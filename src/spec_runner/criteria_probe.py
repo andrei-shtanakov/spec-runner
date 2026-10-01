@@ -49,6 +49,7 @@ _manifest: dict[str, Any] = {
     "inipath": None,
     "plugins": [],
     "xdist_active": False,
+    "rerunfailures_active": False,
     "conftests": [],
     "items": [],
     "errors": [],
@@ -158,8 +159,15 @@ def pytest_runtest_call(item: Any) -> Any:
             _set_tracing(False)
 
 
+RERUN_ERROR = "test was rerun (pytest-rerunfailures); a retried attempt cannot be measured"
+
+
 def pytest_runtest_logreport(report: Any) -> None:
+    global _monitoring_error
     if not (_owner() and MODE == "run"):
+        return
+    if report.outcome == "rerun":  # measured, pytest-rerunfailures 16.7: setup or call retried
+        _monitoring_error = _monitoring_error or RERUN_ERROR
         return
     # last write wins: exact for one item; the orchestrator checks collected == [node_id]
     _RUN["phases"][report.when] = report.outcome
@@ -180,6 +188,9 @@ def pytest_configure(config: Any) -> None:
     # the registered plugin, not the installed distribution: `-p no:xdist` leaves the
     # distribution listed (looponfail still registers) but removes `-n`
     _manifest["xdist_active"] = bool(config.pluginmanager.has_plugin("xdist"))
+    # registered as "rerunfailures" (measured on 16.7); its `flaky` marker reruns even
+    # under `--reruns 0`, so run mode also refuses any rerun it observes
+    _manifest["rerunfailures_active"] = bool(config.pluginmanager.has_plugin("rerunfailures"))
     _manifest["plugins"] = sorted(distributions | {f"pytest-{pytest.__version__}"})
 
 

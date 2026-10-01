@@ -1,7 +1,7 @@
 # The `verify --criteria` bench (#603 B2b, design §8.3): boundary cases run for
 # real under CPython 3.12, where `sys.monitoring` exists. The ordinary `test` job
 # also runs them on 3.12/3.13 and skips them on 3.11; this job pins the claim and
-# adds pytest-xdist / pytest-forked so those rows run — and, under its env switch,
+# adds pytest-xdist / pytest-forked / pytest-rerunfailures so those rows run — and, under its env switch,
 # fail rather than skip if they cannot.
 name: criteria-probe
 
@@ -18,7 +18,7 @@ jobs:
     name: criteria-probe bench (CPython 3.12)
     runs-on: ubuntu-latest
     env:
-      # Turns the bench's skips (Python < 3.12, a missing xdist/forked) into failures:
+      # Turns the bench's skips (Python < 3.12, a missing xdist/forked/rerunfailures) into failures:
       # a skipped bench here is a green job that measured nothing (tests/criteria_bench_required.py).
       SPEC_RUNNER_REQUIRE_CRITERIA_BENCH: "1"
     steps:
@@ -31,6 +31,6 @@ jobs:
       # `--with` keeps the plugins out of the lock and the dev group; no -m filter, so
       # a slow marker could never exclude the bench from its own job.
       - run: >-
-          uv run --with pytest-xdist --with pytest-forked pytest -q
+          uv run --with pytest-xdist --with pytest-forked --with pytest-rerunfailures pytest -q
           tests/test_criteria_bench.py tests/test_criteria_probe_run.py
           tests/test_criteria_run.py -rs

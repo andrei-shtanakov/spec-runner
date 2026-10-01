@@ -109,14 +109,14 @@ def run_selector(
     *,
     rootpath: str,
     inipath: str | None,
-    distribution: Sequence[str] = (),
+    plugin_args: Sequence[str] = (),
 ) -> dict[str, object]:
     """One fresh pytest process for `node_id` → a `complete_run` or an `error_run` object.
 
     `product_files` are repository-relative; `measured` holds the bytes at `sha`
     of every measured file (product ∪ test files, from `read_blobs`, never re-read
-    from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `distribution` is
-    appended before `-q` (`distribution_args(inventory.xdist_active)`). `rootpath` and
+    from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `plugin_args`
+    are appended before `-q` (`criteria_inventory.plugin_args(inventory)`). `rootpath` and
     `inipath` (absolute) are the collection's resolution, reproduced by every run as
     `--rootdir rootpath -c inipath` — or `-c` an empty ini in the invocation dir when
     the collection read no config (R-B15). Raises
@@ -129,7 +129,7 @@ def run_selector(
         config = _config_args(invocation, rootpath, inipath)
         done, manifest_path = _launch(
             env, checkout, probe_dir, invocation, node_id, product_files, deadline,
-            selector_timeout, [*config, *distribution],
+            selector_timeout, [*config, *plugin_args],
         )  # fmt: skip
         return _read_run(
             done, manifest_path, checkout, node_id, product_files, measured, body_lines,

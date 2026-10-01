@@ -161,6 +161,7 @@ def _collect_shape_ok(data: dict[str, Any]) -> bool:
         and (data["inipath"] is None or _is_abs(data["inipath"]))
         and _is_str_list(data["plugins"])
         and isinstance(data["xdist_active"], bool)
+        and isinstance(data["rerunfailures_active"], bool)
         and _is_abs_list(data["conftests"])
         and _list_of(data["items"], _item_ok)
         and _list_of(data["errors"], _error_ok)
@@ -181,6 +182,7 @@ _COLLECT_KEYS = {
     "inipath",
     "plugins",
     "xdist_active",
+    "rerunfailures_active",
     "conftests",
     "items",
     "errors",

@@ -31,6 +31,7 @@ from spec_runner.criteria_inventory import (
     TestItem,
     collect,
     deploy_probe,
+    plugin_args,
 )
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, MODE_ENV, PARENT_ENV, PROBE_MODULE
@@ -98,6 +99,7 @@ def _manifest(checkout: Path, **overrides: Any) -> dict[str, Any]:
         "inipath": str(checkout / "pyproject.toml"),
         "plugins": ["pytest-9.1.1"],
         "xdist_active": False,
+        "rerunfailures_active": False,
         "conftests": [str(checkout / "tests" / "conftest.py")],
         "items": [_function(checkout, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)],
         "errors": [],
@@ -217,11 +219,35 @@ class TestInvocation:
         assert "-n" not in runner.calls[0]["argv"]
 
 
+class TestPluginArgs:
+    """The per-run flags that neutralise plugins whose own process model hides the call."""
+
+    @pytest.mark.parametrize(
+        ("xdist", "rerun", "flags"),
+        [
+            (False, False, []),
+            (True, False, ["-n", "0", "--dist", "no"]),
+            (False, True, ["--reruns", "0"]),
+            (True, True, ["-n", "0", "--dist", "no", "--reruns", "0"]),
+        ],
+    )
+    def test_flags_follow_the_registered_plugins(
+        self, xdist: bool, rerun: bool, flags: list[str]
+    ) -> None:
+        inventory = Inventory((), (), None, (), xdist, rerun, (), (), "/r")
+        assert plugin_args(inventory) == flags
+
+
 class TestManifestToInventory:
     @pytest.mark.parametrize("active", [True, False])
     def test_xdist_active_comes_from_the_manifest(self, fake, active: bool) -> None:
         run, _, _, _ = fake(lambda co: _manifest(co, xdist_active=active))
         assert run().xdist_active is active
+
+    @pytest.mark.parametrize("active", [True, False])
+    def test_rerunfailures_active_comes_from_the_manifest(self, fake, active: bool) -> None:
+        run, _, _, _ = fake(lambda co: _manifest(co, rerunfailures_active=active))
+        assert run().rerunfailures_active is active
 
     def test_items_files_config_and_plugins(self, fake) -> None:
         def manifest(co: Path) -> dict[str, Any]:
@@ -805,11 +831,10 @@ class TestRealExclusions:
         )
 
 
-@pytest.fixture(scope="module")
-def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
-    """A product environment whose lock carries pytest-xdist (offline, from the uv cache)."""
-    root = tmp_path_factory.mktemp("xdistproject")
-    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', 'test = ["pytest", "pytest-xdist"]')
+def _plugin_env(factory: pytest.TempPathFactory, plugin: str) -> Iterator[Environment]:
+    """A product environment whose lock carries `plugin` (offline, from the uv cache)."""
+    root = factory.mktemp(f"{plugin}project")
+    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', f'test = ["pytest", "{plugin}"]')
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("UV_OFFLINE", "1")
         _repo(root, {"pyproject.toml": pyproject})
@@ -818,7 +843,17 @@ def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]
         _git(root, "commit", "-qm", "lock")
         sha = _git(root, "rev-parse", "HEAD")
         criteria = ProductCriteria(("p",), ("test",), ())
-        yield sync_environment(root, sha, tmp_path_factory.mktemp("env"), criteria, Deadline(300))
+        yield sync_environment(root, sha, factory.mktemp("env"), criteria, Deadline(300))
+
+
+@pytest.fixture(scope="module")
+def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    yield from _plugin_env(tmp_path_factory, "pytest-xdist")
+
+
+@pytest.fixture(scope="module")
+def rerunfailures_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    yield from _plugin_env(tmp_path_factory, "pytest-rerunfailures")
 
 
 @pytest.mark.slow
@@ -849,3 +884,24 @@ class TestRealXdistActive:
 
     def test_no_xdist_installed_is_inactive(self, product_env, tmp_path) -> None:
         assert _real(product_env, tmp_path, REAL_BASE).xdist_active is False
+
+
+@pytest.mark.slow
+class TestRealRerunfailuresActive:
+    """The registered plugin's name is `rerunfailures` (measured on pytest-rerunfailures 16.7)."""
+
+    @staticmethod
+    def _files(addopts: str) -> dict[str, str]:
+        return TestRealXdistActive._files(addopts)
+
+    @pytest.mark.parametrize("addopts", ["", "--reruns 2"])
+    def test_registered_rerunfailures_is_active(self, rerunfailures_env, tmp_path, addopts) -> None:
+        inv = _real(rerunfailures_env, tmp_path, self._files(addopts))
+        assert inv.rerunfailures_active is True
+
+    def test_blocked_rerunfailures_is_not_active(self, rerunfailures_env, tmp_path) -> None:
+        inv = _real(rerunfailures_env, tmp_path, self._files("-p no:rerunfailures"))
+        assert inv.rerunfailures_active is False
+
+    def test_not_installed_is_inactive(self, product_env, tmp_path) -> None:
+        assert _real(product_env, tmp_path, REAL_BASE).rerunfailures_active is False

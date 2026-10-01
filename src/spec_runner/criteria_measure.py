@@ -35,6 +35,7 @@ from spec_runner.criteria_inventory import (
     TestItem,
     collect,
     deploy_probe,
+    plugin_args,
 )
 from spec_runner.criteria_process import Deadline
 from spec_runner.criteria_run import product_body_lines, run_selector
@@ -43,7 +44,6 @@ from spec_runner.criteria_workspace import (
     Environment,
     check_origin,
     clone_at,
-    distribution_args,
     read_blobs,
     sync_environment,
     tracked_files,
@@ -136,7 +136,7 @@ def _measure(
     # Once, before any run (R-B11); the product's Python decides the error kind (R-B16).
     body_lines = product_body_lines(files, blobs, product_version=env.version)
     measured = {p: blobs[p] for p in (*files, *inventory.test_files)}
-    distribution = distribution_args(inventory.xdist_active)
+    run_args = plugin_args(inventory)
     # R-B15: a run passes a node id where collection passed nothing, so pytest could
     # resolve another config (tests/pytest.ini) and root — every run reuses collection's.
     inipath = None if inventory.inipath is None else str(checkout / inventory.inipath)
@@ -145,7 +145,7 @@ def _measure(
         deadline.check()  # an exhausted budget between runs is TIMEOUT, never a partial beh
         return run_selector(
             env, checkout, sha, probe_dir, work, node_id, files, measured, body_lines,
-            deadline, selector_timeout, distribution=distribution,
+            deadline, selector_timeout, plugin_args=run_args,
             rootpath=inventory.rootpath, inipath=inipath,
         )  # fmt: skip
 

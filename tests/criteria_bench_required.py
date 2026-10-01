@@ -1,7 +1,7 @@
 """The criteria-probe job's switch: under it, the bench's skips are failures (#603 R-B18).
 
 Locally the bench, the probe's run mode and the real selector runs skip below
-CPython 3.12 (no `sys.monitoring`) and their xdist/forked rows skip without those
+CPython 3.12 (no `sys.monitoring`) and their xdist/forked/rerunfailures rows skip without those
 plugins. `.github/workflows/criteria-probe.yml` sets `SPEC_RUNNER_REQUIRE_CRITERIA_BENCH=1`:
 a skipped bench there is a green job that measured nothing, so an old interpreter is
 a collection error and a missing plugin a test failure — the guard lives next to the

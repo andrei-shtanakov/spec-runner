@@ -448,13 +448,3 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     env["PYTHONNOUSERSITE"] = "1"
     env.update(extra)
     return env
-
-
-def distribution_args(xdist_active: bool) -> list[str]:
-    """Keep every test in the probe's own process when xdist is registered (§3.6).
-
-    `xdist_active` is the collect manifest's `xdist_active`: xdist's plugin was
-    registered in that pytest, so `-n` exists. Only the run passes these flags:
-    `--collect-only` never distributes, and `-n` breaks a product that blocks xdist.
-    """
-    return ["-n", "0", "--dist", "no"] if xdist_active else []

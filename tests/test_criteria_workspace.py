@@ -22,7 +22,6 @@ from spec_runner.criteria_workspace import (
     check_origin,
     child_env,
     clone_at,
-    distribution_args,
     read_blobs,
     reset_checkout,
     sync_environment,
@@ -439,10 +438,6 @@ def _environment(**overrides: Any) -> Environment:
 
 
 class TestEnvironment:
-    def test_distribution_args(self) -> None:
-        assert distribution_args(True) == ["-n", "0", "--dist", "no"]
-        assert distribution_args(False) == []
-
     def test_label(self) -> None:
         assert _environment().label == "CPython 3.12.13"
 
