@@ -1,18 +1,17 @@
 ---
+spec_stage: tasks
+status: draft
+owner_role: stream-owner
+version: 3
+generated_by: fleet-agent
+generated_at: "2026-10-01T22:25:33+04:00"
+source_prompt_version: ""
+validation: ""
+approved_by: ""
 traces_to:
 - decomposition
 upstream_hashes:
   decomposition: e07403320a1f7e0ac3efbe31d0dccdd8e7e25a39
-spec_stage: tasks
-status: approved
-version: 2
-generated_by: fleet-agent
-generated_at: '2026-09-20T19:53:50+04:00'
-source_prompt_version: ''
-validation: pass
-approved_by: andrei-shtanakov
-approved_at: '2026-09-20T16:04:13Z'
-owner_role: stream-owner
 ---
 
 ## Milestone 1: Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
@@ -538,7 +537,7 @@ FR-02 и отдельной строкой таблицы § 2.6, а не счи
 - **AC-23** (test): Опубликованная запись не переписывается; исправление — новая запись со ссылкой
 - **AC-24** (test): Bounded prompt и result сохраняют доказательство исходных байтов
 - **AC-25** (test): Секреты не публикуются; единственный путь публикации проходит через redactor
-- **AC-26** (test): Адаптер store без TLS или шифрования в покое отклонён при загрузке config
+- **AC-26** (test): Адаптер store объявляет свойства безопасности; `n/a` для TLS допустимо только у адаптера без транспорта
 - **AC-27** (test): Каждый orderly exit любой платящей подкоманды оставляет ровно одну closure, kind которой выведен одним правилом
 - **AC-28** (test): `kill -9` не оставляет closure; читатели классифицируют прогон как crash/unknown
 - **AC-29** (test): Closure — последняя запись; отказ ack последнего checkpoint-а и повторная closure — fail-closed
@@ -559,13 +558,18 @@ FR-02 и отдельной строкой таблицы § 2.6, а не счи
 - **AC-44** (metric): Restore-drill и open-call матрица выполнены в объёме условия завершения
 
 ### TASK-001: Store-контракт, `LocalVolumeStore`, блок `durability:` в config и validate
-P2 | ✅ DONE   Est: 0.5d
+P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-28 (DT-01, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-01
+**Delivers:** DEL-01, DEL-02, DEL-03, DEL-04, DEL-05
 
 **Checklist:**
-- [ ] реализовать BEH-28: Адаптер store без TLS или шифрования в покое отклоняется при загрузке config
+- [ ] реализовать BEH-28: Адаптер store объявляет свойства безопасности; отказ — за ложь, молчание и «неприменимо» там, где оно невозможно (DEL-04 (capability): На загрузке `ConfigError` с именем адаптера и свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, объявил `tls: n/a` при адаптере с транспортом (применимость TLS — из capabilities адаптера по реестру, неизвестный адаптер `n/a` объявить не может), либо `retention_days` вне 7–365; `tls: n/a` у адаптера без транспорта загружается; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start)
+- [ ] DEL-01 (module): Новый модуль `src/spec_runner/artifact_store.py`: протокол `ArtifactStore` (`put` с семантикой `if_none_match` всегда → `AlreadyExists` на существующем ключе, `get`, `list`, `delete`), декларация `StoreCapabilities(tls, encryption_at_rest, immutable_put, lifecycle)` и функция ключей §1.3 (`runs/<run_id>/…`, индекс `workstreams/<workstream_key>/runs/…` парой `.json`/`.closed`, каждый ключ пишется один раз)
+- [ ] DEL-02 (module): Адаптер `LocalVolumeStore(root)`: временный файл → `fsync` → `link`/`rename` с `O_EXCL`-семантикой, `tls` неприменим, `encryption_at_rest` по декларации оператора, `lifecycle: none`; `open_store_readonly` — единственный вход без `Publisher`
+- [ ] DEL-03 (config): Блок `durability:` (`store: {adapter, options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`, `retention_days`) в полях `ExecutorConfig` и `KNOWN_EXECUTOR_KEYS`; путеподобные `store.options` разрешаются в абсолютные относительно `project_root` на загрузке, не лениво и не от CWD
+- [ ] DEL-05 (config): Пути `.executor-checkpoints`/`.executor-spool.jsonl` выводятся из config с `spec_prefix`/`change_id` как у `state_file` и входят в `git_ops.runtime_state_paths`, чтобы следующие задачи брали путь из config, а не из литерала
 - [ ] проверка группы: tests/test_config.py (kind: contract) зелёные на BEH-28
 
 **Traces to:** [FR-06]
@@ -575,17 +579,23 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-03, BEH-05, BEH-06, BEH-07, BEH-24, BEH-26, BEH-38, BEH-44 (DT-02, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-02
+**Delivers:** DEL-06, DEL-07, DEL-08, DEL-09, DEL-10, DEL-11, DEL-12, DEL-13, DEL-14, DEL-15
 **Depends on:** [TASK-001]
 
 **Checklist:**
-- [ ] реализовать BEH-03: Старая DB мигрирует аддитивно, старые строки читаются с `run_id IS NULL`
-- [ ] реализовать BEH-05: На каждом сайте платного вызова call-start подтверждён до `Popen`
+- [ ] реализовать BEH-03: Старая DB мигрирует аддитивно, старые строки читаются с `run_id IS NULL` (DEL-14 (config): Аддитивные столбцы в `_migrate`: `agent_calls`/`pr_agent_calls` — `run_id`, `call_id`, `status` (`open`/`closed`/`not_started`), `started_at`; `attempts` — `run_id`; новая таблица `plan_agent_calls` без `task_id`; `costs` показывает строку `planning`, `repo_total_cost` включает её; строка `open` пишется до store-ack и закрывается после call-result)
+- [ ] реализовать BEH-05: На каждом сайте платного вызова call-start подтверждён до `Popen` (DEL-10 (module): Новый `paid_call.py`: `PaidCall`, `CallOutcome`, `execute(config, state, call)` в порядке §2.2 шаги 2–8; `_spawn` — единственная функция репо, передающая argv провайдера в `subprocess.run`; `call_id` чеканит сайт до `log_prompt` и передаёт полем, `execute` его проверяет, а не создаёт)
 - [ ] реализовать BEH-06: Без acknowledgement процесс не стартует; отказ — до траты, exit 2, closure с причиной
 - [ ] реализовать BEH-07: Budget-отказ происходит до call-start — отказанный вызов не оставляет строки
 - [ ] реализовать BEH-24: Планирование получает ledger-identity и отдельную строку `planning` в `costs`
-- [ ] реализовать BEH-26: Bounded prompt и result сохраняют доказательство исходных байтов
-- [ ] реализовать BEH-38: Локальный `status` показывает `run_id` последнего прогона namespace-а
-- [ ] реализовать BEH-44: Тесты не вызывают платного агента, существующие контракты меняются только аддитивно
+- [ ] реализовать BEH-26: Bounded prompt и result сохраняют доказательство исходных байтов (DEL-08 (module): Новый `evidence.py`: `Publisher` — единственный владелец `ArtifactStore` и единственный импортёр `_open_store`; `publish(record)` через redactor по каждому текстовому полю с SHA-256; записи `RunStart`/`CallStart`/`CallResult`/`Closure`; `bound_evidence(text, limit)` с head и tail, marker, `full_sha256`, `full_size`, пределы 1 MiB / 4 MiB)
+- [ ] реализовать BEH-38: Локальный `status` показывает `run_id` последнего прогона namespace-а (DEL-15 (config): `--json-result` и `status --json` получают аддитивные `run_id`/`pipeline_id`; `status` показывает `run_id` последнего run-start namespace-а; `docs/state-schema.md`, `schemas/executor-state.schema.json`, `json-result`, `status` и golden-фикстуры `tests/fixtures/maestro-interop/` меняются только добавлением ключей)
+- [ ] реализовать BEH-44: Тесты не вызывают платного агента, существующие контракты меняются только аддитивно (DEL-11 (capability): Все сайты платного вызова переведены на `execute`: `tdd._run_agent`, `execution._run_agent_process`, `review._run_reviewer`, `review_pr.verify_comment`/`run_fix_agent`, все три сайта `cli_plan.py` (provenance `plan:<stage>`/`plan:interactive`) и `doctor`; `runner.run_claude_async` удалён вместе с экспортом, и `asyncio.create_subprocess_exec` не вызывается ни из одного модуля `src/spec_runner/`)
+- [ ] DEL-06 (module): Новый `run_context.py`: `RunContext` (full UUIDv4 `run_id`, `pipeline_id` из structlog contextvars, `subcommand`, `started_at`, `Publisher`, `policy`), одна точка `start()` в диспетчере `cli.main()` по множеству `PAYING_SUBCOMMANDS` (включая `retry`, `watch`, `run --force`, не берущие executor lock) и `close(exit_code)` вокруг dispatch; meta только `last_run_id`/`last_pipeline_id`, маркер `continuation_index` не пишется
+- [ ] DEL-07 (module): Новый `closure.py`: `CLOSURE_KINDS` из пяти значений (`completed`/`refused`/`failed`/`interrupted`/`crashed`) и `schemas/run-closure.schema.json` с пинованным словарём
+- [ ] DEL-09 (module): Новый `redaction.py`: denylist из окружения плюс паттерны, placeholder `[REDACTED:kind:hash8]`, общий словарь имён с `obs._DEFAULT_REDACT_KEYS`
+- [ ] DEL-12 (capability): Autouse-guard `_no_real_agent_calls` переключён на одно имя `paid_call._spawn`, патчи швов `tdd._run_agent`/`execution._run_agent_process` сняты тем же коммитом; отказ поднимается от `BaseException` и называет сайт по `provenance`; `RealAgentCallRefused` и его ветка удалены
+- [ ] DEL-13 (capability): Область пробы `doctor`: поле `probe_provenance` на scratch-конфиге, пин `execution_mode = standard`, обнуление `review_parallel`/`review_roles`/`audit_log_path`; seam отображает provenance по закрытой карте `<probe>:execute`/`<probe>:review` и публикует записи пробы с `task_id = null`; provenance вне карты при поднятом поле — `Refusal(kind=instrument)` до call-start
 - [ ] проверка группы: tests/test_state.py (kind: contract), tests/test_call_start_before_spawn.py (kind: integration), tests/test_call_start_before_spawn.py (kind: contract), tests/test_planning_has_ledger_identity.py (kind: integration), tests/test_bounded_evidence_logs.py (kind: contract), tests/test_cli_info.py (kind: contract), tests/test_harness_guards.py (kind: contract) зелёные на BEH-03, BEH-05, BEH-06, BEH-07, BEH-24, BEH-26, BEH-38, BEH-44
 
 **Traces to:** [FR-01], [FR-02], [FR-07], [FR-06], [FR-09]
@@ -595,10 +605,17 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-12 (DT-03, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-03
+**Delivers:** DEL-16, DEL-17, DEL-18, DEL-19, DEL-20, DEL-21, DEL-22
 **Depends on:** [TASK-002]
 
 **Checklist:**
-- [ ] реализовать BEH-12: Checkpoint — snapshot с WAL-only страницами, а не копия файла
+- [ ] реализовать BEH-12: Checkpoint — snapshot с WAL-only страницами, а не копия файла (DEL-16 (module): Новый `checkpoint.py`: `after_mutation(config, *, table, task_id=None, conn=None)` — единственная точка публикации; snapshot через `sqlite3.Connection.backup()` с живого соединения в `<state_dir>/.executor-checkpoints/<seq:06d>-<id>/state.db`; `sequence` — монотонный счётчик в `executor_meta`; ротация локальных копий (последняя + предыдущая))
+- [ ] DEL-17 (module): `PolicyIdentity` (`contract_version`, `config_hash` над `POLICY_KEYS`, `namespace`, `namespace_source`, `spec_prefix`, `change_id`) — одна dataclass для run-start, call-start и manifest-а; `facts` рядом, не в identity
+- [ ] DEL-18 (document): `schemas/checkpoint-manifest.schema.json` — полный состав §3.3 (identity, `sequence`, `supersedes`, `join_keys`, `digests`, `degraded`, `wip`, `spool`, `manifest_sha256`), введён отдельным коммитом
+- [ ] DEL-19 (capability): `Publisher` получает очередь по `sequence`, `drain(timeout)` и `last_acknowledged()`; manifest кладётся последним, и ack manifest-а есть ack checkpoint-а
+- [ ] DEL-20 (capability): Два сайта правила Q-05: перед call-start — шаг 1 `execute` (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind=instrument)`, вызова нет) и гейт перед closure (недоставленный checkpoint → closure `failed`, exit 2, строка в stderr «решение записано локально, но не доставлено»); синхронного ожидания внутри `after_mutation` нет
+- [ ] DEL-21 (capability): `after_mutation` выходит без публикации при поднятом `config.probe_provenance`: mutation эфемерной пробы `doctor` не continuation-relevant
+- [ ] DEL-22 (capability): В этой задаче seam подключён к одному сайту записи — `record_attempt`; остальные сайты §3.1 подключает DT-05
 - [ ] проверка группы: tests/test_checkpoint_is_a_snapshot.py (kind: integration) зелёные на BEH-12
 
 **Traces to:** [FR-03]
@@ -608,11 +625,14 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-36, BEH-37 (DT-04, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-04
+**Delivers:** DEL-23, DEL-24, DEL-25, DEL-26
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-36: `evidence <run_id>` отвечает без клона, DB и Git, из одного `collect()`
-- [ ] реализовать BEH-37: Read-surface называет crash/unknown, open call, legacy и недоступный store, но не решает за оператора
+- [ ] реализовать BEH-36: `evidence <run_id>` отвечает без клона, DB и Git, из одного `collect()` (DEL-23 (module): Новый `evidence_cmd.py`: subparser `evidence <run_id> [--json]`, `collect(store, run_id) → EvidenceView` — один сбор для человека и `--json` по образцу `tdd_status.py`; читает только store через `open_store_readonly`, без `project_root`, DB и Git)
+- [ ] реализовать BEH-37: Read-surface называет crash/unknown, open call, legacy и недоступный store, но не решает за оператора (DEL-24 (capability): Read-surface показывает статус `closed:<kind>` либо `crash/unknown` с пометкой «не доказуемо», последний acknowledged checkpoint, open calls, attempts с исходом и стоимостью (`unknown` при `null`), суммарную стоимость, `deletions[]`, стоимость хранения при поддержке адаптером; store недоступен → exit 2; legacy → «нет evidence-контракта» с перечнем недостающего; следующий шаг — рекомендация с пометкой «не доказуемо», ответ ограничен одним `run_id`)
+- [ ] DEL-25 (capability): При terminal `record_attempt` (`success`/`failed`/`blocked`) `evidence.export_attempt(state, task_id, n)` собирает строки этой задачи/attempt-а из таблиц §6.4 в JSONL и публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а; при поднятом `probe_provenance` не публикует ничего
+- [ ] DEL-26 (document): `schemas/evidence-view.schema.json` и `schemas/evidence-record.schema.json`
 - [ ] проверка группы: tests/test_evidence_read_surface.py (kind: integration) зелёные на BEH-36, BEH-37
 
 **Traces to:** [FR-09], [FR-07]
@@ -622,13 +642,16 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-13, BEH-14, BEH-47, BEH-48 (DT-05, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-05
+**Delivers:** DEL-27, DEL-28, DEL-29, DEL-30, DEL-31, DEL-32
 **Depends on:** [TASK-004]
 
 **Checklist:**
-- [ ] реализовать BEH-13: Каждая mutation из перечня публикует новый checkpoint с большим `sequence`; read-only команды — нет
-- [ ] реализовать BEH-14: Manifest валиден, полон и не содержит локальных фактов
-- [ ] реализовать BEH-47: Проба `doctor` не оставляет следа в учёте проекта, а её платные вызовы оставляют полный
-- [ ] реализовать BEH-48: Подкоманда без платного вызова не завершается успешно, пока её checkpoint не acknowledged
+- [ ] реализовать BEH-13: Каждая mutation из перечня публикует новый checkpoint с большим `sequence`; read-only команды — нет (DEL-27 (capability): `after_mutation` вызывают все `record_*` перечня §3.1 в `state.py` (шаг close у `record_agent_call`), `claims.release_claims`, `lifecycle.advance`, `ReviewPrState` при завершении раунда (своё соединение через `conn`) и `bookkeeping.commit_status_flip`; `mark_running`, `set_meta` и `phase_results` seam не вызывают)
+- [ ] реализовать BEH-14: Manifest валиден, полон и не содержит локальных фактов (DEL-28 (capability): Manifest дополнен до §3.3: `repository` (нормализованный remote `host/owner/repo` без учётных данных и `.git`, все root commit-ы), `workstream` (`namespace`, `namespace_source: declared|computed`), `head`, `refs[]` (имя, SHA, `published`, `published_ref`), `join_keys`, `excluded[]`, `digests` для каждого файла включая `wip.tar`; ни абсолютных путей, ни PID)
+- [ ] реализовать BEH-47: Проба `doctor` не оставляет следа в учёте проекта, а её платные вызовы оставляют полный (DEL-31 (capability): Область пробы `doctor` наблюдается целиком: у двойника store run-start, две пары call-start/call-result с provenance `doctor:execute`/`doctor:review`, одна closure, пустые префиксы `checkpoints/` и `attempts/`, ни одной записи с `task_id`; следующий `run --all` доходит до платного вызова собственной `TASK-001` проекта, в том числе после `reset` и в свежем клоне; ключи на месте при относительном `root`)
+- [ ] реализовать BEH-48: Подкоманда без платного вызова не завершается успешно, пока её checkpoint не acknowledged (DEL-32 (capability): Гейт перед closure на настоящих подкомандах: у `budget authorize`, `tdd release` и многошагового `tdd abandon` ack mutation-checkpoint-а стоит раньше выхода с кодом 0; при отклонённом ack — exit 2, stderr с недоставленным `sequence`/`checkpoint_id`, mutation в DB целиком; на `run --task` число и место обращений к store те же, что до бандла)
+- [ ] DEL-29 (module): Новый `wip.py`: `collect(config) → WipArtifact | None` из `after_mutation` — `bundle.git` для каждого in-flight ref от published-base, stash-коммиты под `refs/spec-runner/wip/stash/<n>`, `dirty.tar` по `git_ops.uncommitted_work_paths`, `index.json` с per-file SHA-256; переупаковка только при изменении входов; пустой WIP — `wip: none` без файла
+- [ ] DEL-30 (module): `git_ops.repository_identity`: remote URL, нормализованный до `host/owner/repo`, плюс все root commit-ы по `git rev-list --max-parents=0 HEAD`
 - [ ] проверка группы: tests/test_checkpoint_after_every_mutation.py (kind: integration), tests/test_checkpoint_after_every_mutation.py (kind: contract), tests/test_doctor_probe_scope.py (kind: e2e), tests/test_mutation_checkpoint_ack.py (kind: integration) зелёные на BEH-13, BEH-14, BEH-47, BEH-48
 
 **Traces to:** [FR-03], [FR-04], [FR-02], [FR-06], [FR-05], [FR-07]
@@ -638,17 +661,21 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-16, BEH-17, BEH-18, BEH-19, BEH-20, BEH-21, BEH-41, BEH-43 (DT-06, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-06
+**Delivers:** DEL-33, DEL-34, DEL-35, DEL-36, DEL-37, DEL-38, DEL-39, DEL-40
 **Depends on:** [TASK-005]
 
 **Checklist:**
-- [ ] реализовать BEH-16: Local-only commit, dirty, untracked и rescue stash восстанавливаются байт в байт
+- [ ] реализовать BEH-16: Local-only commit, dirty, untracked и rescue stash восстанавливаются байт в байт (DEL-35 (capability): `restore.apply(plan)`: клон, `wip.apply` (`git bundle verify` → `fetch` → `switch` → распаковка `dirty.tar` с проверкой SHA-256 → `git stash store`), `state.db` из snapshot-а с правкой одного ключа meta `continuation_index = restored` через `set_meta`, replay spool; lock/stop/ready/worktrees не создаются; `tdd_namespace` дописывается shape-preserving merge-ом с `.bak`; недостижимый published ref — `needs-human` с именем и SHA до распаковки)
 - [ ] реализовать BEH-17: Lock, stop-marker, временные worktrees и process identity не восстанавливаются и не становятся authority
 - [ ] реализовать BEH-18: Пустой WIP — явная запись, недостижимый published ref — `needs-human` с именем ref и SHA
 - [ ] реализовать BEH-19: Restore возвращает claims, budget authority, waiver и namespace и печатает следующий шаг без оплаты
-- [ ] реализовать BEH-20: Все проверки restore выполняются до записи в каталог, в объявленном порядке, и любое несовпадение — отказ
-- [ ] реализовать BEH-21: Legacy run, отсутствие `--experimental` и непустой `--into` — отказы с точной причиной
-- [ ] реализовать BEH-41: Ack и recovery укладываются в объявленные бюджеты, а не в CI-гейт
-- [ ] реализовать BEH-43: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E
+- [ ] реализовать BEH-20: Все проверки restore выполняются до записи в каталог, в объявленном порядке, и любое несовпадение — отказ (DEL-34 (capability): `restore.plan(run_id) → RestorePlan | RestoreRefusal` до записи в каталог, в объявленном порядке: `contract_version` → digests последнего acknowledged checkpoint-а и `manifest_sha256` → repository identity → policy identity → namespace → open calls всего workstream-а → spool; первое несовпадение — отказ (instrument для (1), (2), (7) — exit 2, остальные — `needs-human`, exit 1); legacy — fail-closed с перечнем недостающего)
+- [ ] реализовать BEH-21: Legacy run, отсутствие `--experimental` и непустой `--into` — отказы с точной причиной (DEL-33 (module): Новый `restore_cmd.py`: subparser `restore <run_id> --into <dir> [--experimental] [--json]`; непустой `--into` — отказ до всего; без `--experimental` — отказ с текстом CON-01, статус — константа `RESTORE_EXPERIMENTAL = True`; `schemas/restore-result.schema.json` (`status`, `next_step`|`reason`, `checks[]`, `wip`, `namespace`; exit 0/1/2))
+- [ ] реализовать BEH-41: Ack и recovery укладываются в объявленные бюджеты, а не в CI-гейт (DEL-39 (module): `scripts/bench_durability.py` (manual: ack call-start p95/p99 и время доступности checkpoint-а вне машины, сравнение с NFR-02 в отчёте) и CI-тест `test_validation_under_60s` на reference-наборе ≈ 10 MiB)
+- [ ] реализовать BEH-43: Ни байта checkpoint/evidence/spool в продуктовом Git после всех E2E (DEL-40 (capability): Autouse-фикстура в `tests/conftest.py`: после каждого E2E под git automation `git status --porcelain` продуктового репо не содержит путей под `.executor-*` и `tracked_state_paths` пуст)
+- [ ] DEL-36 (capability): Следующий безопасный шаг выводится из DB: open call → `needs-human`; confirmed red без green → `run --task <id>`; после green с не-DONE lifecycle → `tdd resume <id>`; иначе `run --all`
+- [ ] DEL-37 (module): Новый `spool.py`, читающая половина: `Spool(path)`, `read` (единственные читатели — `replay` и checkpoint), проверка sha256 строки с отказом, называющим `seq` и оба digest-а, `replay(state)` в порядке `seq` с таблицей `spool_replays (run_id, seq)` для идемпотентности
+- [ ] DEL-38 (capability): Проверка (6) namespace-wide: половины `BLOCKING`/`NON_BLOCKING` шага 5 объявлены рядом с `PAYING_SUBCOMMANDS` с тестом полноты `set(PAYING_SUBCOMMANDS) == BLOCKING | NON_BLOCKING`; более поздний блокирующий прогон с acknowledged checkpoint-ом — `needs-human` с исполнимым выходом (последний блокирующий прогон без блокирующих после себя); холостой прогон не мешает; `--json` несёт `workstream` (`later_runs[]`, `open_calls[]`)
 - [ ] проверка группы: tests/test_restore_drill.py (kind: e2e), tests/test_restore_drill.py (kind: integration), tests/test_restore_refusals.py (kind: integration), scripts/bench_durability.py (kind: manual) зелёные на BEH-16, BEH-17, BEH-18, BEH-19, BEH-20, BEH-21, BEH-41, BEH-43
 
 **Traces to:** [FR-04], [FR-05], [FR-02], [FR-03], [FR-06]
@@ -658,11 +685,14 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-01, BEH-02 (DT-07, группа identity).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-07
+**Delivers:** DEL-41, DEL-42, DEL-43, DEL-44
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-01: Все каналы прогона несут один и тот же full UUIDv4 `run_id`, а `pipeline_id` лежит рядом
-- [ ] реализовать BEH-02: Каждый invocation чеканит новый `run_id`, `watch` — один на весь цикл
+- [ ] реализовать BEH-01: Все каналы прогона несут один и тот же full UUIDv4 `run_id`, а `pipeline_id` лежит рядом (DEL-41 (capability): `AuditLogger` принимает `run_id` обязательным параметром из контекста в `build_audit_logger`, собственный `uuid.uuid4()` удалён; `run_id` в structlog contextvars рядом с `pipeline_id`, так что OTel-записи несут его без правки формата)
+- [ ] реализовать BEH-02: Каждый invocation чеканит новый `run_id`, `watch` — один на весь цикл (DEL-44 (capability): Статические тесты: в `cli.py` нет `uuid4().hex[:8]` как источника `run_id`, в `audit_log.py` нет собственного `uuid4()`)
+- [ ] DEL-42 (capability): `prompts_log.log_prompt` пишет `run_id`/`call_id` в заголовочную строку `=== <SLUG> PROMPT ===`; тело между заголовком и терминальной секцией остаётся prompt-ом как отправлен, байт в байт
+- [ ] DEL-43 (capability): `watch` — один `start()` на invocation, одна closure, строки обеих задач под одним `run_id`
 - [ ] проверка группы: tests/test_run_identity.py (kind: e2e), tests/test_run_identity.py (kind: integration) зелёные на BEH-01, BEH-02
 
 **Traces to:** [FR-01]
@@ -672,13 +702,15 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-15, BEH-33, BEH-34, BEH-35 (DT-08, группа spool).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-08
+**Delivers:** DEL-45, DEL-46, DEL-47, DEL-48
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-15: Checkpoint в degraded mode включает spool и помечен `degraded: true`
-- [ ] реализовать BEH-33: Отказ SQLite сохраняет mutation в spool; новый процесс доигрывает её в DB до любой работы
-- [ ] реализовать BEH-34: Replay идемпотентен, повреждённая строка spool останавливает старт
+- [ ] реализовать BEH-15: Checkpoint в degraded mode включает spool и помечен `degraded: true` (DEL-47 (capability): Checkpoint в degraded mode: DB snapshot из последнего успешного состояния файла, `spool.jsonl` — копия байтов активного spool-а, manifest `degraded: true`, `sequence` — из spool)
+- [ ] реализовать BEH-33: Отказ SQLite сохраняет mutation в spool; новый процесс доигрывает её в DB до любой работы (DEL-45 (capability): `state._enter_degraded_mode`: каждый `record_*`, поймавший `OperationalError`, вызывает `Spool.append(table, payload)` (append-only, `fsync` на строку, строка `{seq, run_id, namespace, task_id, attempt, table, payload, sha256}`) и возвращается как записанный только при успехе; `_save()` тем же путём; отказ spool-а → `Refusal(kind=instrument)`, следующий платный вызов не начинается, exit 2, closure `failed` с причиной, называющей обе неудачи)
+- [ ] реализовать BEH-34: Replay идемпотентен, повреждённая строка spool останавливает старт (DEL-46 (capability): `spool.replay(state)` вызывается на старте `run`/`retry`/`watch` после run-start и гардов старта до выбора задачи, из `tdd`/`budget`-команд и из `restore`; повреждённая строка — отказ с `seq` и обоими digest-ами, 0 `Popen`, closure `failed`; после replay файл ротируется в `.executor-spool.<ts>.jsonl.done` и ссылка `spool_replayed` уходит в следующий manifest)
 - [ ] реализовать BEH-35: Одновременный отказ DB и spool останавливает исполнение до следующего платного вызова
+- [ ] DEL-48 (capability): Статический тест единственного читателя: `Spool.read` вызывается только из `replay` и checkpoint-а; `get_next_tasks`, claims gate и budget guard spool не читают
 - [ ] проверка группы: tests/test_emergency_spool.py (kind: integration), tests/test_emergency_spool.py (kind: contract) зелёные на BEH-15, BEH-33, BEH-34, BEH-35
 
 **Traces to:** [FR-03], [FR-08], [FR-07]
@@ -688,12 +720,15 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-09, BEH-10, BEH-11 (DT-09, группа door).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-09
+**Delivers:** DEL-49, DEL-50, DEL-51, DEL-52, DEL-53
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-09: Open call блокирует продолжение: `run --all` пропускает, `run --task` отказывает, `restore` даёт `needs-human` до subprocess
-- [ ] реализовать BEH-10: Один `call_id` — ровно один call-start и не более одного call-result
-- [ ] реализовать BEH-11: Open call закрывается только аудируемой операторской командой
+- [ ] реализовать BEH-09: Open call блокирует продолжение: `run --all` пропускает, `run --task` отказывает, `restore` даёт `needs-human` до subprocess (DEL-49 (capability): `paid_call.open_calls(config, state) → list[OpenCall]` — процедура Q-12 с двумя ветками по meta `continuation_index`: при `local` — targeted `get` двух ключей на каждую `open`-строку (call-result закрывает; call-start без результата — open call; ни того ни другого — `not_started`); при отсутствии маркера или `restored` — один `list` индекса workstream-а, восстановление `open`-строк с `task_id` из call-start, маркер `local` последним шагом; недоступный store — `Refusal(kind=instrument)`, exit 2, маркер не ставится)
+- [ ] реализовать BEH-10: Один `call_id` — ровно один call-start и не более одного call-result (DEL-53 (capability): Контракт `call_id` живьём: второй call-result и второй call-start под тем же id отвергнуты с именем `call_id`, первая запись неизменна, отказ не улучшает исход задачи)
+- [ ] реализовать BEH-11: Open call закрывается только аудируемой операторской командой (DEL-52 (module): Дверь `spec-runner evidence close-call <run_id> --call <call_id> --reason …` по образцу `remedy.cmd_tdd`: обязательный `--reason`, записанный actor, `SPEC_RUNNER_AGENT` guardrail, отказ под PID-checked lock, идемпотентность по `result.json` в store до записи; пишет `CallResult(outcome=resolved_unknown, supersedes=<start key>)` и закрывает строку ledger-а семейства вызова; входит в `PAYING_SUBCOMMANDS` и той же строкой в `NON_BLOCKING`)
+- [ ] DEL-50 (capability): Общий рубеж старта `cli._run_start_gate(args, config, state)` вызывается из трёх handler-ов сразу после гардов старта: `_run_tasks_inner`, `cmd_retry` и `cmd_watch` (один раз на invocation)
+- [ ] DEL-51 (capability): `run --all` пропускает задачу с open call с причиной, называющей `call_id`, provenance и «open call», и выполняет остальные ready; `run --task` отказывает той же причиной, exit 1; ни один путь не создаёт второй call-start для того же attempt
 - [ ] проверка группы: tests/test_open_call_door.py (kind: e2e), tests/test_open_call_door.py (kind: contract), tests/test_open_call_door.py (kind: integration) зелёные на BEH-09, BEH-10, BEH-11
 
 **Traces to:** [FR-02], [FR-05], [FR-06]
@@ -703,15 +738,20 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-04, BEH-29, BEH-30, BEH-31, BEH-32, BEH-46 (DT-10, группа closure).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-10
+**Delivers:** DEL-54, DEL-55, DEL-56, DEL-57, DEL-58
 **Depends on:** [TASK-006]
 
 **Checklist:**
 - [ ] реализовать BEH-04: Read-only команды получают `run_id` для логов, но run-start не пишут
 - [ ] реализовать BEH-29: Каждый orderly exit `run`, включая пути до attempt, оставляет ровно одну closure, и её kind выведен из кода выхода и исхода работы
 - [ ] реализовать BEH-30: `kill -9` не оставляет closure, и читатели классифицируют прогон как crash/unknown
-- [ ] реализовать BEH-31: Closure — последняя запись; отказ ack последнего checkpoint-а и повторная closure обрабатываются fail-closed
+- [ ] реализовать BEH-31: Closure — последняя запись; отказ ack последнего checkpoint-а и повторная closure обрабатываются fail-closed (DEL-56 (capability): Отказные режимы записи closure: повторная closure → `AlreadyExists`, первая неизменна; отказ записи closure → stderr с причиной, exit code не улучшается; closure по времени позже последнего checkpoint-ack)
 - [ ] реализовать BEH-32: Kind closure выводит одна функция из кода выхода и исхода работы; ни один сайт выхода kind не выбирает
 - [ ] реализовать BEH-46: Каждая платящая подкоманда вне `run` закрывается closure своего исхода, и ни один её нулевой код не выдаёт невыполненную работу за успех
+- [ ] DEL-54 (module): `closure.derive(outcome)` — единственное место правила вывода kind: исключение → `crashed`; сигнал (флаг `executor._shutdown_requested`) → `interrupted`; код ≠ 0 при отказном `error_kind` последнего неуспешного attempt-а из `ERROR_KINDS` → `refused`; прочий код ≠ 0 → `failed`; код 0 с невыполненной работой или open call → `failed`; код 0 без неё → `completed`; второй словарь отказных kind-ов не заводится
+- [ ] DEL-55 (capability): Kind выводит диспетчер `cli.main()`; ни один сайт выхода ни одной подкоманды не правится; `CLOSURE_KINDS` не расширяется, `RUN_STOP_REASONS` остаётся семизначным, `set_meta(last_run_stop_reason)` и его дефолт не трогаются
+- [ ] DEL-57 (capability): Closure несёт `run_id`, `pipeline_id`, подкоманду, kind, свободную строку `reason`, exit code, число open calls, `degraded`/spool status, timestamps start/end, `last_call_ids`/`attempt_ids`
+- [ ] DEL-58 (capability): `PAYING_SUBCOMMANDS` — одиннадцать позиций с ровно одним run-start и одной closure на invocation, включая три пути без executor lock (`retry`, `watch`, `run --all --force`); read-only команды run-start/checkpoint/closure не пишут; после `kill -9` closure нет, `evidence` — `crash/unknown`, `status` показывает `run_id` незавершённого прогона
 - [ ] проверка группы: tests/test_closure_every_exit.py (kind: integration), tests/test_closure_every_exit.py (kind: e2e), tests/test_closure_every_exit.py (kind: contract) зелёные на BEH-04, BEH-29, BEH-30, BEH-31, BEH-32, BEH-46
 
 **Traces to:** [FR-01], [FR-07], [FR-09], [FR-03]
@@ -721,10 +761,13 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-40 (DT-11, группа integrity).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-11
+**Delivers:** DEL-59, DEL-60, DEL-61
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-40: Любой изменённый байт или отсутствующий обязательный файл — fail-closed до `Popen` и claims gate
+- [ ] реализовать BEH-40: Любой изменённый байт или отсутствующий обязательный файл — fail-closed до `Popen` и claims gate (DEL-59 (capability): Проверка (2) `restore` параметризована по каждому файлу bundle-а (DB snapshot, manifest, WIP artifact, spool, каждый call record, экспорт attempt-а, closure) × {один байт изменён; обязательный файл удалён}; изменённый manifest отвергается по `manifest_sha256`, даже если перечисленные digests сходятся)
+- [ ] DEL-60 (capability): `run` (и `retry`/`watch`) на старте — после run-start и гардов старта, до `Popen` и до `claims.check_claims` — проверяет целостность bundle-а, от которого namespace продолжается, и отказывает `Refusal(kind=instrument)`, exit 2, closure `failed`
+- [ ] DEL-61 (capability): `evidence` при повреждении — exit 2 с `reason`, называющим файл и оба digest-а; `restore --json` и `evidence --json` несут то же в `reason`; авто-лечения нет, ни один вариант не заканчивается успешным restore с предупреждением
 - [ ] проверка группы: tests/test_integrity_fail_closed.py (kind: integration) зелёные на BEH-40
 
 **Traces to:** [FR-03], [FR-04], [FR-05], [FR-06], [FR-07]
@@ -734,10 +777,13 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-42 (DT-12, группа retention).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-12
+**Delivers:** DEL-62, DEL-63, DEL-64
 **Depends on:** [TASK-006]
 
 **Checklist:**
-- [ ] реализовать BEH-42: Retention вне 7–365 дней отклоняется; удаление оставляет audit-запись без содержимого
+- [ ] реализовать BEH-42: Retention вне 7–365 дней отклоняется; удаление оставляет audit-запись без содержимого (DEL-62 (module): Новый `retention.py`: каждый `put` несёт метаданные (`run_id`, `kind`, `closure_at`, `retention_until`); `spec-runner evidence purge <run_id> --reason …` (обязательный `--reason`, actor, `SPEC_RUNNER_AGENT` guardrail) считает истёкшее и удаляемые промежуточные checkpoint-ы (только с acknowledged преемником), вызывает `delete` адаптера и только после успеха пишет `deletions/<ts>.json` без payload; отказ store оставляет всё как есть и audit-записи не пишет; `AuditLogger` получает копию)
+- [ ] DEL-63 (capability): `evidence purge` входит в `PAYING_SUBCOMMANDS` и той же строкой в `NON_BLOCKING` шага 5; kind её closure выводит диспетчер по коду выхода (0 `completed`, 1 и 2 `failed`); open call она не закрывает по построению
+- [ ] DEL-64 (capability): проверить, что `retention_days` вне 7–365 — `ConfigError` при загрузке и ошибка `validate`, наблюдается вместе с удалением — повтор обязательства DEL-04 из TASK-001
 - [ ] проверка группы: tests/test_retention_policy.py (kind: integration) зелёные на BEH-42
 
 **Traces to:** [FR-03], [FR-06], [FR-07]
@@ -747,14 +793,18 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-08, BEH-22, BEH-23, BEH-25, BEH-27 (DT-13, группа matrix).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-13
+**Delivers:** DEL-65, DEL-66, DEL-67, DEL-68, DEL-69
 **Depends on:** [TASK-008], [TASK-009]
 
 **Checklist:**
-- [ ] реализовать BEH-08: Timeout, пустой ответ, `is_error` при exit 0 и crash провайдера — это call-result, не open call
+- [ ] реализовать BEH-08: Timeout, пустой ответ, `is_error` при exit 0 и crash провайдера — это call-result, не open call (DEL-66 (capability): Четыре режима fake CLI (timeout, пустой ответ, `is_error` при exit 0, crash провайдера) дают call-result с outcome по `classify_agent_answer`, а не open call: `evidence` показывает 0 open calls, следующий `run` не ставит задачу в `needs-human`)
 - [ ] реализовать BEH-22: Матрица outcome × site — каждая клетка оставляет адресуемый call record
 - [ ] реализовать BEH-23: Terminal attempt экспортирует свои строки JSONL, и только свои
-- [ ] реализовать BEH-25: Опубликованная запись не переписывается; исправление — новая запись со ссылкой
+- [ ] реализовать BEH-25: Опубликованная запись не переписывается; исправление — новая запись со ссылкой (DEL-68 (capability): Immutability на живом адаптере: повторный `put` с другим содержимым отвергнут, чтение возвращает исходник байт в байт, исправление — новая запись с `supersedes`, `evidence <run_id>` показывает обе, помечая первую superseded, не удаляя)
 - [ ] реализовать BEH-27: Секреты не публикуются; единственный путь публикации проходит через redactor
+- [ ] DEL-65 (capability): Матрица outcome {success, `TASK_FAILED`, blocked, timeout, infrastructure error} × site {GREEN, review, `review:<role>`, `plan --full`, `plan --gated`, интерактивный `plan`, `review-pr fix`, `doctor`}: каждая клетка оставляет call record, адресуемый `run_id/call_id`, с provenance, outcome, стоимостью (число или `null`, никогда `0.0` за неизвестную), bounded/redacted prompt и result с SHA-256 и размером; число records равно числу `spawn` двойника; найденные дыры seam-а закрываются здесь
+- [ ] DEL-67 (capability): Экспорт `pr_*` при завершении раунда `review-pr`; «только свои строки» для трёх задач с исходами `done`/`failed`/`blocked` по `evidence-record.schema.json`; корроборирующие срезы `.task-history.log` от отметки `RunContext.start()` и audit-trail по своему `run_id` через redactor и `bound_evidence`, оба необязательные
+- [ ] DEL-69 (document): Корпус `tests/fixtures/secrets-corpus/` из 100 синтетических секретов известной формы; паттерны `redaction.py` дополнены до полного покрытия корпуса; статический пояс по образцу `PaidBinaryReached` на `ArtifactStore.put` вне `Publisher.publish`; ни одно из 100 значений — ни в одном файле у двойника store при `full_sha256`/`full_size` от исходника
 - [ ] проверка группы: tests/test_evidence_every_outcome.py (kind: integration), tests/test_evidence_every_outcome.py (kind: contract), tests/test_redaction_corpus.py (kind: integration) зелёные на BEH-08, BEH-22, BEH-23, BEH-25, BEH-27
 
 **Traces to:** [FR-02], [FR-06], [FR-09]
@@ -764,11 +814,13 @@ P2 | TODO   Est: 0.5d
 
 Реализовать сценарии BEH-39, BEH-45 (DT-14, группа gate).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-14
+**Delivers:** DEL-70, DEL-71, DEL-72
 **Depends on:** [TASK-007], [TASK-010], [TASK-011], [TASK-012], [TASK-013]
 
 **Checklist:**
-- [ ] реализовать BEH-39: Ни одна подтверждённая mutation не теряется на любой границе (fault-injection ×1000)
-- [ ] реализовать BEH-45: Документация, схемы и статус experimental говорят то же, что код; соседям объявлен контракт
+- [ ] реализовать BEH-39: Ни одна подтверждённая mutation не теряется на любой границе (fault-injection ×1000) (DEL-70 (capability): Точки инъекции в seam-ах (`paid_call.execute`, `checkpoint.after_mutation`, `Spool.append`, `RunContext.start`) и slow-тест `tests/test_write_ahead_fault_injection.py`: параметризован по границе, 1000 повторений на границу, детерминирован по seed; суммарно 0 mutation, подтверждённых и отсутствующих после рестарта, 0 `spawn` без acknowledged call-start, 0 автоматических повторов open call; найденные дыры закрываются в границах seam-ов)
+- [ ] реализовать BEH-45: Документация, схемы и статус experimental говорят то же, что код; соседям объявлен контракт (DEL-71 (document): Отдельными коммитами после green: раздел «Runtime-state inventory and delivery policy (#478)» в `docs/architecture.md` с контрактом checkpoint/evidence/closure и operational minimum для legacy, снятие `runner.run_claude_async` с диаграмм и та же правка в `CLAUDE.md`, сводка `docs/state-schema.md`, проверка полноты пяти схем в `schemas/`, CHANGELOG под Unreleased со статусом `experimental` для `restore` (CON-01) и ссылкой на #480, README с блоком `durability:` и командами `restore`/`evidence`)
+- [ ] DEL-72 (document): Человеческие действия при приёмке PR: контракт `run_id`/`pipeline_id` объявлен соседям (devtools, Maestro) issue с `slug:` + `from:` либо записью в vault без правки их файлов; #480 закрыт ссылкой на PR с restore-drill (M-01) и матрицей open call (M-02); пункт `runtime-state-artifact-export` в `TODO.md` закрыт; 1 GiB drill выполнен и время записано
 - [ ] проверка группы: tests/test_write_ahead_fault_injection.py (kind: e2e), docs/architecture.md (kind: manual) зелёные на BEH-39, BEH-45
 
 **Traces to:** [FR-02], [FR-03], [FR-08], [FR-01], [FR-05], [FR-09]
