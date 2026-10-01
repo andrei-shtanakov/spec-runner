@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import shlex
 import signal
 import sys
@@ -2075,6 +2076,17 @@ def _common_parser(*, task_timeout: bool = True) -> argparse.ArgumentParser:
     return common
 
 
+def _positive_seconds(text: str) -> float:
+    """An argparse type: a positive, finite number of seconds."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} must be a positive, finite number of seconds")
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser.
 
@@ -2281,6 +2293,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--criteria",
         action="store_true",
         help="Measure criteria closure (criteria-closure/v1): needs --request and --json; "
+        "measures --project-root, else the cwd's git toplevel (the cwd outside a repo); "
         "prints exactly one JSON document, exit 0 on an answer, 2/3 on an error document",
     )
     verify_parser.add_argument(
@@ -2288,7 +2301,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument(
         "--selector-timeout",
-        type=float,
+        type=_positive_seconds,
         default=300.0,
         metavar="SECONDS",
         help="With --criteria: bound of one pytest run (default 300)",
@@ -2296,7 +2309,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument(
         "--timeout",
         dest="criteria_timeout",
-        type=float,
+        type=_positive_seconds,
         default=3600.0,
         metavar="SECONDS",
         help="With --criteria: the whole measurement's deadline (default 3600)",
@@ -2732,10 +2745,9 @@ def _criteria_early_exit(parser: argparse.ArgumentParser, args: argparse.Namespa
     """
     if not (args.request and args.json_output):
         parser.error("verify --criteria requires --request PATH and --json")
-    from .cli_info import run_verify_criteria
+    from .cli_info import criteria_root, run_verify_criteria
 
-    root = Path(args.project_root) if args.project_root else Path.cwd()
-    raise SystemExit(run_verify_criteria(args, root.resolve()))
+    raise SystemExit(run_verify_criteria(args, criteria_root(args.project_root)))
 
 
 def main(argv=None):  # untyped on purpose: its body predates mypy strict

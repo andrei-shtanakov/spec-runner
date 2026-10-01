@@ -18,7 +18,6 @@ from jsonschema import Draft7Validator
 
 from spec_runner import __version__
 from spec_runner.cli import main
-from spec_runner.criteria_select import content_sha256, digest_paths
 
 ROOT = Path(__file__).parent.parent
 SCHEMA = json.loads((ROOT / "schemas/criteria-closure/v1/response.schema.json").read_text())
@@ -104,6 +103,65 @@ class TestRequestInvalid:
         (tmp_path / "spec-runner.config.yaml").write_text("{: [unclosed")
         argv = ["verify", "--criteria", "--project-root", str(tmp_path), "--json"]
         self._document([*argv, "--request", str(tmp_path / "missing.json")], capsys)
+
+
+class TestRobustness:
+    def test_deeply_nested_json_is_request_invalid(self, tmp_path: Path, capsys) -> None:
+        request = tmp_path / "r.json"
+        request.write_text("[" * 100000)
+        code, out = _run(["verify", "--criteria", "--request", str(request), "--json"], capsys)
+        assert code == 2
+        assert json.loads(out)["error"]["kind"] == "request-invalid"
+
+    @pytest.mark.parametrize("flag", ["--selector-timeout", "--timeout"])
+    @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf", "abc"])
+    def test_timeouts_must_be_positive_and_finite(self, flag: str, value: str, capsys) -> None:
+        argv = ["verify", "--criteria", "--request", "r.json", "--json", flag, value]
+        code, out = _run(argv, capsys)
+        assert code == 2
+        assert out == ""
+
+
+class TestRoot:
+    def _captured(self, monkeypatch, argv: list[str], capsys) -> Path:
+        seen: list[Path] = []
+
+        def fake(project_root, data, **kwargs):
+            seen.append(project_root)
+            return 0, {"protocol": 1}
+
+        monkeypatch.setattr("spec_runner.criteria_measure.measure", fake)
+        request = Path(argv[argv.index("--request") + 1])
+        request.write_text("{}")
+        _run(argv, capsys)
+        return seen[0]
+
+    def test_a_subdirectory_measures_the_enclosing_repo(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        repo = (tmp_path / "repo").resolve()
+        (repo / "sub").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        monkeypatch.chdir(repo / "sub")
+        argv = ["verify", "--criteria", "--request", str(tmp_path / "r.json"), "--json"]
+        assert self._captured(monkeypatch, argv, capsys) == repo
+
+    def test_outside_a_repo_falls_back_to_the_cwd(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        plain = (tmp_path / "plain").resolve()
+        plain.mkdir()
+        monkeypatch.chdir(plain)
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        argv = ["verify", "--criteria", "--request", str(tmp_path / "r.json"), "--json"]
+        assert self._captured(monkeypatch, argv, capsys) == plain
+
+    def test_an_explicit_project_root_wins(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        elsewhere = (tmp_path / "e").resolve()
+        elsewhere.mkdir()
+        argv = ["verify", "--criteria", "--project-root", str(elsewhere)]
+        argv += ["--request", str(tmp_path / "r.json"), "--json"]
+        assert self._captured(monkeypatch, argv, capsys) == elsewhere
 
 
 def test_the_command_path_needs_no_pytest(tmp_path: Path) -> None:
@@ -218,26 +276,32 @@ def test_end_to_end(tmp_path: Path, monkeypatch, capsys) -> None:
     }
     assert document["environment"]["groups"] == ["dev"]
 
-    excluded = [
-        type("E", (), {"how": e["how"], "path": e.get("path")})()
-        for e in document["collection_excluded"]
+    assert document["product_roots"]["files"] == ["pkg/__init__.py", "pkg/mod.py"]
+    assert document["test_files"] == ["conftest.py", "pyproject.toml", "tests/test_a.py"]
+    assert document["collection_excluded"] == []
+    digest_files = [
+        "conftest.py",
+        "pkg/__init__.py",
+        "pkg/mod.py",
+        "pyproject.toml",
+        "tests/test_a.py",
     ]
-    paths = digest_paths(
-        document["product_roots"]["files"],
-        document["test_files"],
-        excluded,  # type: ignore[arg-type]
-        [
-            p
-            for p in _git(root, "ls-tree", "-r", "--name-only", sha).splitlines()
-            if p.endswith(".py")
-        ],
-    )
-    blobs = {p: _show(root, sha, p) for p in paths}
     lock = hashlib.sha256(_show(root, sha, "uv.lock")).hexdigest()
-    assert document["content_sha256"] == content_sha256(
-        document["product_roots"]["declared"], lock, ["dev"], [], blobs
-    )
+    rev4 = {
+        "v": 1,
+        "product_roots": ["pkg"],
+        "lock": lock,
+        "environment": {"groups": ["dev"], "extras": []},
+        "files": [[p, hashlib.sha256(_show(root, sha, p)).hexdigest()] for p in digest_files],
+    }
+    encoded = json.dumps(rev4, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    assert document["content_sha256"] == hashlib.sha256(encoded.encode("ascii")).hexdigest()
 
+    items = {i["node_id"]: i for i in document["test_items"]}
+    assert set(items) == {"tests/test_a.py::test_traced", "tests/test_a.py::test_reader"}
+    for beh in document["beh"]:
+        for selector in beh["selectors"]:
+            assert selector["definition"] == items[selector["node_id"]]["definition"]
     for item in document["test_items"]:
         qualname = item["definition"]["qualname"]
         assert item["definition"]["line"] == _definition_at(

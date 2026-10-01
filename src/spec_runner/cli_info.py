@@ -603,6 +603,25 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
         sys.exit(1)
 
 
+def criteria_root(project_root: str) -> Path:
+    """The repo `verify --criteria` measures: `--project-root`, else the cwd's repo toplevel.
+
+    `git rev-parse --show-toplevel` from the cwd (a subdirectory measures its repo), the
+    cwd itself outside a repo. The remote and every sha are checked by the measurement.
+    """
+    if project_root:
+        return Path(project_root).resolve()
+    from .criteria_process import Deadline, c_locale_env, run_bounded
+
+    cwd = Path.cwd()
+    argv = ["git", "rev-parse", "--show-toplevel"]
+    done = run_bounded(argv, cwd=cwd, env=c_locale_env(), deadline=Deadline(30))
+    top = done.stdout.decode("utf-8", "replace").strip()
+    if done.returncode != 0 or not top:
+        return cwd.resolve()
+    return Path(top).resolve()
+
+
 def run_verify_criteria(args: argparse.Namespace, project_root: Path) -> int:
     """`verify --criteria` (#603): print the one response document, return the exit code."""
     import json
@@ -613,7 +632,7 @@ def run_verify_criteria(args: argparse.Namespace, project_root: Path) -> int:
     version = __version__
     try:
         data = json.loads(Path(args.request).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
         code, document = request_invalid(
             f"cannot read the request {args.request}: {exc}", version=version
         )
@@ -632,9 +651,6 @@ def run_verify_criteria(args: argparse.Namespace, project_root: Path) -> int:
 def cmd_verify(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Verify post-execution compliance against spec."""
     from .verify import format_verify_json, format_verify_text, verify_all
-
-    if getattr(args, "criteria", False):
-        sys.exit(run_verify_criteria(args, config.project_root))
 
     task_id = getattr(args, "task", None)
     strict = getattr(args, "strict", False)
