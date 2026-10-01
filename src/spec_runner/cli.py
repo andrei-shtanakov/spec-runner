@@ -305,6 +305,16 @@ def _enforce_halt(config: ExecutorConfig) -> None:
     sys.exit(halt_gate.EXIT_UNREAD if code == "refuse_unknown" else halt_gate.EXIT_HALTED)
 
 
+def _halt_admits(config: ExecutorConfig) -> bool:
+    """For the watch daemon: may the NEXT task start? Logs a refusal."""
+    if not halt_gate.enabled():
+        return True
+    admit, code, reason = halt_gate.check(config.project_root)
+    if not admit:
+        logger.warning("watch paused: DarkFactory halt", code=code, reason=reason)
+    return admit
+
+
 def _enforce_spec_governance(config: ExecutorConfig) -> None:
     """Refuse the run when the governance gate blocks it — fail-closed (#134).
 
@@ -1820,6 +1830,11 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
                     ready = get_next_tasks(tasks)
                     if not ready:
                         time.sleep(5)
+                        continue
+                    if not _halt_admits(config):
+                        # The daemon pauses under a halt rather than exiting:
+                        # each NEW task asks again (review #631).
+                        time.sleep(30)
                         continue
                     task = ready[0]
                     with ExecutorState(config) as state:

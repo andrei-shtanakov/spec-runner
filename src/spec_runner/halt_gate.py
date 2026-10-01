@@ -56,11 +56,20 @@ def decide(listing: list[dict[str, Any]] | None, detail: dict[str, Any] | None) 
     return False, "refuse_enforcement", f"halt enforcement {enforcement!r}"
 
 
+def _scp_host(url: str) -> str | None:
+    """Host of an scp-like `[user@]host:path` origin, any ssh user (review #631)."""
+    if "://" in url or url.startswith("/") or ":" not in url:
+        return None
+    head = url.split(":", 1)[0]
+    return head.rsplit("@", 1)[-1] if "/" not in head else None
+
+
 def is_github_origin(url: str) -> bool:
     """Whether an origin URL's host is exactly github.com (admit_not_github)."""
     url = url.strip()
-    if url.startswith("git@"):
-        host = url[4:].split(":", 1)[0]
+    scp = _scp_host(url)
+    if scp is not None:
+        host = scp
     elif "://" in url:
         rest = url.split("://", 1)[1]
         host = rest.split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]
@@ -71,27 +80,44 @@ def is_github_origin(url: str) -> bool:
 
 def _slug(url: str) -> str | None:
     """owner/name of a github.com origin, or None when it cannot be parsed."""
-    url = url.strip()  # `git remote get-url` ends with a newline
-    path = url.split(":", 1)[1] if url.startswith("git@") else url
+    url = url.strip()  # git output ends with a newline
+    path = url.split(":", 1)[1] if _scp_host(url) is not None else url
     if "://" in path:
         path = path.split("://", 1)[1].split("/", 1)[-1]
     parts = [p for p in path.removesuffix(".git").split("/") if p]
     return f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else None
 
 
-def _run(*argv: str, cwd: Path | None = None) -> str | None:
+def _run_rc(*argv: str) -> tuple[int, str]:
+    """(returncode, stdout); a process that could not run is rc -1."""
     try:
-        done = subprocess.run(
-            list(argv), cwd=cwd, capture_output=True, text=True, timeout=60, check=False
-        )
+        done = subprocess.run(list(argv), capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    return done.stdout if done.returncode == 0 else None
+        return -1, ""
+    return done.returncode, done.stdout
+
+
+def _run(*argv: str) -> str | None:
+    rc, out = _run_rc(*argv)
+    return out if rc == 0 else None
+
+
+def _origin(project_root: Path) -> tuple[bool, str | None]:
+    """(read, url). `git config --get` exits 1 exactly when the key is
+    absent — "no origin" is then a fact; any other failure (git missing, a
+    timeout, "dubious ownership", an unreadable .git) is an UNREAD origin,
+    never "not GitHub" (review #631)."""
+    rc, out = _run_rc("git", "-C", str(project_root), "config", "--get", "remote.origin.url")
+    if rc == 0:
+        return True, out
+    return (True, None) if rc == 1 else (False, None)
 
 
 def check(project_root: Path) -> Decision:
     """Read the halt of the repository at *project_root* and decide."""
-    origin = _run("git", "-C", str(project_root), "remote", "get-url", "origin")
+    read, origin = _origin(project_root)
+    if not read:
+        return False, "refuse_unknown", "the checkout's origin could not be read"
     if origin is None or not is_github_origin(origin):
         return True, "admit_not_github", "the checkout has no github.com origin"
     slug = _slug(origin)
