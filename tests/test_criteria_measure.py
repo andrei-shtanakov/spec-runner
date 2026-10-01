@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from jsonschema import Draft7Validator
 
-from spec_runner import criteria_measure
+from spec_runner import criteria_measure, criteria_run
 from spec_runner.criteria_config import ProductCriteria
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
 from spec_runner.criteria_inventory import PLUGINS_ESTABLISHED, Excluded, Inventory, TestItem
@@ -408,13 +408,36 @@ class TestErrors:
     def test_unparseable_product_is_unsupported_runtime_before_any_run(
         self, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def refuse(files: Any, blobs: Any) -> Any:
+        versions: list[str] = []
+
+        def refuse(files: Any, blobs: Any, *, product_version: str) -> Any:
+            versions.append(product_version)
             raise CriteriaError(ErrorKind.UNSUPPORTED_RUNTIME, "pkg/mod.py: PEP 695")
 
         monkeypatch.setattr(criteria_measure, "product_body_lines", refuse)
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 2 and doc["error"]["kind"] == "unsupported-runtime"
         assert "content_sha256" in doc and "beh" not in doc and not pipeline.runs
+        assert versions == ["3.12.13"]  # the product environment's Python (R-B16)
+
+    @pytest.mark.parametrize(
+        ("orchestrator", "code", "kind"),
+        [((3, 11), 2, "unsupported-runtime"), ((3, 12), 3, "product-roots-invalid")],
+    )
+    def test_an_unparseable_product_file_by_version(
+        self,
+        pipeline: Pipeline,
+        monkeypatch: pytest.MonkeyPatch,
+        orchestrator: tuple[int, int],
+        code: int,
+        kind: str,
+    ) -> None:
+        """R-B16: older orchestrator → unsupported-runtime; otherwise the product's fault."""
+        monkeypatch.setitem(BLOBS, "pkg/mod.py", b"def f(:\n    pass\n")
+        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: orchestrator)
+        got, doc = pipeline.measure(_request("ABC:BEH-1"))
+        assert (got, doc["error"]["kind"]) == (code, kind)
+        assert "pkg/mod.py" in doc["error"]["detail"] and not pipeline.runs
 
     def test_selector_absent_from_a_run(self, pipeline: Pipeline) -> None:
         def absent(call: dict[str, Any]) -> dict[str, object]:

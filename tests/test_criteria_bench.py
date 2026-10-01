@@ -22,10 +22,9 @@ from spec_runner.criteria_process import Deadline
 from spec_runner.criteria_run import product_body_lines, run_selector
 from spec_runner.criteria_select import select
 from spec_runner.criteria_workspace import Environment, distribution_args, read_blobs
+from tests.criteria_bench_required import import_plugin, needs_312
 
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="the bench needs CPython >= 3.12 (sys.monitoring)"
-)
+pytestmark = needs_312("the bench needs CPython >= 3.12 (sys.monitoring)")
 
 COUNTER_ENV = "BENCH_FLAKY_COUNTER"  # not PYTHON*/PYTEST_*/VIRTUAL_ENV/GIT_*: child_env keeps it
 CONFTEST = "import sys, os\nsys.path.insert(0, os.path.dirname(__file__))\n"
@@ -79,7 +78,9 @@ class Bench:
             self.checkout, self.sha, [*self.product, "conftest.py", *self.tests], Deadline(60)
         )
         self.body_lines = product_body_lines(
-            self.product, {p: self.measured[p] for p in self.product}
+            self.product,
+            {p: self.measured[p] for p in self.product},
+            product_version=_env().version,
         )
 
     def run(self, node_id: str, distribution: Sequence[str] = ()) -> dict[str, object]:
@@ -247,7 +248,7 @@ class TestResolvedDefinitions:
 
 class TestDistribution:
     def test_xdist_in_addopts_runs_in_the_owner_and_is_traced(self, tmp_path):
-        pytest.importorskip("xdist")
+        import_plugin("xdist")
         files = {
             **_test("test_a", "    assert work(1) == 2", "from pkg.mod import work"),
             "pytest.ini": "[pytest]\naddopts = -n 2\n",
@@ -261,7 +262,7 @@ class TestDistribution:
         assert selector_status(runs) == TRACED
 
     def test_forked_in_addopts_is_distributed_execution(self, tmp_path):
-        pytest.importorskip("pytest_forked")
+        import_plugin("pytest_forked")
         files = {
             **_test("test_a", "    assert work(1) == 2", "from pkg.mod import work"),
             "pytest.ini": "[pytest]\naddopts = --forked\n",

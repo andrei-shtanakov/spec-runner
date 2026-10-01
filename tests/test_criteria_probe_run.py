@@ -21,10 +21,9 @@ from spec_runner.criteria_protocol import (
     valid_run,
 )
 from spec_runner.criteria_workspace import child_env
+from tests.criteria_bench_required import import_plugin, needs_312
 
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="sys.monitoring needs CPython >= 3.12"
-)
+pytestmark = needs_312("sys.monitoring needs CPython >= 3.12")
 
 
 def _run(*args: Any, **kwargs: Any) -> dict:
@@ -195,7 +194,7 @@ class TestOwnership:  # Review Focus 2
         assert m["phases"]["call"] == "passed" and m["exitstatus"] == 0
 
     def test_forked_distribution_is_detected(self, tmp_path):
-        pytest.importorskip("pytest_forked")
+        import_plugin("pytest_forked")
         files = {**PRODUCT, "tests/test_a.py": "def test_a():\n    pass\n"}
         m = _run(tmp_path, files, "tests/test_a.py::test_a", ["pkg/mod.py"], ["--forked"])
         assert m["distributed"] is True and m["call_in_owner"] is False

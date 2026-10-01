@@ -27,11 +27,10 @@ from spec_runner.criteria_protocol import MANIFEST_ENV, PROBE_MODULE, PRODUCT_FI
 from spec_runner.criteria_run import product_body_lines, run_selector
 from spec_runner.criteria_tokens import function_body_lines
 from spec_runner.criteria_workspace import Environment, read_blobs
+from tests.criteria_bench_required import needs_312
 
 SCHEMA = Path(__file__).resolve().parent.parent / "schemas/criteria-closure/v1"
-NEEDS_312 = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="sys.monitoring needs CPython >= 3.12"
-)
+NEEDS_312 = needs_312("sys.monitoring needs CPython >= 3.12")
 
 
 def _run_validator() -> Draft7Validator:
@@ -89,7 +88,7 @@ class Case:
         measured = [*PRODUCT_FILES, "conftest.py", *tests]
         self.measured = read_blobs(self.checkout, self.sha, measured, Deadline(60))
         self.body_lines = product_body_lines(
-            PRODUCT_FILES, {p: self.measured[p] for p in PRODUCT_FILES}
+            PRODUCT_FILES, {p: self.measured[p] for p in PRODUCT_FILES}, product_version=SAME
         )
 
     def run(
@@ -352,36 +351,69 @@ def _never(source: str) -> frozenset[int]:
     raise AssertionError("body lines are computed once, before the runs")
 
 
+#: A product environment one minor version newer / the same as this interpreter.
+NEWER = f"{sys.version_info[0]}.{sys.version_info[1] + 1}.0"
+SAME = ".".join(str(v) for v in sys.version_info[:3])
+UNPARSEABLE = {"pkg/new.py": b"def f(:\n    pass\n"}
+
+
 class TestProductBodyLines:
     def test_body_lines_per_product_file(self) -> None:
         blobs = {"a.py": b"X = 1\ndef f():\n    return 1\n", "b.py": b""}
-        assert product_body_lines(["a.py", "b.py"], blobs) == {
+        assert product_body_lines(["a.py", "b.py"], blobs, product_version=SAME) == {
             "a.py": frozenset({3}),
             "b.py": frozenset(),
         }
 
-    def test_unparseable_grammar_is_unsupported_runtime(self) -> None:
-        blobs = {"pkg/new.py": b"def f(:\n    pass\n"}
+    def test_older_orchestrator_is_unsupported_runtime(self) -> None:
+        """R-B16: the product's Python is newer — its grammar may be beyond ours."""
         with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["pkg/new.py"], blobs)
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version=NEWER)
         assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
         assert "pkg/new.py" in raised.value.detail
         assert f"orchestrator Python {sys.version.split()[0]}" in raised.value.detail
+        assert NEWER in raised.value.detail
 
-    def test_undecodable_bytes_are_unsupported_runtime(self) -> None:
+    @pytest.mark.parametrize("version", [SAME, "3.8.18"])
+    def test_same_or_newer_orchestrator_is_product_roots_invalid(self, version: str) -> None:
+        """R-B16: our Python is not older, so the file is the product's own fault (exit 3)."""
         with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["a.py"], {"a.py": b"x = '\xff'\n"})
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version=version)
+        assert raised.value.kind is ErrorKind.PRODUCT_ROOTS_INVALID
+        assert raised.value.kind.exit_code == 3
+        assert "pkg/new.py" in raised.value.detail
+
+    def test_the_comparison_reads_the_orchestrators_version(self, monkeypatch) -> None:
+        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 11))
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
         assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
+        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 12))
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
+        assert raised.value.kind is ErrorKind.PRODUCT_ROOTS_INVALID
+
+    @pytest.mark.parametrize(
+        ("version", "kind"),
+        [(NEWER, ErrorKind.UNSUPPORTED_RUNTIME), (SAME, ErrorKind.PRODUCT_ROOTS_INVALID)],
+    )
+    def test_undecodable_bytes(self, version: str, kind: ErrorKind) -> None:
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["a.py"], {"a.py": b"x = '\xff'\n"}, product_version=version)
+        assert raised.value.kind is kind
 
     @pytest.mark.parametrize("exc", [RecursionError, MemoryError])
-    def test_parser_exhaustion_is_unsupported_runtime(self, monkeypatch, exc) -> None:
+    def test_parser_exhaustion_follows_the_same_rule(self, monkeypatch, exc) -> None:
         def explode(source: str) -> frozenset[int]:
             raise exc("too deep")
 
         monkeypatch.setattr(criteria_run, "function_body_lines", explode)
         with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["a.py"], {"a.py": b"x = 1\n"})
+            product_body_lines(["a.py"], {"a.py": b"x = 1\n"}, product_version=NEWER)
         assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["a.py"], {"a.py": b"x = 1\n"}, product_version=SAME)
+        assert raised.value.kind is ErrorKind.PRODUCT_ROOTS_INVALID
 
 
 # --------------------------------------------------------------------- real runs
@@ -531,3 +563,12 @@ def _gone(pid: int) -> bool:
             return True
         time.sleep(0.1)
     return False
+
+
+class TestProcessOperations:
+    def test_deduplicated_in_first_seen_order(self, tmp_path, monkeypatch) -> None:
+        """R-B18: one entry per operation, in the order the probe first saw it."""
+        ops = ["subprocess.Popen", "os.fork", "subprocess.Popen", "os.system", "os.fork"]
+        _fake_pytest(monkeypatch, lambda argv, env: _manifest(NODE, process_operations=ops))
+        run = Case(tmp_path, TESTS).run(NODE)
+        assert run["process_operations"] == ["subprocess.Popen", "os.fork", "os.system"]

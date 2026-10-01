@@ -133,7 +133,8 @@ def _measure(
     )
 
     chosen = select(inventory.items, request.beh_ids, blobs)
-    body_lines = product_body_lines(files, blobs)  # once, before any run (R-B11)
+    # Once, before any run (R-B11); the product's Python decides the error kind (R-B16).
+    body_lines = product_body_lines(files, blobs, product_version=env.version)
     measured = {p: blobs[p] for p in (*files, *inventory.test_files)}
     distribution = distribution_args(inventory.xdist_active)
     # R-B15: a run passes a node id where collection passed nothing, so pytest could

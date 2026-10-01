@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -52,25 +53,45 @@ _PARSE_FAILURES = (SyntaxError, ValueError, RecursionError, MemoryError)
 
 
 def product_body_lines(
-    product_files: Sequence[str], blobs: Mapping[str, bytes]
+    product_files: Sequence[str], blobs: Mapping[str, bytes], *, product_version: str
 ) -> dict[str, frozenset[int]]:
     """Function-body lines of every product file at `product_sha`, computed once before any run.
 
-    A committed product file this interpreter cannot parse means the orchestrator's Python is
-    older than the product's grammar (e.g. 3.11 vs PEP 695): UNSUPPORTED_RUNTIME, naming the
-    file and the orchestrator's version (R-B11).
+    A committed product file this interpreter cannot parse (R-B16, refining R-B11) is
+    UNSUPPORTED_RUNTIME only when the orchestrator's Python is older than the product
+    environment's (`product_version`, e.g. "3.12.13" — its grammar may be beyond ours,
+    PEP 695 under 3.11); otherwise the file is the product's own fault:
+    PRODUCT_ROOTS_INVALID. Either detail names the file and both versions.
     """
     lines: dict[str, frozenset[int]] = {}
     for path in product_files:
         try:
             lines[path] = function_body_lines(importlib.util.decode_source(blobs[path]))
         except _PARSE_FAILURES as exc:
-            raise CriteriaError(
-                ErrorKind.UNSUPPORTED_RUNTIME,
-                f"{path} at product_sha cannot be parsed by orchestrator Python "
-                f"{sys.version.split()[0]}: {type(exc).__name__}: {exc}",
-            ) from None
+            raise _unparseable(path, product_version, exc) from None
     return lines
+
+
+def _unparseable(path: str, product_version: str, exc: BaseException) -> CriteriaError:
+    product = _major_minor(product_version)
+    older = product is not None and _orchestrator_version() < product
+    kind = ErrorKind.UNSUPPORTED_RUNTIME if older else ErrorKind.PRODUCT_ROOTS_INVALID
+    return CriteriaError(
+        kind,
+        f"{path} at product_sha cannot be parsed by orchestrator Python "
+        f"{sys.version.split()[0]} (product Python {product_version}): "
+        f"{type(exc).__name__}: {exc}",
+    )
+
+
+def _orchestrator_version() -> tuple[int, int]:
+    return sys.version_info[0], sys.version_info[1]
+
+
+def _major_minor(version: str) -> tuple[int, int] | None:
+    """`(major, minor)` of a version like "3.12.13"; None when it does not start so."""
+    match = re.match(r"(\d+)\.(\d+)", version)
+    return None if match is None else (int(match[1]), int(match[2]))
 
 
 def run_selector(
@@ -229,7 +250,8 @@ def _from_manifest(
         "outcome": run_outcome(phases),
         "product_lines": lines,
         "product_line_count": sum(len(entry["lines"]) for entry in lines),
-        "process_operations": manifest["process_operations"],
+        # One entry per operation, first-seen order: the probe records every audit event.
+        "process_operations": list(dict.fromkeys(manifest["process_operations"])),
     }
 
 

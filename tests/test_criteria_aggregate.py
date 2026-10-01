@@ -98,3 +98,20 @@ def test_selector_status(runs, expected):
 )
 def test_beh_status(selectors, expected):
     assert beh_status(selectors) == expected
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        [("traced", None), ("passed", None)],  # unknown status
+        [("traced", None), ("Traced", None)],
+        [("unconfirmed", "no-test")],  # a BEH-level reason, never a selector's
+        [("traced", None), ("unconfirmed", "flaky")],
+        [("unconfirmed", None)],
+        [("error", "runner"), ("bogus", None)],  # validated before the error short-cut
+    ],
+)
+def test_beh_status_refuses_what_it_cannot_rank(selectors):
+    """R-B18: fail closed — never `traced` for a selector it does not understand."""
+    with pytest.raises(ValueError):
+        beh_status(selectors)
