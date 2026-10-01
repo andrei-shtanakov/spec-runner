@@ -1,16 +1,16 @@
 ---
 spec_stage: decomposition
-status: draft
+status: approval_pending
 dt_contract_version: 2
 owner_role: tech-lead
 traces_to:
 - design
 - acceptance
 upstream_hashes:
-  design: da2f42ccb698c3ccd685e2ced751f1f7db4b8787
-  acceptance: d1f1c17a50d893ccc1893b7b5a9633f7fa07a06a
-version: 2
-approved_content_hash: f3dbbeff3b4074304408d228620126624101a28e
+  design: b01bb955ace751040462645abdcf83245bbce47d
+  acceptance: a29aa431f6dfeec46f14c48720dae0e27f682640
+version: 3
+approved_content_hash: 01118c839aecd639c1ac0b24a4877c1ec2fa49f6
 approved_by: andrei-shtanakov
 approved_at: '2026-09-20T15:49:18Z'
 ---
