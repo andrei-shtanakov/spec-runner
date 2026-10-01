@@ -1,15 +1,15 @@
 ---
 spec_stage: design
-status: draft
+status: approval_pending
 owner_role: architects
 traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
   requirements: fb522d701c91d39841c8187ceefa65da522139e9
-  behaviour-spec: 32587a27ccba928218823ff6fba608c147d72e3e
-version: 2
-approved_content_hash: 0ac758b0a1aa0889233cb428aa046631dda336b0
+  behaviour-spec: 270fb1e12828c9a4de570ffe68c65212de240c93
+version: 3
+approved_content_hash: cf4e6d45ee248fcf352dcc1a06be418acd55e979
 approved_by: andrei-shtanakov
 approved_at: '2026-09-20T15:40:07Z'
 ---
