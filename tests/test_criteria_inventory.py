@@ -24,7 +24,14 @@ import pytest
 from spec_runner import criteria_inventory, criteria_process
 from spec_runner.criteria_config import ProductCriteria
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_inventory import Excluded, Inventory, TestItem, collect, deploy_probe
+from spec_runner.criteria_inventory import (
+    PLUGINS_ESTABLISHED,
+    Excluded,
+    Inventory,
+    TestItem,
+    collect,
+    deploy_probe,
+)
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, MODE_ENV, PARENT_ENV, PROBE_MODULE
 from spec_runner.criteria_workspace import Environment, sync_environment
@@ -274,6 +281,10 @@ class TestFailures:
         assert error.kind is ErrorKind.COLLECTION_FAILED
         assert "exit 0" in error.detail and "boom at the end" in error.detail
 
+    def test_no_manifest_establishes_no_plugins(self, fake) -> None:
+        run, *_ = fake(lambda co: None, rc=1)
+        assert _kind(run).established == {}
+
     def test_local_timeout_is_collection_failed(self, fake) -> None:
         run, *_ = fake(lambda co: None, timed_out="local")
         assert _kind(run).kind is ErrorKind.COLLECTION_FAILED
@@ -292,6 +303,7 @@ class TestFailures:
         error = _kind(run)
         assert error.kind is ErrorKind.COLLECTION_ERROR and "tests/test_b.py" in error.detail
         assert (checkout / "pkg/mod.py").read_text() == "VALUE = 1\n"  # reset on the error path
+        assert error.established == {PLUGINS_ESTABLISHED: ["pytest-9.1.1"]}
 
     def test_config_outside_the_checkout(self, fake, tmp_path: Path) -> None:
         run, *_ = fake(lambda co: _manifest(co, inipath=str(tmp_path / "pytest.ini")))
@@ -330,6 +342,7 @@ class TestFailures:
         assert error.kind is ErrorKind.COLLECTION_MUTATED_CHECKOUT
         assert "pkg/mod.py" in error.detail and "tests/data/fixture.txt" in error.detail
         assert "untracked.txt" not in error.detail
+        assert error.established == {PLUGINS_ESTABLISHED: ["pytest-9.1.1"]}  # the manifest's
         assert (checkout / "pkg/mod.py").read_text() == "VALUE = 1\n"
         assert (checkout / "tests/data/fixture.txt").exists()
         assert not (checkout / "untracked.txt").exists()

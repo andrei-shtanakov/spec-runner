@@ -45,6 +45,9 @@ from spec_runner.criteria_workspace import (
 )
 
 _TAIL_LINES = 20
+#: The `CriteriaError.established` key under which a refused collection that left a
+#: valid manifest reports its loaded plugins (the response's `environment.pytest_plugins`).
+PLUGINS_ESTABLISHED = "pytest_plugins"
 # pytest's wording for an initial conftest that fails to import (exit 4, before any
 # session, so no manifest) — measured on pytest 9.1.1 for import and syntax errors.
 _CONFTEST_FAILURE = "while loading conftest"
@@ -132,16 +135,22 @@ def _collect(
     local_timeout: float,
 ) -> Inventory:
     manifest = _run_probe(env, checkout, probe_dir, work, deadline, local_timeout)
-    if manifest["errors"]:
-        where = ", ".join(str(e["node_id"]) or "<session>" for e in manifest["errors"])
-        raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"pytest could not collect: {where}")
-    inventory = _inventory(manifest, checkout, sha, deadline)
-    changed = changed_since(checkout, sha, deadline)
-    if changed:
-        raise CriteriaError(
-            ErrorKind.COLLECTION_MUTATED_CHECKOUT,
-            f"collection changed tracked files: {', '.join(changed)}",
-        )
+    try:
+        if manifest["errors"]:
+            where = ", ".join(str(e["node_id"]) or "<session>" for e in manifest["errors"])
+            raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"pytest could not collect: {where}")
+        inventory = _inventory(manifest, checkout, sha, deadline)
+        changed = changed_since(checkout, sha, deadline)
+        if changed:
+            raise CriteriaError(
+                ErrorKind.COLLECTION_MUTATED_CHECKOUT,
+                f"collection changed tracked files: {', '.join(changed)}",
+            )
+    except CriteriaError as exc:
+        # A valid manifest names the loaded plugins even when collection is refused:
+        # the response's `environment` is then established (§4).
+        exc.established.setdefault(PLUGINS_ESTABLISHED, list(manifest["plugins"]))
+        raise
     return inventory
 
 

@@ -14,6 +14,7 @@ MODULES = [
     "criteria_select",
     "criteria_aggregate",
     "criteria_run",
+    "criteria_measure",
 ]
 
 
