@@ -86,6 +86,7 @@ class Inventory:
     test_files: tuple[str, ...]
     inipath: str | None
     plugins: tuple[str, ...]
+    xdist_active: bool  # xdist's own plugin is registered (not merely installed)
     excluded: tuple[Excluded, ...]
     non_function: tuple[str, ...]  # node ids of collected items that are not functions
 
@@ -245,6 +246,7 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         test_files=tuple(sorted(files)),
         inipath=inipath,
         plugins=tuple(manifest["plugins"]),
+        xdist_active=manifest["xdist_active"],
         excluded=_excluded(manifest["excluded"], checkout, tracked),
         non_function=tuple(sorted(non_function)),
     )

@@ -440,15 +440,11 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-XDIST_PLUGIN_PREFIX = "pytest-xdist-"
+def distribution_args(xdist_active: bool) -> list[str]:
+    """Keep every test in the probe's own process when xdist is registered (§3.6).
 
-
-def distribution_args(plugins: Sequence[str]) -> list[str]:
-    """Keep every test in the probe's own process when xdist was loaded (§3.6).
-
-    `plugins` is the collect manifest's list of loaded distributions. Only the run
-    passes these flags: `--collect-only` never distributes, and `-n` breaks a product
-    whose addopts disable xdist.
+    `xdist_active` is the collect manifest's `xdist_active`: xdist's plugin was
+    registered in that pytest, so `-n` exists. Only the run passes these flags:
+    `--collect-only` never distributes, and `-n` breaks a product that blocks xdist.
     """
-    xdist = any(name.startswith(XDIST_PLUGIN_PREFIX) for name in plugins)
-    return ["-n", "0", "--dist", "no"] if xdist else []
+    return ["-n", "0", "--dist", "no"] if xdist_active else []

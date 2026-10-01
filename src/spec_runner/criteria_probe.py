@@ -46,6 +46,7 @@ _manifest: dict[str, Any] = {
     "rootpath": None,
     "inipath": None,
     "plugins": [],
+    "xdist_active": False,
     "conftests": [],
     "items": [],
     "errors": [],
@@ -70,6 +71,9 @@ def pytest_configure(config: Any) -> None:
         f"{dist.project_name}-{dist.version}"
         for _, dist in config.pluginmanager.list_plugin_distinfo()
     }
+    # the registered plugin, not the installed distribution: `-p no:xdist` leaves the
+    # distribution listed (looponfail still registers) but removes `-n`
+    _manifest["xdist_active"] = bool(config.pluginmanager.has_plugin("xdist"))
     _manifest["plugins"] = sorted(distributions | {f"pytest-{pytest.__version__}"})
 
 

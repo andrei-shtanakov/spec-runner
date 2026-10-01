@@ -90,6 +90,7 @@ def _manifest(checkout: Path, **overrides: Any) -> dict[str, Any]:
         "rootpath": str(checkout),
         "inipath": str(checkout / "pyproject.toml"),
         "plugins": ["pytest-9.1.1"],
+        "xdist_active": False,
         "conftests": [str(checkout / "tests" / "conftest.py")],
         "items": [_function(checkout, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)],
         "errors": [],
@@ -204,6 +205,11 @@ class TestInvocation:
 
 
 class TestManifestToInventory:
+    @pytest.mark.parametrize("active", [True, False])
+    def test_xdist_active_comes_from_the_manifest(self, fake, active: bool) -> None:
+        run, _, _, _ = fake(lambda co: _manifest(co, xdist_active=active))
+        assert run().xdist_active is active
+
     def test_items_files_config_and_plugins(self, fake) -> None:
         def manifest(co: Path) -> dict[str, Any]:
             doctest = {
@@ -796,19 +802,30 @@ def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]
 
 
 @pytest.mark.slow
-class TestRealXdistOptOut:
-    @pytest.mark.parametrize("addopts", ["-p no:xdist", "-n 2"])
-    def test_collects_whatever_the_product_does_with_xdist(
-        self, xdist_env, tmp_path, addopts
-    ) -> None:
-        files = {
+class TestRealXdistActive:
+    @staticmethod
+    def _files(addopts: str) -> dict[str, str]:
+        ini = "[tool.pytest.ini_options]\ntestpaths = ['tests']\n"
+        return {
             **REAL_BASE,
-            "pyproject.toml": (
-                f"[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = '{addopts}'\n"
-            ),
+            "pyproject.toml": ini + (f"addopts = '{addopts}'\n" if addopts else ""),
         }
-        inv = _real(xdist_env, tmp_path, files)
+
+    def test_blocked_xdist_is_not_active_though_its_distribution_is_listed(
+        self, xdist_env, tmp_path
+    ) -> None:
+        inv = _real(xdist_env, tmp_path, self._files("-p no:xdist"))
         assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
-        # measured: the distribution is listed even under `-p no:xdist` (its looponfail
-        # entry point still registers), so the plugin list alone cannot say "xdist is off"
+        assert inv.xdist_active is False
+        # measured: the distribution is still listed (its looponfail entry point registers),
+        # which is why the plugin list cannot decide the flags
         assert any(name.startswith("pytest-xdist-") for name in inv.plugins)
+
+    @pytest.mark.parametrize("addopts", ["", "-n 2"])
+    def test_registered_xdist_is_active(self, xdist_env, tmp_path, addopts) -> None:
+        inv = _real(xdist_env, tmp_path, self._files(addopts))
+        assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
+        assert inv.xdist_active is True
+
+    def test_no_xdist_installed_is_inactive(self, product_env, tmp_path) -> None:
+        assert _real(product_env, tmp_path, REAL_BASE).xdist_active is False
