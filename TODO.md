@@ -673,6 +673,9 @@
       нет пункта Retry. При `skip` результат — `"SKIP"`, как у любого провала.
 
 - [ ] **executor-write-boundary** (inbox spec-runner#600, from devtools#469) @owner:github:andrei-shtanakov @id:executor-write-boundary @epic:eco.spec-toolchain
+      **2026-10-01, решение владельца:** свои прогоны — `executor_sandbox: required`;
+      фаза 2 (bubblewrap) — с приёмкой на целевом VPS; фаза 3 (дефолт `on`) — пока НЕТ.
+      Шаги — в `docs/plans/2026-10-01-operator-checklist-480-600.md`.
       Исполнитель запускается с `skip_permissions: true` по умолчанию
       (`config.py`, → `--dangerously-skip-permissions` у claude) и может писать
       по абсолютному пути куда угодно, в том числе в
@@ -916,7 +919,19 @@ runtime-state по инварианту конвейера «нужное для
       audit, calls и closure; durable call-start подтверждается до траты, а
       run-closure пишется на каждом orderly exit, включая ранние отказы без
       task/attempt.
+- [ ] **preflight-sees-stale-bundle** (найдено при подготовке #480, 2026-10-01) @owner:github:andrei-shtanakov @id:preflight-sees-stale-bundle @epic:eco.spec-toolchain
+      `preflight` (и гейт `spec_governance: strict`) отвечают `ready`, когда tasks-спека
+      `approved`, хотя узлы бандла выше неё снова `draft` (подпись спеки относится к
+      старой версии апстрима): у `durable-continuation-…-20260915` четыре узла `draft`,
+      `preflight` — «nothing blocks a run». Сверка `traces_to`/`upstream_hashes`
+      tasks-спеки с текущими байтами и статусами узлов закрыла бы это; дверь
+      переиздания (`--supersede`) — у моста devtools, мы только видим и отказываем.
+
 - [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export @epic:eco.spec-toolchain
+      **Операторский чек-лист возобновления (2026-10-01):**
+      `docs/plans/2026-10-01-operator-checklist-480-600.md` — переодобрение ЧЕТЫРЁХ узлов
+      бандла (behaviour-spec, design, acceptance, decomposition — все `draft`), v3 плана,
+      песочница `required`, одна задача с бюджетом, store вне машины перед приёмкой.
       Реализовать принятый механизм. До него инвариант не выполнен: `tasks.md`
       восстанавливает очередь, но не claims, authority decisions, стоимость и
       результаты неуспешных вызовов; planning вообще не имеет task-attempt
