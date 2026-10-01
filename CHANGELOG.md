@@ -10,6 +10,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **DarkFactory halt check, opt-in** (halt D2b). With
+  `DARKFACTORY_HALT_CHECK=1`, `run`, `retry` and `watch` ask GitHub before
+  starting new work whether the repository's `darkfactory-halt` ruleset is
+  active, by github-checker's `contracts/halt-admission/v1` (vendored with a
+  sha256 pin). Halted → exit 6; unreadable → exit 2; no github.com origin or
+  no ruleset → runs as before. Without the flag nothing changes and `gh` is
+  never called.
+
 ## [4.5.0] - 2026-10-01
 
 **Minor, by additive surface.** Release X of `criteria-closure/v1`: it adds the
@@ -89,14 +99,6 @@ flakiness must be seen. The other named boundaries are listed under *Added* belo
   key (no `validate` warning, no mixed-shape error beside `executor:`).
 
 ### Added
-
-- **DarkFactory halt check, opt-in** (halt D2b). With
-  `DARKFACTORY_HALT_CHECK=1`, `run`, `retry` and `watch` ask GitHub before
-  starting new work whether the repository's `darkfactory-halt` ruleset is
-  active, by github-checker's `contracts/halt-admission/v1` (vendored with a
-  sha256 pin). Halted → exit 6; unreadable → exit 2; no github.com origin or
-  no ruleset → runs as before. Without the flag nothing changes and `gh` is
-  never called.
 
 - **`criteria-closure/v1` contract and the measurement's pre-run stages** (#603 B2a).
   Request/response schemas (frozen per design rev 4, confirmed by devtools) and
