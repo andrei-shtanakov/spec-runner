@@ -90,15 +90,23 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `schemas/criteria-closure/v1/`): clones the product at `product_sha`, syncs its
   declared environment, collects, selects the tests that own each BEH, and runs
   each selector twice in a fresh pytest process with a `sys.monitoring` probe
-  that records which declared product files the call phase executed. Exactly one
-  JSON document goes to stdout on every path. Exit 0 is an answer; 2 is a
-  retryable step failure (machine, network, timeout); 3 is a blocked property of
-  the product. `--selector-timeout SECONDS` (default 300) bounds one pytest run,
-  `--timeout SECONDS` (default 3600) the whole measurement. The root is
-  `--project-root`, else the cwd's git toplevel. Product environments need
-  CPython >= 3.12; the orchestrator itself must be able to parse the product's
-  files (otherwise `unsupported-runtime`). A new required workflow,
-  `.github/workflows/criteria-probe.yml`, runs the bench under CPython 3.12.
+  that records which declared product files the call phase executed. Every run
+  reuses the collection's pytest configuration (`--rootdir` and `-c`, an empty
+  ini when the collection read none), so a nested `tests/pytest.ini` cannot give
+  a run another root and other node ids. Exactly one JSON document goes to
+  stdout on every measured path. Exit 0 is an answer; 2 is a retryable step
+  failure (machine, network, timeout); 3 is a blocked property of the product.
+  The exceptions, where no document is printed: an unexpected internal exception
+  (a traceback, an exit code outside 0/2/3); KeyboardInterrupt or SIGTERM/SIGHUP
+  (the pytest child's process group is killed and the temporary workspace
+  removed; exit 143/129 for the signals); argparse usage errors under
+  `--criteria` (exit 2, usage on stderr). `--selector-timeout SECONDS` (default
+  300) bounds one pytest run, `--timeout SECONDS` (default 3600) the whole
+  measurement. The root is `--project-root`, else the cwd's git toplevel.
+  Product environments need CPython >= 3.12. A new workflow,
+  `.github/workflows/criteria-probe.yml`, runs the bench under CPython 3.12
+  with `SPEC_RUNNER_REQUIRE_CRITERIA_BENCH=1`, which turns the bench's skips
+  into failures.
   Named boundaries:
   - `multiprocessing` with `spawn`/`forkserver` raises none of the audited
     process-operation events, so such a test reads `no-product-execution`
@@ -107,7 +115,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
     exists; a collection failure without a manifest carries none.
   - `UV_CONFIG_FILE` from the parent environment still reaches uv.
   - A product file the orchestrator's Python cannot parse is
-    `unsupported-runtime` (exit 2), e.g. PEP 695 syntax on a 3.11 orchestrator.
+    `unsupported-runtime` (exit 2) when the orchestrator's Python is older than
+    the product environment's (e.g. PEP 695 syntax on a 3.11 orchestrator),
+    otherwise `product-roots-invalid` (exit 3); the detail names the file.
+  - `pytest-rerunfailures` (measured with `--reruns 1`): the probe keeps the
+    last report per phase, so a test that fails and then passes on its rerun
+    reads as `passed` — a flaky test can look deterministic — and the product
+    lines its failed attempts executed count toward the run.
 
 ## [4.4.0] - 2026-09-29
 
