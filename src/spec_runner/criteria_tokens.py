@@ -120,6 +120,20 @@ def carried_ids(source: str, definitions: Sequence[TestDefinition], ids: Sequenc
     return {token for token in ids if any(token_pattern(token).search(t) for t in texts)}
 
 
+def function_body_lines(source: str) -> frozenset[int]:
+    """Lines inside any function or method body — devtools' rule (`criteria_close._function_lines`).
+
+    For every `def`/`async def` anywhere (nested ones included): `body[0].lineno`
+    through `end_lineno`. Module code, class bodies, decorators and `def` lines are
+    outside. BOM-tolerant; raises `SyntaxError`/`ValueError` on unparseable source.
+    """
+    lines: set[int] = set()
+    for node in ast.walk(ast.parse(_without_bom(source))):
+        if isinstance(node, _FUNCTIONS) and node.body:
+            lines.update(range(node.body[0].lineno, (node.end_lineno or node.lineno) + 1))
+    return frozenset(lines)
+
+
 def owned_definitions(source: str) -> list[OwnedDefinition]:
     """Every function and method the index holds, with the qualified tokens it owns.
 
