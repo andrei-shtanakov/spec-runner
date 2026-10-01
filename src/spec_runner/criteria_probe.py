@@ -78,12 +78,22 @@ def _owner() -> bool:
     return OWNER_PID is not None and os.getpid() == OWNER_PID
 
 
+_monitoring_error: str | None = None
+
+
 def _product_files() -> frozenset[str]:
+    """The declared product files; a missing or unreadable list is reported, not guessed."""
+    global _monitoring_error
     path = os.environ.get(PRODUCT_FILES_ENV)
     if not path:
+        _monitoring_error = "product files not given"
         return frozenset()
-    with open(path, encoding="utf-8") as handle:
-        return frozenset(os.path.realpath(p) for p in json.load(handle))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return frozenset(os.path.realpath(p) for p in json.load(handle))
+    except (OSError, ValueError, TypeError):
+        _monitoring_error = "product files unreadable"
+        return frozenset()
 
 
 def _real(path: str) -> str:
@@ -113,8 +123,6 @@ def _audit(event: str, args: Any) -> None:
         _RUN["ops"].append(event)
 
 
-_monitoring_error: str | None = None
-
 if MODE == "run" and OWNER_PID is not None:
     sys.addaudithook(_audit)
     if sys.version_info >= (3, 12):
@@ -125,9 +133,9 @@ if MODE == "run" and OWNER_PID is not None:
                 _tool = _candidate
                 break
         else:
-            _monitoring_error = "no free sys.monitoring tool id"
+            _monitoring_error = _monitoring_error or "no free sys.monitoring tool id"
     else:
-        _monitoring_error = "sys.monitoring needs CPython >= 3.12"
+        _monitoring_error = _monitoring_error or "sys.monitoring needs CPython >= 3.12"
 
 
 def _set_tracing(on: bool) -> None:
@@ -153,6 +161,7 @@ def pytest_runtest_call(item: Any) -> Any:
 def pytest_runtest_logreport(report: Any) -> None:
     if not (_owner() and MODE == "run"):
         return
+    # last write wins: exact for one item; the orchestrator checks collected == [node_id]
     _RUN["phases"][report.when] = report.outcome
     if report.when == "call":
         _RUN["call_reports"].append(report.nodeid)
