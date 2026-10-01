@@ -22,6 +22,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -45,6 +46,31 @@ from spec_runner.criteria_workspace import Environment, child_env, reset_checkou
 
 _TAIL_LINES = 20
 MUTATED = "measured-files-mutated"
+#: An error run's `detail` keeps at most this many characters (its end).
+MAX_DETAIL = 4000
+_PARSE_FAILURES = (SyntaxError, ValueError, RecursionError, MemoryError)
+
+
+def product_body_lines(
+    product_files: Sequence[str], blobs: Mapping[str, bytes]
+) -> dict[str, frozenset[int]]:
+    """Function-body lines of every product file at `product_sha`, computed once before any run.
+
+    A committed product file this interpreter cannot parse means the orchestrator's Python is
+    older than the product's grammar (e.g. 3.11 vs PEP 695): UNSUPPORTED_RUNTIME, naming the
+    file and the orchestrator's version (R-B11).
+    """
+    lines: dict[str, frozenset[int]] = {}
+    for path in product_files:
+        try:
+            lines[path] = function_body_lines(importlib.util.decode_source(blobs[path]))
+        except _PARSE_FAILURES as exc:
+            raise CriteriaError(
+                ErrorKind.UNSUPPORTED_RUNTIME,
+                f"{path} at product_sha cannot be parsed by orchestrator Python "
+                f"{sys.version.split()[0]}: {type(exc).__name__}: {exc}",
+            ) from None
+    return lines
 
 
 def run_selector(
@@ -56,7 +82,7 @@ def run_selector(
     node_id: str,
     product_files: Sequence[str],
     measured: Mapping[str, bytes],
-    blobs: Mapping[str, bytes],
+    body_lines: Mapping[str, frozenset[int]],
     deadline: Deadline,
     selector_timeout: float,
     *,
@@ -65,8 +91,8 @@ def run_selector(
     """One fresh pytest process for `node_id` → a `complete_run` or an `error_run` object.
 
     `product_files` are repository-relative; `measured` holds the bytes at `sha`
-    of every measured file (product ∪ test files) and `blobs` the product files'
-    — both from `read_blobs`, never re-read from the checkout. `distribution` is
+    of every measured file (product ∪ test files, from `read_blobs`, never re-read
+    from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `distribution` is
     appended before `-q` (`distribution_args(inventory.xdist_active)`). Raises
     `CriteriaError` with TIMEOUT, SELECTOR_ABSENT or DISTRIBUTED_EXECUTION.
     """
@@ -78,7 +104,10 @@ def run_selector(
             env, checkout, probe_dir, invocation, node_id, product_files, deadline,
             selector_timeout, distribution,
         )  # fmt: skip
-        return _read_run(done, manifest_path, checkout, node_id, measured, blobs, selector_timeout)
+        return _read_run(
+            done, manifest_path, checkout, node_id, product_files, measured, body_lines,
+            selector_timeout,
+        )  # fmt: skip
     finally:
         shutil.rmtree(invocation, ignore_errors=True)
 
@@ -125,15 +154,20 @@ def _read_run(
     manifest_path: Path,
     checkout: Path,
     node_id: str,
+    product_files: Sequence[str],
     measured: Mapping[str, bytes],
-    blobs: Mapping[str, bytes],
+    body_lines: Mapping[str, frozenset[int]],
     selector_timeout: float,
 ) -> dict[str, object]:
     """Global timeout, local timeout, mutated files, manifest validity — in that order."""
     if done.timed_out == "global":
         raise CriteriaError(ErrorKind.TIMEOUT, f"{node_id}: the measurement deadline expired")
-    if done.timed_out == "local" or done.returncode is None:
+    if done.timed_out == "local":
+        # No mutation check: the run is already an error run, and the next run's
+        # reset_checkout restores the tree before anything is measured again.
         return _error(f"{node_id} exceeded {selector_timeout:g}s", timed_out=True)
+    if done.returncode is None:  # run_bounded promises an exit status unless a limit fired
+        return _error(f"{node_id}: no exit status")
     mutated = _mutated(checkout, measured)
     if mutated:
         return _error(MUTATED, mutated_paths=mutated, exit_status=done.returncode)
@@ -144,14 +178,16 @@ def _read_run(
         tail = _tail(done)
         detail = f"{node_id}: {what} (exit {done.returncode})" + (f": {tail}" if tail else "")
         return _error(detail, exit_status=done.returncode)
-    return _from_manifest(manifest, checkout, node_id, blobs, done.returncode)
+    declared = frozenset(product_files)
+    return _from_manifest(manifest, checkout, node_id, declared, body_lines, done.returncode)
 
 
 def _from_manifest(
     manifest: dict[str, Any],
     checkout: Path,
     node_id: str,
-    blobs: Mapping[str, bytes],
+    declared: frozenset[str],
+    body_lines: Mapping[str, frozenset[int]],
     exit_status: int,
 ) -> dict[str, object]:
     if "monitoring_error" in manifest:
@@ -167,7 +203,7 @@ def _from_manifest(
     if collected != [node_id]:
         detail = f"{node_id}: the run collected {', '.join(collected)}"
         return _error(detail, exit_status=exit_status)
-    lines = _product_lines(manifest["product_lines"], checkout, blobs)
+    lines = _product_lines(manifest["product_lines"], checkout, declared, body_lines)
     if isinstance(lines, str):
         return _error(lines, exit_status=exit_status)
     phases: dict[str, str] = manifest["phases"]
@@ -183,19 +219,21 @@ def _from_manifest(
 
 
 def _product_lines(
-    observed: Mapping[str, list[int]], checkout: Path, blobs: Mapping[str, bytes]
+    observed: Mapping[str, list[int]],
+    checkout: Path,
+    declared: frozenset[str],
+    body_lines: Mapping[str, frozenset[int]],
 ) -> list[dict[str, Any]] | str:
-    """Lines in function bodies per product file, sorted; a string names what failed."""
+    """Lines in function bodies per product file, sorted; a string names what failed.
+
+    Only a declared product file counts — a test file's lines never do.
+    """
     entries: list[dict[str, Any]] = []
     for path, numbers in observed.items():
         rel = _relative(path, checkout)
-        if rel is None or rel not in blobs:
+        if rel is None or rel not in declared:
             return f"the probe reported lines of an undeclared product file: {path}"
-        try:
-            bodies = function_body_lines(importlib.util.decode_source(blobs[rel]))
-        except (SyntaxError, ValueError) as exc:
-            return f"{rel} at product_sha does not parse: {exc}"
-        kept = sorted(set(numbers) & bodies)
+        kept = sorted(set(numbers) & body_lines[rel])
         if kept:
             entries.append({"file": rel, "lines": kept})
     return sorted(entries, key=lambda entry: entry["file"])
@@ -234,4 +272,12 @@ def _tail(done: Finished) -> str:
 
 def _error(detail: str, **observed: object) -> dict[str, object]:
     """An `error_run`: reason `runner` plus only what the orchestrator itself observed."""
-    return {"result": "error", "reason": "runner", "detail": detail, **observed}
+    return {"result": "error", "reason": "runner", "detail": _bounded(detail), **observed}
+
+
+def _bounded(detail: str) -> str:
+    """At most MAX_DETAIL characters: the end is kept, the cut announced at the head."""
+    if len(detail) <= MAX_DETAIL:
+        return detail
+    marker = f"[truncated {len(detail)} chars] "
+    return marker + detail[len(detail) - (MAX_DETAIL - len(marker)) :]

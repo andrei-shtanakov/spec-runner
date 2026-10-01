@@ -19,12 +19,12 @@ from typing import Any
 import pytest
 from jsonschema import Draft7Validator
 
-from spec_runner import criteria_process
+from spec_runner import criteria_process, criteria_run
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
 from spec_runner.criteria_inventory import deploy_probe
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, PROBE_MODULE, PRODUCT_FILES_ENV
-from spec_runner.criteria_run import run_selector
+from spec_runner.criteria_run import product_body_lines, run_selector
 from spec_runner.criteria_tokens import function_body_lines
 from spec_runner.criteria_workspace import Environment, read_blobs
 
@@ -79,7 +79,7 @@ PRODUCT_FILES = ("pkg/__init__.py", "pkg/mod.py")
 
 
 class Case:
-    """A committed product, its deployed probe, and the `measured`/`blobs` maps at sha."""
+    """A committed product, its deployed probe, and the `measured` bytes and body lines at sha."""
 
     def __init__(self, tmp_path: Path, tests: dict[str, str]) -> None:
         self.tmp_path = tmp_path
@@ -88,7 +88,9 @@ class Case:
         self.work = tmp_path / "work"
         measured = [*PRODUCT_FILES, "conftest.py", *tests]
         self.measured = read_blobs(self.checkout, self.sha, measured, Deadline(60))
-        self.blobs = {p: self.measured[p] for p in PRODUCT_FILES}
+        self.body_lines = product_body_lines(
+            PRODUCT_FILES, {p: self.measured[p] for p in PRODUCT_FILES}
+        )
 
     def run(
         self,
@@ -107,7 +109,7 @@ class Case:
             node_id,
             PRODUCT_FILES,
             self.measured,
-            self.blobs,
+            self.body_lines,
             deadline or Deadline(300),
             selector_timeout,
             distribution=distribution,
@@ -152,8 +154,9 @@ class TestFunctionBodyLines:
 def _fake_pytest(
     monkeypatch: pytest.MonkeyPatch,
     manifest: Callable[[list[str], dict[str, str]], dict[str, Any] | None],
-    returncode: int = 0,
+    returncode: int | None = 0,
     pid: int = 4242,
+    stderr: bytes = b"pytest said no\n",
 ) -> list[list[str]]:
     """Stand in for the product's pytest: git still runs; pytest writes `manifest`."""
     seen: list[list[str]] = []
@@ -169,7 +172,7 @@ def _fake_pytest(
         data = manifest(list(argv), env)
         if data is not None:
             Path(env[MANIFEST_ENV]).write_text(json.dumps(data))
-        return Finished(returncode, b"", b"pytest said no\n", pid, None)
+        return Finished(returncode, b"", stderr, pid, None)
 
     monkeypatch.setattr(criteria_process, "run_bounded", fake)
     return seen
@@ -274,6 +277,81 @@ class TestFakeManifests:
         assert run["result"] == "error" and run["exit_status"] == 127
         assert "pytest said no" in str(run["detail"])
 
+    def test_a_test_file_is_never_a_product_file(self, tmp_path, monkeypatch) -> None:
+        def manifest(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
+            return _manifest(NODE, product_lines={str(case.checkout / "tests/test_a.py"): [5]})
+
+        _fake_pytest(monkeypatch, manifest)
+        case = Case(tmp_path, TESTS)
+        run = case.run(NODE)
+        assert run["result"] == "error" and "undeclared product file" in str(run["detail"])
+        assert "tests/test_a.py" in str(run["detail"])
+
+    def test_the_detail_is_bounded_and_keeps_the_end(self, tmp_path, monkeypatch) -> None:
+        stderr = b"".join(b"line %d %s\n" % (i, b"x" * 400) for i in range(200)) + b"THE END\n"
+        _fake_pytest(monkeypatch, lambda argv, env: None, stderr=stderr)
+        detail = str(Case(tmp_path, TESTS).run(NODE)["detail"])
+        assert len(detail) <= criteria_run.MAX_DETAIL
+        assert detail.startswith("[truncated ") and detail.endswith("THE END")
+
+    def test_a_short_detail_is_not_marked(self, tmp_path, monkeypatch) -> None:
+        _fake_pytest(monkeypatch, lambda argv, env: _manifest(NODE, monitoring_error="why"))
+        assert Case(tmp_path, TESTS).run(NODE)["detail"] == "why"
+
+    def test_no_exit_status_without_a_timeout_is_not_called_a_timeout(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _fake_pytest(monkeypatch, lambda argv, env: None, returncode=None)
+        run = Case(tmp_path, TESTS).run(NODE)
+        assert run == {"result": "error", "reason": "runner", "detail": f"{NODE}: no exit status"}
+
+    def test_run_selector_uses_the_precomputed_body_lines(self, tmp_path, monkeypatch) -> None:
+        def manifest(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
+            return _manifest(NODE, product_lines={str(case.checkout / "pkg/mod.py"): [1, 2]})
+
+        _fake_pytest(monkeypatch, manifest)
+        case = Case(tmp_path, TESTS)
+        case.body_lines = {"pkg/__init__.py": frozenset(), "pkg/mod.py": frozenset({1})}
+        monkeypatch.setattr(criteria_run, "function_body_lines", _never)
+        run = case.run(NODE)
+        assert run["product_lines"] == [{"file": "pkg/mod.py", "lines": [1]}]
+
+
+def _never(source: str) -> frozenset[int]:
+    raise AssertionError("body lines are computed once, before the runs")
+
+
+class TestProductBodyLines:
+    def test_body_lines_per_product_file(self) -> None:
+        blobs = {"a.py": b"X = 1\ndef f():\n    return 1\n", "b.py": b""}
+        assert product_body_lines(["a.py", "b.py"], blobs) == {
+            "a.py": frozenset({3}),
+            "b.py": frozenset(),
+        }
+
+    def test_unparseable_grammar_is_unsupported_runtime(self) -> None:
+        blobs = {"pkg/new.py": b"def f(:\n    pass\n"}
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["pkg/new.py"], blobs)
+        assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
+        assert "pkg/new.py" in raised.value.detail
+        assert f"orchestrator Python {sys.version.split()[0]}" in raised.value.detail
+
+    def test_undecodable_bytes_are_unsupported_runtime(self) -> None:
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["a.py"], {"a.py": b"x = '\xff'\n"})
+        assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
+
+    @pytest.mark.parametrize("exc", [RecursionError, MemoryError])
+    def test_parser_exhaustion_is_unsupported_runtime(self, monkeypatch, exc) -> None:
+        def explode(source: str) -> frozenset[int]:
+            raise exc("too deep")
+
+        monkeypatch.setattr(criteria_run, "function_body_lines", explode)
+        with pytest.raises(CriteriaError) as raised:
+            product_body_lines(["a.py"], {"a.py": b"x = 1\n"})
+        assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
+
 
 # --------------------------------------------------------------------- real runs
 
@@ -330,6 +408,17 @@ class TestRealRuns:
         run = Case(tmp_path, tests).run(NODE)
         assert run["detail"] == "measured-files-mutated"
         assert run["mutated_paths"] == ["pkg/mod.py"]
+
+    def test_a_rewritten_test_file_is_mutated(self, tmp_path) -> None:
+        tests = {
+            "tests/test_a.py": (
+                "import pathlib\n\n\ndef test_a():\n"
+                "    pathlib.Path('tests/test_a.py').write_text('# gone\\n')\n"
+            )
+        }
+        run = Case(tmp_path, tests).run(NODE)
+        assert run["detail"] == "measured-files-mutated"
+        assert run["mutated_paths"] == ["tests/test_a.py"]
 
     def test_absent_node_id_is_selector_absent(self, tmp_path) -> None:
         case = Case(tmp_path, TESTS)
