@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
+from types import FrameType
 from typing import NoReturn
 from uuid import uuid4
 
@@ -2755,6 +2756,7 @@ def _criteria_early_exit(parser: argparse.ArgumentParser, args: argparse.Namespa
 
 #: SIGTERM/SIGHUP become SystemExit(128 + signum) on the `--criteria` path (R-B17).
 _TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+_SignalHandler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
 
 
 @contextlib.contextmanager
@@ -2764,15 +2766,19 @@ def _exit_on_termination() -> Iterator[None]:
     The default action kills the process at once: the product's pytest (its own
     session) would outlive it and the temporary workspace would leak. Unwinding
     instead reaches `run_bounded`'s group kill and the TemporaryDirectory cleanup.
-    A second signal during that cleanup is ignored.
+    A second signal during that cleanup is ignored. A signal the process inherited as
+    ignored (SIGHUP under `nohup`) is left alone, installed and restored never (R-B19).
     """
+    previous: dict[signal.Signals, _SignalHandler] = {}
 
     def handle_termination(signum: int, frame: object) -> None:
-        for sig in _TERMINATION_SIGNALS:
+        for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         raise SystemExit(128 + signum)
 
-    previous = {sig: signal.signal(sig, handle_termination) for sig in _TERMINATION_SIGNALS}
+    for sig in _TERMINATION_SIGNALS:
+        if signal.getsignal(sig) is not signal.SIG_IGN:
+            previous[sig] = signal.signal(sig, handle_termination)
     try:
         yield
     finally:

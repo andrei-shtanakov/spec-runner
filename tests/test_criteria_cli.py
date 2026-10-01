@@ -454,3 +454,19 @@ class TestTerminationSignals:
         with cli._exit_on_termination():
             assert signal.getsignal(signal.SIGTERM) is not before[signal.SIGTERM]
         assert {s: signal.getsignal(s) for s in before} == before
+
+    def test_an_inherited_ignore_is_left_in_place(self) -> None:
+        """R-B19: under `nohup` SIGHUP is ignored; the measurement must not start dying on it."""
+        from spec_runner import cli
+
+        before_hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        before_term = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        try:
+            with cli._exit_on_termination():
+                assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+                assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN)
+            assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+        finally:
+            signal.signal(signal.SIGHUP, before_hup)
+            signal.signal(signal.SIGTERM, before_term)
