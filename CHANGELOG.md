@@ -10,6 +10,25 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-10-01
+
+**Minor, by additive surface.** Release X of `criteria-closure/v1`: it adds the
+`spec-runner verify --criteria --request <file.json> --json` command and its
+contract (`schemas/criteria-closure/v1/`, with
+`schemas/criteria-closure/v1/min-spec-runner.env` = `MIN_SPEC_RUNNER_VERSION=4.5.0`
+for consumers to pin). `--json-result`, `schemas/json-result.schema.json`,
+`schemas/executor-state.schema.json` and the state-DB format are unchanged (no
+table or column added — `mark_failed` writes the existing `tasks` row), so
+Maestro interop needs nothing. Exit-code changes (`integration_pr` that cannot be
+honoured now refuses with 1) are minor by this project's precedent.
+
+**Boundary to know before relying on a `traced` status — `pytest-rerunfailures`:**
+a successful rerun can hide a flaky test. With `--reruns` configured, a test that
+fails and then passes on its rerun reads as `passed` in that run, so two such runs
+read as `traced` rather than `nondeterministic`, and the product lines of the
+failed attempt count toward the run. Disable reruns for the measured suite if
+flakiness must be seen. The other named boundaries are listed under *Added* below.
+
 ### Changed
 
 - **A terminal refusal now finishes the task like any failure** (#603
@@ -4156,7 +4175,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.5.0...HEAD
+[4.5.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.1.2...v4.2.0

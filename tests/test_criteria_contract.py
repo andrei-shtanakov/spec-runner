@@ -330,3 +330,30 @@ class TestCollectionExcluded:
         doc = _golden("answer")
         doc["collection_excluded"] = [entry]
         assert list(_schema("response").iter_errors(doc))
+
+
+class TestMinSpecRunnerVersion:
+    """`min-spec-runner.env` is what consumers pin (release X, design §4)."""
+
+    ENV = SCHEMAS / "min-spec-runner.env"
+
+    def _version(self, text: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in text.split("."))
+
+    def test_one_line_key_value(self):
+        lines = self.ENV.read_text().splitlines()
+        assert len(lines) == 1
+        key, _, value = lines[0].partition("=")
+        assert key == "MIN_SPEC_RUNNER_VERSION"
+        assert len(self._version(value)) == 3
+
+    def test_not_above_the_package_version(self):
+        import tomllib
+
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+        minimum = self.ENV.read_text().strip().partition("=")[2]
+        assert self._version(minimum) <= self._version(project)
+
+    def test_release_x_is_4_5_0(self):
+        """The release that shipped `verify --criteria`; raising it is a contract change."""
+        assert self.ENV.read_text().strip() == "MIN_SPEC_RUNNER_VERSION=4.5.0"
