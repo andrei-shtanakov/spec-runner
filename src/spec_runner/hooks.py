@@ -8,6 +8,7 @@ import hashlib
 import os
 import stat
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
@@ -127,13 +128,27 @@ def rescue_run_uncommitted(config: ExecutorConfig) -> tuple[bool, str]:
     declared (devtools battle run, 2026-09-30). Same mechanism, same contract
     as :func:`rescue_uncommitted`, labelled for the run instead of a task.
     """
-    return _rescue_uncommitted(config, owner="run", task_id=None)
+    from .git_ops import spec_contract_paths
+
+    # The spec and config files are not stray work: the dirty-spec guard has
+    # already refused them, unless `--allow-dirty-spec` authorised running
+    # them as they are — and stashing them would then silently run the
+    # committed task list instead (local review of this fix). Left in place,
+    # the fork's checkout either carries them over or refuses, and a refusal
+    # stops the run.
+    return _rescue_uncommitted(
+        config, owner="run", task_id=None, exclude=spec_contract_paths(config)
+    )
 
 
 def _rescue_uncommitted(
-    config: ExecutorConfig, *, owner: str, task_id: str | None
+    config: ExecutorConfig,
+    *,
+    owner: str,
+    task_id: str | None,
+    exclude: list[Path] | None = None,
 ) -> tuple[bool, str]:
-    """Stash every non-runtime uncommitted path, labelled for ``owner``."""
+    """Stash every non-runtime uncommitted path but ``exclude``, labelled for ``owner``."""
     from datetime import datetime
 
     from .git_ops import WorktreeStatusError, uncommitted_work_paths
@@ -143,7 +158,7 @@ def _rescue_uncommitted(
         # strict: an unreadable `git status` must not arrive here as "clean"
         # and license the cleanup (Copilot, PR #234). The helper's own callers
         # may fail open — this one is the reason the helper exists.
-        paths = uncommitted_work_paths(config, strict=True)
+        paths = uncommitted_work_paths(config, exclude, strict=True)
     except WorktreeStatusError as exc:
         detail = f"could not read the working tree before cleaning it: {exc}"
         logger.error("Refusing to start: the tree could not be read", task_id=task_id)

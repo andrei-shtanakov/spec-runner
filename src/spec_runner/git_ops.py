@@ -228,6 +228,23 @@ def ensure_runtime_gitignore(config: ExecutorConfig) -> None:
     logger.info("Updated spec/.gitignore with runtime-state entries", added=missing)
 
 
+def spec_contract_paths(config: ExecutorConfig) -> list[Path]:
+    """The spec content files and the config file — the run's contract (#69).
+
+    One list for the dirty-spec guard and for the run-level rescue, which must
+    leave exactly these files alone: under `--allow-dirty-spec` the operator
+    authorised running them as they are in the tree.
+    """
+    return [
+        config.tasks_file,
+        config.requirements_file,
+        config.design_file,
+        config.constitution_file,
+        config.project_root / "spec-runner.config.yaml",
+        config.project_root / "spec" / "executor.config.yaml",  # legacy location
+    ]
+
+
 def spec_dirty_paths(config: ExecutorConfig) -> list[str]:
     """Spec/config files with uncommitted changes, as git-status lines (#69).
 
@@ -249,14 +266,7 @@ def spec_dirty_paths(config: ExecutorConfig) -> list[str]:
     if _git(config, "rev-parse", "HEAD").returncode != 0:
         return []
 
-    candidates = [
-        config.tasks_file,
-        config.requirements_file,
-        config.design_file,
-        config.constitution_file,
-        config.project_root / "spec-runner.config.yaml",
-        config.project_root / "spec" / "executor.config.yaml",  # legacy location
-    ]
+    candidates = spec_contract_paths(config)
     # No existence filter: a tracked-but-deleted spec file is dirt too, and
     # git status reports deletions for paths that are gone from the tree.
     rels: list[str] = []

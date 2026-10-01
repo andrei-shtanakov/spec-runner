@@ -172,6 +172,45 @@ class TestRescueBeforeTheFork:
         assert "integration_pr" in capsys.readouterr().err
 
 
+class TestAllowDirtySpecKeepsItsMeaning:
+    """Local review of this fix: the run-level rescue must not stash the spec
+    the operator authorised with `--allow-dirty-spec`, or the run would execute
+    the committed task list instead of the one asked for."""
+
+    def test_an_authorised_dirty_spec_is_carried_into_the_run(self, repo: Path) -> None:
+        _git(repo, "checkout", "-q", "--", ".")
+        (repo / "scratch.txt").unlink()
+        _git(repo, "checkout", "-q", "master")
+        tasks_md = repo / "spec" / "tasks.md"
+        edited = tasks_md.read_text() + "\n" + _task_block("TASK-010")
+        tasks_md.write_text(edited)
+        (repo / "stray.txt").write_text("stray\n")
+        config = _config(repo)
+
+        run = _maybe_start_integration(SimpleNamespace(dry_run=False), config)
+
+        assert run is not None
+        assert tasks_md.read_text() == edited  # not stashed
+        assert not (repo / "stray.txt").exists()  # stray work still rescued
+        assert "stray.txt" in _git(repo, "stash", "show", "--include-untracked", "--name-only")
+
+    def test_a_dirty_spec_the_checkout_cannot_carry_refuses(self, repo: Path) -> None:
+        _git(repo, "checkout", "-q", "--", ".")
+        (repo / "scratch.txt").unlink()
+        tasks_md = repo / "spec" / "tasks.md"
+        tasks_md.write_text("# Spec\n\n## M0\n\n" + _task_block("TASK-001", "✅ DONE"))
+        _git(repo, "commit", "-q", "-am", "task branch marks TASK-001 done")
+        tasks_md.write_text(tasks_md.read_text() + "\n<!-- operator edit -->\n")
+        edited = tasks_md.read_text()
+        config = _config(repo)
+
+        with pytest.raises(SystemExit):
+            _maybe_start_integration(SimpleNamespace(dry_run=False), config)
+
+        assert tasks_md.read_text() == edited
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "task/task-002-work"
+
+
 class TestDeclaredModeIsNotDroppedSilently:
     def test_a_fork_that_fails_refuses_the_run(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
