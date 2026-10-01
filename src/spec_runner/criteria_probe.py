@@ -50,6 +50,7 @@ _manifest: dict[str, Any] = {
     "plugins": [],
     "xdist_active": False,
     "rerunfailures_active": False,
+    "rerunfailures_force_reruns": False,
     "conftests": [],
     "items": [],
     "errors": [],
@@ -187,11 +188,20 @@ def pytest_configure(config: Any) -> None:
     }
     # the registered plugin, not the installed distribution: `-p no:xdist` leaves the
     # distribution listed (looponfail still registers) but removes `-n`
-    _manifest["xdist_active"] = bool(config.pluginmanager.has_plugin("xdist"))
-    # registered as "rerunfailures" (measured on 16.7); its `flaky` marker reruns even
-    # under `--reruns 0`, so run mode also refuses any rerun it observes
-    _manifest["rerunfailures_active"] = bool(config.pluginmanager.has_plugin("rerunfailures"))
+    # The names are measured: an entry point registers as "xdist"/"rerunfailures";
+    # `-p xdist.plugin`/`-p pytest_rerunfailures` under --disable-plugin-autoload
+    # register under the module name.
+    _manifest["xdist_active"] = _registered(config, "xdist", "xdist.plugin")
+    rerun = _registered(config, "rerunfailures", "pytest_rerunfailures")
+    _manifest["rerunfailures_active"] = rerun
+    # `--force-reruns` outranks `--reruns` and the `flaky` marker (16.7); run mode also
+    # refuses any rerun it observes, for a version without it
+    _manifest["rerunfailures_force_reruns"] = rerun and hasattr(config.option, "force_reruns")
     _manifest["plugins"] = sorted(distributions | {f"pytest-{pytest.__version__}"})
+
+
+def _registered(config: Any, *names: str) -> bool:
+    return any(config.pluginmanager.has_plugin(name) for name in names)
 
 
 def pytest_plugin_registered(plugin: Any, manager: Any) -> None:

@@ -75,7 +75,9 @@ def _env() -> Environment:
     return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, None, ())
 
 
-def _inventory(xdist_active: bool = False, rerunfailures_active: bool = False) -> Inventory:
+def _inventory(
+    xdist_active: bool = False, rerunfailures_active: bool = False, force_reruns: bool = False
+) -> Inventory:
     return Inventory(
         items=ITEMS,
         test_files=("pyproject.toml", "tests/conftest.py", "tests/test_a.py"),
@@ -83,6 +85,7 @@ def _inventory(xdist_active: bool = False, rerunfailures_active: bool = False) -
         plugins=("pytest-9.0.2",),
         xdist_active=xdist_active,
         rerunfailures_active=rerunfailures_active,
+        rerunfailures_force_reruns=force_reruns,
         excluded=EXCLUDED,
         non_function=("tests/test_a.py::TestX",),
         rootpath="/collected/root",
@@ -273,25 +276,30 @@ class TestAnswer:
         assert doc["content_sha256"] == expected
 
     def test_zero_tests_is_every_beh_no_test(self, pipeline: Pipeline) -> None:
-        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, False, (), (), "/r")
+        pipeline.inventory = Inventory(
+            (), (), None, ("pytest-9.0.2",), False, False, False, (), (), "/r"
+        )
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 0 and doc["beh"][0]["reason"] == "no-test" and not pipeline.runs
 
 
 class TestRunArguments:
     @pytest.mark.parametrize(
-        ("xdist", "rerun", "flags"),
+        ("xdist", "rerun", "force", "flags"),
         [
-            (True, False, ["-n", "0", "--dist", "no"]),
-            (False, False, []),
-            (False, True, ["--reruns", "0"]),
-            (True, True, ["-n", "0", "--dist", "no", "--reruns", "0"]),
+            (True, False, False, ["-n", "0", "--dist", "no"]),
+            (False, False, False, []),
+            (False, True, False, ["--reruns", "0"]),
+            (False, True, True, ["--reruns", "0", "--force-reruns", "0"]),
+            (True, True, True, ["-n", "0", "--dist", "no", "--reruns", "0", "--force-reruns", "0"]),
         ],
     )
     def test_plugin_args_from_the_inventory(
-        self, pipeline: Pipeline, xdist: bool, rerun: bool, flags: list[str]
+        self, pipeline: Pipeline, xdist: bool, rerun: bool, force: bool, flags: list[str]
     ) -> None:
-        pipeline.inventory = _inventory(xdist_active=xdist, rerunfailures_active=rerun)
+        pipeline.inventory = _inventory(
+            xdist_active=xdist, rerunfailures_active=rerun, force_reruns=force
+        )
         pipeline.measure(_request("ABC:BEH-1"))
         assert pipeline.runs and all(list(c["plugin_args"]) == flags for c in pipeline.runs)
 
@@ -381,6 +389,7 @@ class TestErrors:
             ("pkg/mod.py", "tests/test_a.py"),
             None,
             ("pytest-9.0.2",),
+            False,
             False,
             False,
             (),

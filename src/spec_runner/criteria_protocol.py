@@ -162,6 +162,9 @@ def _collect_shape_ok(data: dict[str, Any]) -> bool:
         and _is_str_list(data["plugins"])
         and isinstance(data["xdist_active"], bool)
         and isinstance(data["rerunfailures_active"], bool)
+        and isinstance(data["rerunfailures_force_reruns"], bool)
+        # the option exists only with the plugin registered
+        and (data["rerunfailures_active"] or not data["rerunfailures_force_reruns"])
         and _is_abs_list(data["conftests"])
         and _list_of(data["items"], _item_ok)
         and _list_of(data["errors"], _error_ok)
@@ -183,6 +186,7 @@ _COLLECT_KEYS = {
     "plugins",
     "xdist_active",
     "rerunfailures_active",
+    "rerunfailures_force_reruns",
     "conftests",
     "items",
     "errors",

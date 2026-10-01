@@ -286,26 +286,48 @@ class TestDistribution:
 
 
 class TestRerunfailures:
-    """A retry must never hide flakiness: reruns are switched off, or the run is an error."""
+    """A retry must never hide flakiness: reruns are switched off, or the run is an error.
+
+    Measured on pytest-rerunfailures 16.7: `--force-reruns` outranks the marker and
+    `--reruns`, so `--force-reruns 0` (passed with `--reruns 0`) also neutralises the
+    `flaky` marker; the probe's refusal of any rerun remains for a version without it.
+    """
 
     @pytest.fixture(autouse=True)
     def _counter(self, tmp_path, monkeypatch):
         import_plugin("pytest_rerunfailures")
         monkeypatch.setenv(COUNTER_ENV, str(tmp_path / "counter"))
 
-    def test_reruns_in_addopts_are_neutralised_and_flakiness_shows(self, tmp_path):
+    @pytest.mark.parametrize("addopts", ["--reruns 2", "--force-reruns 2"])
+    def test_reruns_in_addopts_are_neutralised_and_flakiness_shows(self, tmp_path, addopts):
         files = {
             **_test("test_a", FLAKY_BODY, FLAKY_HEADER),
-            "pytest.ini": "[pytest]\naddopts = --reruns 2\n",
+            "pytest.ini": f"[pytest]\naddopts = {addopts}\n",
         }
         bench = Bench(tmp_path, files)
         args = bench.inventory_args()
-        assert args[-2:] == ["--reruns", "0"]  # after -n 0 --dist no when xdist is here too
+        # after -n 0 --dist no when xdist is here too
+        assert args[-4:] == ["--reruns", "0", "--force-reruns", "0"]
         assert selector_status(bench.runs(NODE, args)) == ("unconfirmed", "nondeterministic")
 
-    def test_flaky_marker_rerun_is_an_error_run(self, tmp_path):
+    def test_force_reruns_in_addopts_cannot_hide_a_deterministic_failure(self, tmp_path):
+        files = {
+            **_test("test_a", "    work(1)\n    assert False", FLAKY_HEADER),
+            "pytest.ini": "[pytest]\naddopts = --force-reruns 2\n",
+        }
+        bench = Bench(tmp_path, files)
+        runs = bench.runs(NODE, bench.inventory_args())
+        assert selector_status(runs) == ("unconfirmed", "not-passed")
+
+    def test_flaky_marker_is_neutralised_too(self, tmp_path):
         files = _test("test_a", FLAKY_BODY, FLAKY_HEADER + "\n\n\n@pytest.mark.flaky(reruns=2)")
         bench = Bench(tmp_path, files)
         runs = bench.runs(NODE, bench.inventory_args())
+        assert selector_status(runs) == ("unconfirmed", "nondeterministic")
+
+    def test_flaky_marker_rerun_without_the_flags_is_an_error_run(self, tmp_path):
+        """Defence in depth: should a rerun still happen, the run is an error, never traced."""
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER + "\n\n\n@pytest.mark.flaky(reruns=2)")
+        runs = Bench(tmp_path, files).runs(NODE)
         assert runs[0]["result"] == "error" and "test was rerun" in str(runs[0]["detail"])
         assert selector_status(runs) == ("error", "runner")

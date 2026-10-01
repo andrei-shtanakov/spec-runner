@@ -100,6 +100,7 @@ def _manifest(checkout: Path, **overrides: Any) -> dict[str, Any]:
         "plugins": ["pytest-9.1.1"],
         "xdist_active": False,
         "rerunfailures_active": False,
+        "rerunfailures_force_reruns": False,
         "conftests": [str(checkout / "tests" / "conftest.py")],
         "items": [_function(checkout, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)],
         "errors": [],
@@ -232,7 +233,11 @@ class TestInvocation:
         assert runner.calls[0]["max_output"] == criteria_process.DEFAULT_MAX_OUTPUT
 
     def test_collect_carries_no_distribution_flags(self, fake) -> None:
-        manifest = {"xdist_active": True, "rerunfailures_active": True}
+        manifest = {
+            "xdist_active": True,
+            "rerunfailures_active": True,
+            "rerunfailures_force_reruns": True,
+        }
         run, runner, _, _ = fake(lambda co: _manifest(co, **manifest))
         run()
         assert runner.calls[0]["argv"][6:] == ["--collect-only", "-q"]
@@ -243,18 +248,19 @@ class TestPluginArgs:
     """The per-run flags that neutralise plugins whose own process model hides the call."""
 
     @pytest.mark.parametrize(
-        ("xdist", "rerun", "flags"),
+        ("xdist", "rerun", "force", "flags"),
         [
-            (False, False, []),
-            (True, False, ["-n", "0", "--dist", "no"]),
-            (False, True, ["--reruns", "0"]),
-            (True, True, ["-n", "0", "--dist", "no", "--reruns", "0"]),
+            (False, False, False, []),
+            (True, False, False, ["-n", "0", "--dist", "no"]),
+            (False, True, False, ["--reruns", "0"]),
+            (False, True, True, ["--reruns", "0", "--force-reruns", "0"]),
+            (True, True, True, ["-n", "0", "--dist", "no", "--reruns", "0", "--force-reruns", "0"]),
         ],
     )
     def test_flags_follow_the_registered_plugins(
-        self, xdist: bool, rerun: bool, flags: list[str]
+        self, xdist: bool, rerun: bool, force: bool, flags: list[str]
     ) -> None:
-        inventory = Inventory((), (), None, (), xdist, rerun, (), (), "/r")
+        inventory = Inventory((), (), None, (), xdist, rerun, force, (), (), "/r")
         assert plugin_args(inventory) == flags
 
 
@@ -268,6 +274,12 @@ class TestManifestToInventory:
     def test_rerunfailures_active_comes_from_the_manifest(self, fake, active: bool) -> None:
         run, _, _, _ = fake(lambda co: _manifest(co, rerunfailures_active=active))
         assert run().rerunfailures_active is active
+
+    @pytest.mark.parametrize("force", [True, False])
+    def test_force_reruns_comes_from_the_manifest(self, fake, force: bool) -> None:
+        manifest = {"rerunfailures_active": True, "rerunfailures_force_reruns": force}
+        run, _, _, _ = fake(lambda co: _manifest(co, **manifest))
+        assert run().rerunfailures_force_reruns is force
 
     def test_items_files_config_and_plugins(self, fake) -> None:
         def manifest(co: Path) -> dict[str, Any]:
@@ -902,13 +914,20 @@ class TestRealXdistActive:
         assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
         assert inv.xdist_active is True
 
+    def test_xdist_loaded_by_module_without_autoload_is_active(self, xdist_env, tmp_path) -> None:
+        """Measured: `-p xdist.plugin` under `--disable-plugin-autoload` registers as
+        `xdist.plugin`, not `xdist` — and `-n` exists."""
+        inv = _real(xdist_env, tmp_path, self._files("--disable-plugin-autoload -p xdist.plugin"))
+        assert inv.xdist_active is True
+
     def test_no_xdist_installed_is_inactive(self, product_env, tmp_path) -> None:
         assert _real(product_env, tmp_path, REAL_BASE).xdist_active is False
 
 
 @pytest.mark.slow
 class TestRealRerunfailuresActive:
-    """The registered plugin's name is `rerunfailures` (measured on pytest-rerunfailures 16.7)."""
+    """Registered as `rerunfailures` (entry point) or `pytest_rerunfailures` (`-p` by module
+    under `--disable-plugin-autoload`) — measured on pytest-rerunfailures 16.7."""
 
     @staticmethod
     def _files(addopts: str) -> dict[str, str]:
@@ -918,10 +937,16 @@ class TestRealRerunfailuresActive:
     def test_registered_rerunfailures_is_active(self, rerunfailures_env, tmp_path, addopts) -> None:
         inv = _real(rerunfailures_env, tmp_path, self._files(addopts))
         assert inv.rerunfailures_active is True
+        assert inv.rerunfailures_force_reruns is True  # 16.7 has --force-reruns
+
+    def test_loaded_by_module_without_autoload_is_active(self, rerunfailures_env, tmp_path) -> None:
+        addopts = "--disable-plugin-autoload -p pytest_rerunfailures"
+        inv = _real(rerunfailures_env, tmp_path, self._files(addopts))
+        assert inv.rerunfailures_active is True and inv.rerunfailures_force_reruns is True
 
     def test_blocked_rerunfailures_is_not_active(self, rerunfailures_env, tmp_path) -> None:
         inv = _real(rerunfailures_env, tmp_path, self._files("-p no:rerunfailures"))
-        assert inv.rerunfailures_active is False
+        assert inv.rerunfailures_active is False and inv.rerunfailures_force_reruns is False
 
     def test_not_installed_is_inactive(self, product_env, tmp_path) -> None:
         assert _real(product_env, tmp_path, REAL_BASE).rerunfailures_active is False
