@@ -155,9 +155,28 @@ class TestRoot:
         plain = (tmp_path / "plain").resolve()
         plain.mkdir()
         monkeypatch.chdir(plain)
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
         argv = ["verify", "--criteria", "--request", str(tmp_path / "r.json"), "--json"]
         assert self._captured(monkeypatch, argv, capsys) == plain
+
+    def test_git_missing_falls_back_to_the_cwd(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        """git cannot be launched (run_bounded's 127): the cwd, even inside a repo."""
+        from spec_runner import criteria_process
+
+        repo = (tmp_path / "repo").resolve()
+        (repo / "sub").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        monkeypatch.chdir(repo / "sub")
+        launched: list[list[str]] = []
+
+        def no_git(argv: list[str], **kwargs: object) -> criteria_process.Finished:
+            launched.append(list(argv))
+            message = b"cannot launch git: [Errno 2] No such file or directory"
+            return criteria_process.Finished(criteria_process.LAUNCH_FAILED, b"", message, -1, None)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", no_git)
+        argv = ["verify", "--criteria", "--request", str(tmp_path / "r.json"), "--json"]
+        assert self._captured(monkeypatch, argv, capsys) == repo / "sub"
+        assert launched == [["git", "rev-parse", "--show-toplevel"]]
 
     def test_an_explicit_project_root_wins(self, tmp_path: Path, monkeypatch, capsys) -> None:
         elsewhere = (tmp_path / "e").resolve()

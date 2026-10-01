@@ -12,6 +12,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -47,7 +48,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _env() -> Environment:
     version = ".".join(str(v) for v in sys.version_info[:3])
-    return Environment(Path(sys.executable), "CPython", version, "0" * 64, False, None, ())
+    return Environment(Path(sys.executable), "CPython", version, "0" * 64, None, ())
 
 
 class Bench:
@@ -112,8 +113,8 @@ FLAKY_BODY = (
 FLAKY_HEADER = "import os, pathlib\n\nimport pytest\nfrom pkg.mod import work"
 
 
-def _test(name: str, body: str, header: str = "") -> dict[str, str]:
-    return {"tests/test_a.py": f"{header}\n\ndef {name}():\n{body}\n"}
+def _test(name: str, body: str, header: str = "", params: str = "") -> dict[str, str]:
+    return {"tests/test_a.py": f"{header}\n\ndef {name}({params}):\n{body}\n"}
 
 
 NODE = "tests/test_a.py::test_a"
@@ -156,8 +157,12 @@ class TestStatuses:
             "    thread = threading.Thread(target=lambda: (go.wait(), work(1)))\n"
             "    thread.start()\n    yield go, thread\n"
         )
-        files = _test("test_a", "    go, thread = worker\n    go.set()\n    thread.join()", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(worker):")
+        files = _test(
+            "test_a",
+            "    go, thread = worker\n    go.set()\n    thread.join()",
+            header,
+            params="worker",
+        )
         assert Bench(tmp_path, files).status(NODE) == TRACED
 
     def test_async_test_via_asyncio_run(self, tmp_path):
@@ -180,7 +185,8 @@ class TestStatuses:
         bench = Bench(tmp_path, files)
         runs = bench.runs(NODE)
         assert selector_status(runs) == TRACED
-        reported = {line for entry in runs[0]["product_lines"] for line in entry["lines"]}  # type: ignore[attr-defined,index,union-attr]
+        entries = cast(list[dict[str, list[int]]], runs[0]["product_lines"])
+        reported = {line for entry in entries for line in entry["lines"]}
         assert reported == {2, 3}
 
     def test_os_fork_child_running_the_product(self, tmp_path):
@@ -204,19 +210,17 @@ class TestStatuses:
 
     def test_setup_failure_is_not_passed_with_call_not_reached(self, tmp_path):
         header = "import pytest\n\n\n@pytest.fixture\ndef broken():\n    raise RuntimeError"
-        files = _test("test_a", "    pass", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(broken):")
+        files = _test("test_a", "    pass", header, params="broken")
         runs = Bench(tmp_path, files).runs(NODE)
         assert selector_status(runs) == ("unconfirmed", "not-passed")
-        assert runs[0]["phases"]["call"] == "not-reached"  # type: ignore[index]
+        assert cast(dict[str, str], runs[0]["phases"])["call"] == "not-reached"
 
     def test_teardown_failure_in_both_runs_is_not_passed(self, tmp_path):
         header = (
             "import pytest\nfrom pkg.mod import work\n\n\n@pytest.fixture\ndef late():\n"
             "    yield\n    raise RuntimeError"
         )
-        files = _test("test_a", "    work(1)", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(late):")
+        files = _test("test_a", "    work(1)", header, params="late")
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "not-passed")
 
     def test_teardown_failure_in_one_run_is_nondeterministic(self, tmp_path, monkeypatch):
@@ -228,8 +232,7 @@ class TestStatuses:
             "    first = not path.exists()\n    path.write_text('x')\n"
             "    if first:\n        raise RuntimeError"
         )
-        files = _test("test_a", "    work(1)", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(late):")
+        files = _test("test_a", "    work(1)", header, params="late")
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "nondeterministic")
 
 
@@ -238,7 +241,7 @@ class TestResolvedDefinitions:
         source = (
             "import pytest\n\n\nclass Base:\n    def test_inherited(self):\n"
             '        """ENC:BEH-01"""\n\n\nclass TestSub(Base):\n    pass\n\n\n'
-            "def deco(fn):\n    return fn\n\n\n@deco\n@pytest.mark.slowish\n"
+            "def deco(fn):\n    return fn\n\n\n@deco\n@pytest.mark.filterwarnings('default')\n"
             'def test_decorated():\n    """ENC:BEH-02"""\n'
         )
         bench = Bench(tmp_path, {"tests/test_a.py": source})

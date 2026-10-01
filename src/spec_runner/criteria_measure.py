@@ -5,13 +5,16 @@ exit code with the one response document: the answer (exit 0), or an error
 document carrying only the fields established before the failure — never `beh`.
 Only `CriteriaError` becomes a document; any other exception is a bug and
 propagates. The workspace is removed after every process group is gone
-(`run_bounded` kills each group before it returns).
+(`run_bounded` kills each group before it returns); a removal that fails is
+one warning line on stderr, never on stdout (which carries only the document).
 
 Never imports pytest: the product's pytest runs in the product's environment.
 """
 
 from __future__ import annotations
 
+import shutil
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -67,15 +70,28 @@ def measure(
     try:
         request = parse_request(request_data)
         head["request"] = request.raw
-        with tempfile.TemporaryDirectory(
-            prefix="spec-runner-criteria-", ignore_cleanup_errors=True
-        ) as tmp:
-            beh = _measure(
-                project_root, request, Path(tmp), deadline, selector_timeout, established
-            )
+        tmp = Path(tempfile.mkdtemp(prefix="spec-runner-criteria-"))
+        try:
+            beh = _measure(project_root, request, tmp, deadline, selector_timeout, established)
+        finally:
+            _remove_workspace(tmp)
     except CriteriaError as exc:
         return _error_document(exc, head, established)
-    return 0, {**head, **established, "beh": beh}
+    return 0, _with_head({**established, "beh": beh}, head)
+
+
+def _remove_workspace(tmp: Path) -> None:
+    """Remove the workspace; a failure is one warning line on stderr (stdout is the document)."""
+    try:
+        shutil.rmtree(tmp)
+    except OSError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)  # as far as it goes
+        print(f"spec-runner: warning: could not remove workspace {tmp}: {exc}", file=sys.stderr)
+
+
+def _with_head(body: Document, head: Document) -> Document:
+    """`head` first and authoritative: nothing in `body` can override its keys."""
+    return {**head, **body, **head}
 
 
 def request_invalid(detail: str, *, version: str) -> tuple[int, Document]:
@@ -89,7 +105,8 @@ def _error_document(
 ) -> tuple[int, Document]:
     extra = {k: v for k, v in exc.established.items() if k != PLUGINS_ESTABLISHED}
     error = {"kind": exc.kind.value, "retryable": exc.kind.retryable, "detail": exc.detail}
-    return exc.kind.exit_code, {**head, "error": error, **extra, **established}
+    head = {**head, "error": error}
+    return exc.kind.exit_code, _with_head({**extra, **established}, head)
 
 
 def _measure(
@@ -122,8 +139,9 @@ def _measure(
     established["collection_excluded"] = [_excluded(e) for e in inventory.excluded]
 
     files = resolve_roots(checkout, sha, criteria.roots, deadline)
-    check_overlap(files, inventory.test_files)
+    # §4: established after resolution, so an overlap refusal carries what it judged
     established["product_roots"] = {"declared": list(criteria.roots), "files": list(files)}
+    check_overlap(files, inventory.test_files)
 
     tracked_py = [p for p in tracked_files(checkout, sha, deadline) if p.endswith(".py")]
     paths = digest_paths(files, inventory.test_files, inventory.excluded, tracked_py)

@@ -36,6 +36,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
   Python is older by (major, minor, micro) — 3.12.0 against a 3.12.13 product
   environment now counts as older — and `product-roots-invalid` otherwise. The
   product's micro is read from its leading digits (`3.13.0rc1` → 0).
+- **`verify --criteria` error documents.** A `product-roots-overlap-tests`
+  refusal now carries `product_roots` (declared and resolved files), as design
+  §4 asks of every field established before a failure; nothing established can
+  override `protocol`, `request`, `spec_runner_version` or `error`. A workspace
+  that cannot be removed afterwards is reported as one warning line on stderr
+  instead of being ignored silently.
 
 ## [4.5.0] - 2026-10-01
 

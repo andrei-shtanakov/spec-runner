@@ -262,3 +262,15 @@ def test_output_under_the_bound_has_no_marker(tmp_path: Path) -> None:
         _sh("printf abc"), cwd=tmp_path, env=None, deadline=Deadline(60), max_output=3
     )
     assert done.stdout == b"abc"
+
+
+@pytest.mark.parametrize("argv", [[], ()])
+def test_empty_argv_is_a_programming_error(tmp_path: Path, monkeypatch, argv) -> None:
+    """Refused before anything is launched — never a 127 a caller would map to a kind."""
+
+    def no_launch(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("launched")
+
+    monkeypatch.setattr(subprocess, "Popen", no_launch)
+    with pytest.raises(ValueError, match="empty argv"):
+        run_bounded(argv, cwd=tmp_path, env=None, deadline=Deadline(10))

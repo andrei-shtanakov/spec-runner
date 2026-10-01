@@ -33,9 +33,8 @@ MIN_PRODUCT_PYTHON = (3, 12)
 _GIT_STEP_LIMIT = 60.0
 _INTERPRETER_LIMIT = 60.0
 _INTERPRETER_PROBE = (
-    "import json, platform, importlib.util; "
-    "print(json.dumps([platform.python_implementation(), platform.python_version(), "
-    "importlib.util.find_spec('xdist') is not None]))"
+    "import json, platform; "
+    "print(json.dumps([platform.python_implementation(), platform.python_version()]))"
 )
 # R24: the probe's hookimpl(wrapper=True) needs pluggy >= 1.2. Prints the version;
 # exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0). Whether 1.1 would do
@@ -93,7 +92,6 @@ class Environment:
     implementation: str
     version: str
     lock_sha256: str
-    has_xdist: bool
     groups: tuple[str, ...] | None  # None = uv's default groups
     extras: tuple[str, ...]
 
@@ -335,7 +333,7 @@ def sync_environment(
     _uv_sync(checkout, env_dir, criteria, deadline)
     python = env_dir / "bin" / "python"
     with tempfile.TemporaryDirectory(prefix="criteria-empty-") as empty:
-        implementation, version, has_xdist = _interpreter(python, checkout, Path(empty), deadline)
+        implementation, version = _interpreter(python, checkout, Path(empty), deadline)
         _require_pytest(python, checkout, Path(empty), deadline)
         _require_pluggy(python, checkout, Path(empty), deadline)
     return Environment(
@@ -343,7 +341,6 @@ def sync_environment(
         implementation=implementation,
         version=version,
         lock_sha256=lock_sha256,
-        has_xdist=has_xdist,
         groups=criteria.groups,
         extras=criteria.extras,
     )
@@ -387,14 +384,12 @@ def _run_python(
     )
 
 
-def _interpreter(
-    python: Path, checkout: Path, empty: Path, deadline: Deadline
-) -> tuple[str, str, bool]:
+def _interpreter(python: Path, checkout: Path, empty: Path, deadline: Deadline) -> tuple[str, str]:
     done = _run_python(python, _INTERPRETER_PROBE, checkout, empty, deadline)
     if done.timed_out is not None or done.returncode != 0:
         raise _failure(ErrorKind.ENVIRONMENT_SYNC_FAILED, "interpreter check", done)
     try:
-        implementation, version, has_xdist = json.loads(done.stdout)
+        implementation, version = json.loads(done.stdout)
         major_minor = tuple(int(part) for part in str(version).split(".")[:2])
     except (ValueError, TypeError):
         raise CriteriaError(
@@ -406,7 +401,7 @@ def _interpreter(
             ErrorKind.UNSUPPORTED_RUNTIME,
             f"the product environment is {implementation} {version}; CPython >= 3.12 is required",
         )
-    return str(implementation), str(version), bool(has_xdist)
+    return str(implementation), str(version)
 
 
 def _require_pytest(python: Path, checkout: Path, empty: Path, deadline: Deadline) -> None:

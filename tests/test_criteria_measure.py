@@ -72,7 +72,7 @@ def _request(*ids: str) -> dict[str, Any]:
 
 
 def _env() -> Environment:
-    return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, False, None, ())
+    return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, None, ())
 
 
 def _inventory(xdist_active: bool = False, rerunfailures_active: bool = False) -> Inventory:
@@ -390,7 +390,9 @@ class TestErrors:
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 3 and doc["error"]["kind"] == "product-roots-overlap-tests"
         assert {"environment", "test_files", "test_items", "collection_excluded"} <= set(doc)
-        assert "product_roots" not in doc and "content_sha256" not in doc
+        # §4: product_roots after resolution — the overlap is judged on them
+        assert doc["product_roots"] == {"declared": ["pkg"], "files": ["pkg/mod.py"]}
+        assert "content_sha256" not in doc
 
     def test_deadline_exhausted_between_runs(self, pipeline: Pipeline) -> None:
         def expire(call: dict[str, Any]) -> dict[str, object]:
@@ -473,3 +475,75 @@ class TestErrors:
                 version=VERSION,
             )
         assert pipeline.workspaces and not pipeline.workspaces[0].exists()
+
+
+class TestWorkspaceCleanup:
+    def test_a_cleanup_failure_warns_on_stderr_only(
+        self,
+        pipeline: Pipeline,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        real = criteria_measure.shutil.rmtree
+        calls: list[bool] = []
+
+        def flaky_rmtree(path: Any, ignore_errors: bool = False, **kwargs: Any) -> None:
+            calls.append(ignore_errors)
+            if not ignore_errors:
+                raise PermissionError(13, "Permission denied", str(path))
+            real(path, ignore_errors=True)
+
+        monkeypatch.setattr(criteria_measure.shutil, "rmtree", flaky_rmtree)
+        code, doc = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0 and "beh" in doc
+        out, err = capsys.readouterr()
+        assert out == ""
+        lines = err.splitlines()
+        assert len(lines) == 1 and lines[0].startswith("spec-runner: warning:")
+        assert "Permission denied" in lines[0]
+        assert calls == [False, True]  # still removed as far as possible
+        assert not pipeline.workspaces[0].exists()
+
+    def test_a_clean_removal_is_silent(
+        self, pipeline: Pipeline, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        pipeline.measure(_request("ABC:BEH-1"))
+        assert capsys.readouterr() == ("", "")
+        assert not pipeline.workspaces[0].exists()
+
+
+class TestDocumentHead:
+    """`established` (from a step or an exception) never overrides the document's head."""
+
+    FORGED = {
+        "protocol": 99,
+        "request": {"forged": True},
+        "spec_runner_version": "0.0.0",
+        "error": "forged",
+        "test_files": ["tests/test_a.py"],
+    }
+
+    def test_error_document_head_wins(self) -> None:
+        exc = CriteriaError(ErrorKind.COLLECTION_FAILED, "x", **self.FORGED)
+        head: dict[str, object] = {"protocol": 1, "spec_runner_version": VERSION, "request": {}}
+        code, doc = criteria_measure._error_document(exc, head, dict(self.FORGED))
+        assert (doc["protocol"], doc["spec_runner_version"], doc["request"]) == (1, VERSION, {})
+        retryable = ErrorKind.COLLECTION_FAILED.retryable
+        assert doc["error"] == {"kind": "collection-failed", "retryable": retryable, "detail": "x"}
+        assert code == ErrorKind.COLLECTION_FAILED.exit_code
+        assert doc["test_files"] == ["tests/test_a.py"]
+        assert list(doc)[:3] == ["protocol", "spec_runner_version", "request"]
+        assert not list(VALIDATOR.iter_errors(doc))
+
+    def test_answer_head_wins(self, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch) -> None:
+        original = criteria_measure._measure
+
+        def forging(*args: Any) -> list[dict[str, object]]:
+            beh = original(*args)
+            args[-1].update({"protocol": 99, "spec_runner_version": "0.0.0", "beh": []})
+            return beh
+
+        monkeypatch.setattr(criteria_measure, "_measure", forging)
+        code, doc = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0 and doc["protocol"] == 1 and doc["spec_runner_version"] == VERSION
+        assert doc["beh"] and doc["request"] == _request("ABC:BEH-1")

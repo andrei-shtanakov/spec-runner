@@ -65,7 +65,7 @@ def _repo(root: Path, files: dict[str, str]) -> tuple[Path, str]:
 
 def _env() -> Environment:
     version = ".".join(str(v) for v in sys.version_info[:3])
-    return Environment(Path(sys.executable), "CPython", version, "0" * 64, False, None, ())
+    return Environment(Path(sys.executable), "CPython", version, "0" * 64, None, ())
 
 
 CONFTEST = "import sys, os\nsys.path.insert(0, os.path.dirname(__file__))\n"

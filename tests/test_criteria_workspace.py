@@ -429,7 +429,6 @@ def _environment(**overrides: Any) -> Environment:
         "implementation": "CPython",
         "version": "3.12.13",
         "lock_sha256": "0" * 64,
-        "has_xdist": False,
         "groups": None,
         "extras": (),
     }
@@ -533,7 +532,7 @@ class _FakeRun:
     def __init__(
         self,
         uv: Finished | None = None,
-        interpreter: bytes = b'["CPython", "3.12.13", false]',
+        interpreter: bytes = b'["CPython", "3.12.13"]',
         pytest_rc: int = 0,
         pluggy: Finished | None = None,
     ) -> None:
@@ -673,7 +672,7 @@ class TestSyncMapping:
         assert result.groups is None and result.extras == ()
         assert result.python == env_dir / "bin" / "python"
         assert result.lock_sha256 == hashlib.sha256(b"version = 1\n").hexdigest()
-        assert result.label == "CPython 3.12.13" and not result.has_xdist
+        assert result.label == "CPython 3.12.13"
 
     def test_declared_selection_argv(self, tmp_path: Path, monkeypatch) -> None:
         root = tmp_path / "co"
@@ -725,7 +724,7 @@ class TestSyncMapping:
 
     @pytest.mark.parametrize(
         "answer",
-        [b'["PyPy", "3.12.1", false]', b'["CPython", "3.11.9", false]'],
+        [b'["PyPy", "3.12.1"]', b'["CPython", "3.11.9"]'],
     )
     def test_unsupported_runtime(self, tmp_path: Path, monkeypatch, answer: bytes) -> None:
         monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=answer))
@@ -735,8 +734,12 @@ class TestSyncMapping:
             )
         assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
 
-    def test_unreadable_interpreter_answer_is_sync_failed(self, tmp_path: Path, monkeypatch):
-        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=b"garbage"))
+    @pytest.mark.parametrize("answer", [b"garbage", b'["CPython", "3.12.13", false]'])
+    def test_unreadable_interpreter_answer_is_sync_failed(
+        self, tmp_path: Path, monkeypatch, answer: bytes
+    ):
+        """The answer is exactly [implementation, version] — the probe asks nothing else."""
+        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=answer))
         with pytest.raises(CriteriaError) as raised:
             sync_environment(
                 _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
@@ -874,7 +877,6 @@ class TestSync:
         assert env.python == env_dir / "bin" / "python" and env.implementation == "CPython"
         assert tuple(int(p) for p in env.version.split(".")[:2]) >= (3, 12)
         assert env.lock_sha256 == hashlib.sha256((root / "uv.lock").read_bytes()).hexdigest()
-        assert not env.has_xdist
         assert not (root / ".venv").exists()  # the environment lives outside the checkout
         assert tracked_changes(root, _dl()) == []
 

@@ -75,8 +75,8 @@ def _kind(call: Callable[[], object]) -> CriteriaError:
 # --------------------------------------------------------------------------- fast
 
 
-def _fake_env(has_xdist: bool = False) -> Environment:
-    return Environment(Path("/fake/bin/python"), "CPython", "3.12.0", "0" * 64, has_xdist, None, ())
+def _fake_env() -> Environment:
+    return Environment(Path("/fake/bin/python"), "CPython", "3.12.0", "0" * 64, None, ())
 
 
 def _function(checkout: Path, node_id: str, file: str, qualname: str, line: int) -> dict[str, Any]:
@@ -160,14 +160,13 @@ def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
     checkout, sha = _repo(tmp_path / "co", BASE)
 
     def make(manifest: Callable[[Path], dict[str, Any] | None], **opts: Any) -> Any:
-        has_xdist = opts.pop("has_xdist", False)
         deadline = opts.pop("deadline", None) or _dl()
         runner = FakePytest(manifest, **opts)
         monkeypatch.setattr(criteria_process, "run_bounded", runner)
 
         def run() -> Inventory:
             return collect(
-                _fake_env(has_xdist),
+                _fake_env(),
                 checkout,
                 sha,
                 tmp_path / "probe",
@@ -213,7 +212,8 @@ class TestInvocation:
         assert runner.calls[0]["max_output"] == criteria_process.DEFAULT_MAX_OUTPUT
 
     def test_collect_carries_no_distribution_flags(self, fake) -> None:
-        run, runner, _, _ = fake(lambda co: _manifest(co), has_xdist=True)
+        manifest = {"xdist_active": True, "rerunfailures_active": True}
+        run, runner, _, _ = fake(lambda co: _manifest(co, **manifest))
         run()
         assert runner.calls[0]["argv"][6:] == ["--collect-only", "-q"]
         assert "-n" not in runner.calls[0]["argv"]
