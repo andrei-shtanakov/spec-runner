@@ -1332,7 +1332,7 @@ def _execute_task(
             error_kind="timeout",
             error_stage=reporter.current,
         )
-        log_progress(f"\u23f0 Timeout after {config.task_timeout_minutes}m", task_id)
+        _report_timeout(config.task_timeout_minutes, task_id)
         send_callback(config.callback_url, task_id, "failed", duration, error)
         return False
 
@@ -1397,6 +1397,22 @@ _EXPONENTIAL_ERRORS = frozenset(
         ErrorCode.RATE_LIMIT,
     }
 )
+
+
+def _report_timeout(minutes: int, task_id: str) -> None:
+    """Report a timed-out attempt and the limit that a retry will meet again.
+
+    A retry restarts the task from scratch under the same timeout, so an
+    attempt that needed more time fails the same way every time (devtools
+    battle run, 2026-09-30: two 30-minute timeouts, cured only by
+    `--timeout 60`). Saying so costs one line.
+    """
+    log_progress(
+        f"\u23f0 Timeout after {minutes}m — a retry starts over under the same "
+        f"{minutes}m limit and will likely time out again; raise it with "
+        "`--timeout <minutes>` (or `task_timeout_minutes`)",
+        task_id,
+    )
 
 
 def classify_retry_strategy(error_code: ErrorCode | str) -> str:

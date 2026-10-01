@@ -484,6 +484,10 @@ class ExecutorConfig:
     # looks like one, and the pilot's `retry` merged into master precisely
     # because nothing distinguished "redirected" from "not redirected".
     integration_branch_active: bool = False
+    # Runtime only: the base an active integration branch was forked from, for
+    # messages that must name a checkout still there after the per-run branch
+    # is removed at exit.
+    integration_base: str = ""
     sync_deps: bool = True  # Run dependency sync in pre_start_hook (doctor disables this)
     # Dependency sync command (commands.sync in YAML). Empty = auto: run
     # `uv sync` only when pyproject.toml exists, else skip quietly — a

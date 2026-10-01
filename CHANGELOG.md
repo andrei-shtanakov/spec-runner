@@ -33,6 +33,28 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **`integration_pr` on a dirty working copy no longer drops the mode silently**
+  (devtools battle run, 2026-09-30). A restart after an interrupted attempt
+  found the tree dirty on a task branch; the integration fork's
+  `git checkout <base>` refused, and the run went on without its integration
+  branch: every task branched from the base, an accepted task was executed a
+  third time, and the run stopped on a state/spec mismatch after the extra
+  work. Now:
+  - `run`'s guards (spec governance, dirty spec, tracked state) answer before
+    the fork, as they already did for `retry`;
+  - stray uncommitted work is stashed once per run before the fork
+    (`spec-runner rescue: run at …`), by the mechanism the task start uses
+    (#231);
+  - a declared `integration_pr` that cannot be honoured refuses the run
+    (exit 1) instead of falling back to per-task branches;
+  - `run` / `run --all` never select a task the state DB already records as
+    successful while tasks.md shows it open — the #124 mismatch is refused
+    before the work, not after it (an explicit `run --task=ID` still runs);
+  - the mismatch stop names the branch tasks.md was read from and how to
+    recover;
+  - a timed-out attempt says that a retry starts over under the same limit and
+    points at `--timeout`.
+
 - **`validate` no longer crashes on a pathologically deep group file** (#603).
   `ast.parse` raises `RecursionError` on, e.g., a 200 000-term expression; it
   now reads as "cannot be parsed" (a warning in `validate`, a terminal

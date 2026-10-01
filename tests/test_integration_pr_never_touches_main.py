@@ -180,7 +180,12 @@ class TestTheMarkerIsSetByTheForkItself:
         root = _repo(tmp_path)
         cfg = _cfg(root)
 
-        assert cli._maybe_start_integration(argparse.Namespace(dry_run=False), cfg) is None
+        # Since the devtools battle run (2026-09-30) a declared mode that cannot
+        # be honoured refuses the run instead of falling back; the invariant
+        # pinned here — the marker stays off — holds either way.
+        with pytest.raises(SystemExit) as exc:
+            cli._maybe_start_integration(argparse.Namespace(dry_run=False), cfg)
+        assert exc.value.code == 1
         assert cfg.integration_branch_active is False
 
     def test_the_mode_off_leaves_it_off(self, tmp_path):
