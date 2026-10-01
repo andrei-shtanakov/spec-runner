@@ -204,6 +204,12 @@ class TestInvocation:
         assert Path(env["TMPDIR"]).is_relative_to(tmp_path / "work")
         assert env["TMPDIR"] != second["env"]["TMPDIR"]
 
+    def test_collection_output_is_bounded(self, fake) -> None:
+        """R-B20: pytest's output is read only as a tail — the one bounded capture."""
+        run, runner, _, _ = fake(lambda co: _manifest(co))
+        run()
+        assert runner.calls[0]["max_output"] == criteria_process.DEFAULT_MAX_OUTPUT
+
     def test_collect_carries_no_distribution_flags(self, fake) -> None:
         run, runner, _, _ = fake(lambda co: _manifest(co), has_xdist=True)
         run()

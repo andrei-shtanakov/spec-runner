@@ -23,7 +23,8 @@ from typing import IO, Literal
 
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
 
-#: Retained output per stream: callers only ever use tails.
+#: Retained output per stream for output read only as a tail (the product's pytest, uv,
+#: the interpreter checks). Never for git: its stdout is parsed as complete data (R-B20).
 DEFAULT_MAX_OUTPUT = 1 << 20
 #: The shell's "command not found / cannot execute" status, for a launch failure.
 LAUNCH_FAILED = 127
@@ -65,12 +66,13 @@ def run_bounded(
     deadline: Deadline,
     local_timeout: float | None = None,
     stdin: bytes | None = None,
-    max_output: int | None = DEFAULT_MAX_OUTPUT,
+    max_output: int | None = None,
 ) -> Finished:
     """Run `argv` in its own process group under `deadline` and an optional local limit.
 
-    Each of stdout/stderr keeps at most its last `max_output` bytes (`None`: all of
-    them); dropped bytes are announced by a marker line at the head. A command that
+    By default all output is kept. With `max_output` (`DEFAULT_MAX_OUTPUT` for output
+    read only as a tail), each of stdout/stderr keeps its last `max_output` bytes and
+    dropped bytes are announced by a marker line at the head. A command that
     cannot be launched at all (missing executable, bad cwd) is exit 127 with the
     reason on stderr, so every caller's non-zero mapping applies.
     """
@@ -183,10 +185,17 @@ def run_or_raise(
     what: str,
     local_timeout: float | None = None,
     stdin: bytes | None = None,
+    max_output: int | None = None,
 ) -> Finished:
     """`run_bounded`, raising TIMEOUT on the global limit and `kind` on any other failure."""
     done = run_bounded(
-        argv, cwd=cwd, env=env, deadline=deadline, local_timeout=local_timeout, stdin=stdin
+        argv,
+        cwd=cwd,
+        env=env,
+        deadline=deadline,
+        local_timeout=local_timeout,
+        stdin=stdin,
+        max_output=max_output,
     )
     if done.timed_out == "global":
         raise CriteriaError(ErrorKind.TIMEOUT, f"{what}: the measurement deadline expired")

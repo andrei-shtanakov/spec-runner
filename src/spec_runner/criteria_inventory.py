@@ -27,7 +27,7 @@ from typing import Any
 
 from spec_runner import criteria_process
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, Finished
+from spec_runner.criteria_process import DEFAULT_MAX_OUTPUT, Deadline, Finished
 from spec_runner.criteria_protocol import (
     MANIFEST_ENV,
     MODE_ENV,
@@ -185,6 +185,7 @@ def _run_probe(
             env=child_env(probe_dir, variables),
             deadline=deadline,
             local_timeout=local_timeout,
+            max_output=DEFAULT_MAX_OUTPUT,  # read only as a tail (R-B20)
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

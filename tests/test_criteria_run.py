@@ -249,6 +249,21 @@ class TestFakeManifests:
         case.run(NODE, inipath=ini)
         assert seen[0][seen[0].index("-c") + 1] == ini
 
+    def test_pytest_output_is_bounded(self, tmp_path, monkeypatch) -> None:
+        """R-B20: the run's output is read only as a tail — a bounded capture."""
+        bounds: list[object] = []
+        real = criteria_process.run_bounded
+
+        def spy(argv: Sequence[str], **kwargs: Any) -> Finished:
+            if "pytest" in argv:
+                bounds.append(kwargs.get("max_output", "<default>"))
+                return Finished(0, b"", b"", 4242, None)
+            return real(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", spy)
+        Case(tmp_path, TESTS).run(NODE)
+        assert bounds == [criteria_process.DEFAULT_MAX_OUTPUT]
+
     def test_monitoring_error_is_an_error_run(self, tmp_path, monkeypatch) -> None:
         _fake_pytest(
             monkeypatch, lambda argv, env: _manifest(NODE, monitoring_error="no free tool id")

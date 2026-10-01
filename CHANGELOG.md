@@ -64,7 +64,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
   now come from the registered plugin and the collection pass carries none — a
   product with `-p no:xdist` was unmeasurable; a process that cannot be launched
   is an ordinary non-zero result (so it becomes an error document, not a
-  traceback); captured process output keeps its last 1 MiB; a `./:(top)`-style
+  traceback); the output of the product's pytest, uv and the interpreter checks keeps its
+  last 1 MiB (git output, parsed as data, is never truncated); a `./:(top)`-style
   product root is refused as git pathspec magic; `criteria:` is a known config
   key (no `validate` warning, no mixed-shape error beside `executor:`).
 

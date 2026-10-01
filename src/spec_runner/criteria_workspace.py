@@ -21,7 +21,13 @@ from pathlib import Path
 from spec_runner import criteria_process
 from spec_runner.criteria_config import ProductCriteria, check_selection
 from spec_runner.criteria_contract import CriteriaError, ErrorKind, owner_matches
-from spec_runner.criteria_process import Deadline, Finished, c_locale_env, checkout_git
+from spec_runner.criteria_process import (
+    DEFAULT_MAX_OUTPUT,
+    Deadline,
+    Finished,
+    c_locale_env,
+    checkout_git,
+)
 
 MIN_PRODUCT_PYTHON = (3, 12)
 _GIT_STEP_LIMIT = 60.0
@@ -131,9 +137,11 @@ def _in_checkout(
     args: Sequence[str],
     deadline: Deadline,
     stdin: bytes | None = None,
-    max_output: int | None = criteria_process.DEFAULT_MAX_OUTPUT,
 ) -> Finished:
-    """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure."""
+    """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure.
+
+    Unbounded output: listings and blobs are parsed as complete data (R-B20).
+    """
     done = criteria_process.run_bounded(
         [*checkout_git(checkout), *args],
         cwd=checkout,
@@ -141,7 +149,6 @@ def _in_checkout(
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
         stdin=stdin,
-        max_output=max_output,
     )
     if done.timed_out is not None or done.returncode != 0:
         raise _failure(ErrorKind.CLONE_FAILED, f"git {args[0]}", done)
@@ -194,7 +201,7 @@ def read_blobs(
     if bad:
         raise CriteriaError(ErrorKind.CLONE_FAILED, f"unreadable in a batch request: {bad[0]!r}")
     request = b"".join(f"{sha}:{path}\n".encode() for path in paths)
-    done = _in_checkout(checkout, ["cat-file", "--batch"], deadline, stdin=request, max_output=None)
+    done = _in_checkout(checkout, ["cat-file", "--batch"], deadline, stdin=request)
     return _parse_batch(done.stdout, paths, sha)
 
 
@@ -350,7 +357,9 @@ def _uv_sync(checkout: Path, env_dir: Path, criteria: ProductCriteria, deadline:
     # No --quiet: measured (uv 0.11.23) to suppress the "`--locked` was provided"
     # line this classification reads, turning a stale lock into a retryable failure.
     argv = ["uv", "sync", "--locked", *selection_args(criteria)]
-    done = criteria_process.run_bounded(argv, cwd=checkout, env=env, deadline=deadline)
+    done = criteria_process.run_bounded(
+        argv, cwd=checkout, env=env, deadline=deadline, max_output=DEFAULT_MAX_OUTPUT
+    )
     if done.timed_out is None and done.returncode == 0:
         return
     said = done.stderr.decode("utf-8", errors="replace")
@@ -372,6 +381,7 @@ def _run_python(
         env=child_env(empty, {}),
         deadline=deadline,
         local_timeout=_INTERPRETER_LIMIT,
+        max_output=DEFAULT_MAX_OUTPUT,
     )
 
 
