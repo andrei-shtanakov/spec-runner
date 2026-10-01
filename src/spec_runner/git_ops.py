@@ -494,6 +494,15 @@ def has_remote(config: ExecutorConfig) -> bool:
     return pick_remote(config) is not None
 
 
+def current_branch(config: ExecutorConfig) -> str | None:
+    """The checked-out branch name, or None when detached or unreadable."""
+    result = _git(config, "rev-parse", "--abbrev-ref", "HEAD")
+    name = str(result.stdout).strip()
+    if result.returncode != 0 or not name or name == "HEAD":
+        return None
+    return name
+
+
 def make_integration_branch_name(now: datetime | None = None) -> str:
     """Per-run integration branch name, unique to the second."""
     stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")

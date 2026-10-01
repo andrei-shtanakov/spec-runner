@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 from uuid import uuid4
 
 # Re-exports from submodules for backward compatibility
@@ -39,12 +40,14 @@ from .execution import (
 )
 from .git_ops import (
     create_integration_branch,
+    current_branch,
     ensure_on_main_branch,
     finalize_integration_branch,
     make_integration_branch_name,
     spec_dirty_paths,
     tracked_state_paths,
 )
+from .hooks import rescue_run_uncommitted
 from .logging import get_logger
 from .preflight import cmd_preflight
 from .preset_cmd import cmd_config
@@ -303,8 +306,17 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     """Fork a per-run integration branch when ``integration_pr`` is enabled.
 
     Returns an ``IntegrationRun`` (and redirects task merges onto it via
-    ``config.main_branch``) or None when the mode is off/unavailable — in
-    which case the run behaves exactly as before (self-merge into main).
+    ``config.main_branch``) or None when the mode is off or not applicable
+    (no branch automation, a dry run).
+
+    A declared mode that cannot be honoured **refuses the run** (exit 1). It
+    used to fall back silently to per-task branches off main: on the work an
+    interrupted attempt left in the tree, `git checkout <base>` refused, and
+    the restart ran every task from master, re-executed an accepted task and
+    stopped on a state/spec mismatch after the extra work (devtools battle
+    run, 2026-09-30). Stray uncommitted work is therefore rescued into a
+    stash first — once per run, the task start's mechanism (#231) — and a
+    rescue that cannot save it refuses rather than forks over it.
     """
     if not getattr(config, "integration_pr", False):
         return None
@@ -313,13 +325,30 @@ def _maybe_start_integration(args, config: ExecutorConfig):
         return None
     if getattr(args, "dry_run", False):
         return None
+    rescued, detail = rescue_run_uncommitted(config)
+    if not rescued:
+        _refuse_integration(f"uncommitted work could not be saved before forking: {detail}")
     run = create_integration_branch(config, make_integration_branch_name())
-    if run is not None:
-        # Redirect every task's merge target to the integration branch; the
-        # existing merge stage reads config.main_branch, so main is untouched.
-        config.main_branch = run.branch
-        config.integration_branch_active = True
+    if run is None:
+        _refuse_integration("the integration branch could not be created (see the warning above)")
+    # Redirect every task's merge target to the integration branch; the
+    # existing merge stage reads config.main_branch, so main is untouched.
+    config.main_branch = run.branch
+    config.integration_branch_active = True
     return run
+
+
+def _refuse_integration(reason: str) -> NoReturn:
+    """Stop a run whose declared ``integration_pr`` cannot be honoured."""
+    logger.error("Refusing to run: integration_pr cannot be honoured", reason=reason)
+    print(f"⛔ integration_pr is on, but {reason}.", file=sys.stderr)
+    print(
+        "   A run without its integration branch would merge nothing and branch every\n"
+        "   task from the base — not the run that was asked for. Fix the cause and\n"
+        "   rerun, or turn the mode off for this run (`integration_pr: false`).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def run_exit_code(*, failed: int, infrastructure: int, prior: int) -> int:
@@ -356,6 +385,12 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
     branch first (when enabled) and always finalizes it (push + open PR, or
     clean up) afterwards, regardless of how the inner run exits.
     """
+    # The guards answer before anything touches the tree. The integration
+    # fork used to come first, so its checkout (and now its rescue stash) ran
+    # ahead of the dirty-spec and tracked-state refusals.
+    _enforce_spec_governance(config)
+    _enforce_clean_spec(args, config)
+    _enforce_untracked_state(config)
     integration = _maybe_start_integration(args, config)
     try:
         _run_tasks_inner(args, config, lock_held=lock_held)
@@ -675,6 +710,42 @@ def _stop_reason_for(state: ExecutorState, config: ExecutorConfig) -> tuple[str,
     )
 
 
+def _refuse_rerun_of_success(
+    state: ExecutorState,
+    config: ExecutorConfig,
+    task,
+    tasks: list,
+    *,
+    completed: int,
+    failed: int,
+) -> None:
+    """Refuse to select a task the state DB already calls successful.
+
+    The selection reads tasks.md from whatever branch is checked out, and the
+    "done" mark of a finished task lives on that task's branch until it is
+    merged. A restart from the base therefore saw an accepted task as TODO and
+    executed it again — a third time in the devtools battle run (2026-09-30),
+    on a fresh branch off master — before the #124 backstop stopped the run
+    over exactly this disagreement. The same integrity rule, asked before the
+    work rather than after it. An explicit `run --task=ID` is the operator's
+    call and does not come here.
+    """
+    if state.get_task_state(task.id).status != "success":
+        return
+    _exit_on_state_spec_mismatch(
+        state,
+        config=config,
+        detail=(
+            f"{task.id}: success in state-DB but tasks.md={task.status} — "
+            "refusing to run an accepted task again"
+        ),
+        completed=completed,
+        failed=failed,
+        remaining=len([t for t in tasks if t.status != "done"]),
+        task_ids=[task.id],
+    )
+
+
 def _exit_on_state_spec_mismatch(
     state: ExecutorState,
     *,
@@ -683,6 +754,7 @@ def _exit_on_state_spec_mismatch(
     completed: int,
     failed: int,
     remaining: int,
+    task_ids: Sequence[str] = (),
 ) -> None:
     """Record `state_spec_mismatch` as this run's stop reason and exit non-zero.
 
@@ -723,7 +795,30 @@ def _exit_on_state_spec_mismatch(
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("run_complete notification failed", error=str(exc))
+    _print_mismatch_recovery(config, detail, task_ids)
     sys.exit(1)
+
+
+def _print_mismatch_recovery(config: ExecutorConfig, detail: str, task_ids: Sequence[str]) -> None:
+    """Say where tasks.md was read and how to get out (devtools, 2026-09-30).
+
+    The structured log line says *what* disagrees; an operator also needs to
+    know which checkout produced the disagreement — the "done" mark usually
+    sits on a task branch that was never merged — and what to do next.
+    """
+    branch = current_branch(config)
+    where = f"on branch '{branch}'" if branch else "in the working tree"
+    print(f"⛔ State/spec mismatch: {detail}", file=sys.stderr)
+    print(f"   tasks.md was read {where}.", file=sys.stderr)
+    for line in (
+        "   The state DB records work that this tasks.md does not show as done —",
+        "   usually it sits on an unmerged task branch (`git branch --list 'task/*'`).",
+        "   Collect those branches onto one branch and rerun there (`--no-branch`",
+        "   keeps the run on it), or rerun a task deliberately:",
+    ):
+        print(line, file=sys.stderr)
+    for task_id in task_ids:
+        print(f"       spec-runner run --task={task_id}", file=sys.stderr)
 
 
 def _enforce_clean_spec(args, config: ExecutorConfig) -> None:
@@ -905,12 +1000,9 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
     """Internal task execution logic.
 
     lock_held: True when the caller holds the exclusive executor lock, so any
-    orphaned 'running' task can be safely reset regardless of age.
+    orphaned 'running' task can be safely reset regardless of age. The run's
+    guards are :func:`_run_tasks`'s, which answers them before the fork.
     """
-    _enforce_spec_governance(config)
-
-    _enforce_clean_spec(args, config)
-    _enforce_untracked_state(config)
     _announce_budget(config)
 
     # Clear any leftover stop file from previous runs
@@ -1218,6 +1310,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                                 completed=state.total_completed - completed_before,
                                 failed=state.total_failed - failed_before,
                                 remaining=len(nonterminal_tasks),
+                                task_ids=sorted(missing),
                             )
 
                     if todo_tasks:
@@ -1264,6 +1357,14 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     break
 
                 task = ready_tasks[0]
+                _refuse_rerun_of_success(
+                    state,
+                    config,
+                    task,
+                    tasks,
+                    completed=state.total_completed - completed_before,
+                    failed=state.total_failed - failed_before,
+                )
                 executed_ids.add(task.id)
 
                 logger.info("Next ready task", task_id=task.id, name=task.name)
@@ -1295,6 +1396,7 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                             # Same "remaining" definition as gate 2's backstop:
                             # tasks not yet done, not a raw file count.
                             remaining=len([t for t in reread_tasks if t.status != "done"]),
+                            task_ids=[task.id],
                         )
 
                 # v2.3.0: detect tasks that fail again on a second pass.
@@ -1367,6 +1469,15 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                     log_progress("🛑 Graceful shutdown requested")
                     break
 
+                if not args.task:
+                    _refuse_rerun_of_success(
+                        state,
+                        config,
+                        task,
+                        tasks,
+                        completed=state.total_completed - completed_before,
+                        failed=state.total_failed - failed_before,
+                    )
                 result = run_with_retries(task, config, state)
 
                 # v2.3.0: detect tasks that fail again on a second pass.

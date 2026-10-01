@@ -114,6 +114,26 @@ def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
     preserved, and the caller must then refuse to start rather than clean:
     destroying work is never the fallback for failing to save it.
     """
+    return _rescue_uncommitted(config, owner=task.id, task_id=task.id)
+
+
+def rescue_run_uncommitted(config: ExecutorConfig) -> tuple[bool, str]:
+    """Preserve stray uncommitted work before a run forks its integration branch.
+
+    The task start rescues the tree (#231), but under `integration_pr` the
+    run's first git operation — `git checkout <base>` to fork the integration
+    branch — comes earlier. On the work an interrupted attempt left behind,
+    that checkout refused and the run went on without the mode its config
+    declared (devtools battle run, 2026-09-30). Same mechanism, same contract
+    as :func:`rescue_uncommitted`, labelled for the run instead of a task.
+    """
+    return _rescue_uncommitted(config, owner="run", task_id=None)
+
+
+def _rescue_uncommitted(
+    config: ExecutorConfig, *, owner: str, task_id: str | None
+) -> tuple[bool, str]:
+    """Stash every non-runtime uncommitted path, labelled for ``owner``."""
     from datetime import datetime
 
     from .git_ops import WorktreeStatusError, uncommitted_work_paths
@@ -126,13 +146,13 @@ def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
         paths = uncommitted_work_paths(config, strict=True)
     except WorktreeStatusError as exc:
         detail = f"could not read the working tree before cleaning it: {exc}"
-        logger.error("Refusing to start: the tree could not be read", task_id=task.id)
-        log_progress(f"⛔ {detail} — not starting, nothing was touched", task.id)
+        logger.error("Refusing to start: the tree could not be read", task_id=task_id)
+        log_progress(f"⛔ {detail} — not starting, nothing was touched", task_id)
         return False, detail
     if not paths:
         return True, ""  # the ordinary case: nothing to rescue, nothing to say
 
-    label = f"spec-runner rescue: {task.id} at {datetime.now().isoformat(timespec='seconds')}"
+    label = f"spec-runner rescue: {owner} at {datetime.now().isoformat(timespec='seconds')}"
     stash = subprocess.run(
         ["git", "stash", "push", "--include-untracked", "-m", label, "--", *paths],
         capture_output=True,
@@ -145,8 +165,8 @@ def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
             f"({', '.join(paths[:STRANDED_PATHS_SHOWN])}): "
             f"{stash.stderr.strip()[:200] or 'git stash failed'}"
         )
-        logger.error("Refusing to start: uncommitted work cannot be saved", task_id=task.id)
-        log_progress(f"⛔ {detail} — not starting, your changes are untouched", task.id)
+        logger.error("Refusing to start: uncommitted work cannot be saved", task_id=task_id)
+        log_progress(f"⛔ {detail} — not starting, your changes are untouched", task_id)
         return False, detail
 
     note = (
@@ -155,8 +175,8 @@ def rescue_uncommitted(task: Task, config: ExecutorConfig) -> tuple[bool, str]:
         f"{f', and {len(paths) - STRANDED_PATHS_SHOWN} more' if len(paths) > STRANDED_PATHS_SHOWN else ''})"
         f" as “{label}” — recover with `git stash list` / `git stash pop`"
     )
-    logger.warning("Rescued uncommitted work before the branch stage", task_id=task.id, paths=paths)
-    log_progress(f"📦 {note}", task.id)
+    logger.warning("Rescued uncommitted work before the branch stage", task_id=task_id, paths=paths)
+    log_progress(f"📦 {note}", task_id)
     return True, note
 
 
