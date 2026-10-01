@@ -74,8 +74,11 @@ def run_bounded(
     read only as a tail), each of stdout/stderr keeps its last `max_output` bytes and
     dropped bytes are announced by a marker line at the head. A command that
     cannot be launched at all (missing executable, bad cwd) is exit 127 with the
-    reason on stderr, so every caller's non-zero mapping applies.
+    reason on stderr, so every caller's non-zero mapping applies. An empty `argv` is a
+    programming error (ValueError), raised before anything is launched.
     """
+    if not argv:
+        raise ValueError("run_bounded: empty argv")
     deadline.check()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         if stdin is None:

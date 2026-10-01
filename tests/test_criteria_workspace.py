@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -22,8 +23,8 @@ from spec_runner.criteria_workspace import (
     check_origin,
     child_env,
     clone_at,
-    distribution_args,
     read_blobs,
+    remove_tree,
     reset_checkout,
     sync_environment,
     tracked_changes,
@@ -430,7 +431,6 @@ def _environment(**overrides: Any) -> Environment:
         "implementation": "CPython",
         "version": "3.12.13",
         "lock_sha256": "0" * 64,
-        "has_xdist": False,
         "groups": None,
         "extras": (),
     }
@@ -439,10 +439,6 @@ def _environment(**overrides: Any) -> Environment:
 
 
 class TestEnvironment:
-    def test_distribution_args(self) -> None:
-        assert distribution_args(True) == ["-n", "0", "--dist", "no"]
-        assert distribution_args(False) == []
-
     def test_label(self) -> None:
         assert _environment().label == "CPython 3.12.13"
 
@@ -538,7 +534,7 @@ class _FakeRun:
     def __init__(
         self,
         uv: Finished | None = None,
-        interpreter: bytes = b'["CPython", "3.12.13", false]',
+        interpreter: bytes = b'["CPython", "3.12.13"]',
         pytest_rc: int = 0,
         pluggy: Finished | None = None,
     ) -> None:
@@ -678,7 +674,7 @@ class TestSyncMapping:
         assert result.groups is None and result.extras == ()
         assert result.python == env_dir / "bin" / "python"
         assert result.lock_sha256 == hashlib.sha256(b"version = 1\n").hexdigest()
-        assert result.label == "CPython 3.12.13" and not result.has_xdist
+        assert result.label == "CPython 3.12.13"
 
     def test_declared_selection_argv(self, tmp_path: Path, monkeypatch) -> None:
         root = tmp_path / "co"
@@ -730,7 +726,7 @@ class TestSyncMapping:
 
     @pytest.mark.parametrize(
         "answer",
-        [b'["PyPy", "3.12.1", false]', b'["CPython", "3.11.9", false]'],
+        [b'["PyPy", "3.12.1"]', b'["CPython", "3.11.9"]'],
     )
     def test_unsupported_runtime(self, tmp_path: Path, monkeypatch, answer: bytes) -> None:
         monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=answer))
@@ -740,8 +736,12 @@ class TestSyncMapping:
             )
         assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
 
-    def test_unreadable_interpreter_answer_is_sync_failed(self, tmp_path: Path, monkeypatch):
-        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=b"garbage"))
+    @pytest.mark.parametrize("answer", [b"garbage", b'["CPython", "3.12.13", false]'])
+    def test_unreadable_interpreter_answer_is_sync_failed(
+        self, tmp_path: Path, monkeypatch, answer: bytes
+    ):
+        """The answer is exactly [implementation, version] — the probe asks nothing else."""
+        monkeypatch.setattr(criteria_process, "run_bounded", _FakeRun(interpreter=answer))
         with pytest.raises(CriteriaError) as raised:
             sync_environment(
                 _locked_checkout(tmp_path / "co"), "0" * 40, tmp_path / "e", UNDECLARED, _dl()
@@ -879,7 +879,6 @@ class TestSync:
         assert env.python == env_dir / "bin" / "python" and env.implementation == "CPython"
         assert tuple(int(p) for p in env.version.split(".")[:2]) >= (3, 12)
         assert env.lock_sha256 == hashlib.sha256((root / "uv.lock").read_bytes()).hexdigest()
-        assert not env.has_xdist
         assert not (root / ".venv").exists()  # the environment lives outside the checkout
         assert tracked_changes(root, _dl()) == []
 
@@ -979,3 +978,65 @@ class TestDiagnosticOutputIsBounded:
         bounds = self._recording(monkeypatch)
         criteria_workspace._run_python(Path("/p/bin/python"), "print(1)", tmp_path, tmp_path, _dl())
         assert bounds == [criteria_process.DEFAULT_MAX_OUTPUT]
+
+
+def _read_only_tree(root: Path) -> Path:
+    """`root/locked` (0o500) holding a file and a 0o000 subdirectory: plain rmtree fails."""
+    locked = root / "locked"
+    (locked / "inner").mkdir(parents=True)
+    (locked / "inner" / "f").write_text("x")
+    (locked / "f").write_text("x")
+    (locked / "inner").chmod(0o000)
+    locked.chmod(0o500)
+    return locked
+
+
+class TestRemoveTree:
+    """Permission-repairing removal, as TemporaryDirectory.cleanup repairs."""
+
+    def test_plain_rmtree_fails_here(self, tmp_path: Path) -> None:
+        root = tmp_path / "w"
+        locked = _read_only_tree(root)
+        try:
+            with pytest.raises(PermissionError):
+                shutil.rmtree(root)
+        finally:
+            # Restore what pytest's own tmp cleanup needs, or every session
+            # leaves an undeletable `garbage-*` tree and warns about it.
+            locked.chmod(0o700)
+            (locked / "inner").chmod(0o700)
+
+    def test_read_only_directories_are_removed(self, tmp_path: Path) -> None:
+        root = tmp_path / "w"
+        _read_only_tree(root)
+        remove_tree(root)
+        assert not root.exists()
+
+    def test_a_symlinked_directory_is_never_chmodded_through(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("x")
+        outside.chmod(0o500)
+        root = tmp_path / "w"
+        _read_only_tree(root)
+        (root / "link").symlink_to(outside, target_is_directory=True)
+        try:
+            remove_tree(root)
+            assert not root.exists()
+            assert (outside / "keep").exists() and outside.stat().st_mode & 0o777 == 0o500
+        finally:
+            outside.chmod(0o700)
+
+    def test_a_missing_path_is_fine(self, tmp_path: Path) -> None:
+        remove_tree(tmp_path / "absent")
+
+    def test_an_unrepairable_failure_raises(self, tmp_path: Path, monkeypatch) -> None:
+        root = tmp_path / "w"
+        root.mkdir()
+
+        def refuse(path: object, *args: object, **kwargs: object) -> None:
+            raise PermissionError(1, "Operation not permitted", str(path))
+
+        monkeypatch.setattr(criteria_workspace.shutil, "rmtree", refuse)
+        with pytest.raises(OSError):
+            remove_tree(root)

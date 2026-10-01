@@ -71,10 +71,38 @@ def test_run_outcome(phases, outcome):
             [complete({**P, "teardown": "skipped"}), complete()],
             ("unconfirmed", "nondeterministic"),
         ),
+        # the second run alone executes nothing in the product
+        (
+            [complete(), complete(lines=0, ops=["os.fork"])],
+            ("unconfirmed", "subprocess-only"),
+        ),
+        ([complete(lines=0), complete(lines=0)], ("unconfirmed", "no-product-execution")),
+        # a missing phase is never `passed`: the outcome is computed from the phases
+        (
+            [complete({"setup": "passed", "call": "passed"})] * 2,
+            ("unconfirmed", "not-passed"),
+        ),
     ],
 )
 def test_selector_status(runs, expected):
     assert selector_status(runs) == expected
+
+
+@pytest.mark.parametrize("count", [0, 1, 3])
+def test_selector_status_needs_exactly_two_runs(count):
+    with pytest.raises(ValueError, match="two runs"):
+        selector_status([complete()] * count)
+
+
+def test_selector_status_refuses_an_outcome_its_phases_contradict():
+    lying = {**complete({**P, "teardown": "failed"}), "outcome": "passed"}
+    with pytest.raises(ValueError, match="outcome"):
+        selector_status([lying, lying])
+
+
+def test_selector_status_computes_the_outcome_when_absent():
+    bare = {k: v for k, v in complete({**P, "call": "failed"}).items() if k != "outcome"}
+    assert selector_status([bare, complete()]) == ("unconfirmed", "nondeterministic")
 
 
 @pytest.mark.parametrize(
@@ -92,6 +120,14 @@ def test_selector_status(runs, expected):
         ),
         (
             [("unconfirmed", "nondeterministic"), ("unconfirmed", "not-passed")],
+            ("unconfirmed", "not-passed"),
+        ),
+        (  # cross-precedence: not-passed outranks no-product-execution, in either order
+            [("unconfirmed", "no-product-execution"), ("unconfirmed", "not-passed")],
+            ("unconfirmed", "not-passed"),
+        ),
+        (
+            [("unconfirmed", "not-passed"), ("traced", None), ("unconfirmed", "subprocess-only")],
             ("unconfirmed", "not-passed"),
         ),
     ],

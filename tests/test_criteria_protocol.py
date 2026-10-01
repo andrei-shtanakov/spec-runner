@@ -34,6 +34,8 @@ def collect_manifest() -> dict[str, Any]:
         "inipath": "/abs/checkout/pyproject.toml",
         "plugins": ["pytest-9.0.2"],
         "xdist_active": False,
+        "rerunfailures_active": False,
+        "rerunfailures_force_reruns": False,
         "conftests": ["/abs/checkout/tests/conftest.py"],
         "items": [
             {
@@ -200,6 +202,12 @@ COLLECT_ACCEPTED = {
 
 
 class TestValidCollectAccepts:
+    @pytest.mark.parametrize("force", [True, False])
+    def test_rerunfailures_with_or_without_force_reruns(self, force: bool) -> None:
+        data = mutated(collect_manifest(), set_key("rerunfailures_active", True))
+        data["rerunfailures_force_reruns"] = force
+        assert collect_ok(data) is data
+
     @pytest.mark.parametrize("name", list(COLLECT_ACCEPTED))
     def test_accepts(self, name: str) -> None:
         data = COLLECT_ACCEPTED[name]
@@ -269,6 +277,31 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
     "xdist_active int": (mutated(collect_manifest(), set_key("xdist_active", 1)), 0),
     "xdist_active str": (mutated(collect_manifest(), set_key("xdist_active", "yes")), 0),
     "xdist_active null": (mutated(collect_manifest(), set_key("xdist_active", None)), 0),
+    "rerunfailures_active int": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", 0)),
+        0,
+    ),
+    "rerunfailures_active str": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", "no")),
+        0,
+    ),
+    "rerunfailures_active null": (
+        mutated(collect_manifest(), set_key("rerunfailures_active", None)),
+        0,
+    ),
+    "rerunfailures_force_reruns int": (
+        mutated(collect_manifest(), set_key("rerunfailures_force_reruns", 1)),
+        0,
+    ),
+    "rerunfailures_force_reruns null": (
+        mutated(collect_manifest(), set_key("rerunfailures_force_reruns", None)),
+        0,
+    ),
+    # the option exists only with the plugin registered
+    "force_reruns without the plugin": (
+        mutated(collect_manifest(), set_key("rerunfailures_force_reruns", True)),
+        0,
+    ),
     "conftests not list": (mutated(collect_manifest(), set_key("conftests", None)), 0),
     "conftest relative": (mutated(collect_manifest(), set_key("conftests", ["c.py"])), 0),
     "items not list": (mutated(collect_manifest(), set_key("items", {"a": 1})), 0),
@@ -447,6 +480,8 @@ for _key in (
     "inipath",
     "plugins",
     "xdist_active",
+    "rerunfailures_active",
+    "rerunfailures_force_reruns",
     "conftests",
     "items",
     "errors",

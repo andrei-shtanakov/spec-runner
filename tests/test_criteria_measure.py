@@ -72,16 +72,20 @@ def _request(*ids: str) -> dict[str, Any]:
 
 
 def _env() -> Environment:
-    return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, False, None, ())
+    return Environment(Path("/env/bin/python"), "CPython", "3.12.13", LOCK, None, ())
 
 
-def _inventory(xdist_active: bool = False) -> Inventory:
+def _inventory(
+    xdist_active: bool = False, rerunfailures_active: bool = False, force_reruns: bool = False
+) -> Inventory:
     return Inventory(
         items=ITEMS,
         test_files=("pyproject.toml", "tests/conftest.py", "tests/test_a.py"),
         inipath="pyproject.toml",
         plugins=("pytest-9.0.2",),
         xdist_active=xdist_active,
+        rerunfailures_active=rerunfailures_active,
+        rerunfailures_force_reruns=force_reruns,
         excluded=EXCLUDED,
         non_function=("tests/test_a.py::TestX",),
         rootpath="/collected/root",
@@ -272,21 +276,32 @@ class TestAnswer:
         assert doc["content_sha256"] == expected
 
     def test_zero_tests_is_every_beh_no_test(self, pipeline: Pipeline) -> None:
-        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, (), (), "/r")
+        pipeline.inventory = Inventory(
+            (), (), None, ("pytest-9.0.2",), False, False, False, (), (), "/r"
+        )
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 0 and doc["beh"][0]["reason"] == "no-test" and not pipeline.runs
 
 
 class TestRunArguments:
     @pytest.mark.parametrize(
-        ("active", "flags"), [(True, ["-n", "0", "--dist", "no"]), (False, [])]
+        ("xdist", "rerun", "force", "flags"),
+        [
+            (True, False, False, ["-n", "0", "--dist", "no"]),
+            (False, False, False, []),
+            (False, True, False, ["--reruns", "0"]),
+            (False, True, True, ["--reruns", "0", "--force-reruns", "0"]),
+            (True, True, True, ["-n", "0", "--dist", "no", "--reruns", "0", "--force-reruns", "0"]),
+        ],
     )
-    def test_distribution_from_the_inventory(
-        self, pipeline: Pipeline, active: bool, flags: list[str]
+    def test_plugin_args_from_the_inventory(
+        self, pipeline: Pipeline, xdist: bool, rerun: bool, force: bool, flags: list[str]
     ) -> None:
-        pipeline.inventory = _inventory(xdist_active=active)
+        pipeline.inventory = _inventory(
+            xdist_active=xdist, rerunfailures_active=rerun, force_reruns=force
+        )
         pipeline.measure(_request("ABC:BEH-1"))
-        assert pipeline.runs and all(list(c["distribution"]) == flags for c in pipeline.runs)
+        assert pipeline.runs and all(list(c["plugin_args"]) == flags for c in pipeline.runs)
 
     def test_runs_reuse_the_collections_config(self, pipeline: Pipeline) -> None:
         """R-B15: every run gets the collection's rootdir and config file."""
@@ -375,6 +390,8 @@ class TestErrors:
             None,
             ("pytest-9.0.2",),
             False,
+            False,
+            False,
             (),
             (),
             "/r",
@@ -382,7 +399,9 @@ class TestErrors:
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 3 and doc["error"]["kind"] == "product-roots-overlap-tests"
         assert {"environment", "test_files", "test_items", "collection_excluded"} <= set(doc)
-        assert "product_roots" not in doc and "content_sha256" not in doc
+        # §4: product_roots after resolution — the overlap is judged on them
+        assert doc["product_roots"] == {"declared": ["pkg"], "files": ["pkg/mod.py"]}
+        assert "content_sha256" not in doc
 
     def test_deadline_exhausted_between_runs(self, pipeline: Pipeline) -> None:
         def expire(call: dict[str, Any]) -> dict[str, object]:
@@ -422,13 +441,17 @@ class TestErrors:
 
     @pytest.mark.parametrize(
         ("orchestrator", "code", "kind"),
-        [((3, 11), 2, "unsupported-runtime"), ((3, 12), 3, "product-roots-invalid")],
+        [
+            ((3, 11, 9), 2, "unsupported-runtime"),
+            ((3, 12, 0), 2, "unsupported-runtime"),  # micro counts: older than 3.12.13
+            ((3, 12, 13), 3, "product-roots-invalid"),
+        ],
     )
     def test_an_unparseable_product_file_by_version(
         self,
         pipeline: Pipeline,
         monkeypatch: pytest.MonkeyPatch,
-        orchestrator: tuple[int, int],
+        orchestrator: tuple[int, int, int],
         code: int,
         kind: str,
     ) -> None:
@@ -461,3 +484,86 @@ class TestErrors:
                 version=VERSION,
             )
         assert pipeline.workspaces and not pipeline.workspaces[0].exists()
+
+
+class TestWorkspaceCleanup:
+    def test_a_cleanup_failure_warns_on_stderr_only(
+        self,
+        pipeline: Pipeline,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def refuse(path: Path) -> None:
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(criteria_measure, "remove_tree", refuse)
+        code, doc = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0 and "beh" in doc
+        out, err = capsys.readouterr()
+        assert out == ""
+        lines = err.splitlines()
+        assert len(lines) == 1 and lines[0].startswith("spec-runner: warning:")
+        assert "Permission denied" in lines[0]
+        assert not pipeline.workspaces[0].exists()  # still removed as far as it goes
+
+    def test_a_clean_removal_is_silent(
+        self, pipeline: Pipeline, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        pipeline.measure(_request("ABC:BEH-1"))
+        assert capsys.readouterr() == ("", "")
+        assert not pipeline.workspaces[0].exists()
+
+    def test_a_read_only_directory_left_by_a_test_is_removed_silently(
+        self, pipeline: Pipeline, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A product test's 0o500 directory (with a file) under the workspace: no residue."""
+
+        def lock_a_directory(call: dict[str, Any]) -> dict[str, object]:
+            locked = Path(call["work"]) / "tmp-left" / "locked"
+            locked.mkdir(parents=True, exist_ok=True)
+            (locked / "f").write_text("x")
+            locked.chmod(0o500)
+            return _complete()
+
+        pipeline.on_run = lock_a_directory
+        code, _ = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0
+        assert capsys.readouterr() == ("", "")
+        assert not pipeline.workspaces[0].exists()
+
+
+class TestDocumentHead:
+    """`established` (from a step or an exception) never overrides the document's head."""
+
+    FORGED = {
+        "protocol": 99,
+        "request": {"forged": True},
+        "spec_runner_version": "0.0.0",
+        "error": "forged",
+        "test_files": ["tests/test_a.py"],
+    }
+
+    def test_error_document_head_wins(self) -> None:
+        exc = CriteriaError(ErrorKind.COLLECTION_FAILED, "x", **self.FORGED)
+        head: dict[str, object] = {"protocol": 1, "spec_runner_version": VERSION, "request": {}}
+        code, doc = criteria_measure._error_document(exc, head, dict(self.FORGED))
+        assert (doc["protocol"], doc["spec_runner_version"], doc["request"]) == (1, VERSION, {})
+        retryable = ErrorKind.COLLECTION_FAILED.retryable
+        assert doc["error"] == {"kind": "collection-failed", "retryable": retryable, "detail": "x"}
+        assert code == ErrorKind.COLLECTION_FAILED.exit_code
+        assert doc["test_files"] == ["tests/test_a.py"]
+        assert list(doc)[:3] == ["protocol", "spec_runner_version", "request"]
+        assert not list(VALIDATOR.iter_errors(doc))
+
+    def test_answer_head_wins(self, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch) -> None:
+        original = criteria_measure._measure
+
+        def forging(*args: Any) -> list[dict[str, object]]:
+            beh = original(*args)
+            args[-1].update({"protocol": 99, "spec_runner_version": "0.0.0", "beh": []})
+            return beh
+
+        monkeypatch.setattr(criteria_measure, "_measure", forging)
+        code, doc = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0 and doc["protocol"] == 1 and doc["spec_runner_version"] == VERSION
+        assert doc["beh"] and doc["request"] == _request("ABC:BEH-1")

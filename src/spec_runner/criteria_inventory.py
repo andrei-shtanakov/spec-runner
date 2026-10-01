@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import tempfile
 from dataclasses import dataclass
 from importlib import resources
@@ -40,6 +39,7 @@ from spec_runner.criteria_workspace import (
     Environment,
     changed_since,
     child_env,
+    remove_tree_quietly,
     reset_checkout,
     tracked_files,
 )
@@ -90,9 +90,30 @@ class Inventory:
     inipath: str | None
     plugins: tuple[str, ...]
     xdist_active: bool  # xdist's own plugin is registered (not merely installed)
+    rerunfailures_active: bool  # pytest-rerunfailures' plugin is registered
+    rerunfailures_force_reruns: bool  # ... and has the `--force-reruns` option
     excluded: tuple[Excluded, ...]
     non_function: tuple[str, ...]  # node ids of collected items that are not functions
     rootpath: str  # pytest's rootdir (absolute): every run reuses it with `inipath` (R-B15)
+
+
+def plugin_args(inventory: Inventory) -> list[str]:
+    """The per-run flags that neutralise plugins hiding the measured call (§3.6).
+
+    Only the run passes them, and only for a plugin the collect manifest saw
+    registered (an unregistered plugin's flag is a usage error): `-n 0 --dist no`
+    keeps every test in the probe's process under xdist; `--reruns 0` overrides a
+    `--reruns N` in addopts (measured: the later value wins), so a flaky test's
+    first failure is seen; `--force-reruns 0`, where the option exists, also overrides
+    `--force-reruns N` and the `flaky` marker (measured on 16.7: it outranks both).
+    Without it a marker still reruns — the probe refuses that run.
+    """
+    args = ["-n", "0", "--dist", "no"] if inventory.xdist_active else []
+    if inventory.rerunfailures_active:
+        args += ["--reruns", "0"]
+    if inventory.rerunfailures_force_reruns:
+        args += ["--force-reruns", "0"]
+    return args
 
 
 def deploy_probe(into: Path) -> Path:
@@ -188,7 +209,7 @@ def _run_probe(
             max_output=DEFAULT_MAX_OUTPUT,  # read only as a tail (R-B20)
         )
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_tree_quietly(tmp)
     if done.timed_out == "global":
         raise CriteriaError(ErrorKind.TIMEOUT, "collection: the measurement deadline expired")
     if done.timed_out == "local" or done.returncode is None:
@@ -258,6 +279,8 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         inipath=inipath,
         plugins=tuple(manifest["plugins"]),
         xdist_active=manifest["xdist_active"],
+        rerunfailures_active=manifest["rerunfailures_active"],
+        rerunfailures_force_reruns=manifest["rerunfailures_force_reruns"],
         excluded=_excluded(manifest["excluded"], checkout, tracked),
         non_function=tuple(sorted(non_function)),
         rootpath=manifest["rootpath"],

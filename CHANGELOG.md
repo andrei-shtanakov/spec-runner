@@ -20,6 +20,35 @@ is a **breaking change** and requires a major version bump plus an entry here.
   no ruleset → runs as before. Without the flag nothing changes and `gh` is
   never called.
 
+### Fixed
+
+- **`verify --criteria`: `pytest-rerunfailures` can no longer hide a flaky
+  test** (#603 B2b tail). This replaces the 4.5.0 boundary note: the collect
+  manifest records whether the plugin is registered (probe/1
+  `rerunfailures_active`, by its entry-point name or, under
+  `--disable-plugin-autoload`, its module name — likewise for xdist) and whether
+  it has `--force-reruns` (`rerunfailures_force_reruns`). Every selector run then
+  passes `--reruns 0`, which overrides a `--reruns N` in addopts, and
+  `--force-reruns 0`, which (measured on 16.7) outranks a `--force-reruns N` and
+  the `@pytest.mark.flaky` marker — so a test failing once and passing once reads
+  `nondeterministic`, and a deterministic failure `not-passed`. Should a rerun
+  still happen (a version without `--force-reruns`), the probe refuses the run,
+  so the selector is `error` (reason `runner`), never `traced`. No
+  response-schema change.
+- **`verify --criteria`: R-B16 compares the micro version too.** A product file
+  the orchestrator cannot parse is `unsupported-runtime` when the orchestrator's
+  Python is older by (major, minor, micro) — 3.12.0 against a 3.12.13 product
+  environment now counts as older — and `product-roots-invalid` otherwise. The
+  product's micro is read from its leading digits (`3.13.0rc1` → 0).
+- **`verify --criteria` error documents.** A `product-roots-overlap-tests`
+  refusal now carries `product_roots` (declared and resolved files), as design
+  §4 asks of every field established before a failure; nothing established can
+  override `protocol`, `request`, `spec_runner_version` or `error`. The
+  workspace and every per-run temp directory are removed even when a product
+  test left a read-only directory behind (permissions are repaired, as
+  `TemporaryDirectory` does); a workspace that still cannot be removed is
+  reported as one warning line on stderr instead of being ignored silently.
+
 ## [4.5.0] - 2026-10-01
 
 **Minor, by additive surface.** Release X of `criteria-closure/v1`: it adds the

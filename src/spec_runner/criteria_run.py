@@ -22,7 +22,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -43,7 +42,12 @@ from spec_runner.criteria_protocol import (
     valid_run,
 )
 from spec_runner.criteria_tokens import function_body_lines
-from spec_runner.criteria_workspace import Environment, child_env, reset_checkout
+from spec_runner.criteria_workspace import (
+    Environment,
+    child_env,
+    remove_tree_quietly,
+    reset_checkout,
+)
 
 _TAIL_LINES = 20
 MUTATED = "measured-files-mutated"
@@ -60,7 +64,8 @@ def product_body_lines(
     A committed product file this interpreter cannot parse (R-B16, refining R-B11) is
     UNSUPPORTED_RUNTIME only when the orchestrator's Python is older than the product
     environment's (`product_version`, e.g. "3.12.13" — its grammar may be beyond ours,
-    PEP 695 under 3.11); otherwise the file is the product's own fault:
+    PEP 695 under 3.11), compared as (major, minor, micro) so 3.12.0 is older than
+    3.12.13; otherwise the file is the product's own fault:
     PRODUCT_ROOTS_INVALID. Either detail names the file and both versions.
     """
     lines: dict[str, frozenset[int]] = {}
@@ -73,7 +78,7 @@ def product_body_lines(
 
 
 def _unparseable(path: str, product_version: str, exc: BaseException) -> CriteriaError:
-    product = _major_minor(product_version)
+    product = _version_triple(product_version)
     older = product is not None and _orchestrator_version() < product
     kind = ErrorKind.UNSUPPORTED_RUNTIME if older else ErrorKind.PRODUCT_ROOTS_INVALID
     return CriteriaError(
@@ -84,14 +89,20 @@ def _unparseable(path: str, product_version: str, exc: BaseException) -> Criteri
     )
 
 
-def _orchestrator_version() -> tuple[int, int]:
-    return sys.version_info[0], sys.version_info[1]
+def _orchestrator_version() -> tuple[int, int, int]:
+    return sys.version_info[0], sys.version_info[1], sys.version_info[2]
 
 
-def _major_minor(version: str) -> tuple[int, int] | None:
-    """`(major, minor)` of a version like "3.12.13"; None when it does not start so."""
-    match = re.match(r"(\d+)\.(\d+)", version)
-    return None if match is None else (int(match[1]), int(match[2]))
+def _version_triple(version: str) -> tuple[int, int, int] | None:
+    """`(major, minor, micro)` of "3.12.13" / "3.13.0rc1" (micro = its leading digits).
+
+    A missing micro ("3.12") reads as 0; None when the version does not start with
+    `major.minor` — the caller then blames the product, as before.
+    """
+    match = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", version)
+    if match is None:
+        return None
+    return int(match[1]), int(match[2]), int(match[3] or 0)
 
 
 def run_selector(
@@ -109,14 +120,14 @@ def run_selector(
     *,
     rootpath: str,
     inipath: str | None,
-    distribution: Sequence[str] = (),
+    plugin_args: Sequence[str] = (),
 ) -> dict[str, object]:
     """One fresh pytest process for `node_id` → a `complete_run` or an `error_run` object.
 
     `product_files` are repository-relative; `measured` holds the bytes at `sha`
     of every measured file (product ∪ test files, from `read_blobs`, never re-read
-    from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `distribution` is
-    appended before `-q` (`distribution_args(inventory.xdist_active)`). `rootpath` and
+    from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `plugin_args`
+    are appended before `-q` (`criteria_inventory.plugin_args(inventory)`). `rootpath` and
     `inipath` (absolute) are the collection's resolution, reproduced by every run as
     `--rootdir rootpath -c inipath` — or `-c` an empty ini in the invocation dir when
     the collection read no config (R-B15). Raises
@@ -129,14 +140,14 @@ def run_selector(
         config = _config_args(invocation, rootpath, inipath)
         done, manifest_path = _launch(
             env, checkout, probe_dir, invocation, node_id, product_files, deadline,
-            selector_timeout, [*config, *distribution],
+            selector_timeout, [*config, *plugin_args],
         )  # fmt: skip
         return _read_run(
             done, manifest_path, checkout, node_id, product_files, measured, body_lines,
             selector_timeout,
         )  # fmt: skip
     finally:
-        shutil.rmtree(invocation, ignore_errors=True)
+        remove_tree_quietly(invocation)
 
 
 def _config_args(invocation: Path, rootpath: str, inipath: str | None) -> list[str]:

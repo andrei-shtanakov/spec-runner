@@ -31,6 +31,7 @@ from spec_runner.criteria_inventory import (
     TestItem,
     collect,
     deploy_probe,
+    plugin_args,
 )
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, MODE_ENV, PARENT_ENV, PROBE_MODULE
@@ -74,8 +75,8 @@ def _kind(call: Callable[[], object]) -> CriteriaError:
 # --------------------------------------------------------------------------- fast
 
 
-def _fake_env(has_xdist: bool = False) -> Environment:
-    return Environment(Path("/fake/bin/python"), "CPython", "3.12.0", "0" * 64, has_xdist, None, ())
+def _fake_env() -> Environment:
+    return Environment(Path("/fake/bin/python"), "CPython", "3.12.0", "0" * 64, None, ())
 
 
 def _function(checkout: Path, node_id: str, file: str, qualname: str, line: int) -> dict[str, Any]:
@@ -98,6 +99,8 @@ def _manifest(checkout: Path, **overrides: Any) -> dict[str, Any]:
         "inipath": str(checkout / "pyproject.toml"),
         "plugins": ["pytest-9.1.1"],
         "xdist_active": False,
+        "rerunfailures_active": False,
+        "rerunfailures_force_reruns": False,
         "conftests": [str(checkout / "tests" / "conftest.py")],
         "items": [_function(checkout, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)],
         "errors": [],
@@ -158,14 +161,13 @@ def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Any]:
     checkout, sha = _repo(tmp_path / "co", BASE)
 
     def make(manifest: Callable[[Path], dict[str, Any] | None], **opts: Any) -> Any:
-        has_xdist = opts.pop("has_xdist", False)
         deadline = opts.pop("deadline", None) or _dl()
         runner = FakePytest(manifest, **opts)
         monkeypatch.setattr(criteria_process, "run_bounded", runner)
 
         def run() -> Inventory:
             return collect(
-                _fake_env(has_xdist),
+                _fake_env(),
                 checkout,
                 sha,
                 tmp_path / "probe",
@@ -204,6 +206,26 @@ class TestInvocation:
         assert Path(env["TMPDIR"]).is_relative_to(tmp_path / "work")
         assert env["TMPDIR"] != second["env"]["TMPDIR"]
 
+    def test_a_read_only_directory_under_tmpdir_is_removed(
+        self, fake, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A conftest leaving a 0o500 directory in collection's TMPDIR leaves no residue."""
+        run, runner, _, _ = fake(lambda co: _manifest(co))
+        tmpdirs: list[Path] = []
+
+        def locking(argv: list[str], **kwargs: Any) -> Finished:
+            if list(argv[1:4]) == ["-P", "-m", "pytest"]:
+                tmpdirs.append(Path(kwargs["env"]["TMPDIR"]))
+                locked = tmpdirs[-1] / "locked"
+                locked.mkdir()
+                (locked / "f").write_text("x")
+                locked.chmod(0o500)
+            return runner(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", locking)
+        run()
+        assert tmpdirs and not tmpdirs[0].exists()
+
     def test_collection_output_is_bounded(self, fake) -> None:
         """R-B20: pytest's output is read only as a tail — the one bounded capture."""
         run, runner, _, _ = fake(lambda co: _manifest(co))
@@ -211,10 +233,35 @@ class TestInvocation:
         assert runner.calls[0]["max_output"] == criteria_process.DEFAULT_MAX_OUTPUT
 
     def test_collect_carries_no_distribution_flags(self, fake) -> None:
-        run, runner, _, _ = fake(lambda co: _manifest(co), has_xdist=True)
+        manifest = {
+            "xdist_active": True,
+            "rerunfailures_active": True,
+            "rerunfailures_force_reruns": True,
+        }
+        run, runner, _, _ = fake(lambda co: _manifest(co, **manifest))
         run()
         assert runner.calls[0]["argv"][6:] == ["--collect-only", "-q"]
         assert "-n" not in runner.calls[0]["argv"]
+
+
+class TestPluginArgs:
+    """The per-run flags that neutralise plugins whose own process model hides the call."""
+
+    @pytest.mark.parametrize(
+        ("xdist", "rerun", "force", "flags"),
+        [
+            (False, False, False, []),
+            (True, False, False, ["-n", "0", "--dist", "no"]),
+            (False, True, False, ["--reruns", "0"]),
+            (False, True, True, ["--reruns", "0", "--force-reruns", "0"]),
+            (True, True, True, ["-n", "0", "--dist", "no", "--reruns", "0", "--force-reruns", "0"]),
+        ],
+    )
+    def test_flags_follow_the_registered_plugins(
+        self, xdist: bool, rerun: bool, force: bool, flags: list[str]
+    ) -> None:
+        inventory = Inventory((), (), None, (), xdist, rerun, force, (), (), "/r")
+        assert plugin_args(inventory) == flags
 
 
 class TestManifestToInventory:
@@ -222,6 +269,17 @@ class TestManifestToInventory:
     def test_xdist_active_comes_from_the_manifest(self, fake, active: bool) -> None:
         run, _, _, _ = fake(lambda co: _manifest(co, xdist_active=active))
         assert run().xdist_active is active
+
+    @pytest.mark.parametrize("active", [True, False])
+    def test_rerunfailures_active_comes_from_the_manifest(self, fake, active: bool) -> None:
+        run, _, _, _ = fake(lambda co: _manifest(co, rerunfailures_active=active))
+        assert run().rerunfailures_active is active
+
+    @pytest.mark.parametrize("force", [True, False])
+    def test_force_reruns_comes_from_the_manifest(self, fake, force: bool) -> None:
+        manifest = {"rerunfailures_active": True, "rerunfailures_force_reruns": force}
+        run, _, _, _ = fake(lambda co: _manifest(co, **manifest))
+        assert run().rerunfailures_force_reruns is force
 
     def test_items_files_config_and_plugins(self, fake) -> None:
         def manifest(co: Path) -> dict[str, Any]:
@@ -805,11 +863,10 @@ class TestRealExclusions:
         )
 
 
-@pytest.fixture(scope="module")
-def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
-    """A product environment whose lock carries pytest-xdist (offline, from the uv cache)."""
-    root = tmp_path_factory.mktemp("xdistproject")
-    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', 'test = ["pytest", "pytest-xdist"]')
+def _plugin_env(factory: pytest.TempPathFactory, plugin: str) -> Iterator[Environment]:
+    """A product environment whose lock carries `plugin` (offline, from the uv cache)."""
+    root = factory.mktemp(f"{plugin}project")
+    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', f'test = ["pytest", "{plugin}"]')
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("UV_OFFLINE", "1")
         _repo(root, {"pyproject.toml": pyproject})
@@ -818,7 +875,17 @@ def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]
         _git(root, "commit", "-qm", "lock")
         sha = _git(root, "rev-parse", "HEAD")
         criteria = ProductCriteria(("p",), ("test",), ())
-        yield sync_environment(root, sha, tmp_path_factory.mktemp("env"), criteria, Deadline(300))
+        yield sync_environment(root, sha, factory.mktemp("env"), criteria, Deadline(300))
+
+
+@pytest.fixture(scope="module")
+def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    yield from _plugin_env(tmp_path_factory, "pytest-xdist")
+
+
+@pytest.fixture(scope="module")
+def rerunfailures_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    yield from _plugin_env(tmp_path_factory, "pytest-rerunfailures")
 
 
 @pytest.mark.slow
@@ -847,5 +914,39 @@ class TestRealXdistActive:
         assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
         assert inv.xdist_active is True
 
+    def test_xdist_loaded_by_module_without_autoload_is_active(self, xdist_env, tmp_path) -> None:
+        """Measured: `-p xdist.plugin` under `--disable-plugin-autoload` registers as
+        `xdist.plugin`, not `xdist` — and `-n` exists."""
+        inv = _real(xdist_env, tmp_path, self._files("--disable-plugin-autoload -p xdist.plugin"))
+        assert inv.xdist_active is True
+
     def test_no_xdist_installed_is_inactive(self, product_env, tmp_path) -> None:
         assert _real(product_env, tmp_path, REAL_BASE).xdist_active is False
+
+
+@pytest.mark.slow
+class TestRealRerunfailuresActive:
+    """Registered as `rerunfailures` (entry point) or `pytest_rerunfailures` (`-p` by module
+    under `--disable-plugin-autoload`) — measured on pytest-rerunfailures 16.7."""
+
+    @staticmethod
+    def _files(addopts: str) -> dict[str, str]:
+        return TestRealXdistActive._files(addopts)
+
+    @pytest.mark.parametrize("addopts", ["", "--reruns 2"])
+    def test_registered_rerunfailures_is_active(self, rerunfailures_env, tmp_path, addopts) -> None:
+        inv = _real(rerunfailures_env, tmp_path, self._files(addopts))
+        assert inv.rerunfailures_active is True
+        assert inv.rerunfailures_force_reruns is True  # 16.7 has --force-reruns
+
+    def test_loaded_by_module_without_autoload_is_active(self, rerunfailures_env, tmp_path) -> None:
+        addopts = "--disable-plugin-autoload -p pytest_rerunfailures"
+        inv = _real(rerunfailures_env, tmp_path, self._files(addopts))
+        assert inv.rerunfailures_active is True and inv.rerunfailures_force_reruns is True
+
+    def test_blocked_rerunfailures_is_not_active(self, rerunfailures_env, tmp_path) -> None:
+        inv = _real(rerunfailures_env, tmp_path, self._files("-p no:rerunfailures"))
+        assert inv.rerunfailures_active is False and inv.rerunfailures_force_reruns is False
+
+    def test_not_installed_is_inactive(self, product_env, tmp_path) -> None:
+        assert _real(product_env, tmp_path, REAL_BASE).rerunfailures_active is False

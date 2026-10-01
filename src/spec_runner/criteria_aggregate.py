@@ -17,20 +17,37 @@ def run_outcome(phases: Mapping[str, str]) -> str:
 
 
 def selector_status(runs: Sequence[Mapping[str, object]]) -> tuple[str, str | None]:
-    """The first rule of §3.7 that applies; both runs must satisfy every check."""
+    """The first rule of §3.7 that applies; both runs must satisfy every check.
+
+    Exactly two runs (ValueError otherwise). Each complete run's outcome is computed
+    from its phases; a precomputed `outcome` that disagrees is a ValueError.
+    """
+    if len(runs) != 2:
+        raise ValueError(f"exactly two runs expected, got {len(runs)}")
     for run in runs:
         if run["result"] == "error":
             return "error", str(run["reason"])
-    outcomes = [run["outcome"] for run in runs]
+    phases = [_phases(run) for run in runs]
+    outcomes = [run_outcome(p) for p in phases]
+    for run, outcome in zip(runs, outcomes, strict=True):
+        if run.get("outcome", outcome) != outcome:
+            raise ValueError(f"outcome {run['outcome']!r} contradicts its phases ({outcome})")
     if any(o != "passed" for o in outcomes):
-        triples = [tuple(sorted(dict(run["phases"]).items())) for run in runs]  # type: ignore[call-overload]
-        return "unconfirmed", "nondeterministic" if len(set(triples)) > 1 else "not-passed"
+        triples = {tuple(sorted(p.items())) for p in phases}
+        return "unconfirmed", "nondeterministic" if len(triples) > 1 else "not-passed"
     for run in runs:
         if run["product_line_count"] == 0:
             return "unconfirmed", "subprocess-only" if run[
                 "process_operations"
             ] else "no-product-execution"
     return "traced", None
+
+
+def _phases(run: Mapping[str, object]) -> dict[str, str]:
+    phases = run["phases"]
+    if not isinstance(phases, Mapping):
+        raise ValueError(f"phases must be a mapping, got {type(phases).__name__}")
+    return {str(k): str(v) for k, v in phases.items()}
 
 
 def beh_status(selectors: Sequence[tuple[str, str | None]]) -> tuple[str, str | None]:

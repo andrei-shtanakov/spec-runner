@@ -10,9 +10,11 @@ matched by wording.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -33,12 +35,13 @@ MIN_PRODUCT_PYTHON = (3, 12)
 _GIT_STEP_LIMIT = 60.0
 _INTERPRETER_LIMIT = 60.0
 _INTERPRETER_PROBE = (
-    "import json, platform, importlib.util; "
-    "print(json.dumps([platform.python_implementation(), platform.python_version(), "
-    "importlib.util.find_spec('xdist') is not None]))"
+    "import json, platform; "
+    "print(json.dumps([platform.python_implementation(), platform.python_version()]))"
 )
 # R24: the probe's hookimpl(wrapper=True) needs pluggy >= 1.2. Prints the version;
-# exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0).
+# exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0). Whether 1.1 would do
+# is unmeasured — kept at 1.2, fail closed: pluggy 1.1.0 was neither in the uv cache
+# nor fetchable offline when checked (2026-10-01, B2b tails).
 _PLUGGY_CHECK = (
     "import sys, pluggy; v = pluggy.__version__; print(v); "
     "sys.exit(0 if tuple(int(p) for p in v.split('.')[:2]) >= (1, 2) else 3)"
@@ -91,7 +94,6 @@ class Environment:
     implementation: str
     version: str
     lock_sha256: str
-    has_xdist: bool
     groups: tuple[str, ...] | None  # None = uv's default groups
     extras: tuple[str, ...]
 
@@ -333,7 +335,7 @@ def sync_environment(
     _uv_sync(checkout, env_dir, criteria, deadline)
     python = env_dir / "bin" / "python"
     with tempfile.TemporaryDirectory(prefix="criteria-empty-") as empty:
-        implementation, version, has_xdist = _interpreter(python, checkout, Path(empty), deadline)
+        implementation, version = _interpreter(python, checkout, Path(empty), deadline)
         _require_pytest(python, checkout, Path(empty), deadline)
         _require_pluggy(python, checkout, Path(empty), deadline)
     return Environment(
@@ -341,7 +343,6 @@ def sync_environment(
         implementation=implementation,
         version=version,
         lock_sha256=lock_sha256,
-        has_xdist=has_xdist,
         groups=criteria.groups,
         extras=criteria.extras,
     )
@@ -385,14 +386,12 @@ def _run_python(
     )
 
 
-def _interpreter(
-    python: Path, checkout: Path, empty: Path, deadline: Deadline
-) -> tuple[str, str, bool]:
+def _interpreter(python: Path, checkout: Path, empty: Path, deadline: Deadline) -> tuple[str, str]:
     done = _run_python(python, _INTERPRETER_PROBE, checkout, empty, deadline)
     if done.timed_out is not None or done.returncode != 0:
         raise _failure(ErrorKind.ENVIRONMENT_SYNC_FAILED, "interpreter check", done)
     try:
-        implementation, version, has_xdist = json.loads(done.stdout)
+        implementation, version = json.loads(done.stdout)
         major_minor = tuple(int(part) for part in str(version).split(".")[:2])
     except (ValueError, TypeError):
         raise CriteriaError(
@@ -404,7 +403,7 @@ def _interpreter(
             ErrorKind.UNSUPPORTED_RUNTIME,
             f"the product environment is {implementation} {version}; CPython >= 3.12 is required",
         )
-    return str(implementation), str(version), bool(has_xdist)
+    return str(implementation), str(version)
 
 
 def _require_pytest(python: Path, checkout: Path, empty: Path, deadline: Deadline) -> None:
@@ -450,11 +449,46 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-def distribution_args(xdist_active: bool) -> list[str]:
-    """Keep every test in the probe's own process when xdist is registered (§3.6).
+def remove_tree(path: Path) -> None:
+    """Remove `path` like `TemporaryDirectory.cleanup`: read-only directories are repaired.
 
-    `xdist_active` is the collect manifest's `xdist_active`: xdist's plugin was
-    registered in that pytest, so `-n` exists. Only the run passes these flags:
-    `--collect-only` never distributes, and `-n` breaks a product that blocks xdist.
+    A product's test may leave a 0o500 directory under its TMPDIR, which a plain
+    `rmtree` cannot empty. On a PermissionError every directory below `path` is made
+    owner-writable (never through a symlink) and the removal retried once. A missing
+    path is fine; anything still failing raises OSError.
     """
-    return ["-n", "0", "--dist", "no"] if xdist_active else []
+    try:
+        shutil.rmtree(path)
+        return
+    except FileNotFoundError:
+        return
+    except PermissionError:
+        pass
+    _make_writable(path)
+    shutil.rmtree(path)
+
+
+def remove_tree_quietly(path: Path) -> None:
+    """`remove_tree`, best effort: what is left is reported by the measurement's cleanup."""
+    try:
+        remove_tree(path)
+    except OSError:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _make_writable(root: Path) -> None:
+    """u+rwx on `root` and every directory below it, top-down so each can be listed."""
+    if root.is_symlink():
+        return
+    _chmod_dir(str(root))
+    for dirpath, dirnames, _ in os.walk(root):
+        for name in dirnames:
+            child = os.path.join(dirpath, name)
+            if not os.path.islink(child):
+                _chmod_dir(child)
+
+
+def _chmod_dir(path: str) -> None:
+    # a failure here is left to the retried rmtree, which reports what is in the way
+    with contextlib.suppress(OSError):
+        os.chmod(path, os.stat(path).st_mode | 0o700)

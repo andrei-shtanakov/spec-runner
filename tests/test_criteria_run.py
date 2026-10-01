@@ -65,7 +65,7 @@ def _repo(root: Path, files: dict[str, str]) -> tuple[Path, str]:
 
 def _env() -> Environment:
     version = ".".join(str(v) for v in sys.version_info[:3])
-    return Environment(Path(sys.executable), "CPython", version, "0" * 64, False, None, ())
+    return Environment(Path(sys.executable), "CPython", version, "0" * 64, None, ())
 
 
 CONFTEST = "import sys, os\nsys.path.insert(0, os.path.dirname(__file__))\n"
@@ -97,7 +97,7 @@ class Case:
         *,
         deadline: Deadline | None = None,
         selector_timeout: float = 120.0,
-        distribution: Sequence[str] = (),
+        plugin_args: Sequence[str] = (),
         rootpath: str | None = None,
         inipath: str | None = None,
     ) -> dict[str, object]:
@@ -113,7 +113,7 @@ class Case:
             self.body_lines,
             deadline or Deadline(300),
             selector_timeout,
-            distribution=distribution,
+            plugin_args=plugin_args,
             rootpath=rootpath or str(self.checkout),
             inipath=inipath,
         )
@@ -206,19 +206,34 @@ TESTS = {
 
 
 class TestFakeManifests:
-    def test_distribution_flags_reach_the_pytest_argv(self, tmp_path, monkeypatch) -> None:
+    def test_plugin_args_reach_the_pytest_argv(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)
-        run = case.run(NODE, distribution=["-n", "0", "--dist", "no"])
+        run = case.run(NODE, plugin_args=["-n", "0", "--dist", "no", "--reruns", "0"])
         (argv,) = seen
         ini = argv[9]
         assert argv == [sys.executable, "-P", "-m", "pytest", "-p", PROBE_MODULE] + [
-            "--rootdir", str(case.checkout), "-c", ini, "-n", "0", "--dist", "no", "-q", NODE
+            "--rootdir", str(case.checkout), "-c", ini, "-n", "0", "--dist", "no",
+            "--reruns", "0", "-q", NODE,
         ]  # fmt: skip
         assert run["result"] == "error" and run["reason"] == "runner"
         assert "no run manifest" in str(run["detail"])
 
-    def test_no_distribution_flags_by_default(self, tmp_path, monkeypatch) -> None:
+    def test_a_read_only_directory_under_the_runs_tmpdir_is_removed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No residue in `work` when the product's test leaves a 0o500 directory in TMPDIR."""
+
+        def lock_a_directory(argv: list[str], env: dict[str, str]) -> None:
+            locked = Path(env["TMPDIR"]) / "locked"
+            locked.mkdir()
+            (locked / "f").write_text("x")
+            locked.chmod(0o500)
+
+        _fake_pytest(monkeypatch, lock_a_directory)
+        Case(tmp_path, TESTS).run(NODE)  # Case.run asserts `work` is empty afterwards
+
+    def test_no_plugin_args_by_default(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)
         case.run(NODE)
@@ -398,15 +413,31 @@ class TestProductBodyLines:
         assert raised.value.kind.exit_code == 3
         assert "pkg/new.py" in raised.value.detail
 
-    def test_the_comparison_reads_the_orchestrators_version(self, monkeypatch) -> None:
-        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 11))
+    @pytest.mark.parametrize(
+        ("ours", "product", "kind"),
+        [
+            ((3, 11, 9), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 12, 0), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),  # micro counts
+            ((3, 12, 12), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 12, 13), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 12, 14), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 13, 0), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 12, 13), "3.13.0rc1", ErrorKind.UNSUPPORTED_RUNTIME),  # micro: leading digits
+            ((3, 13, 0), "3.13.0rc1", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 13, 0), "3.13.1a1", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 11, 9), "3.12", ErrorKind.UNSUPPORTED_RUNTIME),  # no micro: compared as .0
+            ((3, 12, 0), "3.12", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 11, 9), "unknown", ErrorKind.PRODUCT_ROOTS_INVALID),  # unparseable: ours
+        ],
+    )
+    def test_the_comparison_reads_the_orchestrators_full_version(
+        self, monkeypatch, ours: tuple[int, int, int], product: str, kind: ErrorKind
+    ) -> None:
+        """R-B16 refined: (major, minor, micro) — 3.12.0 is older than 3.12.13."""
+        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: ours)
         with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
-        assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
-        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 12))
-        with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
-        assert raised.value.kind is ErrorKind.PRODUCT_ROOTS_INVALID
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version=product)
+        assert raised.value.kind is kind
 
     @pytest.mark.parametrize(
         ("version", "kind"),

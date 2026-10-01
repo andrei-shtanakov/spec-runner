@@ -3,7 +3,7 @@
 Each case is a tiny product committed to a git repository in `tmp_path`, run twice
 through `run_selector` under this interpreter and judged by `selector_status`. The
 bench needs CPython >= 3.12 (`sys.monitoring`) and runs in its own workflow
-(.github/workflows/criteria-probe.yml); the xdist / forked rows need those plugins.
+(.github/workflows/criteria-probe.yml); the xdist / forked / rerunfailures rows need those plugins.
 """
 
 from __future__ import annotations
@@ -12,16 +12,17 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from spec_runner.criteria_aggregate import selector_status
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_inventory import collect, deploy_probe
+from spec_runner.criteria_inventory import collect, deploy_probe, plugin_args
 from spec_runner.criteria_process import Deadline
 from spec_runner.criteria_run import product_body_lines, run_selector
 from spec_runner.criteria_select import select
-from spec_runner.criteria_workspace import Environment, distribution_args, read_blobs
+from spec_runner.criteria_workspace import Environment, read_blobs
 from tests.criteria_bench_required import import_plugin, needs_312
 
 pytestmark = needs_312("the bench needs CPython >= 3.12 (sys.monitoring)")
@@ -47,7 +48,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _env() -> Environment:
     version = ".".join(str(v) for v in sys.version_info[:3])
-    return Environment(Path(sys.executable), "CPython", version, "0" * 64, False, None, ())
+    return Environment(Path(sys.executable), "CPython", version, "0" * 64, None, ())
 
 
 class Bench:
@@ -83,22 +84,37 @@ class Bench:
             product_version=_env().version,
         )
 
-    def run(self, node_id: str, distribution: Sequence[str] = ()) -> dict[str, object]:
+    def run(self, node_id: str, args: Sequence[str] = ()) -> dict[str, object]:
         return run_selector(
             _env(), self.checkout, self.sha, self.probe_dir, self.work, node_id, self.product,
-            self.measured, self.body_lines, Deadline(300), 120.0, distribution=distribution,
+            self.measured, self.body_lines, Deadline(300), 120.0, plugin_args=args,
             rootpath=str(self.checkout), inipath=self.inipath,
         )  # fmt: skip
 
-    def runs(self, node_id: str, distribution: Sequence[str] = ()) -> list[dict[str, object]]:
-        return [self.run(node_id, distribution), self.run(node_id, distribution)]
+    def runs(self, node_id: str, args: Sequence[str] = ()) -> list[dict[str, object]]:
+        return [self.run(node_id, args), self.run(node_id, args)]
+
+    def inventory_args(self) -> list[str]:
+        """The per-run plugin flags `measure` would derive from this product's collection."""
+        inventory = collect(
+            _env(), self.checkout, self.sha, self.probe_dir, self.work, Deadline(120), 60.0
+        )
+        return plugin_args(inventory)
 
     def status(self, node_id: str) -> tuple[str, str | None]:
         return selector_status(self.runs(node_id))
 
 
-def _test(name: str, body: str, header: str = "") -> dict[str, str]:
-    return {"tests/test_a.py": f"{header}\n\ndef {name}():\n{body}\n"}
+FLAKY_BODY = (
+    f"    path = pathlib.Path(os.environ[{COUNTER_ENV!r}])\n"
+    "    first = not path.exists()\n    path.write_text('x')\n"
+    "    work(1)\n    assert not first"
+)
+FLAKY_HEADER = "import os, pathlib\n\nimport pytest\nfrom pkg.mod import work"
+
+
+def _test(name: str, body: str, header: str = "", params: str = "") -> dict[str, str]:
+    return {"tests/test_a.py": f"{header}\n\ndef {name}({params}):\n{body}\n"}
 
 
 NODE = "tests/test_a.py::test_a"
@@ -131,12 +147,7 @@ class TestStatuses:
     def test_flaky_test_is_nondeterministic(self, tmp_path, monkeypatch):
         counter = tmp_path / "counter"  # outside the checkout: checkout and TMPDIR reset per run
         monkeypatch.setenv(COUNTER_ENV, str(counter))
-        body = (
-            f"    path = pathlib.Path(os.environ[{COUNTER_ENV!r}])\n"
-            "    first = not path.exists()\n    path.write_text('x')\n"
-            "    work(1)\n    assert not first"
-        )
-        files = _test("test_a", body, "import os, pathlib\nfrom pkg.mod import work")
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER)
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "nondeterministic")
 
     def test_setup_created_worker_thread_running_product_code_in_call(self, tmp_path):
@@ -146,8 +157,12 @@ class TestStatuses:
             "    thread = threading.Thread(target=lambda: (go.wait(), work(1)))\n"
             "    thread.start()\n    yield go, thread\n"
         )
-        files = _test("test_a", "    go, thread = worker\n    go.set()\n    thread.join()", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(worker):")
+        files = _test(
+            "test_a",
+            "    go, thread = worker\n    go.set()\n    thread.join()",
+            header,
+            params="worker",
+        )
         assert Bench(tmp_path, files).status(NODE) == TRACED
 
     def test_async_test_via_asyncio_run(self, tmp_path):
@@ -170,7 +185,8 @@ class TestStatuses:
         bench = Bench(tmp_path, files)
         runs = bench.runs(NODE)
         assert selector_status(runs) == TRACED
-        reported = {line for entry in runs[0]["product_lines"] for line in entry["lines"]}  # type: ignore[attr-defined,index,union-attr]
+        entries = cast(list[dict[str, list[int]]], runs[0]["product_lines"])
+        reported = {line for entry in entries for line in entry["lines"]}
         assert reported == {2, 3}
 
     def test_os_fork_child_running_the_product(self, tmp_path):
@@ -194,19 +210,17 @@ class TestStatuses:
 
     def test_setup_failure_is_not_passed_with_call_not_reached(self, tmp_path):
         header = "import pytest\n\n\n@pytest.fixture\ndef broken():\n    raise RuntimeError"
-        files = _test("test_a", "    pass", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(broken):")
+        files = _test("test_a", "    pass", header, params="broken")
         runs = Bench(tmp_path, files).runs(NODE)
         assert selector_status(runs) == ("unconfirmed", "not-passed")
-        assert runs[0]["phases"]["call"] == "not-reached"  # type: ignore[index]
+        assert cast(dict[str, str], runs[0]["phases"])["call"] == "not-reached"
 
     def test_teardown_failure_in_both_runs_is_not_passed(self, tmp_path):
         header = (
             "import pytest\nfrom pkg.mod import work\n\n\n@pytest.fixture\ndef late():\n"
             "    yield\n    raise RuntimeError"
         )
-        files = _test("test_a", "    work(1)", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(late):")
+        files = _test("test_a", "    work(1)", header, params="late")
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "not-passed")
 
     def test_teardown_failure_in_one_run_is_nondeterministic(self, tmp_path, monkeypatch):
@@ -218,8 +232,7 @@ class TestStatuses:
             "    first = not path.exists()\n    path.write_text('x')\n"
             "    if first:\n        raise RuntimeError"
         )
-        files = _test("test_a", "    work(1)", header)
-        files["tests/test_a.py"] = files["tests/test_a.py"].replace("test_a():", "test_a(late):")
+        files = _test("test_a", "    work(1)", header, params="late")
         assert Bench(tmp_path, files).status(NODE) == ("unconfirmed", "nondeterministic")
 
 
@@ -228,7 +241,7 @@ class TestResolvedDefinitions:
         source = (
             "import pytest\n\n\nclass Base:\n    def test_inherited(self):\n"
             '        """ENC:BEH-01"""\n\n\nclass TestSub(Base):\n    pass\n\n\n'
-            "def deco(fn):\n    return fn\n\n\n@deco\n@pytest.mark.slowish\n"
+            "def deco(fn):\n    return fn\n\n\n@deco\n@pytest.mark.filterwarnings('default')\n"
             'def test_decorated():\n    """ENC:BEH-02"""\n'
         )
         bench = Bench(tmp_path, {"tests/test_a.py": source})
@@ -258,7 +271,7 @@ class TestDistribution:
             _env(), bench.checkout, bench.sha, bench.probe_dir, bench.work, Deadline(120), 60.0
         )
         assert inventory.xdist_active is True
-        runs = bench.runs(NODE, distribution_args(inventory.xdist_active))
+        runs = bench.runs(NODE, plugin_args(inventory))
         assert selector_status(runs) == TRACED
 
     def test_forked_in_addopts_is_distributed_execution(self, tmp_path):
@@ -270,3 +283,51 @@ class TestDistribution:
         with pytest.raises(CriteriaError) as raised:
             Bench(tmp_path, files).run(NODE)
         assert raised.value.kind is ErrorKind.DISTRIBUTED_EXECUTION
+
+
+class TestRerunfailures:
+    """A retry must never hide flakiness: reruns are switched off, or the run is an error.
+
+    Measured on pytest-rerunfailures 16.7: `--force-reruns` outranks the marker and
+    `--reruns`, so `--force-reruns 0` (passed with `--reruns 0`) also neutralises the
+    `flaky` marker; the probe's refusal of any rerun remains for a version without it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _counter(self, tmp_path, monkeypatch):
+        import_plugin("pytest_rerunfailures")
+        monkeypatch.setenv(COUNTER_ENV, str(tmp_path / "counter"))
+
+    @pytest.mark.parametrize("addopts", ["--reruns 2", "--force-reruns 2"])
+    def test_reruns_in_addopts_are_neutralised_and_flakiness_shows(self, tmp_path, addopts):
+        files = {
+            **_test("test_a", FLAKY_BODY, FLAKY_HEADER),
+            "pytest.ini": f"[pytest]\naddopts = {addopts}\n",
+        }
+        bench = Bench(tmp_path, files)
+        args = bench.inventory_args()
+        # after -n 0 --dist no when xdist is here too
+        assert args[-4:] == ["--reruns", "0", "--force-reruns", "0"]
+        assert selector_status(bench.runs(NODE, args)) == ("unconfirmed", "nondeterministic")
+
+    def test_force_reruns_in_addopts_cannot_hide_a_deterministic_failure(self, tmp_path):
+        files = {
+            **_test("test_a", "    work(1)\n    assert False", FLAKY_HEADER),
+            "pytest.ini": "[pytest]\naddopts = --force-reruns 2\n",
+        }
+        bench = Bench(tmp_path, files)
+        runs = bench.runs(NODE, bench.inventory_args())
+        assert selector_status(runs) == ("unconfirmed", "not-passed")
+
+    def test_flaky_marker_is_neutralised_too(self, tmp_path):
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER + "\n\n\n@pytest.mark.flaky(reruns=2)")
+        bench = Bench(tmp_path, files)
+        runs = bench.runs(NODE, bench.inventory_args())
+        assert selector_status(runs) == ("unconfirmed", "nondeterministic")
+
+    def test_flaky_marker_rerun_without_the_flags_is_an_error_run(self, tmp_path):
+        """Defence in depth: should a rerun still happen, the run is an error, never traced."""
+        files = _test("test_a", FLAKY_BODY, FLAKY_HEADER + "\n\n\n@pytest.mark.flaky(reruns=2)")
+        runs = Bench(tmp_path, files).runs(NODE)
+        assert runs[0]["result"] == "error" and "test was rerun" in str(runs[0]["detail"])
+        assert selector_status(runs) == ("error", "runner")
