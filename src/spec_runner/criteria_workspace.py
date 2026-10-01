@@ -38,7 +38,9 @@ _INTERPRETER_PROBE = (
     "importlib.util.find_spec('xdist') is not None]))"
 )
 # R24: the probe's hookimpl(wrapper=True) needs pluggy >= 1.2. Prints the version;
-# exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0).
+# exit 3 = too old (measured with pluggy 1.0.0 → 3, 1.6.0 → 0). Whether 1.1 would do
+# is unmeasured — kept at 1.2, fail closed: pluggy 1.1.0 was neither in the uv cache
+# nor fetchable offline when checked (2026-10-01, B2b tails).
 _PLUGGY_CHECK = (
     "import sys, pluggy; v = pluggy.__version__; print(v); "
     "sys.exit(0 if tuple(int(p) for p in v.split('.')[:2]) >= (1, 2) else 3)"
