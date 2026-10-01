@@ -6,8 +6,8 @@ traces_to:
 - requirements
 - behaviour-spec
 upstream_hashes:
-  requirements: fb522d701c91d39841c8187ceefa65da522139e9
   behaviour-spec: 270fb1e12828c9a4de570ffe68c65212de240c93
+  requirements: fb522d701c91d39841c8187ceefa65da522139e9
 version: 3
 approved_content_hash: cf4e6d45ee248fcf352dcc1a06be418acd55e979
 approved_by: andrei-shtanakov
