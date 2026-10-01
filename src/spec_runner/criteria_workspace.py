@@ -10,9 +10,11 @@ matched by wording.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -445,3 +447,48 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     env["PYTHONNOUSERSITE"] = "1"
     env.update(extra)
     return env
+
+
+def remove_tree(path: Path) -> None:
+    """Remove `path` like `TemporaryDirectory.cleanup`: read-only directories are repaired.
+
+    A product's test may leave a 0o500 directory under its TMPDIR, which a plain
+    `rmtree` cannot empty. On a PermissionError every directory below `path` is made
+    owner-writable (never through a symlink) and the removal retried once. A missing
+    path is fine; anything still failing raises OSError.
+    """
+    try:
+        shutil.rmtree(path)
+        return
+    except FileNotFoundError:
+        return
+    except PermissionError:
+        pass
+    _make_writable(path)
+    shutil.rmtree(path)
+
+
+def remove_tree_quietly(path: Path) -> None:
+    """`remove_tree`, best effort: what is left is reported by the measurement's cleanup."""
+    try:
+        remove_tree(path)
+    except OSError:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _make_writable(root: Path) -> None:
+    """u+rwx on `root` and every directory below it, top-down so each can be listed."""
+    if root.is_symlink():
+        return
+    _chmod_dir(str(root))
+    for dirpath, dirnames, _ in os.walk(root):
+        for name in dirnames:
+            child = os.path.join(dirpath, name)
+            if not os.path.islink(child):
+                _chmod_dir(child)
+
+
+def _chmod_dir(path: str) -> None:
+    # a failure here is left to the retried rmtree, which reports what is in the way
+    with contextlib.suppress(OSError):
+        os.chmod(path, os.stat(path).st_mode | 0o700)

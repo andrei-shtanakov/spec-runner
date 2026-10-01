@@ -205,6 +205,26 @@ class TestInvocation:
         assert Path(env["TMPDIR"]).is_relative_to(tmp_path / "work")
         assert env["TMPDIR"] != second["env"]["TMPDIR"]
 
+    def test_a_read_only_directory_under_tmpdir_is_removed(
+        self, fake, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A conftest leaving a 0o500 directory in collection's TMPDIR leaves no residue."""
+        run, runner, _, _ = fake(lambda co: _manifest(co))
+        tmpdirs: list[Path] = []
+
+        def locking(argv: list[str], **kwargs: Any) -> Finished:
+            if list(argv[1:4]) == ["-P", "-m", "pytest"]:
+                tmpdirs.append(Path(kwargs["env"]["TMPDIR"]))
+                locked = tmpdirs[-1] / "locked"
+                locked.mkdir()
+                (locked / "f").write_text("x")
+                locked.chmod(0o500)
+            return runner(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", locking)
+        run()
+        assert tmpdirs and not tmpdirs[0].exists()
+
     def test_collection_output_is_bounded(self, fake) -> None:
         """R-B20: pytest's output is read only as a tail — the one bounded capture."""
         run, runner, _, _ = fake(lambda co: _manifest(co))

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import tempfile
 from dataclasses import dataclass
 from importlib import resources
@@ -40,6 +39,7 @@ from spec_runner.criteria_workspace import (
     Environment,
     changed_since,
     child_env,
+    remove_tree_quietly,
     reset_checkout,
     tracked_files,
 )
@@ -202,7 +202,7 @@ def _run_probe(
             max_output=DEFAULT_MAX_OUTPUT,  # read only as a tail (R-B20)
         )
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_tree_quietly(tmp)
     if done.timed_out == "global":
         raise CriteriaError(ErrorKind.TIMEOUT, "collection: the measurement deadline expired")
     if done.timed_out == "local" or done.returncode is None:

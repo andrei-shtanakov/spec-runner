@@ -22,7 +22,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -43,7 +42,12 @@ from spec_runner.criteria_protocol import (
     valid_run,
 )
 from spec_runner.criteria_tokens import function_body_lines
-from spec_runner.criteria_workspace import Environment, child_env, reset_checkout
+from spec_runner.criteria_workspace import (
+    Environment,
+    child_env,
+    remove_tree_quietly,
+    reset_checkout,
+)
 
 _TAIL_LINES = 20
 MUTATED = "measured-files-mutated"
@@ -143,7 +147,7 @@ def run_selector(
             selector_timeout,
         )  # fmt: skip
     finally:
-        shutil.rmtree(invocation, ignore_errors=True)
+        remove_tree_quietly(invocation)
 
 
 def _config_args(invocation: Path, rootpath: str, inipath: str | None) -> list[str]:

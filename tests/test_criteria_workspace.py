@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -23,6 +24,7 @@ from spec_runner.criteria_workspace import (
     child_env,
     clone_at,
     read_blobs,
+    remove_tree,
     reset_checkout,
     sync_environment,
     tracked_changes,
@@ -976,3 +978,60 @@ class TestDiagnosticOutputIsBounded:
         bounds = self._recording(monkeypatch)
         criteria_workspace._run_python(Path("/p/bin/python"), "print(1)", tmp_path, tmp_path, _dl())
         assert bounds == [criteria_process.DEFAULT_MAX_OUTPUT]
+
+
+def _read_only_tree(root: Path) -> Path:
+    """`root/locked` (0o500) holding a file and a 0o000 subdirectory: plain rmtree fails."""
+    locked = root / "locked"
+    (locked / "inner").mkdir(parents=True)
+    (locked / "inner" / "f").write_text("x")
+    (locked / "f").write_text("x")
+    (locked / "inner").chmod(0o000)
+    locked.chmod(0o500)
+    return locked
+
+
+class TestRemoveTree:
+    """Permission-repairing removal, as TemporaryDirectory.cleanup repairs."""
+
+    def test_plain_rmtree_fails_here(self, tmp_path: Path) -> None:
+        root = tmp_path / "w"
+        locked = _read_only_tree(root)
+        with pytest.raises(PermissionError):
+            shutil.rmtree(root)
+        locked.chmod(0o700)
+
+    def test_read_only_directories_are_removed(self, tmp_path: Path) -> None:
+        root = tmp_path / "w"
+        _read_only_tree(root)
+        remove_tree(root)
+        assert not root.exists()
+
+    def test_a_symlinked_directory_is_never_chmodded_through(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("x")
+        outside.chmod(0o500)
+        root = tmp_path / "w"
+        _read_only_tree(root)
+        (root / "link").symlink_to(outside, target_is_directory=True)
+        try:
+            remove_tree(root)
+            assert not root.exists()
+            assert (outside / "keep").exists() and outside.stat().st_mode & 0o777 == 0o500
+        finally:
+            outside.chmod(0o700)
+
+    def test_a_missing_path_is_fine(self, tmp_path: Path) -> None:
+        remove_tree(tmp_path / "absent")
+
+    def test_an_unrepairable_failure_raises(self, tmp_path: Path, monkeypatch) -> None:
+        root = tmp_path / "w"
+        root.mkdir()
+
+        def refuse(path: object, *args: object, **kwargs: object) -> None:
+            raise PermissionError(1, "Operation not permitted", str(path))
+
+        monkeypatch.setattr(criteria_workspace.shutil, "rmtree", refuse)
+        with pytest.raises(OSError):
+            remove_tree(root)

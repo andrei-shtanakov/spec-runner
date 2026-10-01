@@ -39,9 +39,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
 - **`verify --criteria` error documents.** A `product-roots-overlap-tests`
   refusal now carries `product_roots` (declared and resolved files), as design
   §4 asks of every field established before a failure; nothing established can
-  override `protocol`, `request`, `spec_runner_version` or `error`. A workspace
-  that cannot be removed afterwards is reported as one warning line on stderr
-  instead of being ignored silently.
+  override `protocol`, `request`, `spec_runner_version` or `error`. The
+  workspace and every per-run temp directory are removed even when a product
+  test left a read-only directory behind (permissions are repaired, as
+  `TemporaryDirectory` does); a workspace that still cannot be removed is
+  reported as one warning line on stderr instead of being ignored silently.
 
 ## [4.5.0] - 2026-10-01
 

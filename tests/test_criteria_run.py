@@ -219,6 +219,20 @@ class TestFakeManifests:
         assert run["result"] == "error" and run["reason"] == "runner"
         assert "no run manifest" in str(run["detail"])
 
+    def test_a_read_only_directory_under_the_runs_tmpdir_is_removed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No residue in `work` when the product's test leaves a 0o500 directory in TMPDIR."""
+
+        def lock_a_directory(argv: list[str], env: dict[str, str]) -> None:
+            locked = Path(env["TMPDIR"]) / "locked"
+            locked.mkdir()
+            (locked / "f").write_text("x")
+            locked.chmod(0o500)
+
+        _fake_pytest(monkeypatch, lock_a_directory)
+        Case(tmp_path, TESTS).run(NODE)  # Case.run asserts `work` is empty afterwards
+
     def test_no_plugin_args_by_default(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)

@@ -48,6 +48,7 @@ from spec_runner.criteria_workspace import (
     check_origin,
     clone_at,
     read_blobs,
+    remove_tree,
     sync_environment,
     tracked_files,
 )
@@ -81,9 +82,10 @@ def measure(
 
 
 def _remove_workspace(tmp: Path) -> None:
-    """Remove the workspace; a failure is one warning line on stderr (stdout is the document)."""
+    """Remove the workspace, repairing read-only directories (`remove_tree`); a failure
+    is one warning line on stderr (stdout is the document)."""
     try:
-        shutil.rmtree(tmp)
+        remove_tree(tmp)
     except OSError as exc:
         shutil.rmtree(tmp, ignore_errors=True)  # as far as it goes
         print(f"spec-runner: warning: could not remove workspace {tmp}: {exc}", file=sys.stderr)

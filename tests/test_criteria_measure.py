@@ -484,16 +484,10 @@ class TestWorkspaceCleanup:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        real = criteria_measure.shutil.rmtree
-        calls: list[bool] = []
+        def refuse(path: Path) -> None:
+            raise PermissionError(13, "Permission denied", str(path))
 
-        def flaky_rmtree(path: Any, ignore_errors: bool = False, **kwargs: Any) -> None:
-            calls.append(ignore_errors)
-            if not ignore_errors:
-                raise PermissionError(13, "Permission denied", str(path))
-            real(path, ignore_errors=True)
-
-        monkeypatch.setattr(criteria_measure.shutil, "rmtree", flaky_rmtree)
+        monkeypatch.setattr(criteria_measure, "remove_tree", refuse)
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 0 and "beh" in doc
         out, err = capsys.readouterr()
@@ -501,13 +495,30 @@ class TestWorkspaceCleanup:
         lines = err.splitlines()
         assert len(lines) == 1 and lines[0].startswith("spec-runner: warning:")
         assert "Permission denied" in lines[0]
-        assert calls == [False, True]  # still removed as far as possible
-        assert not pipeline.workspaces[0].exists()
+        assert not pipeline.workspaces[0].exists()  # still removed as far as it goes
 
     def test_a_clean_removal_is_silent(
         self, pipeline: Pipeline, capsys: pytest.CaptureFixture[str]
     ) -> None:
         pipeline.measure(_request("ABC:BEH-1"))
+        assert capsys.readouterr() == ("", "")
+        assert not pipeline.workspaces[0].exists()
+
+    def test_a_read_only_directory_left_by_a_test_is_removed_silently(
+        self, pipeline: Pipeline, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A product test's 0o500 directory (with a file) under the workspace: no residue."""
+
+        def lock_a_directory(call: dict[str, Any]) -> dict[str, object]:
+            locked = Path(call["work"]) / "tmp-left" / "locked"
+            locked.mkdir(parents=True, exist_ok=True)
+            (locked / "f").write_text("x")
+            locked.chmod(0o500)
+            return _complete()
+
+        pipeline.on_run = lock_a_directory
+        code, _ = pipeline.measure(_request("ABC:BEH-1"))
+        assert code == 0
         assert capsys.readouterr() == ("", "")
         assert not pipeline.workspaces[0].exists()
 
