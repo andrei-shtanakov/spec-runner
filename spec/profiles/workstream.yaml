@@ -1,0 +1,14 @@
+# Сгенерировано task_bridge (devtools#386): терминальный узел бандла
+# — внешняя стадия, tasks — её downstream. Не править руками: мост
+# сверяет файл с эталоном при каждой доставке.
+name: workstream
+stages:
+  - name: decomposition
+    external: true
+    path: "workstreams/{ws}/spec/30-decomposition.md"
+    upstream: []
+  - name: tasks
+    template: tasks.template.md
+    marker_prefix: SPEC_TASKS
+    validator: tasks
+    upstream: [decomposition]
