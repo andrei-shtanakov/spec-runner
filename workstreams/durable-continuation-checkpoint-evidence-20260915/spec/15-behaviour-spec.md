@@ -1,13 +1,13 @@
 ---
 spec_stage: behaviour-spec
-status: draft
+status: approval_pending
 owner_role: product
 traces_to:
 - requirements
 upstream_hashes:
   requirements: fb522d701c91d39841c8187ceefa65da522139e9
-version: 2
-approved_content_hash: e445bcc1faefa3b09792373a742adb029a83f457
+version: 3
+approved_content_hash: c2c4a3328e49df2607007af71e708930ee3979e1
 approved_by: andrei-shtanakov
 approved_at: '2026-09-20T15:29:55Z'
 ---
