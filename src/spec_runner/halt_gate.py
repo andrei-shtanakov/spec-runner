@@ -126,6 +126,8 @@ def check(project_root: Path) -> Decision:
     out = _run(
         "gh",
         "api",
+        "--hostname",
+        "github.com",  # GH_HOST must not move the decision to another host
         "--paginate",
         f"repos/{slug}/rulesets?includes_parents=false",
         "--jq",
@@ -142,7 +144,13 @@ def check(project_root: Path) -> Decision:
     if listing is not None:
         named = [r for r in listing if r.get("name") == HALT_RULESET]
         if len(named) == 1:
-            body = _run("gh", "api", f"repos/{slug}/rulesets/{named[0]['id']}")
+            body = _run(
+                "gh",
+                "api",
+                "--hostname",
+                "github.com",
+                f"repos/{slug}/rulesets/{named[0]['id']}",
+            )
             try:
                 parsed = json.loads(body) if body is not None else None
             except json.JSONDecodeError:
