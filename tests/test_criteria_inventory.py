@@ -24,7 +24,14 @@ import pytest
 from spec_runner import criteria_inventory, criteria_process
 from spec_runner.criteria_config import ProductCriteria
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_inventory import Excluded, Inventory, TestItem, collect, deploy_probe
+from spec_runner.criteria_inventory import (
+    PLUGINS_ESTABLISHED,
+    Excluded,
+    Inventory,
+    TestItem,
+    collect,
+    deploy_probe,
+)
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, MODE_ENV, PARENT_ENV, PROBE_MODULE
 from spec_runner.criteria_workspace import Environment, sync_environment
@@ -90,6 +97,7 @@ def _manifest(checkout: Path, **overrides: Any) -> dict[str, Any]:
         "rootpath": str(checkout),
         "inipath": str(checkout / "pyproject.toml"),
         "plugins": ["pytest-9.1.1"],
+        "xdist_active": False,
         "conftests": [str(checkout / "tests" / "conftest.py")],
         "items": [_function(checkout, "tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1)],
         "errors": [],
@@ -196,13 +204,25 @@ class TestInvocation:
         assert Path(env["TMPDIR"]).is_relative_to(tmp_path / "work")
         assert env["TMPDIR"] != second["env"]["TMPDIR"]
 
-    def test_xdist_is_kept_in_process(self, fake) -> None:
+    def test_collection_output_is_bounded(self, fake) -> None:
+        """R-B20: pytest's output is read only as a tail — the one bounded capture."""
+        run, runner, _, _ = fake(lambda co: _manifest(co))
+        run()
+        assert runner.calls[0]["max_output"] == criteria_process.DEFAULT_MAX_OUTPUT
+
+    def test_collect_carries_no_distribution_flags(self, fake) -> None:
         run, runner, _, _ = fake(lambda co: _manifest(co), has_xdist=True)
         run()
-        assert runner.calls[0]["argv"][6:] == ["-n", "0", "--dist", "no", "--collect-only", "-q"]
+        assert runner.calls[0]["argv"][6:] == ["--collect-only", "-q"]
+        assert "-n" not in runner.calls[0]["argv"]
 
 
 class TestManifestToInventory:
+    @pytest.mark.parametrize("active", [True, False])
+    def test_xdist_active_comes_from_the_manifest(self, fake, active: bool) -> None:
+        run, _, _, _ = fake(lambda co: _manifest(co, xdist_active=active))
+        assert run().xdist_active is active
+
     def test_items_files_config_and_plugins(self, fake) -> None:
         def manifest(co: Path) -> dict[str, Any]:
             doctest = {
@@ -218,7 +238,7 @@ class TestManifestToInventory:
             ]
             return _manifest(co, items=items)
 
-        run, *_ = fake(manifest)
+        run, _, checkout, _ = fake(manifest)
         inv = run()
         assert inv.items == (
             TestItem("tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1),
@@ -231,6 +251,7 @@ class TestManifestToInventory:
             "tests/test_a.py",
         )
         assert inv.inipath == "pyproject.toml" and inv.plugins == ("pytest-9.1.1",)
+        assert inv.rootpath == str(checkout)  # R-B15: the runs reuse it
         assert inv.excluded == ()
         assert inv.non_function == ("pkg/mod.py::pkg.mod",)  # R20: counted, not dropped
 
@@ -267,6 +288,10 @@ class TestFailures:
         assert error.kind is ErrorKind.COLLECTION_FAILED
         assert "exit 0" in error.detail and "boom at the end" in error.detail
 
+    def test_no_manifest_establishes_no_plugins(self, fake) -> None:
+        run, *_ = fake(lambda co: None, rc=1)
+        assert _kind(run).established == {}
+
     def test_local_timeout_is_collection_failed(self, fake) -> None:
         run, *_ = fake(lambda co: None, timed_out="local")
         assert _kind(run).kind is ErrorKind.COLLECTION_FAILED
@@ -285,6 +310,7 @@ class TestFailures:
         error = _kind(run)
         assert error.kind is ErrorKind.COLLECTION_ERROR and "tests/test_b.py" in error.detail
         assert (checkout / "pkg/mod.py").read_text() == "VALUE = 1\n"  # reset on the error path
+        assert error.established == {PLUGINS_ESTABLISHED: ["pytest-9.1.1"]}
 
     def test_config_outside_the_checkout(self, fake, tmp_path: Path) -> None:
         run, *_ = fake(lambda co: _manifest(co, inipath=str(tmp_path / "pytest.ini")))
@@ -323,6 +349,7 @@ class TestFailures:
         assert error.kind is ErrorKind.COLLECTION_MUTATED_CHECKOUT
         assert "pkg/mod.py" in error.detail and "tests/data/fixture.txt" in error.detail
         assert "untracked.txt" not in error.detail
+        assert error.established == {PLUGINS_ESTABLISHED: ["pytest-9.1.1"]}  # the manifest's
         assert (checkout / "pkg/mod.py").read_text() == "VALUE = 1\n"
         assert (checkout / "tests/data/fixture.txt").exists()
         assert not (checkout / "untracked.txt").exists()
@@ -776,3 +803,49 @@ class TestRealExclusions:
                 ("tests/helpers.py", "Base.test_inherited", 2),
             ),
         )
+
+
+@pytest.fixture(scope="module")
+def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    """A product environment whose lock carries pytest-xdist (offline, from the uv cache)."""
+    root = tmp_path_factory.mktemp("xdistproject")
+    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', 'test = ["pytest", "pytest-xdist"]')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("UV_OFFLINE", "1")
+        _repo(root, {"pyproject.toml": pyproject})
+        subprocess.run(["uv", "lock", "-q", "--offline"], cwd=root, check=True)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "lock")
+        sha = _git(root, "rev-parse", "HEAD")
+        criteria = ProductCriteria(("p",), ("test",), ())
+        yield sync_environment(root, sha, tmp_path_factory.mktemp("env"), criteria, Deadline(300))
+
+
+@pytest.mark.slow
+class TestRealXdistActive:
+    @staticmethod
+    def _files(addopts: str) -> dict[str, str]:
+        ini = "[tool.pytest.ini_options]\ntestpaths = ['tests']\n"
+        return {
+            **REAL_BASE,
+            "pyproject.toml": ini + (f"addopts = '{addopts}'\n" if addopts else ""),
+        }
+
+    def test_blocked_xdist_is_not_active_though_its_distribution_is_listed(
+        self, xdist_env, tmp_path
+    ) -> None:
+        inv = _real(xdist_env, tmp_path, self._files("-p no:xdist"))
+        assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
+        assert inv.xdist_active is False
+        # measured: the distribution is still listed (its looponfail entry point registers),
+        # which is why the plugin list cannot decide the flags
+        assert any(name.startswith("pytest-xdist-") for name in inv.plugins)
+
+    @pytest.mark.parametrize("addopts", ["", "-n 2"])
+    def test_registered_xdist_is_active(self, xdist_env, tmp_path, addopts) -> None:
+        inv = _real(xdist_env, tmp_path, self._files(addopts))
+        assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
+        assert inv.xdist_active is True
+
+    def test_no_xdist_installed_is_inactive(self, product_env, tmp_path) -> None:
+        assert _real(product_env, tmp_path, REAL_BASE).xdist_active is False

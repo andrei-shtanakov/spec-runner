@@ -27,7 +27,7 @@ from typing import Any
 
 from spec_runner import criteria_process
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, Finished
+from spec_runner.criteria_process import DEFAULT_MAX_OUTPUT, Deadline, Finished
 from spec_runner.criteria_protocol import (
     MANIFEST_ENV,
     MODE_ENV,
@@ -40,12 +40,14 @@ from spec_runner.criteria_workspace import (
     Environment,
     changed_since,
     child_env,
-    distribution_args,
     reset_checkout,
     tracked_files,
 )
 
 _TAIL_LINES = 20
+#: The `CriteriaError.established` key under which a refused collection that left a
+#: valid manifest reports its loaded plugins (the response's `environment.pytest_plugins`).
+PLUGINS_ESTABLISHED = "pytest_plugins"
 # pytest's wording for an initial conftest that fails to import (exit 4, before any
 # session, so no manifest) — measured on pytest 9.1.1 for import and syntax errors.
 _CONFTEST_FAILURE = "while loading conftest"
@@ -87,8 +89,10 @@ class Inventory:
     test_files: tuple[str, ...]
     inipath: str | None
     plugins: tuple[str, ...]
+    xdist_active: bool  # xdist's own plugin is registered (not merely installed)
     excluded: tuple[Excluded, ...]
     non_function: tuple[str, ...]  # node ids of collected items that are not functions
+    rootpath: str  # pytest's rootdir (absolute): every run reuses it with `inipath` (R-B15)
 
 
 def deploy_probe(into: Path) -> Path:
@@ -132,16 +136,22 @@ def _collect(
     local_timeout: float,
 ) -> Inventory:
     manifest = _run_probe(env, checkout, probe_dir, work, deadline, local_timeout)
-    if manifest["errors"]:
-        where = ", ".join(str(e["node_id"]) or "<session>" for e in manifest["errors"])
-        raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"pytest could not collect: {where}")
-    inventory = _inventory(manifest, checkout, sha, deadline)
-    changed = changed_since(checkout, sha, deadline)
-    if changed:
-        raise CriteriaError(
-            ErrorKind.COLLECTION_MUTATED_CHECKOUT,
-            f"collection changed tracked files: {', '.join(changed)}",
-        )
+    try:
+        if manifest["errors"]:
+            where = ", ".join(str(e["node_id"]) or "<session>" for e in manifest["errors"])
+            raise CriteriaError(ErrorKind.COLLECTION_ERROR, f"pytest could not collect: {where}")
+        inventory = _inventory(manifest, checkout, sha, deadline)
+        changed = changed_since(checkout, sha, deadline)
+        if changed:
+            raise CriteriaError(
+                ErrorKind.COLLECTION_MUTATED_CHECKOUT,
+                f"collection changed tracked files: {', '.join(changed)}",
+            )
+    except CriteriaError as exc:
+        # A valid manifest names the loaded plugins even when collection is refused:
+        # the response's `environment` is then established (§4).
+        exc.established.setdefault(PLUGINS_ESTABLISHED, list(manifest["plugins"]))
+        raise
     return inventory
 
 
@@ -160,7 +170,7 @@ def _run_probe(
     tmp.mkdir()
     argv = [
         str(env.python), "-P", "-m", "pytest", "-p", PROBE_MODULE,
-        *distribution_args(env), "--collect-only", "-q",
+        "--collect-only", "-q",
     ]  # fmt: skip
     variables = {
         PARENT_ENV: str(os.getpid()),
@@ -175,6 +185,7 @@ def _run_probe(
             env=child_env(probe_dir, variables),
             deadline=deadline,
             local_timeout=local_timeout,
+            max_output=DEFAULT_MAX_OUTPUT,  # read only as a tail (R-B20)
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -246,8 +257,10 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         test_files=tuple(sorted(files)),
         inipath=inipath,
         plugins=tuple(manifest["plugins"]),
+        xdist_active=manifest["xdist_active"],
         excluded=_excluded(manifest["excluded"], checkout, tracked),
         non_function=tuple(sorted(non_function)),
+        rootpath=manifest["rootpath"],
     )
 
 

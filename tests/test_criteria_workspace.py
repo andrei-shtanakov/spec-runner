@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import subprocess
 from collections.abc import Callable
@@ -11,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from spec_runner import criteria_config, criteria_process
+from spec_runner import criteria_config, criteria_process, criteria_workspace
 from spec_runner.criteria_config import ProductCriteria, read_product_criteria, resolve_roots
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
 from spec_runner.criteria_process import Deadline, Finished, c_locale_env
@@ -439,8 +440,8 @@ def _environment(**overrides: Any) -> Environment:
 
 class TestEnvironment:
     def test_distribution_args(self) -> None:
-        assert distribution_args(_environment(has_xdist=True)) == ["-n", "0", "--dist", "no"]
-        assert distribution_args(_environment(has_xdist=False)) == []
+        assert distribution_args(True) == ["-n", "0", "--dist", "no"]
+        assert distribution_args(False) == []
 
     def test_label(self) -> None:
         assert _environment().label == "CPython 3.12.13"
@@ -892,3 +893,89 @@ class TestSync:
         assert kind is ErrorKind.ENVIRONMENT_SELECTION_INVALID
         env = self._sync(root, sha, tmp_path / "env-test", groups=("test",))
         assert env.groups == ("test",)
+
+
+# ------------------------------------------------- R-B20: git data is never truncated
+
+#: Enough paths that `ls-tree -r -z` prints more than DEFAULT_MAX_OUTPUT (1 MiB).
+_BIG_TREE_PATHS = 12_000
+
+
+def _effective_bound(kwargs: dict[str, Any]) -> int | None:
+    """The `max_output` a run_bounded call actually used (explicit, else its default)."""
+    default = inspect.signature(REAL_RUN).parameters["max_output"].default
+    return kwargs.get("max_output", default)
+
+
+@pytest.fixture(scope="module")
+def big_tree(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str, list[str]]:
+    """A commit whose tracked listing exceeds 1 MiB — built in the index, no files on disk."""
+    root = tmp_path_factory.mktemp("big") / "repo"
+    _init(root)
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=root, input=b"x = 1\n",
+        capture_output=True, check=True,
+    ).stdout.decode().strip()  # fmt: skip
+    paths = sorted(f"pkg/d{i // 1000:02d}/{'m' * 90}_{i:05d}.py" for i in range(_BIG_TREE_PATHS))
+    index = "".join(f"100644 {blob}\t{p}\n" for p in paths).encode()
+    subprocess.run(["git", "update-index", "--index-info"], cwd=root, input=index, check=True)
+    tree = _git(root, "write-tree")
+    sha = _git(root, "commit-tree", tree, "-m", "big")
+    listing = _git_bytes(root, "ls-tree", "-r", "-z", "--name-only", sha)
+    assert len(listing) > criteria_process.DEFAULT_MAX_OUTPUT
+    return root, sha, paths
+
+
+class TestGitDataIsNeverTruncated:
+    def test_tracked_files_returns_every_path(self, big_tree) -> None:
+        root, sha, paths = big_tree
+        assert tracked_files(root, sha, _dl()) == paths
+
+    def test_config_ls_tree_returns_every_entry(self, big_tree) -> None:
+        root, sha, paths = big_tree
+        entries = criteria_config._ls_tree(root, sha, "pkg", _dl())
+        assert [entry.split("\t", 1)[1] for entry in entries] == paths
+
+    def test_every_git_call_on_the_checkout_is_unbounded(self, source: Path, monkeypatch):
+        sha = _git(source, "rev-parse", "HEAD")
+        bounds: list[tuple[str, int | None]] = []
+
+        def recording(argv, **kwargs):
+            bounds.append((" ".join(argv), _effective_bound(kwargs)))
+            return REAL_RUN(argv, **kwargs)
+
+        monkeypatch.setattr(criteria_process, "run_bounded", recording)
+        monkeypatch.setattr(criteria_config, "run_bounded", recording)
+        tracked_files(source, sha, _dl())
+        tracked_changes(source, _dl())
+        changed_since(source, sha, _dl())
+        read_blobs(source, sha, ["a.py"], _dl())
+        criteria_config._ls_tree(source, sha, "a.py", _dl())
+        reset_checkout(source, sha, _dl())
+        assert bounds and all(bound is None for _, bound in bounds), bounds
+
+
+class TestDiagnosticOutputIsBounded:
+    """R-B20: only output read as a tail (uv, the interpreter checks) keeps a bound."""
+
+    def _recording(self, monkeypatch) -> list[int | None]:
+        bounds: list[int | None] = []
+
+        def recording(argv, **kwargs):
+            bounds.append(_effective_bound(kwargs))
+            return _finished()
+
+        monkeypatch.setattr(criteria_process, "run_bounded", recording)
+        return bounds
+
+    def test_uv_sync_is_bounded(self, tmp_path: Path, monkeypatch) -> None:
+        bounds = self._recording(monkeypatch)
+        criteria_workspace._uv_sync(
+            tmp_path, tmp_path / "env", ProductCriteria(("p",), None, ()), _dl()
+        )
+        assert bounds == [criteria_process.DEFAULT_MAX_OUTPUT]
+
+    def test_interpreter_checks_are_bounded(self, tmp_path: Path, monkeypatch) -> None:
+        bounds = self._recording(monkeypatch)
+        criteria_workspace._run_python(Path("/p/bin/python"), "print(1)", tmp_path, tmp_path, _dl())
+        assert bounds == [criteria_process.DEFAULT_MAX_OUTPUT]

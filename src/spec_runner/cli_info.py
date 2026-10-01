@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from .config import (
     ExecutorConfig,
@@ -600,6 +601,51 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
     print(output)
     if not result.ok:
         sys.exit(1)
+
+
+def criteria_root(project_root: str) -> Path:
+    """The repo `verify --criteria` measures: `--project-root`, else the cwd's repo toplevel.
+
+    `git rev-parse --show-toplevel` from the cwd (a subdirectory measures its repo), the
+    cwd itself outside a repo. The remote and every sha are checked by the measurement.
+    """
+    if project_root:
+        return Path(project_root).resolve()
+    from .criteria_process import Deadline, c_locale_env, run_bounded
+
+    cwd = Path.cwd()
+    argv = ["git", "rev-parse", "--show-toplevel"]
+    done = run_bounded(argv, cwd=cwd, env=c_locale_env(), deadline=Deadline(30))
+    top = done.stdout.decode("utf-8", "replace").strip()
+    if done.returncode != 0 or not top:
+        return cwd.resolve()
+    return Path(top).resolve()
+
+
+def run_verify_criteria(args: argparse.Namespace, project_root: Path) -> int:
+    """`verify --criteria` (#603): print the one response document, return the exit code."""
+    import json
+
+    from . import __version__
+    from .criteria_measure import measure, request_invalid
+
+    version = __version__
+    try:
+        data = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
+        code, document = request_invalid(
+            f"cannot read the request {args.request}: {exc}", version=version
+        )
+    else:
+        code, document = measure(
+            project_root,
+            data,
+            selector_timeout=args.selector_timeout,
+            timeout=args.criteria_timeout,
+            version=version,
+        )
+    print(json.dumps(document))
+    return code
 
 
 def cmd_verify(args: argparse.Namespace, config: ExecutorConfig) -> None:

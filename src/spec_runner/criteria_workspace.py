@@ -21,7 +21,13 @@ from pathlib import Path
 from spec_runner import criteria_process
 from spec_runner.criteria_config import ProductCriteria, check_selection
 from spec_runner.criteria_contract import CriteriaError, ErrorKind, owner_matches
-from spec_runner.criteria_process import Deadline, Finished, c_locale_env, checkout_git
+from spec_runner.criteria_process import (
+    DEFAULT_MAX_OUTPUT,
+    Deadline,
+    Finished,
+    c_locale_env,
+    checkout_git,
+)
 
 MIN_PRODUCT_PYTHON = (3, 12)
 _GIT_STEP_LIMIT = 60.0
@@ -127,9 +133,15 @@ def _git_ok(cwd: Path, args: Sequence[str], deadline: Deadline, kind: ErrorKind)
 
 
 def _in_checkout(
-    checkout: Path, args: Sequence[str], deadline: Deadline, stdin: bytes | None = None
+    checkout: Path,
+    args: Sequence[str],
+    deadline: Deadline,
+    stdin: bytes | None = None,
 ) -> Finished:
-    """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure."""
+    """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure.
+
+    Unbounded output: listings and blobs are parsed as complete data (R-B20).
+    """
     done = criteria_process.run_bounded(
         [*checkout_git(checkout), *args],
         cwd=checkout,
@@ -345,7 +357,9 @@ def _uv_sync(checkout: Path, env_dir: Path, criteria: ProductCriteria, deadline:
     # No --quiet: measured (uv 0.11.23) to suppress the "`--locked` was provided"
     # line this classification reads, turning a stale lock into a retryable failure.
     argv = ["uv", "sync", "--locked", *selection_args(criteria)]
-    done = criteria_process.run_bounded(argv, cwd=checkout, env=env, deadline=deadline)
+    done = criteria_process.run_bounded(
+        argv, cwd=checkout, env=env, deadline=deadline, max_output=DEFAULT_MAX_OUTPUT
+    )
     if done.timed_out is None and done.returncode == 0:
         return
     said = done.stderr.decode("utf-8", errors="replace")
@@ -367,6 +381,7 @@ def _run_python(
         env=child_env(empty, {}),
         deadline=deadline,
         local_timeout=_INTERPRETER_LIMIT,
+        max_output=DEFAULT_MAX_OUTPUT,
     )
 
 
@@ -435,6 +450,11 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-def distribution_args(env: Environment) -> list[str]:
-    """Keep every test in the probe's own process when xdist is importable (§3.6)."""
-    return ["-n", "0", "--dist", "no"] if env.has_xdist else []
+def distribution_args(xdist_active: bool) -> list[str]:
+    """Keep every test in the probe's own process when xdist is registered (§3.6).
+
+    `xdist_active` is the collect manifest's `xdist_active`: xdist's plugin was
+    registered in that pytest, so `-n` exists. Only the run passes these flags:
+    `--collect-only` never distributes, and `-n` breaks a product that blocks xdist.
+    """
+    return ["-n", "0", "--dist", "no"] if xdist_active else []

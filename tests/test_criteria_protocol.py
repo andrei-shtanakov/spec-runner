@@ -33,6 +33,7 @@ def collect_manifest() -> dict[str, Any]:
         "rootpath": "/abs/checkout",
         "inipath": "/abs/checkout/pyproject.toml",
         "plugins": ["pytest-9.0.2"],
+        "xdist_active": False,
         "conftests": ["/abs/checkout/tests/conftest.py"],
         "items": [
             {
@@ -265,6 +266,9 @@ COLLECT_REJECTED: dict[str, tuple[Any, int]] = {
     "inipath int": (mutated(collect_manifest(), set_key("inipath", 3)), 0),
     "plugins not list": (mutated(collect_manifest(), set_key("plugins", "x")), 0),
     "plugins non-str": (mutated(collect_manifest(), set_key("plugins", [1])), 0),
+    "xdist_active int": (mutated(collect_manifest(), set_key("xdist_active", 1)), 0),
+    "xdist_active str": (mutated(collect_manifest(), set_key("xdist_active", "yes")), 0),
+    "xdist_active null": (mutated(collect_manifest(), set_key("xdist_active", None)), 0),
     "conftests not list": (mutated(collect_manifest(), set_key("conftests", None)), 0),
     "conftest relative": (mutated(collect_manifest(), set_key("conftests", ["c.py"])), 0),
     "items not list": (mutated(collect_manifest(), set_key("items", {"a": 1})), 0),
@@ -442,6 +446,7 @@ for _key in (
     "rootpath",
     "inipath",
     "plugins",
+    "xdist_active",
     "conftests",
     "items",
     "errors",

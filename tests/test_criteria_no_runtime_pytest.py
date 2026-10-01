@@ -3,7 +3,6 @@
 import subprocess
 import sys
 
-# B2b appends criteria_run, criteria_aggregate, criteria_measure and cli.
 MODULES = [
     "criteria_contract",
     "criteria_process",
@@ -12,6 +11,10 @@ MODULES = [
     "criteria_workspace",
     "criteria_inventory",
     "criteria_select",
+    "criteria_aggregate",
+    "criteria_run",
+    "criteria_measure",
+    "cli",
 ]
 
 

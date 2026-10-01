@@ -47,9 +47,9 @@ Rev 4 (spec-runner#623, design rev 4): Task 4 step 6 also yields `collection_exc
 
 **Interfaces — Produces (probe/1 run manifest):** `collected`, `phases` (`setup`/`call`/`teardown`, `call` = `not-reached` when setup did not pass), `call_in_owner`, `distributed`, `product_lines` (absolute file → sorted lines), `process_operations`, `exitstatus`, `complete`, plus `monitoring_error` (string) when no `sys.monitoring` tool id was free.
 
-- [ ] **Step 1: Branch** — `git switch master && git pull --ff-only && git switch -c feat/603-b2b-runs-command`
+- [x] **Step 1: Branch** — `git switch master && git pull --ff-only && git switch -c feat/603-b2b-runs-command`
 
-- [ ] **Step 2: Write the failing tests** — `tests/test_criteria_probe_run.py` (whole module skipped below 3.12):
+- [x] **Step 2: Write the failing tests** — `tests/test_criteria_probe_run.py` (whole module skipped below 3.12):
 
 ```python
 """#603 B2b: the probe's run mode (probe/1) — lines in call only, owner-only writes."""
@@ -164,9 +164,9 @@ class TestOwnership:  # Review Focus 2
         assert m["distributed"] is True and m["call_in_owner"] is False
 ```
 
-- [ ] **Step 3: Run to verify it fails** — `uv run pytest tests/test_criteria_probe_run.py -q` → FAIL: `KeyError: 'collected'` / manifest missing run fields.
+- [x] **Step 3: Run to verify it fails** — `uv run pytest tests/test_criteria_probe_run.py -q` → FAIL: `KeyError: 'collected'` / manifest missing run fields.
 
-- [ ] **Step 4: Implement** — in `src/spec_runner/criteria_probe.py`, import `sys`, `import pytest` at module top (the plugin is only ever imported by pytest), and add:
+- [x] **Step 4: Implement** — in `src/spec_runner/criteria_probe.py`, import `sys`, `import pytest` at module top (the plugin is only ever imported by pytest), and add:
 
 ```python
 _AUDITED = frozenset({"subprocess.Popen", "os.posix_spawn", "os.exec", "os.system", "os.fork", "os.forkpty"})
@@ -264,9 +264,9 @@ In `pytest_collection_finish`, for run mode record `_run["collected"] = [item.no
 
 Only an observed failed/skipped setup establishes `call: not-reached`. No collected item means no setup, so preserve `phases == {}` for the absent-selector manifest (exit 4 or 5); missing phase evidence for a collected item stays invalid. `call_in_owner` is false when no call report arrived — including an absent selector or a failed/skipped setup — and `distributed` stays false then; B2b's orchestrator reads the validated collection and phases for these cases.
 
-- [ ] **Step 5: Run** — `uv run pytest tests/test_criteria_probe_run.py tests/test_criteria_inventory.py -q` → PASS (the collect-mode tests of B2a must stay green). `uv run mypy src && uv run ruff check .` → clean. mypy runs on 3.11 semantics (`python_version = "3.11"`): guard `sys.monitoring` uses with `if sys.version_info >= (3, 12):` blocks so mypy accepts them.
+- [x] **Step 5: Run** — `uv run pytest tests/test_criteria_probe_run.py tests/test_criteria_inventory.py -q` → PASS (the collect-mode tests of B2a must stay green). `uv run mypy src && uv run ruff check .` → clean. mypy runs on 3.11 semantics (`python_version = "3.11"`): guard `sys.monitoring` uses with `if sys.version_info >= (3, 12):` blocks so mypy accepts them.
 
-- [ ] **Step 6: Commit** — `feat(#603): the probe's run mode — call-only product lines, process operations, distribution`
+- [x] **Step 6: Commit** — `feat(#603): the probe's run mode — call-only product lines, process operations, distribution`
 
 ---
 
@@ -314,7 +314,7 @@ def run_selector(env: Environment, checkout: Path, sha: str, probe_dir: Path, wo
 
 The invocation dir is removed on every path.
 
-- [ ] **Step 1: Failing tests** (3.12+ for runs; `function_body_lines` everywhere):
+- [x] **Step 1: Failing tests** (3.12+ for runs; `function_body_lines` everywhere):
   - `function_body_lines`: module constant and class-body line excluded, a comprehension inside a function included, `async def` body included, BOM tolerated (`{2}` for `"\ufeffdef f():\n    return 1\n"`);
   - a complete run with `pkg/mod.py` lines `[2]`, `product_line_count == 1`;
   - a fixture teardown that calls `pytest.skip` → complete run, `teardown: "skipped"`, `outcome: "skipped"`;
@@ -323,7 +323,7 @@ The invocation dir is removed on every path.
   - a deployed probe with its manifest write patched to drop `phases` → error run, **not** `SELECTOR_ABSENT` and not complete;
   - `selector_timeout=2` on a sleeping test → error run `timed_out: true`; `Deadline(3)` with `selector_timeout=60` → `CriteriaError(TIMEOUT)`;
   - a test that starts `sleep 60 &` with inherited output descriptors and passes → `run_selector` returns a complete run before its local timeout, the background process is no longer running, and no false timeout/error run is produced.
-- [ ] Step 2 RED; Step 3 implement; Step 4 GREEN + ruff + mypy; Step 5 commit `feat(#603): one isolated, bounded, validated selector run`.
+- [x] Step 2 RED; Step 3 implement; Step 4 GREEN + ruff + mypy; Step 5 commit `feat(#603): one isolated, bounded, validated selector run`.
 
 ---
 
@@ -333,7 +333,7 @@ The invocation dir is removed on every path.
 
 **Interfaces — Produces:** `run_outcome(phases: Mapping[str, str]) -> str`; `selector_status(runs: Sequence[Mapping[str, object]]) -> tuple[str, str | None]`; `beh_status(selectors: Sequence[tuple[str, str | None]]) -> tuple[str, str | None]`.
 
-- [ ] **Step 1: Failing tests** — the §3.7 table:
+- [x] **Step 1: Failing tests** — the §3.7 table:
 
 ```python
 """#603 B2b: design §3.7 — outcome over three phases, selector and BEH status."""
@@ -394,7 +394,7 @@ def test_beh_status(selectors, expected):
     assert beh_status(selectors) == expected
 ```
 
-- [ ] **Step 2: RED**, **Step 3: Implement**:
+- [x] **Step 2: RED**, **Step 3: Implement**:
 
 ```python
 """Design §3.7 as pure functions: run outcome, selector status, BEH status (#603)."""
@@ -443,7 +443,7 @@ def beh_status(selectors: Sequence[tuple[str, str | None]]) -> tuple[str, str | 
     return "traced", None
 ```
 
-- [ ] **Step 4: GREEN**; **Step 5: Commit** — `feat(#603): §3.7 aggregation as pure functions`
+- [x] **Step 4: GREEN**; **Step 5: Commit** — `feat(#603): §3.7 aggregation as pure functions`
 
 ---
 
@@ -483,7 +483,7 @@ def measure(project_root: Path, request_data: object, *, selector_timeout: float
 - deadline exhausted between runs → exit 2 `timeout`, established fields up to `content_sha256`, **no `beh`** (Review Focus 4);
 - happy path: one traced BEH, one `no-test` BEH, two BEHs sharing one selector (one pair of runs, listed under both) → exit 0; the document validates against `response.schema.json`;
 - every document of these tests validates against the schema; the `retryable` of each error equals `kind.retryable`.
-- [ ] Steps: RED → implement → GREEN (+ruff, mypy) → commit `feat(#603): the measurement pipeline under one deadline, and its documents`.
+- [x] Steps: RED → implement → GREEN (+ruff, mypy) → commit `feat(#603): the measurement pipeline under one deadline, and its documents`.
 
 ---
 
@@ -537,7 +537,7 @@ jobs:
 
 (Follow `exunit-contract.yml` for the checkout/uv action versions the repo already pins; copy them rather than the ones above if they differ.)
 
-- [ ] Steps: write the bench; prove each row can fail by running it once with `_on_line` returning before recording (every `traced` row must then turn `no-product-execution`) and restoring it; run GREEN; add the workflow; commit `test(#603): the §8.3 bench and boundary cases, CPython 3.12 workflow`.
+- [x] Steps: write the bench; prove each row can fail by running it once with `_on_line` returning before recording (every `traced` row must then turn `no-product-execution`) and restoring it; run GREEN; add the workflow; commit `test(#603): the §8.3 bench and boundary cases, CPython 3.12 workflow`.
 
 ---
 
@@ -545,13 +545,13 @@ jobs:
 
 **Files:** Modify `src/spec_runner/cli.py` (`verify` subparser), `src/spec_runner/cli_info.py` (`cmd_verify`); Test `tests/test_criteria_cli.py`.
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
   - `verify --criteria` without `--request` or without `--json` → argparse usage error (exit 2 from argparse is acceptable here: it is a caller bug, not a measurement), documented in `--help`;
   - a request path that does not exist / holds invalid JSON → stdout is one JSON document, `error.kind == "request-invalid"`, exit 2 (Review Focus 5);
   - `@pytest.mark.slow` end to end: a git repo with `uv.lock` (pytest in a dev group), `criteria.product_roots`, a traced BEH, a docstring-reader BEH, a Must with no test, and `criteria.environment.groups` declaring the dev group → exit 0, statuses `traced` / `no-product-execution` / `no-test`, the document validates, `environment.groups` echoes the declaration, `content_sha256` recomputes from the rev-4 object over the bytes **at `product_sha`** (`git show`), and `test_items` agree with every selector's definition;
   - the command path with `pytest` unimportable (`python -c` with `sys.modules['pytest'] = None`, then `spec_runner.cli.main(["verify", "--criteria", "--request", <missing>, "--json"])`) prints the `request-invalid` document and exits 2 — the command needs no pytest to run.
-- [ ] **Step 2: RED**; **Step 3: Implement** — flags `--criteria`, `--request PATH`, `--selector-timeout SECONDS` (default 300), `--timeout SECONDS` (default 3600); `cmd_verify` branches to `criteria_measure.measure(config.project_root, …, version=__version__)`, prints `json.dumps(doc)`, exits with the code. No other `verify` behaviour changes.
-- [ ] **Step 4: GREEN** (fast and slow); **Step 5: Commit** — `feat(#603): spec-runner verify --criteria (criteria-closure/v1)`
+- [x] **Step 2: RED**; **Step 3: Implement** — flags `--criteria`, `--request PATH`, `--selector-timeout SECONDS` (default 300), `--timeout SECONDS` (default 3600); `cmd_verify` branches to `criteria_measure.measure(config.project_root, …, version=__version__)`, prints `json.dumps(doc)`, exits with the code. No other `verify` behaviour changes.
+- [x] **Step 4: GREEN** (fast and slow); **Step 5: Commit** — `feat(#603): spec-runner verify --criteria (criteria-closure/v1)`
 
 ---
 

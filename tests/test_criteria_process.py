@@ -7,11 +7,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_process import Deadline, run_bounded, run_or_raise
+from spec_runner.criteria_process import DEFAULT_MAX_OUTPUT, Deadline, run_bounded, run_or_raise
 
 
 def _sh(script: str) -> list[str]:
@@ -159,3 +160,105 @@ def test_exhausted_deadline_raises_timeout() -> None:
         Deadline(0).check()
     assert info.value.kind is ErrorKind.TIMEOUT
     assert Deadline(0).remaining() == 0.0
+
+
+def test_missing_executable_is_exit_127(tmp_path: Path) -> None:
+    done = run_bounded(
+        ["/nonexistent/spec-runner-bin"], cwd=tmp_path, env=None, deadline=Deadline(60)
+    )
+    assert done.returncode == 127
+    assert done.stdout == b""
+    assert done.pid == -1
+    assert done.timed_out is None
+    assert done.stderr.startswith(b"cannot launch /nonexistent/spec-runner-bin: ")
+
+
+def test_missing_cwd_is_exit_127(tmp_path: Path) -> None:
+    done = run_bounded(["true"], cwd=tmp_path / "absent", env=None, deadline=Deadline(60))
+    assert done.returncode == 127
+    assert done.stderr.startswith(b"cannot launch true: ")
+
+
+def test_unlaunchable_never_swallows_the_global_timeout(tmp_path: Path) -> None:
+    with pytest.raises(CriteriaError) as info:
+        run_bounded(["/nonexistent/x"], cwd=tmp_path, env=None, deadline=Deadline(0))
+    assert info.value.kind is ErrorKind.TIMEOUT
+
+
+def test_run_or_raise_on_unlaunchable_raises_the_callers_kind(tmp_path: Path) -> None:
+    with pytest.raises(CriteriaError) as info:
+        run_or_raise(
+            ["/nonexistent/spec-runner-bin"],
+            cwd=tmp_path,
+            env=None,
+            deadline=Deadline(60),
+            kind=ErrorKind.CLONE_FAILED,
+            what="cloning",
+        )
+    assert info.value.kind is ErrorKind.CLONE_FAILED
+    assert "cannot launch /nonexistent/spec-runner-bin" in info.value.detail
+
+
+_WRITE_3_MIB = (
+    "import sys;[sys.stdout.buffer.write(bytes([i % 251]) * 1024) for i in range(3 * 1024)]"
+)
+
+
+def test_output_keeps_only_the_tail_with_a_marker(tmp_path: Path) -> None:
+    done = run_bounded(
+        [sys.executable, "-c", _WRITE_3_MIB],
+        cwd=tmp_path,
+        env=None,
+        deadline=Deadline(60),
+        max_output=DEFAULT_MAX_OUTPUT,
+    )
+    marker = f"[spec-runner: {2 << 20} bytes dropped]\n".encode()
+    assert done.stdout.startswith(marker)
+    assert len(done.stdout) == len(marker) + (1 << 20)
+    tail = b"".join(bytes([i % 251]) * 1024 for i in range(2 * 1024, 3 * 1024))
+    assert done.stdout[len(marker) :] == tail
+
+
+def test_default_is_unbounded(tmp_path: Path) -> None:
+    """R-B20: git's stdout is parsed as complete data — only tails are bounded, explicitly."""
+    done = run_bounded(
+        [sys.executable, "-c", _WRITE_3_MIB], cwd=tmp_path, env=None, deadline=Deadline(60)
+    )
+    assert len(done.stdout) == 3 << 20
+
+
+def test_the_tail_bound_is_one_mebibyte() -> None:
+    assert DEFAULT_MAX_OUTPUT == 1 << 20
+
+
+def test_run_or_raise_passes_the_bound_through(tmp_path: Path) -> None:
+    argv = [sys.executable, "-c", _WRITE_3_MIB]
+    common: dict[str, Any] = {
+        "cwd": tmp_path,
+        "env": None,
+        "kind": ErrorKind.CLONE_FAILED,
+        "what": "w",
+    }
+    whole = run_or_raise(argv, deadline=Deadline(60), **common)
+    assert len(whole.stdout) == 3 << 20
+    tail = run_or_raise(argv, deadline=Deadline(60), max_output=1 << 20, **common)
+    assert tail.stdout.startswith(b"[spec-runner:")
+
+
+def test_unbounded_returns_everything(tmp_path: Path) -> None:
+    done = run_bounded(
+        [sys.executable, "-c", _WRITE_3_MIB],
+        cwd=tmp_path,
+        env=None,
+        deadline=Deadline(60),
+        max_output=None,
+    )
+    assert len(done.stdout) == 3 << 20
+    assert not done.stdout.startswith(b"[spec-runner")
+
+
+def test_output_under_the_bound_has_no_marker(tmp_path: Path) -> None:
+    done = run_bounded(
+        _sh("printf abc"), cwd=tmp_path, env=None, deadline=Deadline(60), max_output=3
+    )
+    assert done.stdout == b"abc"
