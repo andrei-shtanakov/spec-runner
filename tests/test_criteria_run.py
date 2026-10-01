@@ -21,7 +21,7 @@ from jsonschema import Draft7Validator
 
 from spec_runner import criteria_process, criteria_run
 from spec_runner.criteria_contract import CriteriaError, ErrorKind
-from spec_runner.criteria_inventory import deploy_probe
+from spec_runner.criteria_inventory import collect, deploy_probe
 from spec_runner.criteria_process import Deadline, Finished
 from spec_runner.criteria_protocol import MANIFEST_ENV, PROBE_MODULE, PRODUCT_FILES_ENV
 from spec_runner.criteria_run import product_body_lines, run_selector
@@ -99,6 +99,8 @@ class Case:
         deadline: Deadline | None = None,
         selector_timeout: float = 120.0,
         distribution: Sequence[str] = (),
+        rootpath: str | None = None,
+        inipath: str | None = None,
     ) -> dict[str, object]:
         run = run_selector(
             _env(),
@@ -113,6 +115,8 @@ class Case:
             deadline or Deadline(300),
             selector_timeout,
             distribution=distribution,
+            rootpath=rootpath or str(self.checkout),
+            inipath=inipath,
         )
         _assert_run_shape(run)
         assert list(self.work.iterdir()) == []  # the invocation dir is removed
@@ -207,17 +211,44 @@ class TestFakeManifests:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
         case = Case(tmp_path, TESTS)
         run = case.run(NODE, distribution=["-n", "0", "--dist", "no"])
-        assert seen == [
-            [sys.executable, "-P", "-m", "pytest", "-p", PROBE_MODULE]
-            + ["-n", "0", "--dist", "no", "-q", NODE]
-        ]
+        (argv,) = seen
+        ini = argv[9]
+        assert argv == [sys.executable, "-P", "-m", "pytest", "-p", PROBE_MODULE] + [
+            "--rootdir", str(case.checkout), "-c", ini, "-n", "0", "--dist", "no", "-q", NODE
+        ]  # fmt: skip
         assert run["result"] == "error" and run["reason"] == "runner"
         assert "no run manifest" in str(run["detail"])
 
     def test_no_distribution_flags_by_default(self, tmp_path, monkeypatch) -> None:
         seen = _fake_pytest(monkeypatch, lambda argv, env: None)
-        Case(tmp_path, TESTS).run(NODE)
-        assert seen[0][-4:] == ["-p", PROBE_MODULE, "-q", NODE]
+        case = Case(tmp_path, TESTS)
+        case.run(NODE)
+        (argv,) = seen
+        assert argv[4:] == ["-p", PROBE_MODULE, "--rootdir", str(case.checkout), "-c", argv[9]] + [
+            "-q", NODE
+        ]  # fmt: skip
+
+    def test_no_collected_config_runs_with_an_empty_ini(self, tmp_path, monkeypatch) -> None:
+        """R-B15: the collection read no config, so neither may a run (tests/pytest.ini)."""
+        inis: list[tuple[Path, str]] = []
+
+        def manifest(argv: list[str], env: dict[str, str]) -> None:
+            ini = Path(argv[argv.index("-c") + 1])
+            assert ini.parent == Path(env[MANIFEST_ENV]).parent  # the invocation dir
+            inis.append((ini, ini.read_text()))
+
+        seen = _fake_pytest(monkeypatch, manifest)
+        case = Case(tmp_path, TESTS)
+        case.run(NODE, rootpath="/collected/root")
+        assert seen[0][seen[0].index("--rootdir") + 1] == "/collected/root"
+        assert [(ini.name, text) for ini, text in inis] == [("pytest.ini", "")]
+
+    def test_the_collections_config_file_is_passed(self, tmp_path, monkeypatch) -> None:
+        seen = _fake_pytest(monkeypatch, lambda argv, env: None)
+        case = Case(tmp_path, TESTS)
+        ini = str(case.checkout / "pyproject.toml")
+        case.run(NODE, inipath=ini)
+        assert seen[0][seen[0].index("-c") + 1] == ini
 
     def test_monitoring_error_is_an_error_run(self, tmp_path, monkeypatch) -> None:
         _fake_pytest(
@@ -369,6 +400,20 @@ class TestRealRuns:
             "product_line_count": 1,
             "process_operations": [],
         }
+
+    def test_a_nested_pytest_ini_runs_with_the_collections_resolution(self, tmp_path) -> None:
+        """R-B15: collection (no path args) reads no config; `<node_id>` alone would find
+        tests/pytest.ini, root pytest at tests/ and name the test `test_a.py::test_a`."""
+        case = Case(tmp_path, {**TESTS, "tests/pytest.ini": "[pytest]\n"})
+        inventory = collect(
+            _env(), case.checkout, case.sha, case.probe_dir, tmp_path / "collect", Deadline(120),
+            120.0,
+        )  # fmt: skip
+        assert inventory.inipath is None and inventory.rootpath == str(case.checkout)
+        assert [item.node_id for item in inventory.items] == [NODE]
+        run = case.run(NODE, rootpath=inventory.rootpath, inipath=None)
+        assert run["result"] == "complete" and run["collected"] == [NODE]
+        assert run["outcome"] == "passed" and run["product_line_count"] == 1
 
     def test_teardown_skip_is_a_skipped_outcome(self, tmp_path) -> None:
         tests = {

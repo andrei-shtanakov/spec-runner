@@ -86,6 +86,8 @@ def run_selector(
     deadline: Deadline,
     selector_timeout: float,
     *,
+    rootpath: str,
+    inipath: str | None,
     distribution: Sequence[str] = (),
 ) -> dict[str, object]:
     """One fresh pytest process for `node_id` → a `complete_run` or an `error_run` object.
@@ -93,16 +95,20 @@ def run_selector(
     `product_files` are repository-relative; `measured` holds the bytes at `sha`
     of every measured file (product ∪ test files, from `read_blobs`, never re-read
     from the checkout) and `body_lines` is `product_body_lines(product_files, …)`. `distribution` is
-    appended before `-q` (`distribution_args(inventory.xdist_active)`). Raises
+    appended before `-q` (`distribution_args(inventory.xdist_active)`). `rootpath` and
+    `inipath` (absolute) are the collection's resolution, reproduced by every run as
+    `--rootdir rootpath -c inipath` — or `-c` an empty ini in the invocation dir when
+    the collection read no config (R-B15). Raises
     `CriteriaError` with TIMEOUT, SELECTOR_ABSENT or DISTRIBUTED_EXECUTION.
     """
     reset_checkout(checkout, sha, deadline)
     work.mkdir(parents=True, exist_ok=True)
     invocation = Path(tempfile.mkdtemp(prefix="run-", dir=work))
     try:
+        config = _config_args(invocation, rootpath, inipath)
         done, manifest_path = _launch(
             env, checkout, probe_dir, invocation, node_id, product_files, deadline,
-            selector_timeout, distribution,
+            selector_timeout, [*config, *distribution],
         )  # fmt: skip
         return _read_run(
             done, manifest_path, checkout, node_id, product_files, measured, body_lines,
@@ -110,6 +116,15 @@ def run_selector(
         )  # fmt: skip
     finally:
         shutil.rmtree(invocation, ignore_errors=True)
+
+
+def _config_args(invocation: Path, rootpath: str, inipath: str | None) -> list[str]:
+    """The collection's rootdir and config file; an empty ini when it read none (R-B15)."""
+    if inipath is None:
+        empty = invocation / "pytest.ini"
+        empty.write_text("", encoding="utf-8")
+        inipath = str(empty)
+    return ["--rootdir", rootpath, "-c", inipath]
 
 
 def _launch(
@@ -121,7 +136,7 @@ def _launch(
     product_files: Sequence[str],
     deadline: Deadline,
     selector_timeout: float,
-    distribution: Sequence[str],
+    extra: Sequence[str],
 ) -> tuple[Finished, Path]:
     manifest_path = invocation / "manifest.json"
     files_path = invocation / "product-files.json"
@@ -130,7 +145,7 @@ def _launch(
     tmp.mkdir()
     argv = [
         str(env.python), "-P", "-m", "pytest", "-p", PROBE_MODULE,
-        *distribution, "-q", node_id,
+        *extra, "-q", node_id,
     ]  # fmt: skip
     variables = {
         PARENT_ENV: str(os.getpid()),

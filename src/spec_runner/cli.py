@@ -1,13 +1,14 @@
 """CLI commands and argument parsing for spec-runner."""
 
 import argparse
+import contextlib
 import json
 import math
 import shlex
 import signal
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -2747,7 +2748,36 @@ def _criteria_early_exit(parser: argparse.ArgumentParser, args: argparse.Namespa
         parser.error("verify --criteria requires --request PATH and --json")
     from .cli_info import criteria_root, run_verify_criteria
 
-    raise SystemExit(run_verify_criteria(args, criteria_root(args.project_root)))
+    with _exit_on_termination():
+        code = run_verify_criteria(args, criteria_root(args.project_root))
+    raise SystemExit(code)
+
+
+#: SIGTERM/SIGHUP become SystemExit(128 + signum) on the `--criteria` path (R-B17).
+_TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+@contextlib.contextmanager
+def _exit_on_termination() -> Iterator[None]:
+    """Turn SIGTERM/SIGHUP into SystemExit so every `finally` runs, then restore.
+
+    The default action kills the process at once: the product's pytest (its own
+    session) would outlive it and the temporary workspace would leak. Unwinding
+    instead reaches `run_bounded`'s group kill and the TemporaryDirectory cleanup.
+    A second signal during that cleanup is ignored.
+    """
+
+    def handle_termination(signum: int, frame: object) -> None:
+        for sig in _TERMINATION_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
+    previous = {sig: signal.signal(sig, handle_termination) for sig in _TERMINATION_SIGNALS}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def main(argv=None):  # untyped on purpose: its body predates mypy strict

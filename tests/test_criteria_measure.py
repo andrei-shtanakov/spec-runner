@@ -8,6 +8,7 @@ Every document produced here is validated against `response.schema.json`.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -83,6 +84,7 @@ def _inventory(xdist_active: bool = False) -> Inventory:
         xdist_active=xdist_active,
         excluded=EXCLUDED,
         non_function=("tests/test_a.py::TestX",),
+        rootpath="/collected/root",
     )
 
 
@@ -270,7 +272,7 @@ class TestAnswer:
         assert doc["content_sha256"] == expected
 
     def test_zero_tests_is_every_beh_no_test(self, pipeline: Pipeline) -> None:
-        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, (), ())
+        pipeline.inventory = Inventory((), (), None, ("pytest-9.0.2",), False, (), (), "/r")
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 0 and doc["beh"][0]["reason"] == "no-test" and not pipeline.runs
 
@@ -285,6 +287,18 @@ class TestRunArguments:
         pipeline.inventory = _inventory(xdist_active=active)
         pipeline.measure(_request("ABC:BEH-1"))
         assert pipeline.runs and all(list(c["distribution"]) == flags for c in pipeline.runs)
+
+    def test_runs_reuse_the_collections_config(self, pipeline: Pipeline) -> None:
+        """R-B15: every run gets the collection's rootdir and config file."""
+        pipeline.measure(_request("ABC:BEH-1"))
+        checkout = pipeline.workspaces[0] / "src"
+        assert pipeline.runs and all(c["rootpath"] == "/collected/root" for c in pipeline.runs)
+        assert all(c["inipath"] == str(checkout / "pyproject.toml") for c in pipeline.runs)
+
+    def test_no_collected_config_is_passed_as_none(self, pipeline: Pipeline) -> None:
+        pipeline.inventory = dataclasses.replace(_inventory(), inipath=None)
+        pipeline.measure(_request("ABC:BEH-1"))
+        assert pipeline.runs and all(c["inipath"] is None for c in pipeline.runs)
 
     def test_measured_bytes_body_lines_and_timeout(self, pipeline: Pipeline) -> None:
         pipeline.measure(_request("ABC:BEH-1"))
@@ -363,6 +377,7 @@ class TestErrors:
             False,
             (),
             (),
+            "/r",
         )
         code, doc = pipeline.measure(_request("ABC:BEH-1"))
         assert code == 3 and doc["error"]["kind"] == "product-roots-overlap-tests"

@@ -9,8 +9,11 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -203,13 +206,13 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _repo(root: Path) -> str:
+def _repo(root: Path, files: dict[str, str] = FILES) -> str:
     root.mkdir()
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
     _git(root, "remote", "add", "origin", "git@github.com:o/r.git")
-    for rel, text in FILES.items():
+    for rel, text in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
@@ -307,3 +310,147 @@ def test_end_to_end(tmp_path: Path, monkeypatch, capsys) -> None:
         assert item["definition"]["line"] == _definition_at(
             root, sha, item["definition"]["file"], qualname
         )
+
+
+def _request_for(sha: str, *ids: str) -> dict[str, object]:
+    return {
+        "protocol": 1,
+        "owner_repo": "o/r",
+        "workstream": "ws",
+        "code": "ENC",
+        "bundle_pin": "a" * 40,
+        "product_sha": sha,
+        "test_criteria": [{"id": i, "verify_task": False} for i in ids],
+    }
+
+
+def _locked_repo(root: Path, files: dict[str, str]) -> str:
+    try:
+        return _repo(root, files)
+    except subprocess.CalledProcessError as exc:
+        pytest.skip(f"uv cannot lock offline here: {exc}")
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="the product env needs CPython >= 3.12")
+def test_a_nested_pytest_ini_is_measured_with_the_collections_config(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """R-B15: collection reads no config; a run given `<node_id>` alone would find
+    tests/pytest.ini, root pytest at tests/ and collect nothing under the node id."""
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    root = tmp_path / "repo"
+    sha = _locked_repo(root, {**FILES, "tests/pytest.ini": "[pytest]\n"})
+    request_file = tmp_path / "request.json"
+    request_file.write_text(json.dumps(_request_for(sha, "ENC:BEH-01")))
+    code, out = _run(
+        ["verify", "--criteria", "--project-root", str(root), "--request", str(request_file),
+         "--json"],
+        capsys,
+    )  # fmt: skip
+    document = json.loads(out)
+    if document.get("error", {}).get("kind") == "environment-sync-failed":
+        pytest.skip(f"uv cannot provide the environment offline: {document['error']['detail']}")
+    assert code == 0, document
+    (beh,) = document["beh"]
+    assert (beh["status"], beh.get("reason")) == ("traced", None), beh
+    (selector,) = beh["selectors"]
+    assert [run["collected"] for run in selector["runs"]] == [["tests/test_a.py::test_traced"]] * 2
+
+
+def _gone(pid: int) -> bool:
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+SLEEPER = '''import os
+import time
+
+import pkg.mod
+
+
+def test_traced():
+    """ENC:BEH-01"""
+    with open({pid_file!r}, "w") as handle:
+        handle.write(str(os.getpid()))
+    time.sleep(300)
+    assert pkg.mod.work(1) == 2
+'''
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="the product env needs CPython >= 3.12")
+def test_sigterm_mid_run_kills_the_child_and_removes_the_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """R-B17: SIGTERM unwinds through run_bounded's kill and the TemporaryDirectory."""
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    pid_file = tmp_path / "child.pid"  # outside the checkout: the test writes it
+    root = tmp_path / "repo"
+    sha = _locked_repo(root, {**FILES, "tests/test_a.py": SLEEPER.format(pid_file=str(pid_file))})
+    request_file = tmp_path / "request.json"
+    request_file.write_text(json.dumps(_request_for(sha, "ENC:BEH-01")))
+    tmpdir = tmp_path / "tmp"  # the workspace's parent: TemporaryDirectory honours TMPDIR
+    tmpdir.mkdir()
+    argv = [sys.executable, "-m", "spec_runner", "verify", "--criteria"]
+    argv += ["--project-root", str(root), "--request", str(request_file), "--json"]
+    proc = subprocess.Popen(
+        argv, env={**os.environ, "TMPDIR": str(tmpdir)}, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True,
+    )  # fmt: skip
+    try:
+        deadline = time.monotonic() + 240
+        while not pid_file.exists() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if not pid_file.exists():
+            if proc.poll() is None:
+                raise AssertionError("the selector run never started")
+            out, _ = proc.communicate(timeout=30)
+            if b"environment-sync-failed" in out:
+                pytest.skip("uv cannot provide the environment offline")
+            raise AssertionError(f"the selector run never started: {out[-2000:]!r}")
+        time.sleep(0.5)  # the pid is written; the test now sleeps inside pytest
+        child = int(pid_file.read_text())
+        assert any(tmpdir.glob("spec-runner-criteria-*"))
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+    assert proc.returncode == 143, err[-2000:]
+    assert out == b""  # no document: the measurement was interrupted
+    assert _gone(child)
+    assert list(tmpdir.glob("spec-runner-criteria-*")) == []
+
+
+class TestTerminationSignals:
+    @pytest.mark.parametrize(("sig", "code"), [(signal.SIGTERM, 143), (signal.SIGHUP, 129)])
+    def test_a_signal_unwinds_as_system_exit_and_handlers_are_restored(
+        self, sig: signal.Signals, code: int
+    ) -> None:
+        from spec_runner import cli
+
+        before = signal.getsignal(sig)
+        unwound: list[bool] = []
+        with pytest.raises(SystemExit) as raised, cli._exit_on_termination():
+            try:
+                os.kill(os.getpid(), sig)
+                time.sleep(5)  # the handler interrupts this
+            finally:
+                unwound.append(True)
+        assert raised.value.code == code and unwound == [True]
+        assert signal.getsignal(sig) is before
+
+    def test_handlers_are_restored_after_a_normal_exit(self) -> None:
+        from spec_runner import cli
+
+        before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+        with cli._exit_on_termination():
+            assert signal.getsignal(signal.SIGTERM) is not before[signal.SIGTERM]
+        assert {s: signal.getsignal(s) for s in before} == before

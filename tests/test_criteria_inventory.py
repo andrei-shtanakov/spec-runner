@@ -232,7 +232,7 @@ class TestManifestToInventory:
             ]
             return _manifest(co, items=items)
 
-        run, *_ = fake(manifest)
+        run, _, checkout, _ = fake(manifest)
         inv = run()
         assert inv.items == (
             TestItem("tests/test_a.py::test_x", "tests/test_a.py", "test_x", 1),
@@ -245,6 +245,7 @@ class TestManifestToInventory:
             "tests/test_a.py",
         )
         assert inv.inipath == "pyproject.toml" and inv.plugins == ("pytest-9.1.1",)
+        assert inv.rootpath == str(checkout)  # R-B15: the runs reuse it
         assert inv.excluded == ()
         assert inv.non_function == ("pkg/mod.py::pkg.mod",)  # R20: counted, not dropped
 

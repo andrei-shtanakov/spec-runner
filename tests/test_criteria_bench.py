@@ -73,6 +73,8 @@ class Bench:
         self.probe_dir = deploy_probe(tmp_path / "probe")
         self.work = tmp_path / "work"
         self.tests = [p for p in files if p.endswith(".py") and p != "conftest.py"]
+        # What collection would read from the root (R-B15): the bench's only config file.
+        self.inipath = str(self.checkout / "pytest.ini") if "pytest.ini" in files else None
         self.measured = read_blobs(
             self.checkout, self.sha, [*self.product, "conftest.py", *self.tests], Deadline(60)
         )
@@ -84,6 +86,7 @@ class Bench:
         return run_selector(
             _env(), self.checkout, self.sha, self.probe_dir, self.work, node_id, self.product,
             self.measured, self.body_lines, Deadline(300), 120.0, distribution=distribution,
+            rootpath=str(self.checkout), inipath=self.inipath,
         )  # fmt: skip
 
     def runs(self, node_id: str, distribution: Sequence[str] = ()) -> list[dict[str, object]]:

@@ -92,6 +92,7 @@ class Inventory:
     xdist_active: bool  # xdist's own plugin is registered (not merely installed)
     excluded: tuple[Excluded, ...]
     non_function: tuple[str, ...]  # node ids of collected items that are not functions
+    rootpath: str  # pytest's rootdir (absolute): every run reuses it with `inipath` (R-B15)
 
 
 def deploy_probe(into: Path) -> Path:
@@ -258,6 +259,7 @@ def _inventory(manifest: dict[str, Any], checkout: Path, sha: str, deadline: Dea
         xdist_active=manifest["xdist_active"],
         excluded=_excluded(manifest["excluded"], checkout, tracked),
         non_function=tuple(sorted(non_function)),
+        rootpath=manifest["rootpath"],
     )
 
 

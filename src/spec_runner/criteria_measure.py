@@ -136,12 +136,16 @@ def _measure(
     body_lines = product_body_lines(files, blobs)  # once, before any run (R-B11)
     measured = {p: blobs[p] for p in (*files, *inventory.test_files)}
     distribution = distribution_args(inventory.xdist_active)
+    # R-B15: a run passes a node id where collection passed nothing, so pytest could
+    # resolve another config (tests/pytest.ini) and root — every run reuses collection's.
+    inipath = None if inventory.inipath is None else str(checkout / inventory.inipath)
 
     def run(node_id: str) -> Document:
         deadline.check()  # an exhausted budget between runs is TIMEOUT, never a partial beh
         return run_selector(
             env, checkout, sha, probe_dir, work, node_id, files, measured, body_lines,
             deadline, selector_timeout, distribution=distribution,
+            rootpath=inventory.rootpath, inipath=inipath,
         )  # fmt: skip
 
     selectors = _run_selectors(chosen, inventory.items, run)
