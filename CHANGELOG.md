@@ -60,6 +60,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
   now reads as "cannot be parsed" (a warning in `validate`, a terminal
   INSTRUMENT refusal at the gate) instead of a traceback.
 
+- **B2a carry-overs for `verify --criteria`** (#603). xdist flags (`-n 0 --dist no`)
+  now come from the registered plugin and the collection pass carries none — a
+  product with `-p no:xdist` was unmeasurable; a process that cannot be launched
+  is an ordinary non-zero result (so it becomes an error document, not a
+  traceback); captured process output keeps its last 1 MiB; a `./:(top)`-style
+  product root is refused as git pathspec magic; `criteria:` is a known config
+  key (no `validate` warning, no mixed-shape error beside `executor:`).
+
 ### Added
 
 - **`criteria-closure/v1` contract and the measurement's pre-run stages** (#603 B2a).
@@ -76,6 +84,30 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `criteria_tokens.owned_definitions` — every function and method with the
   qualified criterion tokens (`CODE:(BEH|AC)-NN`) it owns. devtools vendors them for parser parity before
   `verify --criteria` (slice B2).
+
+- **`spec-runner verify --criteria --request <file.json> --json`** (#603 B2b).
+  Measures criteria closure per `criteria-closure/v1` (schemas in
+  `schemas/criteria-closure/v1/`): clones the product at `product_sha`, syncs its
+  declared environment, collects, selects the tests that own each BEH, and runs
+  each selector twice in a fresh pytest process with a `sys.monitoring` probe
+  that records which declared product files the call phase executed. Exactly one
+  JSON document goes to stdout on every path. Exit 0 is an answer; 2 is a
+  retryable step failure (machine, network, timeout); 3 is a blocked property of
+  the product. `--selector-timeout SECONDS` (default 300) bounds one pytest run,
+  `--timeout SECONDS` (default 3600) the whole measurement. The root is
+  `--project-root`, else the cwd's git toplevel. Product environments need
+  CPython >= 3.12; the orchestrator itself must be able to parse the product's
+  files (otherwise `unsupported-runtime`). A new required workflow,
+  `.github/workflows/criteria-probe.yml`, runs the bench under CPython 3.12.
+  Named boundaries:
+  - `multiprocessing` with `spawn`/`forkserver` raises none of the audited
+    process-operation events, so such a test reads `no-product-execution`
+    rather than `subprocess-only`.
+  - `environment` appears in an error document only once a collect manifest
+    exists; a collection failure without a manifest carries none.
+  - `UV_CONFIG_FILE` from the parent environment still reaches uv.
+  - A product file the orchestrator's Python cannot parse is
+    `unsupported-runtime` (exit 2), e.g. PEP 695 syntax on a 3.11 orchestrator.
 
 ## [4.4.0] - 2026-09-29
 

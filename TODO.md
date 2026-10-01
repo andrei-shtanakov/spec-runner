@@ -625,6 +625,8 @@
             несёт `definition` по правилу `test_items` (`null`, если не резолвится).
             Схемы v1 замораживаются — старт B2a Task 2.
       - [x] B2a — contract, workspace, inventory, selection (plan `docs/superpowers/plans/2026-09-29-criteria-closure-b2a-contract-and-inventory.md`; branch `feat/603-b2a-contract-inventory`)
+      - [x] B2b — probe run mode, isolated runs, aggregation, `verify --criteria` (plan `docs/superpowers/plans/2026-09-29-criteria-closure-b2b-runs-and-command.md`; branch `feat/603-b2b-runs-command`)
+            Дальше: релиз X (`schemas/criteria-closure/v1/min-spec-runner.env` — отдельный release PR) и комментарий в devtools#491 / `criteria-closure-v1-signoff`; пункт B2 закрывается релизом.
       **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
       решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
