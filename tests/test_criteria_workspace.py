@@ -997,9 +997,14 @@ class TestRemoveTree:
     def test_plain_rmtree_fails_here(self, tmp_path: Path) -> None:
         root = tmp_path / "w"
         locked = _read_only_tree(root)
-        with pytest.raises(PermissionError):
-            shutil.rmtree(root)
-        locked.chmod(0o700)
+        try:
+            with pytest.raises(PermissionError):
+                shutil.rmtree(root)
+        finally:
+            # Restore what pytest's own tmp cleanup needs, or every session
+            # leaves an undeletable `garbage-*` tree and warns about it.
+            locked.chmod(0o700)
+            (locked / "inner").chmod(0o700)
 
     def test_read_only_directories_are_removed(self, tmp_path: Path) -> None:
         root = tmp_path / "w"
