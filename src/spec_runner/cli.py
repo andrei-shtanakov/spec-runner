@@ -335,6 +335,7 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     # existing merge stage reads config.main_branch, so main is untouched.
     config.main_branch = run.branch
     config.integration_branch_active = True
+    config.integration_base = run.base
     return run
 
 
@@ -806,8 +807,13 @@ def _print_mismatch_recovery(config: ExecutorConfig, detail: str, task_ids: Sequ
     know which checkout produced the disagreement — the "done" mark usually
     sits on a task branch that was never merged — and what to do next.
     """
-    branch = current_branch(config)
-    where = f"on branch '{branch}'" if branch else "in the working tree"
+    if config.integration_branch_active and config.integration_base:
+        # The per-run branch is removed at exit when it holds no commit, so
+        # name the checkout it was forked from — the one still there.
+        where = f"on this run's integration branch, forked from '{config.integration_base}'"
+    else:
+        branch = current_branch(config)
+        where = f"on branch '{branch}'" if branch else "in the working tree"
     print(f"⛔ State/spec mismatch: {detail}", file=sys.stderr)
     print(f"   tasks.md was read {where}.", file=sys.stderr)
     for line in (
@@ -1678,6 +1684,15 @@ def cmd_retry(args, config: ExecutorConfig):
             logger.error("Task not found", task_id=args.task_id)
             return
 
+        # A retry is a run of one task, and under `integration_pr` it has to
+        # behave like one (#254): fork the integration branch, collect the work
+        # on it, push it and open the PR. Without this the merge stage now
+        # refuses (correctly) and the finished work would sit on a task branch
+        # with nobody told what to do next. Forked before any state is reset:
+        # the fork may now refuse, and a refused retry must not have zeroed the
+        # consecutive-failure brake (local review of the 2026-09-30 fix).
+        integration = _maybe_start_integration(args, config)
+
         task_state = state.get_task_state(task.id)
 
         # Handle --fresh flag
@@ -1702,12 +1717,6 @@ def cmd_retry(args, config: ExecutorConfig):
 
         logger.info("Retrying task", task_id=task.id)
 
-        # A retry is a run of one task, and under `integration_pr` it has to
-        # behave like one (#254): fork the integration branch, collect the work
-        # on it, push it and open the PR. Without this the merge stage now
-        # refuses (correctly) and the finished work would sit on a task branch
-        # with nobody told what to do next.
-        integration = _maybe_start_integration(args, config)
         try:
             # Execute single attempt (not run_with_retries which has max_retries limit)
             success = execute_task(task, config, state)

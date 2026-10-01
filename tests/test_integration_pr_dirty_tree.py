@@ -172,12 +172,12 @@ class TestRescueBeforeTheFork:
         assert "integration_pr" in capsys.readouterr().err
 
 
-class TestAllowDirtySpecKeepsItsMeaning:
-    """Local review of this fix: the run-level rescue must not stash the spec
-    the operator authorised with `--allow-dirty-spec`, or the run would execute
-    the committed task list instead of the one asked for."""
+class TestTheForkLeavesTheSpecAlone:
+    """Local review of this fix: the fork's rescue must not stash the spec the
+    operator authorised with `--allow-dirty-spec`. Scope: the fork only — each
+    task's branch stage still rescues and resets the whole tree (#231)."""
 
-    def test_an_authorised_dirty_spec_is_carried_into_the_run(self, repo: Path) -> None:
+    def test_an_authorised_dirty_spec_survives_the_fork(self, repo: Path) -> None:
         _git(repo, "checkout", "-q", "--", ".")
         (repo / "scratch.txt").unlink()
         _git(repo, "checkout", "-q", "master")
@@ -386,3 +386,55 @@ class TestTimeoutSaysRaiseTheLimit:
         execution._report_timeout(30, "TASK-002")
 
         assert any("--timeout" in line and "30" in line for line in lines)
+
+
+class TestUnderIntegrationTheMessageNamesTheBase:
+    def test_the_stop_names_the_base_not_the_branch_removed_at_exit(
+        self,
+        repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _git(repo, "checkout", "-q", "--", ".")
+        (repo / "scratch.txt").unlink()
+        cfg = _config(repo)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", success=True, duration=1.0)
+        monkeypatch.setattr(cli_mod, "run_with_retries", lambda *a: pytest.fail("ran"))
+
+        with pytest.raises(SystemExit):
+            _run_tasks(_run_args(), cfg)
+
+        err = capsys.readouterr().err
+        tail = err[err.index("⛔ State/spec mismatch") :].splitlines()
+        stop = "\n".join([tail[0], *[line for line in tail[1:] if line.startswith("   ")]])
+        assert "forked from 'master'" in stop
+        assert "spec-runner/run-" not in stop
+        # The empty per-run branch is gone, as the message anticipates.
+        assert _git(repo, "branch", "--list", "spec-runner/run-*") == ""
+
+
+class TestARefusedRetryTouchesNoState:
+    def test_the_failure_brake_survives_a_refused_retry(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _git(repo, "checkout", "-q", "--", ".")
+        (repo / "scratch.txt").unlink()
+        cfg = _config(repo)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", success=False, duration=1.0, error="boom")
+            state.get_task_state("TASK-001").status = "failed"
+            state.consecutive_failures = 3
+            state._save()
+        monkeypatch.setattr(cli_mod, "create_integration_branch", lambda config, name: None)
+        monkeypatch.setattr(cli_mod, "execute_task", lambda *a: pytest.fail("executed"))
+
+        with pytest.raises(SystemExit) as exc:
+            cli_mod.cmd_retry(
+                argparse.Namespace(task_id="TASK-001", fresh=False, allow_dirty_spec=False), cfg
+            )
+
+        assert exc.value.code == 1
+        with ExecutorState(cfg) as state:
+            assert state.consecutive_failures == 3
+            assert state.get_task_state("TASK-001").status == "failed"

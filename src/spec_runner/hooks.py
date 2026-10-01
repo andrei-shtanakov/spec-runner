@@ -131,11 +131,11 @@ def rescue_run_uncommitted(config: ExecutorConfig) -> tuple[bool, str]:
     from .git_ops import spec_contract_paths
 
     # The spec and config files are not stray work: the dirty-spec guard has
-    # already refused them, unless `--allow-dirty-spec` authorised running
-    # them as they are — and stashing them would then silently run the
-    # committed task list instead (local review of this fix). Left in place,
-    # the fork's checkout either carries them over or refuses, and a refusal
-    # stops the run.
+    # already refused them, unless `--allow-dirty-spec` authorised them. The
+    # fork leaves them in place — its checkout carries them over or refuses,
+    # and a refusal stops the run. That is all this guarantees: each task's
+    # own branch stage still rescues and resets the whole tree (#231), the
+    # spec included, as it did before integration_pr was involved.
     return _rescue_uncommitted(
         config, owner="run", task_id=None, exclude=spec_contract_paths(config)
     )
