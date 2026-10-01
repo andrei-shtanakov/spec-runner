@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from .config import (
     ExecutorConfig,
@@ -602,9 +603,38 @@ def cmd_validate(args: argparse.Namespace, config: ExecutorConfig) -> None:
         sys.exit(1)
 
 
+def run_verify_criteria(args: argparse.Namespace, project_root: Path) -> int:
+    """`verify --criteria` (#603): print the one response document, return the exit code."""
+    import json
+
+    from . import __version__
+    from .criteria_measure import measure, request_invalid
+
+    version = __version__
+    try:
+        data = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        code, document = request_invalid(
+            f"cannot read the request {args.request}: {exc}", version=version
+        )
+    else:
+        code, document = measure(
+            project_root,
+            data,
+            selector_timeout=args.selector_timeout,
+            timeout=args.criteria_timeout,
+            version=version,
+        )
+    print(json.dumps(document))
+    return code
+
+
 def cmd_verify(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Verify post-execution compliance against spec."""
     from .verify import format_verify_json, format_verify_text, verify_all
+
+    if getattr(args, "criteria", False):
+        sys.exit(run_verify_criteria(args, config.project_root))
 
     task_id = getattr(args, "task", None)
     strict = getattr(args, "strict", False)

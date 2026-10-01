@@ -2009,16 +2009,18 @@ class _CommonDefaultsParser(argparse.ArgumentParser):
         return parsed
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level argument parser.
+def _common_parser(*, task_timeout: bool = True) -> argparse.ArgumentParser:
+    """The options shared by every subcommand.
 
-    Extracted from main() to allow programmatic use and testing.
+    `verify --criteria` takes its own `--timeout` (seconds of the whole measurement), so
+    its parent is built without the task-minutes one.
     """
     # Shared options available to every subcommand. SUPPRESS defaults — see
     # _CommonDefaultsParser; real defaults live in _COMMON_DEFAULTS.
     common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     common.add_argument("--max-retries", type=int, help="Max retries per task (default: 3)")
-    common.add_argument("--timeout", type=int, help="Task timeout in minutes (default: 30)")
+    if task_timeout:
+        common.add_argument("--timeout", type=int, help="Task timeout in minutes (default: 30)")
     common.add_argument("--no-tests", action="store_true", help="Skip tests on task completion")
     common.add_argument("--no-branch", action="store_true", help="Skip git branch creation")
     common.add_argument("--no-commit", action="store_true", help="Skip auto-commit on success")
@@ -2070,6 +2072,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Per-task budget in USD (block task when exceeded)",
     )
+    return common
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Extracted from main() to allow programmatic use and testing.
+    """
+    common = _common_parser()
+    verify_common = _common_parser(task_timeout=False)
     # Drift guard: with SUPPRESS defaults, a common option missing from
     # _COMMON_DEFAULTS would silently vanish from the namespace and surface
     # later as an AttributeError. Fail at parser-build time instead.
@@ -2256,7 +2268,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # verify
     verify_parser = subparsers.add_parser(
-        "verify", parents=[common], help="Verify post-execution compliance"
+        "verify", parents=[verify_common], help="Verify post-execution compliance"
     )
     verify_parser.add_argument("--task", "-t", help="Verify specific task ID")
     verify_parser.add_argument(
@@ -2264,6 +2276,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument(
         "--strict", action="store_true", help="Fail on warnings (missing traceability)"
+    )
+    verify_parser.add_argument(
+        "--criteria",
+        action="store_true",
+        help="Measure criteria closure (criteria-closure/v1): needs --request and --json; "
+        "prints exactly one JSON document, exit 0 on an answer, 2/3 on an error document",
+    )
+    verify_parser.add_argument(
+        "--request", metavar="PATH", help="With --criteria: the request JSON file"
+    )
+    verify_parser.add_argument(
+        "--selector-timeout",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="With --criteria: bound of one pytest run (default 300)",
+    )
+    verify_parser.add_argument(
+        "--timeout",
+        dest="criteria_timeout",
+        type=float,
+        default=3600.0,
+        metavar="SECONDS",
+        help="With --criteria: the whole measurement's deadline (default 3600)",
     )
 
     # preflight (read-only readiness diagnostics, #142a)
@@ -2688,13 +2724,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def _criteria_early_exit(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """`verify --criteria` (#603) needs only the measured repo, never its spec-runner config.
+
+    Runs before config loading and startup checks: stdout must carry exactly one JSON
+    document on every path, and a missing or broken config must not prevent it.
+    """
+    if not (args.request and args.json_output):
+        parser.error("verify --criteria requires --request PATH and --json")
+    from .cli_info import run_verify_criteria
+
+    root = Path(args.project_root) if args.project_root else Path.cwd()
+    raise SystemExit(run_verify_criteria(args, root.resolve()))
+
+
+def main(argv=None):  # untyped on purpose: its body predates mypy strict
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
         return
+
+    if args.command == "verify" and args.criteria:
+        _criteria_early_exit(parser, args)
 
     # Load config from YAML file, then override with CLI args. Resolve the
     # path once — _resolve_config_path() prints a deprecation warning for the

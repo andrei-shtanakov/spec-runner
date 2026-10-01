@@ -22,7 +22,13 @@ from spec_runner.criteria_config import (
     read_product_criteria,
     resolve_roots,
 )
-from spec_runner.criteria_contract import PROTOCOL, CriteriaError, Request, parse_request
+from spec_runner.criteria_contract import (
+    PROTOCOL,
+    CriteriaError,
+    ErrorKind,
+    Request,
+    parse_request,
+)
 from spec_runner.criteria_inventory import (
     PLUGINS_ESTABLISHED,
     Excluded,
@@ -68,10 +74,22 @@ def measure(
                 project_root, request, Path(tmp), deadline, selector_timeout, established
             )
     except CriteriaError as exc:
-        extra = {k: v for k, v in exc.established.items() if k != PLUGINS_ESTABLISHED}
-        error = {"kind": exc.kind.value, "retryable": exc.kind.retryable, "detail": exc.detail}
-        return exc.kind.exit_code, {**head, "error": error, **extra, **established}
+        return _error_document(exc, head, established)
     return 0, {**head, **established, "beh": beh}
+
+
+def request_invalid(detail: str, *, version: str) -> tuple[int, Document]:
+    """The error document for a request that could not even be read (no `request` echo)."""
+    exc = CriteriaError(ErrorKind.REQUEST_INVALID, detail)
+    return _error_document(exc, {"protocol": PROTOCOL, "spec_runner_version": version}, {})
+
+
+def _error_document(
+    exc: CriteriaError, head: Document, established: Document
+) -> tuple[int, Document]:
+    extra = {k: v for k, v in exc.established.items() if k != PLUGINS_ESTABLISHED}
+    error = {"kind": exc.kind.value, "retryable": exc.kind.retryable, "detail": exc.detail}
+    return exc.kind.exit_code, {**head, "error": error, **extra, **established}
 
 
 def _measure(
