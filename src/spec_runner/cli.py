@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import NoReturn
 from uuid import uuid4
 
+from . import halt_gate  # noqa: E402
+
 # Re-exports from submodules for backward compatibility
 from .cli_info import (  # noqa: E402, F401
     cmd_audit,
@@ -285,6 +287,24 @@ def spec_run_gate_ok(config: ExecutorConfig) -> tuple[bool, str]:
     )
 
 
+def _enforce_halt(config: ExecutorConfig) -> None:
+    """Refuse NEW work while the DarkFactory halt is on — opt-in (D2b).
+
+    Only with ``DARKFACTORY_HALT_CHECK=1``: spec-runner runs outside
+    DarkFactory too, where there is no halt and maybe no ``gh``. Exit 6 when
+    the halt is in force, 2 when it could not be read (retry fits) — the
+    codes devtools ``merge-pr.sh`` uses.
+    """
+    if not halt_gate.enabled():
+        return
+    admit, code, reason = halt_gate.check(config.project_root)
+    if admit:
+        return
+    logger.error("Refusing to run: DarkFactory halt", code=code, reason=reason)
+    print(f"⛔ DarkFactory halt ({code}): {reason}", file=sys.stderr)
+    sys.exit(halt_gate.EXIT_UNREAD if code == "refuse_unknown" else halt_gate.EXIT_HALTED)
+
+
 def _enforce_spec_governance(config: ExecutorConfig) -> None:
     """Refuse the run when the governance gate blocks it — fail-closed (#134).
 
@@ -389,6 +409,7 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
     # The guards answer before anything touches the tree. The integration
     # fork used to come first, so its checkout (and now its rescue stash) ran
     # ahead of the dirty-spec and tracked-state refusals.
+    _enforce_halt(config)
     _enforce_spec_governance(config)
     _enforce_clean_spec(args, config)
     _enforce_untracked_state(config)
@@ -1668,6 +1689,7 @@ def cmd_retry(args, config: ExecutorConfig):
     """Retry failed task, preserving error context from previous attempts."""
     # Spec governance gate — must run before any task execution/lock so a
     # blocked retry has zero side effects (same bypass class as `watch`).
+    _enforce_halt(config)
     _enforce_spec_governance(config)
 
     # Dirty-spec guard (#69) — retry executes tasks and runs the git
@@ -1748,6 +1770,7 @@ def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
     # branch, before pre-run validation, before any lock/stop-file handling)
     # so a blocked watch has zero side effects. `run` gates via `_run_tasks`;
     # `watch` has its own loop and previously bypassed the gate entirely.
+    _enforce_halt(config)
     _enforce_spec_governance(config)
 
     # Dirty-spec guard (#69) — same enforcement as `run`, checked once
