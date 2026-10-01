@@ -589,7 +589,7 @@
 #147/#148), #136 (PR #144), #137 (PR #145, с явным перечислением четырёх несделанных
 сопутствующих пунктов в теле ответа). Открытыми остаются #138, #139, #140, #141, #142.
 
-- [ ] **criteria-closure-verify** (inbox spec-runner#603, from devtools — DarkFactory E) @owner:github:andrei-shtanakov @id:criteria-closure-verify @epic:eco.spec-toolchain
+- [x] **criteria-closure-verify** (inbox spec-runner#603, from devtools — DarkFactory E) @owner:github:andrei-shtanakov @id:criteria-closure-verify @epic:eco.spec-toolchain
       `spec-runner verify --criteria --request <file.json> --json` по контракту
       `criteria-closure/v1` (производитель — spec-runner, devtools вендорит):
       квалифицированный токен `CODE:BEH-NN` в `scenarios.py` (засчитывается
@@ -627,6 +627,9 @@
       - [x] B2a — contract, workspace, inventory, selection (plan `docs/superpowers/plans/2026-09-29-criteria-closure-b2a-contract-and-inventory.md`; branch `feat/603-b2a-contract-inventory`)
       - [x] B2b — probe run mode, isolated runs, aggregation, `verify --criteria` (plan `docs/superpowers/plans/2026-09-29-criteria-closure-b2b-runs-and-command.md`; branch `feat/603-b2b-runs-command`)
             Релиз X = 4.5.0 (`schemas/criteria-closure/v1/min-spec-runner.env`, release PR `release/v4.5.0`); версия и ссылка на релиз — в devtools#491.
+      **Сделано 2026-10-01:** выпущено в **4.5.0** (тег `v4.5.0` → `1de715c`, #633;
+      B2a #627, B2b #630); проверено из `uv tool` (traced / no-test / request-invalid);
+      версия и ссылка — devtools#491; #603 закрыт.
       **Дизайн 2026-09-29:** rev 2 (PR #610) — против нормы на `b7edcca` (rev 10),
       решения владельца; §8 rev 1 закрыт. Срез A влит PR #612 (приём
       `ENC:BEH-03`, AST-владение). Для B: G0 через `-p`-плагин `sys.monitoring`
