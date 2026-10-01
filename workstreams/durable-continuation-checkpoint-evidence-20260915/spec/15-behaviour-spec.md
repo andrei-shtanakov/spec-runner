@@ -1,6 +1,6 @@
 ---
 spec_stage: behaviour-spec
-status: approval_pending
+status: approved
 owner_role: product
 traces_to:
 - requirements
@@ -9,7 +9,7 @@ upstream_hashes:
 version: 3
 approved_content_hash: c2c4a3328e49df2607007af71e708930ee3979e1
 approved_by: andrei-shtanakov
-approved_at: '2026-09-20T15:29:55Z'
+approved_at: '2026-10-01T17:33:25Z'
 ---
 
 # Behaviour spec — Durable continuation checkpoint и evidence для run/call/attempt (spec-runner#480)
