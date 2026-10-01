@@ -399,15 +399,31 @@ class TestProductBodyLines:
         assert raised.value.kind.exit_code == 3
         assert "pkg/new.py" in raised.value.detail
 
-    def test_the_comparison_reads_the_orchestrators_version(self, monkeypatch) -> None:
-        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 11))
+    @pytest.mark.parametrize(
+        ("ours", "product", "kind"),
+        [
+            ((3, 11, 9), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 12, 0), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),  # micro counts
+            ((3, 12, 12), "3.12.13", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 12, 13), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 12, 14), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 13, 0), "3.12.13", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 12, 13), "3.13.0rc1", ErrorKind.UNSUPPORTED_RUNTIME),  # micro: leading digits
+            ((3, 13, 0), "3.13.0rc1", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 13, 0), "3.13.1a1", ErrorKind.UNSUPPORTED_RUNTIME),
+            ((3, 11, 9), "3.12", ErrorKind.UNSUPPORTED_RUNTIME),  # no micro: compared as .0
+            ((3, 12, 0), "3.12", ErrorKind.PRODUCT_ROOTS_INVALID),
+            ((3, 11, 9), "unknown", ErrorKind.PRODUCT_ROOTS_INVALID),  # unparseable: ours
+        ],
+    )
+    def test_the_comparison_reads_the_orchestrators_full_version(
+        self, monkeypatch, ours: tuple[int, int, int], product: str, kind: ErrorKind
+    ) -> None:
+        """R-B16 refined: (major, minor, micro) — 3.12.0 is older than 3.12.13."""
+        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: ours)
         with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
-        assert raised.value.kind is ErrorKind.UNSUPPORTED_RUNTIME
-        monkeypatch.setattr(criteria_run, "_orchestrator_version", lambda: (3, 12))
-        with pytest.raises(CriteriaError) as raised:
-            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version="3.12.13")
-        assert raised.value.kind is ErrorKind.PRODUCT_ROOTS_INVALID
+            product_body_lines(["pkg/new.py"], UNPARSEABLE, product_version=product)
+        assert raised.value.kind is kind
 
     @pytest.mark.parametrize(
         ("version", "kind"),

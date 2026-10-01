@@ -60,7 +60,8 @@ def product_body_lines(
     A committed product file this interpreter cannot parse (R-B16, refining R-B11) is
     UNSUPPORTED_RUNTIME only when the orchestrator's Python is older than the product
     environment's (`product_version`, e.g. "3.12.13" — its grammar may be beyond ours,
-    PEP 695 under 3.11); otherwise the file is the product's own fault:
+    PEP 695 under 3.11), compared as (major, minor, micro) so 3.12.0 is older than
+    3.12.13; otherwise the file is the product's own fault:
     PRODUCT_ROOTS_INVALID. Either detail names the file and both versions.
     """
     lines: dict[str, frozenset[int]] = {}
@@ -73,7 +74,7 @@ def product_body_lines(
 
 
 def _unparseable(path: str, product_version: str, exc: BaseException) -> CriteriaError:
-    product = _major_minor(product_version)
+    product = _version_triple(product_version)
     older = product is not None and _orchestrator_version() < product
     kind = ErrorKind.UNSUPPORTED_RUNTIME if older else ErrorKind.PRODUCT_ROOTS_INVALID
     return CriteriaError(
@@ -84,14 +85,20 @@ def _unparseable(path: str, product_version: str, exc: BaseException) -> Criteri
     )
 
 
-def _orchestrator_version() -> tuple[int, int]:
-    return sys.version_info[0], sys.version_info[1]
+def _orchestrator_version() -> tuple[int, int, int]:
+    return sys.version_info[0], sys.version_info[1], sys.version_info[2]
 
 
-def _major_minor(version: str) -> tuple[int, int] | None:
-    """`(major, minor)` of a version like "3.12.13"; None when it does not start so."""
-    match = re.match(r"(\d+)\.(\d+)", version)
-    return None if match is None else (int(match[1]), int(match[2]))
+def _version_triple(version: str) -> tuple[int, int, int] | None:
+    """`(major, minor, micro)` of "3.12.13" / "3.13.0rc1" (micro = its leading digits).
+
+    A missing micro ("3.12") reads as 0; None when the version does not start with
+    `major.minor` — the caller then blames the product, as before.
+    """
+    match = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", version)
+    if match is None:
+        return None
+    return int(match[1]), int(match[2]), int(match[3] or 0)
 
 
 def run_selector(

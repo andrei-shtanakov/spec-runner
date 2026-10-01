@@ -31,6 +31,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `--reruns 0` (measured on 16.7); the probe refuses any run in which it
   observes a rerun, so such a selector is `error` (reason `runner`), never
   `traced`. No response-schema change.
+- **`verify --criteria`: R-B16 compares the micro version too.** A product file
+  the orchestrator cannot parse is `unsupported-runtime` when the orchestrator's
+  Python is older by (major, minor, micro) — 3.12.0 against a 3.12.13 product
+  environment now counts as older — and `product-roots-invalid` otherwise. The
+  product's micro is read from its leading digits (`3.13.0rc1` → 0).
 
 ## [4.5.0] - 2026-10-01
 

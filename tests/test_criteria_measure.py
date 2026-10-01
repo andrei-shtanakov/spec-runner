@@ -430,13 +430,17 @@ class TestErrors:
 
     @pytest.mark.parametrize(
         ("orchestrator", "code", "kind"),
-        [((3, 11), 2, "unsupported-runtime"), ((3, 12), 3, "product-roots-invalid")],
+        [
+            ((3, 11, 9), 2, "unsupported-runtime"),
+            ((3, 12, 0), 2, "unsupported-runtime"),  # micro counts: older than 3.12.13
+            ((3, 12, 13), 3, "product-roots-invalid"),
+        ],
     )
     def test_an_unparseable_product_file_by_version(
         self,
         pipeline: Pipeline,
         monkeypatch: pytest.MonkeyPatch,
-        orchestrator: tuple[int, int],
+        orchestrator: tuple[int, int, int],
         code: int,
         kind: str,
     ) -> None:
