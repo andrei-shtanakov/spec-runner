@@ -1062,6 +1062,7 @@ KNOWN_EXECUTOR_KEYS: set[str] = set(ExecutorConfig.__dataclass_fields__.keys()) 
     "commands",
     "paths",
     "durability",
+    "criteria",  # product-side: read by `verify --criteria`, never an ExecutorConfig field
 }
 
 
@@ -1081,7 +1082,7 @@ def discarded_top_level_keys(data: dict) -> list[str]:
     """
     if "executor" not in data:
         return []
-    return sorted(k for k in data if k != "executor" and k in KNOWN_EXECUTOR_KEYS)
+    return sorted(k for k in data if k not in ("executor", "criteria") and k in KNOWN_EXECUTOR_KEYS)
 
 
 def mixed_shape_error(config_path: Path | None, data: dict) -> str | None:

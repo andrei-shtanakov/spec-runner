@@ -40,7 +40,6 @@ from spec_runner.criteria_workspace import (
     Environment,
     changed_since,
     child_env,
-    distribution_args,
     reset_checkout,
     tracked_files,
 )
@@ -160,7 +159,7 @@ def _run_probe(
     tmp.mkdir()
     argv = [
         str(env.python), "-P", "-m", "pytest", "-p", PROBE_MODULE,
-        *distribution_args(env), "--collect-only", "-q",
+        "--collect-only", "-q",
     ]  # fmt: skip
     variables = {
         PARENT_ENV: str(os.getpid()),

@@ -196,10 +196,11 @@ class TestInvocation:
         assert Path(env["TMPDIR"]).is_relative_to(tmp_path / "work")
         assert env["TMPDIR"] != second["env"]["TMPDIR"]
 
-    def test_xdist_is_kept_in_process(self, fake) -> None:
+    def test_collect_carries_no_distribution_flags(self, fake) -> None:
         run, runner, _, _ = fake(lambda co: _manifest(co), has_xdist=True)
         run()
-        assert runner.calls[0]["argv"][6:] == ["-n", "0", "--dist", "no", "--collect-only", "-q"]
+        assert runner.calls[0]["argv"][6:] == ["--collect-only", "-q"]
+        assert "-n" not in runner.calls[0]["argv"]
 
 
 class TestManifestToInventory:
@@ -776,3 +777,38 @@ class TestRealExclusions:
                 ("tests/helpers.py", "Base.test_inherited", 2),
             ),
         )
+
+
+@pytest.fixture(scope="module")
+def xdist_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Environment]:
+    """A product environment whose lock carries pytest-xdist (offline, from the uv cache)."""
+    root = tmp_path_factory.mktemp("xdistproject")
+    pyproject = ENV_PYPROJECT.replace('test = ["pytest"]', 'test = ["pytest", "pytest-xdist"]')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("UV_OFFLINE", "1")
+        _repo(root, {"pyproject.toml": pyproject})
+        subprocess.run(["uv", "lock", "-q", "--offline"], cwd=root, check=True)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "lock")
+        sha = _git(root, "rev-parse", "HEAD")
+        criteria = ProductCriteria(("p",), ("test",), ())
+        yield sync_environment(root, sha, tmp_path_factory.mktemp("env"), criteria, Deadline(300))
+
+
+@pytest.mark.slow
+class TestRealXdistOptOut:
+    @pytest.mark.parametrize("addopts", ["-p no:xdist", "-n 2"])
+    def test_collects_whatever_the_product_does_with_xdist(
+        self, xdist_env, tmp_path, addopts
+    ) -> None:
+        files = {
+            **REAL_BASE,
+            "pyproject.toml": (
+                f"[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = '{addopts}'\n"
+            ),
+        }
+        inv = _real(xdist_env, tmp_path, files)
+        assert "tests/test_a.py::test_p[1]" in {i.node_id for i in inv.items}
+        # measured: the distribution is listed even under `-p no:xdist` (its looponfail
+        # entry point still registers), so the plugin list alone cannot say "xdist is off"
+        assert any(name.startswith("pytest-xdist-") for name in inv.plugins)

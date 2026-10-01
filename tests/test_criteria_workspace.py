@@ -438,9 +438,18 @@ def _environment(**overrides: Any) -> Environment:
 
 
 class TestEnvironment:
-    def test_distribution_args(self) -> None:
-        assert distribution_args(_environment(has_xdist=True)) == ["-n", "0", "--dist", "no"]
-        assert distribution_args(_environment(has_xdist=False)) == []
+    @pytest.mark.parametrize(
+        ("plugins", "expected"),
+        [
+            (["pytest-9.0.0", "pytest-xdist-3.6.1"], ["-n", "0", "--dist", "no"]),
+            (["pytest-9.0.0"], []),
+            ([], []),
+            (["pytest-xdistx-1"], []),
+            (["xpytest-xdist-3"], []),
+        ],
+    )
+    def test_distribution_args(self, plugins: list[str], expected: list[str]) -> None:
+        assert distribution_args(plugins) == expected
 
     def test_label(self) -> None:
         assert _environment().label == "CPython 3.12.13"

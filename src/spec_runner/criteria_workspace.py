@@ -127,7 +127,11 @@ def _git_ok(cwd: Path, args: Sequence[str], deadline: Deadline, kind: ErrorKind)
 
 
 def _in_checkout(
-    checkout: Path, args: Sequence[str], deadline: Deadline, stdin: bytes | None = None
+    checkout: Path,
+    args: Sequence[str],
+    deadline: Deadline,
+    stdin: bytes | None = None,
+    max_output: int | None = criteria_process.DEFAULT_MAX_OUTPUT,
 ) -> Finished:
     """git aimed explicitly at the checkout (`checkout_git`), CLONE_FAILED on any failure."""
     done = criteria_process.run_bounded(
@@ -137,6 +141,7 @@ def _in_checkout(
         deadline=deadline,
         local_timeout=_GIT_STEP_LIMIT,
         stdin=stdin,
+        max_output=max_output,
     )
     if done.timed_out is not None or done.returncode != 0:
         raise _failure(ErrorKind.CLONE_FAILED, f"git {args[0]}", done)
@@ -189,7 +194,7 @@ def read_blobs(
     if bad:
         raise CriteriaError(ErrorKind.CLONE_FAILED, f"unreadable in a batch request: {bad[0]!r}")
     request = b"".join(f"{sha}:{path}\n".encode() for path in paths)
-    done = _in_checkout(checkout, ["cat-file", "--batch"], deadline, stdin=request)
+    done = _in_checkout(checkout, ["cat-file", "--batch"], deadline, stdin=request, max_output=None)
     return _parse_batch(done.stdout, paths, sha)
 
 
@@ -435,6 +440,15 @@ def child_env(probe_dir: Path, extra: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-def distribution_args(env: Environment) -> list[str]:
-    """Keep every test in the probe's own process when xdist is importable (§3.6)."""
-    return ["-n", "0", "--dist", "no"] if env.has_xdist else []
+XDIST_PLUGIN_PREFIX = "pytest-xdist-"
+
+
+def distribution_args(plugins: Sequence[str]) -> list[str]:
+    """Keep every test in the probe's own process when xdist was loaded (§3.6).
+
+    `plugins` is the collect manifest's list of loaded distributions. Only the run
+    passes these flags: `--collect-only` never distributes, and `-n` breaks a product
+    whose addopts disable xdist.
+    """
+    xdist = any(name.startswith(XDIST_PLUGIN_PREFIX) for name in plugins)
+    return ["-n", "0", "--dist", "no"] if xdist else []

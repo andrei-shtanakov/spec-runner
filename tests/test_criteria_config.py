@@ -113,7 +113,9 @@ class TestRoots:
         root, sha = _repo(tmp_path, FILES, config)
         assert _kind(_read, root, sha) is kind
 
-    @pytest.mark.parametrize("root_spec", [":", ":(top)", ":(glob)**/*.py", ":!x", ":(icase)PKG"])
+    @pytest.mark.parametrize(
+        "root_spec", [":", ":(top)", ":(glob)**/*.py", ":!x", ":(icase)PKG", "./:(top)", "./:x"]
+    )
     def test_pathspec_magic_root_is_invalid(self, tmp_path, root_spec):
         """A root is a path, never a git pathspec: `:` / `:(top)` would list the repo."""
         config = f"criteria:\n  product_roots: [{root_spec!r}]\n"

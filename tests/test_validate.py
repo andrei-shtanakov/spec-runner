@@ -907,3 +907,26 @@ class TestBEH28ValidateReportsTlsApplicability:
         result = validate_config(self._cfg(tmp_path, "local_volume", "n/a"))
 
         assert not any("tls" in e for e in result.errors), result.errors
+
+
+class TestCriteriaSection:
+    """`criteria:` is a product-side key read by `verify --criteria`, not an unknown key."""
+
+    def test_flat_config_with_criteria_validates_clean(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("claude_command: codex\ncriteria:\n  product_roots: [src]\n")
+        result = validate_config(cfg)
+        assert result.ok
+        assert not any("criteria" in m for m in result.errors + result.warnings)
+
+    def test_criteria_beside_an_executor_wrapper_is_not_a_mixed_shape(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "spec-runner.config.yaml"
+        cfg.write_text("executor:\n  claude_command: codex\ncriteria:\n  product_roots: [src]\n")
+        result = validate_config(cfg)
+        assert not any("criteria" in m for m in result.errors + result.warnings)
+
+    def test_criteria_is_not_an_executor_field(self) -> None:
+        from spec_runner.config import KNOWN_EXECUTOR_KEYS, ExecutorConfig
+
+        assert "criteria" in KNOWN_EXECUTOR_KEYS
+        assert "criteria" not in ExecutorConfig.__dataclass_fields__

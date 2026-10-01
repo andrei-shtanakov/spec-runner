@@ -130,16 +130,17 @@ def _normalise_root(entry: object) -> str:
     if not isinstance(entry, str) or not entry.strip():
         raise CriteriaError(ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is not a path")
     path = PurePosixPath(entry.strip())
-    if entry.strip().startswith(":"):
-        raise CriteriaError(
-            ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is git pathspec magic, not a path"
-        )
     if path.is_absolute() or ".." in path.parts:
         raise CriteriaError(ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} escapes the checkout")
     parts = [part for part in path.parts if part not in (".", "")]
     if not parts:
         raise CriteriaError(ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is the repository root")
-    return "/".join(parts)
+    root = "/".join(parts)
+    if root.startswith(":"):  # checked after normalisation: `./:(top)` is magic too
+        raise CriteriaError(
+            ErrorKind.PRODUCT_ROOTS_INVALID, f"{entry!r} is git pathspec magic, not a path"
+        )
+    return root
 
 
 def _invalid_env(detail: str) -> CriteriaError:
