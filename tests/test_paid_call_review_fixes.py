@@ -325,10 +325,15 @@ class TestRedactionIsIdempotent:
             "API_TOKEN=abcdefgh12345678 key ghp_" + "A" * 36 + "\n"
             "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----"
         )
+        import re
+
         once = redact(text, environ={})
 
+        # Every placeholder whole: a kind read as `key: value` used to nest a
+        # second one inside it, already on the first pass.
+        well_formed = re.findall(r"\[REDACTED:[a-z_]+:[0-9a-f]{8}\]", once)
+        assert len(well_formed) == once.count("[REDACTED:") == 3, once
         assert redact(once, environ={}) == once
-        assert "[REDACTED:secret:[REDACTED" not in once
 
     def test_the_published_prompt_hashes_to_its_digest(self):
         import hashlib
