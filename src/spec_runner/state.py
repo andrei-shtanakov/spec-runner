@@ -3069,12 +3069,15 @@ def _done_on_main_branch(config: ExecutorConfig, tasks_file: Path) -> set[str]:
         rel = tasks_file.resolve().relative_to(root).as_posix()
     except ValueError:
         return set()
-    result = subprocess.run(
-        ["git", "show", f"{get_main_branch(config)}:./{rel}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{get_main_branch(config)}:./{rel}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:  # no git on PATH: a supported setup with git automation off
+        return set()
     if result.returncode != 0:
         return set()
     return {task.id for task in parse_tasks_text(result.stdout) if task.status == "done"}
@@ -3129,6 +3132,8 @@ def recover_stale_tasks(
             done_tasks = _done_on_main_branch(state.config, tasks_file)
         if task_id in done_tasks:
             ts.status = "success"
+            # `completed_at` NULL reads as "not finished" on the stable surface.
+            ts.completed_at = ts.completed_at or now.isoformat()
             recovered.append(task_id)
             continue
 

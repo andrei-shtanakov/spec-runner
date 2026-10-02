@@ -1351,6 +1351,7 @@ class TestRecoverStaleTasks:
             assert recovered == ["TASK-001"]
             assert ts.status == "success"
             assert ts.attempts == []
+            assert ts.completed_at is not None
             assert (state.total_completed, state.total_failed) == counters
             assert tasks_file.read_text() == original
         with ExecutorState(config) as state:
@@ -1378,6 +1379,25 @@ class TestRecoverStaleTasks:
             assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == ["TASK-001"]
             assert state.get_task_state("TASK-001").status == "failed"
         assert "TODO" in tasks_file.read_text()
+
+    def test_no_git_binary_is_not_a_crash(self, tmp_path, monkeypatch):
+        """Review of #649: git automation off on a machine without git."""
+        import subprocess
+
+        from spec_runner.state import recover_stale_tasks
+
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text("### TASK-001: work\nP0 | DONE\n")
+        config = _make_config(tmp_path, main_branch="main")
+        self._stale(config)
+
+        def no_git(*args, **kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(subprocess, "run", no_git)
+        with ExecutorState(config) as state:
+            assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == ["TASK-001"]
+            assert state.get_task_state("TASK-001").status == "failed"
 
     def test_without_git_done_is_not_trusted(self, tmp_path):
         from spec_runner.state import recover_stale_tasks
