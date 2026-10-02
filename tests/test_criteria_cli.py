@@ -455,16 +455,23 @@ class TestTerminationSignals:
     ) -> None:
         from spec_runner import cli
 
-        before = signal.getsignal(sig)
-        unwound: list[bool] = []
-        with pytest.raises(SystemExit) as raised, cli._exit_on_termination():
-            try:
-                os.kill(os.getpid(), sig)
-                time.sleep(5)  # the handler interrupts this
-            finally:
-                unwound.append(True)
-        assert raised.value.code == code and unwound == [True]
-        assert signal.getsignal(sig) is before
+        # Under `nohup` the suite inherits SIGHUP ignored, and an inherited
+        # ignore is deliberately left in place (R-B19, the test below) — so
+        # start from the default disposition this test is about.
+        inherited = signal.signal(sig, signal.SIG_DFL)
+        try:
+            before = signal.getsignal(sig)
+            unwound: list[bool] = []
+            with pytest.raises(SystemExit) as raised, cli._exit_on_termination():
+                try:
+                    os.kill(os.getpid(), sig)
+                    time.sleep(5)  # the handler interrupts this
+                finally:
+                    unwound.append(True)
+            assert raised.value.code == code and unwound == [True]
+            assert signal.getsignal(sig) is before
+        finally:
+            signal.signal(sig, inherited)
 
     def test_handlers_are_restored_after_a_normal_exit(self) -> None:
         from spec_runner import cli

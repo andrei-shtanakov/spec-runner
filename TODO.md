@@ -928,6 +928,15 @@ runtime-state по инварианту конвейера «нужное для
       наследует политику ревью/TDD проекта), сохраняя то, ради чего её зовут (CLI, модель,
       `executor_sandbox`); регрессия — `doctor` в tdd-проекте → READY.
 
+- [ ] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
+      GREEN-вызов TASK-002, убитый таймаутом 60 мин (прогон `1f1a0932`), не оставил ни строки
+      в `agent_calls`, ни терминальной секции в логе промпта (`TASK-002-green-20261002-135911.log`
+      кончается промптом). Инвариант #295/#296 («каждый артефакт кончается терминальной
+      секцией», `=== NO RESULT` для таймаута) на этом сайте не держится, а цена 60 минут
+      работы неизвестна и невидима бюджету (`costs` показал прежние $8.77). Ожидание: таймаут
+      GREEN пишет строку ledger-а с ценой NULL и `=== NO RESULT: timeout ===`; регрессия —
+      фейковый CLI, который не отвечает дольше лимита.
+
 - [ ] **preflight-sees-stale-bundle** (найдено при подготовке #480, 2026-10-01) @owner:github:andrei-shtanakov @id:preflight-sees-stale-bundle @epic:eco.spec-toolchain
       `preflight` (и гейт `spec_governance: strict`) отвечают `ready`, когда tasks-спека
       `approved`, хотя узлы бандла выше неё снова `draft` (подпись спеки относится к
