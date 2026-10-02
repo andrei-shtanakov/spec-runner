@@ -53,6 +53,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("github_token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
     ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("bearer", re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._~+/=\-]{16,}")),
+    # userinfo of a URL (`https://user:password@host`), e.g. a git remote.
+    ("url_credentials", re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")),
 )
 
 _KEY_VALUE = re.compile(

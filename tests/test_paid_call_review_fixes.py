@@ -259,3 +259,56 @@ def test_review_pr_total_is_not_a_floor_because_of_planning(capsys):
     out = capsys.readouterr().out
     assert "Review-PR total:      $0.20" in out
     assert "Repo total:           ≥$1.20" in out
+
+
+class TestALedgerFromBeforeTheStatusColumn:
+    """Round 2 of #653: the not_started filter must not hide a legacy ledger."""
+
+    LEGACY_PR = """
+        CREATE TABLE pr_agent_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL,
+            pr_number INTEGER NOT NULL, comment_id INTEGER NOT NULL, head_sha TEXT,
+            round_number INTEGER, kind TEXT NOT NULL, provenance TEXT NOT NULL,
+            outcome TEXT NOT NULL, cost_usd REAL, input_tokens INTEGER,
+            output_tokens INTEGER, timestamp TEXT NOT NULL)
+    """
+
+    def test_costs_still_reads_review_pr_spend(self, tmp_path):
+        import sqlite3
+
+        from spec_runner.review_pr import pr_cost_rows
+
+        config = _cfg(tmp_path)
+        conn = sqlite3.connect(config.state_file)
+        conn.execute(self.LEGACY_PR)
+        conn.execute(
+            "INSERT INTO pr_agent_calls (repo, pr_number, comment_id, kind, provenance, "
+            "outcome, cost_usd, timestamp) VALUES ('o/r', 7, 1, 'verify', 'v', 'ok', NULL, 't')"
+        )
+        conn.commit()
+        conn.close()
+
+        (row,) = pr_cost_rows(config)
+        assert (row["calls"], row["unmeasured_calls"]) == (1, 1)
+
+    def test_the_filter_follows_the_column(self):
+        import sqlite3
+
+        from spec_runner.state import started_calls_only
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE old (cost_usd REAL)")
+        conn.execute("CREATE TABLE new (cost_usd REAL, status TEXT)")
+
+        assert started_calls_only(conn, "old") == "1 = 1"
+        assert "not_started" in started_calls_only(conn, "new")
+
+
+def test_url_credentials_are_redacted():
+    from spec_runner.redaction import redact
+
+    text = "origin https://ci-bot:s3cretPassw0rd@git.example.com/o/r.git (fetch)"
+    out = redact(text)
+
+    assert "s3cretPassw0rd" not in out
+    assert "git.example.com/o/r.git" in out

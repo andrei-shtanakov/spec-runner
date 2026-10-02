@@ -220,6 +220,19 @@ _DISK_FULL_MARKERS = (
 )
 
 
+def started_calls_only(conn: sqlite3.Connection, table: str) -> str:
+    """SQL condition keeping the calls that started.
+
+    A `not_started` row spent nothing and is not a call. A ledger written
+    before the `status` column existed (#480) has no such rows — and a
+    read-only reader cannot migrate it, so filtering on a missing column
+    would fail and the caller's `except` would report no spend at all
+    (review of #653).
+    """
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    return "COALESCE(status, '') != 'not_started'" if "status" in columns else "1 = 1"
+
+
 def _is_disk_full_error(exc: sqlite3.OperationalError) -> bool:
     """Classify an OperationalError as disk-full vs another failure.
 
@@ -2396,7 +2409,7 @@ class ExecutorState:
         # spent nothing, and the cost surfaces count calls that were made.
         sql = (
             "SELECT task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp "
-            "FROM agent_calls WHERE COALESCE(status, '') != 'not_started'"
+            f"FROM agent_calls WHERE {started_calls_only(self._conn, 'agent_calls')}"
         )
         params: list[object] = []
         if task_id:
@@ -2564,16 +2577,16 @@ class ExecutorState:
         # would make every run look unpriced.
         # A `not_started` row spent nothing: counting it would make one refused
         # call-start an unprovable remainder that refuses every later call.
-        sql = (
-            "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL AND provenance != 'green' "
-            "AND COALESCE(status, '') != 'not_started'"
-        )
         params: list[object] = []
-        if task_id:
-            sql += " AND task_id = ?"
-            params.append(task_id)
         try:
             assert self._conn is not None
+            sql = (
+                "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL AND provenance != 'green' "
+                f"AND {started_calls_only(self._conn, 'agent_calls')}"
+            )
+            if task_id:
+                sql += " AND task_id = ?"
+                params.append(task_id)
             return int(self._conn.execute(sql, params).fetchone()[0] or 0)
         except Exception:
             return 0

@@ -1429,12 +1429,14 @@ def pr_cost_rows(config: ExecutorConfig) -> list[dict]:
     try:
         conn = _sqlite3.connect(f"file:{config.state_file}?mode=ro", uri=True)
         try:
+            from .state import started_calls_only
+
             rows = conn.execute(
                 "SELECT repo, pr_number, COUNT(*), "
                 "       COALESCE(SUM(cost_usd), 0.0), "
                 "       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), "
                 "       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
-                "FROM pr_agent_calls WHERE COALESCE(status, '') != 'not_started' "
+                f"FROM pr_agent_calls WHERE {started_calls_only(conn, 'pr_agent_calls')} "
                 "GROUP BY repo, pr_number ORDER BY repo, pr_number"
             ).fetchall()
         finally:
