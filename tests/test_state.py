@@ -1309,6 +1309,32 @@ class TestRecoverStaleTasks:
             )
             assert recovered == ["TASK-001"]
 
+    @pytest.mark.parametrize("recover_all", [False, True])
+    def test_plan_done_wins_over_stale_running_state(self, tmp_path, recover_all):
+        from datetime import datetime, timedelta
+
+        from spec_runner.state import recover_stale_tasks
+
+        config = _make_config(tmp_path)
+        tasks_file = tmp_path / "tasks.md"
+        original = "### TASK-001: accepted task\nP0 | DONE\n- [x] Accepted work\n"
+        tasks_file.write_text(original)
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            ts = state.get_task_state("TASK-001")
+            ts.started_at = (datetime.now() - timedelta(days=2)).isoformat()
+            state._save()
+            counters = (state.total_completed, state.total_failed)
+            recovered = recover_stale_tasks(state, 60, tasks_file, recover_all=recover_all)
+            assert recovered == ["TASK-001"]
+            assert ts.status == "success"
+            assert ts.attempts == []
+            assert (state.total_completed, state.total_failed) == counters
+            assert tasks_file.read_text() == original
+        with ExecutorState(config) as state:
+            assert state.get_task_state("TASK-001").status == "success"
+            assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == []
+
     def test_does_not_recover_completed_tasks(self, tmp_path):
         from spec_runner.state import recover_stale_tasks
 

@@ -3067,9 +3067,17 @@ def recover_stale_tasks(
     (the caller holds the exclusive executor lock, so any 'running' task is
     orphaned from a dead run) every running task is recovered regardless of age.
 
-    Returns list of recovered task IDs.
+    DONE in the plan is authoritative: reconcile that task to success without
+    adding an attempt or changing cumulative counters. Other stale tasks become
+    failed and are reset to TODO in the plan.
+
+    Returns list of recovered task IDs, including reconciled DONE tasks.
     """
+    from .task import parse_tasks, update_task_status
+
     recovered: list[str] = []
+    reset_to_todo: list[str] = []
+    done_tasks: set[str] | None = None
     now = datetime.now()
 
     for task_id, ts in state.tasks.items():
@@ -3082,6 +3090,16 @@ def recover_stale_tasks(
         elapsed_minutes = (now - started).total_seconds() / 60
 
         if not recover_all and elapsed_minutes <= timeout_minutes:
+            continue
+
+        # The plan may have been accepted after this stale DB snapshot.
+        # Reconcile that status without inventing a successful attempt or
+        # charging the cumulative counters for work that did not run here.
+        if done_tasks is None:
+            done_tasks = {task.id for task in parse_tasks(tasks_file) if task.status == "done"}
+        if task_id in done_tasks:
+            ts.status = "success"
+            recovered.append(task_id)
             continue
 
         # Stale task — recover it
@@ -3097,12 +3115,12 @@ def recover_stale_tasks(
             )
         )
         recovered.append(task_id)
+        reset_to_todo.append(task_id)
 
     if recovered:
         state._save()
-        from .task import update_task_status
 
-        for task_id in recovered:
+        for task_id in reset_to_todo:
             update_task_status(tasks_file, task_id, "todo")
 
     return recovered
