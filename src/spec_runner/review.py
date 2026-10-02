@@ -248,9 +248,16 @@ class TaskDiff:
     it — WIP commits, master merged in, the agent's own commits. `HEAD~1`
     saw only the last one: TASK-002 of #480 passed a required review on a
     one-line diff of tasks.md while ~3,900 lines went unread.
+
+    The diff is what merging this branch delivers. A branch that carries
+    another task's unmerged work (reused from a stopped run) delivers that
+    too, so the reviewer sees it — deliberately.
     """
 
     base: str
+    #: False when the base is a guess (`HEAD~1`): no claim about emptiness
+    #: may rest on it.
+    established: bool
     #: None when git could not say (not a repository, no such base): unknown,
     #: never "nothing changed".
     files: list[str] | None
@@ -262,27 +269,31 @@ def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess[str]
     return subprocess.run(["git", *args], capture_output=True, text=True, cwd=config.project_root)
 
 
-def task_base(config: ExecutorConfig) -> str:
-    """Where the task under review began (see ``TaskDiff``).
+def task_base(config: ExecutorConfig) -> tuple[str, bool]:
+    """Where the task under review began (see ``TaskDiff``), and whether that
+    is established or a guess.
 
-    ``HEAD~1`` only when the task's work was committed on the main branch
-    itself — no branch marks where it started. On a task branch whose HEAD
-    *is* the merge-base the task has no commit of its own: the base is HEAD,
-    so only uncommitted work is in the diff and `nothing_to_review` can say
-    so — `HEAD~1` there would hand the reviewer someone else's commit
-    (review of #655).
+    Established: the merge-base with the main branch, or — on a task branch
+    whose HEAD *is* the merge-base, i.e. no commit of its own — HEAD itself,
+    so only uncommitted work is in the diff (`HEAD~1` there handed the
+    reviewer someone else's commit, review of #655). A guess: `HEAD~1`, when
+    the work sits on the main branch itself or the merge-base cannot be
+    computed — the review still runs on it, as before, but nothing may be
+    concluded from it being empty.
     """
     from .git_ops import current_branch, get_main_branch
 
     main = get_main_branch(config)
     merge_base = _git(config, "merge-base", "HEAD", main)
-    head = _git(config, "rev-parse", "HEAD").stdout.strip()
+    head = _git(config, "rev-parse", "HEAD")
     base = merge_base.stdout.strip()
-    if merge_base.returncode == 0 and base and base != head:
-        return base
+    if merge_base.returncode != 0 or not base or head.returncode != 0:
+        return "HEAD~1", False
+    if base != head.stdout.strip():
+        return base, True
     if current_branch(config) == main:
-        return "HEAD~1"
-    return "HEAD"
+        return "HEAD~1", False
+    return "HEAD", True
 
 
 def task_diff(config: ExecutorConfig) -> TaskDiff | None:
@@ -294,7 +305,7 @@ def task_diff(config: ExecutorConfig) -> TaskDiff | None:
     """
     if not (config.create_git_branch or config.auto_commit):
         return None
-    base = task_base(config)
+    base, established = task_base(config)
     # `--relative`: paths as the project sees them, for the bookkeeping check.
     names = _git(config, "diff", "--relative", "--name-only", base)
     files = names.stdout.splitlines() if names.returncode == 0 else None
@@ -302,6 +313,7 @@ def task_diff(config: ExecutorConfig) -> TaskDiff | None:
     patch = _git(config, "diff", "-p", base)
     return TaskDiff(
         base=base,
+        established=established,
         files=files,
         stat=stat.stdout.strip() if stat.returncode == 0 else "",
         patch=patch.stdout if patch.returncode == 0 else "",
@@ -322,7 +334,7 @@ def nothing_to_review(config: ExecutorConfig) -> str | None:
     if getattr(config, "probe_provenance", None):
         return None
     diff = task_diff(config)
-    if diff is None or diff.files is None:
+    if diff is None or diff.files is None or not diff.established:
         return None
     tasks_rel = (
         Path(config.tasks_file)
@@ -330,7 +342,11 @@ def nothing_to_review(config: ExecutorConfig) -> str | None:
         .relative_to(Path(config.project_root).resolve())
         .as_posix()
     )
-    if [f for f in diff.files if f != tasks_rel]:
+    # New files git does not track yet are work too (auto_commit off).
+    untracked = _git(config, "ls-files", "--others", "--exclude-standard")
+    if untracked.returncode != 0:
+        return None
+    if [f for f in [*diff.files, *untracked.stdout.splitlines()] if f != tasks_rel]:
         return None
     return (
         f"nothing to review: the diff from {diff.base} changes "
@@ -385,6 +401,8 @@ def _render_review_prompt(
             "TASK_NAME": task.name,
             "CHANGED_FILES": changed_files,
             "GIT_DIFF": git_diff_stat,
+            # The base, so a project's own template can name it too.
+            "TASK_BASE": diff.base if diff is not None else "",
         }
         return render_template(template, variables)
 

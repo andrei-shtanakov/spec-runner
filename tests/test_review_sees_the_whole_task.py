@@ -125,9 +125,35 @@ class TestTheDiffStartsWhereTheTaskBegan:
 
         cfg = _cfg(repo)
 
-        assert task_base(cfg) == "HEAD"
+        assert task_base(cfg) == ("HEAD", True)
         assert "F = 1" not in build_review_prompt(_task(), cfg)
         assert nothing_to_review(cfg) is not None
+
+    def test_an_unknown_main_branch_is_a_guess_not_an_empty_task(self, repo):
+        """Review of #655 round 2: an uncomputable merge-base must not turn
+        into base HEAD and a false "nothing to review"."""
+        _commit(repo, "src/a.py", "A = 1\n", "work")
+        _flip_status(repo)
+        cfg = _cfg(repo, main_branch="no-such-branch")
+
+        assert task_base(cfg) == ("HEAD~1", False)
+        assert nothing_to_review(cfg) is None
+
+    def test_new_untracked_files_are_work(self, repo):
+        (repo / "src").mkdir(exist_ok=True)
+        (repo / "src" / "new.py").write_text("N = 1\n")
+
+        assert nothing_to_review(_cfg(repo, auto_commit=False)) is None
+
+    def test_a_project_template_is_given_the_base(self, repo):
+        _commit(repo, "src/a.py", "A = 1\n", "work")
+        cfg = _cfg(repo)
+        cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.prompts_dir / "review.md").write_text("BASE={{TASK_BASE}}")
+
+        prompt = build_review_prompt(_task(), cfg)
+
+        assert f"BASE={_git(repo, 'merge-base', 'HEAD', 'main')}" in prompt
 
     def test_a_path_with_a_space_stays_one_path(self, repo):
         _commit(repo, "docs/release notes.md", "x\n", "doc")
@@ -140,7 +166,7 @@ class TestTheDiffStartsWhereTheTaskBegan:
         _git(repo, "switch", "-q", "main")
         _commit(repo, "src/a.py", "A = 1\n", "work on main")
 
-        assert task_base(_cfg(repo)) == "HEAD~1"
+        assert task_base(_cfg(repo)) == ("HEAD~1", False)
 
 
 class TestNothingToReview:
