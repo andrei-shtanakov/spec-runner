@@ -105,3 +105,67 @@ class TestANeverStartedCallIsNotUnpriced:
         assert [r["cost_usd"] for r in pr.agent_calls()] == [0.2]
         (row,) = pr_cost_rows(config)
         assert (row["calls"], row["unmeasured_calls"]) == (1, 0)
+
+
+class TestEvidenceProvesTheOriginalBytes:
+    """Finding 3: BEH-27 — full digest and size describe the unredacted text."""
+
+    # A synthetic key in the provider shape; the redactor checks shape only.
+    SECRET = "sk-ant-" + "Q" * 40
+
+    def _sha(self, text: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def test_call_start_digest_is_over_the_original_prompt(self):
+        from spec_runner.evidence import PolicyIdentity, call_start_for
+
+        prompt = f"use {self.SECRET} for the call"
+        record = call_start_for(
+            run_id="r",
+            pipeline_id=None,
+            call_id="c",
+            provenance="review",
+            policy=PolicyIdentity(1, "h", "ns", "derived", "", ""),
+            task_id="TASK-1",
+            attempt=1,
+            prompt=prompt,
+            timestamp="t",
+        )
+
+        assert self.SECRET not in record.prompt
+        assert record.prompt_full_sha256 == self._sha(prompt)
+        assert record.prompt_full_size == len(prompt.encode())
+        assert record.prompt_sha256 == self._sha(record.prompt)
+
+    def test_call_result_digest_is_over_the_original_result(self):
+        from spec_runner.evidence import call_result_for
+
+        result = f"leaked {self.SECRET} here"
+        record = call_result_for(
+            run_id="r",
+            pipeline_id=None,
+            call_id="c",
+            provenance="review",
+            outcome="answered",
+            cost_usd=None,
+            returncode=0,
+            result=result,
+            timestamp="t",
+        )
+
+        assert self.SECRET not in record.result
+        assert record.result_full_sha256 == self._sha(result)
+        assert record.result_full_size == len(result.encode())
+
+    def test_a_truncated_record_names_the_original_digest(self):
+        from spec_runner.evidence import bound_evidence
+        from spec_runner.redaction import redact
+
+        original = self.SECRET + " " + "x" * 4096
+        bounded = bound_evidence(redact(original), 512, original=original)
+
+        assert bounded.truncated
+        assert self._sha(original) in bounded.text
+        assert self.SECRET not in bounded.text

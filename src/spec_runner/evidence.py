@@ -71,25 +71,30 @@ class BoundedText:
     full_size: int
 
 
-def bound_evidence(text: str, limit: int) -> BoundedText:
+def bound_evidence(text: str, limit: int, *, original: str | None = None) -> BoundedText:
     """``text`` unchanged if it fits ``limit`` bytes, else its head and tail.
 
     Pattern of ``prompts_log.bound``: head *and* tail survive (the frozen-files
     block is appended last, #214), a marker says that a cut happened, and the
     SHA-256 and size describe the *whole* text. ``limit`` is in UTF-8 bytes and
     the result, marker included, never exceeds it.
+
+    ``original``: the text the digest and size must describe when ``text`` is
+    a redacted copy of it — BEH-27: they prove the *unredacted* content, so an
+    auditor can join a published record to the local artefact.
     """
     raw = text.encode("utf-8", "surrogatepass")
-    digest = hashlib.sha256(raw).hexdigest()
+    whole = raw if original is None else original.encode("utf-8", "surrogatepass")
+    digest = hashlib.sha256(whole).hexdigest()
     if len(raw) <= limit:
-        return BoundedText(text, False, digest, len(raw))
+        return BoundedText(text, False, digest, len(whole))
     marker = (
-        f"\n\n=== TRUNCATED: {len(raw)} bytes in total; sha256 of the full text {digest} ===\n\n"
+        f"\n\n=== TRUNCATED: {len(whole)} bytes in total; sha256 of the full text {digest} ===\n\n"
     )
     keep = max((limit - len(marker.encode("utf-8"))) // 2, 0)
     head = raw[:keep].decode("utf-8", "ignore")
     tail = raw[len(raw) - keep :].decode("utf-8", "ignore") if keep else ""
-    return BoundedText(f"{head}{marker}{tail}", True, digest, len(raw))
+    return BoundedText(f"{head}{marker}{tail}", True, digest, len(whole))
 
 
 # --- policy identity -------------------------------------------------------
@@ -238,9 +243,11 @@ def call_start_for(
     prompt: str,
     timestamp: str,
 ) -> CallStart:
-    """Assemble a ``CallStart`` from the *redacted* prompt (digest included)."""
+    """Assemble a ``CallStart``: a bounded *redacted* prompt, its digest, and
+    the full digest and size of the *original* (design: taken before
+    redaction, BEH-26/27)."""
     redacted = redact(prompt)
-    bounded = bound_evidence(redacted, PROMPT_LIMIT)
+    bounded = bound_evidence(redacted, PROMPT_LIMIT, original=prompt)
     return CallStart(
         run_id=run_id,
         pipeline_id=pipeline_id,
@@ -249,7 +256,7 @@ def call_start_for(
         policy=policy,
         task_id=task_id,
         attempt=attempt,
-        prompt_sha256=bounded.full_sha256,
+        prompt_sha256=hashlib.sha256(redacted.encode("utf-8", "surrogatepass")).hexdigest(),
         prompt=bounded.text,
         prompt_truncated=bounded.truncated,
         prompt_full_sha256=bounded.full_sha256,
@@ -272,7 +279,7 @@ def call_result_for(
     supersedes: str | None = None,
 ) -> CallResult:
     """Assemble a ``CallResult`` with a bounded, redacted copy of ``result``."""
-    bounded = bound_evidence(redact(result), RESULT_LIMIT)
+    bounded = bound_evidence(redact(result), RESULT_LIMIT, original=result)
     return CallResult(
         run_id=run_id,
         pipeline_id=pipeline_id,
