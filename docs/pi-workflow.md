@@ -96,8 +96,7 @@ The reviewer prompt is filled from `git diff <base>` taken at the project root (
 `review.py`), where `<base>` is the merge-base of HEAD with the main branch (the integration
 branch during an `integration_pr` run) — every commit of the task, not only its last. So the
 review gate sees a task's changes when they are in the project's *own* git repo: run with
-`auto_commit: true` or `create_git_branch: true`. If only the task file changed, the review is
-not run and the verdict is `not_run` (under `review_policy: required` it blocks). If you run a
+`auto_commit: true` or `create_git_branch: true`. If you run a
 project that is itself a subdirectory of another git repo, the diff resolves against the
 *outer* repo; keep each spec-runner project its own repo.
 

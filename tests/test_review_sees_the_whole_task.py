@@ -16,12 +16,9 @@ from spec_runner.config import ExecutorConfig
 from spec_runner.review import (
     MAX_PROMPT_PATCH,
     build_review_prompt,
-    nothing_to_review,
-    run_code_review,
     task_base,
     task_diff,
 )
-from spec_runner.state import ReviewVerdict
 from spec_runner.task import Task
 
 
@@ -125,25 +122,14 @@ class TestTheDiffStartsWhereTheTaskBegan:
 
         cfg = _cfg(repo)
 
-        assert task_base(cfg) == ("HEAD", True)
+        assert task_base(cfg) == "HEAD"
         assert "F = 1" not in build_review_prompt(_task(), cfg)
-        assert nothing_to_review(cfg) is not None
 
-    def test_an_unknown_main_branch_is_a_guess_not_an_empty_task(self, repo):
-        """Review of #655 round 2: an uncomputable merge-base must not turn
-        into base HEAD and a false "nothing to review"."""
+    def test_an_unknown_main_branch_falls_back_to_the_last_commit(self, repo):
         _commit(repo, "src/a.py", "A = 1\n", "work")
-        _flip_status(repo)
         cfg = _cfg(repo, main_branch="no-such-branch")
 
-        assert task_base(cfg) == ("HEAD~1", False)
-        assert nothing_to_review(cfg) is None
-
-    def test_new_untracked_files_are_work(self, repo):
-        (repo / "src").mkdir(exist_ok=True)
-        (repo / "src" / "new.py").write_text("N = 1\n")
-
-        assert nothing_to_review(_cfg(repo, auto_commit=False)) is None
+        assert task_base(cfg) == "HEAD~1"
 
     def test_a_project_template_is_given_the_base(self, repo):
         _commit(repo, "src/a.py", "A = 1\n", "work")
@@ -166,47 +152,23 @@ class TestTheDiffStartsWhereTheTaskBegan:
         _git(repo, "switch", "-q", "main")
         _commit(repo, "src/a.py", "A = 1\n", "work on main")
 
-        assert task_base(_cfg(repo)) == ("HEAD~1", False)
+        assert task_base(_cfg(repo)) == "HEAD~1"
 
 
-class TestNothingToReview:
-    def test_only_bookkeeping_is_not_reviewed_and_not_passed(self, repo, monkeypatch):
-        from spec_runner import paid_call
+class TestANoOpTaskIsStillReviewable:
+    """Acceptance review of #655: a #97 no-op task (its work absorbed by an
+    earlier task) changes only the task file. The review runs on that diff as
+    it always did — refusing it as "nothing to review" would block such a
+    task forever under `review_policy: required`."""
 
-        _flip_status(repo)
-
-        def no_call(*_a, **_k):
-            raise AssertionError("no paid review call for an empty diff")
-
-        monkeypatch.setattr(paid_call, "_spawn", no_call)
-        verdict, error, output = run_code_review(_task(), _cfg(repo))
-
-        assert verdict is ReviewVerdict.NOT_RUN
-        assert error is not None and "only spec/tasks.md" in error
-        assert output is None
-
-    def test_real_work_is_reviewable(self, repo):
-        _commit(repo, "src/a.py", "A = 1\n", "work")
-        _flip_status(repo)
-
-        assert nothing_to_review(_cfg(repo)) is None
-
-    def test_without_git_automation_nothing_is_claimed(self, repo):
-        cfg = _cfg(repo, create_git_branch=False, auto_commit=False)
-
-        assert nothing_to_review(cfg) is None
-
-    def test_a_doctor_probe_is_not_held_to_it(self, repo):
-        """`doctor` probes the review CLI; its scratch task changes nothing."""
+    def test_the_diff_is_the_bookkeeping_and_the_prompt_is_built(self, repo):
         _flip_status(repo)
         cfg = _cfg(repo)
-        cfg.probe_provenance = "doctor"
 
-        assert nothing_to_review(cfg) is None
+        diff = task_diff(cfg)
 
-    def test_an_unreadable_diff_is_unknown_not_empty(self, tmp_path):
-        """Not a repository: the review runs as before rather than being refused."""
-        assert nothing_to_review(_cfg(tmp_path)) is None
+        assert diff is not None and diff.files == ["spec/tasks.md"]
+        assert "spec/tasks.md" in build_review_prompt(_task(), cfg)
 
 
 def test_a_truncated_patch_names_the_base_to_read_the_rest(repo):

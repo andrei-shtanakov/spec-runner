@@ -60,10 +60,11 @@ is a **breaking change** and requires a major version bump plus an entry here.
   one. TASK-002 of #480 passed `review_policy: required` on a one-line status
   flip while ~3,900 lines went unread. The diff now starts at the merge-base of
   HEAD with the branch the task merges into (the integration branch during a
-  run), falling back to `HEAD~1` only for work committed on the main branch
-  itself. A diff that changes nothing but the task file is not reviewed: no
-  paid call, verdict `not_run` (under `required` it blocks, never `passed`). A truncated patch names its base so the reviewer can read the
-  rest.
+  run); a task branch with no commit of its own is diffed from HEAD (never
+  someone else's `HEAD~1`); `HEAD~1` remains only for work committed on the
+  main branch itself or an uncomputable merge-base. A truncated patch names
+  its base so the reviewer can read the rest; a project review template gets
+  `{{TASK_BASE}}`. Changed paths are split by line, so a space stays inside one.
 
 - **Task prompts can see a workstream's specification** (`task_context_files`).
   The RED and implementation prompts looked for requirements and design only
