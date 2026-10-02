@@ -128,6 +128,7 @@ def _record_pr_call(
     outcome: str,
     head_sha: str | None,
     cli_result=None,
+    call_id: str | None = None,
 ) -> None:
     """Write one row to this loop's ledger, if a ledger was passed (#218 stage 2).
 
@@ -147,7 +148,52 @@ def _record_pr_call(
         cost_usd=getattr(cli_result, "cost_usd", None),
         input_tokens=getattr(cli_result, "input_tokens", None),
         output_tokens=getattr(cli_result, "output_tokens", None),
+        call_id=call_id,
     )
+
+
+def _pr_ledger(
+    ledger: "ReviewPrState | None",
+    repo: str,
+    pr_number: int,
+    comment_id: int,
+    kind: str,
+    head_sha: str | None,
+):
+    """The call's row in this loop's own ledger, for the paid-call seam (#480)."""
+    if ledger is None:
+        return None
+    from .paid_call import Ledger
+
+    def open_row(call_id: str, run_id: str | None, started_at: str) -> None:
+        ledger.open_agent_call(
+            repo,
+            pr_number,
+            comment_id,
+            kind=kind,
+            head_sha=head_sha,
+            run_id=run_id,
+            call_id=call_id,
+            started_at=started_at,
+        )
+
+    def close_row(call_id: str, status: str, outcome) -> None:
+        if outcome is None:
+            ledger.close_call_row(call_id, status=status, outcome="not_started")
+            return
+        parsed = outcome.parsed
+        ledger.close_call_row(
+            call_id,
+            status=status,
+            outcome="timeout"
+            if outcome.timed_out
+            else ("error" if outcome.returncode != 0 else "completed"),
+            cost_usd=getattr(parsed, "cost_usd", None),
+            input_tokens=getattr(parsed, "input_tokens", None),
+            output_tokens=getattr(parsed, "output_tokens", None),
+        )
+
+    return Ledger(open_row, close_row)
 
 
 def _note(message: str) -> None:
@@ -355,6 +401,10 @@ class ReviewPrState:
                 timestamp TEXT NOT NULL
             )
         """)
+        # #480: call identity, additive; rows from before keep NULL.
+        for col in ("run_id", "call_id", "status", "started_at"):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(f"ALTER TABLE pr_agent_calls ADD COLUMN {col} TEXT")
         self._conn.commit()
 
     def known_ids(self, repo: str, pr_number: int) -> set[int]:
@@ -470,6 +520,63 @@ class ReviewPrState:
         ).fetchone()
         return int(row[0])
 
+    def open_agent_call(
+        self,
+        repo: str,
+        pr_number: int,
+        comment_id: int,
+        *,
+        kind: str,
+        head_sha: str | None,
+        run_id: str | None,
+        call_id: str,
+        started_at: str,
+    ) -> None:
+        """The `open` row of a call, written before the store ack (#480).
+
+        Raises on failure, and `paid_call.execute` logs and proceeds: this row
+        is the local index, the acknowledged call-start the durable intent
+        (FR-02). Outcome stays `open` until the call closes it.
+        """
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO pr_agent_calls (repo, pr_number, comment_id, head_sha, "
+                "kind, provenance, outcome, timestamp, run_id, call_id, status, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 'open', ?)",
+                (
+                    repo,
+                    pr_number,
+                    comment_id,
+                    head_sha,
+                    kind,
+                    f"review_pr:{kind}",
+                    started_at,
+                    run_id,
+                    call_id,
+                    started_at,
+                ),
+            )
+
+    def close_call_row(
+        self,
+        call_id: str,
+        *,
+        status: str = "closed",
+        outcome: str | None = None,
+        cost_usd: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Close the row of ``call_id``; NULL cost stays NULL (unknown, not zero)."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE pr_agent_calls SET status = ?, outcome = COALESCE(?, outcome), "
+                "cost_usd = COALESCE(?, cost_usd), "
+                "input_tokens = COALESCE(?, input_tokens), "
+                "output_tokens = COALESCE(?, output_tokens) WHERE call_id = ?",
+                (status, outcome, cost_usd, input_tokens, output_tokens, call_id),
+            )
+
     def record_agent_call(
         self,
         repo: str,
@@ -482,6 +589,7 @@ class ReviewPrState:
         cost_usd: float | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        call_id: str | None = None,
     ) -> None:
         """Record one paid call this loop made (#218 stage 2). Never raises.
 
@@ -509,6 +617,16 @@ class ReviewPrState:
                     (repo, pr_number),
                 ).fetchone()
                 round_number = int(row[0]) or None
+            if call_id is not None:
+                with self._conn:
+                    updated = self._conn.execute(
+                        "UPDATE pr_agent_calls SET status = 'closed', outcome = ?, "
+                        "round_number = ?, cost_usd = ?, input_tokens = ?, output_tokens = ? "
+                        "WHERE call_id = ?",
+                        (outcome, round_number, cost_usd, input_tokens, output_tokens, call_id),
+                    ).rowcount
+                if updated:
+                    return
             with self._conn:
                 self._conn.execute(
                     "INSERT INTO pr_agent_calls (repo, pr_number, comment_id, head_sha, "
@@ -545,9 +663,12 @@ class ReviewPrState:
             "SELECT repo, pr_number, comment_id, head_sha, round_number, kind, provenance, "
             "outcome, cost_usd, input_tokens, output_tokens, timestamp FROM pr_agent_calls"
         )
+        # A row exists for every call whose intent was written; one that never
+        # started is not a call (the table's own invariant).
+        sql += " WHERE COALESCE(status, '') != 'not_started'"
         params: list[object] = []
         if repo is not None and pr_number is not None:
-            sql += " WHERE repo = ? AND pr_number = ?"
+            sql += " AND repo = ? AND pr_number = ?"
             params = [repo, pr_number]
         sql += " ORDER BY id"
         cols = [
@@ -661,7 +782,6 @@ def verify_comment(
         AgentAnswer,
         build_cli_invocation,
         classify_agent_answer,
-        parse_cli_result,
     )
 
     cmd = config.review_command or config.claude_command
@@ -683,33 +803,46 @@ def verify_comment(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
-    from .sandbox import sandboxed
+    from . import paid_call
 
-    call = sandboxed(config, invocation)
+    call_id = paid_call.new_call_id()
     try:
-        result = subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.review_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=call.env,
+        outcome = paid_call.execute(
+            config,
+            None,
+            paid_call.PaidCall(
+                invocation=invocation,
+                provenance="review-pr:verify",
+                prompt=prompt,
+                timeout_seconds=config.review_timeout_minutes * 60,
+                call_id=call_id,
+                ledger=_pr_ledger(ledger, repo, pr_number, comment.comment_id, "verify", head_sha),
+            ),
         )
-    except subprocess.TimeoutExpired:
+    except paid_call.CallRefused as refused:
+        # Intent could not be made durable: nothing started, nothing is known.
+        return VERDICT_UNCERTAIN, f"Verifier was not started: {refused.refusal}", None
+    if outcome.timed_out:
         # The process started and was billed for the time it ran, so it is a
         # ledger row with an unknown price — not an absent call (#218 stage 2).
-        _record_pr_call(ledger, repo, pr_number, comment.comment_id, "verify", "timeout", head_sha)
+        _record_pr_call(
+            ledger,
+            repo,
+            pr_number,
+            comment.comment_id,
+            "verify",
+            "timeout",
+            head_sha,
+            call_id=call_id,
+        )
         return (
             VERDICT_UNCERTAIN,
             f"Verifier timed out after {config.review_timeout_minutes}m",
             None,
         )
-    finally:
-        call.cleanup()
-    cli_result = parse_cli_result(
-        invocation.result_format, result.stdout, result.stderr, result.returncode
-    )
-    answer = classify_agent_answer(cli_result, result.returncode)
+    cli_result = outcome.parsed
+    assert cli_result is not None
+    answer = classify_agent_answer(cli_result, outcome.returncode)
     _record_pr_call(
         ledger,
         repo,
@@ -719,6 +852,7 @@ def verify_comment(
         "completed" if answer is not AgentAnswer.CRASHED else "error",
         head_sha,
         cli_result,
+        call_id=call_id,
     )
     if not answer.carries_a_verdict:
         # #241: this used to parse a verdict out of a crashed run whenever it
@@ -735,10 +869,8 @@ def verify_comment(
         )
         if answer is AgentAnswer.EMPTY:
             detail = "Verifier produced no output"
-        elif result.returncode != 0:
-            detail = (
-                f"Verifier exited {result.returncode}: {result.stderr.strip()[:200] or 'no stderr'}"
-            )
+        elif outcome.returncode != 0:
+            detail = f"Verifier exited {outcome.returncode}: {outcome.stderr.strip()[:200] or 'no stderr'}"
         else:
             # claude's JSON reports a failure with **exit 0** and an `is_error`
             # payload, and `_parse_claude_json` folds that payload into the
@@ -861,7 +993,7 @@ def run_fix_agent(
     ran, and recording that as 0.0 is how the loop's limit came to bound a
     number smaller than the spend.
     """
-    from .runner import build_cli_invocation, parse_cli_result
+    from .runner import build_cli_invocation
 
     prompt = FIX_PROMPT.format(
         repo=repo,
@@ -880,35 +1012,48 @@ def run_fix_agent(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
-    from .sandbox import sandboxed
+    from . import paid_call
 
-    call = sandboxed(config, invocation)
+    call_id = paid_call.new_call_id()
     try:
-        result = subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.task_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=call.env,
+        outcome = paid_call.execute(
+            config,
+            None,
+            paid_call.PaidCall(
+                invocation=invocation,
+                provenance="review-pr:fix",
+                prompt=prompt,
+                timeout_seconds=config.task_timeout_minutes * 60,
+                call_id=call_id,
+                ledger=_pr_ledger(ledger, repo, pr_number, comment.comment_id, "fix", head_sha),
+            ),
         )
-    except subprocess.TimeoutExpired:
-        _record_pr_call(ledger, repo, pr_number, comment.comment_id, "fix", "timeout", head_sha)
+    except paid_call.CallRefused as refused:
+        return False, f"Fix agent was not started: {refused.refusal}", None
+    if outcome.timed_out:
+        _record_pr_call(
+            ledger,
+            repo,
+            pr_number,
+            comment.comment_id,
+            "fix",
+            "timeout",
+            head_sha,
+            call_id=call_id,
+        )
         return False, f"Fix agent timed out after {config.task_timeout_minutes}m", None
-    finally:
-        call.cleanup()
-    cli_result = parse_cli_result(
-        invocation.result_format, result.stdout, result.stderr, result.returncode
-    )
+    cli_result = outcome.parsed
+    assert cli_result is not None
     _record_pr_call(
         ledger,
         repo,
         pr_number,
         comment.comment_id,
         "fix",
-        "error" if result.returncode != 0 else "completed",
+        "error" if outcome.returncode != 0 else "completed",
         head_sha,
         cli_result,
+        call_id=call_id,
     )
     cost = cli_result.cost_usd
     output = cli_result.text
@@ -918,8 +1063,8 @@ def run_fix_agent(
     m = re.search(r"FIX_COMPLETE:\s*(.+)", output)
     if m:
         return True, m.group(1).strip()[:300], cost
-    if result.returncode != 0:
-        return False, f"Fix agent exited {result.returncode} without a marker", cost
+    if outcome.returncode != 0:
+        return False, f"Fix agent exited {outcome.returncode} without a marker", cost
     # No marker but clean exit: accept only if something actually changed —
     # the caller checks the tree either way.
     return True, "(no FIX_COMPLETE marker; accepted on clean exit)", cost
@@ -1285,12 +1430,15 @@ def pr_cost_rows(config: ExecutorConfig) -> list[dict]:
     try:
         conn = _sqlite3.connect(f"file:{config.state_file}?mode=ro", uri=True)
         try:
+            from .state import started_calls_only
+
             rows = conn.execute(
                 "SELECT repo, pr_number, COUNT(*), "
                 "       COALESCE(SUM(cost_usd), 0.0), "
                 "       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), "
                 "       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
-                "FROM pr_agent_calls GROUP BY repo, pr_number ORDER BY repo, pr_number"
+                f"FROM pr_agent_calls WHERE {started_calls_only(conn, 'pr_agent_calls')} "
+                "GROUP BY repo, pr_number ORDER BY repo, pr_number"
             ).fetchall()
         finally:
             conn.close()

@@ -169,6 +169,10 @@
             "review",
             null
           ]
+        },
+        "run_id": {
+          "description": "run_id of the invocation that recorded the attempt (added 4.5.0, #480); null for rows written before the contract.",
+          "type": ["string", "null"]
         }
       },
       "required": ["timestamp", "success", "duration_seconds"]

@@ -27,10 +27,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from spec_runner import cli, cli_plan
+from spec_runner import cli
 from spec_runner.config import ConfigError, ExecutorConfig
 from spec_runner.prompt import SPEC_STAGES, build_gated_generation_prompt
 from spec_runner.spec import LITE, read_spec_meta, stage_path, write_spec
+from tests import plan_doubles
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "c1-zero-behaviour"
 
@@ -127,7 +128,7 @@ def test_gated_pipeline_files_match_golden(stage: str, tmp_path: Path, update_go
     """
     cfg = _pipeline_cfg(tmp_path)
     for s in ("requirements", "design", "tasks"):
-        rc = cli_plan.run_gated_stage(s, "Build X", cfg, invoke=_fake_invoke(s))
+        rc = plan_doubles.run_gated_stage(s, "Build X", cfg, invoke=_fake_invoke(s))
         assert rc == 0, f"{s} generation failed rc={rc}"
         path = stage_path(cfg, s)
         meta = read_spec_meta(path)

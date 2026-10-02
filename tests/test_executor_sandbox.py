@@ -258,23 +258,102 @@ class TestEveryLaunchSiteGoesThroughTheSeam:
                 if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
                     yield path, fn
 
+    @staticmethod
+    def _reaches_seam(node: ast.AST) -> bool:
+        """A direct call of the seam: `paid_call.execute(...)` or `sandboxed(...)`.
+
+        Qualified on purpose (review of #653): matching bare attribute names
+        made `conn.execute(...)` and `f.close()` count as the seam.
+        """
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            func = sub.func
+            if isinstance(func, ast.Name) and func.id == "sandboxed":
+                return True
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "execute"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in {"paid_call", "paid_call_mod"}
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _local_calls(node: ast.AST) -> set[str]:
+        """Bare-name calls only — a same-module helper (`_run_agent_process`)."""
+        return {
+            sub.func.id
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+        }
+
+    def _offenders(self, source: str) -> list[str]:
+        """Builders in one module that reach the seam neither directly nor
+        through a chain of that module's own functions."""
+        tree = ast.parse(source)
+        fns = [f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef | ast.AsyncFunctionDef)]
+        seamed = {f.name for f in fns if self._reaches_seam(f)}
+        grew = True
+        while grew:
+            grew = False
+            for f in fns:
+                if f.name not in seamed and self._local_calls(f) & seamed:
+                    seamed.add(f.name)
+                    grew = True
+        return [
+            f.name
+            for f in fns
+            if (self._calls(f) & self.BUILDERS or self._builds_claude_argv(f))
+            and f.name not in seamed
+        ]
+
     def test_no_unsandboxed_launch(self):
-        """A builder counts as covered when it calls `sandboxed`, or hands the
-        invocation to a function that does (`_execute_task` →
-        `_run_agent_process`)."""
-        seamed = {fn.name for _, fn in self._functions() if "sandboxed" in self._calls(fn)}
-        offenders = []
-        for path, fn in self._functions():
-            if path.name in {"runner.py", "sandbox.py"}:
-                continue  # the builders themselves; `run_claude_async` is library API
-            calls = self._calls(fn)
-            builds = calls & self.BUILDERS or self._builds_claude_argv(fn)
-            if builds and not ({"sandboxed"} | seamed) & calls:
-                offenders.append(f"{path.name}:{fn.name}")
+        """A builder counts as covered when it calls the seam, or hands the
+        invocation through its own module's functions to one that does
+        (`_execute_task` → `_run_agent_process` → `paid_call.execute`)."""
+        offenders = [
+            f"{path.name}:{name}"
+            for path in sorted(SRC.glob("*.py"))
+            if path.name not in {"runner.py", "sandbox.py"}  # the builders themselves
+            for name in self._offenders(path.read_text())
+        ]
         assert offenders == [], offenders
 
+    def test_the_scan_sees_every_launch_module(self):
+        """Without builders to look at, `no_unsandboxed_launch` proves nothing."""
+        modules = {
+            path.name
+            for path in sorted(SRC.glob("*.py"))
+            if path.name not in {"runner.py", "sandbox.py"}
+            for f in ast.walk(ast.parse(path.read_text()))
+            if isinstance(f, ast.FunctionDef | ast.AsyncFunctionDef)
+            and (self._calls(f) & self.BUILDERS or self._builds_claude_argv(f))
+        }
+        assert modules == {"cli_plan.py", "execution.py", "review.py", "review_pr.py", "tdd.py"}
+
+    def test_the_scan_still_catches_a_launch_that_skips_the_seam(self):
+        """Review of #653: the check must be able to fail. A builder that
+        launches directly is reported even when it also runs a query and
+        closes a file — names that used to make everything look seamed."""
+        source = """
+from . import paid_call
+
+def covered(config, prompt):
+    inv = build_cli_invocation(config, prompt)
+    return paid_call.execute(config, inv)
+
+def rogue(config, prompt, conn, f):
+    inv = build_cli_invocation(config, prompt)
+    conn.execute("SELECT 1")
+    f.close()
+    return subprocess.run(inv.argv)
+"""
+        assert self._offenders(source) == ["rogue"]
+
     def test_the_seam_is_found_at_every_known_site(self):
-        """The scan must see all eight sites, or it proves nothing."""
+        """The scan must see the one place that sandboxes, or it proves nothing."""
         sites: dict[str, int] = {}
         for path in sorted(SRC.glob("*.py")):
             for sub in ast.walk(ast.parse(path.read_text())):
@@ -284,13 +363,9 @@ class TestEveryLaunchSiteGoesThroughTheSeam:
                     and sub.func.id == "sandboxed"
                 ):
                     sites[path.name] = sites.get(path.name, 0) + 1
-        assert sites == {
-            "cli_plan.py": 3,
-            "execution.py": 1,
-            "review.py": 1,
-            "review_pr.py": 2,
-            "tdd.py": 1,
-        }
+        # One seam now: every site hands its invocation to `paid_call.execute`,
+        # which sandboxes it before `_spawn`.
+        assert sites == {"paid_call.py": 1}
 
 
 def test_env_is_not_mutated(tmp_path):

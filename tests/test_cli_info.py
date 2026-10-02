@@ -1,5 +1,6 @@
 """Tests for status output formatting (v2.3.0)."""
 
+import json
 from argparse import Namespace
 from pathlib import Path
 
@@ -190,3 +191,35 @@ class TestFileDoneReconciliation:
         not_started_section = out.split("Not started", 1)[1]
         assert "TASK-000" not in not_started_section
         assert "TASK-001" in not_started_section
+
+
+class TestStatusShowsTheLastRunId:
+    """BEH-38: `status` names the last run-start of the namespace."""
+
+    RUN_B = "b2f0c1de-5a1b-4c3d-9e8f-0a1b2c3d4e5f"
+
+    def test_human_and_json_name_the_last_run(self, tmp_path, capsys):
+        config = _cfg(tmp_path)
+        config.logs_dir.mkdir()
+        with ExecutorState(config) as state:
+            state.set_meta("last_run_id", "a1111111-1111-4111-8111-111111111111")
+            state.set_meta("last_run_id", self.RUN_B)
+            state.set_meta("last_pipeline_id", "01PIPE")
+
+        print_status(config)
+        assert self.RUN_B in capsys.readouterr().out
+        cmd_status(Namespace(json_output=True), config)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["run_id"] == self.RUN_B
+        assert payload["pipeline_id"] == "01PIPE"
+        assert "total_cost" in payload
+
+    def test_a_namespace_without_runs_invents_no_id(self, tmp_path, capsys):
+        config = _cfg(tmp_path)
+        config.logs_dir.mkdir()
+        with ExecutorState(config) as state:
+            state.record_attempt("TASK-001", success=True, duration=1.0)
+
+        cmd_status(Namespace(json_output=True), config)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload.get("run_id") is None

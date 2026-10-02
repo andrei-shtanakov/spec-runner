@@ -947,7 +947,8 @@ def run_red_phase(
     # shape the invariant reserves for "the runner died mid-call", while the
     # runner was alive and the retry loop carried on.
     try:
-        call = _run_agent(config, red_prompt)
+        with _paid_scope(task, "red", RED_AUTHORING, state, red_prompt, prompt_log):
+            call = _run_agent(config, red_prompt)
     except subprocess.TimeoutExpired:
         append_output(prompt_log, "", note=f"timed out after {config.task_timeout_minutes}m")
         raise
@@ -964,6 +965,7 @@ def run_red_phase(
         input_tokens=call.input_tokens,
         output_tokens=call.output_tokens,
         cost_usd=call.cost_usd,
+        call_id=call.call_id,
     )
     # Beside the prompt it answered (#295). Until this, the RED artefact held
     # the question and not the answer, on the one call whose output decides
@@ -1759,7 +1761,8 @@ def _run_lint_agent_round(
     )
     prompt_log = _log_prompt_as(config, task, prompt, "red_agent_round")
     try:
-        call = _run_agent(config, prompt)
+        with _paid_scope(task, "red:fix", RED_AUTOFIX_AGENT_ROUND, state, prompt, prompt_log):
+            call = _run_agent(config, prompt)
     except subprocess.TimeoutExpired:
         append_output(prompt_log, "", note=f"timed out after {config.task_timeout_minutes}m")
         raise
@@ -1772,6 +1775,7 @@ def _run_lint_agent_round(
         input_tokens=call.input_tokens,
         output_tokens=call.output_tokens,
         cost_usd=call.cost_usd,
+        call_id=call.call_id,
     )
     append_output(
         prompt_log,
@@ -2155,6 +2159,8 @@ class AgentCall:
     #: seam dropped both before the call site ever saw them.
     stderr: str = ""
     returncode: int = 0
+    #: The seam's identity for the call; None when a stub stood in for it.
+    call_id: str | None = None
 
 
 def _log_prompt(config: ExecutorConfig, task, prompt: str) -> Path | None:
@@ -2168,9 +2174,30 @@ def _log_prompt(config: ExecutorConfig, task, prompt: str) -> Path | None:
     return log_prompt(config, task.id, "red", prompt)
 
 
+def _paid_scope(task, provenance: str, ledger_provenance: str, state, prompt: str, prompt_log):
+    """Who is calling, for the seam: this task, its next attempt, this state."""
+    from . import paid_call
+
+    return paid_call.scope(
+        task_id=task.id,
+        provenance=provenance,
+        ledger_provenance=ledger_provenance,
+        attempt=state.get_task_state(task.id).attempt_count + 1,
+        state=state,
+        prompt=prompt,
+        prompt_log=prompt_log,
+    )
+
+
 def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
-    """Run the coding agent once. Seam for tests."""
-    from .runner import agent_env, build_cli_invocation, parse_cli_result
+    """Run the coding agent once, through the paid-call seam (#480).
+
+    Still the patchable seam tests stub to mean "no call happened"; the guard
+    against a real call is on `paid_call._spawn`. The task, attempt and state
+    arrive through `paid_call.scope` because this signature is stubbed as is.
+    """
+    from . import paid_call
+    from .runner import agent_env, build_cli_invocation
 
     invocation = build_cli_invocation(
         cmd=config.claude_command,
@@ -2180,30 +2207,45 @@ def _run_agent(config: ExecutorConfig, prompt: str) -> AgentCall:
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
-    from .sandbox import sandboxed
-
-    call = sandboxed(config, invocation, agent_env())
-    try:
-        result = subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.task_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=call.env,
-        )
-    finally:
-        call.cleanup()
-    parsed = parse_cli_result(
-        invocation.result_format, result.stdout, result.stderr, result.returncode
+    ctx = paid_call.current_scope()
+    task_id = ctx.task_id if ctx is not None else None
+    provenance = ctx.provenance if ctx is not None else "red"
+    ledger_provenance = (ctx.ledger_provenance if ctx is not None else None) or provenance
+    timeout = config.task_timeout_minutes * 60
+    outcome = paid_call.execute(
+        config,
+        ctx.state if ctx is not None else None,
+        paid_call.PaidCall(
+            invocation=invocation,
+            provenance=provenance,
+            prompt=prompt,
+            timeout_seconds=timeout,
+            call_id=paid_call.new_call_id(),
+            task_id=task_id,
+            attempt=ctx.attempt if ctx is not None else None,
+            env=agent_env(),
+            prompt_log=ctx.prompt_log if ctx is not None else None,
+            ledger=(
+                paid_call.task_ledger(
+                    config, ctx.state if ctx is not None else None, task_id, ledger_provenance
+                )
+                if task_id is not None
+                else None
+            ),
+        ),
     )
+    if outcome.timed_out:
+        raise subprocess.TimeoutExpired(invocation.argv, timeout)
+    parsed = outcome.parsed
+    assert parsed is not None
     return AgentCall(
         text=parsed.text,
         input_tokens=parsed.input_tokens,
         output_tokens=parsed.output_tokens,
         cost_usd=parsed.cost_usd,
-        stderr=result.stderr,
-        returncode=result.returncode,
+        stderr=outcome.stderr,
+        returncode=outcome.returncode,
+        call_id=outcome.call_id,
     )
 
 

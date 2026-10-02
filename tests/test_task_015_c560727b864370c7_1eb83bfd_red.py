@@ -38,6 +38,7 @@ from spec_runner.executor import execute_task
 from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import Task
+from tests.conftest import PaidSpawnRefused
 
 
 def _config(tmp_path: Path) -> ExecutorConfig:
@@ -63,18 +64,20 @@ class TestTheStandardExecutionSeamIsGuardedLikeTheRedSeam:
         return_value=CliInvocation(["claude", "prompt"], "text"),
     )
     @patch("spec_runner.execution.pre_start_hook", return_value=True)
-    @patch("spec_runner.execution.subprocess.run")
+    @patch("subprocess.Popen")
     def test_a_bare_agent_name_is_refused_on_the_standard_path_too(
         self, mock_run, mock_pre, mock_cmd, mock_prompt, mock_status, tmp_path
     ):
         def _explode(*_a, **_k):
             raise RuntimeError("nothing may be executed by this test")
 
+        # The tripwire sits below the guard (which stands down for a test that
+        # replaced `subprocess.run`): nothing may be spawned even if it is gone.
         mock_run.side_effect = _explode
 
         task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1h")
         config = _config(tmp_path)
         state = ExecutorState(config)
 
-        with pytest.raises(AssertionError, match="would call the real agent"):
+        with pytest.raises(PaidSpawnRefused, match="would call the real agent"):
             execute_task(task, config, state)

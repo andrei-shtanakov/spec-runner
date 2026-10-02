@@ -7,7 +7,8 @@ runs are explicitly unauthorised. Nothing was wrong with the product: the test
 was missing one `monkeypatch.setattr`, and the only signal was a minute of
 silence before it failed for an unrelated reason.
 
-`conftest._no_real_agent_calls` closes that. These tests pin the guard itself,
+`conftest._no_real_agent_calls` closes that, on the one name every paid site goes
+through (`paid_call._spawn`). These tests pin the guard itself,
 because a guard nothing checks is a guard that quietly stops working — and its
 failure mode is a bill.
 """
@@ -20,7 +21,6 @@ import pytest
 
 from spec_runner import tdd
 from spec_runner.config import ExecutorConfig
-from spec_runner.execution import RealAgentCallRefused
 from spec_runner.executor import execute_task
 from spec_runner.lifecycle import TddPhase
 from spec_runner.preset_cmd import list_presets, load_fragment
@@ -33,6 +33,7 @@ from tests.conftest import (
     BELT_PROBE_COMMAND,
     PAID_AGENT_COMMANDS,
     PaidBinaryReached,
+    PaidSpawnRefused,
 )
 
 
@@ -60,9 +61,12 @@ class TestTheGuard:
         def _explode(*_a, **_k):
             raise RuntimeError("nothing may be executed by this test")
 
-        monkeypatch.setattr(tdd.subprocess, "run", _explode)
+        # `Popen`, not `run`: the guard stands down for a test that replaced
+        # `subprocess.run` (nothing can be spawned then), so the tripwire that
+        # makes a missing guard harmless sits one level below it.
+        monkeypatch.setattr(subprocess, "Popen", _explode)
 
-        with pytest.raises(AssertionError, match="would call the real agent"):
+        with pytest.raises(PaidSpawnRefused, match="would call the real agent"):
             tdd._run_agent(_cfg(tmp_path, cmd), "any prompt")
 
     def test_a_fake_script_still_runs(self, tmp_path):
@@ -139,28 +143,16 @@ class TestTheGuardCoversVerifyFirst:
         """The refusal must come from the RED-authoring seam, and nothing may
         run even if the guard is gone.
 
-        Two defects this test had, both of which let it pass while covering
-        nothing:
+        The refusal names its call site by provenance, so "which seam" is no
+        longer a guess: it must be the RED one (`red`), not GREEN (`green`) --
+        a flow that skipped `_run_red_phase_gate` would be refused too, with
+        the same words, and the recorded phase below is what proves RED was
+        entered.
 
-        * `pytest.raises(AssertionError, match="would call the real agent")`
-          also catches `RealAgentCallRefused` — a subclass of `AssertionError`
-          carrying the SAME message, raised by the guard on the *green* seam
-          (`execution._run_agent_process`) when the flow goes around
-          `_run_red_phase_gate` entirely. So deleting the `verify_first_red`
-          branch this class exists to cover left the test green: the standard
-          path refused instead, with an identical message. The seam is now
-          named — the refusal must NOT be the green one — and the recorded
-          phase is asserted, so the RED path must genuinely have been entered.
-        * a test about not spending money relied wholly on the autouse guard.
-          Drop `"claude"` from `PAID_AGENT_COMMANDS` and `_refuse_tdd` falls
-          through to the real `tdd._run_agent` and executes the CLI. That is
-          not hypothetical: it happened while measuring this very test
-          (spec-runner#455, 2026-09-12) and executed the real agent **seven
-          times across three runs** — RED authoring, task execution, and once
-          the review seam, which no guard covered. The belt that prevents it
-          now lives in `conftest._belt_never_executes_a_paid_binary`, one
-          level below every seam, so it protects the whole suite rather than
-          this test alone.
+        A test about not spending money must not rely wholly on the autouse
+        guard: `conftest._belt_never_executes_a_paid_binary` sits one level
+        below it (spec-runner#455 -- the incident that executed the real agent
+        seven times across three runs).
         """
 
         root = self._repo(tmp_path)
@@ -188,14 +180,14 @@ class TestTheGuardCoversVerifyFirst:
 
         with (
             ExecutorState(cfg) as state,
-            pytest.raises(AssertionError, match="would call the real agent") as refused,
+            pytest.raises(PaidSpawnRefused, match="would call the real agent") as refused,
         ):
             execute_task(task, cfg, state)
 
-        assert not isinstance(refused.value, RealAgentCallRefused), (
-            "the refusal came from the green seam (`_run_agent_process`), not "
-            "from RED authoring — the `verify_first_red` branch this test "
-            "exists to cover was not entered at all"
+        assert "'red' call site" in str(refused.value), (
+            "the refusal did not come from RED authoring — the `verify_first_red` "
+            "branch this test exists to cover was not entered at all: "
+            f"{refused.value}"
         )
 
         with ExecutorState(cfg) as state:
@@ -401,41 +393,30 @@ class TestTheBeltCoversEverySeamEvenWithTheGuardGone:
 
         assert BELT_PROBE_COMMAND in str(belted.value)
 
-    def test_the_plan_seam_is_belted_through_its_captured_default(self, monkeypatch):
-        """The plan seam captures `subprocess.run` at import time — and is
-        still belted, one level further down.
+    def test_the_plan_seam_is_belted(self, tmp_path, monkeypatch):
+        """Planning goes through the same seam as every other paid call: with
+        the name-based guard gone, the belt still stops it at process creation.
 
-        `cli_plan._generate_stage_draft` and `run_gated_stage` take
-        `invoke=subprocess.run` as a **default argument**, bound when the
-        module was imported. Patching the `subprocess.run` attribute cannot
-        reach that binding: the default holds the original function object,
-        so a reader can reasonably conclude this seam escapes the belt.
-
-        It does not, and the reason is worth pinning rather than
-        rediscovering: CPython's `subprocess.run` creates the child through
-        `Popen`, looked up as a module global at call time — and the belt
-        patches `Popen` too. So the captured `run` walks into the belt on its
-        way to spawning anything.
-
-        This test holds that chain in place. Delete the `Popen` line from the
-        belt and this test goes red while the seams that go through the
-        patched `run` attribute stay green — which is exactly the coverage
-        that would otherwise be lost silently.
+        (It used to be reachable through `invoke=subprocess.run`, a default
+        argument bound at import time, which no patch of the attribute could
+        reach. That parameter is gone; a double of `_spawn` replaces it.)
         """
         self._unguarded(monkeypatch)
         from spec_runner import cli_plan
+        from spec_runner.runner import build_cli_invocation
 
-        captured = cli_plan.run_gated_stage.__defaults__[-1]
-        assert captured is not subprocess.run, (
-            "the premise of this test is that the default is the ORIGINAL "
-            "`subprocess.run`, captured before the attribute was patched"
+        invocation = build_cli_invocation(
+            cmd=BELT_PROBE_COMMAND,
+            prompt="any prompt",
+            model=None,
+            template=None,
+            skip_permissions=False,
+            json_output=True,
         )
 
         with pytest.raises(PaidBinaryReached) as belted:
-            captured([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)
+            cli_plan._run_plan_call(
+                _cfg(tmp_path, BELT_PROBE_COMMAND), invocation, "any prompt", "plan:requirements"
+            )
 
         assert BELT_PROBE_COMMAND in str(belted.value)
-
-        captured_draft = cli_plan._generate_stage_draft.__defaults__[-1]
-        with pytest.raises(PaidBinaryReached):
-            captured_draft([BELT_PROBE_COMMAND, "-p", "x"], capture_output=True)

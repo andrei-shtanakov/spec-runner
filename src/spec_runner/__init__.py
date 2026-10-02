@@ -55,7 +55,7 @@ from .requirements import (
     parse_requirements,
     serialize_requirement,
 )
-from .runner import parse_token_usage, run_claude_async
+from .runner import parse_token_usage
 from .spec import (
     SPEC_META_CONTRACT,
     SpecMeta,
@@ -153,7 +153,6 @@ __all__ = [
     "execute_task",
     "load_config_from_yaml",
     "parse_token_usage",
-    "run_claude_async",
     "recover_stale_tasks",
     "run_with_retries",
     "executor_main",

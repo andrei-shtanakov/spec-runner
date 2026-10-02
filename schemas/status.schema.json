@@ -52,6 +52,14 @@
     "budget_usd": {
       "description": "Configured global budget in USD, or null when unset",
       "type": ["number", "null"]
+    },
+    "run_id": {
+      "description": "run_id of the last run-start recorded in this namespace (added 4.5.0, #480). Absent for a namespace that has had none.",
+      "type": "string"
+    },
+    "pipeline_id": {
+      "description": "pipeline_id of that run, when it had one (added 4.5.0, #480).",
+      "type": "string"
     }
   }
 }

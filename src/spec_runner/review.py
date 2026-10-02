@@ -5,7 +5,6 @@ code review execution, and HITL approval gate functions.
 """
 
 import subprocess
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -13,6 +12,8 @@ from .budget import budget_is_active
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .git_ops import stage_all_except_runtime
 from .logging import get_logger
+from .paid_call import _LEDGER_LOCK as paid_call_lock
+from .paid_call import scope as paid_call_scope
 from .prompt import load_prompt_template, neutralise_markers, render_template
 from .prompts_log import append_not_started, append_output, log_prompt
 from .runner import (
@@ -455,7 +456,7 @@ def _run_reviewer(
     and `budget_usd` were all blind to a third of a TDD attempt's calls, and to
     one call per role of every parallel review (#213).
     """
-    from .runner import build_cli_invocation, parse_cli_result
+    from .runner import build_cli_invocation
 
     # #213: the third of a TDD attempt's paid calls, and the one whose refusal
     # costs least — the candidate commit stands either way, and an unreviewed
@@ -475,46 +476,62 @@ def _run_reviewer(
         skip_permissions=config.skip_permissions,
         json_output=True,
     )
-    from .sandbox import sandboxed
+    from . import paid_call
 
-    call = sandboxed(config, invocation, agent_env())
+    scope = paid_call.current_scope()
     try:
-        result = subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.review_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=call.env,
+        # The seam writes the ledger row (open before the store ack, closed
+        # after the result): a timed-out call is a row with an unknown cost,
+        # never a zero, and a call that never launched is closed
+        # `not_started`.
+        outcome = paid_call.execute(
+            config,
+            None,
+            paid_call.PaidCall(
+                invocation=invocation,
+                provenance=provenance,
+                prompt=prompt,
+                timeout_seconds=config.review_timeout_minutes * 60,
+                call_id=paid_call.new_call_id(),
+                task_id=task_id,
+                attempt=_attempt_number(config, task_id),
+                env=agent_env(),
+                prompt_log=scope.prompt_log if scope is not None else None,
+                ledger=paid_call.task_ledger(config, None, task_id, provenance),
+            ),
         )
-    except subprocess.TimeoutExpired:
-        # It ran, and it was billed for as long as it ran. The cost is
-        # unknown — recorded as unknown, never as zero, because a zero would
-        # be indistinguishable from a cheap call in every later sum.
-        _record_call(config, task_id, provenance, None)
-        return ReviewCall(text="", stderr="", returncode=-1, cost_usd=None, timed_out=True)
     except OSError as exc:
         logger.warning(
-            "Reviewer did not launch — no ledger row",
+            "Reviewer did not launch",
             task_id=task_id,
             provenance=provenance,
             error=str(exc),
         )
         raise
-    finally:
-        call.cleanup()
-
-    parsed = parse_cli_result(
-        invocation.result_format, result.stdout, result.stderr, result.returncode
-    )
-    _record_call(config, task_id, provenance, parsed)
+    if outcome.timed_out:
+        return ReviewCall(text="", stderr="", returncode=-1, cost_usd=None, timed_out=True)
+    parsed = outcome.parsed
+    assert parsed is not None
     return ReviewCall(
         text=parsed.text,
-        stderr=result.stderr,
-        returncode=result.returncode,
+        stderr=outcome.stderr,
+        returncode=outcome.returncode,
         cost_usd=parsed.cost_usd,
         is_error=parsed.is_error,
     )
+
+
+def _attempt_number(config: ExecutorConfig, task_id: str) -> int | None:
+    """The attempt this review belongs to: the one `record_attempt` has not yet
+    written (a review runs before its attempt is recorded). None when the
+    state cannot be read -- a number is evidence, not a reason to skip a call."""
+    from .state import ExecutorState
+
+    try:
+        with _LEDGER_LOCK, ExecutorState(config) as state:
+            return int(state.get_task_state(task_id).attempt_count) + 1
+    except Exception:  # noqa: BLE001
+        return None
 
 
 #: Serialises ledger writes from the parallel review pool. Each role opens its
@@ -524,7 +541,7 @@ def _run_reviewer(
 #: `test_each_parallel_role_gets_its_own_row` lost one role's row to exactly
 #: that. A review call takes minutes; serialising a millisecond write is free,
 #: and losing an accounting row is the thing this change exists to stop.
-_LEDGER_LOCK = threading.Lock()
+_LEDGER_LOCK = paid_call_lock
 
 
 def _budget_refusal(
@@ -561,33 +578,6 @@ def _budget_refusal(
             UNREADABLE,
             f"the budget guard could not read recorded spend ({exc}), so the remaining "
             f"budget cannot be proven — not starting the {provenance} call",
-        )
-
-
-def _record_call(config: ExecutorConfig, task_id: str, provenance: str, parsed: object) -> None:
-    """Append the ledger row. Never allowed to affect the verdict.
-
-    Loud on failure and swallowed all the same: an accounting problem must not
-    turn "the reviewer found issues" into "the reviewer passed it", and must
-    not turn a finished review into a failed task.
-    """
-    from .state import ExecutorState
-
-    try:
-        with _LEDGER_LOCK, ExecutorState(config) as state:
-            state.record_agent_call(
-                task_id,
-                provenance,
-                input_tokens=getattr(parsed, "input_tokens", None),
-                output_tokens=getattr(parsed, "output_tokens", None),
-                cost_usd=getattr(parsed, "cost_usd", None),
-            )
-    except Exception as exc:
-        logger.warning(
-            "Review cost was not recorded",
-            task_id=task_id,
-            provenance=provenance,
-            error=str(exc),
         )
 
 
@@ -647,16 +637,19 @@ def run_code_review(
         # shape the invariant reserves for a runner that died (Copilot, PR
         # #298). Measured: with the binary missing, that file was open.
         try:
-            call = _run_reviewer(
-                config,
-                task.id,
-                REVIEW_PROVENANCE,
-                prompt,
-                review_cmd,
-                review_model,
-                review_template,
-                pending_cost,
-            )
+            with paid_call_scope(
+                task_id=task.id, provenance=REVIEW_PROVENANCE, prompt_log=prompt_log
+            ):
+                call = _run_reviewer(
+                    config,
+                    task.id,
+                    REVIEW_PROVENANCE,
+                    prompt,
+                    review_cmd,
+                    review_model,
+                    review_template,
+                    pending_cost,
+                )
         except OSError as exc:
             append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
             raise
@@ -821,16 +814,19 @@ def _run_single_role_review(
     prompt_log = log_prompt(config, task_id, role_provenance(role), full_prompt)
     try:
         try:
-            call = _run_reviewer(
-                config,
-                task_id,
-                role_provenance(role),
-                full_prompt,
-                review_cmd,
-                review_model,
-                review_template,
-                pending_cost,
-            )
+            with paid_call_scope(
+                task_id=task_id, provenance=role_provenance(role), prompt_log=prompt_log
+            ):
+                call = _run_reviewer(
+                    config,
+                    task_id,
+                    role_provenance(role),
+                    full_prompt,
+                    review_cmd,
+                    review_model,
+                    review_template,
+                    pending_cost,
+                )
         except OSError as exc:
             append_not_started(prompt_log, f"the reviewer did not launch: {exc}")
             raise

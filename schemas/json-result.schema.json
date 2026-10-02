@@ -95,6 +95,14 @@
         "exit_code": {
           "type": "integer",
           "enum": [0, 1]
+        },
+        "run_id": {
+          "description": "Full UUIDv4 of the spec-runner invocation that produced this entry (added 4.5.0, #480). Absent when the entry was built outside a CLI invocation.",
+          "type": "string"
+        },
+        "pipeline_id": {
+          "description": "Pipeline id of that invocation, when one was set (ORCHESTRA_PIPELINE_ID). Added 4.5.0, #480.",
+          "type": "string"
         }
       },
       "required": ["task_id", "status", "attempts"]

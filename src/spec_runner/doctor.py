@@ -299,6 +299,18 @@ def build_scratch(
     # The project's spec files do not exist under the scratch root either;
     # the probe's one task needs none.
     cfg.task_context_files = []
+    # The probe's scope (#480 design § 2.7): this config declares itself an
+    # ephemeral probe, so the seam publishes its two calls under the
+    # `doctor:` provenance without a task and no checkpoint is taken of a
+    # directory that is about to be deleted.
+    cfg.probe_provenance = "doctor"
+    # Exactly the calls the cost gate announces: one execution, one review.
+    cfg.execution_mode = "standard"
+    cfg.review_parallel = False
+    cfg.review_roles = []
+    # An absolute path would send the probe's audit lines to the caller's file
+    # under the caller's run id.
+    cfg.audit_log_path = ""
     cfg.__post_init__()
 
     # Hook flags

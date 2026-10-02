@@ -328,10 +328,12 @@ class TestOnlyTheDeclaredDoorReachesAWritableStore:
         import pathlib
 
         package = pathlib.Path(artifact_store.__file__).parent
-        writable = {"LocalVolumeStore", "_build_store"}
+        writable = {"LocalVolumeStore", "_build_store", "_open_store"}
         offenders: list[str] = []
         for module in sorted(package.rglob("*.py")):
-            if module.name == "artifact_store.py":
+            # `evidence.py` is the Publisher: the one declared importer of the
+            # writable door (design § 1.4).
+            if module.name in ("artifact_store.py", "evidence.py"):
                 continue
             tree = ast.parse(module.read_text(encoding="utf-8"))
             # Поимённый импорт — первая форма обхода.
