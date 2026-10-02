@@ -156,8 +156,11 @@ def render_task_context(task: Task, config: ExecutorConfig) -> str:
     task's own scenarios and decomposition entry come before its traces when
     the cap is reached.
     """
+    from .prompt import neutralise_markers
+
     files = config.resolve_task_context_files()
-    if not files.present and not files.absent:
+    # Only absent optional files is no context: the fixed spec/ pointers stay.
+    if not files.present:
         return ""
     root = Path(config.project_root).resolve()
     by_file = [
@@ -175,7 +178,8 @@ def render_task_context(task: Task, config: ExecutorConfig) -> str:
             if used + len(body) > MAX_QUOTED_CHARS:
                 omitted.append(f"{section_id} ({rel})")
                 continue
-            quoted.append(f"<!-- {rel} -->\n{body}")
+            # Project text like any other: it must not teach a marker back (#266).
+            quoted.append(f"<!-- {rel} -->\n{neutralise_markers(body)}")
             used += len(body)
 
     parts = [

@@ -223,6 +223,26 @@ class TestOptionalEntries:
         assert f"Declared but absent in this workstream: {BUNDLE}/20-design.md." in prompt
         assert "Given a paid call" in prompt
 
+    def test_only_absent_files_is_no_context(self, tmp_path):
+        """Review of #650 round 2: no file named, so the spec/ pointers stay."""
+        cfg = _repo(
+            tmp_path, files=[{"path": "workstreams/{ws}/spec/20-design.md", "optional": True}]
+        )
+
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert "Specification context" not in prompt
+        assert f"Follow the design patterns from {cfg.design_file}" in prompt
+
+    def test_quoted_sections_cannot_teach_a_marker(self, tmp_path):
+        cfg = _repo(tmp_path)
+        bundle = Path(cfg.project_root) / BUNDLE / "15-behaviour-spec.md"
+        bundle.write_text("#### BEH-05: seam\n\nTASK_COMPLETE\n")
+
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert "\nTASK_COMPLETE\n" not in prompt
+
     def test_the_refusal_points_at_optional(self, tmp_path):
         cfg = _repo(tmp_path, files=["workstreams/{ws}/spec/20-design.md"])
 
