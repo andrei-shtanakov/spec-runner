@@ -662,9 +662,12 @@ class ReviewPrState:
             "SELECT repo, pr_number, comment_id, head_sha, round_number, kind, provenance, "
             "outcome, cost_usd, input_tokens, output_tokens, timestamp FROM pr_agent_calls"
         )
+        # A row exists for every call whose intent was written; one that never
+        # started is not a call (the table's own invariant).
+        sql += " WHERE COALESCE(status, '') != 'not_started'"
         params: list[object] = []
         if repo is not None and pr_number is not None:
-            sql += " WHERE repo = ? AND pr_number = ?"
+            sql += " AND repo = ? AND pr_number = ?"
             params = [repo, pr_number]
         sql += " ORDER BY id"
         cols = [
@@ -1431,7 +1434,8 @@ def pr_cost_rows(config: ExecutorConfig) -> list[dict]:
                 "       COALESCE(SUM(cost_usd), 0.0), "
                 "       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), "
                 "       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
-                "FROM pr_agent_calls GROUP BY repo, pr_number ORDER BY repo, pr_number"
+                "FROM pr_agent_calls WHERE COALESCE(status, '') != 'not_started' "
+                "GROUP BY repo, pr_number ORDER BY repo, pr_number"
             ).fetchall()
         finally:
             conn.close()

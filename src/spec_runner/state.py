@@ -2562,7 +2562,12 @@ class ExecutorState:
         # GREEN's row joins the seam's ids to the ledger and carries no price on
         # purpose: that money is on the attempt row, and counting its NULL here
         # would make every run look unpriced.
-        sql = "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL AND provenance != 'green'"
+        # A `not_started` row spent nothing: counting it would make one refused
+        # call-start an unprovable remainder that refuses every later call.
+        sql = (
+            "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL AND provenance != 'green' "
+            "AND COALESCE(status, '') != 'not_started'"
+        )
         params: list[object] = []
         if task_id:
             sql += " AND task_id = ?"
