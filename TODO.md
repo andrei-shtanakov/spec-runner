@@ -919,6 +919,15 @@ runtime-state по инварианту конвейера «нужное для
       audit, calls и closure; durable call-start подтверждается до траты, а
       run-closure пишется на каждом orderly exit, включая ранние отказы без
       task/attempt.
+- [ ] **doctor-ignores-tdd-mode** (найдено на шаге 3.1 чек-листа #480/#600, 2026-10-02) @owner:github:andrei-shtanakov @id:doctor-ignores-tdd-mode @epic:eco.spec-toolchain
+      `doctor` копирует конфиг проекта (`build_scratch`: `copy.deepcopy(base)`) и не
+      сбрасывает `execution_mode`: в проекте с `execution_mode: tdd` проба уходит в RED-гейт
+      без коммитов в scratch и всегда даёт BROKEN за 0 с («no confirmed red … fresh repo»),
+      не вызвав агента. В этом репо `doctor` поэтому неприменим без обходного пути (минимальный
+      конфиг в отдельном каталоге). Ожидание: проба форсирует `execution_mode: standard` (и не
+      наследует политику ревью/TDD проекта), сохраняя то, ради чего её зовут (CLI, модель,
+      `executor_sandbox`); регрессия — `doctor` в tdd-проекте → READY.
+
 - [ ] **preflight-sees-stale-bundle** (найдено при подготовке #480, 2026-10-01) @owner:github:andrei-shtanakov @id:preflight-sees-stale-bundle @epic:eco.spec-toolchain
       `preflight` (и гейт `spec_governance: strict`) отвечают `ready`, когда tasks-спека
       `approved`, хотя узлы бандла выше неё снова `draft` (подпись спеки относится к
