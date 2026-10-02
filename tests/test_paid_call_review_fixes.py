@@ -217,7 +217,10 @@ class TestDrain:
 
         started = time.monotonic()
         assert publisher.drain(0.05) is False
-        assert time.monotonic() - started < 1.0
+        # Against the ack timeout it would otherwise wait (30 s), not against
+        # the scheduler: a wall-clock bound near the work's own duration is
+        # what made the gate flaky (#651, #652).
+        assert time.monotonic() - started < publisher.ack_timeout / 3
         assert publisher.pending == 1
 
     def test_concurrent_drains_deliver_each_record_once(self):
