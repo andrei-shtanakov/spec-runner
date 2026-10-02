@@ -15,6 +15,7 @@ from .logging import get_logger
 from .spec import LITE, StageDef, StageProfile, ancestor_stages
 from .state import RetryContext, TaskAttempt
 from .task import Task
+from .task_context import render_task_context
 
 logger = get_logger("prompt")
 
@@ -600,6 +601,7 @@ def _render_red_prompt(task: "Task", config: "ExecutorConfig") -> str:
 
     checklist = "\n".join(f"- {'[x]' if done else '[ ]'} {item}" for item, done in task.checklist)
     context = "\n\n".join(related)
+    spec_context = render_task_context(task, config)
 
     return f"""# RED phase: {task.id} — {task.name}
 
@@ -613,7 +615,7 @@ You are writing **one failing test** and nothing else.
 
 {f"## Requirements{chr(10)}{chr(10)}{context}" if context else ""}
 
-## Rules
+{spec_context + chr(10) if spec_context else ""}## Rules
 
 1. Write **exactly one** test that fails because the behaviour does not exist yet.
 2. Write **no implementation**. A test that passes because you also wrote the
@@ -745,6 +747,8 @@ def _render_task_prompt(
                 "Do not repeat the same mistakes.\n\n"
             )
 
+    spec_context = render_task_context(task, config)
+
     # Load constitution guardrails (if present)
     constitution = ""
     if config.constitution_file.exists():
@@ -774,6 +778,7 @@ def _render_task_prompt(
             "RELATED_DESIGN": "\n".join(related_design)
             if related_design
             else f"See {config.design_file}",
+            "TASK_CONTEXT": spec_context,
             "PREVIOUS_ATTEMPTS": attempts_section,
             "CONSTITUTION": constitution,
             "PERSONA_PROMPT": persona_prompt,
@@ -801,7 +806,7 @@ def _render_task_prompt(
 
 {chr(10).join(related_design) if related_design else f"See {config.design_file}"}
 
-{"## Constitution (Inviolable Rules):" + chr(10) + chr(10) + constitution + chr(10) + chr(10) if constitution else ""}## Instructions:
+{spec_context + chr(10) if spec_context else ""}{"## Constitution (Inviolable Rules):" + chr(10) + chr(10) + constitution + chr(10) + chr(10) if constitution else ""}## Instructions:
 
 1. Implement ALL checklist items for this task
 2. Write unit tests for new code (coverage ≥80%)

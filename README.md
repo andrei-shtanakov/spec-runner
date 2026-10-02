@@ -541,6 +541,9 @@ harness_allow: []            # Globs exempt from strict-mode violations
 executor_sandbox: "off"      # OS write boundary for agent calls: off | on | required
                              # (macOS sandbox-exec; quote the word — bare YAML `on` is a bool)
 sandbox_allow: []            # Extra writable paths under the sandbox (~/.npm, ~/.mix, ...)
+task_context_files: []       # Spec files for task prompts, e.g. workstreams/{ws}/spec/20-design.md;
+                             # listed in the prompt, referenced sections quoted;
+                             # a missing file refuses run/retry/watch
 
 commands:
   test: "uv run pytest tests/ -v"

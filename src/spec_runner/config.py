@@ -656,6 +656,11 @@ class ExecutorConfig:
     # injected only for the matching stage, wrapped in <rules>...</rules>.
     spec_rules: dict[str, list[str]] = field(default_factory=dict)
 
+    # Files that specify the tasks (project-root-relative; `{prefix}`/`{ws}`
+    # as in an external stage path). Listed in every task-execution prompt,
+    # with the sections the task references quoted — see `task_context.py`.
+    task_context_files: list[str] = field(default_factory=list)
+
     # Harness-mutation tripwire (#64): the verification harness (test/lint
     # config, dependency manifests, CI workflows) is writable by the agent
     # under test — an agent can satisfy the gates by patching the oracle.
@@ -722,7 +727,7 @@ class ExecutorConfig:
                 f"invalid executor_sandbox {self.executor_sandbox!r}: "
                 "expected one of 'off', 'on', 'required'"
             )
-        for attr in ("harness_files", "harness_allow", "sandbox_allow"):
+        for attr in ("harness_files", "harness_allow", "sandbox_allow", "task_context_files"):
             value = getattr(self, attr)
             if isinstance(value, str):
                 setattr(self, attr, [value])
@@ -730,7 +735,7 @@ class ExecutorConfig:
                 raise ConfigError(f"{attr} must be a list of paths, got {type(value).__name__}")
         # An empty entry is a typo, and `Path.match("")` raises: the guard
         # would crash on the first violation it compares (review of #601).
-        for attr in ("harness_files", "harness_allow", "sandbox_allow"):
+        for attr in ("harness_files", "harness_allow", "sandbox_allow", "task_context_files"):
             if any(not str(entry).strip() for entry in getattr(self, attr)):
                 raise ConfigError(f"{attr} has an empty entry: {getattr(self, attr)!r}")
 
@@ -1003,6 +1008,16 @@ class ExecutorConfig:
             return resolve_stage_paths(profile, self)
         except ProfileError as exc:
             raise ConfigError(str(exc)) from exc
+
+    def resolve_task_context_files(self) -> list[Path]:
+        """The declared `task_context_files`, resolved for this namespace.
+
+        Raises:
+            ConfigError: on an entry that escapes the project or names no file.
+        """
+        from .task_context import resolve_context_files
+
+        return resolve_context_files(self)
 
     def resolve_tdd_runner(self) -> str | None:
         """The adapter name that verifies a RED here, or None to refuse.
@@ -1515,6 +1530,7 @@ def load_config_from_yaml(config_path: Path | None = None) -> dict:
             "spec_profile": executor_config.get("spec_profile"),
             "spec_context": executor_config.get("spec_context"),
             "spec_rules": executor_config.get("spec_rules"),
+            "task_context_files": executor_config.get("task_context_files"),
             "review_pr_allowed_bots": (executor_config.get("review_pr") or {}).get("allowed_bots"),
             "review_pr_max_rounds": (executor_config.get("review_pr") or {}).get("max_rounds"),
             "review_pr_max_comments": (executor_config.get("review_pr") or {}).get("max_comments"),

@@ -2885,6 +2885,9 @@ def main(argv=None):  # untyped on purpose: its body predates mypy strict
     try:
         config.resolve_spec_profile()
         config.resolve_tdd_runner()
+        # A run whose declared specification is missing would build blind.
+        if args.command in BUDGETED_COMMANDS:
+            config.resolve_task_context_files()
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
 
