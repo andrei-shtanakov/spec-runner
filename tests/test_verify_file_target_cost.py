@@ -358,11 +358,13 @@ class TestBEH08FileTargetCostIsMeasuredOnTheRealDeclarationFile:
         # The declaration itself shrinks (charter: 2984 -> ~48 chars).
         assert len(file_target_line) < len(expanded_line)
 
-        # A real, live-measured speedup — not pinned to the charter's own
-        # seconds, only to the same direction of reduction.
-        assert file_target_elapsed < expanded_elapsed
-
         if update_golden:
+            # A real, live-measured speedup — asserted only when measuring on
+            # purpose. Two live runs' wall clock under a neighbour's load is
+            # not a gate (it failed #480 TASK-002's test gate at 8.3 s vs 6.3 s
+            # with every count held); BEH-08's deterministic gate is the run
+            # count above.
+            assert file_target_elapsed < expanded_elapsed
             MEASUREMENTS_DIR.mkdir(parents=True, exist_ok=True)
             ARTIFACT_PATH.write_text(
                 json.dumps(
