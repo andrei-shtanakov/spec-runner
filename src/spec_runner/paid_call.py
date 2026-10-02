@@ -219,7 +219,10 @@ def task_ledger(
 
     def close_row(call_id: str, status: str, outcome: CallOutcome | None) -> None:
         parsed = outcome.parsed if outcome is not None else None
-        cost = None if price_on_attempt or parsed is None else parsed.cost_usd
+        # A call priced on its attempt row (GREEN) keeps its tokens there too:
+        # the totals sum attempts and ledger, so writing them here as well
+        # would count them twice.
+        usage = None if price_on_attempt else parsed
         _with_state(
             config,
             state,
@@ -227,9 +230,9 @@ def task_ledger(
                 "agent_calls",
                 call_id,
                 status=status,
-                input_tokens=getattr(parsed, "input_tokens", None),
-                output_tokens=getattr(parsed, "output_tokens", None),
-                cost_usd=cost,
+                input_tokens=getattr(usage, "input_tokens", None),
+                output_tokens=getattr(usage, "output_tokens", None),
+                cost_usd=getattr(usage, "cost_usd", None),
             ),
         )
 
