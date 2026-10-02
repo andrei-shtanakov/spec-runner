@@ -7,6 +7,7 @@ code review execution, and HITL approval gate functions.
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 from .budget import budget_is_active
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
@@ -233,6 +234,103 @@ def append_waiver_obligation(prompt: str, config: ExecutorConfig, task: Task) ->
     )
 
 
+#: How much of the patch the prompt carries; the reviewer reads the rest
+#: itself from the base the prompt names.
+MAX_PROMPT_PATCH = 30_000
+
+
+@dataclass(frozen=True)
+class TaskDiff:
+    """The task's changes: from where the task began to the tree under review.
+
+    ``base`` is the merge-base of HEAD with the branch the task merges into
+    (the integration branch during a run), so every commit of the task is in
+    it — WIP commits, master merged in, the agent's own commits. `HEAD~1`
+    saw only the last one: TASK-002 of #480 passed a required review on a
+    one-line diff of tasks.md while ~3,900 lines went unread.
+    """
+
+    base: str
+    #: None when git could not say (not a repository, no such base): unknown,
+    #: never "nothing changed".
+    files: list[str] | None
+    stat: str
+    patch: str
+
+
+def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=config.project_root)
+
+
+def task_base(config: ExecutorConfig) -> str:
+    """Where the task under review began (see ``TaskDiff``).
+
+    Falls back to ``HEAD~1`` when HEAD *is* the merge-base — work committed
+    straight onto the main branch, where no branch marks the task's start.
+    """
+    from .git_ops import get_main_branch
+
+    merge_base = _git(config, "merge-base", "HEAD", get_main_branch(config))
+    head = _git(config, "rev-parse", "HEAD")
+    base = merge_base.stdout.strip()
+    if merge_base.returncode == 0 and base and base != head.stdout.strip():
+        return base
+    return "HEAD~1"
+
+
+def task_diff(config: ExecutorConfig) -> TaskDiff | None:
+    """The task's diff, or None when git automation is off for this project.
+
+    Off means no per-task isolation — a subdir of a larger repo, or
+    `--no-branch --no-commit` — where a diff would run against the parent
+    repo and drown the reviewer in unrelated changes.
+    """
+    if not (config.create_git_branch or config.auto_commit):
+        return None
+    base = task_base(config)
+    # `--relative`: paths as the project sees them, for the bookkeeping check.
+    names = _git(config, "diff", "--relative", "--name-only", base)
+    files = names.stdout.split() if names.returncode == 0 else None
+    stat = _git(config, "diff", base, "--stat")
+    patch = _git(config, "diff", "-p", base)
+    return TaskDiff(
+        base=base,
+        files=files,
+        stat=stat.stdout.strip() if stat.returncode == 0 else "",
+        patch=patch.stdout if patch.returncode == 0 else "",
+    )
+
+
+def nothing_to_review(config: ExecutorConfig) -> str | None:
+    """Why a review would have nothing to read, or None.
+
+    Only the task file's bookkeeping changed (or nothing did): a reviewer
+    handed that has nothing to pass, and its PASSED would be read as a
+    reviewed task. Not run, and said so — an `ERROR` verdict, which
+    `review_policy: required` treats as an instrument error.
+    """
+    # `doctor` probes whether the review CLI answers, not whether a task's
+    # work is sound; its scratch task need not change anything.
+    if getattr(config, "probe_provenance", None):
+        return None
+    diff = task_diff(config)
+    if diff is None or diff.files is None:
+        return None
+    tasks_rel = (
+        Path(config.tasks_file)
+        .resolve()
+        .relative_to(Path(config.project_root).resolve())
+        .as_posix()
+    )
+    if [f for f in diff.files if f != tasks_rel]:
+        return None
+    return (
+        f"nothing to review: the diff from {diff.base} changes "
+        f"{'only ' + tasks_rel if diff.files else 'nothing'} — the task's work is not in "
+        "the tree under review"
+    )
+
+
 def _render_review_prompt(
     task: Task,
     config: ExecutorConfig,
@@ -251,44 +349,24 @@ def _render_review_prompt(
         lint_output: Lint check output to include in review context
         previous_error: Error from previous attempt (retry context)
     """
-    # Gather the task diff via `git diff HEAD~1` ONLY when this project does
-    # git-based task isolation (a branch and/or commit per task). When git
-    # automation is off — a subdir of a larger repo, or `--no-branch --no-commit`
-    # — `git diff HEAD~1` runs against the PARENT repo and yields a huge, unrelated
-    # diff that makes the reviewer slow or hang. In that case skip it.
-    if config.create_git_branch or config.auto_commit:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1"],
-            capture_output=True,
-            text=True,
-            cwd=config.project_root,
-        )
+    diff = task_diff(config)
+    if diff is not None:
         changed_files = (
-            result.stdout.strip() if result.returncode == 0 else "Unable to get changed files"
+            "Unable to get changed files" if diff.files is None else "\n".join(diff.files)
         )
-
-        result = subprocess.run(
-            ["git", "diff", "HEAD~1", "--stat"],
-            capture_output=True,
-            text=True,
-            cwd=config.project_root,
-        )
-        git_diff_stat = result.stdout.strip() if result.returncode == 0 else ""
-
-        # Full diff for review context (truncated to 30KB)
-        diff_p_result = subprocess.run(
-            ["git", "diff", "-p", "HEAD~1"],
-            capture_output=True,
-            text=True,
-            cwd=config.project_root,
-        )
-        full_diff = diff_p_result.stdout[:30_000]
-        if len(diff_p_result.stdout) > 30_000:
-            full_diff += "\n... (diff truncated)"
+        git_diff_stat = diff.stat
+        full_diff = diff.patch[:MAX_PROMPT_PATCH]
+        if len(diff.patch) > MAX_PROMPT_PATCH:
+            full_diff += (
+                f"\n... (diff truncated at {MAX_PROMPT_PATCH} of {len(diff.patch)} chars — "
+                f"read the rest with `git diff {diff.base}`)"
+            )
+        base_note = f"Base of the task: `{diff.base}` (the diff below is `git diff {diff.base}`)"
     else:
         changed_files = "(git diff unavailable: git automation disabled for this project)"
         git_diff_stat = ""
         full_diff = ""
+        base_note = ""
 
     # Try to load CLI-specific or custom template
     template = load_prompt_template("review", cli_name=cli_name, prompts_dir=config.prompts_dir)
@@ -346,6 +424,8 @@ def _render_review_prompt(
     return f"""{persona_section}# Code Review Request
 
 ## Task Completed: {task.id} — {task.name}
+
+{base_note}
 
 ## Changed Files:
 {changed_files}
@@ -602,6 +682,10 @@ def run_code_review(
         Tuple of (verdict, error_message, review_output).
     """
     log_progress("🔍 Starting code review", task.id)
+    empty = nothing_to_review(config)
+    if empty is not None:
+        log_progress(f"⛔ Review not run: {empty}", task.id)
+        return ReviewVerdict.ERROR, empty, None
 
     # Use review-specific command/model if configured, then persona, then main settings
     review_cmd = config.review_command or config.claude_command
@@ -900,6 +984,10 @@ def run_parallel_review(
     Verdicts are aggregated: any FAILED → overall FAILED.
     """
     log_progress(f"🔍 Starting parallel review ({len(config.review_roles)} roles)", task.id)
+    empty = nothing_to_review(config)
+    if empty is not None:
+        log_progress(f"⛔ Review not run: {empty}", task.id)
+        return ReviewVerdict.ERROR, empty, None
 
     review_cmd = config.review_command or config.claude_command
     review_model = config.review_model or config.get_model_for_role("reviewer")
