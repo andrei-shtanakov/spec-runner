@@ -59,9 +59,13 @@ executor:
   task_context_files:
   - workstreams/{ws}/spec/10-requirements.md
   - workstreams/{ws}/spec/15-behaviour-spec.md
-  - workstreams/{ws}/spec/20-design.md
-  - workstreams/{ws}/spec/25-acceptance.md
-  - workstreams/{ws}/spec/30-decomposition.md
+  # Бандлы старой формы (WS-spec-runner-341/367) — без design/acceptance/decomposition.
+  - path: workstreams/{ws}/spec/20-design.md
+    optional: true
+  - path: workstreams/{ws}/spec/25-acceptance.md
+    optional: true
+  - path: workstreams/{ws}/spec/30-decomposition.md
+    optional: true
   task_timeout_minutes: 30
   # Долларовых потолков нет намеренно: подписка; total_cost_usd — нотация
   # листпрайса. Тормоза: max_retries, on_task_failure: stop, task_timeout.

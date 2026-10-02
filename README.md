@@ -543,7 +543,8 @@ executor_sandbox: "off"      # OS write boundary for agent calls: off | on | req
 sandbox_allow: []            # Extra writable paths under the sandbox (~/.npm, ~/.mix, ...)
 task_context_files: []       # Spec files for task prompts, e.g. workstreams/{ws}/spec/20-design.md;
                              # listed in the prompt, referenced sections quoted;
-                             # a missing file refuses run/retry/watch
+                             # a missing file refuses run/retry/watch, unless the entry
+                             # is {path: ..., optional: true}
 
 commands:
   test: "uv run pytest tests/ -v"

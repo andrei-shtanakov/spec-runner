@@ -18,6 +18,7 @@ key exists to prevent.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,21 +30,55 @@ if TYPE_CHECKING:
 #: kilobytes; what does not fit is named, not dropped silently.
 MAX_QUOTED_CHARS = 60_000
 
-_ID = re.compile(r"\b([A-Z][A-Z0-9]*-\d+)(?![\w-])")
+_ID_SHAPE = r"[A-Z][A-Z0-9]*-\d+[a-z]?(?![\w-])"
+_ID = re.compile(rf"\b({_ID_SHAPE})")
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-_HEADING_ID = re.compile(r"([A-Z][A-Z0-9]*-\d+)(?![\w-])")
+_HEADING_ID = re.compile(rf"({_ID_SHAPE})")
 
 
-def resolve_context_files(config: ExecutorConfig) -> list[Path]:
+@dataclass(frozen=True)
+class ContextFiles:
+    """The declared files for one namespace: those present, and the optional
+    ones this workstream does not have (named in the prompt, never hidden)."""
+
+    present: list[Path]
+    absent: list[str]
+
+
+def _entry(raw: object) -> tuple[str, bool]:
+    """`path` or `{path: …, optional: true}` → (path, optional)."""
+    from .config import ConfigError
+
+    if isinstance(raw, str):
+        return raw, False
+    if (
+        isinstance(raw, dict)
+        and isinstance(raw.get("path"), str)
+        and set(raw)
+        <= {
+            "path",
+            "optional",
+        }
+    ):
+        optional = raw.get("optional", False)
+        if isinstance(optional, bool):
+            return raw["path"], optional
+    raise ConfigError(
+        f"task_context_files: {raw!r} — expected a path or {{path: <path>, optional: <bool>}}"
+    )
+
+
+def resolve_context_files(config: ExecutorConfig) -> ContextFiles:
     """The declared context files for this namespace, in declared order.
 
     `{prefix}`/`{ws}` are substituted as in an external stage path (#338). An
     entry with a placeholder belongs to a namespaced workstream and is skipped
-    when no `--spec-prefix` is given.
+    when no `--spec-prefix` is given. An `optional` entry may be absent — a
+    bundle of an older shape has no design node — and is then named as such.
 
     Raises:
         ConfigError: on a malformed entry, a path outside the project, or a
-            file that does not exist.
+            required file that does not exist.
     """
     from .config import ConfigError
     from .spec import _PLACEHOLDER, ProfileError, _check_path_template
@@ -51,8 +86,10 @@ def resolve_context_files(config: ExecutorConfig) -> list[Path]:
     root = Path(config.project_root).resolve()
     prefix = config.spec_prefix or ""
     ws = prefix[:-1] if prefix.endswith("-") else prefix
-    out: list[Path] = []
-    for entry in config.task_context_files:
+    present: list[Path] = []
+    absent: list[str] = []
+    for raw in config.task_context_files:
+        entry, optional = _entry(raw)
         try:
             _check_path_template(entry, "task_context_files")
         except ProfileError as exc:
@@ -64,13 +101,17 @@ def resolve_context_files(config: ExecutorConfig) -> list[Path]:
             raise ConfigError(
                 f"task_context_files: {entry!r} resolves outside the project ({path})"
             )
-        if not path.is_file():
+        if path.is_file():
+            present.append(path)
+        elif optional:
+            absent.append(path.relative_to(root).as_posix())
+        else:
             raise ConfigError(
                 f"task_context_files: {entry!r} resolves to {path}, which is not a file — "
-                "the tasks would run without the specification they were declared to need"
+                "the tasks would run without the specification they were declared to need "
+                "(mark the entry `optional: true` if a workstream may lack it)"
             )
-        out.append(path)
-    return out
+    return ContextFiles(present, absent)
 
 
 def referenced_ids(task: Task) -> list[str]:
@@ -109,19 +150,25 @@ def sections_by_id(text: str) -> dict[str, str]:
 
 
 def render_task_context(task: Task, config: ExecutorConfig) -> str:
-    """The prompt section for `task`, or "" when nothing is declared."""
+    """The prompt section for `task`, or "" when nothing is declared.
+
+    Sections are quoted in the order the task references their ids, so the
+    task's own scenarios and decomposition entry come before its traces when
+    the cap is reached.
+    """
     files = config.resolve_task_context_files()
-    if not files:
+    if not files.present and not files.absent:
         return ""
     root = Path(config.project_root).resolve()
-    ids = referenced_ids(task)
+    by_file = [
+        (path.relative_to(root).as_posix(), sections_by_id(path.read_text(encoding="utf-8")))
+        for path in files.present
+    ]
     quoted: list[str] = []
     omitted: list[str] = []
     used = 0
-    for path in files:
-        rel = path.relative_to(root).as_posix()
-        sections = sections_by_id(path.read_text(encoding="utf-8"))
-        for section_id in ids:
+    for section_id in referenced_ids(task):
+        for rel, sections in by_file:
             body = sections.get(section_id)
             if body is None:
                 continue
@@ -131,7 +178,6 @@ def render_task_context(task: Task, config: ExecutorConfig) -> str:
             quoted.append(f"<!-- {rel} -->\n{body}")
             used += len(body)
 
-    listing = "\n".join(f"- `{p.relative_to(root).as_posix()}`" for p in files)
     parts = [
         "## Specification context",
         "",
@@ -139,8 +185,10 @@ def render_task_context(task: Task, config: ExecutorConfig) -> str:
         "anything this prompt does not quote — including sections the checklist "
         "cites by number (e.g. §2.2).",
         "",
-        listing,
+        "\n".join(f"- `{rel}`" for rel, _ in by_file),
     ]
+    if files.absent:
+        parts += ["", f"Declared but absent in this workstream: {', '.join(files.absent)}."]
     if quoted:
         parts += ["", "### Sections this task references", "", "\n\n".join(quoted)]
     if omitted:

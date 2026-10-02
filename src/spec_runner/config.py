@@ -22,6 +22,7 @@ import yaml
 if TYPE_CHECKING:
     from .spec import StageProfile
     from .task import Task
+    from .task_context import ContextFiles
 
 #: Execution contracts a task can run under (#141, #367). `standard` is the
 #: default and its guarantee is precise: execution, terminal state and
@@ -659,7 +660,8 @@ class ExecutorConfig:
     # Files that specify the tasks (project-root-relative; `{prefix}`/`{ws}`
     # as in an external stage path). Listed in every task-execution prompt,
     # with the sections the task references quoted — see `task_context.py`.
-    task_context_files: list[str] = field(default_factory=list)
+    # An entry may be `{path: …, optional: true}` for a file some workstreams lack.
+    task_context_files: list[str | dict[str, object]] = field(default_factory=list)
 
     # Harness-mutation tripwire (#64): the verification harness (test/lint
     # config, dependency manifests, CI workflows) is writable by the agent
@@ -1009,7 +1011,7 @@ class ExecutorConfig:
         except ProfileError as exc:
             raise ConfigError(str(exc)) from exc
 
-    def resolve_task_context_files(self) -> list[Path]:
+    def resolve_task_context_files(self) -> "ContextFiles":
         """The declared `task_context_files`, resolved for this namespace.
 
         Raises:

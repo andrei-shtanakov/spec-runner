@@ -30,10 +30,14 @@ is a **breaking change** and requires a major version bump plus an entry here.
   `TASK_BLOCKED` on the missing design). The new list key names those files
   (`{prefix}`/`{ws}` as in an external stage path; entries with a placeholder
   are skipped without `--spec-prefix`). Both prompts list them and quote every
-  section whose heading carries an id the task references, up to 60 000
-  characters, naming what did not fit; custom templates get `{{TASK_CONTEXT}}`.
-  A declared file that is missing or outside the project refuses `run`,
-  `retry` and `watch` at startup. Nothing declared changes nothing.
+  section whose heading carries an id the task references (`BEH-18a` included),
+  in the task's reference order, up to 60 000 characters, naming what did not
+  fit. A custom template places it with `{{TASK_CONTEXT}}` and gets it appended
+  otherwise; the "See spec/<prefix>design.md" pointers give way to it. A
+  required file that is missing or outside the project refuses `run`, `retry`
+  and `watch` at startup; an entry `{path: …, optional: true}` may be absent
+  (an older bundle has no design node) and is named in the prompt. `doctor`'s
+  scratch workspace drops the key. Nothing declared changes nothing.
 
 - **`verify --criteria`: `pytest-rerunfailures` can no longer hide a flaky
   test** (#603 B2b tail). This replaces the 4.5.0 boundary note: the collect

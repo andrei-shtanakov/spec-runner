@@ -161,7 +161,7 @@ class TestResolution:
         cfg = _repo(tmp_path)
         root = Path(cfg.project_root).resolve()
 
-        assert cfg.resolve_task_context_files() == [
+        assert cfg.resolve_task_context_files().present == [
             root / BUNDLE / "15-behaviour-spec.md",
             root / BUNDLE / "30-decomposition.md",
         ]
@@ -169,12 +169,12 @@ class TestResolution:
     def test_placeholder_entries_skip_a_run_without_prefix(self, tmp_path):
         cfg = _repo(tmp_path, spec_prefix="")
 
-        assert cfg.resolve_task_context_files() == []
+        assert cfg.resolve_task_context_files().present == []
 
     def test_plain_entries_apply_without_prefix(self, tmp_path):
         cfg = _repo(tmp_path, files=[f"{BUNDLE}/30-decomposition.md"], spec_prefix="")
 
-        assert [p.name for p in cfg.resolve_task_context_files()] == ["30-decomposition.md"]
+        assert [p.name for p in cfg.resolve_task_context_files().present] == ["30-decomposition.md"]
 
     def test_a_missing_file_is_refused(self, tmp_path):
         cfg = _repo(tmp_path, files=["workstreams/{ws}/spec/20-design.md"])
@@ -204,6 +204,106 @@ class TestResolution:
             _repo(tmp_path, files=[" "])
 
 
+class TestOptionalEntries:
+    """Review of #650: a bundle of the older 3-node shape has no design node."""
+
+    def test_an_optional_absent_file_is_named_not_refused(self, tmp_path):
+        cfg = _repo(
+            tmp_path,
+            files=[
+                "workstreams/{ws}/spec/15-behaviour-spec.md",
+                {"path": "workstreams/{ws}/spec/20-design.md", "optional": True},
+            ],
+        )
+
+        resolved = cfg.resolve_task_context_files()
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert resolved.absent == [f"{BUNDLE}/20-design.md"]
+        assert f"Declared but absent in this workstream: {BUNDLE}/20-design.md." in prompt
+        assert "Given a paid call" in prompt
+
+    def test_the_refusal_points_at_optional(self, tmp_path):
+        cfg = _repo(tmp_path, files=["workstreams/{ws}/spec/20-design.md"])
+
+        with pytest.raises(ConfigError, match="optional: true"):
+            cfg.resolve_task_context_files()
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"path": "x.md", "optional": "yes"},
+            {"path": "x.md", "required": True},
+            {"optional": True},
+            7,
+        ],
+    )
+    def test_a_malformed_entry_is_refused(self, tmp_path, entry):
+        cfg = _repo(tmp_path, files=[entry])
+
+        with pytest.raises(ConfigError, match="expected a path or"):
+            cfg.resolve_task_context_files()
+
+    def test_every_namespace_of_this_repo_starts(self):
+        """The repo's own config against every prefixed plan it holds — the
+        legacy WS-spec-runner-341/367 bundles included."""
+        import yaml
+
+        repo = Path(__file__).resolve().parent.parent
+        declared = yaml.safe_load((repo / "spec-runner.config.yaml").read_text())["executor"][
+            "task_context_files"
+        ]
+        prefixes = [p.name[: -len("tasks.md")] for p in (repo / "spec").glob("*-tasks.md")]
+        assert prefixes
+        for prefix in prefixes:
+            cfg = ExecutorConfig(project_root=repo, spec_prefix=prefix, task_context_files=declared)
+            assert cfg.resolve_task_context_files().present, prefix
+
+
+class TestPromptShape:
+    def test_a_template_without_the_variable_still_gets_it(self, tmp_path):
+        """Review of #650: the frozen-files rule — a template written before
+        the variable existed must not drop the context."""
+        cfg = _repo(tmp_path)
+        cfg.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.prompts_dir / "task.md").write_text("Do {{TASK_ID}}.")
+
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert prompt.startswith("Do TASK-002.")
+        assert "## Specification context" in prompt
+        assert prompt.count("## Specification context") == 1
+
+    def test_no_pointer_at_the_missing_spec_files(self, tmp_path):
+        cfg = _repo(tmp_path)
+
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert str(cfg.design_file) not in prompt
+        assert str(cfg.requirements_file) not in prompt
+        assert "Follow the design patterns from the specification context below" in prompt
+
+    def test_without_context_the_pointers_are_unchanged(self, tmp_path):
+        cfg = _repo(tmp_path, files=[])
+
+        prompt = build_task_prompt(_task(), cfg)
+
+        assert f"Follow the design patterns from {cfg.design_file}" in prompt
+
+    def test_doctor_scratch_drops_the_project_s_context(self, tmp_path):
+        import shutil
+
+        from spec_runner.doctor import build_scratch
+
+        scratch, root = build_scratch(
+            _repo(tmp_path), with_review=False, budget=0.5, timeout_min=None
+        )
+        try:
+            assert scratch.task_context_files == []
+        finally:
+            shutil.rmtree(root)
+
+
 class TestSections:
     def test_a_section_runs_to_the_next_heading_of_its_level(self):
         sections = sections_by_id(BEHAVIOUR)
@@ -217,6 +317,38 @@ class TestSections:
 
     def test_referenced_ids_skip_task_ids_and_keep_order(self):
         assert referenced_ids(_task()) == ["BEH-05", "BEH-06", "DT-02", "DEL-10", "FR-01"]
+
+    def test_a_lowercase_suffix_is_an_id(self):
+        """Review of #650: the bundle contract declares `BEH-18a` valid."""
+        text = "#### BEH-18a: variant\n\nBody.\n\n#### BEH-19: next\n"
+        task = Task(
+            id="TASK-9",
+            name="t",
+            priority="p1",
+            status="todo",
+            estimate="1h",
+            description="Implement BEH-18a.",
+        )
+
+        assert referenced_ids(task) == ["BEH-18a"]
+        assert sections_by_id(text)["BEH-18a"] == "#### BEH-18a: variant\n\nBody."
+
+    def test_quotes_follow_the_task_s_reference_order(self, tmp_path, monkeypatch):
+        """The task's own scenarios and DT entry before its traces — the
+        files' declared order must not decide what the cap cuts."""
+        from spec_runner import task_context
+
+        cfg = _repo(
+            tmp_path,
+            files=[
+                "workstreams/{ws}/spec/30-decomposition.md",
+                "workstreams/{ws}/spec/15-behaviour-spec.md",
+            ],
+        )
+        monkeypatch.setattr(task_context, "MAX_QUOTED_CHARS", 10_000)
+        text = render_task_context(_task(), cfg)
+
+        assert text.index("#### BEH-05") < text.index("#### DT-02")
 
     def test_what_does_not_fit_is_named(self, tmp_path, monkeypatch):
         from spec_runner import task_context

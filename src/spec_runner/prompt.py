@@ -748,6 +748,15 @@ def _render_task_prompt(
             )
 
     spec_context = render_task_context(task, config)
+    # With declared context, the fixed spec/ paths are not where the spec is:
+    # naming them as the place to look is what blocked #480 TASK-002.
+    see_reqs = (
+        "See the specification context below" if spec_context else f"See {config.requirements_file}"
+    )
+    see_design = (
+        "See the specification context below" if spec_context else f"See {config.design_file}"
+    )
+    design_source = "the specification context below" if spec_context else config.design_file
 
     # Load constitution guardrails (if present)
     constitution = ""
@@ -772,18 +781,19 @@ def _render_task_prompt(
             "ESTIMATE": task.estimate or "TBD",
             "MILESTONE": task.milestone or "N/A",
             "CHECKLIST": checklist_text,
-            "RELATED_REQS": "\n".join(related_reqs)
-            if related_reqs
-            else f"See {config.requirements_file}",
-            "RELATED_DESIGN": "\n".join(related_design)
-            if related_design
-            else f"See {config.design_file}",
+            "RELATED_REQS": "\n".join(related_reqs) if related_reqs else see_reqs,
+            "RELATED_DESIGN": "\n".join(related_design) if related_design else see_design,
             "TASK_CONTEXT": spec_context,
             "PREVIOUS_ATTEMPTS": attempts_section,
             "CONSTITUTION": constitution,
             "PERSONA_PROMPT": persona_prompt,
         }
-        return render_template(template, variables)
+        rendered = render_template(template, variables)
+        # Like the frozen-files block (claims.append_frozen_files): a template
+        # written before the variable existed must not drop the context.
+        if spec_context and "TASK_CONTEXT" not in template:
+            rendered = f"{rendered.rstrip()}\n\n{spec_context}"
+        return rendered
 
     # Fallback to built-in prompt
     prompt = f"""{persona_prompt + chr(10) + chr(10) if persona_prompt else ""}# Task Execution Request
@@ -800,17 +810,17 @@ def _render_task_prompt(
 
 ## Related Requirements:
 
-{chr(10).join(related_reqs) if related_reqs else f"See {config.requirements_file}"}
+{chr(10).join(related_reqs) if related_reqs else see_reqs}
 
 ## Related Design:
 
-{chr(10).join(related_design) if related_design else f"See {config.design_file}"}
+{chr(10).join(related_design) if related_design else see_design}
 
 {spec_context + chr(10) if spec_context else ""}{"## Constitution (Inviolable Rules):" + chr(10) + chr(10) + constitution + chr(10) + chr(10) if constitution else ""}## Instructions:
 
 1. Implement ALL checklist items for this task
 2. Write unit tests for new code (coverage ≥80%)
-3. Follow the design patterns from {config.design_file}
+3. Follow the design patterns from {design_source}
 4. Use existing code style and conventions
 5. Create/update files as needed
 
