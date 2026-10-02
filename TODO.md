@@ -928,7 +928,7 @@ runtime-state по инварианту конвейера «нужное для
       наследует политику ревью/TDD проекта), сохраняя то, ради чего её зовут (CLI, модель,
       `executor_sandbox`); регрессия — `doctor` в tdd-проекте → READY.
 
-- [ ] **review-sees-only-last-commit** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:review-sees-only-last-commit @epic:eco.spec-toolchain
+- [x] **review-sees-only-last-commit** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:review-sees-only-last-commit @epic:eco.spec-toolchain
       Ревью задачи собирает диф через `git diff HEAD~1` (`review.py`, ~строки 253-280), то есть
       только последний коммит. Если работа задачи лежит в нескольких коммитах (WIP-коммиты
       оператора, мерж master в ветку задачи, собственные коммиты агента), ревьюер её не видит.

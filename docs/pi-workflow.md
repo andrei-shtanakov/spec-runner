@@ -92,12 +92,13 @@ project rules.
 
 ## The review gate needs a local commit
 
-The reviewer prompt is filled from `git diff HEAD~1` taken at the project root (see
-`review.py`). So the review gate only sees a task's changes when those changes are **committed**
-in the project's *own* git repo — i.e. run with `auto_commit: true` (and a baseline commit so
-`HEAD~1` exists). If you run a project that is itself a subdirectory of another git repo, the
-diff resolves against the *outer* repo and the reviewer will (correctly) report that the task's
-files aren't in the diff. Keep each spec-runner project its own repo.
+The reviewer prompt is filled from `git diff <base>` taken at the project root (see
+`review.py`), where `<base>` is the merge-base of HEAD with the main branch (the integration
+branch during an `integration_pr` run) — every commit of the task, not only its last. So the
+review gate sees a task's changes when they are in the project's *own* git repo: run with
+`auto_commit: true` or `create_git_branch: true`. If you run a
+project that is itself a subdirectory of another git repo, the diff resolves against the
+*outer* repo; keep each spec-runner project its own repo.
 
 ## Try it
 

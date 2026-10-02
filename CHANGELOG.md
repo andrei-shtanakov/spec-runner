@@ -54,6 +54,19 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **Review reads the whole task, not its last commit.** The review diff was
+  `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,
+  the main branch merged in, the agent's own commits) was reviewed on its last
+  one. TASK-002 of #480 passed `review_policy: required` on a one-line status
+  flip while ~3,900 lines went unread. The diff now starts at the merge-base of
+  HEAD with the branch the task merges into (the integration branch during a
+  run); a task branch with no commit of its own is diffed from HEAD (never
+  someone else's `HEAD~1`); `HEAD~1` remains only for work committed on the
+  main branch itself, a project without per-task branches, or an uncomputable
+  merge-base. New files not yet committed are named to the reviewer. A truncated patch names
+  its base so the reviewer can read the rest; a project review template gets
+  `{{TASK_BASE}}`. Changed paths are split by line, so a space stays inside one.
+
 - **Task prompts can see a workstream's specification** (`task_context_files`).
   The RED and implementation prompts looked for requirements and design only
   at `spec/<prefix>requirements.md`/`design.md` and otherwise said "See
