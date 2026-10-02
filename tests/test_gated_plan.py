@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from spec_runner import cli_plan
-from spec_runner.cli_plan import run_gated_stage
 from spec_runner.spec import STAGES, SpecMeta, read_spec_meta, stage_path, write_spec
+from tests.plan_doubles import generate_stage_draft, run_gated_stage
 
 
 def _cfg(tmp_path: Path):
@@ -297,9 +297,7 @@ def test_regenerate_draft_preserves_existing_version(tmp_path: Path):
         GOOD_REQ_BODY,
     )
 
-    rc = cli_plan._generate_stage_draft(
-        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
-    )
+    rc = generate_stage_draft("requirements", "Build X", cfg, invoke=_fake_invoke(_good_out()))
 
     assert rc == 0
     meta = read_spec_meta(cfg.requirements_file)
@@ -325,9 +323,7 @@ def test_regenerate_draft_preserves_extras_and_owner_role(tmp_path: Path):
         GOOD_REQ_BODY,
     )
 
-    rc = cli_plan._generate_stage_draft(
-        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
-    )
+    rc = generate_stage_draft("requirements", "Build X", cfg, invoke=_fake_invoke(_good_out()))
 
     assert rc == 0
     meta = read_spec_meta(cfg.requirements_file)
@@ -347,7 +343,7 @@ def test_gated_generation_handles_custom_profile_stage(tmp_path, monkeypatch, ac
     for upstream in ("requirements", "design"):
         write_spec(stage_path(cfg, upstream), SpecMeta(upstream, "approved"), "up\n")
 
-    rc = cli_plan._generate_stage_draft(
+    rc = generate_stage_draft(
         "acceptance",
         "desc",
         cfg,
@@ -365,7 +361,7 @@ def test_gated_tasks_blocked_when_design_went_stale(tmp_path):
     def _fail(cmd, **kwargs):
         raise AssertionError("generation must not start when the direct upstream is stale")
 
-    rc = cli_plan._generate_stage_draft("tasks", "desc", cfg, invoke=_fail)
+    rc = generate_stage_draft("tasks", "desc", cfg, invoke=_fail)
     assert rc == 2
 
 
@@ -390,7 +386,7 @@ def test_gated_prompt_labels_a_draft_ancestor_as_unapproved(tmp_path):
             stderr="",
         )
 
-    rc = cli_plan._generate_stage_draft("tasks", "desc", cfg, invoke=_capture)
+    rc = generate_stage_draft("tasks", "desc", cfg, invoke=_capture)
     assert rc == 0
 
     prompt = seen["prompt"]
@@ -410,7 +406,7 @@ def test_gated_tasks_allowed_when_only_direct_upstream_is_approved(tmp_path):
     write_spec(cfg.requirements_file, SpecMeta("requirements", "draft"), "r\n")
     write_spec(cfg.design_file, SpecMeta("design", "approved"), "d\n")
 
-    rc = cli_plan._generate_stage_draft(
+    rc = generate_stage_draft(
         "tasks",
         "desc",
         cfg,

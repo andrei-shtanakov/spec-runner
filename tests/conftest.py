@@ -270,10 +270,24 @@ PAID_AGENT_COMMANDS = frozenset(
 )
 
 
-def _real_agent_refusal(cmd: str, cls: type[AssertionError] = AssertionError) -> AssertionError:
-    return cls(
-        f"this test would call the real agent ({cmd!r}) and be billed for it. "
-        "Stub `spec_runner.tdd._run_agent` / `spec_runner.execution._run_agent_process`, "
+class PaidSpawnRefused(BaseException):
+    """The guard refused a paid spawn: a test was about to call a real agent.
+
+    **Not** an `Exception`, for the reason `PaidBinaryReached` is not: the
+    review path turns an `Exception` into a verdict `error`, interactive
+    `plan` into exit 0 and the post-PR stage into silence. A refusal the
+    product can swallow is a guard that passes while billing. The belt below
+    cannot back this up -- it hooks process creation, and this refusal happens
+    before any process exists.
+    """
+
+
+def _real_agent_refusal(cmd: str, provenance: str | None = None) -> PaidSpawnRefused:
+    site = f" at the {provenance!r} call site" if provenance else ""
+    return PaidSpawnRefused(
+        f"this test would call the real agent ({cmd!r}){site} and be billed for it. "
+        "Stub `spec_runner.paid_call._spawn` (or the seam above it: "
+        "`tdd._run_agent` / `execution._run_agent_process`), "
         "or point `claude_command` at a fake script under tmp_path."
     )
 
@@ -331,62 +345,57 @@ def _no_real_agent_calls(monkeypatch):
     """Fail a test that would invoke a real agent, instead of billing for it.
 
     Written after this suite spent $0.55: a new test drove the RED phase with
-    the default `claude_command`, the checkpoint it planted turned out not to
-    be reusable, and the phase did exactly what it is supposed to do — it
-    called `claude`. Nothing was wrong with the product; the test was missing
-    one `monkeypatch.setattr`, and the only signal was a minute of silence.
+    the default `claude_command`, and the phase did exactly what it is supposed
+    to do -- it called `claude`.
 
-    The guard covers TWO of the paid seams by name: `tdd._run_agent` for the
-    TDD red/fix passes and `execution._run_agent_process` for the standard
-    execution path (#341/#334 BEH-24: the second seam that used to have no
-    guard at all). It still does NOT cover the review seam
-    (`review._run_reviewer`, also reached from `post_done_hook` with
-    `run_review=True`) or the plan/review-pr seams — but since
-    spec-runner#455 those are no longer unprotected: they are caught one
-    level down by `_belt_never_executes_a_paid_binary` above, at process
-    creation, which is exactly the case that seam-by-seam guarding keeps
-    missing. The guard fires only on a **known agent name**: a fake script
-    (an absolute path under `tmp_path`) runs as before, and a test that stubs
-    either seam itself replaces this patch and never sees it — the belt
-    underneath still applies.
+    One name now: `paid_call._spawn`, the only function that hands a provider's
+    argv to a subprocess. Every paid site -- RED, GREEN, review and its roles,
+    `review-pr`, the three planning paths, the `doctor` probe -- goes through
+    it, so one guard covers all of them (it used to cover two of five by name).
+    It is keyed on the argv that would actually run, not on a config value, and
+    its message names the site by the call's provenance.
+
+    A test that replaces `_spawn` itself (the call-start matrix does) replaces
+    this patch -- a documented property of the guard, not a bypass: the belt
+    underneath still refuses any path to a paid binary that skips `_spawn`.
     """
-    from spec_runner import execution, tdd
+    from pathlib import PurePath
 
-    def _refuse_tdd(config, prompt, **kwargs):
-        cmd = getattr(config, "claude_command", "")
-        if cmd in PAID_AGENT_COMMANDS:
-            raise _real_agent_refusal(cmd)
-        return _real_run_agent(config, prompt, **kwargs)
+    from spec_runner import paid_call
 
-    def _refuse_execution(config, invocation, **kwargs):
-        # Keyed on the invocation's own argv[0], not `config.claude_command`:
-        # `build_cli_invocation` is a separate, commonly-stubbed seam, and a
-        # test that points it at a harmless real binary (`true`, `echo`) while
-        # `claude_command` stays at its default must still be allowed through —
-        # what would actually run is what decides, not the config value that
-        # produced it.
+    real_spawn = paid_call._spawn
+
+    def _refuse_spawn(invocation, **kwargs):
+        # A test that has put its own double in place of `subprocess.run` cannot
+        # reach a process: nothing here would be created, billed or belted. The
+        # guard exists for the *real* call, so it stands down for that test --
+        # the same property as a test that replaces `_spawn` itself. The belt's
+        # wrapper carries a mark; anything else (a Mock, a function) lacks it.
+        if getattr(subprocess.run, "belted_door", None) != "subprocess.run":
+            return real_spawn(invocation, **kwargs)
         argv = getattr(invocation, "argv", None) or []
-        # A wrapped template (`bash -lc '{cmd} …'`) or the llama-server
-        # branch (`curl …`) hides the agent name deeper in argv, and argv[0]
-        # alone would wave the paid call through (#363 review). Refuse when
-        # a known agent name is visible ANYWHERE in argv, by basename.
-        from pathlib import PurePath
-
         cmd = argv[0] if argv else ""
+        # A wrapped template (`bash -lc '{cmd} …'`) or the llama-server branch
+        # hides the agent name deeper in argv: refuse when a known agent name
+        # is visible ANYWHERE, by basename (#363 review).
         visible = {PurePath(str(part)).name for part in argv}
         if cmd in PAID_AGENT_COMMANDS or visible & PAID_AGENT_COMMANDS:
-            # `execution.RealAgentCallRefused`, not a bare `AssertionError`:
-            # `execute_task`'s `try` block also reaches genuine internal
-            # asserts (harness/stage invariants), and only this guard's own
-            # exception may propagate as an uncaught test failure.
-            raise _real_agent_refusal(cmd, cls=execution.RealAgentCallRefused)
-        return _real_run_agent_process(config, invocation, **kwargs)
+            raise _real_agent_refusal(cmd, paid_call.provenance_in_flight())
+        return real_spawn(invocation, **kwargs)
 
-    _real_run_agent = tdd._run_agent
-    monkeypatch.setattr(tdd, "_run_agent", _refuse_tdd)
+    monkeypatch.setattr(paid_call, "_spawn", _refuse_spawn)
 
-    _real_run_agent_process = execution._run_agent_process
-    monkeypatch.setattr(execution, "_run_agent_process", _refuse_execution)
+
+@pytest.fixture(autouse=True)
+def _no_run_context_leaks():
+    """`cli.main` installs a process-wide `RunContext`; a test that drove it must
+    not leave one behind, or the next test's paid call would publish into a
+    store that no longer exists."""
+    from spec_runner import run_context
+
+    run_context.install(None)
+    yield
+    run_context.install(None)
 
 
 @pytest.fixture

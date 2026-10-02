@@ -91,9 +91,10 @@ CREATE TABLE executor_meta (
 | `review_findings` | TEXT | experimental | Free-text review notes |
 | `error_kind` | TEXT | experimental | Added v2.3.0, vocabulary corrected in #301. Classified failure kind, nullable. From `errors.classify`: `rate_limit`, `auth`, `network`, `cli_error`, `unknown`. From the execution path: `api_error`, `blocked`, `hook_failure`, `harness_guard`, `timeout`, `interrupted`, `internal_error`, and the three refusal kinds `policy` (a gate answered no), `instrument` (a gate could not answer — the run exits 2), `budget`. The single source is `errors.ERROR_KINDS`; a test compares it to this schema, because the enum had drifted — `blocked` and `api_error` were being written while the schema listed five values |
 | `error_stage` | TEXT | experimental | Added v2.3.0. Sub-stage when failure occurred (one of `sync_deps`, `branch`, `verify`, `exec`, `parse`, `tests`, `lint`, `commit`, `merge`, `review`); nullable. `exec` replaced `codex` in v2.13 — rows written by ≤2.12 may still carry `codex`. `verify` (v2.36.0, #367 BEH-30) is the live verify-first run, before any paid call — distinct from `tests`, which judges the candidate tree after the implementation pass |
+| `run_id` | TEXT | stable | Added 4.5.0 (#480). Full UUIDv4 of the invocation that recorded the attempt; NULL for rows written before the contract. Additive |
 | `no_op` | INTEGER | stable | Added v2.16.0 (#97). 1 when the attempt succeeded with nothing to commit (work already absorbed by earlier tasks); 0/null otherwise. Only meaningful with `auto_commit` on |
 
-**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`, `no_op`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
+**Column detection:** older databases may lack `input_tokens`, `output_tokens`, `cost_usd`, `review_status`, `review_findings`, `error_kind`, `error_stage`, `no_op`, `run_id`. Consumers should probe with `PRAGMA table_info(attempts)` and treat missing columns as `None`.
 
 ### `pr_review_comments` (experimental, v2.18.0)
 
@@ -121,7 +122,10 @@ Columns: `repo`, `pr_number`, `comment_id`, `head_sha`, `round_number` (NULL
 before the first round is started — verification runs before any round exists),
 `kind` (`verify`/`fix`), `provenance` (`review_pr:<kind>`), `outcome`
 (`completed`/`error`/`timeout`), `cost_usd` (**NULL when the CLI reported none**
-— unknown is not zero), `input_tokens`, `output_tokens`, `timestamp`.
+— unknown is not zero), `input_tokens`, `output_tokens`, `timestamp`. Added
+4.5.0 (#480), all nullable, NULL on older rows: `run_id`, `call_id` (joins the row
+to its published call record), `status` (`open` while the call is in flight,
+`closed`, `not_started`), `started_at`.
 
 A row exists exactly when a subprocess **started**. A call refused by the cost
 guard before spawning anything is not a call and gets no row; a verifier killed
@@ -407,7 +411,12 @@ construction, since a verdict is keyed on the tree it judged.
 
 One row per agent invocation whose cost has nowhere else to live. Columns:
 `task_id`, `provenance`, `input_tokens`, `output_tokens`, `cost_usd`,
-`timestamp`.
+`timestamp`. Added 4.5.0 (#480), all nullable and NULL on older rows: `run_id`,
+`call_id`, `status` (`open` until the call closes it, then `closed`; `not_started`
+for a call whose process never launched), `started_at`. The row is written `open`
+**before** the call-start is acknowledged and closed after the result, so a
+crash between the two leaves an `open` row -- an index of an open call, never
+the proof of one (the proof is the pair of published records).
 
 `provenance` is `red_authoring`, `red_autofix_agent_round` (the one cold
 BEH-07 follow-up call of a RED phase whose machine lint fix left findings),
@@ -417,19 +426,37 @@ could not say which role was expensive or which was never measured). The
 GREEN/exec pass keeps its cost on the attempt row, where the schema above
 already publishes it, so the ledger holds only the calls that were previously
 invisible — which is why `total_cost()` can sum both without double counting.
+Since 4.5.0 the GREEN call also has a row here (provenance `green`) so that its
+`call_id` joins the ledger to the published record; that row carries **no cost**
+by construction and is excluded from `unmeasured_calls()`.
 
 `cost_usd` is **nullable, and NULL is not zero**: a reviewer killed by a
 timeout or an account limit was billed for as long as it ran, and recording
 0.0 would make that indistinguishable from a cheap call in every later sum.
 `ExecutorState.unmeasured_calls()` counts the NULL rows, and `costs --json`
 publishes that count per task and overall, so a total can be read as the floor
-it is. A call that never launched (missing binary) writes no row at all.
+it is. A call that never launched (missing binary) is not a call: its row is closed
+`not_started` and neither `agent_calls()` nor any cost surface counts it.
 
 Added because the TDD RED pass parsed its CLI result and kept only the text:
 its tokens and cost were discarded, so `spec-runner costs` reported `$0.00`
 for a run that had made an extra paid call per task. A failed authoring
 attempt is recorded too — money spent on a call that produced nothing usable
 is still spent.
+
+### `plan_agent_calls` (experimental, 4.5.0, #480)
+
+The paid calls of `plan --full`, `plan --gated` and interactive `plan`, which
+belong to no task. The third ledger of the family, for the reason `pr_agent_calls`
+exists: `agent_calls.task_id` is `NOT NULL` and `costs` groups that ledger by
+task, so a row without a task is given a table of its own rather than a
+nullable column.
+
+Columns: `provenance` (`plan:requirements`, `plan:design`, `plan:tasks`,
+`plan:interactive`), `run_id`, `call_id`, `status` (`open`/`closed`/`not_started`),
+`started_at`, `input_tokens`, `output_tokens`, `cost_usd` (NULL when the CLI
+reported none), `timestamp`. `costs` shows the sum as a separate `planning` line
+and `repo_total_cost` includes it; no task's cost changes.
 
 ### `tdd_phases` (experimental, #141)
 
@@ -464,6 +491,8 @@ which are written fail-closed. This table remembers.
 | `total_failed` | int (stored as TEXT) | stable | Monotonic counter |
 | `second_pass_fail_tasks` | comma-joined TEXT | experimental | Added v2.3.0. Task IDs that failed again across runs; empty string when none |
 | `last_run_stop_reason` | TEXT | experimental | Added v2.3.0. One of `completed`, `task_failed_stop`, `dependency_blocked_after_skip`, `state_spec_mismatch`, `max_consecutive_failures`, `budget_exceeded`, `validation_failed`, `error_<kind>`. Enumerated in `spec_runner.cli.RUN_STOP_REASONS` (the `error_<kind>` family is dynamic). Only `completed` exits 0 |
+| `last_run_id` | TEXT | experimental | Added 4.5.0 (#480). Full UUIDv4 of the last paying invocation's run-start in this namespace; `status` shows it. Absent for a namespace that has had none |
+| `last_pipeline_id` | TEXT | experimental | Added 4.5.0 (#480). `pipeline_id` of that run, when it had one |
 | `last_run_stop_detail` | TEXT | experimental | Added v2.3.0. Free-text detail for the stop reason (e.g. `12/2`, or an error message) |
 
 ### `ErrorCode` enum values
@@ -613,6 +642,8 @@ Single task (one element list) → JSON object. Multiple tasks → JSON array.
 | `verify_outcome` | string | stable | Added #367. Present only for a task that recorded live verify-first evidence (`execution_mode: verify_first`): `"green"`, `"test_failure"`, or `"instrument_error"`. Absent for every standard/tdd task and for a verify-first task that never recorded evidence — additive, so existing consumers/fixtures are unaffected |
 | `verify_composition.size` / `.executed` / `.skipped` | int | stable | Added by the verify-first-file-scope-group-targets workstream (FR-21/FR-22). Present only when the recorded verify-first evidence has a file-target composition (`size` members, `executed` of which actually ran, `skipped` accounted-but-not-executed). Lets a consumer tell a fully-executed green from one with skips (`skipped > 0`) without comparing compositions by hand. Absent for a group of node ids only, or a row recorded before this field existed — additive |
 | `exit_code` | int | stable | 0 on success, 1 on failure |
+| `run_id` | string | stable | Added 4.5.0 (#480). Full UUIDv4 of the invocation that produced the entry. Additive: absent when the entry was built outside a CLI invocation, so consumers that predate the key see unchanged output |
+| `pipeline_id` | string | stable | Added 4.5.0 (#480). The invocation's pipeline id, present only when one was set |
 
 ### Empty-tasks edge case
 
@@ -645,6 +676,10 @@ Aggregate snapshot for dashboards. Does not include per-task details.
 ```
 
 All fields are **stable**. `budget_usd` is `null` when no budget is configured.
+
+Added 4.5.0 (#480), additive: `run_id` (and `pipeline_id` when the run had one) --
+the last run-start recorded in this namespace. Both are **absent** for a namespace
+that has had no run, never an invented id.
 
 ---
 

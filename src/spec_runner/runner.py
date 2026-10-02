@@ -6,7 +6,6 @@ functions used by the executor and hooks modules.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -15,10 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
-
-if TYPE_CHECKING:
-    from .events import EventBus
+from typing import Literal
 
 from .config import ERROR_PATTERNS, PROGRESS_FILE
 
@@ -552,87 +548,3 @@ def build_cli_command(
 ) -> list[str]:
     """Back-compat wrapper returning just argv (review + existing callers)."""
     return build_cli_invocation(cmd, prompt, model, template, skip_permissions, prompt_file).argv
-
-
-async def run_claude_async(
-    cmd: list[str],
-    timeout: float,
-    cwd: str,
-    event_bus: EventBus | None = None,
-    task_id: str = "",
-) -> tuple[str, str, int]:
-    """Run CLI command asynchronously with optional event streaming.
-
-    When event_bus is provided, stdout is streamed line-by-line as TaskEvents
-    for live TUI updates. Otherwise, stdout is collected in bulk (original behavior).
-
-    Args:
-        cmd: Command arguments.
-        timeout: Timeout in seconds.
-        cwd: Working directory.
-        event_bus: Optional EventBus for streaming stdout lines as events.
-        task_id: Task ID for event attribution (required if event_bus is set).
-
-    Returns:
-        (stdout, stderr, returncode).
-
-    Raises:
-        asyncio.TimeoutError: If command exceeds timeout.
-    """
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-    )
-
-    if event_bus is not None and proc.stdout is not None:
-        # Stream stdout line-by-line while collecting full output
-        from .events import TaskEvent
-
-        stdout_lines: list[str] = []
-
-        async def _stream_stdout():
-            assert proc.stdout is not None
-            async for line_bytes in proc.stdout:
-                line = line_bytes.decode(errors="replace")
-                stdout_lines.append(line)
-                event_bus.publish(
-                    TaskEvent(task_id=task_id, event_type="output_line", data=line.rstrip())
-                )
-
-        async def _collect_stderr():
-            assert proc.stderr is not None
-            return await proc.stderr.read()
-
-        try:
-            _, stderr_bytes = await asyncio.wait_for(
-                asyncio.gather(_stream_stdout(), _collect_stderr()),
-                timeout=timeout,
-            )
-            await proc.wait()
-        except TimeoutError:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except TimeoutError:
-                proc.kill()
-                await proc.wait()
-            raise
-
-        stdout = "".join(stdout_lines)
-        stderr = stderr_bytes.decode(errors="replace") if isinstance(stderr_bytes, bytes) else ""
-        return stdout, stderr, proc.returncode or 0
-
-    # Non-streaming path (original behavior)
-    try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-        raise
-    return stdout_bytes.decode(), stderr_bytes.decode(), proc.returncode or 0

@@ -17,8 +17,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from spec_runner.cli_plan import run_gated_stage
 from spec_runner.spec import LITE, read_spec_meta
+from tests.plan_doubles import run_gated_stage
 
 GOOD_REQ = """# Requirements
 

@@ -122,6 +122,13 @@ class PhaseRecord:
     timestamp: str
 
 
+def _current_run_id() -> str | None:
+    """The invocation's run id, or None outside `cli.main` (library use, tests)."""
+    from .run_context import current_run_id
+
+    return current_run_id()
+
+
 @dataclass(frozen=True)
 class GateVerdict:
     """A stored gate answer, bound to the tree and policy it judged."""
@@ -168,6 +175,7 @@ class TaskAttempt:
     error_kind: str | None = None  # v2.3.0: classified by errors.classify
     error_stage: str | None = None  # v2.3.0: stage when failure occurred
     no_op: bool = False  # v2.16.0: task completed without any committable changes (#97)
+    run_id: str | None = None  # #480: the invocation that recorded it; None before the contract
 
 
 @dataclass
@@ -528,6 +536,29 @@ class ExecutorState:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_calls_task ON agent_calls (task_id)"
         )
+        # #480 DT-02: call identity, additive. Rows written before the contract
+        # keep NULL in all four, and `costs` sums them as before.
+        self._add_call_identity_columns("agent_calls")
+        with contextlib.suppress(sqlite3.OperationalError):
+            self._conn.execute("ALTER TABLE attempts ADD COLUMN run_id TEXT")
+        # The third ledger of the family, for paid calls that belong to no task
+        # (planning). Same reason `pr_agent_calls` exists: `agent_calls.task_id`
+        # is NOT NULL and `costs` groups that ledger by task, so a row without
+        # a task would have to be special-cased by every reader of it.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS plan_agent_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provenance TEXT NOT NULL,
+                run_id TEXT,
+                call_id TEXT,
+                status TEXT,
+                started_at TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cost_usd REAL,
+                timestamp TEXT NOT NULL
+            )
+        """)
         # #141 slice 4a: where a task is in the TDD lifecycle. Append-only —
         # where it has *been* is evidence, including refused transitions.
         self._conn.execute("""
@@ -914,7 +945,7 @@ class ExecutorState:
         cursor = self._conn.execute(
             "SELECT task_id, timestamp, success, duration_seconds, "
             "error, error_code, claude_output, input_tokens, output_tokens, cost_usd, "
-            "review_status, review_findings, error_kind, error_stage, no_op "
+            "review_status, review_findings, error_kind, error_stage, no_op, run_id "
             "FROM attempts ORDER BY id"
         )
         for row in cursor.fetchall():
@@ -934,6 +965,7 @@ class ExecutorState:
                 error_kind,
                 error_stage,
                 no_op,
+                attempt_run_id,
             ) = row
             error_code: ErrorCode | None = None
             if error_code_str is not None:
@@ -953,6 +985,7 @@ class ExecutorState:
                 error_kind=error_kind,
                 error_stage=error_stage,
                 no_op=bool(no_op),
+                run_id=attempt_run_id,
             )
             if task_id in self.tasks:
                 self.tasks[task_id].attempts.append(attempt)
@@ -1006,8 +1039,8 @@ class ExecutorState:
                         "error, error_code, claude_output, "
                         "input_tokens, output_tokens, cost_usd, "
                         "review_status, review_findings, "
-                        "error_kind, error_stage, no_op) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "error_kind, error_stage, no_op, run_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             a.timestamp,
@@ -1024,6 +1057,7 @@ class ExecutorState:
                             a.error_kind,
                             a.error_stage,
                             int(a.no_op),
+                            a.run_id,
                         ),
                     )
             self._save_meta()
@@ -2218,6 +2252,83 @@ class ExecutorState:
             for r in rows
         ]
 
+    def _add_call_identity_columns(self, table: str) -> None:
+        """Additive `run_id`/`call_id`/`status`/`started_at` (idempotent, #480)."""
+        assert self._conn is not None
+        for col in ("run_id", "call_id", "status", "started_at"):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+
+    def open_agent_call(
+        self, task_id: str, provenance: str, *, run_id: str | None, call_id: str, started_at: str
+    ) -> None:
+        """Write the `open` row of a task-ledger call, before the store ack.
+
+        Raises on failure, unlike `record_agent_call`: a call whose intent
+        cannot be written must not start (FR-02).
+        """
+        self._insert_phase_row(
+            "INSERT INTO agent_calls "
+            "(task_id, provenance, run_id, call_id, status, started_at, timestamp) "
+            "VALUES (?, ?, ?, ?, 'open', ?, ?)",
+            (task_id, provenance, run_id, call_id, started_at, started_at),
+        )
+
+    def close_call_row(
+        self,
+        table: str,
+        call_id: str,
+        *,
+        status: str = "closed",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        """Close the row of ``call_id`` in `agent_calls` / `plan_agent_calls`.
+
+        ``not_started`` closes a row whose process never launched. Tokens and
+        cost stay NULL unless given: unknown is not zero (#213).
+        """
+        if table not in ("agent_calls", "plan_agent_calls"):
+            raise ValueError(f"not a call ledger: {table}")
+        self._insert_phase_row(
+            f"UPDATE {table} SET status = ?, "
+            "input_tokens = COALESCE(?, input_tokens), "
+            "output_tokens = COALESCE(?, output_tokens), "
+            "cost_usd = COALESCE(?, cost_usd) WHERE call_id = ?",
+            (status, input_tokens, output_tokens, cost_usd, call_id),
+        )
+
+    def open_plan_call(
+        self, provenance: str, *, run_id: str | None, call_id: str, started_at: str
+    ) -> None:
+        """The `open` row of a planning call -- a ledger with no task (FR-06)."""
+        self._insert_phase_row(
+            "INSERT INTO plan_agent_calls "
+            "(provenance, run_id, call_id, status, started_at, timestamp) "
+            "VALUES (?, ?, ?, 'open', ?, ?)",
+            (provenance, run_id, call_id, started_at, started_at),
+        )
+
+    def plan_calls(self) -> list[dict]:
+        """Planning calls, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT provenance, run_id, call_id, status, input_tokens, output_tokens, "
+            "cost_usd, timestamp FROM plan_agent_calls ORDER BY id"
+        ).fetchall()
+        keys = (
+            "provenance",
+            "run_id",
+            "call_id",
+            "status",
+            "input_tokens",
+            "output_tokens",
+            "cost_usd",
+            "timestamp",
+        )
+        return [dict(zip(keys, r, strict=True)) for r in rows]
+
     def record_agent_call(
         self,
         task_id: str,
@@ -2226,6 +2337,7 @@ class ExecutorState:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_usd: float | None = None,
+        call_id: str | None = None,
     ) -> None:
         """Record one agent invocation and what it cost (#141 F-6).
 
@@ -2233,12 +2345,28 @@ class ExecutorState:
         able to fail a task. Unlike a claim, nothing *gates* on it — losing one
         costs visibility, which is the very thing being fixed, so it is logged
         loudly rather than swallowed silently.
+
+        With a ``call_id`` this is the *close* of a row the seam opened (#480):
+        the row of that call is updated, and only when no such row exists is
+        one inserted -- so a call is one row whoever writes it last.
         """
         try:
+            if call_id is not None:
+                assert self._conn is not None
+                with self._conn:
+                    updated = self._conn.execute(
+                        "UPDATE agent_calls SET status = 'closed', "
+                        "input_tokens = ?, output_tokens = ?, cost_usd = ? "
+                        "WHERE call_id = ?",
+                        (input_tokens, output_tokens, cost_usd, call_id),
+                    ).rowcount
+                if updated:
+                    return
             self._insert_phase_row(
                 "INSERT INTO agent_calls "
-                "(task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp, "
+                "run_id, call_id, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     provenance,
@@ -2246,6 +2374,9 @@ class ExecutorState:
                     output_tokens,
                     cost_usd,
                     datetime.now().isoformat(),
+                    _current_run_id(),
+                    call_id,
+                    "closed" if call_id else None,
                 ),
             )
         except Exception as exc:
@@ -2261,13 +2392,15 @@ class ExecutorState:
     def agent_calls(self, task_id: str | None = None) -> list[dict]:
         """Recorded agent invocations, oldest first."""
         assert self._conn is not None
+        # A call that never started (status `not_started`) is not a call: it
+        # spent nothing, and the cost surfaces count calls that were made.
         sql = (
             "SELECT task_id, provenance, input_tokens, output_tokens, cost_usd, timestamp "
-            "FROM agent_calls"
+            "FROM agent_calls WHERE COALESCE(status, '') != 'not_started'"
         )
         params: list[object] = []
         if task_id:
-            sql += " WHERE task_id = ?"
+            sql += " AND task_id = ?"
             params.append(task_id)
         rows = self._conn.execute(sql + " ORDER BY id", params).fetchall()
         return [
@@ -2426,7 +2559,10 @@ class ExecutorState:
         one in every total the tool prints. The count is what lets a reader
         (and, from #213, a budget guard) know a figure is a floor.
         """
-        sql = "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL"
+        # GREEN's row joins the seam's ids to the ledger and carries no price on
+        # purpose: that money is on the attempt row, and counting its NULL here
+        # would make every run look unpriced.
+        sql = "SELECT COUNT(*) FROM agent_calls WHERE cost_usd IS NULL AND provenance != 'green'"
         params: list[object] = []
         if task_id:
             sql += " AND task_id = ?"
@@ -2524,6 +2660,7 @@ class ExecutorState:
             error_kind=error_kind,
             error_stage=error_stage,
             no_op=no_op,
+            run_id=_current_run_id(),
         )
         state.attempts.append(attempt)
         assert self._conn is not None
@@ -2557,8 +2694,8 @@ class ExecutorState:
                     "error, error_code, claude_output, "
                     "input_tokens, output_tokens, cost_usd, "
                     "review_status, review_findings, "
-                    "error_kind, error_stage, no_op) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "error_kind, error_stage, no_op, run_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task_id,
                         attempt.timestamp,
@@ -2575,6 +2712,7 @@ class ExecutorState:
                         attempt.error_kind,
                         attempt.error_stage,
                         int(attempt.no_op),
+                        attempt.run_id,
                     ),
                 )
                 self._save_meta()

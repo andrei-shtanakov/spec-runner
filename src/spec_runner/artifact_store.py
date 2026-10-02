@@ -378,6 +378,12 @@ def _build_store(
     return LocalVolumeStore(Path(root), encryption_at_rest=encryption_at_rest)
 
 
+#: The writable door `evidence.Publisher` -- and only it -- imports (§ 1.4).
+#: Private for the same reason `_build_store` is: the belt looks for public
+#: entries, and a second importer of this name is a second writer.
+_open_store = _build_store
+
+
 def open_store_readonly(
     adapter: str, options: dict[str, str], *, encryption_at_rest: bool = False
 ) -> ArtifactStore:

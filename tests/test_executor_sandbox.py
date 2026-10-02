@@ -260,13 +260,22 @@ class TestEveryLaunchSiteGoesThroughTheSeam:
 
     def test_no_unsandboxed_launch(self):
         """A builder counts as covered when it calls `sandboxed`, or hands the
-        invocation to a function that does (`_execute_task` →
-        `_run_agent_process`)."""
-        seamed = {fn.name for _, fn in self._functions() if "sandboxed" in self._calls(fn)}
+        invocation -- through any chain of calls -- to a function that does
+        (`_execute_task` → `_run_agent_process` → `paid_call.execute`)."""
+        functions = list(self._functions())
+        seamed = {fn.name for _, fn in functions if "sandboxed" in self._calls(fn)}
+        # Fixpoint: whoever calls a seamed function is seamed too.
+        grew = True
+        while grew:
+            grew = False
+            for _, fn in functions:
+                if fn.name not in seamed and self._calls(fn) & seamed:
+                    seamed.add(fn.name)
+                    grew = True
         offenders = []
-        for path, fn in self._functions():
+        for path, fn in functions:
             if path.name in {"runner.py", "sandbox.py"}:
-                continue  # the builders themselves; `run_claude_async` is library API
+                continue  # the builders themselves
             calls = self._calls(fn)
             builds = calls & self.BUILDERS or self._builds_claude_argv(fn)
             if builds and not ({"sandboxed"} | seamed) & calls:
@@ -274,7 +283,7 @@ class TestEveryLaunchSiteGoesThroughTheSeam:
         assert offenders == [], offenders
 
     def test_the_seam_is_found_at_every_known_site(self):
-        """The scan must see all eight sites, or it proves nothing."""
+        """The scan must see the one place that sandboxes, or it proves nothing."""
         sites: dict[str, int] = {}
         for path in sorted(SRC.glob("*.py")):
             for sub in ast.walk(ast.parse(path.read_text())):
@@ -284,13 +293,9 @@ class TestEveryLaunchSiteGoesThroughTheSeam:
                     and sub.func.id == "sandboxed"
                 ):
                     sites[path.name] = sites.get(path.name, 0) + 1
-        assert sites == {
-            "cli_plan.py": 3,
-            "execution.py": 1,
-            "review.py": 1,
-            "review_pr.py": 2,
-            "tdd.py": 1,
-        }
+        # One seam now: every site hands its invocation to `paid_call.execute`,
+        # which sandboxes it before `_spawn`.
+        assert sites == {"paid_call.py": 1}
 
 
 def test_env_is_not_mutated(tmp_path):

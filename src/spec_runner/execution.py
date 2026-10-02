@@ -4,6 +4,7 @@ import subprocess
 import time
 from datetime import datetime
 
+from . import paid_call as paid_call_mod
 from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
@@ -530,40 +531,49 @@ def _run_verify_first_phase(
     )
 
 
-class RealAgentCallRefused(AssertionError):
-    """Raised only by the test-only guard (`conftest._no_real_agent_calls`)
-    to refuse a real, billed agent call before it happens.
-
-    A distinct type, not a bare `AssertionError`: `execute_task`'s `try` block
-    also reaches genuine internal-invariant asserts (e.g. `harness_violations`,
-    `StageReporter.enter`), and those must keep failing as an ordinary failed
-    attempt, not crash the whole run.
-    """
-
-
 def _run_agent_process(
     config: ExecutorConfig, invocation: CliInvocation
 ) -> subprocess.CompletedProcess[str]:
-    """Run the agent's CLI invocation. Seam for tests, mirroring `tdd._run_agent`.
+    """Run the agent's CLI invocation through the paid-call seam (#480).
 
-    The standard-execution counterpart to that seam (#341/#334 BEH-24):
-    `conftest._no_real_agent_calls` guards it the same way, refusing a bare
-    paid-agent `claude_command` before this reaches `subprocess.run`.
+    Still a patchable seam (tests stub it to mean "no call happened"), but no
+    longer the place where a real call is refused: the autouse guard sits on
+    `paid_call._spawn`, below the call-start protocol. Who is calling (task,
+    attempt, state) arrives through `paid_call.scope`, because this signature
+    is stubbed in dozens of tests.
     """
-    from .sandbox import sandboxed
+    from . import paid_call
 
-    call = sandboxed(config, invocation, agent_env())
-    try:
-        return subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            timeout=config.task_timeout_minutes * 60,
-            cwd=config.project_root,
-            env=call.env,
-        )
-    finally:
-        call.cleanup()
+    ctx = paid_call.current_scope()
+    task_id = ctx.task_id if ctx is not None else None
+    timeout = config.task_timeout_minutes * 60
+    outcome = paid_call.execute(
+        config,
+        ctx.state if ctx is not None else None,
+        paid_call.PaidCall(
+            invocation=invocation,
+            provenance=ctx.provenance if ctx is not None else "green",
+            prompt=ctx.prompt if ctx is not None else "",
+            timeout_seconds=timeout,
+            call_id=paid_call.new_call_id(),
+            task_id=task_id,
+            attempt=ctx.attempt if ctx is not None else None,
+            env=agent_env(),
+            prompt_log=ctx.prompt_log if ctx is not None else None,
+            ledger=(
+                paid_call.task_ledger(
+                    config, ctx.state, task_id, ctx.provenance, price_on_attempt=True
+                )
+                if ctx is not None and task_id is not None
+                else None
+            ),
+        ),
+    )
+    if outcome.timed_out:
+        raise subprocess.TimeoutExpired(invocation.argv, timeout)
+    return subprocess.CompletedProcess(
+        invocation.argv, outcome.returncode, outcome.stdout, outcome.stderr
+    )
 
 
 def execute_task(
@@ -843,6 +853,10 @@ def _execute_task(
             # were and the task resumes when the cap is raised.
             _fail_for_budget(task, config, state, str(stop), reporter.current)
             return False
+        except paid_call_mod.CallRefused as stop:
+            # The seam could not make a RED call's intent durable (#480
+            # BEH-06): nothing started, and the refusal says why.
+            refusal = stop.refusal
         if refusal is not None:
             log_progress(f"⛔ {refusal}", task_id)
             state.record_attempt(
@@ -946,7 +960,18 @@ def _execute_task(
         harness_before = (harness_baseline or HarnessBaseline()).capture(config)
 
         reporter.enter("exec")
-        result = _run_agent_process(config, invocation)
+        from . import paid_call
+
+        with paid_call.scope(
+            task_id=task_id,
+            provenance="green",
+            attempt=state.get_task_state(task_id).attempt_count + 1,
+            state=state,
+            price_on_attempt=True,
+            prompt=prompt,
+            prompt_log=log_file,
+        ):
+            result = _run_agent_process(config, invocation)
 
         duration = (datetime.now() - start_time).total_seconds()
         cli_result = parse_cli_result(
@@ -1350,13 +1375,22 @@ def _execute_task(
         log_progress("Interrupted by signal", task_id)
         return False
 
-    except RealAgentCallRefused:
-        # The test-only agent guard (`conftest._no_real_agent_calls`) raises
-        # this to refuse a real, billed call before it happens. Swallowing it
-        # here as a normal failed attempt — `return False`, no distinguishable
-        # signal — is exactly the gap BEH-24 closes: it must surface as the
-        # test failure it is, the same way it already does on the RED seam.
-        raise
+    except paid_call_mod.CallRefused as stop:
+        # The seam could not make the call's intent durable and nothing was
+        # started (#480 BEH-06): a typed instrument refusal -- INFRASTRUCTURE,
+        # exit 2 -- not a failure of the work and not an internal error.
+        duration = (datetime.now() - start_time).total_seconds()
+        log_progress(f"⛔ {stop.refusal}", task_id)
+        state.record_attempt(
+            task_id,
+            False,
+            duration,
+            error=str(stop.refusal),
+            error_code=_refusal_error_code(stop.refusal),
+            error_kind=_refusal_error_kind(stop.refusal),
+            error_stage=reporter.current,
+        )
+        return False
 
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()

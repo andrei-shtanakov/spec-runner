@@ -170,14 +170,14 @@ class TestTheRestOfTheLifecycle:
         assert audit.read_bytes() == before
 
     def test_plan_gated_refuses_an_external_target(self, tmp_path, capsys):
-        from spec_runner.cli_plan import run_gated_stage
+        from tests.plan_doubles import run_gated_stage
 
         cfg, ext = _project(tmp_path, APPROVED)
         assert run_gated_stage("decomposition", "d", cfg, invoke=_never) == 1
         assert "is external" in capsys.readouterr().out
 
     def test_plan_gated_gates_on_admission(self, tmp_path, capsys):
-        from spec_runner.cli_plan import run_gated_stage
+        from tests.plan_doubles import run_gated_stage
 
         cfg, ext = _project(tmp_path, "---\nstatus: draft\n---\nx\n")
         assert run_gated_stage("tasks", "d", cfg, invoke=_never) == 2

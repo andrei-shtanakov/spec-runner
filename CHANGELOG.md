@@ -12,6 +12,29 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Added
 
+- **Run identity, run-start/closure and one seam for every paid call** (#480
+  DT-02). `cli.main` mints one full UUIDv4 `run_id` per invocation (the
+  truncated display id is gone) and hands it to the structured log, the
+  `attempts` and call ledgers, `--json-result` and `status`. Paying
+  subcommands (`run`, `retry`, `watch`, `plan`, `review-pr`, `doctor`,
+  `tdd abandon/repair/resume/release`, `budget authorize`) write a run-start
+  before their handler and exactly one closure after it, from the dispatcher's
+  `finally`: kind `completed`/`refused`/`failed`/`interrupted`/`crashed`,
+  derived from how the handler left and whether work was left undone (pinned by
+  `schemas/run-closure.schema.json`). Every paid call -- RED, GREEN, review and
+  its roles, `review-pr` verify/fix, all three `plan` paths and the `doctor`
+  probe -- now goes through `paid_call.execute`: the call-start is published and
+  **acknowledged before the process starts** (a refusal is exit 2,
+  `INFRASTRUCTURE`, closure `failed`), and `paid_call._spawn` is the only
+  function that hands a provider's argv to a subprocess. Records pass a redactor
+  (`[REDACTED:kind:hash8]`) and are bounded to 1 MiB / 4 MiB with head, tail,
+  marker, and the digest and size of the full text. Planning gets a ledger of
+  its own (`plan_agent_calls`) and a `planning` line in `costs`;
+  `repo_total_cost` includes it. State-contract minor bump, additive only:
+  `attempts.run_id`, `run_id`/`call_id`/`status`/`started_at` on
+  `agent_calls` and `pr_agent_calls`, `run_id`/`pipeline_id` in
+  `--json-result` and `status --json`, `planning` in `costs --json`.
+
 - **DarkFactory halt check, opt-in** (halt D2b). With
   `DARKFACTORY_HALT_CHECK=1`, `run`, `retry` and `watch` ask GitHub before
   starting new work whether the repository's `darkfactory-halt` ruleset is
@@ -19,6 +42,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
   sha256 pin). Halted → exit 6; unreadable → exit 2; no github.com origin or
   no ruleset → runs as before. Without the flag nothing changes and `gh` is
   never called.
+
+### Removed
+
+- `spec_runner.run_claude_async` (and its export from the package): the
+  asynchronous second path to a provider's binary, with no caller in the tree.
+  A streaming variant, if one is ever needed, belongs inside `paid_call`.
+- The `invoke=` parameter of `cli_plan._generate_stage_draft` and
+  `run_gated_stage`: planning spawns through the same seam as every other paid
+  call, and tests double `paid_call._spawn`.
 
 ### Fixed
 
