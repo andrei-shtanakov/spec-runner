@@ -82,6 +82,12 @@ workstreams/*/spec/00-discovery/*
 # собственном репозитории.
 !/spec/negative-controls/
 !/spec/negative-controls/*.patch
+# …и repo-local профили стадий (#338): `spec approve --profile <name>` читает
+# `spec/profiles/<name>.yaml`, мост devtools доставляет его PR-ом и при
+# `--deliver-approve` добавляет простым `git add` — игнорируемый путь ронял
+# доставку штампа одобрения (#480, 2026-10-02).
+!/spec/profiles/
+!/spec/profiles/*.yaml
 
 COWORK_CONTEXT.md
 _cowork_output/
