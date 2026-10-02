@@ -787,7 +787,7 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Traces to:** [FR-06]
 
 ### TASK-002: Run identity, run-start/closure, publisher с redactor-ом и единый seam платного вызова на всех сайтах
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-03, BEH-05, BEH-06, BEH-07, BEH-24, BEH-26, BEH-38, BEH-44 (DT-02, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-02
