@@ -52,6 +52,20 @@ executor:
   # своего CLI (macOS Seatbelt). `required`, а не `on`: без доступного бэкенда
   # прогон останавливается, а не идёт без песочницы — защита доказательств #480.
   executor_sandbox: required
+  # Спека воркстрима живёт в бандле, а не в spec/<prefix>requirements.md|design.md:
+  # без этого ключа агент TASK-002 (#480) три попытки строил по «See <нет файла>».
+  # Промпт перечисляет файлы и цитирует разделы, на id которых ссылается задача.
+  # `{ws}` — namespace без `-`; без --spec-prefix записи с плейсхолдером пропускаются.
+  task_context_files:
+  - workstreams/{ws}/spec/10-requirements.md
+  - workstreams/{ws}/spec/15-behaviour-spec.md
+  # Бандлы старой формы (WS-spec-runner-341/367) — без design/acceptance/decomposition.
+  - path: workstreams/{ws}/spec/20-design.md
+    optional: true
+  - path: workstreams/{ws}/spec/25-acceptance.md
+    optional: true
+  - path: workstreams/{ws}/spec/30-decomposition.md
+    optional: true
   task_timeout_minutes: 30
   # Долларовых потолков нет намеренно: подписка; total_cost_usd — нотация
   # листпрайса. Тормоза: max_retries, on_task_failure: stop, task_timeout.
