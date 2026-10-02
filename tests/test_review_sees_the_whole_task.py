@@ -116,6 +116,26 @@ class TestTheDiffStartsWhereTheTaskBegan:
 
         assert diff is not None and diff.files == ["src/mine.py"]
 
+    def test_a_task_branch_with_no_commit_of_its_own_is_not_given_a_foreign_one(self, repo):
+        """Review of #655: HEAD == merge-base on a task branch used to fall
+        back to HEAD~1 — the previous main commit, presented as the task's."""
+        _git(repo, "switch", "-q", "main")
+        _commit(repo, "src/foreign.py", "F = 1\n", "someone else's commit on main")
+        _git(repo, "switch", "-qc", "task/task-009")
+
+        cfg = _cfg(repo)
+
+        assert task_base(cfg) == "HEAD"
+        assert "F = 1" not in build_review_prompt(_task(), cfg)
+        assert nothing_to_review(cfg) is not None
+
+    def test_a_path_with_a_space_stays_one_path(self, repo):
+        _commit(repo, "docs/release notes.md", "x\n", "doc")
+
+        diff = task_diff(_cfg(repo))
+
+        assert diff is not None and diff.files == ["docs/release notes.md"]
+
     def test_work_committed_on_main_itself_falls_back_to_the_last_commit(self, repo):
         _git(repo, "switch", "-q", "main")
         _commit(repo, "src/a.py", "A = 1\n", "work on main")
@@ -135,7 +155,7 @@ class TestNothingToReview:
         monkeypatch.setattr(paid_call, "_spawn", no_call)
         verdict, error, output = run_code_review(_task(), _cfg(repo))
 
-        assert verdict is ReviewVerdict.ERROR
+        assert verdict is ReviewVerdict.NOT_RUN
         assert error is not None and "only spec/tasks.md" in error
         assert output is None
 

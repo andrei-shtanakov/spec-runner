@@ -62,8 +62,7 @@ is a **breaking change** and requires a major version bump plus an entry here.
   HEAD with the branch the task merges into (the integration branch during a
   run), falling back to `HEAD~1` only for work committed on the main branch
   itself. A diff that changes nothing but the task file is not reviewed: no
-  paid call, verdict `error` (under `required` an instrument error, never
-  `passed`). A truncated patch names its base so the reviewer can read the
+  paid call, verdict `not_run` (under `required` it blocks, never `passed`). A truncated patch names its base so the reviewer can read the
   rest.
 
 - **Task prompts can see a workstream's specification** (`task_context_files`).

@@ -265,17 +265,24 @@ def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess[str]
 def task_base(config: ExecutorConfig) -> str:
     """Where the task under review began (see ``TaskDiff``).
 
-    Falls back to ``HEAD~1`` when HEAD *is* the merge-base — work committed
-    straight onto the main branch, where no branch marks the task's start.
+    ``HEAD~1`` only when the task's work was committed on the main branch
+    itself — no branch marks where it started. On a task branch whose HEAD
+    *is* the merge-base the task has no commit of its own: the base is HEAD,
+    so only uncommitted work is in the diff and `nothing_to_review` can say
+    so — `HEAD~1` there would hand the reviewer someone else's commit
+    (review of #655).
     """
-    from .git_ops import get_main_branch
+    from .git_ops import current_branch, get_main_branch
 
-    merge_base = _git(config, "merge-base", "HEAD", get_main_branch(config))
-    head = _git(config, "rev-parse", "HEAD")
+    main = get_main_branch(config)
+    merge_base = _git(config, "merge-base", "HEAD", main)
+    head = _git(config, "rev-parse", "HEAD").stdout.strip()
     base = merge_base.stdout.strip()
-    if merge_base.returncode == 0 and base and base != head.stdout.strip():
+    if merge_base.returncode == 0 and base and base != head:
         return base
-    return "HEAD~1"
+    if current_branch(config) == main:
+        return "HEAD~1"
+    return "HEAD"
 
 
 def task_diff(config: ExecutorConfig) -> TaskDiff | None:
@@ -290,7 +297,7 @@ def task_diff(config: ExecutorConfig) -> TaskDiff | None:
     base = task_base(config)
     # `--relative`: paths as the project sees them, for the bookkeeping check.
     names = _git(config, "diff", "--relative", "--name-only", base)
-    files = names.stdout.split() if names.returncode == 0 else None
+    files = names.stdout.splitlines() if names.returncode == 0 else None
     stat = _git(config, "diff", base, "--stat")
     patch = _git(config, "diff", "-p", base)
     return TaskDiff(
@@ -306,8 +313,9 @@ def nothing_to_review(config: ExecutorConfig) -> str | None:
 
     Only the task file's bookkeeping changed (or nothing did): a reviewer
     handed that has nothing to pass, and its PASSED would be read as a
-    reviewed task. Not run, and said so — an `ERROR` verdict, which
-    `review_policy: required` treats as an instrument error.
+    reviewed task. Not run, and said so — `NOT_RUN`: a fact about the work,
+    not a broken instrument, so `required` blocks it (exit 1) rather than
+    retrying a paid attempt as an infrastructure error (review of #655).
     """
     # `doctor` probes whether the review CLI answers, not whether a task's
     # work is sound; its scratch task need not change anything.
@@ -685,7 +693,7 @@ def run_code_review(
     empty = nothing_to_review(config)
     if empty is not None:
         log_progress(f"⛔ Review not run: {empty}", task.id)
-        return ReviewVerdict.ERROR, empty, None
+        return ReviewVerdict.NOT_RUN, empty, None
 
     # Use review-specific command/model if configured, then persona, then main settings
     review_cmd = config.review_command or config.claude_command
@@ -987,7 +995,7 @@ def run_parallel_review(
     empty = nothing_to_review(config)
     if empty is not None:
         log_progress(f"⛔ Review not run: {empty}", task.id)
-        return ReviewVerdict.ERROR, empty, None
+        return ReviewVerdict.NOT_RUN, empty, None
 
     review_cmd = config.review_command or config.claude_command
     review_model = config.review_model or config.get_model_for_role("reviewer")
