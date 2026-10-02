@@ -250,6 +250,22 @@ def test_interactive_plan_acknowledges_its_round(tmp_path, journal, monkeypatch)
     assert [p for _, p in adjacent_pairs(journal)] == ["plan:interactive"]
 
 
+def test_interactive_plan_refused_start_exits_2(tmp_path, journal, monkeypatch):
+    """Review of #653: the interactive loop's broad `except` swallowed the
+    refusal, so `plan` exited 0 and its closure said `completed`."""
+    cfg = project(tmp_path)
+    make_run(journal, RecordingStore(journal, refuse_starts=True), ack_timeout=0.1)
+    monkeypatch.setattr("builtins.input", lambda *_a: "n")
+    args = SimpleNamespace(
+        full=False, gated=False, description="build x", from_file=None, stage=None
+    )
+
+    with spawn_double(journal), pytest.raises(SystemExit) as exit_info:
+        cli_plan.cmd_plan(args, cfg)
+
+    assert exit_info.value.code == 2
+
+
 def test_plan_calls_land_in_the_plan_ledger_and_not_in_agent_calls(tmp_path, journal):
     cfg = project(tmp_path)
     ctx = make_run(journal)

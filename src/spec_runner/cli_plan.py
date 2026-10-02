@@ -931,6 +931,11 @@ When done, respond with: PLAN_READY
             print(output[:2000])
             return
 
+        except CallRefused as refused:
+            # Like the gated and --full paths: a refused call-start is exit 2,
+            # not a planning round that "completed" (review of #653).
+            print(f"⛔ plan: the call was not started: {refused.refusal}")
+            sys.exit(2)
         except subprocess.TimeoutExpired:
             print(f"\n⏰ Planning timeout after {config.task_timeout_minutes}m")
             return
