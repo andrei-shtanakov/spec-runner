@@ -169,3 +169,93 @@ class TestEvidenceProvesTheOriginalBytes:
         assert bounded.truncated
         assert self._sha(original) in bounded.text
         assert self.SECRET not in bounded.text
+
+
+class _SlowStore:
+    """Acknowledges after `delay` seconds."""
+
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self.keys: list[str] = []
+
+    def put(self, key, payload, *, metadata):
+        import time
+
+        from spec_runner.artifact_store import Ack
+
+        time.sleep(self.delay)
+        self.keys.append(key)
+        return Ack(key=key, size=len(payload))
+
+
+def _result(call_id: str):
+    from spec_runner.evidence import call_result_for
+
+    return call_result_for(
+        run_id="r",
+        pipeline_id=None,
+        call_id=call_id,
+        provenance="review",
+        outcome="answered",
+        cost_usd=None,
+        returncode=0,
+        result="ok",
+        timestamp="t",
+    )
+
+
+class TestDrain:
+    """Minor of #653: `drain` ignored its timeout and raced with itself."""
+
+    def test_drain_honours_its_timeout(self):
+        import time
+
+        from spec_runner.evidence import Publisher
+
+        publisher = Publisher(_SlowStore(0.5), ack_timeout=30.0)
+        publisher._queue.append(_result("c-1"))
+
+        started = time.monotonic()
+        assert publisher.drain(0.05) is False
+        assert time.monotonic() - started < 1.0
+        assert publisher.pending == 1
+
+    def test_concurrent_drains_deliver_each_record_once(self):
+        import threading
+
+        from spec_runner.evidence import Publisher
+
+        store = _SlowStore(0.01)
+        publisher = Publisher(store, ack_timeout=5.0)
+        for i in range(20):
+            publisher._queue.append(_result(f"c-{i}"))
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                publisher.drain(5.0)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert publisher.pending == 0
+        assert len(store.keys) == len(set(store.keys)) == 20
+
+
+def test_review_pr_total_is_not_a_floor_because_of_planning(capsys):
+    from spec_runner.cli_info import _print_pr_costs
+
+    pr_rows = [{"repo": "o/r", "pr_number": 7, "calls": 1, "cost": 0.2, "unmeasured_calls": 0}]
+    _print_pr_costs(
+        pr_rows, task_cost=1.0, planning={"calls": 1, "cost": 0.0, "unmeasured_calls": 1}
+    )
+
+    out = capsys.readouterr().out
+    assert "Review-PR total:      $0.20" in out
+    assert "Repo total:           ≥$1.20" in out

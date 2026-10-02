@@ -331,6 +331,7 @@ class Publisher:
     ack_timeout: float = 3.0
     channel: str = "store"
     _queue: deque[Record] = field(default_factory=deque)
+    _drain_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @classmethod
     def from_config(cls, config: ExecutorConfig) -> Publisher:
@@ -354,7 +355,7 @@ class Publisher:
             channel = "local"
         return cls(store, ack_timeout=config.durability_ack_timeout_seconds, channel=channel)
 
-    def publish(self, record: Record) -> Ack:
+    def publish(self, record: Record, *, timeout: float | None = None) -> Ack:
         """Write ``record`` once; return the store's ack or raise.
 
         Raises ``AlreadyExists`` when the key is taken (first write unchanged)
@@ -366,9 +367,12 @@ class Publisher:
             "kind": record.kind,
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
-        return self._put(record.key, payload, metadata)
+        return self._put(record.key, payload, metadata, timeout=timeout)
 
-    def _put(self, key: str, payload: bytes, metadata: dict[str, str]) -> Ack:
+    def _put(
+        self, key: str, payload: bytes, metadata: dict[str, str], *, timeout: float | None = None
+    ) -> Ack:
+        wait = self.ack_timeout if timeout is None else timeout
         outcome: dict[str, Any] = {}
 
         def deliver() -> None:
@@ -379,9 +383,9 @@ class Publisher:
 
         worker = threading.Thread(target=deliver, name="spec-runner-publish", daemon=True)
         worker.start()
-        worker.join(self.ack_timeout)
+        worker.join(wait)
         if worker.is_alive():
-            raise AckNotReceived(f"no acknowledgement for {key} within {self.ack_timeout}s")
+            raise AckNotReceived(f"no acknowledgement for {key} within {wait}s")
         error = outcome.get("error")
         if isinstance(error, AlreadyExists):
             raise error
@@ -407,18 +411,26 @@ class Publisher:
         return True
 
     def drain(self, timeout: float) -> bool:
-        """Deliver every queued record; ``True`` when nothing is left owed."""
-        remaining = len(self._queue)
-        for _ in range(remaining):
-            record = self._queue.popleft()
-            try:
-                self.publish(record)
-            except AlreadyExists:
-                continue
-            except AckNotReceived:
-                self._queue.append(record)
-                break
-        return not self._queue
+        """Deliver every queued record; ``True`` when nothing is left owed.
+
+        ``timeout`` bounds each acknowledgement it waits for. Serialised: the
+        parallel review pool drains from several threads, and two drains
+        popping one queue raced (review of #653).
+        """
+        with self._drain_lock:
+            for _ in range(len(self._queue)):
+                try:
+                    record = self._queue.popleft()
+                except IndexError:
+                    break
+                try:
+                    self.publish(record, timeout=timeout)
+                except AlreadyExists:
+                    continue
+                except AckNotReceived:
+                    self._queue.append(record)
+                    break
+            return not self._queue
 
     @property
     def pending(self) -> int:

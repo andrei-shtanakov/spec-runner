@@ -394,7 +394,10 @@ def _print_pr_costs(pr_rows: list[dict], *, task_cost: float, planning: dict | N
                 f"  {r['repo']}#{r['pr_number']:<6} {r['calls']:>3} call(s)   "
                 f"{prefix}${r['cost']:.2f}"
             )
-        print(f"Review-PR total:      {floor}${pr_cost:.2f}")
+        # This ledger's own floor: an unpriced *planning* call says nothing
+        # about review-pr spend (review of #653).
+        pr_floor = "≥" if any(r["unmeasured_calls"] for r in pr_rows) else ""
+        print(f"Review-PR total:      {pr_floor}${pr_cost:.2f}")
     if planning:
         prefix = "≥" if planning["unmeasured_calls"] else ""
         print(f"\n{'=' * 40}" if not pr_rows else "")
