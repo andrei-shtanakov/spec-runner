@@ -10,6 +10,7 @@ does not belong there.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -122,9 +123,13 @@ class TestEachPlanningPathLeavesCallRecords:
         assert rows[0][1] and rows[0][2]
 
     def test_two_invocations_have_two_run_ids(self, root):
-        _run(root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")])
+        _run(
+            root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")]
+        )
         (root / "spec" / "requirements.md").unlink()
-        _run(root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")])
+        _run(
+            root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")]
+        )
 
         rows = _rows(root, "plan_agent_calls")
         assert len(rows) == 2 and rows[0][1] != rows[1][1]
@@ -178,7 +183,9 @@ class TestCostsShowsPlanningAsItsOwnLine:
         )
 
     def test_the_text_table_names_the_planning_line(self, root, capsys):
-        _run(root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")])
+        _run(
+            root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")]
+        )
 
         capsys.readouterr()
         cli.main(["costs", "--project-root", str(root)])
@@ -195,24 +202,28 @@ class TestCostsShowsPlanningAsItsOwnLine:
 
     def test_the_payload_validates_against_the_schema(self, root, capsys):
         jsonschema = pytest.importorskip("jsonschema")
-        _run(root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")])
+        _run(
+            root, ["plan", "--gated", "--stage", "requirements", "x"], [_stage_text("requirements")]
+        )
 
         payload = _costs_json(root, capsys)
 
-        schema = json.loads((Path(__file__).parent.parent / "schemas" / "costs.schema.json").read_text())
+        schema = json.loads(
+            (Path(__file__).parent.parent / "schemas" / "costs.schema.json").read_text()
+        )
         jsonschema.validate(payload, schema)
 
 
 class TestAnUnpricedPlanningCallIsAFloor:
     def test_unknown_cost_is_null_and_counted_not_zeroed(self, root, capsys):
         journal = Journal()
-        with spawn_double(journal, lambda argv: completed(argv, _stage_text("requirements"))):
-            try:
-                cli.main(
-                    ["plan", "--gated", "--stage", "requirements", "x", "--project-root", str(root)]
-                )
-            except SystemExit:
-                pass
+        with (
+            spawn_double(journal, lambda argv: completed(argv, _stage_text("requirements"))),
+            contextlib.suppress(SystemExit),
+        ):
+            cli.main(
+                ["plan", "--gated", "--stage", "requirements", "x", "--project-root", str(root)]
+            )
 
         rows = _rows(root, "plan_agent_calls")
         assert rows[0][4] is None

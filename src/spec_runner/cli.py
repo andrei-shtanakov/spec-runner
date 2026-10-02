@@ -2843,7 +2843,7 @@ def _exit_on_termination() -> Iterator[None]:
 def _dispatch(args, config) -> None:
     """Run the handler for the parsed subcommand (raises SystemExit to exit)."""
     try:
-        commands = {
+        commands: dict[str, Callable[..., object]] = {
             "run": cmd_run,
             "status": cmd_status,
             "costs": cmd_costs,
@@ -2902,15 +2902,15 @@ def _dispatch(args, config) -> None:
         if args.command == "change":
             from . import change_commands
 
-            handler = {
+            change_handler = {
                 "new": change_commands.cmd_change_new,
                 "list": change_commands.cmd_change_list,
                 "archive": change_commands.cmd_change_archive,
             }.get(args.change_command)
-            if handler is None:
+            if change_handler is None:
                 # no sub-subcommand given -> default to `change list`
                 raise SystemExit(change_commands.cmd_change_list(args, config))
-            raise SystemExit(handler(args, config))
+            raise SystemExit(change_handler(args, config))
 
         # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
         if args.command == "spec":
@@ -2918,17 +2918,17 @@ def _dispatch(args, config) -> None:
 
             _check_stage_name(config, getattr(args, "stage", None))
             _check_stage_files(config)
-            handler = {
+            spec_handler = {
                 "status": spec_commands.cmd_spec_status,
                 "approve": spec_commands.cmd_spec_approve,
                 "reject": spec_commands.cmd_spec_reject,
                 "adopt": spec_commands.cmd_spec_adopt,
                 "check": spec_commands.cmd_spec_check,
             }.get(args.spec_command)
-            if handler is None:
+            if spec_handler is None:
                 # no sub-subcommand given -> default to `spec status`
                 raise SystemExit(spec_commands.cmd_spec_status(args, config))
-            raise SystemExit(handler(args, config))
+            raise SystemExit(spec_handler(args, config))
 
         if args.command == "plan":
             _check_stage_name(config, getattr(args, "stage", None))
@@ -2951,13 +2951,14 @@ def _close_run(ctx, config, exit_code: int, crashed=None, *, interrupted=False, 
     """Write the closure of a started run; returns the exit code to use."""
     from . import executor
 
-    return ctx.close(
+    closed: int = ctx.close(
         config,
         exit_code=exit_code,
         crashed=crashed,
         interrupted=interrupted or bool(getattr(executor, "_shutdown_requested", False)),
         hint=hint,
     )
+    return closed
 
 
 def _run_with_closure(args, config, ctx) -> None:

@@ -57,7 +57,9 @@ class RecordingStore:
         self.stall = stall
 
     def capabilities(self) -> StoreCapabilities:
-        return StoreCapabilities(tls=None, encryption_at_rest=True, immutable_put=True, lifecycle="")
+        return StoreCapabilities(
+            tls=None, encryption_at_rest=True, immutable_put=True, lifecycle=""
+        )
 
     def put(self, key: str, data: bytes, *, metadata: dict[str, str]) -> Ack:
         is_start = key.endswith("/start.json")
@@ -152,16 +154,16 @@ def project(tmp_path: Path, **overrides):
 
     root = tmp_path
     (root / "spec").mkdir(parents=True, exist_ok=True)
-    defaults = dict(
-        project_root=root,
-        state_file=root / "spec" / ".executor-state.db",
-        logs_dir=root / "spec" / ".executor-logs",
-        claude_command="claude",
-        create_git_branch=False,
-        run_tests_on_done=False,
-        auto_commit=False,
-        run_review=False,
-        callback_url="",
-    )
+    defaults = {
+        "project_root": root,
+        "state_file": root / "spec" / ".executor-state.db",
+        "logs_dir": root / "spec" / ".executor-logs",
+        "claude_command": "claude",
+        "create_git_branch": False,
+        "run_tests_on_done": False,
+        "auto_commit": False,
+        "run_review": False,
+        "callback_url": "",
+    }
     defaults.update(overrides)
     return ExecutorConfig(**defaults)

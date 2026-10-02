@@ -380,7 +380,8 @@ class Publisher:
             raise error
         if error is not None:
             raise AckNotReceived(f"store refused {key}: {error}") from error
-        return outcome["ack"]
+        ack: Ack = outcome["ack"]
+        return ack
 
     def publish_or_queue(self, record: Record) -> bool:
         """``publish``, but a failure queues the record for ``drain``.

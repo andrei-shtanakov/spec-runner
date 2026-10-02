@@ -74,7 +74,10 @@ def _invocation(cfg, prompt="do the work"):
 
 
 def site_red(cfg):
-    with ExecutorState(cfg) as state, tdd._paid_scope(TASK, "red", tdd.RED_AUTHORING, state, "p", None):
+    with (
+        ExecutorState(cfg) as state,
+        tdd._paid_scope(TASK, "red", tdd.RED_AUTHORING, state, "p", None),
+    ):
         tdd._run_agent(cfg, "write the failing test")
 
 
@@ -257,7 +260,9 @@ def test_plan_calls_land_in_the_plan_ledger_and_not_in_agent_calls(tmp_path, jou
     (start,) = ctx.test_store.records("call-start")
     conn = sqlite3.connect(cfg.state_file)
     try:
-        plan_rows = conn.execute("SELECT provenance, call_id, run_id FROM plan_agent_calls").fetchall()
+        plan_rows = conn.execute(
+            "SELECT provenance, call_id, run_id FROM plan_agent_calls"
+        ).fetchall()
         task_rows = conn.execute("SELECT COUNT(*) FROM agent_calls").fetchone()[0]
     finally:
         conn.close()
@@ -278,7 +283,11 @@ def test_the_probe_publishes_its_two_calls_without_a_task(tmp_path, journal):
 
     def priced(text):
         return json.dumps(
-            {"result": text, "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 1}}
+            {
+                "result": text,
+                "total_cost_usd": 0.01,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
         )
 
     def answer(argv):
@@ -305,9 +314,12 @@ def test_a_provenance_outside_the_probe_map_is_refused_before_call_start(tmp_pat
     cfg = project(tmp_path, probe_provenance="doctor")
     ctx = make_run(journal)
 
-    with spawn_double(journal), pytest.raises(paid_call.CallRefused) as refused:
-        with paid_call.scope(task_id="TASK-001", provenance="red", attempt=1):
-            tdd._run_agent(cfg, "p")
+    with (
+        spawn_double(journal),
+        pytest.raises(paid_call.CallRefused) as refused,
+        paid_call.scope(task_id="TASK-001", provenance="red", attempt=1),
+    ):
+        tdd._run_agent(cfg, "p")
 
     assert refused.value.refusal.kind.value == "instrument"
     assert journal.events == []
@@ -342,9 +354,7 @@ def _tdd_task_project(tmp_path):
 @pytest.mark.parametrize("failure", ["refuses", "stalls"])
 def test_without_an_ack_the_process_never_starts(tmp_path, journal, failure):
     cfg = _tdd_task_project(tmp_path)
-    store = RecordingStore(
-        journal, refuse_starts=True, stall=0.5 if failure == "stalls" else 0.0
-    )
+    store = RecordingStore(journal, refuse_starts=True, stall=0.5 if failure == "stalls" else 0.0)
     make_run(journal, store, ack_timeout=0.1)
 
     with spawn_double(journal) as argvs, ExecutorState(cfg) as state:
@@ -394,9 +404,12 @@ def test_the_prompt_artefact_of_a_refused_start_says_so(tmp_path, journal):
     artefact = tmp_path / "prompt.log"
     artefact.write_text("=== RED PROMPT ===\nthe prompt\n")
 
-    with spawn_double(journal), pytest.raises(paid_call.CallRefused):
-        with paid_call.scope(task_id="TASK-001", provenance="red", prompt_log=artefact):
-            tdd._run_agent(cfg, "p")
+    with (
+        spawn_double(journal),
+        pytest.raises(paid_call.CallRefused),
+        paid_call.scope(task_id="TASK-001", provenance="red", prompt_log=artefact),
+    ):
+        tdd._run_agent(cfg, "p")
 
     assert artefact.read_text().rstrip().endswith("===") and "NOT STARTED" in artefact.read_text()
 
@@ -449,13 +462,12 @@ def test_a_budget_refusal_leaves_no_start_no_spawn_and_no_row(tmp_path, journal)
     with ExecutorState(cfg) as state:
         state.record_agent_call(TASK.id, "red_authoring", cost_usd=1.5)
 
-    with spawn_double(journal), ExecutorState(cfg) as state:
-        with pytest.raises(BudgetRefused):
-            from spec_runner.budget import check_before_call
+    with spawn_double(journal), ExecutorState(cfg) as state, pytest.raises(BudgetRefused):
+        from spec_runner.budget import check_before_call
 
-            refusal = check_before_call(cfg, state, TASK.id, "green")
-            assert refusal is not None
-            raise BudgetRefused(refusal)
+        refusal = check_before_call(cfg, state, TASK.id, "green")
+        assert refusal is not None
+        raise BudgetRefused(refusal)
 
     assert journal.events == []
     with ExecutorState(cfg) as state:

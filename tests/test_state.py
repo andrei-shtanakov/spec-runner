@@ -1842,3 +1842,37 @@ class TestLatestVerifyEvidence:
             "though workstream-b never recorded any evidence of its own"
         )
         state.close()
+
+
+class TestOldDbMigratesAdditively:
+    """BEH-03: a pre-contract DB gains the identity columns, loses nothing."""
+
+    def test_old_rows_read_with_null_identity(self, tmp_path):
+        db = tmp_path / "state.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            """
+            CREATE TABLE agent_calls (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL, provenance TEXT NOT NULL,
+                input_tokens INTEGER, output_tokens INTEGER, cost_usd REAL,
+                timestamp TEXT NOT NULL);
+            INSERT INTO agent_calls (task_id, provenance, cost_usd, timestamp)
+                VALUES ('TASK-001', 'green', 1.25, '2026-01-01T00:00:00'),
+                       ('TASK-001', 'review', 0.75, '2026-01-01T00:01:00');
+            """
+        )
+        conn.commit()
+        conn.close()
+        cfg = ExecutorConfig(state_file=db, project_root=tmp_path, logs_dir=tmp_path / "logs")
+
+        with ExecutorState(cfg):
+            pass
+
+        conn = sqlite3.connect(db)
+        rows = conn.execute("SELECT run_id, call_id, cost_usd FROM agent_calls").fetchall()
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        attempt_cols = {c[1] for c in conn.execute("PRAGMA table_info(attempts)")}
+        conn.close()
+        assert rows == [(None, None, 1.25), (None, None, 0.75)]
+        assert "plan_agent_calls" in tables
+        assert "run_id" in attempt_cols

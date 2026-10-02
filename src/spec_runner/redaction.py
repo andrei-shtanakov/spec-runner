@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from .obs import _DEFAULT_REDACT_KEYS
 
@@ -86,6 +86,11 @@ def _redact_pair(match: re.Match[str]) -> str:
     return match.group("key") + match.group("sep") + placeholder("secret", value)
 
 
+def _replacer(kind: str) -> Callable[[re.Match[str]], str]:
+    """A substitution that stands a match for its placeholder."""
+    return lambda match: placeholder(kind, match.group(0))
+
+
 def redact(text: str, *, environ: Mapping[str, str] | None = None) -> str:
     """``text`` with every recognised secret replaced by its placeholder.
 
@@ -97,7 +102,7 @@ def redact(text: str, *, environ: Mapping[str, str] | None = None) -> str:
     for value in sorted(set(env_denylist(environ).values()), key=len, reverse=True):
         text = text.replace(value, placeholder("env", value))
     for kind, pattern in _PATTERNS:
-        text = pattern.sub(lambda m, k=kind: placeholder(k, m.group(0)), text)
+        text = pattern.sub(_replacer(kind), text)
     return _KEY_VALUE.sub(_redact_pair, text)
 
 

@@ -1,6 +1,5 @@
 """Tests for spec_runner.events module."""
 
-
 from spec_runner.events import EventBus, TaskEvent
 
 

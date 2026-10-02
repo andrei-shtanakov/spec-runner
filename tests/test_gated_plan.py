@@ -297,9 +297,7 @@ def test_regenerate_draft_preserves_existing_version(tmp_path: Path):
         GOOD_REQ_BODY,
     )
 
-    rc = generate_stage_draft(
-        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
-    )
+    rc = generate_stage_draft("requirements", "Build X", cfg, invoke=_fake_invoke(_good_out()))
 
     assert rc == 0
     meta = read_spec_meta(cfg.requirements_file)
@@ -325,9 +323,7 @@ def test_regenerate_draft_preserves_extras_and_owner_role(tmp_path: Path):
         GOOD_REQ_BODY,
     )
 
-    rc = generate_stage_draft(
-        "requirements", "Build X", cfg, invoke=_fake_invoke(_good_out())
-    )
+    rc = generate_stage_draft("requirements", "Build X", cfg, invoke=_fake_invoke(_good_out()))
 
     assert rc == 0
     meta = read_spec_meta(cfg.requirements_file)
