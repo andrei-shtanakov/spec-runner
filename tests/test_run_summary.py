@@ -150,3 +150,26 @@ class TestRunSummaryDelta:
         kw = summary_calls[0].kwargs
         assert kw["completed"] == 1, kw
         assert kw["failed_attempts"] is None, kw  # 0 this run → suppressed
+
+
+def test_dry_run_preserves_stale_and_failed_task_state(tmp_path):
+    from datetime import datetime, timedelta
+
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as state:
+        state.mark_running("TASK-001")
+        state.get_task_state("TASK-001").started_at = (
+            datetime.now() - timedelta(days=2)
+        ).isoformat()
+        state.record_attempt("TASK-002", success=False, duration=1.0)
+        state._save()
+        before = [(tid, ts.status, len(ts.attempts)) for tid, ts in state.tasks.items()]
+        counters = (state.total_completed, state.total_failed, state.consecutive_failures)
+    plan = cfg.tasks_file.read_bytes()
+
+    _run_tasks(_run_args(dry_run=True), cfg, lock_held=True)
+
+    assert cfg.tasks_file.read_bytes() == plan
+    with ExecutorState(cfg) as state:
+        assert [(tid, ts.status, len(ts.attempts)) for tid, ts in state.tasks.items()] == before
+        assert (state.total_completed, state.total_failed, state.consecutive_failures) == counters
