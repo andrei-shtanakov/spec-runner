@@ -58,6 +58,9 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _KEY_VALUE = re.compile(
+    # Not the kind inside a placeholder (`[REDACTED:secret:hash8]` reads as
+    # `secret: hash8]`): a second pass must be a no-op (review of #653).
+    r"(?<!\[REDACTED:)"
     r"(?P<key>\b[\w.\-]*(?:" + _KEY_ALTERNATION + r")[\w.\-]*)"
     r"(?P<sep>[\"']?\s*[:=]\s*[\"']?)"
     r"(?P<value>[^\s\"',;]{" + str(MIN_SECRET_LENGTH) + r",})",

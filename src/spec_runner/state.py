@@ -2277,8 +2277,10 @@ class ExecutorState:
     ) -> None:
         """Write the `open` row of a task-ledger call, before the store ack.
 
-        Raises on failure, unlike `record_agent_call`: a call whose intent
-        cannot be written must not start (FR-02).
+        Raises on failure, and `paid_call.execute` logs and proceeds: this row
+        is the local index of the call, the acknowledged call-start is its
+        durable intent (FR-02). Refusing on the index alone waits for the
+        emergency spool (FR-08, the TODO at the seam).
         """
         self._insert_phase_row(
             "INSERT INTO agent_calls "

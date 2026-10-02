@@ -312,3 +312,43 @@ def test_url_credentials_are_redacted():
 
     assert "s3cretPassw0rd" not in out
     assert "git.example.com/o/r.git" in out
+
+
+class TestRedactionIsIdempotent:
+    """Round 3 of #653: placeholders were wrapped again on a second pass, and
+    the publisher redacts every field of an already-redacted record."""
+
+    def test_a_second_pass_changes_nothing(self):
+        from spec_runner.redaction import redact
+
+        text = (
+            "API_TOKEN=abcdefgh12345678 key ghp_" + "A" * 36 + "\n"
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----"
+        )
+        once = redact(text, environ={})
+
+        assert redact(once, environ={}) == once
+        assert "[REDACTED:secret:[REDACTED" not in once
+
+    def test_the_published_prompt_hashes_to_its_digest(self):
+        import hashlib
+        import json
+
+        from spec_runner.evidence import PolicyIdentity, call_start_for, serialise
+
+        record = call_start_for(
+            run_id="r",
+            pipeline_id=None,
+            call_id="c",
+            provenance="review",
+            policy=PolicyIdentity(1, "h", "ns", "derived", "", ""),
+            task_id="TASK-1",
+            attempt=1,
+            prompt="API_TOKEN=abcdefgh12345678 go",
+            timestamp="t",
+        )
+        published = json.loads(serialise(record))
+
+        assert (
+            hashlib.sha256(published["prompt"].encode()).hexdigest() == published["prompt_sha256"]
+        )

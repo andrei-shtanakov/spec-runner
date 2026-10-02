@@ -230,20 +230,26 @@ class TestAnErrorPayloadIsAnError:
 
 
 class TestTheLedgerNeverDecidesAnything:
-    def test_a_failed_ledger_write_does_not_change_the_verdict(self, tmp_path):
+    # The review's row is written through the paid-call seam since #480: open
+    # before the call, close after it. Either write failing is the injection
+    # (review of #653: patching the retired `record_agent_call` reached
+    # nothing, so the test passed without exercising the guard).
+    @pytest.mark.parametrize("write", ["open_agent_call", "close_call_row"])
+    def test_a_failed_ledger_write_does_not_change_the_verdict(self, tmp_path, write):
         """An accounting problem must not turn "found issues" into "passed",
         nor a finished review into a failed task."""
         cfg = _cfg(tmp_path)
+        broken = patch(
+            f"spec_runner.state.ExecutorState.{write}", side_effect=RuntimeError("disk full")
+        )
 
         with (
             patch("spec_runner.review.subprocess.run", return_value=_claude_json("REVIEW_FAILED")),
-            patch(
-                "spec_runner.state.ExecutorState.record_agent_call",
-                side_effect=RuntimeError("disk full"),
-            ),
+            broken as injected,
         ):
             verdict, error, _out = run_code_review(_task(), cfg)
 
+        assert injected.called, "the injection must reach the ledger write"
         assert verdict is ReviewVerdict.FAILED
         assert error == "Review found issues"
 

@@ -534,8 +534,9 @@ class ReviewPrState:
     ) -> None:
         """The `open` row of a call, written before the store ack (#480).
 
-        Raises on failure: a call whose intent cannot be written must not
-        start. Outcome stays `open` until the call closes it.
+        Raises on failure, and `paid_call.execute` logs and proceeds: this row
+        is the local index, the acknowledged call-start the durable intent
+        (FR-02). Outcome stays `open` until the call closes it.
         """
         with self._conn:
             self._conn.execute(
