@@ -1309,6 +1309,107 @@ class TestRecoverStaleTasks:
             )
             assert recovered == ["TASK-001"]
 
+    @staticmethod
+    def _git_repo(tmp_path: Path, plan: str) -> Path:
+        import subprocess
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "o@e.c")
+        git("config", "user.name", "O")
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text(plan)
+        git("add", "tasks.md")
+        git("commit", "-qm", "plan")
+        return tasks_file
+
+    @staticmethod
+    def _stale(config: ExecutorConfig) -> None:
+        from datetime import datetime, timedelta
+
+        with ExecutorState(config) as state:
+            state.mark_running("TASK-001")
+            ts = state.get_task_state("TASK-001")
+            ts.started_at = (datetime.now() - timedelta(days=2)).isoformat()
+            state._save()
+
+    @pytest.mark.parametrize("recover_all", [False, True])
+    def test_done_on_main_wins_over_stale_running_state(self, tmp_path, recover_all):
+        """The #480 case: TASK-001 accepted on main, its DB row left `running`."""
+        from spec_runner.state import recover_stale_tasks
+
+        original = "### TASK-001: accepted task\nP0 | DONE\n- [x] Accepted work\n"
+        tasks_file = self._git_repo(tmp_path, original)
+        config = _make_config(tmp_path, main_branch="main")
+        self._stale(config)
+        with ExecutorState(config) as state:
+            counters = (state.total_completed, state.total_failed)
+            recovered = recover_stale_tasks(state, 60, tasks_file, recover_all=recover_all)
+            ts = state.get_task_state("TASK-001")
+            assert recovered == ["TASK-001"]
+            assert ts.status == "success"
+            assert ts.attempts == []
+            assert ts.completed_at is not None
+            assert (state.total_completed, state.total_failed) == counters
+            assert tasks_file.read_text() == original
+        with ExecutorState(config) as state:
+            assert state.get_task_state("TASK-001").status == "success"
+            assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == []
+
+    def test_done_only_in_the_tree_is_not_success(self, tmp_path):
+        """Review of #649: the harness writes DONE before commit and merge, so a
+        run killed in that window leaves DONE on an unmerged task branch."""
+        import subprocess
+
+        from spec_runner.state import recover_stale_tasks
+
+        tasks_file = self._git_repo(tmp_path, "### TASK-001: work\nP0 | IN_PROGRESS\n")
+        subprocess.run(
+            ["git", "switch", "-qc", "task/TASK-001"], cwd=tmp_path, check=True, capture_output=True
+        )
+        tasks_file.write_text("### TASK-001: work\nP0 | DONE\n")
+        subprocess.run(
+            ["git", "commit", "-qam", "done"], cwd=tmp_path, check=True, capture_output=True
+        )
+        config = _make_config(tmp_path, main_branch="main")
+        self._stale(config)
+        with ExecutorState(config) as state:
+            assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == ["TASK-001"]
+            assert state.get_task_state("TASK-001").status == "failed"
+        assert "TODO" in tasks_file.read_text()
+
+    def test_no_git_binary_is_not_a_crash(self, tmp_path, monkeypatch):
+        """Review of #649: git automation off on a machine without git."""
+        import subprocess
+
+        from spec_runner.state import recover_stale_tasks
+
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text("### TASK-001: work\nP0 | DONE\n")
+        config = _make_config(tmp_path, main_branch="main")
+        self._stale(config)
+
+        def no_git(*args, **kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(subprocess, "run", no_git)
+        with ExecutorState(config) as state:
+            assert recover_stale_tasks(state, 60, tasks_file, recover_all=True) == ["TASK-001"]
+            assert state.get_task_state("TASK-001").status == "failed"
+
+    def test_without_git_done_is_not_trusted(self, tmp_path):
+        from spec_runner.state import recover_stale_tasks
+
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text("### TASK-001: work\nP0 | DONE\n")
+        config = _make_config(tmp_path, main_branch="main")
+        self._stale(config)
+        with ExecutorState(config) as state:
+            recover_stale_tasks(state, 60, tasks_file, recover_all=True)
+            assert state.get_task_state("TASK-001").status == "failed"
+
     def test_does_not_recover_completed_tasks(self, tmp_path):
         from spec_runner.state import recover_stale_tasks
 

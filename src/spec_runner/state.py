@@ -3053,6 +3053,36 @@ def clear_ready_file(config: ExecutorConfig) -> None:
         ready_file.unlink()
 
 
+def _done_on_main_branch(config: ExecutorConfig, tasks_file: Path) -> set[str]:
+    """Tasks the plan committed on the main branch shows DONE.
+
+    Unreadable (no git, no such branch, the plan not on it) is the empty set:
+    the caller then recovers the task as before rather than guessing success.
+    """
+    import subprocess
+
+    from .git_ops import get_main_branch
+    from .task import parse_tasks_text
+
+    root = Path(config.project_root).resolve()
+    try:
+        rel = tasks_file.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{get_main_branch(config)}:./{rel}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:  # no git on PATH: a supported setup with git automation off
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {task.id for task in parse_tasks_text(result.stdout) if task.status == "done"}
+
+
 def recover_stale_tasks(
     state: ExecutorState,
     timeout_minutes: float,
@@ -3067,9 +3097,20 @@ def recover_stale_tasks(
     (the caller holds the exclusive executor lock, so any 'running' task is
     orphaned from a dead run) every running task is recovered regardless of age.
 
-    Returns list of recovered task IDs.
+    A task the plan *on the main branch* shows DONE is reconciled to success
+    without adding an attempt or changing cumulative counters: it landed, or a
+    person accepted it there. A DONE only in the working tree is no evidence —
+    the harness writes it before it commits and merges, so a run killed in that
+    window leaves one for work that never reached main (review of #649). Other
+    stale tasks become failed and are reset to TODO in the plan.
+
+    Returns list of recovered task IDs, including reconciled DONE tasks.
     """
+    from .task import update_task_status
+
     recovered: list[str] = []
+    reset_to_todo: list[str] = []
+    done_tasks: set[str] | None = None
     now = datetime.now()
 
     for task_id, ts in state.tasks.items():
@@ -3082,6 +3123,18 @@ def recover_stale_tasks(
         elapsed_minutes = (now - started).total_seconds() / 60
 
         if not recover_all and elapsed_minutes <= timeout_minutes:
+            continue
+
+        # The plan may have been accepted after this stale DB snapshot.
+        # Reconcile that status without inventing a successful attempt or
+        # charging the cumulative counters for work that did not run here.
+        if done_tasks is None:
+            done_tasks = _done_on_main_branch(state.config, tasks_file)
+        if task_id in done_tasks:
+            ts.status = "success"
+            # `completed_at` NULL reads as "not finished" on the stable surface.
+            ts.completed_at = ts.completed_at or now.isoformat()
+            recovered.append(task_id)
             continue
 
         # Stale task — recover it
@@ -3097,12 +3150,12 @@ def recover_stale_tasks(
             )
         )
         recovered.append(task_id)
+        reset_to_todo.append(task_id)
 
     if recovered:
         state._save()
-        from .task import update_task_status
 
-        for task_id in recovered:
+        for task_id in reset_to_todo:
             update_task_status(tasks_file, task_id, "todo")
 
     return recovered

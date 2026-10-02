@@ -1073,15 +1073,22 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         # lock (--force), a concurrent runner may be active, so fall back to the
         # age-based heuristic (2x the task timeout).
         stale_timeout = config.task_timeout_minutes * 2
-        recovered = recover_stale_tasks(
-            state, stale_timeout, config.tasks_file, recover_all=lock_held
+        dry_run = getattr(args, "dry_run", False)
+        recovered = (
+            []
+            if dry_run
+            else recover_stale_tasks(state, stale_timeout, config.tasks_file, recover_all=lock_held)
         )
         if recovered:
             logger.warning("Recovered stale tasks", task_ids=recovered)
             tasks = parse_tasks(config.tasks_file)
 
         # v2.3.0: reset failed-task state on `run --all` unless opted out.
-        reset_enabled = getattr(args, "all", False) and not getattr(args, "no_reset_failed", False)
+        reset_enabled = (
+            not dry_run
+            and getattr(args, "all", False)
+            and not getattr(args, "no_reset_failed", False)
+        )
         previously_failed: set[str] = set()  # used by T17 second-pass detection
         if reset_enabled:
             previously_failed = state.reset_failed_to_pending()
@@ -2885,6 +2892,9 @@ def main(argv=None):  # untyped on purpose: its body predates mypy strict
     try:
         config.resolve_spec_profile()
         config.resolve_tdd_runner()
+        # A run whose declared specification is missing would build blind.
+        if args.command in BUDGETED_COMMANDS:
+            config.resolve_task_context_files()
     except ConfigError as exc:
         raise SystemExit(f"⛔ {exc}") from None
 

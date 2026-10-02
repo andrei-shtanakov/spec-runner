@@ -296,6 +296,9 @@ def build_scratch(
     # guard would watch a file outside the scratch root and blame the probe
     # for an edit made in the real project while it ran.
     cfg.config_path = None
+    # The project's spec files do not exist under the scratch root either;
+    # the probe's one task needs none.
+    cfg.task_context_files = []
     cfg.__post_init__()
 
     # Hook flags

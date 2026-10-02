@@ -391,7 +391,12 @@ def parse_tasks(filepath: Path) -> list[Task]:
         print(f"❌ File {filepath} not found")
         sys.exit(1)
 
-    content = strip_frontmatter(filepath.read_text())
+    return parse_tasks_text(filepath.read_text())
+
+
+def parse_tasks_text(text: str) -> list[Task]:
+    """Parse the text of a tasks.md — e.g. a committed revision read from git."""
+    content = strip_frontmatter(text)
     lines = content.split("\n")
 
     tasks = []
