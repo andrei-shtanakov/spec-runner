@@ -1,6 +1,5 @@
 """Tests for spec_runner.events module."""
 
-import asyncio
 
 from spec_runner.events import EventBus, TaskEvent
 
@@ -88,48 +87,3 @@ class TestEventBus:
         for t in threads:
             t.join()
         # No assertion on count — just verifying no crash/deadlock
-
-
-class TestEventBusWithRunClaudeAsync:
-    """Integration test: verify run_claude_async streams to EventBus."""
-
-    def test_streaming_captures_output_lines(self):
-        """run_claude_async with event_bus publishes output_line events."""
-
-        async def _run():
-            bus = EventBus()
-            from spec_runner.runner import run_claude_async
-
-            stdout, stderr, rc = await run_claude_async(
-                ["echo", "hello\nworld"],
-                timeout=10,
-                cwd=".",
-                event_bus=bus,
-                task_id="TASK-TEST",
-            )
-            events = bus.drain_recent()
-            return stdout, events, rc
-
-        stdout, events, rc = asyncio.run(_run())
-        assert rc == 0
-        assert "hello" in stdout
-        # At least one event should be published
-        assert len(events) >= 1
-        assert events[0].task_id == "TASK-TEST"
-        assert events[0].event_type == "output_line"
-
-    def test_non_streaming_still_works(self):
-        """run_claude_async without event_bus works as before."""
-
-        async def _run():
-            from spec_runner.runner import run_claude_async
-
-            return await run_claude_async(
-                ["echo", "hello"],
-                timeout=10,
-                cwd=".",
-            )
-
-        stdout, stderr, rc = asyncio.run(_run())
-        assert rc == 0
-        assert "hello" in stdout

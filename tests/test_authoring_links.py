@@ -31,6 +31,7 @@ from spec_runner.spec import (
     upstream_pins,
     write_spec,
 )
+from tests import plan_doubles
 
 
 def _cfg(tmp_path: Path):
@@ -271,7 +272,6 @@ def test_adopt_as_draft_traces_without_pinning(tmp_path: Path):
 def test_generated_draft_carries_traces_but_no_pins(tmp_path: Path):
     """`plan --gated` writes the link at generation time — the draft already knows
     what it was derived from — while the pins wait for the approval they record."""
-    from spec_runner import cli_plan
 
     cfg = _cfg(tmp_path)
     cfg.claude_command = "claude"
@@ -290,7 +290,7 @@ def test_generated_draft_carries_traces_but_no_pins(tmp_path: Path):
             stderr="",
         )
 
-    assert cli_plan.run_gated_stage("design", "Build X", cfg, invoke=_invoke) == 0
+    assert plan_doubles.run_gated_stage("design", "Build X", cfg, invoke=_invoke) == 0
 
     meta = read_spec_meta(cfg.design_file)
     assert meta is not None and meta.status == "draft"

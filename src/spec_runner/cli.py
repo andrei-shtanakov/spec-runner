@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from types import FrameType
 from typing import NoReturn
-from uuid import uuid4
 
 from . import halt_gate  # noqa: E402
 
@@ -108,6 +107,16 @@ def build_task_json_result(
     """
     ts = state.get_task_state(task_id)
     entry: dict = {"task_id": task_id, "status": "unknown", "attempts": 0}
+    # Additive (#480): the invocation that produced this entry. Absent outside
+    # `cli.main` (library callers, the pinned contract tests), so every
+    # consumer and golden fixture that predates the key sees the same bytes.
+    from .run_context import current as _current_run
+
+    ctx = _current_run()
+    if ctx is not None:
+        entry["run_id"] = ctx.run_id
+        if ctx.pipeline_id:
+            entry["pipeline_id"] = ctx.pipeline_id
     if not ts:
         return entry
     entry["status"] = "done" if ts.status == "success" else "failed"
@@ -2831,6 +2840,154 @@ def _exit_on_termination() -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+def _dispatch(args, config) -> None:
+    """Run the handler for the parsed subcommand (raises SystemExit to exit)."""
+    try:
+        commands = {
+            "run": cmd_run,
+            "status": cmd_status,
+            "costs": cmd_costs,
+            "retry": cmd_retry,
+            "logs": cmd_logs,
+            "stop": cmd_stop,
+            "reset": cmd_reset,
+            "plan": cmd_plan,
+            "validate": cmd_validate,
+            "verify": cmd_verify,
+            "audit": cmd_audit,
+            "preflight": cmd_preflight,
+            "report": cmd_report,
+            "tui": cmd_tui,
+            "watch": cmd_watch,
+            "mcp": cmd_mcp,
+            "doctor": cmd_doctor,
+            "sync": cmd_sync,
+            "config": cmd_config,
+        }
+
+        # review-pr (#102 M1): stable exit-code contract for external callers
+        # (0 = all verified, 1 = fail-closed, 2 = NEEDS_HUMAN)
+        if args.command == "review-pr":
+            from .review_pr import cmd_review_pr
+
+            raise SystemExit(cmd_review_pr(args, config))
+
+        if args.command == "budget":
+            from .budget_cmd import cmd_budget
+
+            raise SystemExit(cmd_budget(args, config))
+
+        # tdd remedies: a refusal is an operator-facing message, not a traceback
+        if args.command == "tdd":
+            if args.tdd_command in ("status", "checkpoints"):
+                from .tdd_status import cmd_tdd_checkpoints, cmd_tdd_status
+
+                handler = cmd_tdd_status if args.tdd_command == "status" else cmd_tdd_checkpoints
+                raise SystemExit(handler(args, config))
+            if args.tdd_command == "control":
+                from .tdd_control import cmd_tdd_control
+
+                raise SystemExit(cmd_tdd_control(args, config))
+
+            from .remedy import cmd_tdd
+
+            raise SystemExit(cmd_tdd(args, config))
+
+        # Handle unified task subcommand
+        if args.command == "task":
+            _dispatch_task_command(args)
+            return
+
+        # Handle change-as-folder subcommand (new/list/archive)
+        if args.command == "change":
+            from . import change_commands
+
+            handler = {
+                "new": change_commands.cmd_change_new,
+                "list": change_commands.cmd_change_list,
+                "archive": change_commands.cmd_change_archive,
+            }.get(args.change_command)
+            if handler is None:
+                # no sub-subcommand given -> default to `change list`
+                raise SystemExit(change_commands.cmd_change_list(args, config))
+            raise SystemExit(handler(args, config))
+
+        # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
+        if args.command == "spec":
+            from . import spec_commands
+
+            _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
+            handler = {
+                "status": spec_commands.cmd_spec_status,
+                "approve": spec_commands.cmd_spec_approve,
+                "reject": spec_commands.cmd_spec_reject,
+                "adopt": spec_commands.cmd_spec_adopt,
+                "check": spec_commands.cmd_spec_check,
+            }.get(args.spec_command)
+            if handler is None:
+                # no sub-subcommand given -> default to `spec status`
+                raise SystemExit(spec_commands.cmd_spec_status(args, config))
+            raise SystemExit(handler(args, config))
+
+        if args.command == "plan":
+            _check_stage_name(config, getattr(args, "stage", None))
+            _check_stage_files(config)
+        cmd_func = commands.get(args.command)
+        if cmd_func:
+            cmd_func(args, config)
+    except SpecMetaError as exc:
+        raise SystemExit(f"⛔ {exc}") from None
+
+
+def _exit_code_of(code) -> int:
+    """The process exit status a SystemExit.code stands for."""
+    if code is None:
+        return 0
+    return code if isinstance(code, int) else 1
+
+
+def _close_run(ctx, config, exit_code: int, crashed=None, *, interrupted=False, hint="") -> int:
+    """Write the closure of a started run; returns the exit code to use."""
+    from . import executor
+
+    return ctx.close(
+        config,
+        exit_code=exit_code,
+        crashed=crashed,
+        interrupted=interrupted or bool(getattr(executor, "_shutdown_requested", False)),
+        hint=hint,
+    )
+
+
+def _run_with_closure(args, config, ctx) -> None:
+    """Dispatch, then close the run however the handler left (FR-07, § 6.3).
+
+    The one place a closure is written: no exit site chooses its kind. The
+    BaseException branch re-raises -- a closure that swallowed the
+    exception would make ``crashed`` mean "swallowed" and hide a guard's
+    refusal from the exit code.
+    """
+    try:
+        _dispatch(args, config)
+    except SystemExit as exc:
+        code = _exit_code_of(exc.code)
+        hint = exc.code if isinstance(exc.code, str) else ""
+        final = _close_run(ctx, config, code, hint=hint)
+        if final != code:
+            raise SystemExit(final) from None
+        raise
+    except KeyboardInterrupt as exc:
+        _close_run(ctx, config, 130, exc, interrupted=True)
+        raise
+    except BaseException as exc:
+        _close_run(ctx, config, 1, exc)
+        raise
+    final = _close_run(ctx, config, 0)
+    if final:
+        raise SystemExit(final)
+
+
 def main(argv=None):  # untyped on purpose: its body predates mypy strict
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -2933,7 +3090,13 @@ def main(argv=None):  # untyped on purpose: its body predates mypy strict
 
     import structlog
 
-    structlog.contextvars.bind_contextvars(run_id=uuid4().hex[:8])
+    from . import run_context
+    from .obs import current_pipeline_id
+
+    # One full UUIDv4 per invocation, handed unchanged to every channel (FR-01).
+    ctx = run_context.new_context(run_context.subcommand_key(args), current_pipeline_id())
+    run_context.install(ctx)
+    structlog.contextvars.bind_contextvars(run_id=ctx.run_id)
 
     # #63: a run without a config file silently used all defaults — including
     # self-merge into main and a Python test command on non-Python repos.
@@ -2953,103 +3116,14 @@ def main(argv=None):  # untyped on purpose: its body predates mypy strict
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGQUIT, _pause_handler)
 
-    # Dispatch
-    try:
-        commands = {
-            "run": cmd_run,
-            "status": cmd_status,
-            "costs": cmd_costs,
-            "retry": cmd_retry,
-            "logs": cmd_logs,
-            "stop": cmd_stop,
-            "reset": cmd_reset,
-            "plan": cmd_plan,
-            "validate": cmd_validate,
-            "verify": cmd_verify,
-            "audit": cmd_audit,
-            "preflight": cmd_preflight,
-            "report": cmd_report,
-            "tui": cmd_tui,
-            "watch": cmd_watch,
-            "mcp": cmd_mcp,
-            "doctor": cmd_doctor,
-            "sync": cmd_sync,
-            "config": cmd_config,
-        }
+    if run_context.is_paying(args):
+        try:
+            ctx.start(config)
+        except run_context.RunStartRefused as exc:
+            print(f"⛔ {exc}", file=sys.stderr)
+            raise SystemExit(2) from None
 
-        # review-pr (#102 M1): stable exit-code contract for external callers
-        # (0 = all verified, 1 = fail-closed, 2 = NEEDS_HUMAN)
-        if args.command == "review-pr":
-            from .review_pr import cmd_review_pr
-
-            raise SystemExit(cmd_review_pr(args, config))
-
-        if args.command == "budget":
-            from .budget_cmd import cmd_budget
-
-            raise SystemExit(cmd_budget(args, config))
-
-        # tdd remedies: a refusal is an operator-facing message, not a traceback
-        if args.command == "tdd":
-            if args.tdd_command in ("status", "checkpoints"):
-                from .tdd_status import cmd_tdd_checkpoints, cmd_tdd_status
-
-                handler = cmd_tdd_status if args.tdd_command == "status" else cmd_tdd_checkpoints
-                raise SystemExit(handler(args, config))
-            if args.tdd_command == "control":
-                from .tdd_control import cmd_tdd_control
-
-                raise SystemExit(cmd_tdd_control(args, config))
-
-            from .remedy import cmd_tdd
-
-            raise SystemExit(cmd_tdd(args, config))
-
-        # Handle unified task subcommand
-        if args.command == "task":
-            _dispatch_task_command(args)
-            return
-
-        # Handle change-as-folder subcommand (new/list/archive)
-        if args.command == "change":
-            from . import change_commands
-
-            handler = {
-                "new": change_commands.cmd_change_new,
-                "list": change_commands.cmd_change_list,
-                "archive": change_commands.cmd_change_archive,
-            }.get(args.change_command)
-            if handler is None:
-                # no sub-subcommand given -> default to `change list`
-                raise SystemExit(change_commands.cmd_change_list(args, config))
-            raise SystemExit(handler(args, config))
-
-        # Handle spec lifecycle subcommand (status/approve/reject/adopt/check)
-        if args.command == "spec":
-            from . import spec_commands
-
-            _check_stage_name(config, getattr(args, "stage", None))
-            _check_stage_files(config)
-            handler = {
-                "status": spec_commands.cmd_spec_status,
-                "approve": spec_commands.cmd_spec_approve,
-                "reject": spec_commands.cmd_spec_reject,
-                "adopt": spec_commands.cmd_spec_adopt,
-                "check": spec_commands.cmd_spec_check,
-            }.get(args.spec_command)
-            if handler is None:
-                # no sub-subcommand given -> default to `spec status`
-                raise SystemExit(spec_commands.cmd_spec_status(args, config))
-            raise SystemExit(handler(args, config))
-
-        if args.command == "plan":
-            _check_stage_name(config, getattr(args, "stage", None))
-            _check_stage_files(config)
-        cmd_func = commands.get(args.command)
-        if cmd_func:
-            cmd_func(args, config)
-    except SpecMetaError as exc:
-        raise SystemExit(f"⛔ {exc}") from None
+    _run_with_closure(args, config, ctx)
 
 
 if __name__ == "__main__":

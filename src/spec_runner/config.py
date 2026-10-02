@@ -680,6 +680,11 @@ class ExecutorConfig:
     # Extra writable paths under the sandbox (tool caches: ~/.npm, ~/.mix ...).
     sandbox_allow: list[str] = field(default_factory=list)
 
+    # Set only by `doctor.build_scratch` (value "doctor"): its presence IS the
+    # declaration "this config is an ephemeral probe" (#480 design § 2.7), and
+    # it supplies the provenance prefix. Never read from YAML.
+    probe_provenance: str | None = None
+
     # Durable continuation checkpoint/evidence store (#480, BEH-28, design
     # §1.1). Declared here so `run`/`validate` both refuse an adapter that
     # has not declared itself secure — spec-runner checks the *declaration*

@@ -79,6 +79,13 @@ def print_status(config: ExecutorConfig) -> None:
 
         print(f"\n📊 spec-runner v{__version__}")
 
+        # The run to ask `evidence`/`restore` about (#480): the last run-start
+        # this namespace recorded. Absent for a namespace that has had none --
+        # never an invented id.
+        last_run_id = state.get_meta("last_run_id")
+        if last_run_id:
+            print(f"Last run id:           {last_run_id}")
+
         # Stop-reason warning from executor_meta
         reason = state.get_meta("last_run_stop_reason")
         detail = state.get_meta("last_run_stop_detail") or ""
@@ -268,21 +275,24 @@ def cmd_status(args, config: ExecutorConfig):
             running = sum(1 for ts in state.tasks.values() if ts.status == "running")
             cost = state.total_cost()
             inp, out = state.total_tokens()
-            print(
-                json.dumps(
-                    {
-                        "total_tasks": len(all_tasks),
-                        "completed": completed,
-                        "failed": failed,
-                        "running": running,
-                        "not_started": len(all_tasks) - completed - failed - running,
-                        "total_cost": round(cost, 2),
-                        "input_tokens": inp,
-                        "output_tokens": out,
-                        "budget_usd": config.budget_usd,
-                    }
-                )
-            )
+            payload = {
+                "total_tasks": len(all_tasks),
+                "completed": completed,
+                "failed": failed,
+                "running": running,
+                "not_started": len(all_tasks) - completed - failed - running,
+                "total_cost": round(cost, 2),
+                "input_tokens": inp,
+                "output_tokens": out,
+                "budget_usd": config.budget_usd,
+            }
+            # Additive (#480): the last run-start of this namespace, when there
+            # was one. Absent otherwise.
+            for key in ("run_id", "pipeline_id"):
+                value = state.get_meta(f"last_{key}")
+                if value:
+                    payload[key] = value
+            print(json.dumps(payload))
         return
     print_status(config)
 
@@ -293,47 +303,111 @@ def cmd_status(args, config: ExecutorConfig):
 PR_LEDGER_SINCE = "2.31.0"
 
 
-def _add_pr_costs(payload: dict, summary: dict, pr_rows: list[dict], *, task_cost: float) -> None:
-    """Attach the PR ledger to a `costs --json` payload (#218 stage 2).
+def plan_cost_row(config: ExecutorConfig) -> dict | None:
+    """The planning ledger as one row for `costs`, or None when it is empty (#480).
 
-    Three separate numbers, never one: `total_cost` stays the **task** total and
-    is not touched, `pr_review_cost` is what `review-pr` spent, and
-    `repo_total_cost` is their sum — computed at the point of asking rather than
-    by mixing the ledgers at the point of writing. A consumer that only knows
-    about tasks keeps reading exactly what it read before.
-
-    Absent entirely when the ledger is empty, so a project that never runs
-    `review-pr` sees no new keys.
+    Planning belongs to no task, so it has its own ledger (`plan_agent_calls`)
+    and its own line: never folded into a task's cost, summed with the others
+    only in `repo_total_cost`. Read-only and forgiving, like `pr_cost_rows` --
+    a state file from before the table yields None, not an error.
     """
-    if not pr_rows:
+    import sqlite3
+
+    if not config.state_file.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{config.state_file}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0.0), "
+                "SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), "
+                "COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
+                "FROM plan_agent_calls WHERE COALESCE(status, '') != 'not_started'"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    if not row or not row[0]:
+        return None
+    return {
+        "calls": int(row[0]),
+        "cost": round(float(row[1]), 4),
+        "unmeasured_calls": int(row[2] or 0),
+        "input_tokens": int(row[3]),
+        "output_tokens": int(row[4]),
+    }
+
+
+def _add_pr_costs(
+    payload: dict,
+    summary: dict,
+    pr_rows: list[dict],
+    *,
+    task_cost: float,
+    planning: dict | None = None,
+) -> None:
+    """Attach the other ledgers to a `costs --json` payload (#218 stage 2, #480).
+
+    Separate numbers, never one: `total_cost` stays the **task** total and is
+    not touched, `pr_review_cost` is what `review-pr` spent, `planning_cost`
+    what `plan` spent, and `repo_total_cost` is their sum -- computed at the
+    point of asking rather than by mixing the ledgers at the point of writing. A
+    consumer that only knows about tasks keeps reading exactly what it read
+    before.
+
+    Absent entirely when both ledgers are empty, so a project that never runs
+    `review-pr` or `plan` sees no new keys.
+    """
+    if not pr_rows and planning is None:
         return
     pr_cost = round(sum(r["cost"] for r in pr_rows), 2)
-    payload["pr_reviews"] = pr_rows
-    summary["pr_review_cost"] = pr_cost
-    summary["pr_review_unmeasured_calls"] = sum(r["unmeasured_calls"] for r in pr_rows)
-    summary["repo_total_cost"] = round(task_cost + pr_cost, 2)
-    summary["pr_ledger_since"] = PR_LEDGER_SINCE
+    planning_cost = round(planning["cost"], 2) if planning else 0.0
+    if pr_rows:
+        payload["pr_reviews"] = pr_rows
+        summary["pr_review_cost"] = pr_cost
+        summary["pr_review_unmeasured_calls"] = sum(r["unmeasured_calls"] for r in pr_rows)
+        summary["pr_ledger_since"] = PR_LEDGER_SINCE
+    if planning:
+        payload["planning"] = planning
+        summary["planning_cost"] = planning_cost
+        summary["planning_unmeasured_calls"] = planning["unmeasured_calls"]
+    summary["repo_total_cost"] = round(task_cost + pr_cost + planning_cost, 2)
 
 
-def _print_pr_costs(pr_rows: list[dict], *, task_cost: float) -> None:
-    """The same three numbers, for a human."""
-    if not pr_rows:
+def _print_pr_costs(pr_rows: list[dict], *, task_cost: float, planning: dict | None = None) -> None:
+    """The same numbers, for a human."""
+    if not pr_rows and planning is None:
         return
     pr_cost = sum(r["cost"] for r in pr_rows)
-    unpriced = sum(r["unmeasured_calls"] for r in pr_rows)
-    print(f"\n{'=' * 40}")
-    print("Review-PR sessions (separate ledger — not task cost)")
-    for r in pr_rows:
-        prefix = "≥" if r["unmeasured_calls"] else ""
-        print(
-            f"  {r['repo']}#{r['pr_number']:<6} {r['calls']:>3} call(s)   {prefix}${r['cost']:.2f}"
-        )
-    print(f"Review-PR total:      {'≥' if unpriced else ''}${pr_cost:.2f}")
-    print(f"Repo total:           {'≥' if unpriced else ''}${task_cost + pr_cost:.2f}")
-    print(
-        f"  (review-pr calls before {PR_LEDGER_SINCE} were not recorded at all — "
-        "earlier sessions are missing from this ledger, not free)"
+    planning_cost = planning["cost"] if planning else 0.0
+    unpriced = sum(r["unmeasured_calls"] for r in pr_rows) + (
+        planning["unmeasured_calls"] if planning else 0
     )
+    floor = "≥" if unpriced else ""
+    if pr_rows:
+        print(f"\n{'=' * 40}")
+        print("Review-PR sessions (separate ledger — not task cost)")
+        for r in pr_rows:
+            prefix = "≥" if r["unmeasured_calls"] else ""
+            print(
+                f"  {r['repo']}#{r['pr_number']:<6} {r['calls']:>3} call(s)   "
+                f"{prefix}${r['cost']:.2f}"
+            )
+        print(f"Review-PR total:      {floor}${pr_cost:.2f}")
+    if planning:
+        prefix = "≥" if planning["unmeasured_calls"] else ""
+        print(f"\n{'=' * 40}" if not pr_rows else "")
+        print(
+            f"planning (separate ledger — not task cost): {planning['calls']} call(s)   "
+            f"{prefix}${planning_cost:.2f}"
+        )
+    print(f"Repo total:           {floor}${task_cost + pr_cost + planning_cost:.2f}")
+    if pr_rows:
+        print(
+            f"  (review-pr calls before {PR_LEDGER_SINCE} were not recorded at all — "
+            "earlier sessions are missing from this ledger, not free)"
+        )
 
 
 def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
@@ -347,6 +421,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         # --json must stay machine-parseable even with no tasks (empty is not an
         # error) — emit a valid, schema-conformant payload instead of prose.
         pr_rows = pr_cost_rows(config)
+        planning = plan_cost_row(config)
         if getattr(args, "json", False):
             summary: dict = {
                 "total_cost": 0.0,
@@ -361,11 +436,11 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
             payload: dict = {"tasks": [], "summary": summary}
             # No tasks does not mean no spend: `review-pr` runs against a repo,
             # not against a task list (#218 stage 2).
-            _add_pr_costs(payload, summary, pr_rows, task_cost=0.0)
+            _add_pr_costs(payload, summary, pr_rows, task_cost=0.0, planning=planning)
             print(json.dumps(payload, indent=2))
         else:
             print("No tasks found")
-            _print_pr_costs(pr_rows, task_cost=0.0)
+            _print_pr_costs(pr_rows, task_cost=0.0, planning=planning)
         return
 
     with ExecutorState.for_read(config) as state:
@@ -450,6 +525,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
         # review-pr call belongs to a PR comment, not to a task, and folding it
         # into a task's cost would be a lie about which work cost what.
         pr_rows = pr_cost_rows(config)
+        planning = plan_cost_row(config)
 
         summary = {
             "total_cost": round(total_cost, 2),
@@ -483,7 +559,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                     }
                 )
             payload = {"tasks": json_tasks, "summary": summary}
-            _add_pr_costs(payload, summary, pr_rows, task_cost=total_cost)
+            _add_pr_costs(payload, summary, pr_rows, task_cost=total_cost, planning=planning)
             print(json.dumps(payload, indent=2))
             return
 
@@ -540,7 +616,7 @@ def cmd_costs(args: argparse.Namespace, config: ExecutorConfig) -> None:
                 f"Unpriced calls:       {unmeasured} — the CLI reported no cost "
                 "(timeout, account limit, or a CLI that does not report one)"
             )
-        _print_pr_costs(pr_rows, task_cost=total_cost)
+        _print_pr_costs(pr_rows, task_cost=total_cost, planning=planning)
 
 
 def cmd_logs(args, config: ExecutorConfig):

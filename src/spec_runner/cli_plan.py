@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import ExecutorConfig, ExecutorLock
 from .logging import get_logger
+from .paid_call import CallRefused
 from .prompt import (
     _parse_stage_marker,
     _stage_def,
@@ -20,12 +21,10 @@ from .prompt import (
     template_hash,
 )
 from .runner import (
-    CliInvocation,
-    build_cli_command,
+    build_cli_invocation,
     check_error_patterns,
     log_progress,
 )
-from .sandbox import sandboxed
 from .spec import (
     SpecMeta,
     ancestor_stages,
@@ -91,11 +90,42 @@ def _restore(path: Path, previous: bytes | None) -> None:
         atomic_write_bytes(path, previous)
 
 
+def _run_plan_call(config, invocation, prompt: str, provenance: str):
+    """One planning call through the paid-call seam; its ledger has no task.
+
+    A timeout surfaces as subprocess.TimeoutExpired exactly as the direct
+    subprocess.run did, so the callers' handling is unchanged.
+    """
+    from . import paid_call
+
+    timeout = config.task_timeout_minutes * 60
+    outcome = paid_call.execute(
+        config,
+        None,
+        paid_call.PaidCall(
+            invocation=invocation,
+            provenance=provenance,
+            prompt=prompt,
+            timeout_seconds=timeout,
+            call_id=paid_call.new_call_id(),
+            # A config with no state file has no ledger to write to (a duck-typed
+            # config in a library call); the seam still publishes the call.
+            ledger=(
+                paid_call.plan_ledger(config, provenance)
+                if getattr(config, "state_file", None) is not None
+                else None
+            ),
+        ),
+    )
+    if outcome.timed_out:
+        raise subprocess.TimeoutExpired(invocation.argv, timeout)
+    return outcome
+
+
 def _generate_stage_draft(
     stage: str,
     description: str,
     config,
-    invoke=subprocess.run,
 ) -> int:
     """Generate one gated spec stage: enforce upstream gate, write DRAFT, validate.
 
@@ -108,8 +138,6 @@ def _generate_stage_draft(
         stage: One of 'requirements', 'design', 'tasks'.
         description: Project description used to build the generation prompt.
         config: Executor config providing stage file paths and CLI settings.
-        invoke: Injectable subprocess runner (defaults to `subprocess.run`);
-            tests pass a fake to avoid spawning a real CLI.
 
     Returns:
         0 on success (DRAFT written, validated); 1 on generation failure
@@ -180,31 +208,26 @@ def _generate_stage_draft(
             statuses=statuses,
             repair_errors=repair_errors,
         )
-        cmd = build_cli_command(
+        invocation = build_cli_invocation(
             cmd=config.claude_command,
             prompt=prompt,
             model=config.claude_model,
             template=config.command_template,
             skip_permissions=config.skip_permissions,
+            json_output=True,
         )
-        call = sandboxed(config, CliInvocation(cmd, "text"))
         try:
-            result = invoke(
-                call.argv,
-                capture_output=True,
-                text=True,
-                timeout=config.task_timeout_minutes * 60,
-                cwd=config.project_root,
-                env=call.env,
-            )
-        finally:
-            call.cleanup()
+            result = _run_plan_call(config, invocation, prompt, f"plan:{stage}")
+        except CallRefused as refused:
+            print(f"⛔ {stage}: the call was not started: {refused.refusal}")
+            _restore(path, previous)
+            return 2
         if result.returncode != 0:
             print(f"generation failed at {stage}: {result.stderr[:300]}")
             _restore(path, previous)
             return 1
 
-        body = _parse_stage_marker(result.stdout, stage_def)
+        body = _parse_stage_marker(result.parsed.text if result.parsed else "", stage_def)
         if not body:
             print(f"no {stage} content produced (marker missing)")
             _restore(path, previous)
@@ -270,7 +293,6 @@ def run_gated_stage(
     stage: str,
     description: str,
     config,
-    invoke=subprocess.run,
     *,
     interactive: bool = False,
     input_fn: Callable[[str], str] = input,
@@ -294,7 +316,6 @@ def run_gated_stage(
         stage: One of 'requirements', 'design', 'tasks'.
         description: Project description used to build the generation prompt.
         config: Executor config providing stage file paths and CLI settings.
-        invoke: Injectable subprocess runner (defaults to `subprocess.run`).
         interactive: Show the TTY checkpoint menu after a successful DRAFT.
         input_fn: Injectable input function for the menu (tests never read
             real stdin).
@@ -306,7 +327,7 @@ def run_gated_stage(
         action ("approved"/"stop"/"abort"); the `_generate_stage_draft`
         error code (1 or 2) if generation itself fails.
     """
-    rc = _generate_stage_draft(stage, description, config, invoke)
+    rc = _generate_stage_draft(stage, description, config)
     if rc != 0 or not interactive:
         return rc
 
@@ -320,7 +341,7 @@ def run_gated_stage(
             (editor_fn or _open_editor)(stage_path(config, stage))
             continue
         if action == "regenerate":
-            rc = _generate_stage_draft(stage, description, config, invoke)
+            rc = _generate_stage_draft(stage, description, config)
             if rc != 0:
                 return rc
             continue
@@ -677,25 +698,19 @@ def cmd_plan(args, config: ExecutorConfig):
                 spec_rules=config.spec_rules or None,
             )
 
-            cmd = build_cli_command(
+            invocation = build_cli_invocation(
                 cmd=config.claude_command,
                 prompt=prompt,
                 model=config.claude_model,
                 template=config.command_template,
                 skip_permissions=config.skip_permissions,
+                json_output=True,
             )
-            call = sandboxed(config, CliInvocation(cmd, "text"))
             try:
-                result = subprocess.run(
-                    call.argv,
-                    capture_output=True,
-                    text=True,
-                    timeout=config.task_timeout_minutes * 60,
-                    cwd=config.project_root,
-                    env=call.env,
-                )
-            finally:
-                call.cleanup()
+                result = _run_plan_call(config, invocation, prompt, f"plan:{stage}")
+            except CallRefused as refused:
+                print(f"⛔ {stage}: the call was not started: {refused.refusal}")
+                sys.exit(2)
 
             if result.returncode != 0:
                 logger.error(
@@ -706,7 +721,9 @@ def cmd_plan(args, config: ExecutorConfig):
                 print(f"Failed at stage: {stage}")
                 sys.exit(1)
 
-            content = parse_spec_marker(result.stdout, marker_names[stage])
+            content = parse_spec_marker(
+                result.parsed.text if result.parsed else "", marker_names[stage]
+            )
             if not content:
                 logger.error("No spec marker found in output", stage=stage)
                 print(f"Claude did not produce {stage} content.")
@@ -820,26 +837,20 @@ When done, respond with: PLAN_READY
     while True:
         # Run Claude
         try:
-            cmd = [config.claude_command, "-p", prompt]
-            if config.skip_permissions:
-                cmd.append("--dangerously-skip-permissions")
+            invocation = build_cli_invocation(
+                cmd=config.claude_command,
+                prompt=prompt,
+                model=config.claude_model,
+                template=config.command_template,
+                skip_permissions=config.skip_permissions,
+                json_output=True,
+            )
 
             print("\n🤖 Claude is analyzing...")
 
-            call = sandboxed(config, CliInvocation(cmd, "text"))
-            try:
-                result = subprocess.run(
-                    call.argv,
-                    capture_output=True,
-                    text=True,
-                    timeout=config.task_timeout_minutes * 60,
-                    cwd=config.project_root,
-                    env=call.env,
-                )
-            finally:
-                call.cleanup()
+            result = _run_plan_call(config, invocation, prompt, "plan:interactive")
 
-            output = result.stdout
+            output = result.parsed.text if result.parsed else ""
 
             # Save output
             with open(log_file, "a") as f:

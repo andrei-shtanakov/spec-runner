@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/run-closure.schema.json",
+  "title": "SpecRunnerRunClosure",
+  "description": "The closure record of one spec-runner invocation (`runs/<run_id>/closure.json`, #480 FR-07): the last record of a run, written once by the dispatcher's `finally` however the handler left. The `closure_kind` vocabulary is pinned here and derived mechanically by `closure.derive` from how the handler left and whether work was left undone -- no exit site chooses it. A run-start with no closure is read as crash/unknown, never as an empty success.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "run_id",
+    "subcommand",
+    "closure_kind",
+    "reason",
+    "exit_code",
+    "last_checkpoint_id",
+    "last_call_ids",
+    "attempt_ids",
+    "open_calls",
+    "degraded",
+    "started_at",
+    "ended_at"
+  ],
+  "properties": {
+    "kind": {
+      "description": "Record type discriminator.",
+      "type": "string",
+      "enum": ["closure"]
+    },
+    "run_id": {
+      "description": "Full UUIDv4 of the invocation.",
+      "type": "string"
+    },
+    "pipeline_id": {
+      "description": "Pipeline id of the invocation, when one was set.",
+      "type": ["string", "null"]
+    },
+    "subcommand": {
+      "description": "The paying subcommand, e.g. `run` or `tdd:abandon`.",
+      "type": "string"
+    },
+    "closure_kind": {
+      "description": "How the invocation ended. completed: exit 0 and nothing left undone. refused: non-zero exit and the last unsuccessful attempt's error_kind is a rule's refusal (policy, budget, blocked, hook_failure, harness_guard). failed: any other non-zero exit, or exit 0 with unfinished work. interrupted: a signal or KeyboardInterrupt. crashed: an unhandled exception.",
+      "type": "string",
+      "enum": ["completed", "refused", "failed", "interrupted", "crashed"]
+    },
+    "reason": {
+      "description": "Free text for a human. Not a vocabulary, not validated, may be empty.",
+      "type": "string"
+    },
+    "exit_code": {
+      "description": "The exit code of the process. Distinguishes 1 (the work was bad) from 2 (the instrument could not tell), both `failed`.",
+      "type": "integer"
+    },
+    "last_checkpoint_id": {
+      "description": "Id of the last acknowledged checkpoint, or null.",
+      "type": ["string", "null"]
+    },
+    "last_call_ids": {
+      "description": "call_id of every paid call this invocation started, in order.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "attempt_ids": {
+      "description": "`<task_id>-<n>` of every attempt this invocation recorded. Empty together with no calls reads as 'there was nothing to do'.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "open_calls": {
+      "description": "Calls with an acknowledged start and no recorded result at exit.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "degraded": {
+      "description": "True when the run continued on a degraded record (spool).",
+      "type": "boolean"
+    },
+    "started_at": {
+      "description": "ISO 8601 timestamp of run-start.",
+      "type": "string"
+    },
+    "ended_at": {
+      "description": "ISO 8601 timestamp of the closure.",
+      "type": "string"
+    }
+  }
+}

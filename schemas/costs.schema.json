@@ -16,9 +16,37 @@
       "description": "Per-PR totals from the `review-pr` ledger (`pr_agent_calls`). A separate ledger from the task one: these calls belong to a PR comment, not to a task, and are never folded into `tasks[].cost`. Added 2.31.0; absent when the loop has never run in this state file.",
       "type": "array",
       "items": { "$ref": "#/definitions/PrReviewCost" }
+    },
+    "planning": {
+      "description": "Totals from the planning ledger (`plan_agent_calls`): paid calls of `plan --full`, `plan --gated` and interactive `plan`, which belong to no task. A separate ledger like `pr_reviews`; never folded into `tasks[].cost`. Added 4.5.0 (#480); absent when no planning call was recorded.",
+      "$ref": "#/definitions/PlanningCost"
     }
   },
   "definitions": {
+    "PlanningCost": {
+      "title": "PlanningCost",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls", "cost", "unmeasured_calls"],
+      "properties": {
+        "calls": {
+          "description": "Planning calls that were started (a call that never launched is not counted)",
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "description": "Sum of the priced calls in USD. A floor when `unmeasured_calls` > 0.",
+          "type": "number"
+        },
+        "unmeasured_calls": {
+          "description": "Calls whose cost the CLI never reported. When > 0, `cost` is a floor, not a total.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" }
+      }
+    },
     "PrReviewCost": {
       "title": "PrReviewCost",
       "type": "object",
@@ -160,8 +188,17 @@
           "type": "integer",
           "minimum": 0
         },
+        "planning_cost": {
+          "description": "Total USD spent by planning calls in this state file. Separate from `total_cost`, which remains the TASK total. Added 4.5.0 (#480); present only when the planning ledger has rows.",
+          "type": "number"
+        },
+        "planning_unmeasured_calls": {
+          "description": "Planning calls whose cost the CLI never reported. When > 0, `planning_cost` is a floor. Added 4.5.0.",
+          "type": "integer",
+          "minimum": 0
+        },
         "repo_total_cost": {
-          "description": "`total_cost` + `pr_review_cost` — the two ledgers summed at the point of asking, never merged at the point of writing. Added 2.31.0; present only when the PR ledger has rows.",
+          "description": "`total_cost` + `pr_review_cost` + `planning_cost` — the ledgers summed at the point of asking, never merged at the point of writing. Added 2.31.0, planning added 4.5.0; present only when the PR or the planning ledger has rows.",
           "type": "number"
         },
         "pr_ledger_since": {

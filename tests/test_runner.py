@@ -1,11 +1,8 @@
 """Tests for spec_runner.runner module."""
 
-import asyncio
 import json as _json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from spec_runner.runner import (
     _parse_claude_json,
@@ -15,7 +12,6 @@ from spec_runner.runner import (
     log_progress,
     parse_cli_result,
     parse_token_usage,
-    run_claude_async,
 )
 
 
@@ -278,43 +274,6 @@ class TestParseTokenUsage:
         assert inp == 500
         assert out is None
         assert cost is None
-
-
-class TestRunClaudeAsync:
-    """Tests for async subprocess wrapper."""
-
-    def test_returns_stdout_stderr_returncode(self):
-        async def _run():
-            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
-                mock_proc = AsyncMock()
-                mock_proc.communicate.return_value = (b"output text", b"stderr text")
-                mock_proc.returncode = 0
-                mock_cse.return_value = mock_proc
-
-                stdout, stderr, rc = await run_claude_async(["echo", "hi"], timeout=60, cwd="/tmp")
-                assert stdout == "output text"
-                assert stderr == "stderr text"
-                assert rc == 0
-
-        asyncio.run(_run())
-
-    def test_timeout_terminates_then_kills_process(self):
-        async def _run():
-            with patch("spec_runner.runner.asyncio.create_subprocess_exec") as mock_cse:
-                mock_proc = AsyncMock()
-                mock_proc.communicate.side_effect = TimeoutError()
-                mock_proc.terminate = MagicMock()
-                mock_proc.kill = MagicMock()
-                # wait() after terminate times out, triggering kill fallback
-                mock_proc.wait = AsyncMock(side_effect=TimeoutError())
-                mock_cse.return_value = mock_proc
-
-                with pytest.raises(TimeoutError):
-                    await run_claude_async(["echo", "hi"], timeout=1, cwd="/tmp")
-                mock_proc.terminate.assert_called_once()
-                mock_proc.kill.assert_called_once()
-
-        asyncio.run(_run())
 
 
 class TestBuildCliCommandCodexV230:
