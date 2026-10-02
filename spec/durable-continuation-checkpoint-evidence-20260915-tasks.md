@@ -558,19 +558,19 @@ FR-02 и отдельной строкой таблицы § 2.6, а не счи
 - **AC-44** (metric): Restore-drill и open-call матрица выполнены в объёме условия завершения
 
 ### TASK-001: Store-контракт, `LocalVolumeStore`, блок `durability:` в config и validate
-P2 | TODO   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-28 (DT-01, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-01
 **Delivers:** DEL-01, DEL-02, DEL-03, DEL-04, DEL-05
 
 **Checklist:**
-- [ ] реализовать BEH-28: Адаптер store объявляет свойства безопасности; отказ — за ложь, молчание и «неприменимо» там, где оно невозможно (DEL-04 (capability): На загрузке `ConfigError` с именем адаптера и свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, объявил `tls: n/a` при адаптере с транспортом (применимость TLS — из capabilities адаптера по реестру, неизвестный адаптер `n/a` объявить не может), либо `retention_days` вне 7–365; `tls: n/a` у адаптера без транспорта загружается; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start)
-- [ ] DEL-01 (module): Новый модуль `src/spec_runner/artifact_store.py`: протокол `ArtifactStore` (`put` с семантикой `if_none_match` всегда → `AlreadyExists` на существующем ключе, `get`, `list`, `delete`), декларация `StoreCapabilities(tls, encryption_at_rest, immutable_put, lifecycle)` и функция ключей §1.3 (`runs/<run_id>/…`, индекс `workstreams/<workstream_key>/runs/…` парой `.json`/`.closed`, каждый ключ пишется один раз)
-- [ ] DEL-02 (module): Адаптер `LocalVolumeStore(root)`: временный файл → `fsync` → `link`/`rename` с `O_EXCL`-семантикой, `tls` неприменим, `encryption_at_rest` по декларации оператора, `lifecycle: none`; `open_store_readonly` — единственный вход без `Publisher`
-- [ ] DEL-03 (config): Блок `durability:` (`store: {adapter, options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`, `retention_days`) в полях `ExecutorConfig` и `KNOWN_EXECUTOR_KEYS`; путеподобные `store.options` разрешаются в абсолютные относительно `project_root` на загрузке, не лениво и не от CWD
-- [ ] DEL-05 (config): Пути `.executor-checkpoints`/`.executor-spool.jsonl` выводятся из config с `spec_prefix`/`change_id` как у `state_file` и входят в `git_ops.runtime_state_paths`, чтобы следующие задачи брали путь из config, а не из литерала
-- [ ] проверка группы: tests/test_config.py (kind: contract) зелёные на BEH-28
+- [x] реализовать BEH-28: Адаптер store объявляет свойства безопасности; отказ — за ложь, молчание и «неприменимо» там, где оно невозможно (DEL-04 (capability): На загрузке `ConfigError` с именем адаптера и свойства, если адаптер объявил `tls: false`, не объявил `encryption_at_rest` или `immutable_put`, объявил `tls: n/a` при адаптере с транспортом (применимость TLS — из capabilities адаптера по реестру, неизвестный адаптер `n/a` объявить не может), либо `retention_days` вне 7–365; `tls: n/a` у адаптера без транспорта загружается; `spec-runner validate` повторяет ту же ошибку; `run` с таким config-ом не доходит до run-start)
+- [x] DEL-01 (module): Новый модуль `src/spec_runner/artifact_store.py`: протокол `ArtifactStore` (`put` с семантикой `if_none_match` всегда → `AlreadyExists` на существующем ключе, `get`, `list`, `delete`), декларация `StoreCapabilities(tls, encryption_at_rest, immutable_put, lifecycle)` и функция ключей §1.3 (`runs/<run_id>/…`, индекс `workstreams/<workstream_key>/runs/…` парой `.json`/`.closed`, каждый ключ пишется один раз)
+- [x] DEL-02 (module): Адаптер `LocalVolumeStore(root)`: временный файл → `fsync` → `link`/`rename` с `O_EXCL`-семантикой, `tls` неприменим, `encryption_at_rest` по декларации оператора, `lifecycle: none`; `open_store_readonly` — единственный вход без `Publisher`
+- [x] DEL-03 (config): Блок `durability:` (`store: {adapter, options…}`, `ack`, `ack_timeout_seconds`, `checkpoint_ack_timeout_seconds`, `retention_days`) в полях `ExecutorConfig` и `KNOWN_EXECUTOR_KEYS`; путеподобные `store.options` разрешаются в абсолютные относительно `project_root` на загрузке, не лениво и не от CWD
+- [x] DEL-05 (config): Пути `.executor-checkpoints`/`.executor-spool.jsonl` выводятся из config с `spec_prefix`/`change_id` как у `state_file` и входят в `git_ops.runtime_state_paths`, чтобы следующие задачи брали путь из config, а не из литерала
+- [x] проверка группы: tests/test_config.py (kind: contract) зелёные на BEH-28
 
 **Traces to:** [FR-06]
 
