@@ -62,7 +62,8 @@ is a **breaking change** and requires a major version bump plus an entry here.
   HEAD with the branch the task merges into (the integration branch during a
   run); a task branch with no commit of its own is diffed from HEAD (never
   someone else's `HEAD~1`); `HEAD~1` remains only for work committed on the
-  main branch itself or an uncomputable merge-base. A truncated patch names
+  main branch itself, a project without per-task branches, or an uncomputable
+  merge-base. New files not yet committed are named to the reviewer. A truncated patch names
   its base so the reviewer can read the rest; a project review template gets
   `{{TASK_BASE}}`. Changed paths are split by line, so a space stays inside one.
 

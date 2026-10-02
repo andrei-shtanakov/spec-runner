@@ -171,6 +171,30 @@ class TestANoOpTaskIsStillReviewable:
         assert "spec/tasks.md" in build_review_prompt(_task(), cfg)
 
 
+class TestTheAcceptanceFindings:
+    def test_new_uncommitted_files_are_named_to_the_reviewer(self, repo):
+        """`auto_commit: false`: new files are invisible to `git diff`."""
+        (repo / "src").mkdir(exist_ok=True)
+        (repo / "src" / "foo.py").write_text("FOO = 1\n")
+
+        prompt = build_review_prompt(_task(), _cfg(repo, auto_commit=False))
+
+        assert "New files not yet committed" in prompt
+        assert "src/foo.py" in prompt
+
+    def test_without_task_branches_the_task_is_the_last_commit(self, repo):
+        """No branch per task: a merge-base is a long-lived branch's fork
+        point and would carry every earlier task."""
+        _commit(repo, "src/earlier.py", "E = 1\n", "an earlier task")
+        _commit(repo, "src/mine.py", "M = 1\n", "this task")
+        cfg = _cfg(repo, create_git_branch=False)
+
+        diff = task_diff(cfg)
+
+        assert task_base(cfg) == "HEAD~1"
+        assert diff is not None and diff.files == ["src/mine.py"]
+
+
 def test_a_truncated_patch_names_the_base_to_read_the_rest(repo):
     _commit(repo, "src/big.py", "X = 1\n" * (MAX_PROMPT_PATCH // 4), "big")
 

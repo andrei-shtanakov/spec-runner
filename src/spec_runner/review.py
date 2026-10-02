@@ -257,6 +257,9 @@ class TaskDiff:
     #: None when git could not say (not a repository, no such base): unknown,
     #: never "nothing changed".
     files: list[str] | None
+    #: New files git does not track yet: work `git diff` cannot show
+    #: (`auto_commit: false`), named so the reviewer reads them.
+    untracked: list[str]
     stat: str
     patch: str
 
@@ -279,6 +282,11 @@ def task_base(config: ExecutorConfig) -> str:
     """
     from .git_ops import current_branch, get_main_branch
 
+    # Without a branch per task nothing marks where the task began: its work
+    # is the candidate commit, and a merge-base would be the fork point of a
+    # long-lived branch, carrying every earlier task (acceptance of #655).
+    if not config.create_git_branch:
+        return "HEAD~1"
     main = get_main_branch(config)
     merge_base = _git(config, "merge-base", "HEAD", main)
     head = _git(config, "rev-parse", "HEAD")
@@ -307,9 +315,11 @@ def task_diff(config: ExecutorConfig) -> TaskDiff | None:
     files = names.stdout.splitlines() if names.returncode == 0 else None
     stat = _git(config, "diff", base, "--stat")
     patch = _git(config, "diff", "-p", base)
+    others = _git(config, "ls-files", "--others", "--exclude-standard")
     return TaskDiff(
         base=base,
         files=files,
+        untracked=others.stdout.splitlines() if others.returncode == 0 else [],
         stat=stat.stdout.strip() if stat.returncode == 0 else "",
         patch=patch.stdout if patch.returncode == 0 else "",
     )
@@ -338,6 +348,11 @@ def _render_review_prompt(
         changed_files = (
             "Unable to get changed files" if diff.files is None else "\n".join(diff.files)
         )
+        if diff.untracked:
+            changed_files += (
+                "\n\nNew files not yet committed (not in the diff below — read them):\n"
+                + "\n".join(diff.untracked)
+            )
         git_diff_stat = diff.stat
         full_diff = diff.patch[:MAX_PROMPT_PATCH]
         if len(diff.patch) > MAX_PROMPT_PATCH:
