@@ -324,7 +324,9 @@ resolved profile.
 codex-review-кита из steward (независимое ревью дифа другой моделью), пин —
 `scripts/review/PIN`. Copy-integrity проверяет джоба `review-kit-integrity`
 в CI (чекер исполняется извлечённым из base), дрейф от продюсера ловит
-вахта `review-kit-drift.yml`. `review-prompt.md` — данные этого репо (вне
+вахта `review-kit-drift.yml`. `review-prompt.md` и `review-prompt-spec.md`
+(промпт режима ревью спецификаций `local.sh --spec`: проза входит в область
+ревью; без файла режим отказывает кодом 2) — данные этого репо (вне
 integrity), generated-файлы объявляются в `.gitattributes`
 (`linguist-generated`). Локальный прогон: `sh scripts/review/local-claude.sh`
 (невендоренная обёртка, форсирует harness-claude — тот же харнесс, что и
