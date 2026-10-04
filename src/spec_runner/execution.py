@@ -1262,6 +1262,8 @@ def _execute_task(
                 if config.resolve_execution_mode(task) in ("tdd", "verify_first"):
                     _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)
+                from .tdd import resolve_namespace
+
                 state.record_attempt(
                     task_id,
                     True,
@@ -1273,6 +1275,9 @@ def _execute_task(
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
                     no_op=hook_no_op,
+                    # DONE drops the task's workspace/baseline rows in the
+                    # same transaction, in every mode (spec 2026-10-04 §2).
+                    forget_workspace=resolve_namespace(config),
                 )
                 if hook_no_op:
                     log_progress("✔️ No-op: completed without changes", task_id)

@@ -646,10 +646,23 @@ def cmd_stop(args, config: ExecutorConfig):
 
 
 def cmd_reset(args, config: ExecutorConfig):
-    """Reset executor state"""
+    """Reset executor state, keeping workspaces, harness baselines and the trust audit.
+
+    The DB is rebuilt in a temporary file and swapped in atomically; any
+    failure before the swap leaves it unchanged and exits 2 (spec 2026-10-04 §2).
+    """
+    from . import state as state_mod
 
     if config.state_file.exists():
-        config.state_file.unlink()
+        try:
+            state_mod.reset_state_preserving_workspaces(config)
+        except Exception as exc:
+            print(f"⛔ reset failed, the state DB is unchanged: {exc}")
+            raise SystemExit(2) from exc
+        print(
+            "State reset. Kept: task workspace records, harness baselines "
+            "and the harness trust audit."
+        )
         logger.info("State reset", state_file=str(config.state_file))
 
     clear_stop_file(config)

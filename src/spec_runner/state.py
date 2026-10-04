@@ -4,6 +4,7 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 """
 
 import contextlib
+import copy
 import fcntl
 import hashlib
 import json
@@ -282,6 +283,26 @@ def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
     return tuple(
         CompositionMember(member=e["member"], outcome=e["outcome"], reason=e.get("reason"))
         for e in json.loads(raw)
+    )
+
+
+_REMEDY_INSERT = (
+    "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, reason, "
+    "actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+def _remedy_params(remedy: "RemedyRecordT") -> tuple:
+    """The `tdd_remedies` row for one remedy."""
+    return (
+        remedy.namespace,
+        remedy.task_id,
+        remedy.checkpoint_id,
+        getattr(remedy.operation, "value", remedy.operation),
+        remedy.reason,
+        remedy.actor,
+        remedy.timestamp,
+        remedy.new_checkpoint_id,
     )
 
 
@@ -1817,6 +1838,17 @@ class ExecutorState:
         from more than one after a repair, and a remedy aimed at a specific
         checkpoint must not sweep claims belonging to another (F-3).
         """
+        with self._immediate():
+            return self._supersede_claims_sql(namespace, task_id, status, checkpoint_id)
+
+    def _supersede_claims_sql(
+        self,
+        namespace: str,
+        task_id: str,
+        status: "ClaimStatusT",
+        checkpoint_id: str | None = None,
+    ) -> int:
+        """`supersede_claims` without the commit; the caller holds the transaction."""
         assert self._conn is not None
         from .claims import ClaimStatus
 
@@ -1831,7 +1863,6 @@ class ExecutorState:
             sql += " AND checkpoint_id = ?"
             params.append(checkpoint_id)
         cursor = self._conn.execute(sql, params)
-        self._conn.commit()
         return cursor.rowcount
 
     def checkpoint_by_id(self, namespace: str, checkpoint_id: str) -> "RedCheckpointT | None":
@@ -1952,6 +1983,11 @@ class ExecutorState:
     def set_checkpoint_status(self, namespace: str, checkpoint_id: str, status) -> int:
         """Retire a checkpoint. Nothing is deleted — the row keeps its history
         and gains a new standing."""
+        with self._immediate():
+            return self._set_checkpoint_status_sql(namespace, checkpoint_id, status)
+
+    def _set_checkpoint_status_sql(self, namespace: str, checkpoint_id: str, status) -> int:
+        """`set_checkpoint_status` without the commit; the caller holds the transaction."""
         assert self._conn is not None
         rows = self._conn.execute(
             "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
@@ -1979,7 +2015,6 @@ class ExecutorState:
                     (getattr(status, "value", status), row[0]),
                 )
                 changed += 1
-        self._conn.commit()
         return changed
 
     def reinstate_checkpoint_with_claims(
@@ -2324,13 +2359,43 @@ class ExecutorState:
 
     def forget_task_workspace(self, namespace: str, task_id: str) -> None:
         """Drop workspace, baseline and file rows together; keep the audit."""
-        assert self._conn is not None
         with self._immediate():
-            for table in ("harness_baseline_files", "harness_baselines", "task_workspaces"):
-                self._conn.execute(
-                    f"DELETE FROM {table} WHERE namespace = ? AND task_id = ?",
-                    (namespace, task_id),
-                )
+            self._forget_workspace_sql(namespace, task_id)
+
+    def _forget_workspace_sql(self, namespace: str, task_id: str) -> None:
+        """Delete the task's workspace, baseline and file rows (no commit).
+
+        The caller holds the transaction: the deletion lands with the record
+        that ends the task (DONE, abandon) or not at all (spec §2). The trust
+        audit is never deleted.
+        """
+        assert self._conn is not None
+        for table in ("harness_baseline_files", "harness_baselines", "task_workspaces"):
+            self._conn.execute(
+                f"DELETE FROM {table} WHERE namespace = ? AND task_id = ?",
+                (namespace, task_id),
+            )
+
+    def abandon_atomically(
+        self, namespace: str, task_id: str, checkpoint_id: str, remedy: "RemedyRecordT"
+    ) -> None:
+        """Abandon's writes and the workspace deletion, all or nothing (spec §2).
+
+        Checkpoint -> abandoned, that lineage's active claims -> abandoned, the
+        remedy row, and the task's workspace/baseline/file rows: one
+        `BEGIN IMMEDIATE`. A repeat abandon that finds the remedy row therefore
+        also finds the rows gone.
+        """
+        from .claims import ClaimStatus
+        from .remedy import CheckpointStatus
+
+        with self._immediate():
+            self._set_checkpoint_status_sql(namespace, checkpoint_id, CheckpointStatus.ABANDONED)
+            self._supersede_claims_sql(
+                namespace, task_id, ClaimStatus.ABANDONED, checkpoint_id=checkpoint_id
+            )
+            self._insert_remedy_sql(remedy)
+            self._forget_workspace_sql(namespace, task_id)
 
     def reanchor_lineage(
         self,
@@ -2506,20 +2571,16 @@ class ExecutorState:
         """Persist one remedy. **Raises** on failure — like a claim and for the
         same reason: a remedy nobody can find is indistinguishable from one that
         never happened."""
-        self._insert_phase_row(
-            "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, reason, "
-            "actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                remedy.namespace,
-                remedy.task_id,
-                remedy.checkpoint_id,
-                getattr(remedy.operation, "value", remedy.operation),
-                remedy.reason,
-                remedy.actor,
-                remedy.timestamp,
-                remedy.new_checkpoint_id,
-            ),
-        )
+        self._insert_phase_row(_REMEDY_INSERT, _remedy_params(remedy))
+
+    def _insert_remedy_sql(self, remedy: "RemedyRecordT") -> None:
+        """`record_remedy` without the commit; the caller holds the transaction.
+
+        Not through `_insert_phase_row`: its `with self._conn` would commit an
+        enclosing transaction early.
+        """
+        assert self._conn is not None
+        self._conn.execute(_REMEDY_INSERT, _remedy_params(remedy))
 
     def remedies(self, task_id: str, namespace: str) -> list["RemedyRecordT"]:
         """Every remedy taken on this task in this workstream, oldest first."""
@@ -2941,8 +3002,15 @@ class ExecutorState:
         error_kind: str | None = None,
         error_stage: str | None = None,
         no_op: bool = False,
+        forget_workspace: str | None = None,
     ) -> None:
-        """Record execution attempt with atomic SQLite persistence."""
+        """Record execution attempt with atomic SQLite persistence.
+
+        ``forget_workspace``: on success, the namespace whose workspace,
+        baseline and file rows for this task are deleted in the **same**
+        transaction as the attempt row (spec §2). A DONE that does not land
+        (degraded mode) leaves them in place, so the two never disagree.
+        """
         state = self.get_task_state(task_id)
         now = datetime.now().isoformat()
         attempt = TaskAttempt(
@@ -3015,6 +3083,8 @@ class ExecutorState:
                         attempt.run_id,
                     ),
                 )
+                if success and forget_workspace is not None:
+                    self._forget_workspace_sql(forget_workspace, task_id)
                 self._save_meta()
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("record_attempt", e, task_id=task_id)
@@ -3441,6 +3511,91 @@ class ExecutorState:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False  # Don't suppress exceptions
+
+
+#: Carried over by `reset` (spec §2): the started-task record, the harness
+#: snapshot and its files, and the trust audit, which is never deleted.
+KEPT_ON_RESET = (
+    "task_workspaces",
+    "harness_baselines",
+    "harness_baseline_files",
+    "harness_trust_audit",
+)
+
+
+def _sidecars(db: Path) -> tuple[Path, Path]:
+    return Path(f"{db}-wal"), Path(f"{db}-shm")
+
+
+def _read_kept_tables(db: Path) -> dict[str, tuple[list[str], list[tuple]]]:
+    """The kept tables' rows, after folding the WAL into the main file.
+
+    Raises when the TRUNCATE checkpoint is blocked: another connection is in
+    the middle of a transaction, and what it writes next would be lost.
+    """
+    kept: dict[str, tuple[list[str], list[tuple]]] = {}
+    conn = sqlite3.connect(db)
+    try:
+        busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if busy is not None and busy[0]:
+            raise RuntimeError(f"state DB is in use by another connection: {db}")
+        present = {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        for table in KEPT_ON_RESET:
+            if table not in present:
+                continue
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            rows = conn.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
+            kept[table] = (cols, rows)
+    finally:
+        conn.close()
+    return kept
+
+
+def _build_reset_db(
+    config: ExecutorConfig, tmp: Path, kept: dict[str, tuple[list[str], list[tuple]]]
+) -> None:
+    """A fresh schema at `tmp` holding only the kept rows, WAL folded in."""
+    tmp_config = copy.copy(config)
+    tmp_config.state_file = tmp
+    with ExecutorState(tmp_config) as fresh:
+        assert fresh._conn is not None
+        with fresh._immediate():
+            for table, (cols, rows) in kept.items():
+                marks = ", ".join("?" for _ in cols)
+                fresh._conn.executemany(
+                    f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({marks})", rows
+                )
+        fresh._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
+    """Rebuild the state DB keeping the harness-trust tables (spec §2).
+
+    Built in a temporary file and swapped in with one `os.replace`: any failure
+    before the swap leaves the original DB file exactly as it was, and the
+    exception propagates. The original's WAL is checkpointed (TRUNCATE) and
+    its sidecars removed **before** the swap, so no stale WAL can be replayed
+    onto the new file. A DB another connection is mid-transaction on is
+    refused rather than reset under it.
+    """
+    src = config.state_file
+    kept = _read_kept_tables(src) if src.exists() else {}
+    tmp = src.with_name(src.name + ".reset-tmp")
+    for leftover in (tmp, *_sidecars(tmp)):
+        leftover.unlink(missing_ok=True)
+    try:
+        _build_reset_db(config, tmp, kept)
+        for sidecar in _sidecars(src):
+            sidecar.unlink(missing_ok=True)
+        os.replace(tmp, src)
+    except BaseException:
+        for leftover in (tmp, *_sidecars(tmp)):
+            leftover.unlink(missing_ok=True)
+        raise
+    for leftover in _sidecars(tmp):
+        leftover.unlink(missing_ok=True)
 
 
 def check_stop_requested(config: ExecutorConfig) -> bool:
