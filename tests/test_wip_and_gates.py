@@ -126,3 +126,272 @@ def test_wip_read_failure_fails_closed(tmp_path, monkeypatch):
     assert ok is False
     assert isinstance(err, Refusal)
     assert err.kind == RefusalKind.INSTRUMENT
+
+
+# --- fix round 1 -----------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from tests.test_candidate_commit import _cfg as cc_cfg  # noqa: E402
+from tests.test_candidate_commit import _git as cc_git  # noqa: E402
+from tests.test_candidate_commit import _recording_gate  # noqa: E402
+from tests.test_candidate_commit import _repo as cc_repo  # noqa: E402
+from tests.test_candidate_commit import _task as cc_task  # noqa: E402
+
+
+def _cc_branch_with_wip(tmp_path, wip_file="w1.py"):
+    root = cc_repo(tmp_path)
+    cc_git(root, "checkout", "-qb", "task/task-001-t")
+    (root / wip_file).write_text("w\n")
+    cc_git(root, "add", "-A")
+    cc_git(
+        root,
+        "commit",
+        "-qm",
+        f"wip(TASK-001): x\n\n{WIP_TRAILER}: TASK-001\n{WIP_ATTEMPT_TRAILER}: 1",
+    )
+    return root
+
+
+def _subjects(root, rev="--all"):
+    return cc_git(root, "log", rev, "--format=%s").stdout.splitlines()
+
+
+def _is_wip(root, sha):
+    return WIP_TRAILER in cc_git(root, "log", "-1", "--format=%B", sha).stdout
+
+
+@pytest.mark.slow
+class TestPostDoneHookOverWip:
+    def test_gate_judges_a_candidate_not_the_wip(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True)
+        seen = _recording_gate(monkeypatch)
+        ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+        assert ok is True, err
+        assert seen and not _is_wip(root, seen[-1])
+        assert cc_git(root, "log", "-1", "--format=%s", seen[-1]).stdout.strip() == (
+            "TASK-001: candidate"
+        )
+        assert _subjects(root).count("TASK-001: candidate") == 1
+
+    def test_review_checkpoint_never_names_wip(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True, run_review=True)
+        cfg.review_policy = "advisory"
+        seen = _recording_gate(monkeypatch)
+        from spec_runner.state import ReviewVerdict
+
+        monkeypatch.setattr(
+            hooks,
+            "run_code_review",
+            lambda *a, **k: (ReviewVerdict.PASSED, None, "REVIEW_PASSED"),
+        )
+        reviewed: list[str] = []
+        real_head = hooks._head_sha
+
+        def _spy(config):
+            sha = real_head(config)
+            reviewed.append(sha)
+            return sha
+
+        monkeypatch.setattr(hooks, "_head_sha", _spy)
+        hooks.post_done_hook(cc_task(), cfg, True)
+        assert seen, "the gate never ran"
+        assert not any(_is_wip(root, sha) for sha in seen)
+
+    def test_no_candidate_without_auto_commit(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True, auto_commit=False)
+        _recording_gate(monkeypatch)
+        hooks.post_done_hook(cc_task(), cfg, True)
+        assert "TASK-001: candidate" not in _subjects(root)
+
+    def test_a_retry_makes_no_second_candidate(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner.gates import GateStatus
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True)
+        _recording_gate(monkeypatch, GateStatus.UNSATISFIED)
+        hooks.post_done_hook(cc_task(), cfg, True)
+        hooks.post_done_hook(cc_task(), cfg, True)
+        assert _subjects(root).count("TASK-001: candidate") == 1
+
+    def test_a_failed_candidate_commit_is_an_instrument_refusal(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+        from spec_runner.phases import Refusal, RefusalKind
+
+        root = _cc_branch_with_wip(tmp_path)
+        hook = root / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        cfg = cc_cfg(root, create_git_branch=True)
+        seen = _recording_gate(monkeypatch)
+        ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+        assert ok is False
+        assert isinstance(err, Refusal) and err.kind == RefusalKind.INSTRUMENT
+        assert not seen, "no gate may run when the candidate could not be made"
+
+    def test_uncomputable_merge_base_fails_closed(self, tmp_path, monkeypatch):
+        from spec_runner import git_ops, hooks
+        from spec_runner.phases import Refusal, RefusalKind
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True)
+        monkeypatch.setattr(git_ops, "get_main_branch", lambda c: "no-such-branch")
+        ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+        assert ok is False
+        assert isinstance(err, Refusal) and err.kind == RefusalKind.INSTRUMENT
+
+    def test_noop_when_wip_is_undone_in_the_tree(self, tmp_path, monkeypatch):
+        from spec_runner import hooks
+
+        root = _cc_branch_with_wip(tmp_path)
+        (root / "w1.py").unlink()
+        cfg = cc_cfg(root, create_git_branch=True)
+        ok, err, _v, _f, no_op = hooks.post_done_hook(cc_task(), cfg, True)
+        assert ok is True, err
+        assert no_op is True
+
+    def test_not_noop_when_wip_has_content(self, tmp_path):
+        from spec_runner import hooks
+
+        root = _cc_branch_with_wip(tmp_path)
+        cfg = cc_cfg(root, create_git_branch=True)
+        ok, err, _v, _f, no_op = hooks.post_done_hook(cc_task(), cfg, True)
+        assert ok is True, err
+        assert no_op is False
+
+
+@pytest.mark.slow
+def test_tracked_tasks_md_is_not_the_tasks_work(tmp_path):
+    from spec_runner.hooks import task_changed_since_base
+
+    root = _cc_branch_with_wip(tmp_path)
+    cfg = cc_cfg(root, create_git_branch=True)
+    tasks = root / "spec" / "tasks.md"
+    tasks.write_text(tasks.read_text() + "\nDONE flip\n")
+    cc_git(root, "add", "-A")
+    cc_git(root, "commit", "-qm", "status flip")
+    assert task_changed_since_base(cfg) is True  # w1.py still there
+    (root / "w1.py").unlink()
+    cc_git(root, "add", "-A")
+    cc_git(root, "commit", "-qm", "undo")
+    assert task_changed_since_base(cfg) is False  # only tasks.md differs
+
+
+def test_unreadable_diff_is_not_unchanged(tmp_path, monkeypatch):
+    from spec_runner import review
+    from spec_runner.hooks import task_changed_since_base
+    from spec_runner.wip import WipReadError
+
+    root = _repo(tmp_path)
+    cfg = ExecutorConfig(project_root=root, create_git_branch=True)
+    monkeypatch.setattr(review, "task_base", lambda c: "no-such-ref")
+    with pytest.raises(WipReadError):
+        task_changed_since_base(cfg)
+
+
+def test_walk_reaching_a_root_commit_adopts_nothing(tmp_path):
+    from spec_runner.tdd import _unregistered_red
+
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@e.c")
+    _git(tmp_path, "config", "user.name", "T")
+    _wip(tmp_path, "w1.py")
+    cfg = ExecutorConfig(project_root=tmp_path, create_git_branch=True)
+    assert _unregistered_red(cfg, _St(), _task(), SEL) == ""
+
+
+# --- a red below WIP is adopted only if it needs no repair ------------------
+
+
+def _scenario(tmp_path, body):
+    import shlex
+    import sys
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@e.c")
+    _git(root, "config", "user.name", "T")
+    (root / "README.md").write_text("x\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "base")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "check.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "sys.exit(1 if any('AGENTWORD' in Path(p).read_text() for p in sys.argv[1:]) else 0)\n"
+    )
+    (scripts / "fix.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "for p in sys.argv[1:]:\n"
+        "    f = Path(p)\n    f.write_text(f.read_text().replace('AGENTWORD', ''))\n"
+    )
+    q = shlex.quote
+    cfg = ExecutorConfig(
+        project_root=root,
+        state_file=root / ".state.db",
+        logs_dir=root / ".logs",
+        execution_mode="tdd",
+        test_command="python -m pytest",
+        lint_command=f"{q(sys.executable)} {q(str(scripts / 'check.py'))}",
+        lint_command_declared=True,
+        lint_fix_command=f"{q(sys.executable)} {q(str(scripts / 'fix.py'))}",
+        lint_fix_command_declared=True,
+        create_git_branch=True,
+    )
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    from spec_runner.tdd import resolve_namespace
+    from spec_runner.tdd_runners import ADAPTERS
+
+    evid = str(ADAPTERS["pytest"].evidential_file("TASK-080", namespace=resolve_namespace(cfg)))
+    red = root / evid
+    red.parent.mkdir(parents=True, exist_ok=True)
+    red.write_text(body)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", f"TASK-080: red for {evid}::test_thing")
+    red_sha = _git(root, "rev-parse", "HEAD").strip()
+    _wip(root, "w1.py")
+    return root, cfg, red_sha, evid
+
+
+@pytest.mark.slow
+class TestRedBelowWip:
+    def test_a_repair_that_would_rewrite_the_red_is_refused(self, tmp_path):
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import RedOutcome, run_red_phase
+
+        root, cfg, red_sha, evid = _scenario(
+            tmp_path, "def test_thing():  # AGENTWORD\n    assert False\n"
+        )
+        wip_sha = _git(root, "rev-parse", "HEAD").strip()
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.checkpoint is None
+        assert red_sha[:12] in result.detail and wip_sha[:12] in result.detail
+        assert _git(root, "rev-parse", "HEAD").strip() == wip_sha
+        body = _git(root, "log", "-1", "--format=%B")
+        assert f"{WIP_TRAILER}: TASK-080" in body and f"{WIP_ATTEMPT_TRAILER}: 1" in body
+        assert (root / evid).read_text().count("AGENTWORD") == 1
+        assert _git(root, "status", "--porcelain", "--", evid).strip() == ""
+
+    def test_a_clean_red_is_adopted_at_its_own_sha(self, tmp_path):
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import RedOutcome, run_red_phase
+
+        root, cfg, red_sha, _ = _scenario(tmp_path, "def test_thing():\n    assert False\n")
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
+        assert result.checkpoint is not None
+        assert result.checkpoint.commit_sha == red_sha

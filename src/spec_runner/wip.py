@@ -194,3 +194,19 @@ def wip_commits(
         shown = _git(config, "show", "--name-only", "-z", "--format=", sha)
         found.append((sha, number, [f for f in shown.stdout.split("\0") if f]))
     return found
+
+
+def head_is_wip_of(config: ExecutorConfig, task_id: str) -> bool:
+    """Whether HEAD is this task's WIP commit; an unreadable HEAD raises.
+
+    `is_wip_of` answers False on a git error, which is right for a walk that
+    stops and wrong for a gate: "could not look" must not read as "not WIP".
+    """
+    head = _git(config, "rev-parse", "--verify", "HEAD")
+    sha = head.stdout.strip()
+    if head.returncode != 0 or not sha:
+        raise WipReadError(head.stderr.strip()[:200] or "cannot read HEAD")
+    body = _git(config, "log", "-1", "--format=%(trailers:key=" + WIP_TRAILER + ",valueonly)", sha)
+    if body.returncode != 0:
+        raise WipReadError(body.stderr.strip()[:200] or "cannot read HEAD's trailers")
+    return task_id in body.stdout.split()

@@ -993,9 +993,10 @@ class TestStageEmissionPreStart:
 
 
 class TestStageEmissionPostDone:
+    @patch("spec_runner.hooks._wip_base", return_value=None)  # git is blanket-mocked here
     @patch("spec_runner.hooks.run_code_review", return_value=(ReviewVerdict.PASSED, None, "ok"))
     @patch("spec_runner.hooks.subprocess.run")
-    def test_tests_lint_commit_merge_emitted(self, mock_run, _mock_review):
+    def test_tests_lint_commit_merge_emitted(self, mock_run, _mock_review, _mock_base):
         from spec_runner.stages import StageReporter
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")

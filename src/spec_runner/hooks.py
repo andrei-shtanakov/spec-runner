@@ -484,29 +484,94 @@ def _head_sha(config: ExecutorConfig) -> str:
 def commit_candidate_over_wip(task: Task, config: ExecutorConfig) -> None:
     """Make HEAD a candidate when it is a WIP commit (retry-from-WIP spec §4).
 
-    A gate verdict is bound to a SHA; it must never name a WIP commit.
+    A gate verdict is bound to a SHA; it must never name a WIP commit. Raises
+    `WipReadError` when HEAD cannot be read or the candidate cannot be made:
+    the caller must not go on to bind a verdict to a WIP commit.
     """
-    from .wip import is_wip_of
+    from .wip import WipReadError, head_is_wip_of
 
-    head = _head_sha(config)
-    if head and is_wip_of(config, head, task.id):
-        subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", f"{task.id}: candidate"],
-            capture_output=True,
-            text=True,
-            cwd=config.project_root,
+    if not head_is_wip_of(config, task.id):
+        return
+    made = subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", f"{task.id}: candidate"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if made.returncode != 0:
+        raise WipReadError(f"candidate commit failed: {made.stderr.strip()[:200]}")
+
+
+def _candidate_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
+    """`commit_candidate_over_wip` as a typed INSTRUMENT refusal."""
+    from .wip import WipReadError
+
+    try:
+        commit_candidate_over_wip(task, config)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot make a candidate over this task's WIP: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
         )
+    return None
+
+
+def _wip_base(config: ExecutorConfig) -> str | None:
+    """Where the task's branch forked, or None when there provably is no WIP.
+
+    No WIP can exist without a per-task branch, on the main branch itself, or
+    on a task branch with no commit of its own (merge-base == HEAD). Anything
+    else that cannot be computed raises `WipReadError` instead of reading as
+    "no WIP" (review.task_base falls back to ``HEAD~1`` there).
+    """
+    from .git_ops import current_branch, get_main_branch
+    from .wip import WipReadError
+
+    if not config.create_git_branch:
+        return None
+    main = get_main_branch(config)
+    if current_branch(config) == main:
+        return None
+    run = lambda *a: subprocess.run(  # noqa: E731
+        ["git", *a], capture_output=True, text=True, cwd=config.project_root
+    )
+    merge_base = run("merge-base", "HEAD", main)
+    head = run("rev-parse", "--verify", "HEAD")
+    base, tip = merge_base.stdout.strip(), head.stdout.strip()
+    if merge_base.returncode != 0 or not base or head.returncode != 0 or not tip:
+        raise WipReadError(
+            (merge_base.stderr or head.stderr).strip()[:200] or "cannot compute the task's base"
+        )
+    return None if base == tip else base
 
 
 def task_changed_since_base(config: ExecutorConfig) -> bool:
-    """Whether the task's cumulative diff against its base is non-empty."""
-    from .review import task_base
+    """Whether the task's cumulative diff against its base is non-empty.
 
+    The harness's own files (tasks.md flips, runtime state) are not the task's
+    work. Raises `WipReadError` when git cannot answer.
+    """
+    import os
+
+    from .git_ops import runtime_state_paths
+    from .review import task_base
+    from .wip import WipReadError
+
+    root = Path(config.project_root).resolve()
+    excluded: list[str] = []
+    for path in [config.tasks_file, *runtime_state_paths(config)]:
+        rel = os.path.relpath(Path(path).resolve(), root)
+        if not rel.startswith(".."):
+            excluded.append(f":(exclude,literal){rel}")
     diff = subprocess.run(
-        ["git", "diff", "--quiet", task_base(config), "HEAD", "--"],
+        ["git", "diff", "--quiet", task_base(config), "HEAD", "--", ".", *excluded],
         capture_output=True,
+        text=True,
         cwd=config.project_root,
     )
+    if diff.returncode not in (0, 1):
+        raise WipReadError(diff.stderr.strip()[:200] or "git diff failed")
     return diff.returncode == 1
 
 
@@ -1298,27 +1363,23 @@ def post_done_hook(
     # WIP of this task on the branch (retry-from-WIP spec §4). An unreadable
     # history is not "no WIP": the no-op verdict and the candidate depend on it.
     has_wip = False
-    if config.create_git_branch:
-        from .review import task_base
+    try:
         from .wip import WipReadError, wip_commits
 
-        base = task_base(config)
-        try:
-            # "HEAD~1"/"HEAD" are task_base's fallbacks for work on the main
-            # branch or a branch with no commit of its own: no WIP can exist.
-            has_wip = base not in ("HEAD~1", "HEAD") and bool(wip_commits(config, task.id, base))
-        except WipReadError as e:
-            return (
-                False,
-                Refusal(
-                    f"Cannot read this task's WIP history: {e}",
-                    RefusalKind.INSTRUMENT,
-                    terminal=True,
-                ),
-                ReviewVerdict.SKIPPED.value,
-                "",
-                False,
-            )
+        wip_base = _wip_base(config)
+        has_wip = wip_base is not None and bool(wip_commits(config, task.id, wip_base))
+    except WipReadError as e:
+        return (
+            False,
+            Refusal(
+                f"Cannot read this task's WIP history: {e}",
+                RefusalKind.INSTRUMENT,
+                terminal=True,
+            ),
+            ReviewVerdict.SKIPPED.value,
+            "",
+            False,
+        )
 
     # Run tests — capture output for review context
     test_output_str: str | None = None
@@ -1539,9 +1600,12 @@ def post_done_hook(
     if wants_candidate:
         if reporter:
             reporter.enter("commit")
-        committed_pre_review = commit_task_work(task, config) == "committed"
-        if not committed_pre_review and config.create_git_branch:
-            commit_candidate_over_wip(task, config)
+        pre_review = commit_task_work(task, config)
+        committed_pre_review = pre_review == "committed"
+        if pre_review == "empty" and config.create_git_branch:
+            candidate_refusal = _candidate_refusal(task, config)
+            if candidate_refusal is not None:
+                return (False, candidate_refusal, ReviewVerdict.SKIPPED.value, "", False)
         # #157 §2.1: the tree review is about to judge. Recorded only when a
         # gate will actually use it — the dormant path stays free of git calls.
         if has_gates() and config.run_review:
@@ -1944,8 +2008,6 @@ def post_done_hook(
     if review_changed_candidate and config.auto_commit and has_gates():
         commit_task_work(task, config)
 
-    if config.auto_commit and config.create_git_branch:
-        commit_candidate_over_wip(task, config)
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
 
     # #380 review finding 1 (round 1) / round 3 finding 3: the candidate the
@@ -2124,7 +2186,14 @@ def post_done_hook(
             logger.error("Commit failed", error=str(e))
             final = "failed"
         if final == "empty" and config.create_git_branch:
-            commit_candidate_over_wip(task, config)
+            before_candidate = _head_sha(config)
+            candidate_refusal = _candidate_refusal(task, config)
+            if candidate_refusal is not None:
+                return (False, candidate_refusal, review_verdict.value, "", False)
+            # Nothing judged a WIP sha (no review, no gate), so the drift
+            # check may be re-bound to the candidate that replaces it.
+            if gated_sha and gated_sha == before_candidate:
+                gated_sha = _head_sha(config)
         if wants_candidate:
             # The candidate carried the work, so this commit only ever carries
             # bookkeeping — "was it empty?" no longer answers the question. The
@@ -2138,7 +2207,20 @@ def post_done_hook(
         if has_wip:
             # The WIP commits already carry the work, so "nothing new in this
             # attempt" says nothing; ask whether the task changed anything.
-            no_op = not task_changed_since_base(config)
+            try:
+                no_op = not task_changed_since_base(config)
+            except WipReadError as exc:
+                return (
+                    False,
+                    Refusal(
+                        f"Cannot tell whether the task changed anything: {exc}",
+                        RefusalKind.INSTRUMENT,
+                        terminal=True,
+                    ),
+                    review_verdict.value,
+                    "",
+                    False,
+                )
         if no_op:
             logger.info("No changes to commit — marking task as no-op")
 
