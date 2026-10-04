@@ -412,6 +412,73 @@ def _wip_before_fork(config: ExecutorConfig, state: ExecutorState | None) -> Ref
         )
 
 
+def _save_owned_work_before_switch(config: ExecutorConfig, state: ExecutorState | None) -> bool:
+    """Commit the owned task's work as WIP before a switch off its branch; False on refusal.
+
+    The run's end checks out the main branch (or, under ``integration_pr``, the
+    run's base). A plain ``git checkout`` carries untracked and unconflicting
+    dirt along, off the branch its workspace row names — the next ``retry``
+    then found no owner and stashed the work (final review, Critical #1).
+    Spec §1: WIP is saved before every switch that leaves the owned branch.
+    Dirt nobody owns switches as before. A refusal is printed and the caller
+    must not switch: the tree and the branch stay exactly as they are.
+    """
+    refusal = _wip_before_switch(config, state)
+    if refusal is None:
+        return True
+    branch = current_branch(config) or "the current branch"
+    logger.error("Not leaving the task branch: WIP not saved", branch=branch, reason=str(refusal))
+    print(
+        f"⛔ Not leaving '{branch}': {refusal}.\n"
+        "   The working tree and the branch were left as they are, so the next\n"
+        "   `spec-runner retry` still finds this task's work there.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _wip_before_switch(config: ExecutorConfig, state: ExecutorState | None) -> Refusal | None:
+    """`save_wip` with the start's refusal semantics; no trust check (nothing is destroyed)."""
+    from .git_ops import WorktreeStatusError
+    from .wip import save_wip
+
+    try:
+        if state is not None:
+            return save_wip(config, state).refusal
+        with ExecutorState(config) as opened:
+            return save_wip(config, opened).refusal
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        return Refusal(
+            f"could not tell whether the tree holds a task's unfinished work ({exc})",
+            RefusalKind.INSTRUMENT,
+        )
+
+
+def _leave_owned_branch(
+    config: ExecutorConfig,
+    state: ExecutorState | None,
+    switch: Callable[[ExecutorConfig], object],
+) -> bool:
+    """Run ``switch`` once the owned task's work is safe; whether it ran."""
+    if not _save_owned_work_before_switch(config, state):
+        return False
+    switch(config)
+    return True
+
+
+def _finalize_integration(
+    config: ExecutorConfig, integration, state: ExecutorState | None, *, post_pr: bool
+) -> None:
+    """Finalize the integration branch, returning to the base only once WIP is saved."""
+    back = _save_owned_work_before_switch(config, state)
+    pr_url = finalize_integration_branch(config, integration, return_to_base=back)
+    if not pr_url:
+        return
+    _announce_integration_pr(config, pr_url)
+    if post_pr and back:
+        _post_pr_review_stage(config, pr_url, integration)
+
+
 def _owned_work_refusal(config: ExecutorConfig, state: ExecutorState) -> Refusal | None:
     """R4: the current branch's owner is trust-checked, then its work saved as WIP.
 
@@ -519,10 +586,7 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
         _run_tasks_inner(args, config, lock_held=lock_held)
     finally:
         if integration is not None:
-            pr_url = finalize_integration_branch(config, integration)
-            if pr_url:
-                _announce_integration_pr(config, pr_url)
-                _post_pr_review_stage(config, pr_url, integration)
+            _finalize_integration(config, integration, None, post_pr=True)
 
 
 def _post_pr_review_stage(config: ExecutorConfig, pr_url: str, integration) -> None:
@@ -1463,11 +1527,11 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                         # "all done" branch below (todo_tasks was empty) and
                         # still got ensure_on_main_branch — keep that git side
                         # effect so only the diagnostics change.
-                        ensure_on_main_branch(config)
+                        _leave_owned_branch(config, state, ensure_on_main_branch)
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
-                        ensure_on_main_branch(config)
+                        _leave_owned_branch(config, state, ensure_on_main_branch)
 
                     # Blocked-after-skip (#131/#136 item 2): work is left over
                     # and none of it can ever become ready — a task gave up
@@ -1867,9 +1931,7 @@ def cmd_retry(args, config: ExecutorConfig):
             _announce_budget_stop(state, config)
         finally:
             if integration is not None:
-                pr_url = finalize_integration_branch(config, integration)
-                if pr_url:
-                    _announce_integration_pr(config, pr_url)
+                _finalize_integration(config, integration, state, post_pr=False)
 
 
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:

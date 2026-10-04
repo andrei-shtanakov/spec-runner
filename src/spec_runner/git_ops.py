@@ -578,12 +578,18 @@ def create_integration_branch(config: ExecutorConfig, branch_name: str) -> Integ
     return IntegrationRun(branch=branch_name, base=base)
 
 
-def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> str | None:
+def finalize_integration_branch(
+    config: ExecutorConfig, run: IntegrationRun, *, return_to_base: bool = True
+) -> str | None:
     """Push the integration branch and open one PR; clean up when empty.
 
     Returns the PR URL on success, else None. When no task produced a commit,
     the empty integration branch is deleted and no PR is opened. A missing
     remote or ``gh`` degrades to a warning, leaving the branch local.
+
+    ``return_to_base=False`` leaves the working copy where it is: the caller
+    could not save an owned task's work as WIP, and a checkout would carry it
+    off its branch (spec 2026-10-04 §1).
     """
     count = _git(config, "rev-list", "--count", f"{run.base}..{run.branch}")
     try:
@@ -593,7 +599,8 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
 
     if commits == 0:
         logger.info("Integration branch empty, cleaning up", branch=run.branch)
-        _git(config, "checkout", run.base)
+        if return_to_base:
+            _git(config, "checkout", run.base)
         _git(config, "branch", "-D", run.branch)
         return None
 
@@ -621,8 +628,8 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
 
         return _open_pr(config, run, commits)
     finally:
-        back = _git(config, "checkout", run.base)
-        if back.returncode != 0:
+        back = _git(config, "checkout", run.base) if return_to_base else None
+        if back is not None and back.returncode != 0:
             # Loud, operator-facing failure (#62): a warning that scrolls away
             # left operators stranded on the run branch with a dirty tree.
             stderr = back.stderr.strip()[:200]
