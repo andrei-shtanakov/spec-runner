@@ -141,21 +141,69 @@ class TestReviewerEdits:
         assert ok is True, error
         assert _status(cfg) == "done"
 
-    def test_a_refused_reviewer_edit_is_not_committed(self, project, monkeypatch):
-        """Refused before `commit_task_work` sweeps the reviewer's fixes into
-        the branch: the oracle edit must not land in history."""
+    @staticmethod
+    def _repo(project: Path) -> None:
         _git(project, "init", "-q")
         _git(project, "config", "user.email", "t@e.c")
         _git(project, "config", "user.name", "T")
         _git(project, "add", "-A")
         _git(project, "commit", "-qm", "base")
-        monkeypatch.setattr(hooks, "run_code_review", _reviewer(project, touches=True))
-        cfg = _cfg(project, auto_commit=True)
+
+    @staticmethod
+    def _real_reviewer(project: Path, monkeypatch, *, touches: bool) -> None:
+        """The production `run_code_review`, which commits a FIXED verdict's
+        edits itself; only the reviewer subprocess is replaced."""
+        from spec_runner import review
+
+        def _call(*args, **kwargs):
+            (project / "app.py").write_text("x = 2\n")
+            if touches:
+                _touch_pyproject(project)
+            return review.ReviewCall(text="REVIEW_FIXED\n", stderr="", returncode=0, cost_usd=None)
+
+        monkeypatch.setattr(review, "_run_reviewer", _call)
+
+    @pytest.mark.parametrize("parallel", [False, True])
+    def test_a_refused_reviewer_edit_is_neither_committed_nor_left(
+        self, project, monkeypatch, parallel
+    ):
+        """The review call commits FIXED edits itself. Under `strict` it must
+        not commit an oracle edit, and the refusal must undo it in the tree:
+        under `create_git_branch: false` the next task's baseline would
+        otherwise read it as the oracle."""
+        self._repo(project)
+        self._real_reviewer(project, monkeypatch, touches=True)
+        cfg = _cfg(project, auto_commit=True, review_parallel=parallel)
+
+        ok, error, *_ = hooks.post_done_hook(_task(), cfg, True)
+
+        assert ok is False
+        assert "Harness guard: the reviewer" in (error or "")
+        assert _git(project, "show", "HEAD:pyproject.toml") == PYPROJECT
+        assert (project / "pyproject.toml").read_text() == PYPROJECT
+        log = _git(project, "log", "--format=%s")
+        assert "review fixes" not in log
+
+    @pytest.mark.parametrize("parallel", [False, True])
+    def test_a_clean_reviewer_fix_is_still_committed(self, project, monkeypatch, parallel):
+        self._repo(project)
+        self._real_reviewer(project, monkeypatch, touches=False)
+        cfg = _cfg(project, auto_commit=True, review_parallel=parallel)
+
+        ok, error, *_ = hooks.post_done_hook(_task(), cfg, True)
+
+        assert ok is True, error
+        assert "review fixes" in _git(project, "log", "--format=%s")
+
+    def test_warn_still_commits_the_reviewer_edit(self, project, monkeypatch):
+        self._repo(project)
+        self._real_reviewer(project, monkeypatch, touches=True)
+        cfg = _cfg(project, auto_commit=True, harness_guard="warn")
 
         ok, *_ = hooks.post_done_hook(_task(), cfg, True)
 
-        assert ok is False
-        assert _git(project, "show", "HEAD:pyproject.toml") == PYPROJECT
+        assert ok is True
+        assert _git(project, "show", "HEAD:pyproject.toml") != PYPROJECT
 
 
 class TestPostReviewPluginEdits:
@@ -176,3 +224,6 @@ class TestPostReviewPluginEdits:
         assert ok is False, "a post_review plugin rewrote pyproject.toml and the task passed"
         assert "Harness guard: a post_review plugin" in (error or "")
         assert _status(cfg) != "done"
+        assert (project / "pyproject.toml").read_text() == PYPROJECT, (
+            "the refused plugin edit was left in the tree for the next task's baseline"
+        )

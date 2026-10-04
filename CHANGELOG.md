@@ -69,11 +69,13 @@ is a **breaking change** and requires a major version bump plus an entry here.
   agent all wrote into the tree after the only check, so under `strict` any
   of them could rewrite `pyproject.toml` and the task still closed (or the
   fix was pushed). Each step is now checked against a snapshot taken just
-  before it. The reviewer is checked before its fixes are committed, the
-  plugins before the DONE flip, and each `review-pr` fix before its gates
-  (a refused fix is rolled back and left to a human). Writes the harness
-  makes itself, such as the repo-wide `lint_fix_command`, are not blamed on
-  anyone.
+  before it: the reviewer before the re-run gates, the plugins before the
+  DONE flip, and each `review-pr` fix before its gates. Under `strict` the
+  review call no longer commits fixes that touch the harness, and a refused
+  reviewer or plugin edit is restored from the bytes taken before the step.
+  A refused `review-pr` fix is rolled back and left to a human. Writes the
+  harness makes itself, such as the repo-wide `lint_fix_command`, are not
+  blamed on anyone.
 
 - **Review reads the whole task, not its last commit.** The review diff was
   `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,

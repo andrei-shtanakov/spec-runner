@@ -21,12 +21,12 @@ after: created/modified/deleted files are violations. Modes
 
 Where it looks (`guard_error`): after the RED/verify-first passes and
 before GREEN; after GREEN, before the gates; after the reviewer, before
-the re-run gates and the commit of its fixes (a reviewer that commits its
-own fixes inside the review call is refused, not undone — its commit
-stays on the task branch, and under ``create_git_branch: false`` the next
-task's baseline inherits it); after the
-`post_review` plugins, before the DONE flip; and per `review-pr` fix,
-before its gates.
+the re-run gates — the review call itself withholds the commit of fixes
+that touch the harness; after the `post_review` plugins, before the DONE
+flip; and per `review-pr` fix, before its gates. On the post-done sites a
+refused step is undone (`restore_surface`): a refused edit left in the
+tree would be committed next, or — under ``create_git_branch: false`` —
+read by the next task's baseline as the oracle.
 
 The spec-runner config itself (`CONTROL_PLANE`) is always on the surface and
 never exempt: it is the policy the attempt is judged by.
@@ -190,6 +190,64 @@ def snapshot_harness(config: ExecutorConfig) -> dict[str, str] | None:
                 digest = "unreadable"
             snapshot[_surface_key(config, f)] = digest
     return snapshot
+
+
+def snapshot_contents(config: ExecutorConfig) -> dict[str, bytes | None] | None:
+    """The harness surface's bytes, for undoing a refused edit (`restore_surface`).
+
+    Keyed like `snapshot_harness`; an unreadable file maps to None. Returns
+    None when the guard is off.
+    """
+    if config.harness_guard == "off":
+        return None
+    contents: dict[str, bytes | None] = {}
+    candidates = [*HARNESS_CANDIDATES, *_control_plane_keys(config), *config.harness_files]
+    for rel in candidates:
+        for f in _iter_files(config.project_root / rel):
+            try:
+                contents[_surface_key(config, f)] = f.read_bytes()
+            except OSError:
+                contents[_surface_key(config, f)] = None
+    return contents
+
+
+def content_hashes(contents: dict[str, bytes | None] | None) -> dict[str, str] | None:
+    """`snapshot_contents` in `snapshot_harness`'s shape, for `harness_violations`."""
+    if contents is None:
+        return None
+    return {
+        key: "unreadable" if data is None else hashlib.sha256(data).hexdigest()
+        for key, data in contents.items()
+    }
+
+
+def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | None) -> list[str]:
+    """Undo every violation relative to `before`; return the paths it could not.
+
+    What a refused step wrote must not outlive the refusal: left in the tree,
+    it is committed by whatever commits next, and under
+    ``create_git_branch: false`` the next task's baseline is taken from it —
+    the refused edit becomes the oracle. Exempt (`harness_allow`) paths are
+    not violations and are left alone.
+    """
+    unrestored: list[str] = []
+    for violation in harness_violations(config, content_hashes(before)):
+        kind, key = violation.split(" ", 1)
+        path = Path(key) if Path(key).is_absolute() else config.project_root / key
+        try:
+            if kind == "created":
+                path.unlink(missing_ok=True)
+                continue
+            data = (before or {}).get(key)
+            if data is None:
+                unrestored.append(key)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as exc:
+            logger.error("Could not restore harness file", path=key, error=str(exc))
+            unrestored.append(key)
+    return unrestored
 
 
 class HarnessBaseline:
