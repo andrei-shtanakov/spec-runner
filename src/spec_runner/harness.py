@@ -17,14 +17,16 @@ after: created/modified/deleted files are violations. Modes
 - ``strict`` — fail the attempt; the error message feeds the retry prompt
   so the next attempt knows not to touch the harness. Operators opting in
   can exempt paths via ``harness_allow``.
+- ``off`` — no snapshotting at all.
 
 Where it looks (`guard_error`): after the RED/verify-first passes and
 before GREEN; after GREEN, before the gates; after the reviewer, before
 the re-run gates and the commit of its fixes (a reviewer that commits its
-own fixes inside the review call is refused, not undone); after the
+own fixes inside the review call is refused, not undone — its commit
+stays on the task branch, and under ``create_git_branch: false`` the next
+task's baseline inherits it); after the
 `post_review` plugins, before the DONE flip; and per `review-pr` fix,
 before its gates.
-- ``off`` — no snapshotting at all.
 
 The spec-runner config itself (`CONTROL_PLANE`) is always on the surface and
 never exempt: it is the policy the attempt is judged by.

@@ -1656,13 +1656,19 @@ def post_done_hook(
             config, task.id, review_harness_before, log_progress, actor="the reviewer"
         )
         if harness_error is not None:
-            blocked = _commit_blocked_status(
+            harness_blocked = _commit_blocked_status(
                 task,
                 config,
                 Refusal(harness_error, RefusalKind.POLICY),
                 review_checkpoint_sha or _head_sha(config),
             )
-            return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
+            return (
+                False,
+                harness_blocked,
+                review_verdict.value,
+                (review_output or "")[:2048],
+                False,
+            )
 
     # HITL approval gate
     if config.hitl_review and review_output:
