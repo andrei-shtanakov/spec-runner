@@ -977,7 +977,9 @@ def _execute_task(
             error_kind=_refusal_error_kind(refusal),
             error_stage=reporter.current,
         )
-        return False
+        # Terminal, as built: the next attempt would ask the same history the
+        # same question before any paid call (final review #8).
+        return "TERMINAL_REFUSAL"
 
     # Build RetryContext from previous failed attempts
     retry_context: RetryContext | None = None

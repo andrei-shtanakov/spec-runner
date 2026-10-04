@@ -230,3 +230,11 @@ def test_unreadable_tasks_file_is_exit_2(repo, capsys):
     (repo / "spec" / "tasks.md").write_bytes(b"\xff\xfe\x00bad")
     assert cmd_harness(_args(), _cfg(repo)) == 2
     assert "tasks.md" in capsys.readouterr().out
+
+
+def test_replacement_is_named_in_plain_words(repo):
+    cfg = _cfg(repo)
+    _trust(cfg, reason="checked", bind_branch=BRANCH)
+    assert _trust(cfg, reason="again") == (
+        "✅ TASK-100: harness baseline trusted (replaced the earlier operator baseline)"
+    )

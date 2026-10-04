@@ -607,3 +607,35 @@ def test_real_git_failure_in_a_repo_with_commits_still_refuses(repo, monkeypatch
     monkeypatch.setattr(wip, "_git", _git_failing)
     with pytest.raises(WipReadError):
         wip.wip_base(_cfg(repo))
+
+
+def test_unreadable_wip_is_terminal_not_retried(repo, monkeypatch):
+    """Final review #8: the refusal is built `terminal`, so the attempt loop stops.
+
+    The next attempt would ask the same unreadable history the same question,
+    before any paid call; retrying it only repeats the refusal.
+    """
+    from spec_runner import wip
+    from spec_runner.execution import run_with_retries
+    from spec_runner.wip import WipReadError
+
+    _fail_once(repo, monkeypatch)
+    spawned: list[int] = []
+
+    def _spawn(invocation, *, timeout, cwd, env):
+        spawned.append(1)
+        return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+    def _boom(config):
+        raise WipReadError("git exploded")
+
+    monkeypatch.setattr(paid_call, "_spawn", _spawn)
+    monkeypatch.setattr(wip, "wip_base", _boom)
+    cfg = _cfg(repo, max_retries=3)
+    with ExecutorState(cfg) as st:
+        st.get_task_state("TASK-070").attempts = []
+        run_with_retries(_task(), cfg, st)
+        attempts = st.get_task_state("TASK-070").attempts
+    assert not spawned
+    assert len(attempts) == 1, "a terminal refusal is not retried"
+    assert attempts[0].error_kind == "instrument"

@@ -303,3 +303,23 @@ def test_dangling_symlink_is_not_unstaged_as_vanished(repo):
     unstage_vanished_paths(cfg, ["app.py"])
     # Not "gone": the staged removal is left alone, not reset back from HEAD.
     assert "app.py" in _git(repo, "diff", "--cached", "--name-only").split()
+
+
+@pytest.mark.parametrize("failing", ["log", "show"])
+def test_wip_commits_raises_when_a_commit_cannot_be_read(repo, monkeypatch, failing):
+    """A git error inside the walk is "could not look", never "not WIP" (final review #7)."""
+    from spec_runner import wip
+    from spec_runner.wip import WipReadError
+
+    cfg = _cfg(repo)
+    _wip_commit(repo, "a.py", "TASK-060", 1)
+    real = wip._git
+
+    def _broken(config, *args):
+        if args[:1] == (failing,):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: bad object")
+        return real(config, *args)
+
+    monkeypatch.setattr(wip, "_git", _broken)
+    with pytest.raises(WipReadError, match="bad object"):
+        wip_commits(cfg, "TASK-060", "main")

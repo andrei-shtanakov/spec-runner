@@ -166,9 +166,21 @@ def save_wip(config: ExecutorConfig, state: ExecutorState) -> WipResult:
 
 
 def is_wip_of(config: ExecutorConfig, sha: str, task_id: str) -> bool:
-    """Whether `sha` carries this task's WIP trailer."""
+    """Whether `sha` carries this task's WIP trailer; a git error reads as False.
+
+    Right for a walk that stops at the first other commit; a caller that
+    must not mistake "could not look" for "not WIP" uses `_trailer_values`.
+    """
     body = _git(config, "log", "-1", "--format=%(trailers:key=" + WIP_TRAILER + ",valueonly)", sha)
     return body.returncode == 0 and task_id in body.stdout.split()
+
+
+def _trailer_values(config: ExecutorConfig, sha: str, key: str) -> list[str]:
+    """The values of trailer `key` on `sha`; a git error raises `WipReadError`."""
+    body = _git(config, "log", "-1", "--format=%(trailers:key=" + key + ",valueonly)", sha)
+    if body.returncode != 0:
+        raise WipReadError(body.stderr.strip()[:200] or f"cannot read the trailers of {sha}")
+    return body.stdout.split()
 
 
 def wip_base(config: ExecutorConfig) -> str | None:
@@ -203,27 +215,27 @@ def wip_base(config: ExecutorConfig) -> str | None:
 def wip_commits(
     config: ExecutorConfig, task_id: str, base: str
 ) -> list[tuple[str, int, list[str]]]:
-    """This task's WIP commits in `base..HEAD`, oldest first."""
+    """This task's WIP commits in `base..HEAD`, oldest first.
+
+    Strict: any git error while reading a commit raises `WipReadError` rather
+    than dropping that commit from the continuation (final review #7).
+    """
     listed = _git(config, "rev-list", "--reverse", f"{base}..HEAD")
     if listed.returncode != 0:
         raise WipReadError(listed.stderr.strip()[:200] or "git rev-list failed")
     shas = listed.stdout.split()
     found: list[tuple[str, int, list[str]]] = []
     for sha in shas:
-        if not is_wip_of(config, sha, task_id):
+        if task_id not in _trailer_values(config, sha, WIP_TRAILER):
             continue
-        attempt = _git(
-            config,
-            "log",
-            "-1",
-            "--format=%(trailers:key=" + WIP_ATTEMPT_TRAILER + ",valueonly)",
-            sha,
-        ).stdout.split()
+        attempt = _trailer_values(config, sha, WIP_ATTEMPT_TRAILER)
         try:
             number = int(attempt[0]) if attempt else 0
         except ValueError as exc:
             raise WipReadError(f"malformed {WIP_ATTEMPT_TRAILER} on {sha}") from exc
         shown = _git(config, "show", "--name-only", "-z", "--format=", sha)
+        if shown.returncode != 0:
+            raise WipReadError(shown.stderr.strip()[:200] or f"cannot list the files of {sha}")
         found.append((sha, number, [f for f in shown.stdout.split("\0") if f]))
     return found
 
@@ -238,7 +250,4 @@ def head_is_wip_of(config: ExecutorConfig, task_id: str) -> bool:
     sha = head.stdout.strip()
     if head.returncode != 0 or not sha:
         raise WipReadError(head.stderr.strip()[:200] or "cannot read HEAD")
-    body = _git(config, "log", "-1", "--format=%(trailers:key=" + WIP_TRAILER + ",valueonly)", sha)
-    if body.returncode != 0:
-        raise WipReadError(body.stderr.strip()[:200] or "cannot read HEAD's trailers")
-    return task_id in body.stdout.split()
+    return task_id in _trailer_values(config, sha, WIP_TRAILER)
