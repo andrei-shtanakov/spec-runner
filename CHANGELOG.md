@@ -54,6 +54,12 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **A timed-out GREEN call closes its prompt artefact.** The artefact ended
+  with the prompt, which is the shape reserved for a runner that died
+  mid-call. It now ends with `=== NO RESULT: timed out after Nm ===`, as the
+  RED and review artefacts already do. The ledger row with an unknown price
+  is written by the paid-call seam.
+
 - **The harness guard sees the RED and verify-first passes.** Its baseline
   was taken right before the GREEN call, after both passes had written into
   the tree, and `_commit_red` commits the whole tree with the red. A RED agent
