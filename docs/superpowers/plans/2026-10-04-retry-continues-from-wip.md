@@ -21,11 +21,12 @@
 - Ruff line length 100; mypy clean; `uv run pytest`.
 - Every test that needs an agent replaces only `paid_call._spawn` (never `_run_agent_process` when the property is about ordering or commits).
 
-**Spec deviations found while mapping the code (owner to confirm at plan review):**
+**Owner decisions (2026-10-04, after mapping the code):**
 
-1. `spec-runner reset` (`cli_info.cmd_reset`) deletes the whole state DB file. "`reset` keeps workspace and baseline" cannot hold without changing `reset`. This plan keeps `reset` as is; after a reset a task whose branch exists is "started", so under `strict` it is refused until `harness trust --bind-branch`. Trust never appears silently.
-2. `remedy.abandon` is three separate commits. The workspace/baseline/file deletion is its own single `_immediate` transaction at the end of `abandon`, not atomic with abandon's other writes.
-3. No golden fixture and not `schemas/executor-state.schema.json` (legacy JSON-state schema) lists DB tables. The contract is pinned by `docs/state-schema.md` plus a test asserting the four tables exist.
+1. `spec-runner reset` deletes the whole state DB today. It is changed in this work (Task 9): the DB is rebuilt in a temporary file with the four tables carried over and replaced atomically; any failure before the replace leaves the original untouched (exit 2).
+2. DONE and `tdd abandon` delete workspace/baseline/files **atomically with their own records** (Task 9): DONE inside `record_attempt`'s success transaction; abandon's three writes plus the deletion in one `BEGIN IMMEDIATE`. No "log and continue".
+3. `schemas/executor-state.schema.json` (legacy JSON state) is not extended. SQLite is documented in `docs/state-schema.md`; tests pin columns, keys, CHECKs and atomicity. The golden regeneration command is run; no diff is expected.
+4. `test_claims_released_at_completion` was not a local-only failure: it is `@pytest.mark.slow` and CI runs `-m "not slow"`. Fixed on this branch (`931d767`, a real `CliInvocation` in the stub). No failure is pre-allowed in any verification step.
 
 ## Review Focus
 
@@ -87,6 +88,33 @@ def test_the_four_tables_exist(tmp_path):
         "harness_baseline_files",
         "harness_trust_audit",
     } <= names
+
+
+def test_table_structure_keys_and_checks(tmp_path):
+    with ExecutorState(_cfg(tmp_path)):
+        pass
+    conn = sqlite3.connect(tmp_path / "state.db")
+
+    def cols(t):
+        return {r[1]: r[5] for r in conn.execute(f"PRAGMA table_info({t})")}  # name -> pk pos
+
+    assert cols("task_workspaces") == {
+        "namespace": 1, "task_id": 2, "branch": 0, "started_at": 0, "run_id": 0, "bound_by": 0,
+    }
+    assert cols("harness_baselines") == {
+        "namespace": 1, "task_id": 2, "captured_at": 0, "run_id": 0, "guard_mode": 0,
+        "provenance": 0, "surface": 0,
+    }
+    assert cols("harness_baseline_files") == {
+        "namespace": 1, "task_id": 2, "path": 3, "state": 0, "digest": 0, "content": 0,
+    }
+    assert cols("harness_trust_audit")["id"] == 1
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO harness_baselines VALUES ('n','t','now',NULL,'strict','guessed','{}')"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO task_workspaces VALUES ('n','t',NULL,'now',NULL,'agent')")
 
 
 def test_workspace_is_recorded_once_and_found_by_exact_branch(tmp_path):
@@ -1113,6 +1141,26 @@ def test_detached_head_falls_back_to_stash(repo):
     assert _save(cfg).saved_sha is None
 
 
+def test_unreadable_index_is_an_instrument_refusal(repo, monkeypatch):
+    from spec_runner import wip
+    from spec_runner.phases import RefusalKind
+
+    cfg = _cfg(repo)
+    _own(cfg)
+    (repo / "app.py").write_text("x = 2\n")
+    real = wip._git
+
+    def _broken(config, *args):
+        if args[:1] == ("diff",):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: index file corrupt")
+        return real(config, *args)
+
+    monkeypatch.setattr(wip, "_git", _broken)
+    result = _save(cfg)
+    assert result.refusal is not None and result.refusal.kind is RefusalKind.INSTRUMENT
+    assert (repo / "app.py").read_text() == "x = 2\n"
+
+
 def test_commit_failure_is_refused_with_work_in_tree(repo):
     cfg = _cfg(repo)
     _own(cfg)
@@ -1179,9 +1227,17 @@ def owner(config: ExecutorConfig, state: ExecutorState) -> str | None:
     return state.workspace_for_branch(resolve_namespace(config), branch)
 
 
+class IndexUnreadable(RuntimeError):
+    """`git diff` could not say what is staged."""
+
+
 def _partially_staged(config: ExecutorConfig, paths: list[str]) -> list[str]:
-    staged = set(_git(config, "diff", "--cached", "--name-only", "-z").stdout.split("\0"))
-    unstaged = set(_git(config, "diff", "--name-only", "-z").stdout.split("\0"))
+    cached = _git(config, "diff", "--cached", "--name-only", "-z")
+    worktree = _git(config, "diff", "--name-only", "-z")
+    if cached.returncode != 0 or worktree.returncode != 0:
+        raise IndexUnreadable((cached.stderr or worktree.stderr).strip()[:200] or "git diff failed")
+    staged = set(cached.stdout.split("\0"))
+    unstaged = set(worktree.stdout.split("\0"))
     return sorted(p for p in paths if p in staged and p in unstaged)
 
 
@@ -1193,7 +1249,14 @@ def save_wip(config: ExecutorConfig, state: ExecutorState) -> WipResult:
     paths = uncommitted_work_paths(config, spec_contract_paths(config), strict=True)
     if not paths:
         return WipResult(None, None)
-    split = _partially_staged(config, paths)
+    try:
+        split = _partially_staged(config, paths)
+    except IndexUnreadable as exc:
+        return WipResult(None, Refusal(
+            f"cannot tell what is staged before saving {task_id}'s work as WIP ({exc}); "
+            "the work is in the tree and nothing destructive ran",
+            RefusalKind.INSTRUMENT,
+        ))
     if split:
         return WipResult(None, Refusal(
             f"cannot save {task_id}'s work as WIP: {', '.join(split)} "
@@ -1765,16 +1828,15 @@ git commit -m "feat(prompt): retry prompt names the WIP it continues"
 
 ---
 
-### Task 8: Lifecycle and `harness trust`
+### Task 8: `harness trust`
 
 **Files:**
-- Modify: `src/spec_runner/execution.py` (DONE site :1178), `src/spec_runner/remedy.py` (`abandon` :141)
 - Create: `src/spec_runner/harness_cmd.py`
 - Modify: `src/spec_runner/cli.py` (parser after `budget` block :2641; dispatch after :2878)
 - Test: `tests/test_harness_trust.py`
 
 **Interfaces:**
-- Consumes: Task 1 `trust_harness`, `forget_task_workspace`, `get_workspace`; Task 2 `surface_snapshot`; `remedy._guard`, `remedy.resolve_actor`, `RemedyError`.
+- Consumes: Task 1 `trust_harness`, `get_workspace`; Task 2 `surface_snapshot`; `remedy._guard`, `remedy.resolve_actor`, `RemedyError`; `task.parse_tasks`.
 - Produces: `cmd_harness(args, config) -> int`; `trust(config, state, task_id, *, reason, bind_branch=None, actor=None) -> str` (message).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1873,20 +1935,33 @@ def test_create_git_branch_false_needs_no_bind(repo):
         assert st.get_workspace(resolve_namespace(cfg), "TASK-100")["branch"] is None
 
 
-def test_abandon_forgets_workspace_and_baseline(repo, monkeypatch):
-    from spec_runner import remedy
-
+def test_unknown_task_is_refused(repo):
     cfg = _cfg(repo)
-    _trust(cfg, reason="checked", bind_branch="task/task-100-w")
-    with ExecutorState(cfg) as st:
-        remedy._forget_workspace(cfg, st, "TASK-100")
-        ns = resolve_namespace(cfg)
-        assert st.get_workspace(ns, "TASK-100") is None
-        assert st.get_harness_baseline(ns, "TASK-100") is None
-        assert len(st.harness_trust_audit(ns, "TASK-100")) == 1
+    with pytest.raises(TrustError, match="no task TASK-404"):
+        with ExecutorState(cfg) as st:
+            trust(cfg, st, "TASK-404", reason="checked", bind_branch="task/task-100-w")
+
+
+def test_db_failure_is_exit_2(repo, monkeypatch, capsys):
+    import argparse
+    import sqlite3
+
+    from spec_runner.harness_cmd import cmd_harness
+    from spec_runner.state import ExecutorState as ES
+
+    def boom(self, *a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(ES, "trust_harness", boom)
+    args = argparse.Namespace(
+        harness_command="trust", task_id="TASK-100", reason="checked",
+        bind_branch="task/task-100-w", actor=None,
+    )
+    assert cmd_harness(args, _cfg(repo)) == 2
+    assert "disk I/O error" in capsys.readouterr().out
 ```
 
-Plus, in `tests/test_trusted_baseline.py`, add `test_done_forgets_workspace_and_baseline`: a run whose `post_done_hook` stub returns success → after `run_with_retries`, `get_workspace` and `get_harness_baseline` are None. And `test_abandon_end_to_end` using the existing abandon test fixture shape from `tests/test_remedy.py` (read it; reuse its red/checkpoint setup) asserting both rows are gone after `remedy.abandon(...)`.
+The repo fixture must also write `spec/tasks.md` declaring `TASK-100` (copy the header shape from Task 3's fixture) so the existence check passes in the other tests.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1907,6 +1982,7 @@ first, then states that it is trusted, with a reason that is kept.
 from __future__ import annotations
 
 import argparse
+import sqlite3
 
 from .config import ExecutorConfig
 from .git_ops import current_branch
@@ -1933,6 +2009,10 @@ def trust(
         namespace = _guard(config, reason)
     except RemedyError as exc:
         raise TrustError(str(exc)) from exc
+    from .task import parse_tasks
+
+    if not any(t.id == task_id for t in parse_tasks(config.tasks_file)):
+        raise TrustError(f"no task {task_id} in {config.tasks_file}")
     branch = current_branch(config) if config.create_git_branch else None
     workspace = state.get_workspace(namespace, task_id)
     bind = workspace is None
@@ -1967,15 +2047,18 @@ def cmd_harness(args: argparse.Namespace, config: ExecutorConfig) -> int:
     if args.harness_command != "trust":
         print("usage: spec-runner harness trust TASK --reason …")
         return 1
-    with ExecutorState(config) as state:
-        try:
+    try:
+        with ExecutorState(config) as state:
             print(trust(
                 config, state, args.task_id, reason=args.reason,
                 bind_branch=args.bind_branch, actor=args.actor,
             ))
-        except TrustError as exc:
-            print(f"⛔ {exc}")
-            return 1
+    except TrustError as exc:
+        print(f"⛔ {exc}")
+        return 1
+    except sqlite3.Error as exc:
+        print(f"⛔ the state DB could not be read or written: {exc}")
+        return 2
     return 0
 ```
 
@@ -2006,27 +2089,6 @@ dispatch (after the budget branch):
         raise SystemExit(cmd_harness(args, config))
 ```
 
-`execution.py` DONE site (:1178-1180), after `_release_claims`:
-
-```python
-                _forget_workspace(state, config, task)
-```
-
-with
-
-```python
-def _forget_workspace(state, config, task) -> None:
-    """DONE: the task's workspace and harness baseline are spent (spec §2)."""
-    try:
-        state.forget_task_workspace(resolve_namespace(config), task.id)
-    except Exception as exc:  # the task is done; a stale row only costs a re-trust
-        logger.error("Could not drop the task workspace", task_id=task.id, error=str(exc))
-```
-
-(call it for every mode, outside the `tdd/verify_first` condition).
-
-`remedy.py`: add `def _forget_workspace(config, state, task_id) -> None: state.forget_task_workspace(resolve_namespace(config), task_id)` and call it at the end of `abandon` after `_record(...)`.
-
 - [ ] **Step 4: Run tests**
 
 Run: `uv run pytest tests/test_harness_trust.py tests/test_task_workspace_state.py tests/test_trusted_baseline.py tests/test_remedy.py tests/test_cli_flags.py -v`
@@ -2036,12 +2098,257 @@ Expected: PASS.
 
 ```bash
 git add -A src/spec_runner tests
-git commit -m "feat(harness): audited harness trust; workspace forgotten at DONE and abandon"
+git commit -m "feat(harness): audited harness trust"
 ```
 
 ---
 
-### Task 9: Harness edits in WIP or red never become the oracle (cross-cutting regressions)
+### Task 9: Atomic DONE and abandon; `reset` keeps the four tables
+
+**Files:**
+- Modify: `src/spec_runner/state.py` (`record_attempt` :2648, `set_checkpoint_status`, `supersede_claims`, `record_remedy`, new `abandon_atomically`, new `reset_state_preserving_workspaces`), `src/spec_runner/execution.py` (DONE site :1181), `src/spec_runner/remedy.py` (`abandon` :141, `_record`), `src/spec_runner/cli_info.py` (`cmd_reset` :648)
+- Test: `tests/test_workspace_lifecycle.py`
+
+**Interfaces:**
+- Consumes: Task 1 tables.
+- Produces:
+  - `ExecutorState._forget_workspace_sql(namespace, task_id) -> None` (no commit; caller holds the transaction); `forget_task_workspace` from Task 1 becomes `with self._immediate(): self._forget_workspace_sql(...)`.
+  - `record_attempt(..., forget_workspace: str | None = None)` — when `success` and a namespace is given, deletes that task's workspace/baseline/files inside the same `with self._conn:` transaction as the attempt row.
+  - `ExecutorState.abandon_atomically(namespace: str, task_id: str, checkpoint_id: str, remedy: RemedyRecord) -> None` — checkpoint → abandoned, claims of that lineage → abandoned, remedy row, workspace forgotten: one `BEGIN IMMEDIATE`.
+  - `reset_state_preserving_workspaces(config: ExecutorConfig) -> None` (module-level in `state.py`); raises on any failure before the replace.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+"""Workspace/baseline lifecycle is atomic with the records that end a task (spec §2)."""
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from spec_runner.config import ExecutorConfig
+from spec_runner.state import ExecutorState, reset_state_preserving_workspaces
+
+NS = "ns-a"
+
+
+def _cfg(tmp_path: Path) -> ExecutorConfig:
+    return ExecutorConfig(project_root=tmp_path, state_file=tmp_path / "state.db")
+
+
+def _seed(st: ExecutorState) -> None:
+    st.record_workspace(NS, "TASK-1", branch="task/task-1", run_id=None)
+    st.store_harness_baseline(
+        NS, "TASK-1", provenance="initial", guard_mode="strict",
+        surface={"pyproject.toml": "file"}, files={"pyproject.toml": b"x"}, run_id=None,
+    )
+
+
+def test_done_forgets_in_the_same_transaction(tmp_path):
+    with ExecutorState(_cfg(tmp_path)) as st:
+        _seed(st)
+        st.record_attempt("TASK-1", True, 1.0, forget_workspace=NS)
+        assert st.get_workspace(NS, "TASK-1") is None
+        assert st.get_harness_baseline(NS, "TASK-1") is None
+
+
+def test_failed_attempt_keeps_them(tmp_path):
+    with ExecutorState(_cfg(tmp_path)) as st:
+        _seed(st)
+        st.record_attempt("TASK-1", False, 1.0, error="x", forget_workspace=NS)
+        assert st.get_workspace(NS, "TASK-1") is not None
+
+
+def test_a_failing_forget_rolls_back_the_done_row(tmp_path, monkeypatch):
+    with ExecutorState(_cfg(tmp_path)) as st:
+        _seed(st)
+
+        def boom(namespace, task_id):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr(st, "_forget_workspace_sql", boom)
+        st.record_attempt("TASK-1", True, 1.0, forget_workspace=NS)  # degraded, no raise
+    conn = sqlite3.connect(tmp_path / "state.db")
+    assert conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM task_workspaces").fetchone()[0] == 1
+
+
+def test_reset_keeps_the_four_tables_and_drops_the_rest(tmp_path):
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as st:
+        _seed(st)
+        st.trust_harness(
+            NS, "TASK-1", bind=False, bind_branch=None, branch=None, surface={}, files={},
+            guard_mode="strict", actor="op", reason="r", run_id=None,
+        )
+        st.record_attempt("TASK-1", False, 1.0, error="x")
+    reset_state_preserving_workspaces(cfg)
+    with ExecutorState(cfg) as st:
+        assert st.get_workspace(NS, "TASK-1") is not None
+        assert st.get_harness_baseline(NS, "TASK-1").provenance == "operator"
+        assert len(st.harness_trust_audit(NS, "TASK-1")) == 1
+        assert st.get_task_state("TASK-1").attempt_count == 0
+
+
+def test_a_failing_reset_leaves_the_original_untouched(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as st:
+        _seed(st)
+        st.record_attempt("TASK-1", False, 1.0, error="x")
+    before = (tmp_path / "state.db").read_bytes()
+    import spec_runner.state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError):
+        reset_state_preserving_workspaces(cfg)
+    assert (tmp_path / "state.db").read_bytes() == before
+```
+
+Add `test_abandon_is_one_transaction` using the abandon fixture of `tests/test_remedy.py` (read it; reuse its red/checkpoint setup and `_cfg`): monkeypatch `ExecutorState._forget_workspace_sql` to raise `sqlite3.OperationalError`; `remedy.abandon(...)` raises; afterwards the checkpoint is still `active`, the claims still `active`, no `tdd_remedies` row, and the workspace row still exists. Then without the fault: all four changed, and a repeat `abandon` returns `already_applied=True`.
+
+Add to `tests/test_cli_info.py` (or a new test there): `cmd_reset` exits 2 and leaves the DB when `reset_state_preserving_workspaces` raises.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `uv run pytest tests/test_workspace_lifecycle.py -v`
+Expected: FAIL — `ImportError: cannot import name 'reset_state_preserving_workspaces'`.
+
+- [ ] **Step 3: Implement**
+
+`state.py`:
+
+```python
+    def _forget_workspace_sql(self, namespace: str, task_id: str) -> None:
+        """Delete the task's workspace, baseline and file rows (no commit)."""
+        assert self._conn is not None
+        for table in ("harness_baseline_files", "harness_baselines", "task_workspaces"):
+            self._conn.execute(
+                f"DELETE FROM {table} WHERE namespace = ? AND task_id = ?",
+                (namespace, task_id),
+            )
+```
+
+`forget_task_workspace` → `with self._immediate(): self._forget_workspace_sql(namespace, task_id)`.
+
+`record_attempt`: new keyword `forget_workspace: str | None = None`; inside the existing `with self._conn:` block, after the attempts INSERT and before `self._save_meta()`:
+
+```python
+                if success and forget_workspace is not None:
+                    self._forget_workspace_sql(forget_workspace, task_id)
+```
+
+Split the three abandon writers into SQL-only internals, keeping the public methods' behaviour:
+
+```python
+    def _supersede_claims_sql(self, namespace, task_id, status, checkpoint_id=None) -> int:
+        # body of supersede_claims without self._conn.commit()
+
+    def supersede_claims(self, namespace, task_id, status, checkpoint_id=None) -> int:
+        with self._immediate():
+            return self._supersede_claims_sql(namespace, task_id, status, checkpoint_id)
+```
+
+Same for `set_checkpoint_status` → `_set_checkpoint_status_sql`, and for `record_remedy` → `_insert_remedy_sql(remedy)` using `self._conn.execute(...)` (not `_insert_phase_row`, whose `with self._conn:` would commit an outer transaction early); `record_remedy` keeps calling `_insert_phase_row` for its own single-row write. Then:
+
+```python
+    def abandon_atomically(
+        self, namespace: str, task_id: str, checkpoint_id: str, remedy: "RemedyRecordT"
+    ) -> None:
+        """Abandon's writes and the workspace deletion, all or nothing."""
+        from .claims import ClaimStatus
+        from .tdd import CheckpointStatus
+
+        with self._immediate():
+            self._set_checkpoint_status_sql(namespace, checkpoint_id, CheckpointStatus.ABANDONED)
+            self._supersede_claims_sql(
+                namespace, task_id, ClaimStatus.ABANDONED, checkpoint_id=checkpoint_id
+            )
+            self._insert_remedy_sql(remedy)
+            self._forget_workspace_sql(namespace, task_id)
+```
+
+(Import `CheckpointStatus` from where `remedy.py` imports it.)
+
+Module level, after the class:
+
+```python
+_KEPT_ON_RESET = (
+    "task_workspaces", "harness_baselines", "harness_baseline_files", "harness_trust_audit",
+)
+
+
+def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
+    """Rebuild the state DB keeping the harness-trust tables (spec §2).
+
+    Built in a temporary file and swapped in with one `os.replace`: any failure
+    before the swap leaves the original DB exactly as it was.
+    """
+    src = config.state_file
+    kept: dict[str, tuple[list[str], list[tuple]]] = {}
+    if src.exists():
+        conn = sqlite3.connect(src)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table in _KEPT_ON_RESET:
+                if table in present:
+                    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+                    kept[table] = (cols, conn.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall())
+        finally:
+            conn.close()
+    tmp = src.with_name(src.name + ".reset-tmp")
+    for leftover in (tmp, Path(f"{tmp}-wal"), Path(f"{tmp}-shm")):
+        leftover.unlink(missing_ok=True)
+    with ExecutorState(dataclasses.replace(config, state_file=tmp)) as fresh:
+        assert fresh._conn is not None
+        with fresh._immediate():
+            for table, (cols, rows) in kept.items():
+                marks = ", ".join("?" for _ in cols)
+                fresh._conn.executemany(
+                    f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({marks})", rows
+                )
+        fresh._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    os.replace(tmp, src)
+    for sidecar in (Path(f"{src}-wal"), Path(f"{src}-shm"), Path(f"{tmp}-wal"), Path(f"{tmp}-shm")):
+        sidecar.unlink(missing_ok=True)
+```
+
+Note the order: the old `-wal`/`-shm` are removed **after** the replace in this sketch; verify with the test that a stale WAL cannot be replayed onto the new file. If it can (the old `-wal` exists after `wal_checkpoint(TRUNCATE)` + close), remove the old sidecars **before** `os.replace` — they are empty after the TRUNCATE checkpoint, so removing them first loses nothing. Confirm `ExecutorConfig` is a dataclass whose `state_file` can be replaced; if `state_file` is derived from `spec_prefix`, construct the temp config the way `doctor.build_scratch` does.
+
+`cli_info.cmd_reset`: replace the `state_file.unlink()` with
+
+```python
+    from .state import reset_state_preserving_workspaces
+
+    try:
+        reset_state_preserving_workspaces(config)
+    except Exception as exc:
+        print(f"⛔ reset failed, the state DB is unchanged: {exc}")
+        raise SystemExit(2) from exc
+```
+
+and say in its output that workspace records, harness baselines and the trust audit were kept.
+
+`remedy.abandon`: replace the three writes and `_record(...)` with building the `RemedyRecord` exactly as `_record` does (extract a `_remedy_record(...)` builder from `_record` and use it in both) and `state.abandon_atomically(namespace, task_id, active.checkpoint_id, record)`.
+
+`execution.py` DONE site: pass `forget_workspace=resolve_namespace(config)` to the success `state.record_attempt(...)` (every mode, not only tdd/verify_first).
+
+- [ ] **Step 4: Run tests**
+
+Run: `uv run pytest tests/test_workspace_lifecycle.py tests/test_remedy.py tests/test_tdd_battle.py tests/test_state.py tests/test_cli_info.py tests/test_claims.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A src/spec_runner tests
+git commit -m "feat(state): DONE and abandon drop the workspace atomically; reset keeps it"
+```
+
+---
+
+### Task 10: Harness edits in WIP or red never become the oracle (cross-cutting regressions)
 
 **Files:**
 - Test: `tests/test_wip_harness_not_trusted.py`
@@ -2110,7 +2417,7 @@ git commit -m "test(wip): harness edits in WIP or red never become the oracle"
 
 ---
 
-### Task 10: Contract, docs, version
+### Task 11: Contract, docs, version
 
 **Files:**
 - Modify: `docs/state-schema.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`, `pyproject.toml`, `TODO.md`
@@ -2176,8 +2483,11 @@ then confirm them:
 
 - [ ] **Step 5: Verify**
 
+Run: `uv run pytest tests/test_json_result_contract.py --update-golden && git status --porcelain tests/fixtures`
+Expected: no diff under `tests/fixtures/` (no golden lists DB tables).
+
 Run: `uv run pytest tests/ -q && uv run ruff check . && uv run ruff format --check . && uv run mypy src && python scripts/check_changelog_links.py`
-Expected: all pass except the known local-only `test_claims_released_at_completion` failure.
+Expected: all pass, slow tests included. Any failure is fixed, or reproduced on `master` and recorded as its own TODO item with the evidence — never pre-allowed.
 
 - [ ] **Step 6: Commit**
 
