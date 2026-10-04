@@ -106,7 +106,9 @@ class TestExecuteTask:
         # no cost, and the property worth pinning is that an unpriced call
         # reaches the guard as *unknown* rather than as $0.00 — `ANY` would
         # have passed either way (Copilot, PR #221).
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=None)
+        mock_post.assert_called_once_with(
+            task, config, True, reporter=ANY, pending_cost=None, harness_before=ANY
+        )
         mock_status.assert_called()
 
     @patch("spec_runner.execution.update_task_status")
@@ -149,7 +151,9 @@ class TestExecuteTask:
         # no cost, and the property worth pinning is that an unpriced call
         # reaches the guard as *unknown* rather than as $0.00 — `ANY` would
         # have passed either way (Copilot, PR #221).
-        mock_post.assert_called_once_with(task, config, True, reporter=ANY, pending_cost=None)
+        mock_post.assert_called_once_with(
+            task, config, True, reporter=ANY, pending_cost=None, harness_before=ANY
+        )
 
     @patch("spec_runner.execution.update_task_status")
     @patch("spec_runner.execution.log_progress")

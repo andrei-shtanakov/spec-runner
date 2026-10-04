@@ -63,6 +63,16 @@ is a **breaking change** and requires a major version bump plus an entry here.
   violation), and the surface is compared once more after the passes, before
   the paid GREEN call. Under `warn` that check warns and lets the task go on.
 
+- **The harness guard sees what is written after GREEN.** A reviewer
+  answering `REVIEW_FIXED`, a `post_review` plugin and the `review-pr` fix
+  agent all wrote into the tree after the only check, so under `strict` any
+  of them could rewrite `pyproject.toml` and the task still closed (or the
+  fix was pushed). `post_done_hook` now compares the surface with the task's
+  baseline right before the DONE flip and the commit, and refuses the same
+  resumable way a `post_review` plugin does. `review-pr` snapshots before
+  each fix and checks before the gates; a fix that touches the harness is
+  rolled back and left to a human.
+
 - **Review reads the whole task, not its last commit.** The review diff was
   `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,
   the main branch merged in, the agent's own commits) was reviewed on its last

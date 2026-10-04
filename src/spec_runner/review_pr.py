@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
+from .harness import guard_error, snapshot_harness
 from .logging import get_logger
 
 logger = get_logger("review_pr")
@@ -1317,6 +1318,9 @@ def _apply_phase(
             break
         comment = comment_map[cid]
         pre_fix_head = _git(config, "rev-parse", "HEAD").stdout.strip()
+        # Harness tripwire (#64): per fix, since the tree before each one is
+        # the previous fix's accepted (or rolled-back) result.
+        harness_before = snapshot_harness(config)
         ok, note, cost = run_fix_agent(
             comment,
             row["evidence"] or "",
@@ -1351,6 +1355,18 @@ def _apply_phase(
         if not _worktree_fingerprint(config).strip():
             state.set_resolution(repo, pr_number, cid, "needs_human")
             logger.warning("Fix agent changed nothing", comment_id=cid)
+            continue
+        # Before the gates: a rewritten oracle makes their verdict worthless.
+        harness_error = guard_error(
+            config, f"review-pr#{pr_number}", harness_before, lambda line, _id: _note(line)
+        )
+        if harness_error is not None:
+            clean_rollback = _rollback_fix(config, pre_fix_head)
+            state.set_resolution(repo, pr_number, cid, "needs_human")
+            logger.warning("Fix touched the harness — reverted", comment_id=cid)
+            if not clean_rollback:
+                logger.warning("Untracked residue after harness edit — stopping safely")
+                break
             continue
         gates_ok, gate_detail = _run_gates(config)
         if not gates_ok:

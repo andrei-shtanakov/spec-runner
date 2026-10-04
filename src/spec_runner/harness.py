@@ -24,6 +24,7 @@ never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -241,3 +242,45 @@ def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) ->
             or not any(Path(v.split(" ", 1)[1]).match(pattern) for pattern in config.harness_allow)
         ]
     return violations
+
+
+def guard_error(
+    config: ExecutorConfig,
+    task_id: str,
+    before: dict[str, str] | None,
+    log_progress: Callable[[str, str], None],
+) -> str | None:
+    """Compare the harness with the task's baseline; the refusal, if any.
+
+    Returns the attempt's error under `strict` when the surface changed;
+    under `warn` it logs the change and returns None, as it does when nothing
+    changed or the guard is off. One answer for every site that checks —
+    after the RED/verify-first passes, after GREEN, and before DONE.
+    """
+    violations = harness_violations(config, before)
+    if not violations:
+        return None
+    summary = ", ".join(violations)
+    if config.harness_guard != "strict":
+        log_progress(f"⚠️ Harness files changed by agent: {summary}", task_id)
+        logger.warning("Harness files mutated by agent", violations=violations)
+        return None
+    # The error becomes the next attempt's prompt, so it must not name the
+    # exemption: that taught the author agent how to lift the barrier that
+    # just stopped it. The operator's way out goes on the progress line, which
+    # no prompt carries. That is the whole guarantee: the knob is no secret
+    # (README documents it, and the progress file sits in the tree); keeping
+    # the agent from *using* it is companion #1 (config under guard).
+    policy = [v for v in violations if is_control_plane(config, v)]
+    hints = []
+    if policy:
+        hints.append("the spec-runner config cannot be exempted; revert it")
+    if len(policy) < len(violations):
+        hints.append("exempt an intended change via harness_allow in the config")
+    log_progress(f"⛔ Harness guard: {summary} (operator: {'; '.join(hints)})", task_id)
+    logger.error("Harness files mutated by agent", violations=violations)
+    return (
+        "Harness guard: the agent modified verification files: "
+        f"{summary}. These files define how the task is verified "
+        "and must not be changed by the task. Revert them."
+    )

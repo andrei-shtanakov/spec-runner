@@ -548,6 +548,54 @@ class TestApplyPhase:
         with ReviewPrState(cfg) as st:
             assert st.rows(REPO, 6)[0]["resolution"] == "needs_human"
 
+    def _fix_touching_harness(self, work: Path):
+        def agent(comment, evidence, repo, pr, config, **_kw):
+            (work / "src.py").write_text("x = 2\n")
+            (work / "Makefile").write_text("test:\n\ttrue\n")
+            return True, "changed x to 2", 0.01
+
+        return agent
+
+    def test_fix_editing_the_harness_is_refused_under_strict(self, tmp_path, monkeypatch):
+        """The fix agent is held to the harness guard like every other agent:
+        its gates ran against an oracle it had just rewritten."""
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work, harness_guard="strict")
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
+            patch.object(rp, "run_fix_agent", side_effect=self._fix_touching_harness(work)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_NEEDS_HUMAN
+        assert _git(work, "rev-parse", "HEAD").stdout.strip() == head  # nothing committed
+        assert reply_log == []
+        with ReviewPrState(cfg) as st:
+            assert st.rows(REPO, 6)[0]["resolution"] == "needs_human"
+
+    def test_fix_editing_the_harness_proceeds_under_warn(self, tmp_path, monkeypatch):
+        work, _, head = _init_repo_with_remote(tmp_path)
+        reply_log: list = []
+        monkeypatch.setattr(
+            rp,
+            "_gh",
+            _gh_router(comments=[_comment_payload(1)], head_sha=head, reply_log=reply_log),
+        )
+        cfg = _m2_cfg(work, harness_guard="warn")
+        with (
+            patch.object(rp, "verify_comment", return_value=("valid", "checked", 0.01)),
+            patch.object(rp, "run_fix_agent", side_effect=self._fix_touching_harness(work)),
+        ):
+            code = cmd_review_pr(_args(), cfg)
+        assert code == EXIT_OK
+        with ReviewPrState(cfg) as st:
+            assert st.rows(REPO, 6)[0]["resolution"] == "fixed"
+
     def test_format_gate_failure_preserves_untracked_residue_and_stops(self, tmp_path, monkeypatch):
         work, _, head = _init_repo_with_remote(tmp_path)
         reply_log: list = []

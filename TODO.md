@@ -1649,7 +1649,21 @@ A/B — дефекты подтверждённого поведения, C — 
       `error_kind=harness_guard`, задача не DONE. То же для verify-first.
       Контроль: при `warn` предупреждение есть, попытка проходит. Тест должен
       краснеть на текущем master.
-- [ ] **harness-guard-after-post-done** — правки харнесса после GREEN-проверки (ревьюер, `post_review`, фикс-агент) не видны @owner:github:andrei-shtanakov @id:harness-guard-after-post-done @epic:eco.spec-toolchain
+- [x] **harness-guard-after-post-done** — правки харнесса после GREEN-проверки (ревьюер, `post_review`, фикс-агент) были не видны @owner:github:andrei-shtanakov @id:harness-guard-after-post-done @epic:eco.spec-toolchain
+      **Сделано 2026-10-04 (PR #658):** общий `harness.guard_error` вызывается
+      в трёх местах. (1) `post_done_hook(harness_before=…)` сверяет с
+      task-baseline перед DONE-флипом и финальным коммитом, то есть после
+      ревью и после `post_review`. Отказ оформлен как у плагина
+      `post_review`: `Refusal(POLICY)` через `_commit_blocked_status`.
+      (2) `review_pr._apply_phase` снимает снимок перед каждым фиксом и
+      сверяет до гейтов; при нарушении — откат и `needs_human`. Отличие от
+      плана: в `post_done` у попытки `error_kind=policy`, а не
+      `harness_guard`. Отказ идёт обычным путём hook-отказа, текст начинается
+      с «Harness guard:». Регресс: `tests/test_harness_guard_after_post_done.py`
+      (ревьюер, плагин, передача baseline из execution) и
+      `tests/test_review_pr.py::TestApplyPhase::test_fix_editing_the_harness_*`.
+      Ключевые тесты краснели по поведению, задача доходила до DONE; это
+      проверено с параметром, но без самой сверки.
       Найдено 2026-10-04 вместе с предыдущим пунктом, по чтению кода.
       `harness_violations` вызывается ровно в одном месте, `execution.py:1094`,
       только вокруг GREEN-вызова. Всё, что пишет в дерево позже, не сверяется:

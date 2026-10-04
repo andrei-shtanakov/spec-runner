@@ -1179,10 +1179,16 @@ def post_done_hook(
     *,
     reporter: StageReporter | None = None,
     pending_cost: float | None = 0.0,
+    harness_before: dict[str, str] | None = None,
 ) -> tuple[bool, str | None, str, str, bool]:
     """Hook after task completion.
 
     Args:
+        harness_before: the task's harness baseline (#64). The surface is
+            compared with it once more right before the DONE flip, so an edit
+            made by the reviewer or a `post_review` plugin is held to the same
+            guard as the implementation's. `None` (guard off, or a caller
+            without a baseline) skips the check.
         pending_cost: what this attempt has already spent on the implementation
             call but has not yet recorded — `record_attempt` runs after this
             hook returns, so the budget guard would otherwise read stale spend
@@ -1935,6 +1941,23 @@ def post_done_hook(
                 reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "non-blocking format warning")
         elif reporter:
             reporter.record(PhaseOutcome.PASS, "format clean after post_review")
+
+    # Harness tripwire (#64), last look: the reviewer (`REVIEW_FIXED`) and the
+    # `post_review` plugins above write into the tree after execution's own
+    # check, and everything here is swept into the commit next. Same baseline,
+    # same answer, same resumable shape as the plugin refusal.
+    from .harness import guard_error
+    from .runner import log_progress
+
+    harness_error = guard_error(config, task.id, harness_before, log_progress)
+    if harness_error is not None:
+        blocked = _commit_blocked_status(
+            task,
+            config,
+            Refusal(harness_error, RefusalKind.POLICY),
+            gated_sha or _head_sha(config),
+        )
+        return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the
