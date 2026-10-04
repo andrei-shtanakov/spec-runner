@@ -5,6 +5,7 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import sqlite3
@@ -176,6 +177,17 @@ class TaskAttempt:
     error_stage: str | None = None  # v2.3.0: stage when failure occurred
     no_op: bool = False  # v2.16.0: task completed without any committable changes (#97)
     run_id: str | None = None  # #480: the invocation that recorded it; None before the contract
+
+
+@dataclass(frozen=True)
+class StoredBaseline:
+    """A persisted harness baseline (spec 2026-10-04 §2)."""
+
+    provenance: str
+    guard_mode: str
+    surface: dict[str, str]
+    files: dict[str, bytes | None]
+    captured_at: str
 
 
 @dataclass
@@ -716,6 +728,58 @@ class ExecutorState:
             "CREATE INDEX IF NOT EXISTS idx_verify_evidence_lookup "
             "ON verify_evidence (task_id, namespace, id DESC)"
         )
+        # Retry-from-WIP (spec 2026-10-04 §2). `task_workspaces`: the task
+        # started, and on which exact branch (NULL without per-task branches).
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_workspaces (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                branch TEXT,
+                started_at TEXT NOT NULL,
+                run_id TEXT,
+                bound_by TEXT NOT NULL,
+                PRIMARY KEY (namespace, task_id),
+                CHECK (bound_by IN ('run', 'operator'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_baselines (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                run_id TEXT,
+                guard_mode TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                surface TEXT NOT NULL,
+                PRIMARY KEY (namespace, task_id),
+                CHECK (provenance IN ('initial', 'operator', 'recaptured'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_baseline_files (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                state TEXT NOT NULL,
+                digest TEXT,
+                content BLOB,
+                PRIMARY KEY (namespace, task_id, path),
+                CHECK (state IN ('present', 'unreadable'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_trust_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                at TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                branch TEXT,
+                bound_branch INTEGER NOT NULL,
+                replaced_provenance TEXT
+            )
+        """)
         self._conn.commit()
 
     def _init_db_for_read(self) -> None:
@@ -2051,6 +2115,220 @@ class ExecutorState:
                 ),
             )
         return int(cursor.rowcount or 0)
+
+    # === Task workspaces and harness baselines (spec 2026-10-04) ===
+
+    def get_workspace(self, namespace: str, task_id: str) -> dict | None:
+        """The started-task record, or None."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT branch, bound_by, started_at, run_id FROM task_workspaces "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"branch": row[0], "bound_by": row[1], "started_at": row[2], "run_id": row[3]}
+
+    def workspace_for_branch(self, namespace: str, branch: str) -> str | None:
+        """The task whose recorded branch is exactly `branch` in `namespace`."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT task_id FROM task_workspaces WHERE namespace = ? AND branch = ?",
+            (namespace, branch),
+        ).fetchone()
+        return row[0] if row else None
+
+    def record_workspace(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        branch: str | None,
+        run_id: str | None,
+        bound_by: str = "run",
+    ) -> None:
+        """Record that the task started; an existing record is kept."""
+        assert self._conn is not None
+        with self._immediate():
+            self._conn.execute(
+                "INSERT OR IGNORE INTO task_workspaces "
+                "(namespace, task_id, branch, started_at, run_id, bound_by) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (namespace, task_id, branch, datetime.now().isoformat(), run_id, bound_by),
+            )
+
+    def get_harness_baseline(self, namespace: str, task_id: str) -> StoredBaseline | None:
+        """The persisted baseline, or None."""
+        assert self._conn is not None
+        meta = self._conn.execute(
+            "SELECT provenance, guard_mode, surface, captured_at FROM harness_baselines "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchone()
+        if meta is None:
+            return None
+        files: dict[str, bytes | None] = {}
+        for path, state, content in self._conn.execute(
+            "SELECT path, state, content FROM harness_baseline_files "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ):
+            files[path] = bytes(content) if state == "present" else None
+        return StoredBaseline(
+            provenance=meta[0],
+            guard_mode=meta[1],
+            surface=json.loads(meta[2]),
+            files=files,
+            captured_at=meta[3],
+        )
+
+    def _write_baseline(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        provenance: str,
+        guard_mode: str,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        run_id: str | None,
+    ) -> None:
+        """Replace the baseline rows; the caller holds the transaction."""
+        assert self._conn is not None
+        self._conn.execute(
+            "DELETE FROM harness_baseline_files WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO harness_baselines "
+            "(namespace, task_id, captured_at, run_id, guard_mode, provenance, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                namespace,
+                task_id,
+                datetime.now().isoformat(),
+                run_id,
+                guard_mode,
+                provenance,
+                json.dumps(surface, sort_keys=True),
+            ),
+        )
+        for path, data in sorted(files.items()):
+            self._conn.execute(
+                "INSERT INTO harness_baseline_files "
+                "(namespace, task_id, path, state, digest, content) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    namespace,
+                    task_id,
+                    path,
+                    "unreadable" if data is None else "present",
+                    None if data is None else hashlib.sha256(data).hexdigest(),
+                    data,
+                ),
+            )
+
+    def store_harness_baseline(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        provenance: str,
+        guard_mode: str,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        run_id: str | None,
+    ) -> None:
+        """Write a baseline in one transaction (replacing any)."""
+        with self._immediate():
+            self._write_baseline(
+                namespace,
+                task_id,
+                provenance=provenance,
+                guard_mode=guard_mode,
+                surface=surface,
+                files=files,
+                run_id=run_id,
+            )
+
+    def trust_harness(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        bind: bool,
+        bind_branch: str | None,
+        branch: str | None,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        guard_mode: str,
+        actor: str,
+        reason: str,
+        run_id: str | None,
+    ) -> str | None:
+        """Binding (if asked) + operator snapshot + audit, all or nothing.
+
+        Returns the provenance of the snapshot it replaced, if any.
+        """
+        assert self._conn is not None
+        with self._immediate():
+            prior = self._conn.execute(
+                "SELECT provenance FROM harness_baselines WHERE namespace = ? AND task_id = ?",
+                (namespace, task_id),
+            ).fetchone()
+            if bind:
+                self._conn.execute(
+                    "INSERT INTO task_workspaces "
+                    "(namespace, task_id, branch, started_at, run_id, bound_by) "
+                    "VALUES (?, ?, ?, ?, ?, 'operator')",
+                    (namespace, task_id, bind_branch, datetime.now().isoformat(), run_id),
+                )
+            self._write_baseline(
+                namespace,
+                task_id,
+                provenance="operator",
+                guard_mode=guard_mode,
+                surface=surface,
+                files=files,
+                run_id=run_id,
+            )
+            self._conn.execute(
+                "INSERT INTO harness_trust_audit "
+                "(namespace, task_id, at, actor, reason, branch, bound_branch, "
+                "replaced_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    namespace,
+                    task_id,
+                    datetime.now().isoformat(),
+                    actor,
+                    reason,
+                    branch,
+                    1 if bind else 0,
+                    prior[0] if prior else None,
+                ),
+            )
+        return prior[0] if prior else None
+
+    def harness_trust_audit(self, namespace: str, task_id: str) -> list[dict]:
+        """Every `harness trust` event for the task, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT at, actor, reason, branch, bound_branch, replaced_provenance "
+            "FROM harness_trust_audit WHERE namespace = ? AND task_id = ? ORDER BY id",
+            (namespace, task_id),
+        ).fetchall()
+        keys = ("at", "actor", "reason", "branch", "bound_branch", "replaced_provenance")
+        return [dict(zip(keys, r, strict=True)) for r in rows]
+
+    def forget_task_workspace(self, namespace: str, task_id: str) -> None:
+        """Drop workspace, baseline and file rows together; keep the audit."""
+        assert self._conn is not None
+        with self._immediate():
+            for table in ("harness_baseline_files", "harness_baselines", "task_workspaces"):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE namespace = ? AND task_id = ?",
+                    (namespace, task_id),
+                )
 
     def reanchor_lineage(
         self,
