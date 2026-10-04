@@ -21,22 +21,47 @@ def _baseline(cfg):
         return st.get_harness_baseline(resolve_namespace(cfg), "TASK-070")
 
 
+def _attempts(cfg):
+    with ExecutorState(cfg) as st:
+        return list(st.get_task_state("TASK-070").attempts)
+
+
 def _retry(cfg):
-    """A separate `spec-runner retry` invocation: one attempt, attempts kept."""
+    """A separate `spec-runner retry` invocation: one attempt, attempts kept.
+
+    Returns (result, attempts_before, attempts_after).
+    """
+    before = len(_attempts(cfg))
     with ExecutorState(cfg) as state:
         task_state = state.get_task_state("TASK-070")
         task_state.status = "pending"
         state._save()
         result = execution.execute_task(_task(), cfg, state)
-        last = state.get_task_state("TASK-070").attempts[-1]
-    return result, last
+    return result, before, _attempts(cfg)
+
+
+def _assert_never_trusted(cfg, root, first, *, row_dropped=False, head_original=True):
+    again = _baseline(cfg)
+    if row_dropped:  # a legitimate DONE drops the baseline with the workspace
+        assert again is None
+    else:
+        assert again.captured_at == first.captured_at
+        assert again.provenance == "initial"
+        assert again.files["pyproject.toml"] == ORIGINAL.encode()
+        assert again.surface == first.surface
+    if head_original:
+        assert _git(root, "show", "HEAD:pyproject.toml") == ORIGINAL
 
 
 def _idle(monkeypatch):
+    calls: list[int] = []
+
     def _spawn(invocation, *, timeout, cwd, env):
+        calls.append(1)
         return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
 
     monkeypatch.setattr(paid_call, "_spawn", _spawn)
+    return calls
 
 
 def test_harness_edit_in_wip_is_refused_by_the_next_invocation(repo, monkeypatch):  # noqa: F811
@@ -50,51 +75,65 @@ def test_harness_edit_in_wip_is_refused_by_the_next_invocation(repo, monkeypatch
         execution.run_with_retries(_task(), cfg, st)
     first = _baseline(cfg)
     assert first.provenance == "initial"
+    first_attempts = _attempts(cfg)
+    assert len(first_attempts) == 1
+    assert first_attempts[0].error_kind == "timeout"
 
-    _idle(monkeypatch)
-    result, last = _retry(cfg)
+    calls = _idle(monkeypatch)
+    result, before, after = _retry(cfg)
 
-    again = _baseline(cfg)
-    assert result is not True
-    assert last.error_kind == "harness_guard"
-    assert again.captured_at == first.captured_at
-    assert again.provenance == "initial"
-    # The edit was never accepted: no baseline row carries it.
-    assert "# addopts" not in str(again)
+    assert result is False
+    assert len(after) == before + 1
+    assert after[-1].error_kind == "harness_guard"
+    assert calls == [1]  # the guard fires after the agent call, on the carried edit
+    # HEAD is the WIP commit and legitimately carries the edit; the baseline does not.
+    _assert_never_trusted(cfg, repo, first, head_original=False)
 
 
 def test_harness_edit_in_red_commit_never_becomes_trusted(repo, monkeypatch):  # noqa: F811
-    """Observed contract: the pre-GREEN refuse-and-restore (#658) puts the original
-    bytes back in the tree, so the next invocation either refuses as
-    `harness_guard` or runs against the ORIGINAL bytes. It never trusts the edit,
-    and the baseline row (captured_at, provenance=initial) is never re-captured.
-    Observed today: the red commit still differs from the baseline, so the next
-    invocation is refused as `harness_guard`.
+    """The red commit carries the edit; the retry's stub does NOT re-inject it.
+
+    Attempt 1: the stub commits the edit; the pre-GREEN refuse-and-restore
+    (#658) refuses as `harness_guard` and puts the original bytes back in the
+    tree, but the red commit stays in history.
+
+    Retry (separate invocation), observed: the tree already holds the original
+    bytes (the restore in attempt 1 is the working-tree state; the red commit is
+    reachable only in history), so the tree matches the stored baseline, the
+    guard finds no violation and the retry succeeds legitimately. The edit is
+    not trusted: it was never captured as a baseline (attempt 1's row holds
+    the original bytes, asserted above via `first`), and HEAD carries the
+    original bytes. After the legitimate DONE the baseline row is dropped with the workspace (Task 9), so it cannot be re-captured.
     """
+    red_calls: list[int] = []
 
     def _red(task, config, state, reporter):
+        red_calls.append(1)
+        if len(red_calls) > 1:
+            return None
         (repo / "pyproject.toml").write_text(EDITED)
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "TASK-070: red for x")
         return None
 
     monkeypatch.setattr(execution, "_run_red_phase_gate", _red)
-    _idle(monkeypatch)
-    cfg = _cfg(repo, max_retries=1, execution_mode="tdd")
+    calls = _idle(monkeypatch)
+    cfg = _cfg(repo, max_retries=1, execution_mode="tdd", run_lint_on_done=False)
     with ExecutorState(cfg) as st:
         execution.run_with_retries(_task(), cfg, st)
     first = _baseline(cfg)
     assert first.provenance == "initial"
-    with ExecutorState(cfg) as st:
-        first_attempt = st.get_task_state("TASK-070").attempts[-1]
-    assert first_attempt.error_kind == "harness_guard"
+    first_attempts = _attempts(cfg)
+    assert [a.error_kind for a in first_attempts] == ["harness_guard"]
     assert (repo / "pyproject.toml").read_text() == ORIGINAL  # restored in the tree
+    assert calls == []
 
-    result, last = _retry(cfg)
+    result, before, after = _retry(cfg)
 
-    again = _baseline(cfg)
-    assert again.captured_at == first.captured_at
-    assert again.provenance == "initial"
-    tree = (repo / "pyproject.toml").read_text()
-    refused = last.error_kind == "harness_guard"
-    assert refused or tree == ORIGINAL, "the edit became the trusted oracle"
+    assert len(red_calls) == 2
+    assert len(after) == before + 1
+    assert result is True
+    assert after[-1].error_kind is None
+    assert calls == [1]  # the retry ran its GREEN agent call
+    assert (repo / "pyproject.toml").read_text() == ORIGINAL
+    _assert_never_trusted(cfg, repo, first, row_dropped=True)
