@@ -67,13 +67,26 @@ def test_a_failing_forget_rolls_back_the_done_row(tmp_path, monkeypatch):
 
 
 def test_the_done_site_forgets_in_every_mode():
-    """The success `record_attempt` in execution.py passes the namespace (all modes)."""
-    source = (Path(__file__).parents[1] / "src/spec_runner/execution.py").read_text()
-    head = source.index(
-        "state.record_attempt(\n                    task_id,\n                    True,"
-    )
-    call = source[head : source.index(")\n", head)]
-    assert "forget_workspace=resolve_namespace(config)" in call
+    """Every success `record_attempt` in execution.py passes the namespace, unconditionally."""
+    import ast
+
+    tree = ast.parse((Path(__file__).parents[1] / "src/spec_runner/execution.py").read_text())
+    successes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "record_attempt"
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value is True
+    ]
+    assert successes, "the DONE site is gone"
+    for call in successes:
+        kw = {k.arg: k.value for k in call.keywords}
+        value = kw.get("forget_workspace")
+        assert isinstance(value, ast.Call), "DONE must forget the workspace"
+        assert isinstance(value.func, ast.Name) and value.func.id == "resolve_namespace"
 
 
 def test_reset_keeps_the_four_tables_and_drops_the_rest(tmp_path):
@@ -236,3 +249,61 @@ def test_abandon_is_one_transaction(tmp_path, monkeypatch):
     assert again.already_applied
     assert _status(cfg, "SELECT COUNT(*) FROM tdd_remedies") == [1]
     assert _status(cfg, "SELECT COUNT(*) FROM task_workspaces") == [0]
+
+
+def test_reset_refuses_while_the_executor_lock_is_held(tmp_path):
+    """A live run holds the lock: reset touches nothing, DB and sidecars alike."""
+    from spec_runner.config import ExecutorLock
+    from spec_runner.state import ResetRefused
+
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as st:
+        _seed(st)
+        st.record_attempt("TASK-1", False, 1.0, error="x")
+    live = sqlite3.connect(cfg.state_file)
+    live.execute("PRAGMA wal_autocheckpoint=0")
+    live.execute("INSERT INTO executor_meta (key, value) VALUES ('live', '1')")
+    live.commit()
+    wal, shm = (Path(f"{cfg.state_file}{s}") for s in ("-wal", "-shm"))
+    before = [p.read_bytes() for p in (cfg.state_file, wal, shm)]
+    lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+    assert lock.acquire()
+    try:
+        with pytest.raises(ResetRefused, match="lock"):
+            reset_state_preserving_workspaces(cfg)
+        assert [p.read_bytes() for p in (cfg.state_file, wal, shm)] == before
+        assert not Path(f"{cfg.state_file}.reset-tmp").exists()
+    finally:
+        lock.release()
+        live.close()
+
+
+def test_reset_releases_the_lock(tmp_path):
+    from spec_runner.config import ExecutorLock
+
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as st:
+        _seed(st)
+    reset_state_preserving_workspaces(cfg)
+    lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+    assert lock.acquire()
+    lock.release()
+
+
+def test_the_in_use_refusal_is_fast(tmp_path):
+    import time
+
+    cfg = _cfg(tmp_path)
+    with ExecutorState(cfg) as st:
+        _seed(st)
+    holder = sqlite3.connect(cfg.state_file)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO executor_meta (key, value) VALUES ('h', '1')")
+    started = time.monotonic()
+    try:
+        with pytest.raises((RuntimeError, sqlite3.OperationalError)):
+            reset_state_preserving_workspaces(cfg)
+    finally:
+        holder.rollback()
+        holder.close()
+    assert time.monotonic() - started < 2.0

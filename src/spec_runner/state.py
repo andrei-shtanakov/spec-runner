@@ -3523,6 +3523,14 @@ KEPT_ON_RESET = (
 )
 
 
+#: How long reset waits for another connection's write lock before refusing.
+_RESET_BUSY_TIMEOUT = 0.1
+
+
+class ResetRefused(RuntimeError):
+    """`reset` will not run now; nothing was touched."""
+
+
 def _sidecars(db: Path) -> tuple[Path, Path]:
     return Path(f"{db}-wal"), Path(f"{db}-shm")
 
@@ -3534,11 +3542,13 @@ def _read_kept_tables(db: Path) -> dict[str, tuple[list[str], list[tuple]]]:
     the middle of a transaction, and what it writes next would be lost.
     """
     kept: dict[str, tuple[list[str], list[tuple]]] = {}
-    conn = sqlite3.connect(db)
+    conn = sqlite3.connect(db, timeout=_RESET_BUSY_TIMEOUT)
     try:
-        busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        if busy is not None and busy[0]:
-            raise RuntimeError(f"state DB is in use by another connection: {db}")
+        busy, log, checkpointed = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        # Fail closed: a TRUNCATE that did not fold every frame leaves rows
+        # that the rebuilt file would not carry.
+        if busy or log != checkpointed:
+            raise ResetRefused(f"state DB is in use by another connection: {db}")
         present = {
             r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
@@ -3577,9 +3587,27 @@ def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
     before the swap leaves the original DB file exactly as it was, and the
     exception propagates. The original's WAL is checkpointed (TRUNCATE) and
     its sidecars removed **before** the swap, so no stale WAL can be replayed
-    onto the new file. A DB another connection is mid-transaction on is
-    refused rather than reset under it.
+    onto the new file.
+
+    The executor lock (the one `run` holds, at `state_file.with_suffix(".lock")`)
+    is held from the read through the replace: a live run is refused with
+    `ResetRefused` before anything is touched, and no run can start and write
+    rows that the rebuilt file would drop. A DB some other connection is
+    mid-transaction on is refused as well.
     """
+    from .config import ExecutorLock
+
+    lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+    if not lock.acquire():
+        raise ResetRefused("the executor lock is held (a run is live); stop the run before reset")
+    try:
+        _reset_locked(config)
+    finally:
+        lock.release()
+
+
+def _reset_locked(config: ExecutorConfig) -> None:
+    """The rebuild and swap; the caller holds the executor lock."""
     src = config.state_file
     kept = _read_kept_tables(src) if src.exists() else {}
     tmp = src.with_name(src.name + ".reset-tmp")

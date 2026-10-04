@@ -260,3 +260,24 @@ class TestReset:
         assert "workspace" in out and "baseline" in out and "trust audit" in out
         with ExecutorState(cfg) as state:
             assert state.get_task_state("TASK-001").attempt_count == 0
+
+    def test_a_held_lock_exits_2_and_touches_nothing(self, tmp_path, capsys):
+        import pytest
+
+        from spec_runner.cli_info import cmd_reset
+        from spec_runner.config import ExecutorLock
+
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", False, 1.0, error="x")
+        before = cfg.state_file.read_bytes()
+        lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+        assert lock.acquire()
+        try:
+            with pytest.raises(SystemExit) as exc:
+                cmd_reset(Namespace(logs=False), cfg)
+        finally:
+            lock.release()
+        assert exc.value.code == 2
+        assert cfg.state_file.read_bytes() == before
+        assert "lock" in capsys.readouterr().out
