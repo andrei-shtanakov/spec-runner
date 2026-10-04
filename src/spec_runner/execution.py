@@ -47,11 +47,24 @@ from .task import (
     Task,
     update_task_status,
 )
+from .wip import WipReadError, wip_commits
 
 logger = get_logger("execution")
 
 
 # === Task Executor ===
+
+
+def _wip_continuation(
+    config: ExecutorConfig, task_id: str
+) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """The task's WIP commits as prompt input; raises `WipReadError` on git failure."""
+    from . import hooks
+
+    base = hooks._wip_base(config)
+    if base is None:
+        return ()
+    return tuple((sha, n, tuple(files)) for sha, n, files in wip_commits(config, task_id, base))
 
 
 def _refuse_task(
@@ -943,25 +956,59 @@ def _execute_task(
     task_state = state.get_task_state(task_id)
     previous_attempts = task_state.attempts if task_state.attempts else None
 
+    # Unfinished work of earlier attempts, read from the WIP trailers (never
+    # the state counter). Unreadable history is not "no WIP": refuse before
+    # the paid GREEN call rather than silently drop the continuation.
+    try:
+        continuation = _wip_continuation(config, task_id)
+    except WipReadError as exc:
+        refusal = Refusal(
+            f"Cannot read this task's WIP history: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+        log_progress(f"⛔ {refusal}", task_id)
+        state.record_attempt(
+            task_id,
+            False,
+            0.0,
+            error=refusal,
+            error_code=_refusal_error_code(refusal),
+            error_kind=_refusal_error_kind(refusal),
+            error_stage=reporter.current,
+        )
+        return False
+
     # Build RetryContext from previous failed attempts
     retry_context: RetryContext | None = None
-    if previous_attempts:
-        failed = [a for a in previous_attempts if not a.success]
-        if failed:
-            last = failed[-1]
-            retry_context = RetryContext(
-                attempt_number=task_state.attempt_count + 1,
-                max_attempts=config.max_retries,
-                previous_error_code=last.error_code or ErrorCode.UNKNOWN,
-                previous_error=last.error or "Unknown error",
-                what_was_tried=f"Previous attempt for {task.name}",
-                test_failures=(
-                    extract_test_failures(last.claude_output)
-                    if last.claude_output
-                    and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
-                    else None
-                ),
-            )
+    failed = [a for a in previous_attempts or [] if not a.success]
+    if failed:
+        last = failed[-1]
+        retry_context = RetryContext(
+            attempt_number=task_state.attempt_count + 1,
+            max_attempts=config.max_retries,
+            previous_error_code=last.error_code or ErrorCode.UNKNOWN,
+            previous_error=last.error or "Unknown error",
+            what_was_tried=f"Previous attempt for {task.name}",
+            test_failures=(
+                extract_test_failures(last.claude_output)
+                if last.claude_output
+                and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
+                else None
+            ),
+            continuation=continuation,
+        )
+    elif continuation:
+        # A fresh `retry` invocation: no failures in memory, but WIP on the branch.
+        retry_context = RetryContext(
+            attempt_number=task_state.attempt_count + 1,
+            max_attempts=config.max_retries,
+            previous_error_code=ErrorCode.UNKNOWN,
+            previous_error="previous attempt did not finish",
+            what_was_tried=f"Previous attempt for {task.name}",
+            test_failures=None,
+            continuation=continuation,
+        )
 
     # #213: the guard immediately before the implementation call — the second
     # of the three paid calls a TDD attempt makes, and the most expensive.

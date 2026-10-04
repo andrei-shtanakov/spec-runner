@@ -117,7 +117,6 @@ def test_attempt_two_sees_attempt_ones_file(repo, monkeypatch):
     assert "Spec-Runner-WIP-Attempt: 1" in log
 
 
-@pytest.mark.xfail(strict=True, reason="the continuation prompt lands in Task 7")
 def test_attempt_two_prompt_names_the_continuation(repo, monkeypatch):
     prompts: list[str] = []
     monkeypatch.setattr(paid_call, "_spawn", _timeout_then_complete(repo, prompts))
@@ -523,3 +522,31 @@ def test_unreadable_tasks_md_at_the_fork_is_an_instrument_refusal(repo, monkeypa
     assert _stash_list(repo) == ""
     assert _git(repo, "branch", "--show-current").strip() == BRANCH
     assert (repo / "feature.py").exists()
+
+
+def test_unreadable_wip_refuses_before_the_paid_green_call(repo, monkeypatch):
+    """A WipReadError while building the prompt is an INSTRUMENT refusal, no spend."""
+    from spec_runner import hooks
+    from spec_runner.execution import run_with_retries
+    from spec_runner.wip import WipReadError
+
+    _fail_once(repo, monkeypatch)
+    spawned: list[int] = []
+
+    def _spawn(invocation, *, timeout, cwd, env):
+        spawned.append(1)
+        return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+    def _boom(config):
+        raise WipReadError("git exploded")
+
+    monkeypatch.setattr(paid_call, "_spawn", _spawn)
+    monkeypatch.setattr(hooks, "_wip_base", _boom)
+    cfg = _cfg(repo, max_retries=1)
+    with ExecutorState(cfg) as st:
+        st.get_task_state("TASK-070").attempts = []
+        run_with_retries(_task(), cfg, st)
+        last = st.get_task_state("TASK-070").attempts[-1]
+    assert not spawned
+    assert not last.success
+    assert "git exploded" in (last.error or "")

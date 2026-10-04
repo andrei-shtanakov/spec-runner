@@ -200,6 +200,8 @@ class RetryContext:
     previous_error: str
     what_was_tried: str
     test_failures: str | None
+    # (sha, attempt from the WIP trailer, files) of unfinished work to continue
+    continuation: tuple[tuple[str, int, tuple[str, ...]], ...] = ()
 
 
 @dataclass
