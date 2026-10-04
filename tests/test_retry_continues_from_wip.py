@@ -463,3 +463,63 @@ class TestIntegrationFork:
 
         assert run is not None
         assert "spec-runner rescue: run" in _stash_list(repo)
+
+
+class TestUnownedTaskBranchDirtAtTaskStart:
+    """R5 (spec §1, second bullet): the same rule at the pre_start branch stage."""
+
+    def _start_on_foreign_branch(self, repo: Path, monkeypatch, guard: str) -> list[int]:
+        _git(repo, "checkout", "-q", "-b", "task/task-555-x")
+        (repo / "stray.py").write_text("x\n")
+        calls: list[int] = []
+
+        def _spawn(invocation, *, timeout, cwd, env):
+            calls.append(1)
+            return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+        monkeypatch.setattr(paid_call, "_spawn", _spawn)
+        from spec_runner.execution import run_with_retries
+
+        cfg = _cfg(repo, max_retries=1, harness_guard=guard)
+        with ExecutorState(cfg) as st:
+            run_with_retries(_task(), cfg, st)
+        return calls
+
+    def test_strict_refuses_before_the_stash(self, repo, monkeypatch):
+        calls = self._start_on_foreign_branch(repo, monkeypatch, "strict")
+
+        assert calls == []
+        with ExecutorState(_cfg(repo)) as st:
+            attempt = st.get_task_state("TASK-070").attempts[-1]
+        assert attempt.error_kind == "policy"
+        assert attempt.error_stage == "branch"
+        assert "belongs to no recorded task" in (attempt.error or "")
+        assert _stash_list(repo) == ""
+        assert _git(repo, "branch", "--show-current").strip() == "task/task-555-x"
+        assert (repo / "stray.py").exists()
+
+    def test_warn_still_stashes(self, repo, monkeypatch):
+        calls = self._start_on_foreign_branch(repo, monkeypatch, "warn")
+
+        assert calls == [1]
+        assert "spec-runner rescue: TASK-070" in _stash_list(repo)
+
+
+def test_unreadable_tasks_md_at_the_fork_is_an_instrument_refusal(repo, monkeypatch):
+    from spec_runner import cli
+
+    _fail_once(repo, monkeypatch)
+    cfg = _cfg(repo, integration_pr=True)
+
+    def _broken(path):
+        raise ValueError("malformed task header")
+
+    monkeypatch.setattr(cli, "parse_tasks", _broken)
+
+    with pytest.raises(SystemExit) as exc:
+        cli._maybe_start_integration(_fork_args(), cfg)
+
+    assert exc.value.code == 2
+    assert _stash_list(repo) == ""
+    assert _git(repo, "branch", "--show-current").strip() == BRANCH
+    assert (repo / "feature.py").exists()

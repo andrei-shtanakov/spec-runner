@@ -353,7 +353,8 @@ def _maybe_start_integration(args, config: ExecutorConfig, state: ExecutorState 
     ``config.main_branch``) or None when the mode is off or not applicable
     (no branch automation, a dry run).
 
-    A declared mode that cannot be honoured **refuses the run** (exit 1). It
+    A declared mode that cannot be honoured **refuses the run** (exit 1; exit 2
+    when the refusal is an ``instrument`` failure, e.g. an unreadable state DB). It
     used to fall back silently to per-task branches off main: on the work an
     interrupted attempt left in the tree, `git checkout <base>` refused, and
     the restart ran every task from master, re-executed an accepted task and
@@ -418,11 +419,11 @@ def _owned_work_refusal(config: ExecutorConfig, state: ExecutorState) -> Refusal
     destructive step. Under ``strict``, dirt on a ``task/*`` branch no recorded
     task owns refuses: whose work it is cannot be told.
     """
-    from .wip import owner, save_wip
+    from .wip import owner, save_wip, unowned_dirt_refusal
 
     task_id = owner(config, state)
     refusal = (
-        _stray_task_branch_refusal(config)
+        unowned_dirt_refusal(config, state)
         if task_id is None
         else _owner_trust_refusal(config, state, task_id)
     )
@@ -435,7 +436,13 @@ def _owner_trust_refusal(
     """The owner's `strict` trust check (`task_started` + `prepare`), as at its start."""
     from .harness import HarnessBaseline, HarnessStateError, task_started
 
-    task = get_task_by_id(parse_tasks(config.tasks_file), task_id)
+    try:
+        task = get_task_by_id(parse_tasks(config.tasks_file), task_id)
+    except (OSError, ValueError) as exc:
+        return Refusal(
+            f"could not read {config.tasks_file} to check {task_id}: {exc}",
+            RefusalKind.INSTRUMENT,
+        )
     if task is None:
         return Refusal(
             f"the current branch is recorded for {task_id}, which is not in "
@@ -448,26 +455,6 @@ def _owner_trust_refusal(
     except HarnessStateError as exc:
         return Refusal(str(exc), RefusalKind.INSTRUMENT)
     return None if trust is None else Refusal(f"{task_id}: {trust}", RefusalKind.POLICY)
-
-
-def _stray_task_branch_refusal(config: ExecutorConfig) -> Refusal | None:
-    """Under `strict`: uncommitted work on an unowned ``task/*`` branch refuses."""
-    from .git_ops import WorktreeStatusError, spec_contract_paths, uncommitted_work_paths
-    from .harness import TRUST_REMEDY
-
-    branch = current_branch(config) or ""
-    if config.harness_guard != "strict" or not branch.startswith("task/"):
-        return None
-    try:
-        dirt = uncommitted_work_paths(config, spec_contract_paths(config), strict=True)
-    except WorktreeStatusError as exc:
-        return Refusal(f"could not read the working tree: {exc}", RefusalKind.INSTRUMENT)
-    if not dirt:
-        return None
-    return Refusal(
-        f"uncommitted work on {branch} belongs to no recorded task; {TRUST_REMEDY}",
-        RefusalKind.POLICY,
-    )
 
 
 def _refuse_integration(reason: str, *, kind: RefusalKind = RefusalKind.POLICY) -> NoReturn:

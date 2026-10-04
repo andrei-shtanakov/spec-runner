@@ -385,14 +385,15 @@ def _save_wip_or_refuse(
 ) -> None:
     """Commit the owned task's work as WIP before the branch stage cleans the tree.
 
-    Raises `StartRefused` on a WIP refusal or when ownership cannot be read
-    (an `instrument` refusal): the work stays in the tree, nothing ran.
+    Under `strict`, dirt on an unowned ``task/*`` branch refuses first. Raises
+    `StartRefused` on a refusal or when ownership cannot be read (an
+    `instrument` refusal): the work stays in the tree, nothing ran.
     """
     from .git_ops import WorktreeStatusError
-    from .wip import save_wip
+    from .wip import save_wip, unowned_dirt_refusal
 
     try:
-        refusal = save_wip(config, state).refusal
+        refusal = unowned_dirt_refusal(config, state) or save_wip(config, state).refusal
     except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
         refusal = Refusal(
             f"could not decide whether the tree holds a task's unfinished work ({exc}); "

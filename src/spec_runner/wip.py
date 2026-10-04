@@ -10,7 +10,12 @@ import subprocess
 from dataclasses import dataclass
 
 from .config import ExecutorConfig
-from .git_ops import current_branch, spec_contract_paths, uncommitted_work_paths
+from .git_ops import (
+    WorktreeStatusError,
+    current_branch,
+    spec_contract_paths,
+    uncommitted_work_paths,
+)
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
 from .state import ExecutorState
@@ -45,6 +50,32 @@ def owner(config: ExecutorConfig, state: ExecutorState) -> str | None:
     if branch is None:
         return None
     return state.workspace_for_branch(resolve_namespace(config), branch)
+
+
+def unowned_dirt_refusal(config: ExecutorConfig, state: ExecutorState) -> Refusal | None:
+    """Under `strict`: uncommitted work on a ``task/*`` branch no recorded task owns.
+
+    Spec §1, second bullet: whose work it is cannot be told, so it is neither
+    committed nor stashed. Checked before either destructive point. Raises
+    what `owner` raises (a state DB error); an unreadable tree is `instrument`.
+    """
+    from .harness import TRUST_REMEDY
+
+    if config.harness_guard != "strict":
+        return None
+    branch = current_branch(config) or ""
+    if not branch.startswith("task/") or owner(config, state) is not None:
+        return None
+    try:
+        dirt = uncommitted_work_paths(config, spec_contract_paths(config), strict=True)
+    except WorktreeStatusError as exc:
+        return Refusal(f"could not read the working tree: {exc}", RefusalKind.INSTRUMENT)
+    if not dirt:
+        return None
+    return Refusal(
+        f"uncommitted work on {branch} belongs to no recorded task; {TRUST_REMEDY}",
+        RefusalKind.POLICY,
+    )
 
 
 class WipReadError(RuntimeError):
