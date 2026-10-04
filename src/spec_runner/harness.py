@@ -360,13 +360,20 @@ class HarnessStateError(RuntimeError):
 _STATE_ERRORS = (sqlite3.Error, ValueError, OSError)
 
 
+# Stages before the baseline capture: an attempt that failed in one of them
+# ran no agent, so it does not make the task "started" (a failed `uv sync`
+# must not lock a strict task behind `harness trust`).
+PRE_CAPTURE_STAGES = frozenset({"setup", "sync_deps", "branch"})
+
+
 def task_started(config: ExecutorConfig, state: "ExecutorState", task: "Task") -> bool:
     """Whether the task started before this attempt (spec 2026-10-04 §2).
 
     Called **before** `pre_start_hook`: a branch this attempt's `pre_start`
     creates and this attempt's own row must not count. Started means a
-    workspace row, a recorded attempt, or — only when the run branches — an
-    existing task branch. Raises `HarnessStateError` when the DB cannot be read.
+    workspace row, a recorded attempt past the pre-capture stages, or — only
+    when the run branches — an existing task branch. Raises
+    `HarnessStateError` when the DB cannot be read.
     """
     from .tdd import resolve_namespace
 
@@ -375,14 +382,44 @@ def task_started(config: ExecutorConfig, state: "ExecutorState", task: "Task") -
             return True
     except _STATE_ERRORS as exc:
         raise HarnessStateError(f"could not read the task workspace: {exc}") from exc
-    if state.get_task_state(task.id).attempt_count > 0:
+    attempts = state.get_task_state(task.id).attempts
+    if any(a.error_stage not in PRE_CAPTURE_STAGES for a in attempts):
         return True
     if config.create_git_branch:
         from .git_ops import _git, get_task_branch_name
 
-        probe = _git(config, "rev-parse", "--verify", "--quiet", get_task_branch_name(task))
+        ref = f"refs/heads/{get_task_branch_name(task)}"
+        try:
+            probe = _git(config, "rev-parse", "--verify", "--quiet", ref)
+        except FileNotFoundError:  # git is not installed: no branch exists
+            return False
         return probe.returncode == 0
     return False
+
+
+def record_task_workspace(config: ExecutorConfig, state: "ExecutorState", task: "Task") -> None:
+    """Record that the task started (`task_workspaces`), in every guard mode.
+
+    Bound to the task branch only when this run checked it out (HEAD is the
+    task branch under `create_git_branch`); otherwise the branch is NULL —
+    no branching, no repository, or a failed checkout. Ownership comes from
+    our own checkout, never from a name. Raises `HarnessStateError`.
+    """
+    from .git_ops import current_branch, get_task_branch_name
+    from .tdd import resolve_namespace
+
+    branch: str | None = None
+    if config.create_git_branch:
+        try:
+            head = current_branch(config)
+        except FileNotFoundError:  # git is not installed
+            head = None
+        if head == get_task_branch_name(task):
+            branch = head
+    try:
+        state.record_workspace(resolve_namespace(config), task.id, branch=branch, run_id=None)
+    except _STATE_ERRORS as exc:
+        raise HarnessStateError(f"could not record the task workspace: {exc}") from exc
 
 
 class HarnessBaseline:
@@ -461,9 +498,13 @@ class HarnessBaseline:
                     files=files,
                     run_id=None,
                 )
+                # Re-read: the in-memory baseline carries what was persisted,
+                # `captured_at` included.
+                self._stored = state.get_harness_baseline(resolve_namespace(config), task.id)
             except _STATE_ERRORS as exc:
                 raise HarnessStateError(f"could not store the harness baseline: {exc}") from exc
-            self._stored = StoredBaseline(provenance, config.harness_guard, surface, files, "")
+            if self._stored is None:
+                raise HarnessStateError("the harness baseline was not stored")
         self._hashes = content_hashes(self._stored.files)
         self._loaded = True
         return self._hashes

@@ -38,7 +38,8 @@ def project(tmp_path: Path) -> Path:
 
 def _cfg(project: Path, **kw) -> ExecutorConfig:
     base = {
-        "state_file": project / "state.db",
+        # Under spec/: pre_start's `git clean -fd --exclude=spec/` keeps it.
+        "state_file": project / "spec" / "state.db",
         "project_root": project,
         "logs_dir": project / "logs",
         "create_git_branch": False,
@@ -273,43 +274,174 @@ class TestTaskStarted:
             # Without branching, a branch of that name proves nothing.
             assert task_started(_cfg(project), st, _task()) is False
 
-
-class TestPreStartRecordsTheWorkspace:
-    """`pre_start_hook(state=...)` binds the workspace to the branch it checked out."""
-
-    def _repo(self, project: Path) -> None:
-        def git(*args):
-            subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
-
-        git("init", "-q", "-b", "main")
-        git("add", "-A")
-        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
-
-    def test_branching_records_the_task_branch(self, project):
+    def test_a_tag_of_the_branch_name_is_not_a_branch(self, project):
+        """Review #5: only refs/heads counts."""
         from spec_runner.git_ops import get_task_branch_name
-        from spec_runner.hooks import pre_start_hook
+        from spec_runner.harness import task_started
 
-        self._repo(project)
+        _git_repo(project)
+        subprocess.run(["git", "tag", get_task_branch_name(_task())], cwd=project, check=True)
         cfg = _cfg(project, create_git_branch=True)
         with ExecutorState(cfg) as st:
-            assert pre_start_hook(_task(), cfg, state=st) is True
+            assert task_started(cfg, st, _task()) is False
+
+    def test_missing_git_means_no_branch(self, project, monkeypatch):
+        """Review #4."""
+        from spec_runner import git_ops
+        from spec_runner.harness import task_started
+
+        def no_git(*a, **k):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(git_ops.subprocess, "run", no_git)
+        cfg = _cfg(project, create_git_branch=True)
+        with ExecutorState(cfg) as st:
+            assert task_started(cfg, st, _task()) is False
+
+    def test_pre_capture_failures_do_not_count(self, project):
+        from spec_runner.harness import task_started
+
+        cfg = _cfg(project)
+        with ExecutorState(cfg) as st:
+            for stage in ("setup", "sync_deps", "branch"):
+                st.record_attempt("TASK-050", False, 0.0, error="x", error_stage=stage)
+        with ExecutorState(cfg) as st:
+            assert task_started(cfg, st, _task()) is False
+            st.record_attempt("TASK-050", False, 0.0, error="x", error_stage="codex")
+            assert task_started(cfg, st, _task()) is True
+
+
+def _git_repo(project: Path) -> None:
+    def git(*args):
+        subprocess.run(["git", *args], cwd=project, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+
+
+class TestWorkspaceRecord:
+    """Written after the capture, before the agent, in every guard mode (R3)."""
+
+    def test_branching_records_the_task_branch(self, project, monkeypatch):
+        from spec_runner.git_ops import get_task_branch_name
+
+        _git_repo(project)
+        _agent(monkeypatch)
+        cfg = _cfg(project, create_git_branch=True)
+        _run(cfg)
+        with ExecutorState(cfg) as st:
             ws = st.get_workspace(resolve_namespace(cfg), "TASK-050")
         assert ws is not None and ws["branch"] == get_task_branch_name(_task())
 
-    def test_a_failed_checkout_records_nothing(self, project, monkeypatch):
-        from spec_runner import hooks
+    def test_a_failed_checkout_records_a_null_branch(self, project, monkeypatch):
+        from spec_runner import git_ops
 
-        self._repo(project)
-        monkeypatch.setattr(hooks, "current_branch", lambda config: "main")
+        _git_repo(project)
+        _agent(monkeypatch)
+        monkeypatch.setattr(git_ops, "current_branch", lambda config: "main")
         cfg = _cfg(project, create_git_branch=True)
+        _run(cfg)
         with ExecutorState(cfg) as st:
-            hooks.pre_start_hook(_task(), cfg, state=st)
-            assert st.get_workspace(resolve_namespace(cfg), "TASK-050") is None
+            ws = st.get_workspace(resolve_namespace(cfg), "TASK-050")
+        assert ws is not None and ws["branch"] is None
 
-    def test_without_state_nothing_is_recorded(self, project):
-        from spec_runner.hooks import pre_start_hook
+    def test_no_repository_still_records_the_start(self, project, monkeypatch):
+        """Review #3: pre_start's no-git early return used to leave no row."""
+        _agent(monkeypatch)
+        _run(_cfg(project, create_git_branch=True, harness_guard="off"))
+        called: list[int] = []
+        _agent(monkeypatch, write=lambda: called.append(1))
+        strict = _cfg(project, create_git_branch=True)
+        assert _retry(strict, fresh=True) is not True and called == []
+        assert _baseline(strict) is None, "captured as initial instead of refused"
+        with ExecutorState(strict) as st:
+            assert st.get_task_state("TASK-050").attempts[-1].error_kind == "policy"
+
+
+class TestAFailedStartDoesNotLockTheTask:
+    """R3: an attempt that stopped before the capture ran no agent."""
+
+    def test_a_pre_start_failure_then_a_strict_retry_proceeds(self, project, monkeypatch):
+        from spec_runner import execution
 
         cfg = _cfg(project)
-        assert pre_start_hook(_task(), cfg) is True
+        monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: False)
+        called: list[int] = []
+        _agent(monkeypatch, write=lambda: called.append(1))
+        assert _run(cfg) is not True and called == []
         with ExecutorState(cfg) as st:
+            first = st.get_task_state("TASK-050").attempts[-1]
             assert st.get_workspace(resolve_namespace(cfg), "TASK-050") is None
+        assert first.error_kind == "hook_failure" and first.error_stage == "setup"
+        monkeypatch.setattr(execution, "pre_start_hook", lambda *a, **k: True)
+        _retry(cfg)
+        stored = _baseline(cfg)
+        assert called == [1], "the retry was refused"
+        assert stored is not None and stored.provenance == "initial"
+
+    def test_a_capture_write_failure_then_a_strict_retry_proceeds(self, project, monkeypatch):
+        original = ExecutorState.store_harness_baseline
+
+        def boom(self, *a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(ExecutorState, "store_harness_baseline", boom)
+        called: list[int] = []
+        _agent(monkeypatch, write=lambda: called.append(1))
+        cfg = _cfg(project)
+        assert _run(cfg) is not True and called == []
+        monkeypatch.setattr(ExecutorState, "store_harness_baseline", original)
+        with ExecutorState(cfg) as st:
+            assert st.get_task_state("TASK-050").attempts[-1].error_stage == "setup"
+        _retry(cfg)
+        stored = _baseline(cfg)
+        assert called == [1], "the retry was refused"
+        assert stored is not None and stored.provenance == "initial"
+
+
+def test_a_second_attempt_in_one_run_reuses_the_in_run_baseline(project, monkeypatch):
+    """Review #6: attempt 2 sees attempt 1 (started) and the `initial` row it wrote."""
+    from spec_runner import execution
+
+    cfg = _cfg(project, max_retries=2)
+    stores: list[int] = []
+    original = ExecutorState.store_harness_baseline
+
+    def counting(self, *a, **k):
+        stores.append(1)
+        return original(self, *a, **k)
+
+    monkeypatch.setattr(ExecutorState, "store_harness_baseline", counting)
+    seen: list[str] = []
+
+    def post_done(*a, **k):
+        stored = _baseline(cfg)
+        assert stored is not None
+        seen.append(stored.captured_at)
+        return (False, "Tests failed", "skipped", "", False)
+
+    monkeypatch.setattr(execution, "post_done_hook", post_done)
+    called: list[int] = []
+    _agent(monkeypatch, write=lambda: called.append(1))
+    assert _run(cfg) is not True
+    with ExecutorState(cfg) as st:
+        attempts = st.get_task_state("TASK-050").attempts
+    assert called == [1, 1] and len(attempts) == 2
+    assert all(a.error_kind not in ("policy", "instrument") for a in attempts)
+    assert stores == [1] and len(seen) == 2 and seen[0] == seen[1] != ""
+
+
+def test_the_in_memory_baseline_carries_the_stored_timestamp(project):
+    """Review #7: `captured_at` is the persisted one, not a placeholder."""
+    from spec_runner.harness import HarnessBaseline
+
+    cfg = _cfg(project)
+    with ExecutorState(cfg) as st:
+        baseline = HarnessBaseline()
+        baseline.prepare(cfg, st, _task(), started=False)
+        baseline.capture(cfg, st, _task())
+        stored = st.get_harness_baseline(resolve_namespace(cfg), "TASK-050")
+    assert stored is not None
+    assert baseline._stored is not None
+    assert baseline._stored.captured_at == stored.captured_at != ""

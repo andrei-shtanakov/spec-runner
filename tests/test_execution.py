@@ -100,7 +100,7 @@ class TestExecuteTask:
         result = execute_task(task, config, state)
 
         assert result is True
-        mock_pre.assert_called_once_with(task, config, reporter=ANY, state=state)
+        mock_pre.assert_called_once_with(task, config, reporter=ANY)
         # `pending_cost` carries this attempt's unrecorded spend to the budget
         # guard (#213). Asserted as exactly None, not ANY: the fake CLI reports
         # no cost, and the property worth pinning is that an unpriced call

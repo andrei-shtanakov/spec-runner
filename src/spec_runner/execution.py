@@ -13,6 +13,7 @@ from .harness import (
     HarnessBaseline,
     HarnessStateError,
     guard_error,
+    record_task_workspace,
     refuse_and_restore,
     snapshot_contents,
     task_started,
@@ -705,18 +706,7 @@ def _execute_task(
         return _refuse_task(task, config, state, trust, kind=RefusalKind.POLICY)
 
     # Pre-start hook
-    try:
-        pre_started = pre_start_hook(task, config, reporter=reporter, state=state)
-    except HarnessStateError as exc:
-        return _refuse_task(
-            task,
-            config,
-            state,
-            str(exc),
-            kind=RefusalKind.INSTRUMENT,
-            stage=reporter.current or "setup",
-        )
-    if not pre_started:
+    if not pre_start_hook(task, config, reporter=reporter):
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -725,7 +715,9 @@ def _execute_task(
             error="Pre-start hook failed",
             error_code=ErrorCode.HOOK_FAILURE,
             error_kind="hook_failure",
-            error_stage=reporter.current,
+            # A pre-capture stage (`harness.PRE_CAPTURE_STAGES`): no agent
+            # ran, so this attempt must not make the task "started".
+            error_stage=reporter.current or "setup",
         )
         return "HOOK_ERROR"
 
@@ -737,17 +729,14 @@ def _execute_task(
     # belongs to the task, not the attempt, so a retry cannot re-baseline a
     # forbidden edit into legitimacy — and, persisted (spec 2026-10-04 §2),
     # neither can a separate `retry` invocation.
+    # The workspace row (every guard mode) is written only once the capture
+    # succeeded and before any agent call: a start that failed earlier left
+    # nothing an agent touched, and must not mark the task "started".
     try:
         harness_before = baseline.capture(config, state, task)
+        record_task_workspace(config, state, task)
     except HarnessStateError as exc:
-        return _refuse_task(
-            task,
-            config,
-            state,
-            str(exc),
-            kind=RefusalKind.INSTRUMENT,
-            stage=reporter.current or "setup",
-        )
+        return _refuse_task(task, config, state, str(exc), kind=RefusalKind.INSTRUMENT)
     # What the RED/verify-first passes of *this* attempt are judged against —
     # not the task baseline: an edit an earlier attempt left behind is the
     # GREEN agent's to revert (the retry prompt says so), and refusing here
