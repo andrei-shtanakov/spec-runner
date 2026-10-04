@@ -971,8 +971,9 @@ runtime-state по инварианту конвейера «нужное для
       **Сделано 2026-10-05 (PR TBD, релиз 5.0.0):** при `create_git_branch: true`
       (включая `integration_pr`) незакоммиченная работа упавшей попытки сохраняется
       WIP-коммитом `wip(TASK): … — not a candidate` на ветке задачи перед любым
-      разрушительным переключением; retry (в прогоне, отдельный `spec-runner retry`,
-      после убитого процесса) продолжает с неё, промпт это говорит. WIP не кандидат:
+      разрушительным переключением и перед возвратом на main в конце прогона; retry
+      (в прогоне, отдельный `spec-runner retry`, после убитого процесса) продолжает с
+      неё, промпт это говорит. WIP не кандидат:
       красный гейт, claims и `gated_sha` его не видят, поверх делается явный
       `TASK-X: candidate`, no-op считается по накопленному диффу. Baseline харнесса
       теперь персистентный (`harness_baselines`, снят до первого вызова агента),
@@ -990,6 +991,31 @@ runtime-state по инварианту конвейера «нужное для
       держать DB вне записываемого множества агента или включить `executor_sandbox`
       (#600) с DB вне `sandbox_allow`. Регресс: агент под sandbox не может изменить
       строку baseline.
+
+- [ ] **retry-wip-followups** — отложенное из финального ревью `retry-continues-from-wip` (решение R8, 2026-10-05) @owner:github:andrei-shtanakov @id:retry-wip-followups @epic:eco.spec-toolchain
+      Отгружено в 5.0.0 как известные ограничения; по строке на пункт:
+      - **Высокий приоритет:** `auto_commit: false` + гейты + HEAD на WIP-коммите —
+        гейты судят WIP-sha (старое поведение «устаревшего HEAD»); `gated_sha` не должен
+        называть WIP и здесь.
+      - `retry --fresh` чистит попытки в памяти, и следующий WIP пишется как
+        «attempt 0», хотя спека велит N = последняя попытка в state DB.
+      - N в WIP-трейлере считает и отказанные старты (попытки без вызова агента).
+      - `tdd complete` и `task done` закрывают задачу, но оставляют строки
+        workspace/baseline (их удаляют только DONE через `record_attempt` и `tdd abandon`).
+      - Тесты: `_candidates` в детерминированном порядке; абсолютный control-plane ключ,
+        нечитаемый файл и симлинк-кандидат через `surface_snapshot`; замена baseline
+        удаляет старые строки файлов.
+      - Формулировка: сбой перечтения после успешной записи baseline говорит «could not
+        store».
+      - Rescue: после снятия staged-удалений текст «your changes are untouched» неточен;
+        case-only rename на регистронезависимой ФС не проверен; половины rename по
+        разные стороны exclude.
+      - Грязь на ветке уже DONE-задачи (строки workspace нет) под `strict` отказывается как
+        «ничья».
+      - `wip_base` читает повреждённый репо (битый `.git`, нечитаемый HEAD, dubious
+        ownership) как «нет репо/коммитов» → «нет WIP» (fail-open).
+      - `tdd abandon`: CAS не перепроверяется внутри транзакции; `ExecutorLock.acquire`
+        обрезает диагностику держателя при неудачной пробе.
 
 - [x] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
       **Сделано 2026-10-04:** замер до фикса через настоящий шов (подменён
