@@ -1,6 +1,7 @@
 """`harness trust`: audited, guarded, atomic (spec §3); lifecycle (spec §2)."""
 
 import argparse
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -12,6 +13,7 @@ from spec_runner.config import ExecutorConfig, ExecutorLock
 from spec_runner.harness_cmd import TrustError, cmd_harness, trust
 from spec_runner.state import ExecutorState
 from spec_runner.tdd import resolve_namespace
+from tests.test_task_workspace_state import _Proxy
 
 BRANCH = "task/task-100-w"
 
@@ -172,3 +174,59 @@ def test_cli_main_exit_codes(repo, monkeypatch):
     with pytest.raises(SystemExit) as broken:
         cli.main([*base, "--reason", "again"])
     assert broken.value.code == 2
+
+
+def _rows(cfg: ExecutorConfig) -> tuple[object, object, list]:
+    ns = resolve_namespace(cfg)
+    with ExecutorState(cfg) as st:
+        return (
+            st.get_workspace(ns, "TASK-100"),
+            st.get_harness_baseline(ns, "TASK-100"),
+            st.harness_trust_audit(ns, "TASK-100"),
+        )
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+def test_unreadable_harness_file_refuses_and_writes_nothing(repo, capsys):
+    cfg = _cfg(repo)
+    (repo / "pyproject.toml").chmod(0o000)
+    try:
+        assert cmd_harness(_args(), cfg) == 1
+    finally:
+        (repo / "pyproject.toml").chmod(0o644)
+    assert "pyproject.toml" in capsys.readouterr().out
+    assert _rows(cfg) == (None, None, [])
+
+
+def test_audit_failure_at_command_level_leaves_nothing(repo, monkeypatch, capsys):
+    cfg = _cfg(repo)
+    real_init = ExecutorState.trust_harness
+
+    def failing_trust(self, *a, **k):
+        real = self._conn.execute
+
+        def failing(sql, *args):
+            if sql.lstrip().startswith("INSERT INTO harness_trust_audit"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return real(sql, *args)
+
+        self._conn = _Proxy(self._conn, failing)
+        return real_init(self, *a, **k)
+
+    monkeypatch.setattr(ExecutorState, "trust_harness", failing_trust)
+    assert cmd_harness(_args(), cfg) == 2
+    assert "disk I/O error" in capsys.readouterr().out
+    monkeypatch.undo()
+    assert _rows(cfg) == (None, None, [])
+
+
+def test_missing_tasks_file_is_a_refusal(repo, capsys):
+    (repo / "spec" / "tasks.md").unlink()
+    assert cmd_harness(_args(), _cfg(repo)) == 1
+    assert "no task TASK-100" in capsys.readouterr().out
+
+
+def test_unreadable_tasks_file_is_exit_2(repo, capsys):
+    (repo / "spec" / "tasks.md").write_bytes(b"\xff\xfe\x00bad")
+    assert cmd_harness(_args(), _cfg(repo)) == 2
+    assert "tasks.md" in capsys.readouterr().out

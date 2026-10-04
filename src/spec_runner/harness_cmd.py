@@ -14,7 +14,7 @@ from .git_ops import current_branch
 from .harness import HarnessStateError, surface_snapshot
 from .remedy import RemedyError, _guard, resolve_actor
 from .state import ExecutorState
-from .task import parse_tasks
+from .task import parse_tasks_text
 
 
 class TrustError(RuntimeError):
@@ -47,6 +47,30 @@ def _check_binding(
         raise TrustError(f"--bind-branch {bind_branch} is not the current branch ({branch})")
 
 
+def _require_task(config: ExecutorConfig, task_id: str) -> None:
+    """Refuse an unknown task; an unreadable or unparseable tasks.md is an instrument error."""
+    path = config.tasks_file
+    if not path.exists():
+        raise TrustError(f"no task {task_id}: {path} does not exist")
+    try:
+        tasks = parse_tasks_text(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise HarnessStateError(f"{path} could not be read or parsed: {exc}") from exc
+    if not any(t.id == task_id for t in tasks):
+        raise TrustError(f"no task {task_id} in {path}")
+
+
+def _require_readable(files: dict[str, bytes | None]) -> None:
+    """Strict refuses a baseline with an unreadable file, so trusting one does nothing."""
+    unreadable = sorted(k for k, v in files.items() if v is None)
+    if unreadable:
+        raise TrustError(
+            "harness files cannot be read: "
+            + ", ".join(unreadable)
+            + "; fix them, then re-run `harness trust`"
+        )
+
+
 def trust(
     config: ExecutorConfig,
     state: ExecutorState,
@@ -65,13 +89,13 @@ def trust(
         namespace = _guard(config, reason)
     except RemedyError as exc:
         raise TrustError(str(exc)) from exc
-    if not any(t.id == task_id for t in parse_tasks(config.tasks_file)):
-        raise TrustError(f"no task {task_id} in {config.tasks_file}")
+    _require_task(config, task_id)
     branch = current_branch(config) if config.create_git_branch else None
     workspace = state.get_workspace(namespace, task_id)
     _check_binding(config, workspace, task_id, branch, bind_branch)
     bind = workspace is None
     surface, files = surface_snapshot(config)
+    _require_readable(files)
     replaced = state.trust_harness(
         namespace,
         task_id,
