@@ -132,7 +132,7 @@ def uncommitted_work_paths(
     """
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         return []
-    status = _git(config, "status", "--porcelain", "-z")
+    status = _git(config, "status", "--porcelain", "-z", "-uall")
     if status.returncode != 0:
         if strict:
             raise WorktreeStatusError(
@@ -149,6 +149,8 @@ def uncommitted_work_paths(
     out: list[str] = []
     # `-z`: raw names (no C-quoting, so `git add -- <path>` works for a name with
     # a space or non-ASCII); a rename/copy entry is followed by its source name.
+    # `-uall` lists untracked files singly, so an excluded file inside an untracked
+    # directory (spec/changes/<id>/tasks.md) is excluded, not carried with its folder.
     entries = status.stdout.split("\0")
     out_paths: list[str] = []
     i = 0
@@ -158,8 +160,11 @@ def uncommitted_work_paths(
         if len(entry) < 4:
             continue
         out_paths.append(entry[3:])
-        if entry[0] in "RC" or entry[1] in "RC":
-            i += 1  # the rename's original name
+        if (entry[0] in "RC" or entry[1] in "RC") and i < len(entries) and entries[i]:
+            # The source is part of the change: dropping it turns a staged
+            # rename into a copy (`D src` left behind) and strands it in a stash.
+            out_paths.append(entries[i])
+            i += 1
     for path in out_paths:
         # `-wal`/`-shm` sidecars sit next to the state file, hence the prefix
         # forms — the same filter `review_pr` applies to its own dirt check.
@@ -167,6 +172,21 @@ def uncommitted_work_paths(
             continue
         out.append(path)
     return out
+
+
+def unstage_vanished_paths(config: ExecutorConfig, paths: list[str]) -> None:
+    """Put back the index entry of a path gone from both index and tree.
+
+    A staged rename's source is such a path; `git stash push -- <source>`
+    refuses it ("did not match any files"), so the rename would be stashed
+    without its removal half. Restoring the entry makes it an ordinary
+    unstaged deletion that a pathspec can name. Literal pathspecs throughout.
+    """
+    listed = _git(config, "--literal-pathspecs", "ls-files", "-z", "--", *paths)
+    indexed = set(listed.stdout.split("\0"))
+    gone = [p for p in paths if p not in indexed and not (config.project_root / p).exists()]
+    if gone:
+        _git(config, "--literal-pathspecs", "reset", "-q", "HEAD", "--", *gone)
 
 
 def stage_all_except_runtime(config: ExecutorConfig) -> bool:

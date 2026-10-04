@@ -171,9 +171,22 @@ def _rescue_uncommitted(
     if not paths:
         return True, ""  # the ordinary case: nothing to rescue, nothing to say
 
+    from .git_ops import unstage_vanished_paths
+
+    unstage_vanished_paths(config, paths)
     label = f"spec-runner rescue: {owner} at {datetime.now().isoformat(timespec='seconds')}"
     stash = subprocess.run(
-        ["git", "stash", "push", "--include-untracked", "-m", label, "--", *paths],
+        [
+            "git",
+            "--literal-pathspecs",
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            label,
+            "--",
+            *paths,
+        ],
         capture_output=True,
         text=True,
         cwd=config.project_root,

@@ -167,3 +167,117 @@ def test_commit_failure_is_refused_with_work_in_tree(repo):
     result = _save(cfg)
     assert result.refusal is not None and result.saved_sha is None
     assert (repo / "app.py").read_text() == "x = 2\n"
+
+
+def test_staged_rename_keeps_its_source(repo):
+    cfg = _cfg(repo)
+    _own(cfg)
+    _git(repo, "mv", "app.py", "moved.py")
+    assert _save(cfg).saved_sha
+    assert _git(repo, "status", "--porcelain") == ""
+    tracked = _git(repo, "ls-files").splitlines()
+    assert "moved.py" in tracked and "app.py" not in tracked
+
+
+def test_glob_and_magic_named_files_are_literal(repo):
+    cfg = _cfg(repo)
+    _own(cfg)
+    (repo / "*").write_text("star\n")
+    (repo / ":(top)x").write_text("magic\n")
+    (repo / "other.py").write_text("o\n")
+    (repo / "spec" / "tasks.md").write_text("# tasks\nflip\n")
+    assert _save(cfg).saved_sha
+    files = set(_git(repo, "show", "--name-only", "-z", "--format=", "HEAD").split("\0")) - {""}
+    assert files == {"*", ":(top)x", "other.py"}
+    assert "spec/tasks.md" in _git(repo, "status", "--porcelain")
+
+
+def test_untracked_change_folder_tasks_md_stays_out(repo):
+    cfg = _cfg(repo)
+    cfg.change_id = "c1"
+    cfg.__post_init__()
+    _own(cfg)
+    folder = repo / "spec" / "changes" / "c1"
+    folder.mkdir(parents=True)
+    (folder / "tasks.md").write_text("# t\n")
+    (folder / "notes.py").write_text("n\n")
+    (repo / "app.py").write_text("x = 2\n")
+    assert _save(cfg).saved_sha
+    files = _git(repo, "show", "--name-only", "--format=", "HEAD").split()
+    assert "spec/changes/c1/tasks.md" not in files
+    assert "app.py" in files
+
+
+def test_is_wip_of_is_exact(repo):
+    from spec_runner.wip import is_wip_of
+
+    cfg = _cfg(repo)
+    (repo / "a.py").write_text("1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "wip\n\nSpec-Runner-WIP: TASK-10\nSpec-Runner-WIP-Attempt: 0\n")
+    sha = _git(repo, "rev-parse", "HEAD").strip()
+    assert is_wip_of(cfg, sha, "TASK-10")
+    assert not is_wip_of(cfg, sha, "TASK-1")
+
+
+def _wip_commit(repo, name, task, attempt):
+    (repo / name).write_text("1\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "commit",
+        "-qm",
+        f"wip\n\nSpec-Runner-WIP: {task}\nSpec-Runner-WIP-Attempt: {attempt}\n",
+    )
+
+
+def test_wip_commits_filters_and_orders(repo):
+    cfg = _cfg(repo)
+    _wip_commit(repo, "a.py", "TASK-060", 0)
+    _wip_commit(repo, "other.py", "TASK-061", 5)
+    (repo / "plain.py").write_text("1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "plain")
+    _wip_commit(repo, "b c.py", "TASK-060", 2)
+    found = wip_commits(cfg, "TASK-060", "main")
+    assert [(a, f) for _, a, f in found] == [(0, ["a.py"]), (2, ["b c.py"])]
+
+
+def test_wip_commits_raises_on_bad_base(repo):
+    from spec_runner.wip import WipReadError
+
+    with pytest.raises(WipReadError):
+        wip_commits(_cfg(repo), "TASK-060", "no-such-ref")
+
+
+def test_wip_commits_repeated_attempt_trailer_takes_first(repo):
+    cfg = _cfg(repo)
+    (repo / "a.py").write_text("1\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "commit",
+        "-qm",
+        "wip\n\nSpec-Runner-WIP: TASK-060\nSpec-Runner-WIP-Attempt: 3\nSpec-Runner-WIP-Attempt: 4\n",
+    )
+    assert wip_commits(cfg, "TASK-060", "main")[0][1] == 3
+
+
+@pytest.mark.parametrize("failing", ["--cached", "worktree"])
+def test_one_failing_diff_is_an_instrument_refusal(repo, monkeypatch, failing):
+    from spec_runner import wip
+    from spec_runner.phases import RefusalKind
+
+    cfg = _cfg(repo)
+    _own(cfg)
+    (repo / "app.py").write_text("x = 2\n")
+    real = wip._git
+
+    def _broken(config, *args):
+        if args[:1] == ("diff",) and (("--cached" in args) == (failing == "--cached")):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: bad")
+        return real(config, *args)
+
+    monkeypatch.setattr(wip, "_git", _broken)
+    result = _save(cfg)
+    assert result.refusal is not None and result.refusal.kind is RefusalKind.INSTRUMENT
