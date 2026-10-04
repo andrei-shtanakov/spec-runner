@@ -118,11 +118,11 @@ class TestRedPassIsUnderTheGuard:
         assert attempts and all(not a.success for a in attempts)
         assert all(a.error_kind == "harness_guard" for a in attempts)
         assert all("pyproject.toml" in (a.error or "") for a in attempts)
-        # Attempt 1 is refused before GREEN. Attempt 2's RED changes nothing
-        # new, so its GREEN runs — told to revert — and is refused for not
-        # reverting.
-        assert len(green_calls) == len(attempts) - 1, (
-            "the paid GREEN call ran for the attempt whose RED pass was refused"
+        assert green_calls == [], "the paid GREEN call ran for an attempt already refused"
+        # `_commit_red` committed the edit; under `create_git_branch: false`
+        # the next task's baseline would read it as the oracle.
+        assert (project / "pyproject.toml").read_text() == PYPROJECT, (
+            "the refused RED edit outlived the refusal"
         )
 
     def test_green_reverting_the_red_edit_on_retry_passes(self, project, isolate, monkeypatch):
@@ -222,4 +222,5 @@ class TestVerifyFirstPassIsUnderTheGuard:
 
         assert result is not True
         assert attempts and all(a.error_kind == "harness_guard" for a in attempts)
-        assert len(green_calls) == len(attempts) - 1
+        assert green_calls == []
+        assert (project / "pyproject.toml").read_text() == PYPROJECT

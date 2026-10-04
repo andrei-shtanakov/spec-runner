@@ -23,10 +23,11 @@ Where it looks (`guard_error`): after the RED/verify-first passes and
 before GREEN; after GREEN, before the gates; after the reviewer, before
 the re-run gates — the review call itself withholds the commit of fixes
 that touch the harness; after the `post_review` plugins, before the DONE
-flip; and per `review-pr` fix, before its gates. On the post-done sites a
-refused step is undone (`restore_surface`): a refused edit left in the
+flip; and per `review-pr` fix, before its gates. Every site but GREEN
+undoes a refused step (`refuse_and_restore`): a refused edit left in the
 tree would be committed next, or — under ``create_git_branch: false`` —
-read by the next task's baseline as the oracle.
+read by the next task's baseline as the oracle. GREEN's edit is left for
+the next attempt to revert, as the refusal asks.
 
 The spec-runner config itself (`CONTROL_PLANE`) is always on the surface and
 never exempt: it is the policy the attempt is judged by.
@@ -221,6 +222,26 @@ def content_hashes(contents: dict[str, bytes | None] | None) -> dict[str, str] |
     }
 
 
+def _restore_target(config: ExecutorConfig, key: str) -> Path | None:
+    """Where `restore_surface` may write `key`, or None if it may not.
+
+    The step being undone controlled the tree: a directory on the way to a
+    harness file may now be a symlink, and following it would unlink or
+    overwrite a file outside the project. The nearest existing ancestor must
+    resolve to exactly where it sits under the (resolved) root. A key outside
+    the root — the loaded config — was named by the operator, not the step,
+    and only its last component is guarded (by the caller's unlink).
+    """
+    if Path(key).is_absolute():
+        return Path(key)
+    root = config.project_root.resolve()
+    path = root / key
+    ancestor = path.parent
+    while not ancestor.exists() and ancestor != root:
+        ancestor = ancestor.parent
+    return path if ancestor.resolve() == ancestor else None
+
+
 def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | None) -> list[str]:
     """Undo every violation relative to `before`; return the paths it could not.
 
@@ -233,7 +254,11 @@ def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | No
     unrestored: list[str] = []
     for violation in harness_violations(config, content_hashes(before)):
         kind, key = violation.split(" ", 1)
-        path = Path(key) if Path(key).is_absolute() else config.project_root / key
+        path = _restore_target(config, key)
+        if path is None:
+            logger.error("Harness path leaves its directory through a symlink", path=key)
+            unrestored.append(key)
+            continue
         try:
             if kind == "created":
                 path.unlink(missing_ok=True)
@@ -243,6 +268,9 @@ def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | No
                 unrestored.append(key)
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink():
+                # Written through, it would land wherever the link points.
+                path.unlink()
             path.write_bytes(data)
         except OSError as exc:
             logger.error("Could not restore harness file", path=key, error=str(exc))
@@ -360,3 +388,26 @@ def guard_error(
         f"{summary}. These files define how the task is verified "
         "and must not be changed by the task. Revert them."
     )
+
+
+def refuse_and_restore(
+    config: ExecutorConfig,
+    task_id: str,
+    before: dict[str, bytes | None] | None,
+    log_progress: Callable[[str, str], None],
+    actor: str = "the agent",
+) -> str | None:
+    """`guard_error` for one step, the step undone on a refusal.
+
+    For every site that judges a step against a snapshot taken right before
+    it (`snapshot_contents`): what a refused step wrote must not outlive the
+    refusal (`restore_surface`). GREEN is the exception — its edit is left
+    for the next attempt to revert, as the refusal asks.
+    """
+    error = guard_error(config, task_id, content_hashes(before), log_progress, actor=actor)
+    if error is None:
+        return None
+    unrestored = restore_surface(config, before)
+    if unrestored:
+        return error + f" Could not restore: {', '.join(unrestored)}."
+    return error + " The harness has restored them."

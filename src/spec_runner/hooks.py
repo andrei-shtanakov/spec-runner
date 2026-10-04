@@ -30,7 +30,7 @@ from .git_ops import (
     runtime_state_paths,
     stage_all_except_runtime,
 )
-from .harness import content_hashes, guard_error, restore_surface, snapshot_contents
+from .harness import refuse_and_restore, snapshot_contents
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
@@ -1172,30 +1172,6 @@ def _reverify_live_evidence_for_candidate(
     return Refusal(f"verify-first re-check: {result.detail}", kind)
 
 
-def _harness_refusal(
-    config: ExecutorConfig,
-    task: Task,
-    before: dict[str, bytes | None] | None,
-    actor: str,
-) -> str | None:
-    """The harness guard's answer on one post-done step, the step undone (#64).
-
-    On a refusal the step's harness edits are restored to `before`: left in
-    the tree they would be swept into the next commit, and under
-    ``create_git_branch: false`` the next task's baseline would read them as
-    the oracle.
-    """
-    from .runner import log_progress
-
-    error = guard_error(config, task.id, content_hashes(before), log_progress, actor=actor)
-    if error is None:
-        return None
-    unrestored = restore_surface(config, before)
-    if unrestored:
-        error += f" Could not restore: {', '.join(unrestored)}."
-    return error
-
-
 def post_done_hook(
     task: Task,
     config: ExecutorConfig,
@@ -1675,7 +1651,11 @@ def post_done_hook(
         # Before the re-run gates and the commit of its fixes (which the review
         # call withholds under `strict`): a rewritten oracle makes their
         # verdict worthless.
-        harness_error = _harness_refusal(config, task, review_harness_before, "the reviewer")
+        from .runner import log_progress
+
+        harness_error = refuse_and_restore(
+            config, task.id, review_harness_before, log_progress, actor="the reviewer"
+        )
         if harness_error is not None:
             harness_blocked = _commit_blocked_status(
                 task,
@@ -1926,10 +1906,17 @@ def post_done_hook(
     # in the tree rather than being committed as evidence.
     plugin_harness_before = snapshot_contents(config)
     plugin_blocked = run_plugin_hooks_for("post_review", task, config, success=True)
-    if plugin_blocked is None:
-        # Harness tripwire (#64): evidence, yes — the oracle, no.
-        plugin_blocked = _harness_refusal(
-            config, task, plugin_harness_before, "a post_review plugin"
+    # Harness tripwire (#64): evidence, yes — the oracle, no. Checked (and
+    # undone) whatever the plugin itself answered: a plugin that blocks for
+    # its own reason must not leave its harness edit behind.
+    from .runner import log_progress
+
+    plugin_harness_error = refuse_and_restore(
+        config, task.id, plugin_harness_before, log_progress, actor="a post_review plugin"
+    )
+    if plugin_harness_error is not None:
+        plugin_blocked = (
+            f"{plugin_blocked}\n{plugin_harness_error}" if plugin_blocked else plugin_harness_error
         )
     if plugin_blocked is not None:
         # The same resumable shape as the gate refusal above: the candidate

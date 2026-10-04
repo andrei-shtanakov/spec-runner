@@ -9,7 +9,7 @@ from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
-from .harness import HarnessBaseline, guard_error, snapshot_harness
+from .harness import HarnessBaseline, guard_error, refuse_and_restore, snapshot_contents
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
@@ -710,7 +710,7 @@ def _execute_task(
     # not the task baseline: an edit an earlier attempt left behind is the
     # GREEN agent's to revert (the retry prompt says so), and refusing here
     # would take that chance away and fail every retry unpaid.
-    passes_before = snapshot_harness(config)
+    passes_before = snapshot_contents(config)
 
     # Update status
     state.mark_running(task_id)
@@ -885,8 +885,10 @@ def _execute_task(
             return False
 
     # The passes above write into the tree; refuse a harness edit here,
-    # before the paid GREEN call, not after it.
-    harness_error = guard_error(config, task_id, passes_before, log_progress)
+    # before the paid GREEN call, not after it — and undo it: `_commit_red`
+    # has already committed it, and under `create_git_branch: false` the next
+    # task's baseline would read it as the oracle.
+    harness_error = refuse_and_restore(config, task_id, passes_before, log_progress)
     if harness_error is not None:
         state.record_attempt(
             task_id,

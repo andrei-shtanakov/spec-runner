@@ -207,6 +207,27 @@ class TestReviewerEdits:
 
 
 class TestPostReviewPluginEdits:
+    def test_a_plugin_blocking_for_its_own_reason_still_has_its_edit_undone(
+        self, project, monkeypatch
+    ):
+        real = hooks.run_plugin_hooks_for
+
+        def _plugins(point, task, config, **kwargs):
+            if point == "post_review":
+                _touch_pyproject(project)
+                return "exporter failed"
+            return real(point, task, config, **kwargs)
+
+        monkeypatch.setattr(hooks, "run_plugin_hooks_for", _plugins)
+        cfg = _cfg(project, run_review=False)
+
+        ok, error, *_ = hooks.post_done_hook(_task(), cfg, True)
+
+        assert ok is False
+        assert "exporter failed" in (error or "")
+        assert "Harness guard: a post_review plugin" in (error or "")
+        assert (project / "pyproject.toml").read_text() == PYPROJECT
+
     def test_plugin_writing_pyproject_fails_under_strict(self, project, monkeypatch):
         real = hooks.run_plugin_hooks_for
 
