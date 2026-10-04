@@ -75,7 +75,8 @@ empty one).
 
 **The index is not overwritten.** `git add` would replace a staged version of
 an eligible path with the working-tree version. Before touching the index,
-every eligible path is checked: if its index entry differs from HEAD **and**
+every eligible path is checked (a `git diff` that cannot be read is an
+`instrument` refusal, never "nothing partially staged"): if its index entry differs from HEAD **and**
 from the working tree (a partially staged file), the start is refused —
 the paths are named, nothing was staged or committed, no destructive step
 ran; the operator commits or unstages and retries. Anything else (index
@@ -176,10 +177,24 @@ Under `warn`, a started task without a snapshot gets a `recaptured` one with
 a warning (nothing is enforced); under `off`, no snapshot is taken. Neither
 becomes trusted when `strict` is switched on.
 
-**Lifecycle.** Workspace, snapshot and file rows are deleted together, in one
-transaction, at the final DONE (next to `_release_claims`) and by
-`tdd abandon`. They survive errors, timeouts, guard refusals, separate
-`retry` invocations and `reset`. The audit is never deleted.
+**Lifecycle.** Workspace, snapshot and file rows are deleted together, and
+atomically with the record that ends the task:
+
+- **DONE** — inside the same transaction `record_attempt` uses to write the
+  successful attempt. If that transaction fails (degraded mode), the DONE is
+  not durable and neither is the deletion: the two never disagree.
+- **`tdd abandon`** — its checkpoint status change, claims retirement, remedy
+  row and the deletion are one `BEGIN IMMEDIATE` transaction (today they are
+  three separate commits). A repeat call that finds the abandon applied
+  therefore finds the rows gone.
+
+They survive errors, timeouts, guard refusals and separate `retry`
+invocations. **`spec-runner reset` keeps them**: it rebuilds the state DB in a
+temporary file, carries the four tables (workspace, snapshot, files, audit)
+over, and replaces the DB file atomically; any failure before the replace
+leaves the original DB untouched and the command exits 2. Without this, under
+`create_git_branch: false` a reset task would look new and a modified
+harness would become `initial`. The audit is never deleted.
 
 **`create_git_branch: false`.** The tree is not touched and no WIP is made,
 as today. The persistent baseline applies all the same: captured before the
@@ -204,6 +219,8 @@ is trusted — modelled on `budget authorize`: mandatory reason, recorded
 actor, refusal while the executor lock is held, refusal under
 `SPEC_RUNNER_AGENT`.
 
+- The task must exist in `tasks.md`; otherwise refused (`policy`, exit 1).
+  A state DB that cannot be read or written: `instrument`, exit 2.
 - With a workspace row: the namespace must match, and — when the row has a
   branch — the current branch must equal it; otherwise refused.
 - Without a workspace row under `create_git_branch: true`: refused unless
@@ -295,7 +312,9 @@ agent call is needed.
     `off`/`warn` → `strict` without a trusted snapshot is refused.
 12. Under `off`, WIP is still saved (workspace row without a snapshot).
 13. Lifecycle: DONE and `tdd abandon` delete workspace, snapshot and file
-    rows; `reset` keeps both.
+    rows atomically with their own records (a fault injected in the deletion
+    rolls back the DONE attempt row / the abandon); `reset` keeps all four
+    tables, and a fault during the rebuild leaves the original DB untouched.
 14. DB unreadable/unwritable → `instrument` refusal before any destructive
     step, the `integration_pr` fork included.
 15. `create_git_branch: false`: the tree is untouched and no WIP is made; a
@@ -308,9 +327,13 @@ agent call is needed.
 
 ## Contract and release
 
-- `docs/state-schema.md` and `schemas/executor-state.schema.json`: the four
-  tables; golden fixtures under `tests/fixtures/maestro-interop/` regenerated
-  (`--update-golden`) and reviewed.
+- `docs/state-schema.md`: the four tables. `schemas/executor-state.schema.json`
+  describes the legacy JSON state, not SQLite, and is not extended. Tests pin
+  the tables' structure — columns, keys, CHECK constraints — and the
+  atomicity of every multi-row write.
+- The golden regeneration command (`uv run pytest
+  tests/test_json_result_contract.py --update-golden`) is run; no diff is the
+  expected result, since no golden lists DB tables.
 - `--json-result` is unchanged.
 - CLI: `harness trust` documented in CLAUDE.md and README.
 - Version 5.0.0 (from 4.5.0). CHANGELOG gains a migration section: a task
