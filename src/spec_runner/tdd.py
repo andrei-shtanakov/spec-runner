@@ -2298,6 +2298,21 @@ def _parent_of(config: ExecutorConfig, sha: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _head_below_wip(config: ExecutorConfig, task_id: str) -> str:
+    """HEAD, seen through a contiguous chain of this task's WIP commits.
+
+    Only the task's own WIP commits (first parents) are skipped; the walk stops
+    at the first other commit, so another task's WIP or a foreign commit hides
+    nothing. "" when there is no commit or the chain reaches a root.
+    """
+    from .wip import is_wip_of
+
+    head = _head(config)
+    while head and is_wip_of(config, head, task_id):
+        head = _parent_of(config, head)
+    return head
+
+
 def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, selector: str) -> str:
     """A red commit this task left on the branch and never registered (#261).
 
@@ -2329,7 +2344,7 @@ def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, select
     between "there was nothing to commit" and "the commit failed with the work
     pending", of which only the first may be adopted over.
     """
-    head = _head(config)
+    head = _head_below_wip(config, task.id)
     if not head:
         return ""
     subject = _commit_subject(config, head)
@@ -2370,7 +2385,7 @@ def _pending_unregistered_red(
     for it in any status — adopting a registered or unrelated commit would put
     a checkpoint on a tree nobody proposed.
     """
-    head = _head(config)
+    head = _head_below_wip(config, task.id)
     if not head:
         return None
     subject = _commit_subject(config, head)

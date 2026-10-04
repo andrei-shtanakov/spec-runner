@@ -481,6 +481,35 @@ def _head_sha(config: ExecutorConfig) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def commit_candidate_over_wip(task: Task, config: ExecutorConfig) -> None:
+    """Make HEAD a candidate when it is a WIP commit (retry-from-WIP spec §4).
+
+    A gate verdict is bound to a SHA; it must never name a WIP commit.
+    """
+    from .wip import is_wip_of
+
+    head = _head_sha(config)
+    if head and is_wip_of(config, head, task.id):
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", f"{task.id}: candidate"],
+            capture_output=True,
+            text=True,
+            cwd=config.project_root,
+        )
+
+
+def task_changed_since_base(config: ExecutorConfig) -> bool:
+    """Whether the task's cumulative diff against its base is non-empty."""
+    from .review import task_base
+
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", task_base(config), "HEAD", "--"],
+        capture_output=True,
+        cwd=config.project_root,
+    )
+    return diff.returncode == 1
+
+
 def _review_tree_fingerprint(config: ExecutorConfig) -> str | None:
     """HEAD plus dirty bytes, so a failed review-fix commit is still visible.
 
@@ -1266,6 +1295,31 @@ def post_done_hook(
     if not success:
         return False, None, ReviewVerdict.SKIPPED.value, "", False
 
+    # WIP of this task on the branch (retry-from-WIP spec §4). An unreadable
+    # history is not "no WIP": the no-op verdict and the candidate depend on it.
+    has_wip = False
+    if config.create_git_branch:
+        from .review import task_base
+        from .wip import WipReadError, wip_commits
+
+        base = task_base(config)
+        try:
+            # "HEAD~1"/"HEAD" are task_base's fallbacks for work on the main
+            # branch or a branch with no commit of its own: no WIP can exist.
+            has_wip = base not in ("HEAD~1", "HEAD") and bool(wip_commits(config, task.id, base))
+        except WipReadError as e:
+            return (
+                False,
+                Refusal(
+                    f"Cannot read this task's WIP history: {e}",
+                    RefusalKind.INSTRUMENT,
+                    terminal=True,
+                ),
+                ReviewVerdict.SKIPPED.value,
+                "",
+                False,
+            )
+
     # Run tests — capture output for review context
     test_output_str: str | None = None
     if config.run_tests_on_done:
@@ -1486,6 +1540,8 @@ def post_done_hook(
         if reporter:
             reporter.enter("commit")
         committed_pre_review = commit_task_work(task, config) == "committed"
+        if not committed_pre_review and config.create_git_branch:
+            commit_candidate_over_wip(task, config)
         # #157 §2.1: the tree review is about to judge. Recorded only when a
         # gate will actually use it — the dormant path stays free of git calls.
         if has_gates() and config.run_review:
@@ -1888,6 +1944,8 @@ def post_done_hook(
     if review_changed_candidate and config.auto_commit and has_gates():
         commit_task_work(task, config)
 
+    if config.auto_commit and config.create_git_branch:
+        commit_candidate_over_wip(task, config)
     gated_sha = _head_sha(config) if (has_gates() or config.create_git_branch) else ""
 
     # #380 review finding 1 (round 1) / round 3 finding 3: the candidate the
@@ -2065,6 +2123,8 @@ def post_done_hook(
         except Exception as e:
             logger.error("Commit failed", error=str(e))
             final = "failed"
+        if final == "empty" and config.create_git_branch:
+            commit_candidate_over_wip(task, config)
         if wants_candidate:
             # The candidate carried the work, so this commit only ever carries
             # bookkeeping — "was it empty?" no longer answers the question. The
@@ -2075,6 +2135,10 @@ def post_done_hook(
             # Single-commit shape (#97/#103): the one commit is the work, so an
             # empty one means there was none.
             no_op = final == "empty"
+        if has_wip:
+            # The WIP commits already carry the work, so "nothing new in this
+            # attempt" says nothing; ask whether the task changed anything.
+            no_op = not task_changed_since_base(config)
         if no_op:
             logger.info("No changes to commit — marking task as no-op")
 
