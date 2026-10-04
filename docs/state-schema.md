@@ -351,6 +351,44 @@ out" is a fact about us, and only the first refutes the claim.
 
 Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
 
+### `task_workspaces` (experimental, 5.0.0)
+
+The fact that a task started, and on which exact branch. Columns: `namespace`,
+`task_id`, `branch` (NULL without per-task branches), `started_at`, `run_id`,
+`bound_by` (`run` · `operator`). Key `(namespace, task_id)`. WIP is saved only
+for the task whose row names the current branch exactly. Written in every
+guard mode. Deleted at DONE and by `tdd abandon`; kept by `reset`.
+
+### `harness_baselines` (experimental, 5.0.0)
+
+The harness guard's trusted baseline, taken before the first agent call.
+Columns: `namespace`, `task_id`, `captured_at`, `run_id`, `guard_mode`,
+`provenance` (`initial` · `operator` · `recaptured`), `surface` (JSON: every
+candidate → `file` · `dir` · `absent`). Key `(namespace, task_id)`. Under
+`strict` only `initial`/`operator` are trusted. Deleted at DONE and by
+`tdd abandon`; kept by `reset`.
+
+### `harness_baseline_files` (experimental, 5.0.0)
+
+One row per file the surface held at capture. Columns: `namespace`, `task_id`,
+`path`, `state` (`present` · `unreadable`), `digest` (sha256), `content` (BLOB,
+NULL when `unreadable`). Key `(namespace, task_id, path)`. Deleted with its
+baseline.
+
+### `harness_trust_audit` (experimental, 5.0.0)
+
+Append-only record of `spec-runner harness trust`. Columns: `id`, `namespace`,
+`task_id`, `at`, `actor`, `reason`, `branch`, `bound_branch` (1 when the
+command created the workspace binding), `replaced_provenance`. Never deleted,
+not even by DONE, `tdd abandon` or `reset`.
+
+The three baseline-side tables are written and removed together with the record
+that ends the task: DONE inside the transaction that writes the successful
+attempt, `tdd abandon` in the same transaction as its checkpoint, claims and
+remedy writes. `reset` rebuilds the DB in a temporary file, carries these four
+tables over and replaces the file atomically. The trusted baseline lives in the
+state DB, i.e. at the same trust boundary as `tdd_claims` and `red_checkpoints`.
+
 ### `tdd_claims` (experimental, #141)
 
 The byte-lock behind a confirmed RED. Columns: `namespace`, `task_id`,

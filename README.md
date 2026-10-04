@@ -93,6 +93,21 @@ Tasks are defined in `spec/tasks.md`. Task ids are `<PREFIX>-<number>` — `TASK
 
 ## CLI Commands
 
+### Retries continue from WIP
+
+Under `create_git_branch: true` (including `integration_pr`) a retry no longer
+starts from a clean tree: the failed attempt's uncommitted work is saved as a
+`wip(TASK): … — not a candidate` commit on the task branch before the next
+destructive switch, and the next attempt's prompt says it is continuing
+unverified work. The harness guard is judged against a baseline persisted before
+the first attempt, so carried work cannot move the oracle. A task started before
+5.0.0 under `harness_guard: strict` is refused until the operator restores and
+checks its harness files and then confirms them:
+
+```bash
+spec-runner harness trust TASK-001 --bind-branch task/TASK-001-name --reason "restored and diffed against master"
+```
+
 ### spec-runner
 
 ```bash

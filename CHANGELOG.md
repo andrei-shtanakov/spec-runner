@@ -10,7 +10,50 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-05
+
+Major by rule, not by breakage of `--json-result`: the state DB gains four
+tables (`task_workspaces`, `harness_baselines`, `harness_baseline_files`,
+`harness_trust_audit`; `docs/state-schema.md`), and `AGENTS.md` makes any change
+to the SQLite surface a major. `--json-result` is unchanged. The one behaviour
+that needs an operator is the migration below.
+
+### Changed (breaking)
+
+- **Retries continue from the previous attempt's work.** Under
+  `create_git_branch: true` (`integration_pr` included) the uncommitted work of
+  a failed attempt is saved as a `wip(TASK): unfinished work of attempt N — not
+  a candidate` commit (trailers `Spec-Runner-WIP`, `Spec-Runner-WIP-Attempt`)
+  before the next destructive tree switch, instead of a rescue stash. This holds
+  for the in-run retry, a separate `spec-runner retry` and a restart after a
+  killed process. The WIP commit is not a candidate: it gives no ground to the
+  red gate, confirms no claim and is never the SHA a gate verdict is bound to;
+  an explicit `TASK-X: candidate` commit is made over it. The no-op check
+  judges the task's cumulative diff, and the next attempt's prompt says it is
+  continuing unverified work. If the work cannot be saved, nothing destructive
+  runs; a partially staged path is refused by name. `create_git_branch: false`
+  is unchanged (no WIP, tree untouched).
+- **The harness baseline is persisted** (`harness_baselines`) before the first
+  agent call and reused by every later attempt and invocation; it is never
+  re-captured from carried work, so a harness edit in a WIP or red commit stays a
+  violation until reverted. Under `harness_guard: strict` a started task with no
+  trusted snapshot (none, `recaptured`, `unreadable`, or a surface that grew) is
+  refused before any agent call or destructive step.
+- **`spec-runner reset` keeps workspaces, baselines and the trust audit.** The
+  DB is rebuilt in a temporary file and swapped atomically; any failure before
+  the swap leaves the original untouched (exit 2), and reset refuses while a run
+  holds the executor lock.
+- **DONE and `tdd abandon` drop the workspace and baseline atomically** with
+  their own records. A DONE whose DB write fails (degraded mode) keeps the
+  baseline, consistently with the DONE row not being durable.
+
 ### Added
+
+- `spec-runner harness trust TASK-X --reason "…" [--bind-branch <branch>]`: an
+  audited operator confirmation that the task's restored, checked harness is its
+  trusted baseline. Mandatory reason, recorded actor, refused while the executor
+  lock is held or under `SPEC_RUNNER_AGENT`; binding, snapshot and audit row are
+  one transaction. It is not a way around a refusal.
 
 - **Run identity, run-start/closure and one seam for every paid call** (#480
   DT-02). `cli.main` mints one full UUIDv4 `run_id` per invocation (the
@@ -142,6 +185,17 @@ is a **breaking change** and requires a major version bump plus an entry here.
   test left a read-only directory behind (permissions are repaired, as
   `TemporaryDirectory` does); a workspace that still cannot be removed is
   reported as one warning line on stderr instead of being ignored silently.
+
+### Migration
+
+A task started before 5.0.0 has no trusted harness state. Under
+`harness_guard: strict` its next start is refused. First restore the task's
+harness files and check them (for instance against the main branch); only then
+confirm them:
+`spec-runner harness trust TASK-X --bind-branch <its branch> --reason "…"`.
+Under `create_git_branch: false` `--bind-branch` is not needed. Under
+`warn`/`off` nothing is refused, but the snapshot taken is not trusted when
+`strict` is switched on later.
 
 ## [4.5.0] - 2026-10-01
 
@@ -4308,7 +4362,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.5.0...v5.0.0
 [4.5.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...v4.3.0

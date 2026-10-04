@@ -967,14 +967,29 @@ runtime-state по инварианту конвейера «нужное для
       (`drain`, #653) переведён на долю `ack_timeout`. Ловушка остаётся в коде: следующий
       отказ придёт с `_diagnose` — тогда переоткрыть #519 с этим выводом.
 
-- [ ] **retry-continues-from-wip** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:retry-continues-from-wip @epic:eco.spec-toolchain
-      После таймаута или упавшего гейта незакоммиченная работа агента уходит при следующем
-      старте в rescue-стэш, и попытка начинается заново. TASK-002 потеряла бы 60 минут работы:
-      её сохранили ручным WIP-коммитом оператора. Ожидание: `retry` продолжает с работы прошлой
-      попытки (коммит на ветке задачи, не участвующий в red-гейте и claims, с явной пометкой),
-      а не с чистого дерева; плюс таймаут, соразмерный задаче (подсказка в отказе уже есть).
-      Связано: review-sees-only-last-commit — продолжение из коммитов требует ревью от базы
-      задачи.
+- [x] **retry-continues-from-wip** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:retry-continues-from-wip @epic:eco.spec-toolchain
+      **Сделано 2026-10-05 (PR TBD, релиз 5.0.0):** при `create_git_branch: true`
+      (включая `integration_pr`) незакоммиченная работа упавшей попытки сохраняется
+      WIP-коммитом `wip(TASK): … — not a candidate` на ветке задачи перед любым
+      разрушительным переключением; retry (в прогоне, отдельный `spec-runner retry`,
+      после убитого процесса) продолжает с неё, промпт это говорит. WIP не кандидат:
+      красный гейт, claims и `gated_sha` его не видят, поверх делается явный
+      `TASK-X: candidate`, no-op считается по накопленному диффу. Baseline харнесса
+      теперь персистентный (`harness_baselines`, снят до первого вызова агента),
+      правка харнесса в WIP или red-коммите остаётся нарушением; под `strict`
+      без доверенного снимка старт отказан, выход — `spec-runner harness trust`.
+      Четыре новые таблицы (`docs/state-schema.md`) ⇒ мажор 5.0.0; `reset`
+      сохраняет их, DONE и `tdd abandon` удаляют атомарно. Таймаут, соразмерный
+      задаче, — отдельная тема, здесь не делался.
+
+- [ ] **harness-baseline-trust-anchor** — доверенный baseline лежит в state DB, до которой у агента есть право записи @owner:github:andrei-shtanakov @id:harness-baseline-trust-anchor @epic:eco.spec-toolchain
+      Найдено при проектировании `retry-continues-from-wip` (2026-10-05). Доверенный
+      снимок харнесса (`harness_baselines`, `harness_baseline_files`) хранится в
+      state DB. Агент с правом записи в проект может изменить DB — та же граница
+      доверия, что у `tdd_claims`, `red_checkpoints` и budget-авторизаций. Закрыть:
+      держать DB вне записываемого множества агента или включить `executor_sandbox`
+      (#600) с DB вне `sandbox_allow`. Регресс: агент под sandbox не может изменить
+      строку baseline.
 
 - [x] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
       **Сделано 2026-10-04:** замер до фикса через настоящий шов (подменён
@@ -1697,6 +1712,7 @@ A/B — дефекты подтверждённого поведения, C — 
       спорить с обоснованием в `errors.py` (три kind'а = три состояния
       exit-кода) — решение владельца.
 - [ ] **harness-guard-refused-edit-inherited** — отвергнутая правка харнесса GREEN-агентом остаётся в дереве; при `create_git_branch: false` её читает baseline следующей задачи @owner:github:andrei-shtanakov @id:harness-guard-refused-edit-inherited @epic:eco.spec-toolchain
+      **Обновление 2026-10-05 (5.0.0):** RED, verify-first, ревью и плагины теперь откатывают (`refuse_and_restore`); GREEN по-прежнему нет — остаётся предмет этого пункта.
       Найдено 2026-10-04 при разборе приёмки PR #658. Для ревьюера, плагинов
       `post_review` и RED/verify-first закрыто в PR #658 откатом
       (`refuse_and_restore`). RED-часть — блокирующая находка приёмки, круг 2.
