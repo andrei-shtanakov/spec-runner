@@ -6,6 +6,7 @@ import json
 import math
 import shlex
 import signal
+import sqlite3
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -53,6 +54,7 @@ from .git_ops import (
 )
 from .hooks import rescue_run_uncommitted
 from .logging import get_logger
+from .phases import Refusal, RefusalKind
 from .preflight import cmd_preflight
 from .preset_cmd import cmd_config
 from .runner import (
@@ -344,7 +346,7 @@ def _enforce_spec_governance(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
-def _maybe_start_integration(args, config: ExecutorConfig):
+def _maybe_start_integration(args, config: ExecutorConfig, state: ExecutorState | None = None):
     """Fork a per-run integration branch when ``integration_pr`` is enabled.
 
     Returns an ``IntegrationRun`` (and redirects task merges onto it via
@@ -359,6 +361,10 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     run, 2026-09-30). Stray uncommitted work is therefore rescued into a
     stash first — once per run, the task start's mechanism (#231) — and a
     rescue that cannot save it refuses rather than forks over it.
+
+    Before that rescue, the owned task's work is committed as WIP (spec
+    2026-10-04 §1), after that task's harness trust check; ``state`` is the
+    caller's open state DB, if it has one.
     """
     if not getattr(config, "integration_pr", False):
         return None
@@ -367,6 +373,9 @@ def _maybe_start_integration(args, config: ExecutorConfig):
         return None
     if getattr(args, "dry_run", False):
         return None
+    refusal = _wip_before_fork(config, state)
+    if refusal is not None:
+        _refuse_integration(str(refusal), kind=refusal.kind)
     rescued, detail = rescue_run_uncommitted(config)
     if not rescued:
         _refuse_integration(f"uncommitted work could not be saved before forking: {detail}")
@@ -381,8 +390,91 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     return run
 
 
-def _refuse_integration(reason: str) -> NoReturn:
-    """Stop a run whose declared ``integration_pr`` cannot be honoured."""
+def _wip_before_fork(config: ExecutorConfig, state: ExecutorState | None) -> Refusal | None:
+    """Trust-check and save the owned task's work before the fork; the refusal, if any.
+
+    A state DB that cannot be opened or read is an ``instrument`` refusal:
+    ownership is the DB's to answer, never guessed (spec 2026-10-04 §2).
+    """
+    from .git_ops import WorktreeStatusError
+
+    try:
+        if state is not None:
+            return _owned_work_refusal(config, state)
+        with ExecutorState(config) as opened:
+            return _owned_work_refusal(config, opened)
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        return Refusal(
+            f"could not tell whose uncommitted work the tree holds before forking ({exc}); "
+            "nothing destructive ran",
+            RefusalKind.INSTRUMENT,
+        )
+
+
+def _owned_work_refusal(config: ExecutorConfig, state: ExecutorState) -> Refusal | None:
+    """R4: the current branch's owner is trust-checked, then its work saved as WIP.
+
+    Other tasks are checked at their own start, which precedes their own
+    destructive step. Under ``strict``, dirt on a ``task/*`` branch no recorded
+    task owns refuses: whose work it is cannot be told.
+    """
+    from .wip import owner, save_wip
+
+    task_id = owner(config, state)
+    refusal = (
+        _stray_task_branch_refusal(config)
+        if task_id is None
+        else _owner_trust_refusal(config, state, task_id)
+    )
+    return refusal if refusal is not None else save_wip(config, state).refusal
+
+
+def _owner_trust_refusal(
+    config: ExecutorConfig, state: ExecutorState, task_id: str
+) -> Refusal | None:
+    """The owner's `strict` trust check (`task_started` + `prepare`), as at its start."""
+    from .harness import HarnessBaseline, HarnessStateError, task_started
+
+    task = get_task_by_id(parse_tasks(config.tasks_file), task_id)
+    if task is None:
+        return Refusal(
+            f"the current branch is recorded for {task_id}, which is not in "
+            f"{config.tasks_file}; its uncommitted work was left in the tree",
+            RefusalKind.POLICY,
+        )
+    try:
+        started = task_started(config, state, task)
+        trust = HarnessBaseline().prepare(config, state, task, started=started)
+    except HarnessStateError as exc:
+        return Refusal(str(exc), RefusalKind.INSTRUMENT)
+    return None if trust is None else Refusal(f"{task_id}: {trust}", RefusalKind.POLICY)
+
+
+def _stray_task_branch_refusal(config: ExecutorConfig) -> Refusal | None:
+    """Under `strict`: uncommitted work on an unowned ``task/*`` branch refuses."""
+    from .git_ops import WorktreeStatusError, spec_contract_paths, uncommitted_work_paths
+    from .harness import TRUST_REMEDY
+
+    branch = current_branch(config) or ""
+    if config.harness_guard != "strict" or not branch.startswith("task/"):
+        return None
+    try:
+        dirt = uncommitted_work_paths(config, spec_contract_paths(config), strict=True)
+    except WorktreeStatusError as exc:
+        return Refusal(f"could not read the working tree: {exc}", RefusalKind.INSTRUMENT)
+    if not dirt:
+        return None
+    return Refusal(
+        f"uncommitted work on {branch} belongs to no recorded task; {TRUST_REMEDY}",
+        RefusalKind.POLICY,
+    )
+
+
+def _refuse_integration(reason: str, *, kind: RefusalKind = RefusalKind.POLICY) -> NoReturn:
+    """Stop a run whose declared ``integration_pr`` cannot be honoured.
+
+    Exit 1, or 2 when the refusal is an ``instrument`` failure (spec §5).
+    """
     logger.error("Refusing to run: integration_pr cannot be honoured", reason=reason)
     print(f"⛔ integration_pr is on, but {reason}.", file=sys.stderr)
     print(
@@ -391,7 +483,7 @@ def _refuse_integration(reason: str) -> NoReturn:
         "   rerun, or turn the mode off for this run (`integration_pr: false`).",
         file=sys.stderr,
     )
-    sys.exit(1)
+    sys.exit(2 if kind is RefusalKind.INSTRUMENT else 1)
 
 
 def run_exit_code(*, failed: int, infrastructure: int, prior: int) -> int:
@@ -1742,7 +1834,7 @@ def cmd_retry(args, config: ExecutorConfig):
         # with nobody told what to do next. Forked before any state is reset:
         # the fork may now refuse, and a refused retry must not have zeroed the
         # consecutive-failure brake (local review of the 2026-09-30 fix).
-        integration = _maybe_start_integration(args, config)
+        integration = _maybe_start_integration(args, config, state)
 
         task_state = state.get_task_state(task.id)
 

@@ -23,7 +23,6 @@ from .gates import (
 )
 from .git_ops import (
     build_scoped_test_command,
-    current_branch,
     ensure_runtime_gitignore,
     find_changed_source_files,
     get_main_branch,
@@ -32,7 +31,7 @@ from .git_ops import (
     runtime_state_paths,
     stage_all_except_runtime,
 )
-from .harness import HarnessStateError, refuse_and_restore, snapshot_contents
+from .harness import refuse_and_restore, snapshot_contents
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
@@ -221,10 +220,9 @@ def pre_start_hook(
 ) -> bool:
     """Hook before starting task.
 
-    With `state`, records that the task started (`task_workspaces`, spec
-    2026-10-04 §2) once this hook has itself checked out the task branch —
-    or always, without branching (branch NULL). A failed record raises
-    `HarnessStateError`; the caller turns it into an instrument refusal.
+    With `state`, the branch stage first saves the owned task's uncommitted
+    work as a WIP commit (spec 2026-10-04 §1). A WIP refusal raises
+    `StartRefused` carrying its typed `Refusal`, before anything destructive.
     """
     logger.info("Pre-start hook", task_id=task.id)
 
@@ -309,6 +307,8 @@ def pre_start_hook(
             # two cleanup commands and the checkout that precedes them are what
             # deleted a review agent's stranded fixes in the pilot. Save first,
             # and if saving fails, stop instead of cleaning.
+            if state is not None:
+                _save_wip_or_refuse(task, config, state, reporter)
             rescued, rescue_detail = rescue_uncommitted(task, config)
             if not rescued:
                 if reporter:
@@ -368,29 +368,43 @@ def pre_start_hook(
         except FileNotFoundError:
             pass  # git not installed
 
-    if state is not None:
-        _record_workspace(task, config, state)
-
     # Run plugin pre_start hooks
     return run_plugin_hooks_for("pre_start", task, config, success=None) is None
 
 
-def _record_workspace(task: Task, config: ExecutorConfig, state: "ExecutorState") -> None:
-    """Record the started task, bound to the branch this hook checked out.
+class StartRefused(Exception):
+    """`pre_start_hook` refused before anything destructive; carries the typed refusal."""
 
-    Ownership comes from our own checkout, not from a name: when branching is
-    on and HEAD is not the task branch (the checkout failed), nothing is
-    recorded.
+    def __init__(self, refusal: Refusal) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
+
+def _save_wip_or_refuse(
+    task: Task, config: ExecutorConfig, state: "ExecutorState", reporter: StageReporter | None
+) -> None:
+    """Commit the owned task's work as WIP before the branch stage cleans the tree.
+
+    Raises `StartRefused` on a WIP refusal or when ownership cannot be read
+    (an `instrument` refusal): the work stays in the tree, nothing ran.
     """
-    from .tdd import resolve_namespace
+    from .git_ops import WorktreeStatusError
+    from .wip import save_wip
 
-    branch = current_branch(config) if config.create_git_branch else None
-    if config.create_git_branch and branch != get_task_branch_name(task):
-        return
     try:
-        state.record_workspace(resolve_namespace(config), task.id, branch=branch, run_id=None)
-    except (sqlite3.Error, OSError) as exc:
-        raise HarnessStateError(f"could not record the task workspace: {exc}") from exc
+        refusal = save_wip(config, state).refusal
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        refusal = Refusal(
+            f"could not decide whether the tree holds a task's unfinished work ({exc}); "
+            "the work is in the tree and nothing destructive ran",
+            RefusalKind.INSTRUMENT,
+        )
+    if refusal is None:
+        return
+    logger.error("Refusing to start: WIP not saved", task_id=task.id)
+    if reporter:
+        reporter.record_for("branch", PhaseOutcome.ERROR, str(refusal))
+    raise StartRefused(refusal)
 
 
 def commit_task_work(task: Task, config: ExecutorConfig) -> str:

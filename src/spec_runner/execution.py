@@ -18,7 +18,7 @@ from .harness import (
     snapshot_contents,
     task_started,
 )
-from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
+from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, StartRefused, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
 from .logging import get_logger
@@ -705,8 +705,16 @@ def _execute_task(
     if trust is not None:
         return _refuse_task(task, config, state, trust, kind=RefusalKind.POLICY)
 
-    # Pre-start hook
-    if not pre_start_hook(task, config, reporter=reporter):
+    # Pre-start hook. A WIP refusal (spec 2026-10-04 §1) keeps its kind and
+    # names the stage it happened in — `branch`, a pre-capture stage, so the
+    # refused start does not make the task "started".
+    try:
+        hook_ok = pre_start_hook(task, config, reporter=reporter, state=state)
+    except StartRefused as exc:
+        return _refuse_task(
+            task, config, state, str(exc.refusal), kind=exc.refusal.kind, stage="branch"
+        )
+    if not hook_ok:
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
