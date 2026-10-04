@@ -132,7 +132,7 @@ def uncommitted_work_paths(
     """
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         return []
-    status = _git(config, "status", "--porcelain")
+    status = _git(config, "status", "--porcelain", "-z")
     if status.returncode != 0:
         if strict:
             raise WorktreeStatusError(
@@ -147,8 +147,20 @@ def uncommitted_work_paths(
             continue
     skip.add("spec/.gitignore")  # harness-owned (#96)
     out: list[str] = []
-    for line in status.stdout.splitlines():
-        path = line[3:].strip().strip('"')
+    # `-z`: raw names (no C-quoting, so `git add -- <path>` works for a name with
+    # a space or non-ASCII); a rename/copy entry is followed by its source name.
+    entries = status.stdout.split("\0")
+    out_paths: list[str] = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        out_paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            i += 1  # the rename's original name
+    for path in out_paths:
         # `-wal`/`-shm` sidecars sit next to the state file, hence the prefix
         # forms — the same filter `review_pr` applies to its own dirt check.
         if any(path == s or path.startswith(s + "/") or path.startswith(s + "-") for s in skip):
