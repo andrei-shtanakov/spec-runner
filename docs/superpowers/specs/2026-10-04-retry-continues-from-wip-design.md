@@ -41,7 +41,8 @@ oracle — the #137 class.
 - The next attempt's prompt says it is continuing unfinished work, that the
   work is unverified, and that the approach may be revised.
 - If the work cannot be saved, nothing destructive runs.
-- `create_git_branch: false` behaves as today.
+- `create_git_branch: false`: the tree and the absence of WIP stay as today;
+  the persistent baseline applies there too.
 
 ## Design
 
@@ -70,9 +71,29 @@ runtime paths and `spec_contract_paths(config)`: an explicit path list, staged
 with `git add -- <paths>`, committed with `git commit -- <paths>` semantics so
 that anything already in the index (a staged runtime file, a staged
 `tasks.md`) cannot ride along. No eligible change → no WIP commit (never an
-empty one). The excluded changes are left for the existing mechanisms
-(`recover_interrupted_flip` for a harness status flip, the rescue stash for
-the rest) before the cleanup runs.
+empty one).
+
+**The index is not overwritten.** `git add` would replace a staged version of
+an eligible path with the working-tree version. Before touching the index,
+every eligible path is checked: if its index entry differs from HEAD **and**
+from the working tree (a partially staged file), the start is refused —
+the paths are named, nothing was staged or committed, no destructive step
+ran; the operator commits or unstages and retries. Anything else (index
+equal to HEAD, or equal to the working tree) loses nothing when staged.
+
+**What WIP leaves behind, per destructive point.**
+
+- *`integration_pr` run start.* WIP takes the eligible changes; the
+  spec/config paths `rescue_run_uncommitted` deliberately excludes stay in
+  the tree under the existing dirty-spec guard (`_enforce_clean_spec`, which
+  already answers before the fork) and the checkout's own rules. If the
+  checkout refuses because of them, the run stops, as today. Runtime paths
+  are ignored, as today.
+- *`pre_start` branch stage.* WIP takes the eligible changes; whatever
+  remains (spec contract paths, e.g. an uncommitted status flip) goes to the
+  existing task-level rescue stash before the cleanup. If that rescue fails
+  after a successful WIP commit, the cleanup does not run and the start is
+  refused; the WIP commit stays.
 
 **Form.**
 
@@ -96,24 +117,36 @@ killed process never sees its end, and the next start always runs.
 
 ### 2. Persistent state: task workspace and harness baseline
 
-Four tables, keyed by `(namespace, task_id)` where `namespace` is
-`tdd.resolve_namespace(config)`:
+Four tables; `namespace` is `tdd.resolve_namespace(config)`:
 
-- **`task_workspaces`** — `namespace`, `task_id`, `branch`, `started_at`,
-  `run_id`, `bound_by` (`run` | `operator`). The fact that the task started,
-  and on which exact branch. Written **in every guard mode** (WIP depends on
-  it, not on the snapshot), after the current `pre_start` has itself checked
-  out this task's branch — ownership established by our own action, not by a
-  name.
-- **`harness_baselines`** — `namespace`, `task_id`, `captured_at`, `run_id`,
-  `guard_mode`, `provenance` (`initial` | `operator` | `recaptured`),
-  `surface` (JSON list of the surface candidates at capture).
-- **`harness_baseline_files`** — `namespace`, `task_id`, `path`, `state`
-  (`present` | `absent` | `unreadable`), `digest`, `content` (BLOB, NULL
-  unless `present`). An absent file is an explicit `absent` row.
-- **`harness_trust_audit`** — append-only: `namespace`, `task_id`, `at`,
-  `actor`, `reason`, `branch`, `bound_branch` (1 when the command created the
-  workspace binding), `replaced_provenance` (NULL when nothing was replaced).
+- **`task_workspaces`** — key `(namespace, task_id)`; `branch` (NULL under
+  `create_git_branch: false`), `started_at`, `run_id`, `bound_by`
+  (`run` | `operator`). The fact that the task started, and on which exact
+  branch. Written **in every guard mode** (WIP depends on it, not on the
+  snapshot), after the current `pre_start` has itself checked out this task's
+  branch — ownership established by our own action, not by a name.
+- **`harness_baselines`** — key `(namespace, task_id)`; `captured_at`,
+  `run_id`, `guard_mode`, `provenance` (`initial` | `operator` |
+  `recaptured`), `surface` (JSON: every surface **candidate** at capture —
+  `HARNESS_CANDIDATES`, the control-plane keys, `harness_files` — each with
+  its state `file` | `dir` | `absent`).
+- **`harness_baseline_files`** — key `(namespace, task_id, path)`; `state`
+  (`present` | `unreadable`), `digest`, `content` (BLOB, NULL when
+  `unreadable`). One row per file the surface held at capture.
+- **`harness_trust_audit`** — key `id` (one row per event, several per task);
+  `namespace`, `task_id`, `at`, `actor`, `reason`, `branch`, `bound_branch`
+  (1 when the command created the workspace binding), `replaced_provenance`
+  (NULL when nothing was replaced). Append-only, and **kept** after DONE and
+  `tdd abandon`.
+
+**Directory candidates are snapshotted whole.** A candidate that is a
+directory (`.github/workflows`, a directory in `harness_files`) records
+`dir` in `surface` and one file row per file under it. A file under a
+recorded directory that has no row is `created` — an ordinary violation, not
+an unknown surface. A candidate recorded `absent` (file or directory) that
+exists later is `created` for every file it now holds. "Unknown" means only
+a **candidate** that is not in the recorded `surface` at all (the surface
+definition grew, e.g. `harness_files` was extended).
 
 **"Started"** is decided **before** this attempt's `pre_start`, from what
 existed before it: a `task_workspaces` row, or recorded attempts of the task,
@@ -132,10 +165,10 @@ before any destructive step):
 
 | state | result |
 |---|---|
-| `initial` or `operator` snapshot, every current surface path has a `present`/`absent` row | proceed |
+| `initial` or `operator` snapshot, every current surface candidate is in the recorded `surface` | proceed |
 | started, no snapshot (incl. a task begun under `off`, or before 5.0.0) | refuse: no trusted harness state → `harness trust` |
 | snapshot `recaptured` | refuse: an automatic re-capture is not trusted → `harness trust` |
-| a current surface path has no row (e.g. `harness_files` extended) | refuse: the new surface cannot be checked → `harness trust` |
+| a current surface candidate is not in the recorded `surface` (e.g. `harness_files` extended) | refuse: the new surface cannot be checked → `harness trust` |
 | a row is `unreadable` | refuse: not trusted content → fix, then `harness trust` |
 | the DB cannot be read or written | refuse, kind `instrument` |
 
@@ -146,7 +179,14 @@ becomes trusted when `strict` is switched on.
 **Lifecycle.** Workspace, snapshot and file rows are deleted together, in one
 transaction, at the final DONE (next to `_release_claims`) and by
 `tdd abandon`. They survive errors, timeouts, guard refusals, separate
-`retry` invocations and `reset`.
+`retry` invocations and `reset`. The audit is never deleted.
+
+**`create_git_branch: false`.** The tree is not touched and no WIP is made,
+as today. The persistent baseline applies all the same: captured before the
+first agent call, read by later attempts and invocations, the same trust
+rules under `strict`. The workspace row is written with `branch` NULL (the
+"started" marker); no branch match is required to use the baseline, and
+"started" is decided by the workspace row or recorded attempts.
 
 **Failure before anything destructive.** Reading these rows happens before
 the rescue/WIP step of both destructive points, the `integration_pr` fork
@@ -164,10 +204,12 @@ is trusted — modelled on `budget authorize`: mandatory reason, recorded
 actor, refusal while the executor lock is held, refusal under
 `SPEC_RUNNER_AGENT`.
 
-- With a workspace row: the current branch must equal the recorded branch
-  (and the namespace match); otherwise refused.
-- Without a workspace row: refused unless `--bind-branch <branch>` names the
-  **current** branch; then the binding (`bound_by=operator`) is written.
+- With a workspace row: the namespace must match, and — when the row has a
+  branch — the current branch must equal it; otherwise refused.
+- Without a workspace row under `create_git_branch: true`: refused unless
+  `--bind-branch <branch>` names the **current** branch; then the binding
+  (`bound_by=operator`) is written. Under `create_git_branch: false` the
+  binding is written with `branch` NULL and `--bind-branch` is not needed.
 - Writes, in **one transaction**, the binding (if any), the snapshot
   (`provenance=operator`, replacing any existing one) and the audit row
   (with `replaced_provenance`). A failure leaves no partial rows.
@@ -233,7 +275,12 @@ agent call is needed.
    with no stash, no checkout, no clean; a branch created by the current
    start does not block the first capture.
 6. WIP content: a pre-staged runtime file and `tasks.md` are not committed;
-   no eligible change → no WIP commit.
+   no eligible change → no WIP commit. A path whose HEAD, index and working
+   tree all differ → refused before the index is touched; index and working
+   tree bytes unchanged. After WIP, a leftover status flip in `pre_start`
+   goes to the task rescue stash; a failing rescue after WIP blocks the
+   cleanup. At the `integration_pr` start a dirty spec is left to the
+   dirty-spec guard.
 7. WIP commit failure: refused, work still in the tree, no destructive step.
 8. `_unregistered_red` finds a red through a WIP chain and stops at any other
    commit.
@@ -251,7 +298,13 @@ agent call is needed.
     rows; `reset` keeps both.
 14. DB unreadable/unwritable → `instrument` refusal before any destructive
     step, the `integration_pr` fork included.
-15. `create_git_branch: false` → unchanged.
+15. `create_git_branch: false`: the tree is untouched and no WIP is made; a
+    second invocation still uses the original persisted baseline; under
+    `strict` a started task without a snapshot is refused, and
+    `harness trust` works without `--bind-branch`.
+16. Directories: a new file under `.github/workflows` recorded at capture is
+    a `created` violation (not a trust refusal); a candidate directory
+    absent at capture and created later → `created` for its files.
 
 ## Contract and release
 
