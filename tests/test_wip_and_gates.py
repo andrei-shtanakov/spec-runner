@@ -203,6 +203,7 @@ class TestPostDoneHookOverWip:
         hooks.post_done_hook(cc_task(), cfg, True)
         assert seen, "the gate never ran"
         assert not any(_is_wip(root, sha) for sha in seen)
+        assert reviewed and not any(_is_wip(root, sha) for sha in reviewed[-2:])
 
     def test_no_candidate_without_auto_commit(self, tmp_path, monkeypatch):
         from spec_runner import hooks
@@ -395,3 +396,77 @@ class TestRedBelowWip:
         assert result.outcome is RedOutcome.EXPECTED_FAIL, result.detail
         assert result.checkpoint is not None
         assert result.checkpoint.commit_sha == red_sha
+
+
+def _spy_agent(monkeypatch, reply=""):
+    from spec_runner import tdd
+
+    calls: list[str] = []
+
+    def agent(config, prompt, **kw):
+        calls.append(prompt)
+        return tdd.AgentCall(text=reply)
+
+    monkeypatch.setattr(tdd, "_run_agent", agent)
+    return calls
+
+
+@pytest.mark.slow
+class TestBelowWipIsCheckOnly:
+    def test_no_paid_round_when_findings_survive(self, tmp_path, monkeypatch):
+        """The fix cures nothing; below WIP the agent round must not run."""
+        import shlex
+        import sys
+
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import RedOutcome, run_red_phase
+
+        root, cfg, red_sha, evid = _scenario(
+            tmp_path, "def test_thing():  # AGENTWORD\n    assert False\n"
+        )
+        noop = tmp_path / "scripts" / "noop.py"
+        noop.write_text("import sys\nsys.exit(0)\n")
+        cfg.lint_fix_command = f"{shlex.quote(sys.executable)} {shlex.quote(str(noop))}"
+        calls = _spy_agent(monkeypatch)
+        wip_sha = _git(root, "rev-parse", "HEAD").strip()
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert calls == [], "a paid call was made below WIP"
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert red_sha[:12] in result.detail and wip_sha[:12] in result.detail
+        assert "git reset --hard" in result.detail
+        assert _git(root, "rev-parse", "HEAD").strip() == wip_sha
+
+    def test_post_authoring_path_refuses_too(self, tmp_path, monkeypatch):
+        """No declared fix: adoption goes through _unregistered_red."""
+        from spec_runner.state import ExecutorState
+        from spec_runner.tdd import RedOutcome, run_red_phase
+
+        root, cfg, red_sha, evid = _scenario(
+            tmp_path, "def test_thing():  # AGENTWORD\n    assert False\n"
+        )
+        cfg.lint_fix_command_declared = False
+        calls = _spy_agent(monkeypatch, reply=f"TDD_SELECTOR: {evid}::test_thing")
+        wip_sha = _git(root, "rev-parse", "HEAD").strip()
+        with ExecutorState(cfg) as state:
+            result = run_red_phase(_task(), cfg, state)
+        assert len(calls) == 1, "only the authoring call"
+        assert result.outcome is RedOutcome.UNVERIFIABLE
+        assert result.checkpoint is None
+        assert red_sha[:12] in result.detail and wip_sha[:12] in result.detail
+        assert _git(root, "rev-parse", "HEAD").strip() == wip_sha
+
+
+@pytest.mark.slow
+def test_failed_candidate_stage_commit_over_wip_is_refused(tmp_path, monkeypatch):
+    from spec_runner import hooks
+    from spec_runner.phases import Refusal, RefusalKind
+
+    root = _cc_branch_with_wip(tmp_path)
+    cfg = cc_cfg(root, create_git_branch=True)
+    seen = _recording_gate(monkeypatch)
+    monkeypatch.setattr(hooks, "commit_task_work", lambda t, c: "failed")
+    ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+    assert ok is False
+    assert isinstance(err, Refusal) and err.kind == RefusalKind.INSTRUMENT
+    assert not seen

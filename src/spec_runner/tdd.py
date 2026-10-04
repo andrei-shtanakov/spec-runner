@@ -1037,13 +1037,28 @@ def run_red_phase(
     )
 
 
-def _wip_refusal_text(config: ExecutorConfig, sha: str, what: list[str]) -> str:
-    """The adoption refusal naming the red and the WIP commit above it."""
+def _wip_refusal_text(
+    config: ExecutorConfig, sha: str, what: list[str], *, finding: bool = False
+) -> str:
+    """The adoption refusal naming the red, the WIP above it and the way out.
+
+    This wedges: HEAD does not change, so every retry refuses the same way.
+    `spec-runner tdd abandon/repair` act on a recorded checkpoint and none
+    exists for an unregistered red, so the remedy is in git.
+    """
+    wip = _head(config)[:12] or "?"
+    remedy = (
+        f"make the red HEAD again — save any WIP you want to keep elsewhere, then "
+        f"`git reset --hard {sha[:12]}` — fix the findings in the red's file, and retry"
+        if finding
+        else "revert the WIP's change to the red's file (a new commit on top is enough) "
+        "or drop the WIP commit, then retry"
+    )
     return (
-        f"the red {sha[:12]} sits below WIP commit {_head(config)[:12] or '?'} and "
-        f"cannot be adopted: {', '.join(what)} would have to rewrite it or judge the WIP's "
-        "bytes as the red's; a WIP commit never creates, adopts or confirms a red. "
-        "Nothing was amended or committed."
+        f"the unregistered red {sha[:12]} sits below WIP {wip} and cannot be adopted: "
+        f"{'; '.join(what)}. A WIP commit never creates, adopts or confirms a red, and "
+        f"nothing was amended or committed. To continue: {remedy} "
+        "(`tdd abandon`/`repair` do not apply: no checkpoint exists for this red)."
     )
 
 
@@ -1127,13 +1142,23 @@ def _judge_red_commit(
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
+    # Below WIP nothing may be repaired (the refusal would be certain once a
+    # fix changed bytes), so the checks run check-only: no declared fix and no
+    # paid agent round (`task`/`state` withheld).
+    judged = config
+    if under_wip:
+        from dataclasses import replace
+
+        judged = replace(config, lint_fix_command_declared=False, format_command_declared=False)
     lint_failure, tree_before_fix, lint_instrument = _lint_claimed(
-        config,
+        judged,
         parsed_selector,
-        task=task,
-        state=state,
+        task=None if under_wip else task,
+        state=None if under_wip else state,
         raw_selector=selector,
     )
+    if lint_failure and under_wip:
+        lint_failure = _wip_refusal_text(config, sha, [lint_failure], finding=True)
     if lint_failure:
         if tree_before_fix is not None:
             # A fix that ran but did not cure leaves its bytes in the tree;
@@ -1149,7 +1174,9 @@ def _judge_red_commit(
     # file is byte-locked — drift that gets in here fails every attempt by
     # construction. The earliest snapshot wins: judged against it, the absorb
     # below folds the lint fix and the format fix into the one candidate.
-    format_failure, tree_before_format, format_instrument = _format_claimed(config, parsed_selector)
+    format_failure, tree_before_format, format_instrument = _format_claimed(judged, parsed_selector)
+    if format_failure and under_wip:
+        format_failure = _wip_refusal_text(config, sha, [format_failure], finding=True)
     if tree_before_fix is None:
         tree_before_fix = tree_before_format
     if format_failure:
@@ -2429,10 +2456,11 @@ def _pending_unregistered_red(
     paying for a fresh authoring call (#341 BEH-28).
 
     `_unregistered_red` (#261) adopts the same residue, but only after an
-    authoring call already ran, by matching HEAD's subject against the
+    authoring call already ran, by matching the red commit's subject (HEAD, or
+    the commit below this task's WIP chain, `_head_below_wip`) against the
     selector the agent *just* reported. Before that call there is no reported
     selector to match against — so it is read back out of HEAD's own subject
-    instead: `_commit_red` writes exactly ``"{task.id}: red for {selector}"``,
+    instead (the commit below the WIP chain, not necessarily HEAD): `_commit_red` writes exactly ``"{task.id}: red for {selector}"``,
     the only place that subject is ever produced, so recovering the selector
     from it is not a guess.
 

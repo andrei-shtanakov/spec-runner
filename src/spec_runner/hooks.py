@@ -517,6 +517,31 @@ def _candidate_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
     return None
 
 
+def _wip_head_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
+    """INSTRUMENT refusal when the candidate-stage commit failed with HEAD on WIP.
+
+    The verdict would bind to a WIP commit; an unreadable HEAD is no better.
+    """
+    from .wip import WipReadError, head_is_wip_of
+
+    try:
+        on_wip = head_is_wip_of(config, task.id)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot read HEAD after the candidate commit failed: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+    if not on_wip:
+        return None
+    return Refusal(
+        "The candidate commit failed and HEAD is this task's WIP commit; a verdict "
+        "would bind to WIP",
+        RefusalKind.INSTRUMENT,
+        terminal=True,
+    )
+
+
 def _wip_base(config: ExecutorConfig) -> str | None:
     """Where the task's branch forked, or None when there provably is no WIP.
 
@@ -1602,8 +1627,12 @@ def post_done_hook(
             reporter.enter("commit")
         pre_review = commit_task_work(task, config)
         committed_pre_review = pre_review == "committed"
-        if pre_review == "empty" and config.create_git_branch:
-            candidate_refusal = _candidate_refusal(task, config)
+        if pre_review in ("empty", "failed") and config.create_git_branch:
+            candidate_refusal = (
+                _candidate_refusal(task, config)
+                if pre_review == "empty"
+                else _wip_head_refusal(task, config)
+            )
             if candidate_refusal is not None:
                 return (False, candidate_refusal, ReviewVerdict.SKIPPED.value, "", False)
         # #157 §2.1: the tree review is about to judge. Recorded only when a
