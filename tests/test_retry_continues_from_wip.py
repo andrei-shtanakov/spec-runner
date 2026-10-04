@@ -526,7 +526,7 @@ def test_unreadable_tasks_md_at_the_fork_is_an_instrument_refusal(repo, monkeypa
 
 def test_unreadable_wip_refuses_before_the_paid_green_call(repo, monkeypatch):
     """A WipReadError while building the prompt is an INSTRUMENT refusal, no spend."""
-    from spec_runner import hooks
+    from spec_runner import wip
     from spec_runner.execution import run_with_retries
     from spec_runner.wip import WipReadError
 
@@ -541,7 +541,7 @@ def test_unreadable_wip_refuses_before_the_paid_green_call(repo, monkeypatch):
         raise WipReadError("git exploded")
 
     monkeypatch.setattr(paid_call, "_spawn", _spawn)
-    monkeypatch.setattr(hooks, "_wip_base", _boom)
+    monkeypatch.setattr(wip, "wip_base", _boom)
     cfg = _cfg(repo, max_retries=1)
     with ExecutorState(cfg) as st:
         st.get_task_state("TASK-070").attempts = []
@@ -550,3 +550,60 @@ def test_unreadable_wip_refuses_before_the_paid_green_call(repo, monkeypatch):
     assert not spawned
     assert not last.success
     assert "git exploded" in (last.error or "")
+
+
+def test_fresh_retry_with_no_attempts_in_memory_still_continues(repo, monkeypatch):
+    """A new invocation: no failed attempts in memory, WIP on the branch."""
+    _fail_once(repo, monkeypatch)
+    prompts: list[str] = []
+
+    def _spawn(invocation, *, timeout, cwd, env):
+        prompts.append(" ".join(invocation.argv))
+        return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+    monkeypatch.setattr(paid_call, "_spawn", _spawn)
+    from spec_runner.execution import execute_task
+
+    cfg = _cfg(repo, max_retries=1)
+    with ExecutorState(cfg) as st:
+        st.get_task_state("TASK-070").attempts = []
+        execute_task(_task(), cfg, st)
+    assert prompts
+    assert "continuing unfinished work of attempt" in prompts[0]
+    assert "previous attempt did not finish" in prompts[0]
+
+
+def test_non_repo_builds_the_prompt_without_continuation(tmp_path):
+    from spec_runner.execution import _wip_continuation
+    from spec_runner.wip import wip_base
+
+    cfg = _cfg(tmp_path)
+    assert wip_base(cfg) is None
+    assert _wip_continuation(cfg, "TASK-070") == ()
+
+
+def test_empty_repo_builds_the_prompt_without_continuation(tmp_path):
+    from spec_runner.execution import _wip_continuation
+    from spec_runner.wip import wip_base
+
+    _git(tmp_path, "init", "-q", "-b", "main")
+    cfg = _cfg(tmp_path)
+    assert wip_base(cfg) is None
+    assert _wip_continuation(cfg, "TASK-070") == ()
+
+
+def test_real_git_failure_in_a_repo_with_commits_still_refuses(repo, monkeypatch):
+    from spec_runner import wip
+    from spec_runner.wip import WipReadError
+
+    _git(repo, "switch", "-q", "-c", BRANCH)
+    real = wip._git
+
+    def _git_failing(config, *args):
+        if args and args[0] == "merge-base":
+            return subprocess.CompletedProcess(args, 1, "", "boom")
+        return real(config, *args)
+
+    monkeypatch.setattr(wip, "_git", _git_failing)
+    with pytest.raises(WipReadError):
+        wip.wip_base(_cfg(repo))

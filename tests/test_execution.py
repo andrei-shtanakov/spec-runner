@@ -1316,7 +1316,6 @@ class TestSignalHandling:
             project_root=tmp_path,
             state_file=tmp_path / "state.db",
             logs_dir=tmp_path / "logs",
-            create_git_branch=False,  # not a git repo: WIP history is unreadable there
         )
         (tmp_path / "spec").mkdir()
         (tmp_path / "spec" / "tasks.md").write_text("# Tasks\n")

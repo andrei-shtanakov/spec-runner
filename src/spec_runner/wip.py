@@ -168,6 +168,35 @@ def is_wip_of(config: ExecutorConfig, sha: str, task_id: str) -> bool:
     return body.returncode == 0 and task_id in body.stdout.split()
 
 
+def wip_base(config: ExecutorConfig) -> str | None:
+    """Where the task's branch forked, or None when there provably is no WIP.
+
+    No WIP can exist without a per-task branch, without a repository or any
+    commit yet (bootstrap tasks run `git init`), on the main branch itself, or
+    on a task branch with no commit of its own (merge-base == HEAD). Anything
+    else that cannot be computed raises `WipReadError` instead of reading as
+    "no WIP" (review.task_base falls back to ``HEAD~1`` there).
+    """
+    from .git_ops import get_main_branch
+
+    if not config.create_git_branch:
+        return None
+    if _git(config, "rev-parse", "--git-dir").returncode != 0:
+        return None
+    head = _git(config, "rev-parse", "--verify", "HEAD")
+    tip = head.stdout.strip()
+    if head.returncode != 0 or not tip:
+        return None
+    main = get_main_branch(config)
+    if current_branch(config) == main:
+        return None
+    merge_base = _git(config, "merge-base", "HEAD", main)
+    base = merge_base.stdout.strip()
+    if merge_base.returncode != 0 or not base:
+        raise WipReadError(merge_base.stderr.strip()[:200] or "cannot compute the task's base")
+    return None if base == tip else base
+
+
 def wip_commits(
     config: ExecutorConfig, task_id: str, base: str
 ) -> list[tuple[str, int, list[str]]]:

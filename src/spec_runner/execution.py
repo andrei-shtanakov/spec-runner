@@ -59,9 +59,9 @@ def _wip_continuation(
     config: ExecutorConfig, task_id: str
 ) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
     """The task's WIP commits as prompt input; raises `WipReadError` on git failure."""
-    from . import hooks
+    from . import wip
 
-    base = hooks._wip_base(config)
+    base = wip.wip_base(config)
     if base is None:
         return ()
     return tuple((sha, n, tuple(files)) for sha, n, files in wip_commits(config, task_id, base))

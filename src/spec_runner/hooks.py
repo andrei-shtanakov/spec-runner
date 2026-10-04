@@ -542,35 +542,6 @@ def _wip_head_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
     )
 
 
-def _wip_base(config: ExecutorConfig) -> str | None:
-    """Where the task's branch forked, or None when there provably is no WIP.
-
-    No WIP can exist without a per-task branch, on the main branch itself, or
-    on a task branch with no commit of its own (merge-base == HEAD). Anything
-    else that cannot be computed raises `WipReadError` instead of reading as
-    "no WIP" (review.task_base falls back to ``HEAD~1`` there).
-    """
-    from .git_ops import current_branch, get_main_branch
-    from .wip import WipReadError
-
-    if not config.create_git_branch:
-        return None
-    main = get_main_branch(config)
-    if current_branch(config) == main:
-        return None
-    run = lambda *a: subprocess.run(  # noqa: E731
-        ["git", *a], capture_output=True, text=True, cwd=config.project_root
-    )
-    merge_base = run("merge-base", "HEAD", main)
-    head = run("rev-parse", "--verify", "HEAD")
-    base, tip = merge_base.stdout.strip(), head.stdout.strip()
-    if merge_base.returncode != 0 or not base or head.returncode != 0 or not tip:
-        raise WipReadError(
-            (merge_base.stderr or head.stderr).strip()[:200] or "cannot compute the task's base"
-        )
-    return None if base == tip else base
-
-
 def task_changed_since_base(config: ExecutorConfig) -> bool:
     """Whether the task's cumulative diff against its base is non-empty.
 
@@ -1389,10 +1360,10 @@ def post_done_hook(
     # history is not "no WIP": the no-op verdict and the candidate depend on it.
     has_wip = False
     try:
-        from .wip import WipReadError, wip_commits
+        from .wip import WipReadError, wip_base, wip_commits
 
-        wip_base = _wip_base(config)
-        has_wip = wip_base is not None and bool(wip_commits(config, task.id, wip_base))
+        base = wip_base(config)
+        has_wip = base is not None and bool(wip_commits(config, task.id, base))
     except WipReadError as e:
         return (
             False,
