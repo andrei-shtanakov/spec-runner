@@ -9,7 +9,7 @@ from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
-from .harness import HarnessBaseline, guard_error
+from .harness import HarnessBaseline, guard_error, snapshot_harness
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
@@ -706,6 +706,11 @@ def _execute_task(
     # belongs to the task, not the attempt, so a retry cannot re-baseline a
     # forbidden edit into legitimacy.
     harness_before = (harness_baseline or HarnessBaseline()).capture(config)
+    # What the RED/verify-first passes of *this* attempt are judged against —
+    # not the task baseline: an edit an earlier attempt left behind is the
+    # GREEN agent's to revert (the retry prompt says so), and refusing here
+    # would take that chance away and fail every retry unpaid.
+    passes_before = snapshot_harness(config)
 
     # Update status
     state.mark_running(task_id)
@@ -881,7 +886,7 @@ def _execute_task(
 
     # The passes above write into the tree; refuse a harness edit here,
     # before the paid GREEN call, not after it.
-    harness_error = guard_error(config, task_id, harness_before, log_progress)
+    harness_error = guard_error(config, task_id, passes_before, log_progress)
     if harness_error is not None:
         state.record_attempt(
             task_id,
@@ -1141,12 +1146,7 @@ def _execute_task(
             # has already spent. The free budget rehearsal caught exactly that:
             # $0.60 recorded, $1.00 cap, review allowed, $1.80 spent.
             hook_success, hook_error, review_status, review_findings, hook_no_op = post_done_hook(
-                task,
-                config,
-                True,
-                reporter=reporter,
-                pending_cost=cli_result.cost_usd,
-                harness_before=harness_before,
+                task, config, True, reporter=reporter, pending_cost=cli_result.cost_usd
             )
 
             if hook_success:

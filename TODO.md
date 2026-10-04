@@ -1623,13 +1623,15 @@ A/B — дефекты подтверждённого поведения, C — 
          прогноз preflight, и так и сказано в `spec/FORMAT.md`. Сверку с
          диффом не делаем, потребителя нет.
 - [x] **harness-guard-snapshot-before-red** — снимок харнесса снимался после RED/verify-first, и правка RED-агента отмывалась @owner:github:andrei-shtanakov @id:harness-guard-snapshot-before-red @epic:eco.spec-toolchain
-      **Сделано 2026-10-04 (PR #658):** baseline снимается сразу после
-      `pre_start_hook`. После RED/verify-first, до GREEN, добавлена вторая
-      сверка: общий хелпер `_harness_guard_error`, тот же, что у GREEN-сверки.
-      Регресс — `tests/test_harness_guard_before_red.py`: два ключевых теста
-      (RED и verify-first правят `pyproject.toml` при `strict`) краснели на
-      master, три контрольных (`warn`, чистый RED, `uv sync` в pre_start)
-      зелёные и до фикса, и после.
+      **Сделано 2026-10-04 (PR #658):** baseline задачи снимается сразу после
+      `pre_start_hook`, так что GREEN-сверка видит и правки RED/verify-first.
+      Плюс сверка до GREEN: проходы RED/verify-first **этой** попытки
+      сравниваются со снимком, снятым прямо перед ними. С baseline задачи их
+      не сравниваем: правку, оставленную прошлой попыткой, retry-промпт велит
+      GREEN-агенту откатить, и отказ до GREEN отнял бы у него этот шанс.
+      Именно так было в первой версии фикса; это нашёл локальный круг ревью.
+      Регресс: `tests/test_harness_guard_before_red.py`,
+      `test_harness_guard_retry.py::TestARetryMayRevert`.
       Найдено 2026-10-04 при ответе на вопросы devtools про `Touches`, по чтению
       кода.
       В `_execute_task` порядок такой: `pre_start_hook` (`execution.py:688`) →
@@ -1640,30 +1642,22 @@ A/B — дефекты подтверждённого поведения, C — 
       попадает и в red-коммит, и в базовый снимок. Отмывается молча, даже при
       `strict`. Это тот же класс, что #137: барьер разоружает то, что
       происходит до снимка.
-      **Фикс:** захватывать baseline сразу после `pre_start_hook`, то есть после
-      `uv sync`, иначе sync станет нарушением, но до verify-first и RED.
-      Проверять нарушения и после RED-прохода, до реплея и до платного GREEN,
-      чтобы не платить за попытку, которую всё равно отвергнут.
-      **Регресс:** при `execution_mode: tdd` + `harness_guard: strict` фейковый
-      RED-агент правит `pyproject.toml` → попытка проваливается с
-      `error_kind=harness_guard`, задача не DONE. То же для verify-first.
-      Контроль: при `warn` предупреждение есть, попытка проходит. Тест должен
-      краснеть на текущем master.
 - [x] **harness-guard-after-post-done** — правки харнесса после GREEN-проверки (ревьюер, `post_review`, фикс-агент) были не видны @owner:github:andrei-shtanakov @id:harness-guard-after-post-done @epic:eco.spec-toolchain
-      **Сделано 2026-10-04 (PR #658):** общий `harness.guard_error` вызывается
-      в трёх местах. (1) `post_done_hook(harness_before=…)` сверяет с
-      task-baseline перед DONE-флипом и финальным коммитом, то есть после
-      ревью и после `post_review`. Отказ оформлен как у плагина
-      `post_review`: `Refusal(POLICY)` через `_commit_blocked_status`.
-      (2) `review_pr._apply_phase` снимает снимок перед каждым фиксом и
-      сверяет до гейтов; при нарушении — откат и `needs_human`. Отличие от
-      плана: в `post_done` у попытки `error_kind=policy`, а не
-      `harness_guard`. Отказ идёт обычным путём hook-отказа, текст начинается
-      с «Harness guard:». Регресс: `tests/test_harness_guard_after_post_done.py`
-      (ревьюер, плагин, передача baseline из execution) и
-      `tests/test_review_pr.py::TestApplyPhase::test_fix_editing_the_harness_*`.
-      Ключевые тесты краснели по поведению, задача доходила до DONE; это
-      проверено с параметром, но без самой сверки.
+      **Сделано 2026-10-04 (PR #658):** общий `harness.guard_error(actor=…)`.
+      Каждый шаг судится сам по себе, снимком прямо перед ним. **Ревьюер**:
+      сверка сразу после ревью, до повторных гейтов и коммита его правок
+      (ревьюер, коммитящий сам внутри ревью, будет отвергнут, но не откачен).
+      **Плагины `post_review`**: сверка сразу после них, до DONE-флипа.
+      **`review-pr`**: снимок перед каждым фиксом, сверка до гейтов, при
+      нарушении — откат и `needs_human`. Почему не с baseline задачи: между
+      шагами харнесс сам пишет в дерево (`lint_fix_command` по всему дереву
+      может переписать корневой `conftest.py`). Сверка с baseline вменила бы
+      это ревьюеру и сделала бы задачу невосстановимой; так было в первой
+      версии, это нашёл локальный круг ревью. Отказ в `post_done` идёт как
+      `Refusal(POLICY)`, поэтому `error_kind=policy`, а не `harness_guard`.
+      Регресс: `tests/test_harness_guard_after_post_done.py` (ревьюер, плагин,
+      lint-fix харнесса не вменяется, отвергнутая правка ревьюера не попадает
+      в коммит) и `tests/test_review_pr.py::TestApplyPhase::test_fix_editing_the_harness_*`.
       Найдено 2026-10-04 вместе с предыдущим пунктом, по чтению кода.
       `harness_violations` вызывается ровно в одном месте, `execution.py:1094`,
       только вокруг GREEN-вызова. Всё, что пишет в дерево позже, не сверяется:

@@ -14,9 +14,16 @@ after: created/modified/deleted files are violations. Modes
 - ``warn`` (default) — log the mutations, keep going. Legitimate flows
   (``uv add`` touching pyproject/uv.lock) produce a provenance line, not a
   failure.
-- ``strict`` — fail the attempt before the gates run; the error message
-  feeds the retry prompt so the next attempt knows not to touch the
-  harness. Operators opting in can exempt paths via ``harness_allow``.
+- ``strict`` — fail the attempt; the error message feeds the retry prompt
+  so the next attempt knows not to touch the harness. Operators opting in
+  can exempt paths via ``harness_allow``.
+
+Where it looks (`guard_error`): after the RED/verify-first passes and
+before GREEN; after GREEN, before the gates; after the reviewer, before
+the re-run gates and the commit of its fixes (a reviewer that commits its
+own fixes inside the review call is refused, not undone); after the
+`post_review` plugins, before the DONE flip; and per `review-pr` fix,
+before its gates.
 - ``off`` — no snapshotting at all.
 
 The spec-runner config itself (`CONTROL_PLANE`) is always on the surface and
@@ -249,20 +256,29 @@ def guard_error(
     task_id: str,
     before: dict[str, str] | None,
     log_progress: Callable[[str, str], None],
+    actor: str = "the agent",
 ) -> str | None:
-    """Compare the harness with the task's baseline; the refusal, if any.
+    """Compare the harness with `before`; the refusal, if any.
 
     Returns the attempt's error under `strict` when the surface changed;
     under `warn` it logs the change and returns None, as it does when nothing
-    changed or the guard is off. One answer for every site that checks —
-    after the RED/verify-first passes, after GREEN, and before DONE.
+    changed or the guard is off. One answer for every site that checks.
+
+    `before` is what the check is about. GREEN compares with the task's
+    baseline. Every other site compares with a snapshot taken right before
+    the step it judges — the RED/verify-first passes of this attempt, the
+    reviewer, the `post_review` plugins, one `review-pr` fix. Comparing those
+    with the task's baseline would blame them for the harness's own writes
+    (a repo-wide `lint_fix_command` between the steps) and for an edit a
+    previous attempt left behind — which the next GREEN agent is told to
+    revert and must be allowed to.
     """
     violations = harness_violations(config, before)
     if not violations:
         return None
     summary = ", ".join(violations)
     if config.harness_guard != "strict":
-        log_progress(f"⚠️ Harness files changed by agent: {summary}", task_id)
+        log_progress(f"⚠️ Harness files changed by {actor}: {summary}", task_id)
         logger.warning("Harness files mutated by agent", violations=violations)
         return None
     # The error becomes the next attempt's prompt, so it must not name the
@@ -280,7 +296,7 @@ def guard_error(
     log_progress(f"⛔ Harness guard: {summary} (operator: {'; '.join(hints)})", task_id)
     logger.error("Harness files mutated by agent", violations=violations)
     return (
-        "Harness guard: the agent modified verification files: "
+        f"Harness guard: {actor} modified verification files: "
         f"{summary}. These files define how the task is verified "
         "and must not be changed by the task. Revert them."
     )

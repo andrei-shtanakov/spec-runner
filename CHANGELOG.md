@@ -58,20 +58,22 @@ is a **breaking change** and requires a major version bump plus an entry here.
   was taken right before the GREEN call, after both passes had written into
   the tree, and `_commit_red` commits the whole tree with the red. A RED agent
   that edited `pyproject.toml` therefore had the edit taken into the
-  baseline, and `harness_guard: strict` let it through. The baseline is now
-  taken right after `pre_start_hook` (so `uv sync` is still not a
-  violation), and the surface is compared once more after the passes, before
-  the paid GREEN call. Under `warn` that check warns and lets the task go on.
+  baseline, and `harness_guard: strict` let it through. The task baseline is
+  now taken right after `pre_start_hook`, so `uv sync` is still not a
+  violation. The passes of each attempt are also checked against a snapshot
+  taken just before them, before the paid GREEN call. An edit an earlier
+  attempt left behind stays the GREEN agent's to revert.
 
 - **The harness guard sees what is written after GREEN.** A reviewer
   answering `REVIEW_FIXED`, a `post_review` plugin and the `review-pr` fix
   agent all wrote into the tree after the only check, so under `strict` any
   of them could rewrite `pyproject.toml` and the task still closed (or the
-  fix was pushed). `post_done_hook` now compares the surface with the task's
-  baseline right before the DONE flip and the commit, and refuses the same
-  resumable way a `post_review` plugin does. `review-pr` snapshots before
-  each fix and checks before the gates; a fix that touches the harness is
-  rolled back and left to a human.
+  fix was pushed). Each step is now checked against a snapshot taken just
+  before it. The reviewer is checked before its fixes are committed, the
+  plugins before the DONE flip, and each `review-pr` fix before its gates
+  (a refused fix is rolled back and left to a human). Writes the harness
+  makes itself, such as the repo-wide `lint_fix_command`, are not blamed on
+  anyone.
 
 - **Review reads the whole task, not its last commit.** The review diff was
   `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,

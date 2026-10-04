@@ -30,6 +30,7 @@ from .git_ops import (
     runtime_state_paths,
     stage_all_except_runtime,
 )
+from .harness import guard_error, snapshot_harness
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
@@ -1179,16 +1180,10 @@ def post_done_hook(
     *,
     reporter: StageReporter | None = None,
     pending_cost: float | None = 0.0,
-    harness_before: dict[str, str] | None = None,
 ) -> tuple[bool, str | None, str, str, bool]:
     """Hook after task completion.
 
     Args:
-        harness_before: the task's harness baseline (#64). The surface is
-            compared with it once more right before the DONE flip, so an edit
-            made by the reviewer or a `post_review` plugin is held to the same
-            guard as the implementation's. `None` (guard off, or a caller
-            without a baseline) skips the check.
         pending_cost: what this attempt has already spent on the implementation
             call but has not yet recorded — `record_attempt` runs after this
             hook returns, so the budget guard would otherwise read stale spend
@@ -1614,6 +1609,9 @@ def post_done_hook(
         if config.review_parallel:
             review_tree_before = _review_tree_fingerprint(config)
         review_fn = run_parallel_review if config.review_parallel else run_code_review
+        # Harness tripwire (#64): the reviewer writes into the tree when it
+        # fixes; judged by itself, so the lint auto-fix above is not its edit.
+        review_harness_before = snapshot_harness(config)
         logger.info(
             "Running code review",
             parallel=config.review_parallel,
@@ -1650,6 +1648,21 @@ def post_done_hook(
                 "Review could not run — nothing was learned about this code",
                 error=review_error,
             )
+        # Before the re-run gates and the commit of its fixes: a rewritten
+        # oracle makes their verdict worthless.
+        from .runner import log_progress
+
+        harness_error = guard_error(
+            config, task.id, review_harness_before, log_progress, actor="the reviewer"
+        )
+        if harness_error is not None:
+            blocked = _commit_blocked_status(
+                task,
+                config,
+                Refusal(harness_error, RefusalKind.POLICY),
+                review_checkpoint_sha or _head_sha(config),
+            )
+            return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     # HITL approval gate
     if config.hitl_review and review_output:
@@ -1884,7 +1897,15 @@ def post_done_hook(
     # finished — the defect class the gates exist to prevent. A blocked task
     # exports nothing, and whatever a failed exporter left behind stays dirty
     # in the tree rather than being committed as evidence.
+    plugin_harness_before = snapshot_harness(config)
     plugin_blocked = run_plugin_hooks_for("post_review", task, config, success=True)
+    if plugin_blocked is None:
+        # Harness tripwire (#64): evidence, yes — the oracle, no.
+        from .runner import log_progress
+
+        plugin_blocked = guard_error(
+            config, task.id, plugin_harness_before, log_progress, actor="a post_review plugin"
+        )
     if plugin_blocked is not None:
         # The same resumable shape as the gate refusal above: the candidate
         # commit stands, nothing is merged, the task is not marked done, and —
@@ -1941,23 +1962,6 @@ def post_done_hook(
                 reporter.record(PhaseOutcome.UNEXPECTED_FAIL, "non-blocking format warning")
         elif reporter:
             reporter.record(PhaseOutcome.PASS, "format clean after post_review")
-
-    # Harness tripwire (#64), last look: the reviewer (`REVIEW_FIXED`) and the
-    # `post_review` plugins above write into the tree after execution's own
-    # check, and everything here is swept into the commit next. Same baseline,
-    # same answer, same resumable shape as the plugin refusal.
-    from .harness import guard_error
-    from .runner import log_progress
-
-    harness_error = guard_error(config, task.id, harness_before, log_progress)
-    if harness_error is not None:
-        blocked = _commit_blocked_status(
-            task,
-            config,
-            Refusal(harness_error, RefusalKind.POLICY),
-            gated_sha or _head_sha(config),
-        )
-        return (False, blocked, review_verdict.value, (review_output or "")[:2048], False)
 
     # Persist the task's DONE status + checklist to tasks.md BEFORE committing,
     # so it is included in the commit/merge. Writing it after the commit (as the

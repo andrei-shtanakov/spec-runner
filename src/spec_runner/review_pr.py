@@ -1358,7 +1358,11 @@ def _apply_phase(
             continue
         # Before the gates: a rewritten oracle makes their verdict worthless.
         harness_error = guard_error(
-            config, f"review-pr#{pr_number}", harness_before, lambda line, _id: _note(line)
+            config,
+            f"review-pr#{pr_number}",
+            harness_before,
+            lambda line, _id: _note(line),
+            actor="the fix agent",
         )
         if harness_error is not None:
             clean_rollback = _rollback_fix(config, pre_fix_head)

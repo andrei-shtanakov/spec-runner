@@ -118,7 +118,42 @@ class TestRedPassIsUnderTheGuard:
         assert attempts and all(not a.success for a in attempts)
         assert all(a.error_kind == "harness_guard" for a in attempts)
         assert all("pyproject.toml" in (a.error or "") for a in attempts)
-        assert green_calls == [], "the paid GREEN call ran for an attempt already refused"
+        # Attempt 1 is refused before GREEN. Attempt 2's RED changes nothing
+        # new, so its GREEN runs — told to revert — and is refused for not
+        # reverting.
+        assert len(green_calls) == len(attempts) - 1, (
+            "the paid GREEN call ran for the attempt whose RED pass was refused"
+        )
+
+    def test_green_reverting_the_red_edit_on_retry_passes(self, project, isolate, monkeypatch):
+        """The edit survives into attempt 2 with the red; the GREEN agent there
+        is told to revert it and must be allowed to."""
+        import subprocess as sp
+
+        from spec_runner.execution import run_with_retries
+
+        execution, green_calls = isolate
+        reds: list[int] = []
+
+        def _red(task, config, state, reporter):
+            reds.append(1)
+            if len(reds) == 1:
+                _touch_pyproject(project)
+            return None
+
+        def _green(*args, **kwargs):
+            green_calls.append(1)
+            (project / "pyproject.toml").write_text(PYPROJECT)
+            return sp.CompletedProcess(["x"], 0, "TASK_COMPLETE\n", "")
+
+        monkeypatch.setattr(execution, "_run_red_phase_gate", _red)
+        monkeypatch.setattr(execution, "_run_agent_process", _green)
+        cfg = _cfg(project)
+        with ExecutorState(cfg) as state:
+            result = run_with_retries(_task(), cfg, state)
+
+        assert result is True
+        assert green_calls == [1]
 
     def test_warn_reports_and_proceeds(self, project, isolate, monkeypatch):
         from spec_runner.execution import run_with_retries
@@ -187,4 +222,4 @@ class TestVerifyFirstPassIsUnderTheGuard:
 
         assert result is not True
         assert attempts and all(a.error_kind == "harness_guard" for a in attempts)
-        assert green_calls == []
+        assert len(green_calls) == len(attempts) - 1
