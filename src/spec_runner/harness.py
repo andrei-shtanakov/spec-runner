@@ -223,7 +223,8 @@ TRUST_REMEDY = (
     "restore the harness files of this task's tree to a state you have checked "
     "(e.g. against the main branch), then confirm it with "
     '`spec-runner harness trust <TASK> --reason "…"`'
-    " (add `--bind-branch <current branch>` if the task has no workspace record)"
+    " (add `--bind-branch <current branch>` if the task has no workspace record"
+    " or its record names no branch)"
 )
 
 

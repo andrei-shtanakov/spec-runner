@@ -174,7 +174,13 @@ class TestPreStartHook:
                 or cmd == ["git", "clean", "-fd", "--exclude=spec/"]
             ):
                 mock_result.returncode = 0
-            elif cmd == ["git", "rev-parse", "--verify", "task/task-005-setup-ci"]:
+            elif cmd == [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/heads/task/task-005-setup-ci",
+            ]:
                 # Branch does not exist yet
                 mock_result.returncode = 1
                 mock_result.stdout = ""

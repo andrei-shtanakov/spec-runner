@@ -2797,7 +2797,7 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_trust.add_argument(
         "--bind-branch",
         dest="bind_branch",
-        help="Bind the task to the current branch (when it has no workspace record)",
+        help="Bind the task to the current branch (no workspace record, or one with no branch)",
     )
     harness_trust.add_argument("--actor", help="Who (default: git user.email)")
 

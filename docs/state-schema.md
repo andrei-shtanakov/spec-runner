@@ -354,10 +354,17 @@ Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
 ### `task_workspaces` (experimental, 5.0.0)
 
 The fact that a task started, and on which exact branch. Columns: `namespace`,
-`task_id`, `branch` (NULL without per-task branches), `started_at`, `run_id`,
-`bound_by` (`run` · `operator`). Key `(namespace, task_id)`. WIP is saved only
-for the task whose row names the current branch exactly. Written in every
-guard mode. Deleted at DONE and by `tdd abandon`; kept by `reset`.
+`task_id`, `branch`, `started_at`, `run_id`, `bound_by` (`run` · `operator`).
+Key `(namespace, task_id)`. WIP is saved only for the task whose row names the
+current branch exactly. Written in every guard mode. Deleted at DONE and by
+`tdd abandon`; kept by `reset`.
+
+`branch` is NULL without per-task branches, and also when a start did not end
+on the task branch — the repository had no commits yet, or the checkout
+failed. A NULL branch owns no dirt. It is filled, never replaced: by a later
+start that checked the task branch out (in the same transaction as the
+insert-or-keep), or by `harness trust --bind-branch <current branch>`
+(`bound_by` becomes `operator`, audited with `bound_branch` = 1).
 
 ### `harness_baselines` (experimental, 5.0.0)
 
@@ -371,15 +378,16 @@ candidate → `file` · `dir` · `absent`). Key `(namespace, task_id)`. Under
 ### `harness_baseline_files` (experimental, 5.0.0)
 
 One row per file the surface held at capture. Columns: `namespace`, `task_id`,
-`path`, `state` (`present` · `unreadable`), `digest` (sha256), `content` (BLOB,
-NULL when `unreadable`). Key `(namespace, task_id, path)`. Deleted with its
+`path`, `state` (`present` · `unreadable`), `digest` (sha256; NULL when
+`unreadable`), `content` (BLOB, NULL when `unreadable`). Key `(namespace, task_id, path)`. Deleted with its
 baseline.
 
 ### `harness_trust_audit` (experimental, 5.0.0)
 
 Append-only record of `spec-runner harness trust`. Columns: `id`, `namespace`,
 `task_id`, `at`, `actor`, `reason`, `branch`, `bound_branch` (1 when the
-command created the workspace binding), `replaced_provenance`. Never deleted,
+command created the workspace binding or bound a row whose branch was NULL),
+`replaced_provenance`. Never deleted,
 not even by DONE, `tdd abandon` or `reset`.
 
 The three baseline-side tables are written and removed together with the record

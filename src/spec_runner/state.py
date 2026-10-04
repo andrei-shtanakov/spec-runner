@@ -2185,7 +2185,13 @@ class ExecutorState:
         run_id: str | None,
         bound_by: str = "run",
     ) -> None:
-        """Record that the task started; an existing record is kept."""
+        """Record that the task started; an existing record is kept.
+
+        One exception, in the same transaction: an existing row whose branch
+        is NULL (a start that did not end on the task branch — no commits
+        yet, a failed checkout) is bound to ``branch`` when this start
+        checked it out. A recorded branch is never replaced.
+        """
         assert self._conn is not None
         with self._immediate():
             self._conn.execute(
@@ -2194,6 +2200,12 @@ class ExecutorState:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (namespace, task_id, branch, datetime.now().isoformat(), run_id, bound_by),
             )
+            if branch is not None:
+                self._conn.execute(
+                    "UPDATE task_workspaces SET branch = ? "
+                    "WHERE namespace = ? AND task_id = ? AND branch IS NULL",
+                    (branch, namespace, task_id),
+                )
 
     def get_harness_baseline(self, namespace: str, task_id: str) -> StoredBaseline | None:
         """The persisted baseline, or None."""
@@ -2302,10 +2314,16 @@ class ExecutorState:
         actor: str,
         reason: str,
         run_id: str | None,
+        fill_branch: bool = False,
     ) -> str | None:
         """Binding (if asked) + operator snapshot + audit, all or nothing.
 
-        Returns the provenance of the snapshot it replaced, if any.
+        ``bind`` inserts a new workspace row; ``fill_branch`` binds an existing
+        row whose branch is NULL to ``bind_branch`` — and raises
+        `sqlite3.IntegrityError` when that row no longer exists with a NULL
+        branch (it changed since the caller read it). Either is audited with
+        ``bound_branch=1``. Returns the provenance of the snapshot it
+        replaced, if any.
         """
         assert self._conn is not None
         with self._immediate():
@@ -2320,6 +2338,14 @@ class ExecutorState:
                     "VALUES (?, ?, ?, ?, ?, 'operator')",
                     (namespace, task_id, bind_branch, datetime.now().isoformat(), run_id),
                 )
+            if fill_branch:
+                filled = self._conn.execute(
+                    "UPDATE task_workspaces SET branch = ?, bound_by = 'operator' "
+                    "WHERE namespace = ? AND task_id = ? AND branch IS NULL",
+                    (bind_branch, namespace, task_id),
+                )
+                if filled.rowcount != 1:
+                    raise sqlite3.IntegrityError("the workspace row is no longer unbound")
             self._write_baseline(
                 namespace,
                 task_id,
@@ -2340,7 +2366,7 @@ class ExecutorState:
                     actor,
                     reason,
                     branch,
-                    1 if bind else 0,
+                    1 if (bind or fill_branch) else 0,
                     prior[0] if prior else None,
                 ),
             )

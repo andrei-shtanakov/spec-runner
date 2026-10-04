@@ -28,13 +28,19 @@ def _check_binding(
     branch: str | None,
     bind_branch: str | None,
 ) -> None:
-    """Refuse unless the recorded (or named) branch is the one checked out."""
+    """Refuse unless the recorded (or named) branch is the one checked out.
+
+    A named ``--bind-branch`` must be the current branch whether it binds a
+    new row or an existing row whose branch is NULL.
+    """
     if workspace is not None:
         recorded = workspace["branch"]
         if recorded is not None and recorded != branch:
             raise TrustError(
                 f"{task_id}'s recorded branch is {recorded}, the current branch is {branch}"
             )
+        if recorded is None and bind_branch is not None and bind_branch != branch:
+            raise TrustError(f"--bind-branch {bind_branch} is not the current branch ({branch})")
         return
     if not config.create_git_branch:
         return
@@ -94,13 +100,22 @@ def trust(
     workspace = state.get_workspace(namespace, task_id)
     _check_binding(config, workspace, task_id, branch, bind_branch)
     bind = workspace is None
+    # An existing row with no branch (the start never ended on the task
+    # branch) owns nothing under `strict`; naming the current branch binds it.
+    fill = (
+        workspace is not None
+        and workspace["branch"] is None
+        and config.create_git_branch
+        and bind_branch is not None
+    )
     surface, files = surface_snapshot(config)
     _require_readable(files)
     replaced = state.trust_harness(
         namespace,
         task_id,
         bind=bind,
-        bind_branch=bind_branch if (bind and config.create_git_branch) else None,
+        fill_branch=fill,
+        bind_branch=bind_branch if ((bind or fill) and config.create_git_branch) else None,
         branch=branch,
         surface=surface,
         files=files,
@@ -109,7 +124,7 @@ def trust(
         reason=reason.strip(),
         run_id=None,
     )
-    note = f" (replaced a {replaced} baseline)" if replaced else ""
+    note = f" (replaced the earlier {replaced} baseline)" if replaced else ""
     return f"✅ {task_id}: harness baseline trusted{note}"
 
 

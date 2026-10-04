@@ -336,9 +336,10 @@ def pre_start_hook(
                 cwd=config.project_root,
             )
 
-            # Check if branch exists
+            # Check if the *branch* exists: a bare name also resolves a tag of
+            # the same name, whose checkout detaches HEAD (final review #2).
             result = subprocess.run(
-                ["git", "rev-parse", "--verify", branch_name],
+                ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}"],
                 capture_output=True,
                 text=True,
                 cwd=config.project_root,

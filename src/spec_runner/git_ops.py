@@ -537,12 +537,19 @@ def has_remote(config: ExecutorConfig) -> bool:
 
 
 def current_branch(config: ExecutorConfig) -> str | None:
-    """The checked-out branch name, or None when detached or unreadable."""
-    result = _git(config, "rev-parse", "--abbrev-ref", "HEAD")
-    name = str(result.stdout).strip()
-    if result.returncode != 0 or not name or name == "HEAD":
+    """The checked-out branch name, or None when detached, not a repo, or unreadable.
+
+    Exact: read from the symbolic ref, never `rev-parse --abbrev-ref`, which
+    answers ``heads/<name>`` when a tag carries the branch's name — a parser
+    differential against the exact branch a workspace row records (final
+    review #2). An unborn branch (no commits yet) is named.
+    """
+    result = _git(config, "symbolic-ref", "-q", "HEAD")
+    ref = str(result.stdout).strip()
+    prefix = "refs/heads/"
+    if result.returncode != 0 or not ref.startswith(prefix) or ref == prefix:
         return None
-    return name
+    return ref[len(prefix) :]
 
 
 def make_integration_branch_name(now: datetime | None = None) -> str:
