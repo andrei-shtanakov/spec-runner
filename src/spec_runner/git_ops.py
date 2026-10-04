@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -174,19 +175,100 @@ def uncommitted_work_paths(
     return out
 
 
+def git_with_paths(
+    config: ExecutorConfig, args: Sequence[str], paths: Sequence[str]
+) -> subprocess.CompletedProcess[str]:
+    """``git --literal-pathspecs <args>`` with ``paths`` on stdin, NUL-separated.
+
+    `uncommitted_work_paths` lists every untracked file singly (``-uall``);
+    passed as arguments, tens of thousands of them exceed the argv limit and
+    `execve` raises ``OSError: [Errno 7] Argument list too long`` (final review
+    #3). ``--pathspec-from-file=- --pathspec-file-nul`` carries any number of
+    raw names; ``--literal-pathspecs`` still applies to them. An empty list is
+    refused: for `commit --only` no pathspec would mean "the whole index".
+    Measured on git 2.54 for `add`, `commit --only`, `stash push` and `reset`.
+    """
+    if not paths:
+        raise ValueError("git_with_paths needs at least one path")
+    return subprocess.run(
+        [
+            "git",
+            "--literal-pathspecs",
+            *args,
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        input="\0".join(paths),
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+
+
+def stash_pathspecs(config: ExecutorConfig, paths: list[str]) -> list[str]:
+    """``paths`` with each wholly untracked directory collapsed to ``dir/``.
+
+    `git stash push --include-untracked -- <pathspecs>` hands its pathspecs to
+    an internal `git add` **as arguments**, even when they arrived on stdin —
+    measured on git 2.54: ``fatal: cannot exec 'add': Argument list too long``
+    with 6000 long names. Git's own default listing (``-unormal``) names an
+    untracked directory once when nothing under it is tracked; such a
+    directory is collapsed only when every untracked file under it is in
+    ``paths`` (none was excluded), so the stash takes exactly the same set.
+    Ignored files stay out either way: ``--include-untracked`` never takes
+    them. When the listing cannot be read the per-file list is returned.
+    """
+    normal = _git(config, "status", "--porcelain", "-z")
+    every = _git(config, "status", "--porcelain", "-z", "-uall")
+    if normal.returncode != 0 or every.returncode != 0:
+        return paths
+    dirs = {e[3:] for e in normal.stdout.split("\0") if e.startswith("?? ") and e.endswith("/")}
+    wanted = set(paths)
+    seen: set[str] = set()
+    spoiled: set[str] = set()
+    for entry in every.stdout.split("\0"):
+        if not entry.startswith("?? "):
+            continue
+        covering = _covering_dir(entry[3:], dirs)
+        if covering is not None:
+            seen.add(covering)
+            if entry[3:] not in wanted:
+                spoiled.add(covering)
+    collapsed = seen - spoiled
+    if not collapsed:
+        return paths
+    rest = [p for p in paths if _covering_dir(p, collapsed) is None]
+    return [*sorted(collapsed), *rest]
+
+
+def _covering_dir(path: str, dirs: set[str]) -> str | None:
+    """The member of ``dirs`` (each ending in ``/``) that ``path`` lies under, if any."""
+    parts = path.split("/")
+    for i in range(1, len(parts)):
+        prefix = "/".join(parts[:i]) + "/"
+        if prefix in dirs:
+            return prefix
+    return None
+
+
+def indexed_paths(config: ExecutorConfig) -> set[str]:
+    """Every path in the index (`ls-files` takes no pathspec file, so no argv list)."""
+    return set(_git(config, "ls-files", "-z").stdout.split("\0")) - {""}
+
+
 def unstage_vanished_paths(config: ExecutorConfig, paths: list[str]) -> None:
     """Put back the index entry of a path gone from both index and tree.
 
     A staged rename's source is such a path; `git stash push -- <source>`
     refuses it ("did not match any files"), so the rename would be stashed
     without its removal half. Restoring the entry makes it an ordinary
-    unstaged deletion that a pathspec can name. Literal pathspecs throughout.
+    unstaged deletion that a pathspec can name. Literal pathspecs throughout;
+    `lexists`, so a dangling symlink is a path that exists, not a vanished one.
     """
-    listed = _git(config, "--literal-pathspecs", "ls-files", "-z", "--", *paths)
-    indexed = set(listed.stdout.split("\0"))
-    gone = [p for p in paths if p not in indexed and not (config.project_root / p).exists()]
+    indexed = indexed_paths(config)
+    gone = [p for p in paths if p not in indexed and not os.path.lexists(config.project_root / p)]
     if gone:
-        _git(config, "--literal-pathspecs", "reset", "-q", "HEAD", "--", *gone)
+        git_with_paths(config, ["reset", "-q", "HEAD"], gone)
 
 
 def stage_all_except_runtime(config: ExecutorConfig) -> bool:

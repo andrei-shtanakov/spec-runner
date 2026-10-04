@@ -281,3 +281,25 @@ def test_one_failing_diff_is_an_instrument_refusal(repo, monkeypatch, failing):
     monkeypatch.setattr(wip, "_git", _broken)
     result = _save(cfg)
     assert result.refusal is not None and result.refusal.kind is RefusalKind.INSTRUMENT
+
+
+def test_dangling_symlink_is_saved_not_gone(repo):
+    """`lexists`: an untracked symlink to nowhere is work, not a vanished path."""
+    cfg = _cfg(repo)
+    _own(cfg)
+    (repo / "link").symlink_to("missing-target")
+    result = _save(cfg)
+    assert result.refusal is None and result.saved_sha
+    assert "link" in _git(repo, "show", "--name-only", "--format=", "HEAD").split()
+
+
+def test_dangling_symlink_is_not_unstaged_as_vanished(repo):
+    from spec_runner.git_ops import unstage_vanished_paths
+
+    cfg = _cfg(repo)
+    _git(repo, "rm", "-q", "--cached", "app.py")
+    (repo / "app.py").unlink()
+    (repo / "app.py").symlink_to("missing-target")
+    unstage_vanished_paths(cfg, ["app.py"])
+    # Not "gone": the staged removal is left alone, not reset back from HEAD.
+    assert "app.py" in _git(repo, "diff", "--cached", "--name-only").split()

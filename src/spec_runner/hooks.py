@@ -170,31 +170,27 @@ def _rescue_uncommitted(
     if not paths:
         return True, ""  # the ordinary case: nothing to rescue, nothing to say
 
-    from .git_ops import unstage_vanished_paths
+    from .git_ops import git_with_paths, stash_pathspecs, unstage_vanished_paths
 
-    unstage_vanished_paths(config, paths)
     label = f"spec-runner rescue: {owner} at {datetime.now().isoformat(timespec='seconds')}"
-    stash = subprocess.run(
-        [
-            "git",
-            "--literal-pathspecs",
-            "stash",
-            "push",
-            "--include-untracked",
-            "-m",
-            label,
-            "--",
-            *paths,
-        ],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    if stash.returncode != 0:
+    try:
+        unstage_vanished_paths(config, paths)
+        # Paths on stdin, not argv: `-uall` can list more than execve accepts;
+        # whole untracked directories collapsed, since stash re-execs `git add`
+        # with its pathspecs as arguments.
+        stash = git_with_paths(
+            config,
+            ["stash", "push", "--include-untracked", "-m", label],
+            stash_pathspecs(config, paths),
+        )
+        failure = None if stash.returncode == 0 else stash.stderr.strip()[:200]
+    except OSError as exc:
+        failure = str(exc)[:200]
+    if failure is not None:
         detail = (
             f"could not preserve {len(paths)} uncommitted path(s) before cleaning the tree "
             f"({', '.join(paths[:STRANDED_PATHS_SHOWN])}): "
-            f"{stash.stderr.strip()[:200] or 'git stash failed'}"
+            f"{failure or 'git stash failed'}"
         )
         logger.error("Refusing to start: uncommitted work cannot be saved", task_id=task_id)
         log_progress(f"⛔ {detail} — not starting, your changes are untouched", task_id)

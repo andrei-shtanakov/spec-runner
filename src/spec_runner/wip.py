@@ -6,6 +6,7 @@ work is trusted is the harness baseline's question, never this commit's.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -13,6 +14,8 @@ from .config import ExecutorConfig
 from .git_ops import (
     WorktreeStatusError,
     current_branch,
+    git_with_paths,
+    indexed_paths,
     spec_contract_paths,
     uncommitted_work_paths,
 )
@@ -102,9 +105,9 @@ def _stage(config: ExecutorConfig, paths: list[str]) -> subprocess.CompletedProc
     A staged rename's source is gone from the tree *and* the index; `git add`
     refuses such a path, though `commit --only` still records its removal.
     """
-    indexed = set(_git(config, "ls-files", "-z", "--", *paths).stdout.split("\0"))
-    known = [p for p in paths if p in indexed or (config.project_root / p).exists()]
-    return _git(config, "add", "-A", "--", *known) if known else _git(config, "status")
+    indexed = indexed_paths(config)
+    known = [p for p in paths if p in indexed or os.path.lexists(config.project_root / p)]
+    return git_with_paths(config, ["add", "-A"], known) if known else _git(config, "status")
 
 
 def save_wip(config: ExecutorConfig, state: ExecutorState) -> WipResult:
@@ -143,7 +146,7 @@ def save_wip(config: ExecutorConfig, state: ExecutorState) -> WipResult:
     )
     added = _stage(config, paths)
     committed = (
-        _git(config, "commit", "--only", "-m", message, "--", *paths)
+        git_with_paths(config, ["commit", "--only", "-m", message], paths)
         if added.returncode == 0
         else added
     )
