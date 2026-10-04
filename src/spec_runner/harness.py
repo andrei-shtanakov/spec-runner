@@ -37,9 +37,13 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from .config import CONFIG_FILE, LEGACY_CONFIG_FILE, ExecutorConfig
 from .logging import get_logger
+
+if TYPE_CHECKING:
+    from .state import StoredBaseline
 
 logger = get_logger("harness")
 
@@ -210,6 +214,71 @@ def snapshot_contents(config: ExecutorConfig) -> dict[str, bytes | None] | None:
             except OSError:
                 contents[_surface_key(config, f)] = None
     return contents
+
+
+TRUST_REMEDY = (
+    "restore the harness files of this task's tree to a state you have checked "
+    "(e.g. against the main branch), then confirm it with "
+    '`spec-runner harness trust <TASK> --reason "…"`'
+    " (add `--bind-branch <current branch>` if the task has no workspace record)"
+)
+
+
+def _candidates(config: ExecutorConfig) -> list[str]:
+    """Every surface candidate key, in a stable order, without duplicates."""
+    keys = [*HARNESS_CANDIDATES, *_control_plane_keys(config), *config.harness_files]
+    return list(dict.fromkeys(_surface_key(config, config.project_root / k) for k in keys))
+
+
+def surface_snapshot(
+    config: ExecutorConfig,
+) -> tuple[dict[str, str], dict[str, bytes | None]]:
+    """Candidate states and file bytes — the persisted baseline's shape.
+
+    A directory candidate is snapshotted whole: every file under it gets an
+    entry, so a file that appears there later is `created`, not unknown.
+    """
+    surface: dict[str, str] = {}
+    files: dict[str, bytes | None] = {}
+    for key in _candidates(config):
+        path = Path(key) if Path(key).is_absolute() else config.project_root / key
+        surface[key] = "dir" if path.is_dir() else "file" if path.is_file() else "absent"
+        for f in _iter_files(path):
+            try:
+                files[_surface_key(config, f)] = f.read_bytes()
+            except OSError:
+                files[_surface_key(config, f)] = None
+    return surface, files
+
+
+def trust_refusal(
+    config: ExecutorConfig, stored: "StoredBaseline | None", *, started: bool
+) -> str | None:
+    """Why `strict` cannot trust this task's harness baseline, or None."""
+    if config.harness_guard != "strict":
+        return None
+    if stored is None:
+        if not started:
+            return None
+        return f"this task started without a trusted harness baseline — {TRUST_REMEDY}"
+    if stored.provenance not in ("initial", "operator"):
+        return (
+            f"the harness baseline was re-captured automatically ({stored.provenance}) "
+            f"and is not trusted under strict — {TRUST_REMEDY}"
+        )
+    unknown = [k for k in _candidates(config) if k not in stored.surface]
+    if unknown:
+        return (
+            f"the harness surface grew since the baseline ({', '.join(unknown)}); "
+            f"the new surface cannot be checked — {TRUST_REMEDY}"
+        )
+    unreadable = sorted(p for p, data in stored.files.items() if data is None)
+    if unreadable:
+        return (
+            f"baseline holds unreadable files ({', '.join(unreadable)}); fix them, "
+            f"then {TRUST_REMEDY}"
+        )
+    return None
 
 
 def content_hashes(contents: dict[str, bytes | None] | None) -> dict[str, str] | None:
