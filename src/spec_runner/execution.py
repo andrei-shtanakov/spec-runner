@@ -9,7 +9,14 @@ from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
-from .harness import HarnessBaseline, guard_error, refuse_and_restore, snapshot_contents
+from .harness import (
+    HarnessBaseline,
+    HarnessStateError,
+    guard_error,
+    refuse_and_restore,
+    snapshot_contents,
+    task_started,
+)
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
@@ -684,8 +691,32 @@ def _execute_task(
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
+    # The persisted harness baseline (spec 2026-10-04 §2): whether the task
+    # had started is decided from what existed BEFORE this attempt's
+    # pre_start, and an untrusted or unreadable baseline refuses here —
+    # before anything destructive and before any agent call.
+    baseline = harness_baseline or HarnessBaseline()
+    try:
+        started = task_started(config, state, task)
+        trust = baseline.prepare(config, state, task, started=started)
+    except HarnessStateError as exc:
+        return _refuse_task(task, config, state, str(exc), kind=RefusalKind.INSTRUMENT)
+    if trust is not None:
+        return _refuse_task(task, config, state, trust, kind=RefusalKind.POLICY)
+
     # Pre-start hook
-    if not pre_start_hook(task, config, reporter=reporter):
+    try:
+        pre_started = pre_start_hook(task, config, reporter=reporter, state=state)
+    except HarnessStateError as exc:
+        return _refuse_task(
+            task,
+            config,
+            state,
+            str(exc),
+            kind=RefusalKind.INSTRUMENT,
+            stage=reporter.current or "setup",
+        )
+    if not pre_started:
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -704,8 +735,19 @@ def _execute_task(
     # RED passes, whose writes `_commit_red` commits with the red — a snapshot
     # taken after them took their edits as the baseline. #137: the snapshot
     # belongs to the task, not the attempt, so a retry cannot re-baseline a
-    # forbidden edit into legitimacy.
-    harness_before = (harness_baseline or HarnessBaseline()).capture(config)
+    # forbidden edit into legitimacy — and, persisted (spec 2026-10-04 §2),
+    # neither can a separate `retry` invocation.
+    try:
+        harness_before = baseline.capture(config, state, task)
+    except HarnessStateError as exc:
+        return _refuse_task(
+            task,
+            config,
+            state,
+            str(exc),
+            kind=RefusalKind.INSTRUMENT,
+            stage=reporter.current or "setup",
+        )
     # What the RED/verify-first passes of *this* attempt are judged against —
     # not the task baseline: an edit an earlier attempt left behind is the
     # GREEN agent's to revert (the retry prompt says so), and refusing here
@@ -766,8 +808,6 @@ def _execute_task(
             # соседние отказные ветки — claims выше и запись waiver'а ниже —
             # откатывают статус ровно по этой причине.
             update_task_status(config.tasks_file, task_id, "todo")
-            from .phases import RefusalKind
-
             return _refuse_task(
                 task,
                 config,

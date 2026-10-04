@@ -6,6 +6,7 @@ code review, testing, linting, and plugin execution around task runs.
 
 import hashlib
 import os
+import sqlite3
 import stat
 import subprocess
 from pathlib import Path
@@ -22,6 +23,7 @@ from .gates import (
 )
 from .git_ops import (
     build_scoped_test_command,
+    current_branch,
     ensure_runtime_gitignore,
     find_changed_source_files,
     get_main_branch,
@@ -30,7 +32,7 @@ from .git_ops import (
     runtime_state_paths,
     stage_all_except_runtime,
 )
-from .harness import refuse_and_restore, snapshot_contents
+from .harness import HarnessStateError, refuse_and_restore, snapshot_contents
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
@@ -47,6 +49,7 @@ from .state import PhaseOutcome, ReviewVerdict
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .negative_control import ControlResult
+    from .state import ExecutorState
 from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
@@ -197,9 +200,19 @@ def _rescue_uncommitted(
 
 
 def pre_start_hook(
-    task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None
+    task: Task,
+    config: ExecutorConfig,
+    *,
+    reporter: StageReporter | None = None,
+    state: "ExecutorState | None" = None,
 ) -> bool:
-    """Hook before starting task"""
+    """Hook before starting task.
+
+    With `state`, records that the task started (`task_workspaces`, spec
+    2026-10-04 §2) once this hook has itself checked out the task branch —
+    or always, without branching (branch NULL). A failed record raises
+    `HarnessStateError`; the caller turns it into an instrument refusal.
+    """
     logger.info("Pre-start hook", task_id=task.id)
 
     # Sync dependencies (skippable — doctor and other lightweight runs disable
@@ -342,8 +355,29 @@ def pre_start_hook(
         except FileNotFoundError:
             pass  # git not installed
 
+    if state is not None:
+        _record_workspace(task, config, state)
+
     # Run plugin pre_start hooks
     return run_plugin_hooks_for("pre_start", task, config, success=None) is None
+
+
+def _record_workspace(task: Task, config: ExecutorConfig, state: "ExecutorState") -> None:
+    """Record the started task, bound to the branch this hook checked out.
+
+    Ownership comes from our own checkout, not from a name: when branching is
+    on and HEAD is not the task branch (the checkout failed), nothing is
+    recorded.
+    """
+    from .tdd import resolve_namespace
+
+    branch = current_branch(config) if config.create_git_branch else None
+    if config.create_git_branch and branch != get_task_branch_name(task):
+        return
+    try:
+        state.record_workspace(resolve_namespace(config), task.id, branch=branch, run_id=None)
+    except (sqlite3.Error, OSError) as exc:
+        raise HarnessStateError(f"could not record the task workspace: {exc}") from exc
 
 
 def commit_task_work(task: Task, config: ExecutorConfig) -> str:
