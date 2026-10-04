@@ -1345,6 +1345,18 @@ def _execute_task(
             return False
 
     except subprocess.TimeoutExpired:
+        # The call ran and was billed for as long as it ran; its artefact must
+        # say so (#295/#296) instead of ending with the prompt — the shape
+        # reserved for "the runner died mid-call". Same record as a timed-out
+        # review: the seam's return code (-1) and a price that is unknown,
+        # never zero (#213). The ledger row (cost NULL) is the seam's.
+        append_output(
+            log_file,
+            "",
+            note=f"timed out after {config.task_timeout_minutes}m",
+            returncode=-1,
+            cost_usd=None,
+        )
         duration = config.task_timeout_minutes * 60
         error = f"Timeout after {config.task_timeout_minutes} minutes"
         state.record_attempt(

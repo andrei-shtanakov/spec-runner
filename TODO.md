@@ -976,7 +976,18 @@ runtime-state по инварианту конвейера «нужное для
       Связано: review-sees-only-last-commit — продолжение из коммитов требует ревью от базы
       задачи.
 
-- [ ] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
+- [x] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
+      **Сделано 2026-10-04:** замер до фикса через настоящий шов (подменён
+      только `paid_call._spawn`). Строка `agent_calls` с ценой NULL уже есть:
+      шов, который её пишет, — работа самой TASK-002 (`0cce4c6`, после
+      упавшего прогона). Открытым оставался артефакт: обработчик
+      `TimeoutExpired` в `_execute_task` теперь дописывает
+      `=== NO RESULT: timed out after Nm ===`, как RED-сайт. Регресс —
+      `tests/test_green_timeout_leaves_a_trace.py`.
+      Остаётся (найдено локальным ревью, предсуществующее): на путях
+      OSError/KeyboardInterrupt/прочих исключений GREEN-артефакт по-прежнему
+      кончается промптом. RED и ревью там пишут `append_not_started` или
+      `NO RESULT`, так что инвариант для GREEN неполон.
       GREEN-вызов TASK-002, убитый таймаутом 60 мин (прогон `1f1a0932`), не оставил ни строки
       в `agent_calls`, ни терминальной секции в логе промпта (`TASK-002-green-20261002-135911.log`
       кончается промптом). Инвариант #295/#296 («каждый артефакт кончается терминальной
