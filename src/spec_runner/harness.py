@@ -229,11 +229,12 @@ def _restore_target(config: ExecutorConfig, key: str) -> Path | None:
     harness file may now be a symlink, and following it would unlink or
     overwrite a file outside the project. The nearest existing ancestor must
     resolve to exactly where it sits under the (resolved) root. A key outside
-    the root — the loaded config — was named by the operator, not the step,
-    and only its last component is guarded (by the caller's unlink).
+    the root — a loaded config elsewhere — is never written: nothing here
+    can tell its directories from ones a step replaced, and the refusal
+    stands either way.
     """
     if Path(key).is_absolute():
-        return Path(key)
+        return None
     root = config.project_root.resolve()
     path = root / key
     ancestor = path.parent
@@ -256,7 +257,7 @@ def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | No
         kind, key = violation.split(" ", 1)
         path = _restore_target(config, key)
         if path is None:
-            logger.error("Harness path leaves its directory through a symlink", path=key)
+            logger.error("Harness path cannot be restored safely", path=key)
             unrestored.append(key)
             continue
         try:

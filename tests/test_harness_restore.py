@@ -90,3 +90,19 @@ def test_a_directory_replaced_by_a_symlink_is_not_followed(project, tmp_path):
 
     assert victim.read_text() == "keep me\n", "the undo deleted a file outside the project"
     assert ".github/workflows/deploy.yml" in unrestored
+
+
+def test_a_config_outside_the_root_is_never_written(project, tmp_path):
+    """Its directories were not named by anything the step could not touch:
+    the refusal stands, and the file is reported, not rewritten."""
+    outside = tmp_path / "ops" / "spec-runner.config.yaml"
+    outside.parent.mkdir()
+    outside.write_text("harness_guard: strict\n")
+    cfg = _cfg(project, config_path=outside)
+    before = snapshot_contents(cfg)
+    outside.write_text("harness_guard: off\n")
+
+    unrestored = restore_surface(cfg, before)
+
+    assert str(outside) in unrestored
+    assert outside.read_text() == "harness_guard: off\n"
