@@ -156,6 +156,12 @@ instead of being mapped to something plausible.
   reported as undecidable (`unavailable`), not as a blocker — declare the
   files to check exactly. It declares scope; it does not grant permission, and nothing is
   inferred from the task's prose.
+  **A forecast, not a guarantee.** The line is read only by `validate` (its
+  syntax) and `preflight` (the forecast above). Nothing compares it with what
+  the task actually changed: an edit outside the declared scope goes
+  unnoticed, and a task without the line is simply left out of the forecast
+  (`skipped`). What actually holds the harness is `harness_guard`, which
+  compares the files themselves and ignores `Touches` entirely.
 - `TDD-waiver` — `<class> · sanction: <id>`. Valid only on a task whose
   resolved mode is `standard`. It removes the baseline-RED requirement and
   nothing else: active claims and the frozen-files block still apply. The

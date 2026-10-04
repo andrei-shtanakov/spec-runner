@@ -1618,6 +1618,49 @@ A/B — дефекты подтверждённого поведения, C — 
          угадывания по прозе) + preflight-проверка `harness.touches` (blocking
          при `strict`). Дизайн — `docs/superpowers/specs/2026-09-28-touches-preflight-design.md`,
          тесты — `tests/test_touches.py`. Выводить поле мостом — запрос в devtools.
+         **Закрыто 2026-10-04:** devtools поле выводить не будет. Источника полного
+         списка файлов нет, а `Touches` с фактическим диффом не сверяется: это
+         прогноз preflight, и так и сказано в `spec/FORMAT.md`. Сверку с
+         диффом не делаем, потребителя нет.
+- [ ] **harness-guard-snapshot-before-red** — снимок харнесса снимается после RED/verify-first, и правка RED-агента отмывается @owner:github:andrei-shtanakov @id:harness-guard-snapshot-before-red @epic:eco.spec-toolchain
+      Найдено 2026-10-04 при ответе на вопросы devtools про `Touches`, по чтению
+      кода. Тестом пока не подтверждено, первым делом пишется красный тест.
+      В `_execute_task` порядок такой: `pre_start_hook` (`execution.py:688`) →
+      `_run_verify_first_phase` (`:791`) → `_run_red_phase_gate` (`:848`) →
+      ленивый `HarnessBaseline.capture` (`:960`) → GREEN → `harness_violations`
+      (`:1094`). `_commit_red` коммитит всё дерево (`stage_all_except_runtime`),
+      поэтому правка `pyproject.toml` RED-агентом (или агентом verify-first)
+      попадает и в red-коммит, и в базовый снимок. Отмывается молча, даже при
+      `strict`. Это тот же класс, что #137: барьер разоружает то, что
+      происходит до снимка.
+      **Фикс:** захватывать baseline сразу после `pre_start_hook`, то есть после
+      `uv sync`, иначе sync станет нарушением, но до verify-first и RED.
+      Проверять нарушения и после RED-прохода, до реплея и до платного GREEN,
+      чтобы не платить за попытку, которую всё равно отвергнут.
+      **Регресс:** при `execution_mode: tdd` + `harness_guard: strict` фейковый
+      RED-агент правит `pyproject.toml` → попытка проваливается с
+      `error_kind=harness_guard`, задача не DONE. То же для verify-first.
+      Контроль: при `warn` предупреждение есть, попытка проходит. Тест должен
+      краснеть на текущем master.
+- [ ] **harness-guard-after-post-done** — правки харнесса после GREEN-проверки (ревьюер, `post_review`, фикс-агент) не видны @owner:github:andrei-shtanakov @id:harness-guard-after-post-done @epic:eco.spec-toolchain
+      Найдено 2026-10-04 вместе с предыдущим пунктом, по чтению кода.
+      `harness_violations` вызывается ровно в одном месте, `execution.py:1094`,
+      только вокруг GREEN-вызова. Всё, что пишет в дерево позже, не сверяется:
+      ревьюер с вердиктом `REVIEW_FIXED` (`post_done_hook` → `run_code_review` /
+      `run_parallel_review`, `hooks.py:1610`), плагины `post_review`
+      (`hooks.py:1881`, им разрешено писать коммитимые артефакты) и фикс-агент
+      `review-pr` (`review_pr.run_fix_agent`: свой путь со своими `_run_gates`,
+      харнесс-гард там не вызывается совсем).
+      **Фикс:** повторно сверять с тем же task-baseline перед DONE/коммитом:
+      после ревью и после `post_review` в `post_done_hook`, и перед push в
+      `review_pr._apply_phase`. Для `review-pr` нужен свой снимок до фикс-агента,
+      `HarnessBaseline` задачи там нет. При `strict` это провал или отказ, при
+      `warn` предупреждение.
+      **Регресс:** (а) ревьюер с `REVIEW_FIXED` правит `pyproject.toml` → при
+      `strict` задача не DONE, `error_kind=harness_guard`; (б) плагин
+      `post_review` правит харнесс-файл → то же; (в) фикс-агент `review-pr`
+      правит харнесс-файл → коммит не пушится, комментарий не помечается как
+      fixed. Каждый тест должен краснеть на текущем master.
 - [x] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
       **Сделано:** correctness — PR #156 `7bc1360` (нет маркера ≠ passed, таймаут → not_run); политика — `review_policy` (#157, PR #170).
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.
