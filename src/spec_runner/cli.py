@@ -2719,6 +2719,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "required once one exists, and quoted in every refusal",
     )
 
+    # harness trust: an operator confirms a harness they already restored and checked
+    harness_parser = subparsers.add_parser(
+        "harness", parents=[common], help="Harness guard state (operator, audited)"
+    )
+    harness_sub = harness_parser.add_subparsers(dest="harness_command", required=True)
+    harness_trust = harness_sub.add_parser(
+        "trust",
+        parents=[common],
+        help="Confirm a harness you have already restored and checked as this task's "
+        "trusted baseline (not a way around a refusal)",
+    )
+    harness_trust.add_argument("task_id")
+    harness_trust.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    harness_trust.add_argument(
+        "--bind-branch",
+        dest="bind_branch",
+        help="Bind the task to the current branch (when it has no workspace record)",
+    )
+    harness_trust.add_argument("--actor", help="Who (default: git user.email)")
+
     # doctor
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
@@ -2955,6 +2975,11 @@ def _dispatch(args, config) -> None:
             from .budget_cmd import cmd_budget
 
             raise SystemExit(cmd_budget(args, config))
+
+        if args.command == "harness":
+            from .harness_cmd import cmd_harness
+
+            raise SystemExit(cmd_harness(args, config))
 
         # tdd remedies: a refusal is an operator-facing message, not a traceback
         if args.command == "tdd":
