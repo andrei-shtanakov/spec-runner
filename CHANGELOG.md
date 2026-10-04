@@ -54,6 +54,15 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The harness guard sees the RED and verify-first passes.** Its baseline
+  was taken right before the GREEN call, after both passes had written into
+  the tree, and `_commit_red` commits the whole tree with the red. A RED agent
+  that edited `pyproject.toml` therefore had the edit taken into the
+  baseline, and `harness_guard: strict` let it through. The baseline is now
+  taken right after `pre_start_hook` (so `uv sync` is still not a
+  violation), and the surface is compared once more after the passes, before
+  the paid GREEN call. Under `warn` that check warns and lets the task go on.
+
 - **Review reads the whole task, not its last commit.** The review diff was
   `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,
   the main branch merged in, the agent's own commits) was reviewed on its last

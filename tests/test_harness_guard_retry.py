@@ -132,7 +132,10 @@ class TestSnapshotSurvivesRetry:
             "the task passed on a retry with the harness still mutated — "
             "the guard was disarmed by persistence (#137)"
         )
-        assert len(calls) == 3, "all retries should have been spent, each blocked by the guard"
+        # Attempts 2-3 find the edit still in the tree and are refused before
+        # the paid call — there is nothing an agent could do to pass them.
+        assert len(calls) == 1, "a retry paid for an agent call the guard was bound to refuse"
+        assert len(attempts) == 3, "all retries should have been spent, each blocked by the guard"
         assert all(not a.success for a in attempts)
         assert all("pyproject.toml" in (a.error or "") for a in attempts), (
             f"later attempts stopped naming the violation: {[a.error for a in attempts]}"

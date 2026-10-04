@@ -1622,9 +1622,16 @@ A/B — дефекты подтверждённого поведения, C — 
          списка файлов нет, а `Touches` с фактическим диффом не сверяется: это
          прогноз preflight, и так и сказано в `spec/FORMAT.md`. Сверку с
          диффом не делаем, потребителя нет.
-- [ ] **harness-guard-snapshot-before-red** — снимок харнесса снимается после RED/verify-first, и правка RED-агента отмывается @owner:github:andrei-shtanakov @id:harness-guard-snapshot-before-red @epic:eco.spec-toolchain
+- [x] **harness-guard-snapshot-before-red** — снимок харнесса снимался после RED/verify-first, и правка RED-агента отмывалась @owner:github:andrei-shtanakov @id:harness-guard-snapshot-before-red @epic:eco.spec-toolchain
+      **Сделано 2026-10-04 (PR #658):** baseline снимается сразу после
+      `pre_start_hook`. После RED/verify-first, до GREEN, добавлена вторая
+      сверка: общий хелпер `_harness_guard_error`, тот же, что у GREEN-сверки.
+      Регресс — `tests/test_harness_guard_before_red.py`: два ключевых теста
+      (RED и verify-first правят `pyproject.toml` при `strict`) краснели на
+      master, три контрольных (`warn`, чистый RED, `uv sync` в pre_start)
+      зелёные и до фикса, и после.
       Найдено 2026-10-04 при ответе на вопросы devtools про `Touches`, по чтению
-      кода. Тестом пока не подтверждено, первым делом пишется красный тест.
+      кода.
       В `_execute_task` порядок такой: `pre_start_hook` (`execution.py:688`) →
       `_run_verify_first_phase` (`:791`) → `_run_red_phase_gate` (`:848`) →
       ленивый `HarnessBaseline.capture` (`:960`) → GREEN → `harness_violations`
