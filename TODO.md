@@ -1618,6 +1618,87 @@ A/B — дефекты подтверждённого поведения, C — 
          угадывания по прозе) + preflight-проверка `harness.touches` (blocking
          при `strict`). Дизайн — `docs/superpowers/specs/2026-09-28-touches-preflight-design.md`,
          тесты — `tests/test_touches.py`. Выводить поле мостом — запрос в devtools.
+         **Закрыто 2026-10-04:** devtools поле выводить не будет. Источника полного
+         списка файлов нет, а `Touches` с фактическим диффом не сверяется: это
+         прогноз preflight, и так и сказано в `spec/FORMAT.md`. Сверку с
+         диффом не делаем, потребителя нет.
+- [x] **harness-guard-snapshot-before-red** — снимок харнесса снимался после RED/verify-first, и правка RED-агента отмывалась @owner:github:andrei-shtanakov @id:harness-guard-snapshot-before-red @epic:eco.spec-toolchain
+      **Сделано 2026-10-04 (PR #658):** baseline задачи снимается сразу после
+      `pre_start_hook`, так что GREEN-сверка видит и правки RED/verify-first.
+      Плюс сверка до GREEN: проходы RED/verify-first **этой** попытки
+      сравниваются со снимком, снятым прямо перед ними. С baseline задачи их
+      не сравниваем: правку, оставленную прошлой попыткой, retry-промпт велит
+      GREEN-агенту откатить, и отказ до GREEN отнял бы у него этот шанс.
+      Именно так было в первой версии фикса; это нашёл локальный круг ревью.
+      Регресс: `tests/test_harness_guard_before_red.py`,
+      `test_harness_guard_retry.py::TestARetryMayRevert`.
+      Найдено 2026-10-04 при ответе на вопросы devtools про `Touches`, по чтению
+      кода.
+      В `_execute_task` порядок такой: `pre_start_hook` (`execution.py:688`) →
+      `_run_verify_first_phase` (`:791`) → `_run_red_phase_gate` (`:848`) →
+      ленивый `HarnessBaseline.capture` (`:960`) → GREEN → `harness_violations`
+      (`:1094`). `_commit_red` коммитит всё дерево (`stage_all_except_runtime`),
+      поэтому правка `pyproject.toml` RED-агентом (или агентом verify-first)
+      попадает и в red-коммит, и в базовый снимок. Отмывается молча, даже при
+      `strict`. Это тот же класс, что #137: барьер разоружает то, что
+      происходит до снимка.
+- [x] **harness-guard-after-post-done** — правки харнесса после GREEN-проверки (ревьюер, `post_review`, фикс-агент) были не видны @owner:github:andrei-shtanakov @id:harness-guard-after-post-done @epic:eco.spec-toolchain
+      **Сделано 2026-10-04 (PR #658):** общий `harness.guard_error(actor=…)`.
+      Каждый шаг судится сам по себе, снимком прямо перед ним. **Ревьюер**:
+      сверка сразу после ревью, до повторных гейтов. Сам `run_code_review` /
+      `run_parallel_review` при `strict` не коммитит фиксы, задевшие харнесс,
+      а отказ откатывает файлы харнесса к байтам до ревью (`restore_surface`).
+      Без этого правка оставалась в HEAD и при `create_git_branch: false`
+      становилась baseline следующей задачи; это блокирующая находка
+      приёмочного ревью, круг 1. То же откатывание и для плагинов.
+      **Плагины `post_review`**: сверка сразу после них, до DONE-флипа.
+      **`review-pr`**: снимок перед каждым фиксом, сверка до гейтов, при
+      нарушении — откат и `needs_human`. Почему не с baseline задачи: между
+      шагами харнесс сам пишет в дерево (`lint_fix_command` по всему дереву
+      может переписать корневой `conftest.py`). Сверка с baseline вменила бы
+      это ревьюеру и сделала бы задачу невосстановимой; так было в первой
+      версии, это нашёл локальный круг ревью. Отказ в `post_done` идёт как
+      `Refusal(POLICY)`, поэтому `error_kind=policy`, а не `harness_guard`.
+      Регресс: `tests/test_harness_guard_after_post_done.py` (ревьюер, плагин,
+      lint-fix харнесса не вменяется, отвергнутая правка ревьюера не попадает
+      в коммит) и `tests/test_review_pr.py::TestApplyPhase::test_fix_editing_the_harness_*`.
+      Найдено 2026-10-04 вместе с предыдущим пунктом, по чтению кода.
+      **Не сделано (minor приёмки):** отказы ревьюера и плагина пишутся с
+      `error_kind=policy`, а RED/GREEN — с `harness_guard`; фильтр по
+      `harness_guard` их не видит. Чинить отдельным `RefusalKind` значит
+      спорить с обоснованием в `errors.py` (три kind'а = три состояния
+      exit-кода) — решение владельца.
+- [ ] **harness-guard-refused-edit-inherited** — отвергнутая правка харнесса GREEN-агентом остаётся в дереве; при `create_git_branch: false` её читает baseline следующей задачи @owner:github:andrei-shtanakov @id:harness-guard-refused-edit-inherited @epic:eco.spec-toolchain
+      Найдено 2026-10-04 при разборе приёмки PR #658. Для ревьюера, плагинов
+      `post_review` и RED/verify-first закрыто в PR #658 откатом
+      (`refuse_and_restore`). RED-часть — блокирующая находка приёмки, круг 2.
+      Для GREEN — так с #64: отказ оставляет правку в дереве, чтобы следующая
+      попытка могла её откатить. Если ретраи кончились, правка остаётся, и
+      следующая задача без своей ветки берёт её в baseline. Решить:
+      откатывать после последней попытки или останавливать ран. Регресс: при
+      `create_git_branch: false` + `strict` правка, отвергнутая на всех
+      попытках задачи A, отвергается и в задаче B.
+      Рядом, тоже не сделано: red-чекпойнт, записанный на red-коммите с
+      правкой оракула, остаётся подтверждённым и переиспользуется. Откат
+      возвращает файл в дереве, но вердикт «красный» был получен на
+      испорченном оракуле. Решить вместе с TDD-гейтом, а не здесь.
+      `harness_violations` вызывается ровно в одном месте, `execution.py:1094`,
+      только вокруг GREEN-вызова. Всё, что пишет в дерево позже, не сверяется:
+      ревьюер с вердиктом `REVIEW_FIXED` (`post_done_hook` → `run_code_review` /
+      `run_parallel_review`, `hooks.py:1610`), плагины `post_review`
+      (`hooks.py:1881`, им разрешено писать коммитимые артефакты) и фикс-агент
+      `review-pr` (`review_pr.run_fix_agent`: свой путь со своими `_run_gates`,
+      харнесс-гард там не вызывается совсем).
+      **Фикс:** повторно сверять с тем же task-baseline перед DONE/коммитом:
+      после ревью и после `post_review` в `post_done_hook`, и перед push в
+      `review_pr._apply_phase`. Для `review-pr` нужен свой снимок до фикс-агента,
+      `HarnessBaseline` задачи там нет. При `strict` это провал или отказ, при
+      `warn` предупреждение.
+      **Регресс:** (а) ревьюер с `REVIEW_FIXED` правит `pyproject.toml` → при
+      `strict` задача не DONE, `error_kind=harness_guard`; (б) плагин
+      `post_review` правит харнесс-файл → то же; (в) фикс-агент `review-pr`
+      правит харнесс-файл → коммит не пушится, комментарий не помечается как
+      fixed. Каждый тест должен краснеть на текущем master.
 - [x] **#138 review-stage-fail-open** (inbox, from disputatio) — стадия `review` @owner:github:andrei-shtanakov @id:review-stage-fail-open @epic:eco.spec-toolchain
       **Сделано:** correctness — PR #156 `7bc1360` (нет маркера ≠ passed, таймаут → not_run); политика — `review_policy` (#157, PR #170).
       не может провалить задачу ни при каком исходе, но в логе выглядит как гейт.

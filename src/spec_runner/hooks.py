@@ -30,6 +30,7 @@ from .git_ops import (
     runtime_state_paths,
     stage_all_except_runtime,
 )
+from .harness import refuse_and_restore, snapshot_contents
 from .lifecycle import TddPhase
 from .logging import get_logger
 from .phases import Refusal, RefusalKind
@@ -1608,6 +1609,9 @@ def post_done_hook(
         if config.review_parallel:
             review_tree_before = _review_tree_fingerprint(config)
         review_fn = run_parallel_review if config.review_parallel else run_code_review
+        # Harness tripwire (#64): the reviewer writes into the tree when it
+        # fixes; judged by itself, so the lint auto-fix above is not its edit.
+        review_harness_before = snapshot_contents(config)
         logger.info(
             "Running code review",
             parallel=config.review_parallel,
@@ -1643,6 +1647,28 @@ def post_done_hook(
             logger.error(
                 "Review could not run — nothing was learned about this code",
                 error=review_error,
+            )
+        # Before the re-run gates and the commit of its fixes (which the review
+        # call withholds under `strict`): a rewritten oracle makes their
+        # verdict worthless.
+        from .runner import log_progress
+
+        harness_error = refuse_and_restore(
+            config, task.id, review_harness_before, log_progress, actor="the reviewer"
+        )
+        if harness_error is not None:
+            harness_blocked = _commit_blocked_status(
+                task,
+                config,
+                Refusal(harness_error, RefusalKind.POLICY),
+                review_checkpoint_sha or _head_sha(config),
+            )
+            return (
+                False,
+                harness_blocked,
+                review_verdict.value,
+                (review_output or "")[:2048],
+                False,
             )
 
     # HITL approval gate
@@ -1878,7 +1904,20 @@ def post_done_hook(
     # finished — the defect class the gates exist to prevent. A blocked task
     # exports nothing, and whatever a failed exporter left behind stays dirty
     # in the tree rather than being committed as evidence.
+    plugin_harness_before = snapshot_contents(config)
     plugin_blocked = run_plugin_hooks_for("post_review", task, config, success=True)
+    # Harness tripwire (#64): evidence, yes — the oracle, no. Checked (and
+    # undone) whatever the plugin itself answered: a plugin that blocks for
+    # its own reason must not leave its harness edit behind.
+    from .runner import log_progress
+
+    plugin_harness_error = refuse_and_restore(
+        config, task.id, plugin_harness_before, log_progress, actor="a post_review plugin"
+    )
+    if plugin_harness_error is not None:
+        plugin_blocked = (
+            f"{plugin_blocked}\n{plugin_harness_error}" if plugin_blocked else plugin_harness_error
+        )
     if plugin_blocked is not None:
         # The same resumable shape as the gate refusal above: the candidate
         # commit stands, nothing is merged, the task is not marked done, and —

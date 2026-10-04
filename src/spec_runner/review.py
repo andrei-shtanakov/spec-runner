@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from .budget import budget_is_active
 from .config import ExecutorConfig, command_has_executable, format_check_instrument_error
 from .git_ops import stage_all_except_runtime
+from .harness import harness_violations, snapshot_harness
 from .logging import get_logger
 from .paid_call import _LEDGER_LOCK as paid_call_lock
 from .paid_call import scope as paid_call_scope
@@ -662,6 +663,20 @@ def _budget_refusal(
         )
 
 
+def _fix_touches_the_harness(config: ExecutorConfig, before: dict[str, str] | None) -> bool:
+    """Whether a reviewer's fixes must stay uncommitted (#64, `strict` only).
+
+    `post_done_hook` refuses the attempt and restores the harness files; a
+    commit made here first would put the refused oracle edit into the branch,
+    where the next task's baseline — under ``create_git_branch: false`` —
+    would read it as legitimate.
+    """
+    if config.harness_guard != "strict" or not harness_violations(config, before):
+        return False
+    logger.warning("Review fixes touch the harness — not committed")
+    return True
+
+
 def run_code_review(
     task: Task,
     config: ExecutorConfig,
@@ -683,6 +698,7 @@ def run_code_review(
         Tuple of (verdict, error_message, review_output).
     """
     log_progress("🔍 Starting code review", task.id)
+    harness_before = snapshot_harness(config)
 
     # Use review-specific command/model if configured, then persona, then main settings
     review_cmd = config.review_command or config.claude_command
@@ -831,6 +847,8 @@ def run_code_review(
                 # so post_done repeats every deterministic gate before any
                 # general task commit can sweep them up.
                 return ReviewVerdict.FIXED, format_failure, output
+            if _fix_touches_the_harness(config, harness_before):
+                return ReviewVerdict.FIXED, None, output
             # Commit the fixes — runtime state stays out of the commit (#62)
             if stage_all_except_runtime(config):
                 commit_result = subprocess.run(
@@ -981,6 +999,7 @@ def run_parallel_review(
     Verdicts are aggregated: any FAILED → overall FAILED.
     """
     log_progress(f"🔍 Starting parallel review ({len(config.review_roles)} roles)", task.id)
+    harness_before = snapshot_harness(config)
 
     review_cmd = config.review_command or config.claude_command
     review_model = config.review_model or config.get_model_for_role("reviewer")
@@ -1082,6 +1101,8 @@ def run_parallel_review(
         format_failure = _review_fix_format_failure(config)
         if format_failure is not None:
             format_failure_reason = format_failure
+        elif _fix_touches_the_harness(config, harness_before):
+            pass
         else:
             # Commit fixes from any review agent — minus runtime state (#62)
             try:

@@ -9,7 +9,7 @@ from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
-from .harness import HarnessBaseline
+from .harness import HarnessBaseline, guard_error, refuse_and_restore, snapshot_contents
 from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
@@ -698,6 +698,20 @@ def _execute_task(
         )
         return "HOOK_ERROR"
 
+    # Harness tripwire (#64): snapshot the verification surface before any
+    # agent gets write access to it. After pre_start_hook, so `uv sync`
+    # rewriting uv.lock is not an agent mutation; before the verify-first and
+    # RED passes, whose writes `_commit_red` commits with the red — a snapshot
+    # taken after them took their edits as the baseline. #137: the snapshot
+    # belongs to the task, not the attempt, so a retry cannot re-baseline a
+    # forbidden edit into legitimacy.
+    harness_before = (harness_baseline or HarnessBaseline()).capture(config)
+    # What the RED/verify-first passes of *this* attempt are judged against —
+    # not the task baseline: an edit an earlier attempt left behind is the
+    # GREEN agent's to revert (the retry prompt says so), and refusing here
+    # would take that chance away and fail every retry unpaid.
+    passes_before = snapshot_contents(config)
+
     # Update status
     state.mark_running(task_id)
     update_task_status(config.tasks_file, task_id, "in_progress")
@@ -870,6 +884,24 @@ def _execute_task(
             )
             return False
 
+    # The passes above write into the tree; refuse a harness edit here,
+    # before the paid GREEN call, not after it — and undo it: `_commit_red`
+    # has already committed it, and under `create_git_branch: false` the next
+    # task's baseline would read it as the oracle.
+    harness_error = refuse_and_restore(config, task_id, passes_before, log_progress)
+    if harness_error is not None:
+        state.record_attempt(
+            task_id,
+            False,
+            0.0,
+            error=harness_error,
+            error_code=ErrorCode.TASK_FAILED,
+            error_kind="harness_guard",
+            error_stage=reporter.current,
+        )
+        send_callback(config.callback_url, task_id, "failed", 0.0, harness_error)
+        return False
+
     # Get previous attempts for context (to inform Claude about past failures)
     task_state = state.get_task_state(task_id)
     previous_attempts = task_state.attempts if task_state.attempts else None
@@ -949,15 +981,6 @@ def _execute_task(
             model=task_model or "(default)",
             skip_permissions=config.skip_permissions,
         )
-
-        # Harness tripwire (#64): snapshot the verification surface before
-        # the agent gets write access to it. Taken here — after
-        # pre_start_hook — so `uv sync` rewriting uv.lock is not an agent
-        # mutation. #137: the snapshot belongs to the task, not the attempt,
-        # so a retry cannot re-baseline a forbidden edit into legitimacy.
-        from .harness import harness_violations, is_control_plane
-
-        harness_before = (harness_baseline or HarnessBaseline()).capture(config)
 
         reporter.enter("exec")
         from . import paid_call
@@ -1091,47 +1114,23 @@ def _execute_task(
         # Harness tripwire (#64): check BEFORE the gates run — a mutated
         # oracle makes their verdict worthless. strict fails the attempt
         # (the message feeds the retry prompt); warn logs provenance.
-        violations = harness_violations(config, harness_before)
-        if violations:
-            summary = ", ".join(violations)
-            if config.harness_guard == "strict":
-                # `error` becomes the next attempt's prompt, so it must not
-                # name the exemption: that taught the author agent how to lift
-                # the barrier that just stopped it. The operator's way out
-                # goes on the progress line, which no prompt carries. That is
-                # the whole guarantee: the knob is no secret (README documents
-                # it, and the progress file sits in the tree); keeping the
-                # agent from *using* it is companion #1 (config under guard).
-                error = (
-                    "Harness guard: the agent modified verification files: "
-                    f"{summary}. These files define how the task is verified "
-                    "and must not be changed by the task. Revert them."
-                )
-                policy = [v for v in violations if is_control_plane(config, v)]
-                hints = []
-                if policy:
-                    hints.append("the spec-runner config cannot be exempted; revert it")
-                if len(policy) < len(violations):
-                    hints.append("exempt an intended change via harness_allow in the config")
-                log_progress(f"⛔ Harness guard: {summary} (operator: {'; '.join(hints)})", task_id)
-                logger.error("Harness files mutated by agent", violations=violations)
-                state.record_attempt(
-                    task_id,
-                    False,
-                    duration,
-                    error=error,
-                    output=output,
-                    error_code=ErrorCode.TASK_FAILED,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=cost_usd,
-                    error_kind="harness_guard",
-                    error_stage=reporter.current,
-                )
-                send_callback(config.callback_url, task_id, "failed", duration, error)
-                return False
-            log_progress(f"⚠️ Harness files changed by agent: {summary}", task_id)
-            logger.warning("Harness files mutated by agent", violations=violations)
+        harness_error = guard_error(config, task_id, harness_before, log_progress)
+        if harness_error is not None:
+            state.record_attempt(
+                task_id,
+                False,
+                duration,
+                error=harness_error,
+                output=output,
+                error_code=ErrorCode.TASK_FAILED,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                error_kind="harness_guard",
+                error_stage=reporter.current,
+            )
+            send_callback(config.callback_url, task_id, "failed", duration, harness_error)
+            return False
 
         if success:
             reporter.enter("parse")

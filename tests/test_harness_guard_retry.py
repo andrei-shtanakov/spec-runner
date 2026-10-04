@@ -177,6 +177,36 @@ class TestSnapshotSurvivesRetry:
         )
 
 
+class TestARetryMayRevert:
+    def test_an_agent_reverting_on_retry_passes(self, project, isolate, monkeypatch):
+        """The refusal tells the agent to revert, so a retry must get the
+        chance: the checks before GREEN judge only this attempt's passes, never
+        an edit an earlier attempt left in the tree."""
+        import subprocess as sp
+
+        from spec_runner.execution import run_with_retries
+
+        calls: list[int] = []
+
+        def _run(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                (project / "pyproject.toml").write_text(PYPROJECT + "\n# touched\n")
+            else:
+                (project / "pyproject.toml").write_text(PYPROJECT)
+            return sp.CompletedProcess(
+                args=["x"], returncode=0, stdout="TASK_COMPLETE\n", stderr=""
+            )
+
+        monkeypatch.setattr(isolate, "_run_agent_process", _run)
+        cfg = _cfg(project)
+        with ExecutorState(cfg) as state:
+            result = run_with_retries(_task(), cfg, state)
+
+        assert result is True
+        assert len(calls) == 2
+
+
 class TestBaselineCapturedAfterPreStart:
     def test_pre_start_hook_changes_are_not_violations(self, project, isolate, monkeypatch):
         """`uv sync` in pre_start legitimately rewrites uv.lock/pyproject.

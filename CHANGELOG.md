@@ -54,6 +54,32 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ### Fixed
 
+- **The harness guard sees the RED and verify-first passes.** Its baseline
+  was taken right before the GREEN call, after both passes had written into
+  the tree, and `_commit_red` commits the whole tree with the red. A RED agent
+  that edited `pyproject.toml` therefore had the edit taken into the
+  baseline, and `harness_guard: strict` let it through. The task baseline is
+  now taken right after `pre_start_hook`, so `uv sync` is still not a
+  violation. The passes of each attempt are also checked against a snapshot
+  taken just before them, before the paid GREEN call, and a refused edit is
+  restored (the red commit already carries it). An edit an earlier attempt's
+  GREEN left behind stays the next GREEN agent's to revert.
+
+- **The harness guard sees what is written after GREEN.** A reviewer
+  answering `REVIEW_FIXED`, a `post_review` plugin and the `review-pr` fix
+  agent all wrote into the tree after the only check, so under `strict` any
+  of them could rewrite `pyproject.toml` and the task still closed (or the
+  fix was pushed). Each step is now checked against a snapshot taken just
+  before it: the reviewer before the re-run gates, the plugins before the
+  DONE flip, and each `review-pr` fix before its gates. Under `strict` the
+  review call no longer commits fixes that touch the harness, and a refused
+  reviewer or plugin edit is restored from the bytes taken before the step.
+  A plugin that blocks for its own reason is checked and restored too. The
+  restore never writes or unlinks through a symlink the step planted. A
+  refused `review-pr` fix is rolled back and left to a human. Writes the
+  harness makes itself, such as the repo-wide `lint_fix_command`, are not
+  blamed on anyone.
+
 - **Review reads the whole task, not its last commit.** The review diff was
   `git diff HEAD~1`; a task whose work spanned several commits (WIP commits,
   the main branch merged in, the agent's own commits) was reviewed on its last
