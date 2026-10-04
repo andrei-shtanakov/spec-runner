@@ -1016,6 +1016,18 @@ runtime-state по инварианту конвейера «нужное для
         ownership) как «нет репо/коммитов» → «нет WIP» (fail-open).
       - `tdd abandon`: CAS не перепроверяется внутри транзакции; `ExecutorLock.acquire`
         обрезает диагностику держателя при неудачной пробе.
+      - Из scoped-ревью финальной волны (2026-10-05):
+        - остаточный E2BIG (тысячи новых файлов в отслеживаемом каталоге или в корне,
+          тысячи изменений отслеживаемых файлов): git успевает сохранить stash-запись и
+          падает, rescue отказывает чисто, но оставляет осиротевшую `spec-runner rescue:`
+          запись — каждая повторная попытка добавляет ещё одну; отказ о ней не говорит;
+        - нет CLI-теста отказа сохранения WIP в конце прогона для integration_pr
+          (`return_to_base=False` + пропуск post-PR);
+        - `get_main_branch` пробует `rev-parse --verify main/master` без `refs/heads/` —
+          тот же parser differential, другое место;
+        - `harness trust --bind-branch` проверяет только «текущая ветка»: можно привязать
+          задачу к `master` или к ветке другой задачи (нет уникальности
+          `(namespace, branch)`), тогда WIP ляжет на main.
 
 - [x] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
       **Сделано 2026-10-04:** замер до фикса через настоящий шов (подменён
