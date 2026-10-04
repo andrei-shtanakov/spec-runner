@@ -106,3 +106,5 @@ def test_the_prompt_artefact_says_why_it_is_empty(timed_out):
         f"that died mid-call:\n{body[-400:]}"
     )
     assert "timed out" in body.split("=== NO RESULT: ", 1)[1]
+    # Same record as a timed-out review: billed, amount unreported.
+    assert "=== COST: unknown ===" in body
