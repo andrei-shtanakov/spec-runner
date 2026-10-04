@@ -1355,10 +1355,10 @@ def post_done_hook(
 
     # WIP of this task on the branch (retry-from-WIP spec §4). An unreadable
     # history is not "no WIP": the no-op verdict and the candidate depend on it.
+    from .wip import WipReadError, wip_base, wip_commits
+
     has_wip = False
     try:
-        from .wip import WipReadError, wip_base, wip_commits
-
         base = wip_base(config)
         has_wip = base is not None and bool(wip_commits(config, task.id, base))
     except WipReadError as e:
