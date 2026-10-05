@@ -19,6 +19,7 @@ import json
 import shutil
 import sqlite3
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -115,12 +116,28 @@ def _publish(
             release_directory(directory)  # no queue owes it
         # After the enqueue: a failed link write costs one `supersedes` hop
         # to an older real checkpoint, never the checkpoint itself.
-        _remember_last(live, run_id, checkpoint_id)
+        _after_queue(checkpoint_id, "link", lambda: _remember_last(live, run_id, checkpoint_id))
     finally:
         if owned:
             live.close()
-    _rotate(root, run_id, publisher.pending_directories() if publisher is not None else set())
+    owed = publisher.pending_directories() if publisher is not None else set()
+    _after_queue(checkpoint_id, "rotation", lambda: _rotate(root, run_id, owed))
     return checkpoint_id
+
+
+def _after_queue(checkpoint_id: str, what: str, step: Callable[[], None]) -> None:
+    """Run a housekeeping step of a checkpoint that is already taken and queued.
+
+    Its failure must not read as "not taken" (`after_mutation`'s warning) nor
+    stop the next step: the copy and its queue entry stand either way.
+    """
+    try:
+        step()
+    except (sqlite3.Error, OSError) as exc:
+        print(
+            f"⚠️  checkpoint {checkpoint_id} was taken and queued, but its {what} failed: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _next_identity(conn: sqlite3.Connection, run_id: str) -> tuple[int, str, str | None]:
@@ -143,6 +160,12 @@ def _next_identity(conn: sqlite3.Connection, run_id: str) -> tuple[int, str, str
 
 
 def _remember_last(conn: sqlite3.Connection, run_id: str, checkpoint_id: str) -> None:
+    """Link ``checkpoint_id`` as the run's last written checkpoint.
+
+    Written after the backup, so the snapshot's own ``checkpoint_last`` still
+    names the *previous* checkpoint (the one in its manifest's ``supersedes``),
+    never itself: the link exists only once the copy it names does.
+    """
     with conn:
         _set_meta(conn, f"checkpoint_last:{run_id}", checkpoint_id)
 

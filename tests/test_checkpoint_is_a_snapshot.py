@@ -417,3 +417,58 @@ def test_excluded_names_the_files_of_this_namespace(
         state.record_attempt("T-1", True, 1.0)
     (manifest,) = _manifests(config)
     assert manifest["excluded"] == expected
+
+
+@pytest.mark.parametrize("with_late_keys", [True, False])
+def test_schema_join_keys_carry_the_late_identifiers(tmp_path: Path, with_late_keys: bool) -> None:
+    """Design §3.3 / DEL-18: `join_keys` has the last `attempt_id`, `call_id`
+    and `closure`, each null until known; they are optional, not required."""
+    config = _config(tmp_path)
+    with ExecutorState(config) as state:
+        state.record_attempt("T-1", True, 1.0)
+    (manifest,) = _manifests(config)
+    keys = dict(manifest["join_keys"])  # type: ignore[call-overload]
+    if with_late_keys:
+        keys.update(attempt_id=None, call_id=None, closure=None)
+    manifest["join_keys"] = keys
+    schema = json.loads(SCHEMA.read_text())
+    jsonschema.validate(manifest, schema)
+    keys["unknown"] = None
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(manifest, schema)
+
+
+@pytest.mark.parametrize("step", ["_remember_last", "_rotate"])
+def test_a_failure_after_the_queue_says_the_checkpoint_was_taken(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    step: str,
+) -> None:
+    """The copy is on disk and queued: a failed link or rotation must not be
+    reported as "not taken", and one must not skip the other."""
+    config = _config(tmp_path)
+    ctx = _context(_Store())
+    assert ctx.publisher is not None
+    run_context.install(ctx)
+    calls: list[str] = []
+    real_rotate = checkpoint._rotate
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise (sqlite3.OperationalError if step == "_remember_last" else OSError)("boom")
+
+    def counting_rotate(*args: object, **kwargs: object) -> None:
+        calls.append("rotate")
+        real_rotate(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(checkpoint, "_rotate", counting_rotate)
+    monkeypatch.setattr(checkpoint, step, broken)
+    with ExecutorState(config) as state:
+        cid = checkpoint.after_mutation(config, table="attempts", conn=state._conn)
+    assert cid is not None, "a queued checkpoint was reported as not published"
+    assert ctx.publisher.pending == 1
+    err = capsys.readouterr().err
+    assert "was not taken" not in err
+    assert cid in err and "queued" in err
+    if step == "_remember_last":
+        assert calls == ["rotate"], "a failed link skipped the rotation"

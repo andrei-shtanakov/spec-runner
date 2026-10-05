@@ -1090,6 +1090,13 @@ runtime-state по инварианту конвейера «нужное для
       tasks-спеки с текущими байтами и статусами узлов закрыла бы это; дверь
       переиздания (`--supersede`) — у моста devtools, мы только видим и отказываем.
 
+- [ ] **checkpoint-orphans-never-reclaimed** (spec-runner#480, из приёмки PR #663) @owner:TBD @id:checkpoint-orphans-never-reclaimed @epic:eco.spec-toolchain
+      Ротация (`checkpoint._rotate`) удаляет копию чужого прогона только с `.released`,
+      а копию без читаемого manifest-а не трогает вовсе: копии, которые должен упавший
+      процесс (`.released` не появится никогда), и безманифестные остатки после SIGKILL
+      в `checkpoints_dir` не возвращаются никем. Закрыть в retention / `evidence purge`
+      (TASK-012, DT-12) — по возрасту и по store, а не в ротации.
+
 - [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export @epic:eco.spec-toolchain
       **Операторский чек-лист возобновления (2026-10-01):**
       `docs/plans/2026-10-01-operator-checklist-480-600.md` — переодобрение ЧЕТЫРЁХ узлов

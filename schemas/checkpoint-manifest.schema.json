@@ -68,7 +68,19 @@
         "run_id": { "type": "string" },
         "pipeline_id": { "type": ["string", "null"] },
         "table": { "description": "The table whose mutation was published.", "type": "string" },
-        "task_id": { "type": ["string", "null"] }
+        "task_id": { "type": ["string", "null"] },
+        "attempt_id": {
+          "description": "The last attempt of the run; null until known (design 3.3, filled by DT-05).",
+          "type": ["string", "null"]
+        },
+        "call_id": {
+          "description": "The last paid call of the run; null until known (design 3.3, filled by DT-05).",
+          "type": ["string", "null"]
+        },
+        "closure": {
+          "description": "The run's closure; null until it is written (design 3.3, filled by DT-05).",
+          "type": ["string", "null"]
+        }
       }
     },
     "digests": {
