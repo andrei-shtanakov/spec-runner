@@ -88,7 +88,12 @@ that needs an operator is the migration below.
   nothing in the DB, so for a task they flip to DONE the deletion is its own
   transaction after the `tasks.md` write; if it fails the command says so and
   exits 2, and re-running `task done` finishes it. Both refuse (exit 2, nothing
-  written) while a run holds the executor lock. A DONE whose DB write fails
+  written) while a run holds the executor lock. `tdd abandon` does not confirm
+  the current harness and never leads to a new `initial` capture: under
+  `strict` the next start on the surviving branch is refused until the
+  operator restores and checks the harness and runs
+  `spec-runner harness trust TASK-X --bind-branch <current branch> --reason "…"`;
+  both the abandon output and the refusal name that command. A DONE whose DB write fails
   (degraded mode) keeps the baseline, consistently with the DONE row not being
   durable.
 

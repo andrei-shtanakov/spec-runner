@@ -255,8 +255,31 @@ def surface_snapshot(
     return surface, files
 
 
+def trust_remedy(config: ExecutorConfig, task_id: str, *, bind: bool) -> str:
+    """`TRUST_REMEDY` with the exact command for this task (PR #661 owner item 1).
+
+    ``bind``: the task has no workspace record naming a branch (e.g. after
+    `tdd abandon`), so `harness trust` needs ``--bind-branch`` with the
+    current branch — named when it can be read.
+    """
+    flag = ""
+    if bind and config.create_git_branch:
+        from .git_ops import current_branch
+
+        flag = f" --bind-branch {current_branch(config) or '<current branch>'}"
+    return (
+        "restore the harness files of this task's tree to a state you have checked "
+        "(e.g. against the main branch), then confirm it with "
+        f'`spec-runner harness trust {task_id}{flag} --reason "…"`'
+    )
+
+
 def trust_refusal(
-    config: ExecutorConfig, stored: "StoredBaseline | None", *, started: bool
+    config: ExecutorConfig,
+    stored: "StoredBaseline | None",
+    *,
+    started: bool,
+    remedy: str = TRUST_REMEDY,
 ) -> str | None:
     """Why `strict` cannot trust this task's harness baseline, or None."""
     if config.harness_guard != "strict":
@@ -264,7 +287,7 @@ def trust_refusal(
     if stored is None:
         if not started:
             return None
-        return f"this task started without a trusted harness baseline — {TRUST_REMEDY}"
+        return f"this task started without a trusted harness baseline — {remedy}"
     if stored.provenance not in ("initial", "operator"):
         return (
             f"the harness baseline was re-captured automatically ({stored.provenance}) "
@@ -459,10 +482,14 @@ class HarnessBaseline:
         if config.harness_guard == "off":
             return None
         try:
-            self._stored = state.get_harness_baseline(resolve_namespace(config), task.id)
+            namespace = resolve_namespace(config)
+            self._stored = state.get_harness_baseline(namespace, task.id)
+            workspace = state.get_workspace(namespace, task.id)
         except _STATE_ERRORS as exc:
             raise HarnessStateError(f"could not read the harness baseline: {exc}") from exc
-        return trust_refusal(config, self._stored, started=started)
+        bind = workspace is None or workspace.get("branch") is None
+        remedy = trust_remedy(config, task.id, bind=bind)
+        return trust_refusal(config, self._stored, started=started, remedy=remedy)
 
     def capture(
         self, config: ExecutorConfig, state: "ExecutorState", task: "Task"

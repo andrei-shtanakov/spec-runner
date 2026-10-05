@@ -1237,6 +1237,22 @@ def _remedy_record(
     )
 
 
+def _abandon_trust_note(config: ExecutorConfig, task_id: str) -> str:
+    """What the next start needs: abandon dropped the trusted baseline (owner, PR #661).
+
+    Abandon does not confirm the current harness, and nothing re-captures an
+    `initial` one for a started task.
+    """
+    from .harness import trust_remedy
+
+    return (
+        f"ℹ️  {task_id}'s workspace record and trusted harness baseline were dropped with "
+        "the red; abandon does not confirm the current harness. Under "
+        "`harness_guard: strict` the next start is refused until you "
+        f"{trust_remedy(config, task_id.upper(), bind=True)}."
+    )
+
+
 def cmd_tdd(args, config: ExecutorConfig) -> int:
     """`spec-runner tdd abandon|repair`. Returns a process exit code.
 
@@ -1305,6 +1321,7 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         return 0
     if result.operation is RemedyOperation.ABANDON:
         print(f"✔️  Abandoned {result.checkpoint_id}; {args.task_id} returns to RED authoring")
+        print(_abandon_trust_note(config, args.task_id))
         return 0
 
     if result.new_checkpoint_id is None:
