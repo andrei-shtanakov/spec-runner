@@ -14,13 +14,15 @@ full artefact reproduced later.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import sys
 import threading
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .artifact_store import (
     Ack,
@@ -29,6 +31,7 @@ from .artifact_store import (
     _open_store,
     call_result_key,
     call_start_key,
+    checkpoint_key,
     closure_key,
     run_start_key,
 )
@@ -316,6 +319,47 @@ def serialise(record: Record) -> bytes:
     return json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
 
+#: The file of a checkpoint that is put last: its ack is the checkpoint's ack.
+MANIFEST_FILE = "manifest.json"
+#: Local-only marker in a checkpoint directory: no process owes it to the store
+#: any more (acknowledged, or never queued). Another process's rotation may
+#: delete only a directory that carries it -- its queue is invisible (#663).
+RELEASED_MARKER = ".released"
+
+
+class AckedCheckpoint(NamedTuple):
+    """The newest checkpoint whose manifest the store acknowledged."""
+
+    sequence: int
+    checkpoint_id: str
+
+
+@dataclass(frozen=True)
+class PendingCheckpoint:
+    """A checkpoint written locally and owed to the store (design Q-05).
+
+    ``files`` are names inside ``directory``; ``MANIFEST_FILE`` is delivered
+    last whatever the order given, so a reader never sees a manifest whose
+    files are missing.
+    """
+
+    run_id: str
+    sequence: int
+    checkpoint_id: str
+    directory: Path
+    files: tuple[str, ...]
+
+
+class CheckpointLost(Exception):
+    """A queued checkpoint's local file is gone: no retry can deliver it."""
+
+
+def release_directory(directory: Path) -> None:
+    """Mark ``directory`` as owed by nobody; best effort (a stale copy stays)."""
+    with contextlib.suppress(OSError):
+        (directory / RELEASED_MARKER).touch()
+
+
 @dataclass
 class Publisher:
     """The single writer into an ``ArtifactStore``.
@@ -332,6 +376,10 @@ class Publisher:
     channel: str = "store"
     _queue: deque[Record] = field(default_factory=deque)
     _drain_lock: threading.Lock = field(default_factory=threading.Lock)
+    _checkpoints: list[PendingCheckpoint] = field(default_factory=list)
+    _acked: AckedCheckpoint | None = None
+    #: Checkpoints dropped because their local files vanished, in order.
+    lost: list[PendingCheckpoint] = field(default_factory=list)
 
     @classmethod
     def from_config(cls, config: ExecutorConfig) -> Publisher:
@@ -410,32 +458,110 @@ class Publisher:
             return False
         return True
 
-    def drain(self, timeout: float) -> bool:
-        """Deliver every queued record; ``True`` when nothing is left owed.
+    def enqueue_checkpoint(self, checkpoint: PendingCheckpoint) -> None:
+        """Owe ``checkpoint`` to the store; delivery happens in ``drain``.
 
-        ``timeout`` bounds each acknowledgement it waits for. Serialised: the
-        parallel review pool drains from several threads, and two drains
-        popping one queue raced (review of #653).
+        Never waits: the seam after a mutation must not block (Q-05). The
+        queue is ordered by ``sequence``.
         """
         with self._drain_lock:
-            for _ in range(len(self._queue)):
-                try:
-                    record = self._queue.popleft()
-                except IndexError:
-                    break
-                try:
-                    self.publish(record, timeout=timeout)
-                except AlreadyExists:
-                    continue
-                except AckNotReceived:
-                    self._queue.append(record)
-                    break
-            return not self._queue
+            self._checkpoints.append(checkpoint)
+            self._checkpoints.sort(key=lambda c: (c.run_id, c.sequence))
+
+    def last_acknowledged(self) -> AckedCheckpoint | None:
+        """The newest checkpoint whose manifest was acknowledged, if any."""
+        return self._acked
+
+    def pending_directories(self) -> set[Path]:
+        """Local checkpoint directories still owed to the store."""
+        return {c.directory for c in self._checkpoints}
+
+    def unrecovered_losses(self) -> list[PendingCheckpoint]:
+        """Lost checkpoints no later acknowledged checkpoint supersedes.
+
+        A snapshot is the whole DB, so an acknowledged successor carries
+        everything the lost one did; until then the newest state is not in
+        the store, which the Q-05 sites treat like any undelivered checkpoint.
+        """
+        acked = self._acked.sequence if self._acked is not None else 0
+        return [c for c in self.lost if c.sequence > acked]
+
+    def _deliver_checkpoint(self, checkpoint: PendingCheckpoint, timeout: float) -> None:
+        names = [n for n in checkpoint.files if n != MANIFEST_FILE] + [MANIFEST_FILE]
+        for name in names:
+            try:
+                data = (checkpoint.directory / name).read_bytes()
+            except (FileNotFoundError, NotADirectoryError) as exc:
+                raise CheckpointLost(f"checkpoint file {name} is gone: {exc}") from exc
+            except OSError as exc:
+                raise AckNotReceived(f"checkpoint file {name} is unreadable: {exc}") from exc
+            key = checkpoint_key(
+                checkpoint.run_id, checkpoint.sequence, checkpoint.checkpoint_id, name
+            )
+            metadata = {
+                "run_id": checkpoint.run_id,
+                "kind": "checkpoint",
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+            try:
+                self._put(key, data, metadata, timeout=timeout)
+            except AlreadyExists:
+                continue
+
+    def _drain_checkpoints(self, timeout: float) -> None:
+        while self._checkpoints:
+            head = self._checkpoints[0]
+            try:
+                self._deliver_checkpoint(head, timeout)
+            except AckNotReceived:
+                return
+            except CheckpointLost as exc:
+                # Terminal, unlike an outage: drop it so it cannot head the
+                # queue forever, and say so -- the debt stays visible through
+                # `unrecovered_losses` until a successor is acknowledged.
+                self._checkpoints.pop(0)
+                self.lost.append(head)
+                print(
+                    f"⚠️  checkpoint {head.sequence:06d}-{head.checkpoint_id} of run "
+                    f"{head.run_id} cannot be delivered and was dropped: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            self._checkpoints.pop(0)
+            self._acked = AckedCheckpoint(head.sequence, head.checkpoint_id)
+            release_directory(head.directory)
+
+    def _drain_records(self, timeout: float) -> None:
+        for _ in range(len(self._queue)):
+            try:
+                record = self._queue.popleft()
+            except IndexError:
+                break
+            try:
+                self.publish(record, timeout=timeout)
+            except AlreadyExists:
+                continue
+            except AckNotReceived:
+                self._queue.append(record)
+                break
+
+    def drain(self, timeout: float, *, checkpoint_timeout: float | None = None) -> bool:
+        """Deliver every queued record and checkpoint; ``True`` when none is owed.
+
+        ``timeout`` bounds each acknowledgement it waits for
+        (``checkpoint_timeout`` the checkpoint files', by default the same).
+        Serialised: the parallel review pool drains from several threads, and
+        two drains popping one queue raced (review of #653).
+        """
+        with self._drain_lock:
+            self._drain_records(timeout)
+            self._drain_checkpoints(timeout if checkpoint_timeout is None else checkpoint_timeout)
+            return not self._queue and not self._checkpoints and not self.unrecovered_losses()
 
     @property
     def pending(self) -> int:
-        """Records still owed to the store."""
-        return len(self._queue)
+        """Records and checkpoints still owed to the store, lost ones included."""
+        return len(self._queue) + len(self._checkpoints) + len(self.unrecovered_losses())
 
 
 def _local_root(config: ExecutorConfig) -> Path:

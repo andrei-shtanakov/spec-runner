@@ -165,9 +165,21 @@ class RunContext:
         )
         kind = closure_mod.derive(outcome)
         reason = _reason(kind, crashed, facts, hint)
-        if not publisher.drain(config.durability_ack_timeout_seconds):
+        if not publisher.drain(
+            config.durability_ack_timeout_seconds,
+            checkpoint_timeout=config.durability_checkpoint_ack_timeout_seconds,
+        ):
             kind, exit_code = "failed", 2
             reason = f"{publisher.pending} record(s) were not acknowledged by the store"
+            lost = publisher.unrecovered_losses()
+            if lost:
+                names = ", ".join(f"{c.sequence:06d}-{c.checkpoint_id}" for c in lost)
+                reason += f"; checkpoint(s) lost locally before delivery: {names}"
+            print(
+                f"⚠️  решение записано локально, но не доставлено: {reason}",
+                file=sys.stderr,
+            )
+        acked = publisher.last_acknowledged()
         record = Closure(
             run_id=self.run_id,
             pipeline_id=self.pipeline_id,
@@ -175,7 +187,7 @@ class RunContext:
             closure_kind=kind,
             reason=reason,
             exit_code=exit_code,
-            last_checkpoint_id=None,
+            last_checkpoint_id=acked.checkpoint_id if acked else None,
             last_call_ids=list(self.call_ids),
             attempt_ids=facts.attempt_ids,
             open_calls=len(self.open_call_ids),
