@@ -98,3 +98,39 @@ def test_a_stash_that_cannot_be_popped_is_named(tmp_path, monkeypatch):
     [ours] = [line for line in listed.splitlines() if "spec-runner merge" in line]
     assert "TASK-001" in ours
     assert "spec-runner merge" in err and "git stash apply" in err
+
+
+def test_double_fault_never_pops_onto_the_base(tmp_path, monkeypatch):
+    """Conflicting merge, then the return checkout fails too: the stash is not
+    popped onto the base's tree; it is named, with what to do once resolved."""
+    import subprocess
+
+    from spec_runner import hooks
+
+    root, base = _conflicting(tmp_path)
+    stashes_before = _stash_shas(root)
+    _no_gates(monkeypatch)
+    real_run = subprocess.run
+
+    def run(cmd, *a, **k):
+        if list(cmd) == ["git", "checkout", BRANCH]:
+            return subprocess.CompletedProcess(cmd, 1, "", "error: simulated")
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(hooks.subprocess, "run", run)
+    cfg = cc_cfg(root, create_git_branch=True, auto_commit=False)
+
+    ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+
+    assert ok is False
+    assert cc_git(root, "branch", "--show-current").stdout.strip() == base
+    status = cc_git(root, "status", "--porcelain").stdout
+    assert "UU" not in status and "AA" not in status, status
+    assert (root / "own.py").read_text() == "base moved\n", "the stash was applied to the base"
+    after = _stash_shas(root)
+    assert after[1:] == stashes_before, "a stash the stage did not create was touched"
+    listed = cc_git(root, "stash", "list").stdout
+    assert any("spec-runner merge: TASK-001" in line for line in listed.splitlines())
+    assert "spec-runner merge" in err and "git stash apply" in err
+    assert f"git checkout {BRANCH}" in err
+    assert "working tree of" not in err

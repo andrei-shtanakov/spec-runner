@@ -275,11 +275,15 @@ def trust_remedy(
             f"git checkout {branch} && spec-runner harness trust {quoted_id} "
             f'--bind-branch {branch} --reason "…"'
         )
+        # The checkout carries untracked files along; a later WIP save on the
+        # task branch would sweep them into the task's WIP commit.
+        command_note = " (commit or stash your own untracked files first)"
     else:
+        command_note = ""
         command = f'spec-runner harness trust {quoted_id} --reason "…"'
     return (
         "restore the harness files of this task's tree to a state you have checked "
-        f"(e.g. against the main branch), then confirm it with `{command}`"
+        f"(e.g. against the main branch), then confirm it with `{command}`{command_note}"
     )
 
 

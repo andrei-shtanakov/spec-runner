@@ -573,11 +573,11 @@ def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None
         return ""
     off_branch = ""
     if config.create_git_branch:
-        from .git_ops import current_branch
-
-        here = current_branch(config)
+        # `_checked_out` never raises (final pre-acceptance item 2): with git
+        # missing, "unknown" is off the task branch — no commit, tree only.
+        here = _checked_out(config)
         if here != get_task_branch_name(task):
-            off_branch = here or "a detached HEAD"
+            off_branch = here or "unknown (git could not say)"
     try:
         rel = os.path.relpath(config.tasks_file, config.project_root)
         current = config.tasks_file.read_text()
@@ -667,15 +667,23 @@ def _merge_refusal(
     """
     from .git_ops import uncommitted_work_paths
 
-    try:
-        dirty = uncommitted_work_paths(config, exclude=[config.tasks_file])
+    here = _checked_out(config)
+    if here != branch:
+        # The tree in hand is not the task's (final pre-acceptance item 1).
         where = (
-            f"uncommitted work is in the working tree of {branch} ({len(dirty)} path(s))"
-            if dirty
-            else f"the task's work is committed on its branch {branch}"
+            f"{branch} is not checked out (HEAD is {here or 'unknown'}); its committed "
+            "work is on that branch"
         )
-    except Exception:  # noqa: BLE001 - the refusal must not fail on its own wording
-        where = "the state of the working tree could not be read"
+    else:
+        try:
+            dirty = uncommitted_work_paths(config, exclude=[config.tasks_file])
+            where = (
+                f"uncommitted work is in the working tree of {branch} ({len(dirty)} path(s))"
+                if dirty
+                else f"the task's work is committed on its branch {branch}"
+            )
+        except Exception:  # noqa: BLE001 - the refusal must not fail on its own wording
+            where = "the state of the working tree could not be read"
     return Refusal(
         f"Could not merge the task's branch ({stage}): {detail.strip()[:300] or 'git failed'}. "
         f"Nothing was merged and the task is not done; {where}"
@@ -714,11 +722,50 @@ def _merge_stash_push(config: ExecutorConfig, task: Task) -> tuple[str, str] | N
     return (sha, label) if sha and label in subject else None
 
 
-def _merge_stash_pop(config: ExecutorConfig, stashed: tuple[str, str] | None) -> str:
-    """Pop exactly the merge stage's own stash; "" when restored, else a note naming it."""
+def _checked_out(config: ExecutorConfig) -> str | None:
+    """The checked-out branch, or None when git cannot say (never raises)."""
+    from .git_ops import current_branch
+
+    try:
+        return current_branch(config)
+    except Exception:  # noqa: BLE001 - callers fail safe on "unknown"
+        return None
+
+
+def _merge_in_progress(config: ExecutorConfig) -> bool:
+    probe = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    return probe.returncode == 0
+
+
+def _merge_stash_pop(config: ExecutorConfig, stashed: tuple[str, str] | None, branch: str) -> str:
+    """Pop exactly the merge stage's own stash; "" when restored, else a note naming it.
+
+    Only onto the task's own branch (final pre-acceptance item 1): when the
+    return checkout failed after a conflicting merge, popping would apply the
+    task's work onto the base's tree mid-conflict. Then nothing is popped and
+    the note says where the work is and what to do once the base is resolved.
+    """
     if stashed is None:
         return ""
     sha, label = stashed
+    here = _checked_out(config)
+    if here != branch:
+        state = (
+            "a merge is still in progress there (`git merge --abort`)"
+            if _merge_in_progress(config)
+            else f"the checkout back to {branch} failed"
+        )
+        return (
+            f"its uncommitted work is in the stash entry “{label}” ({sha[:12]}), not in any "
+            f"working tree: HEAD is {here or 'unknown'} and {state}. Once that is resolved, "
+            f"recover it with `git checkout {shlex.quote(branch)} && "
+            f"git stash apply {shlex.quote(sha)}`"
+        )
     listed = subprocess.run(
         ["git", "stash", "list", "--format=%H"],
         capture_output=True,
@@ -2642,7 +2689,7 @@ def post_done_hook(
                         stderr=error_msg,
                     )
                     # PR #661 owner item 3: an undelivered task is not done.
-                    stash_note = _merge_stash_pop(config, merge_stash)
+                    stash_note = _merge_stash_pop(config, merge_stash, branch_name)
                     return _refuse_after_done_write(
                         task,
                         config,
@@ -2696,7 +2743,7 @@ def post_done_hook(
                     capture_output=True,
                     cwd=config.project_root,
                 )
-                stash_note = _merge_stash_pop(config, merge_stash)
+                stash_note = _merge_stash_pop(config, merge_stash, branch_name)
                 # PR #661 owner item 3: an unmerged task is not done.
                 return _refuse_after_done_write(
                     task,
@@ -2714,7 +2761,7 @@ def post_done_hook(
                 )
         except Exception as e:
             logger.error("Merge failed", error=str(e))
-            stash_note = _merge_stash_pop(config, merge_stash)
+            stash_note = _merge_stash_pop(config, merge_stash, get_task_branch_name(task))
             return _refuse_after_done_write(
                 task,
                 config,

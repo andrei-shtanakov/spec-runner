@@ -113,8 +113,9 @@ that needs an operator is the migration below.
   merge is aborted, the refusal says where the work is (committed on its
   branch, or uncommitted in the tree), the stash the merge stage takes for a
   dirty checkout — now labelled `spec-runner merge: TASK-X at …` instead of a
-  bare `git stash` — is popped back by its own SHA (or named, with the
-  `git stash apply` to run, when it cannot be), and `tasks.md` is not left DONE
+  bare `git stash` — is popped back by its own SHA, and only onto the task's
+  branch (or named, with the `git checkout … && git stash apply` to run, when
+  it cannot be — e.g. the return checkout failed after a conflict), and `tasks.md` is not left DONE
   (never by a commit off the task's branch: if the return to it failed,
   `tasks.md` is restored in the working tree only and the refusal says so) (an uncommitted flip is
   put back, a committed one is reverted by a status-only bookkeeping commit).
