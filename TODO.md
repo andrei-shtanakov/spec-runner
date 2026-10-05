@@ -1034,9 +1034,14 @@ runtime-state по инварианту конвейера «нужное для
           (`return_to_base=False` + пропуск post-PR);
         - `get_main_branch` пробует `rev-parse --verify main/master` без `refs/heads/` —
           тот же parser differential, другое место;
-        - `harness trust --bind-branch` проверяет только «текущая ветка»: можно привязать
-          задачу к `master` или к ветке другой задачи (нет уникальности
-          `(namespace, branch)`), тогда WIP ляжет на main.
+      - Из пред-приёмочного ревью (2026-10-05):
+        - проба ветки в `task_started` обходит `PRE_CAPTURE_STAGES`: старт, упавший после
+          создания ветки задачи, делает задачу «начатой» (minor приёмки);
+        - решение R9: блокирующий `post_done`-плагин срабатывает после мержа и оставляет
+          `tasks.md` в DONE, а DB пишет неуспех (откат DONE там сознательно не делается —
+          работа уже в базе);
+        - M1: повторяемый упавший финальный коммит встречает тот же pre-commit hook при
+          следующем сохранении WIP (`save_wip` коммитит через те же хуки).
 
 - [x] **green-timeout-leaves-no-trace** (найдено на этапе 4.5 чек-листа #480, 2026-10-02) @owner:github:andrei-shtanakov @id:green-timeout-leaves-no-trace @epic:eco.spec-toolchain
       **Сделано 2026-10-04:** замер до фикса через настоящий шов (подменён
