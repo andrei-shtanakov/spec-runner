@@ -1097,6 +1097,36 @@ runtime-state по инварианту конвейера «нужное для
       в `checkpoints_dir` не возвращаются никем. Закрыть в retention / `evidence purge`
       (TASK-012, DT-12) — по возрасту и по store, а не в ротации.
 
+- [ ] **budget-stop-before-review-counts-as-policy-failure** (найдено на прогоне #480 TASK-004, 2026-10-05) @owner:github:andrei-shtanakov @id:budget-stop-before-review-counts-as-policy-failure @epic:eco.spec-toolchain
+      Guard бюджета отказал перед вызовом обязательного ревью (`$15.24 >= $15.00`), ревью
+      записано как `not_run`, гейт `review_policy: required` прочитал это как отказ политики:
+      задача — неудача (HOOK_FAILURE), счётчик `on_task_failure: stop` вырос (1/2). Должно
+      быть остановкой по бюджету (`BUDGET`, задача возобновляется после повышения потолка,
+      счётчик не трогается) — как бюджетный отказ перед RED/GREEN (`_fail_for_budget`).
+      Регресс: потолок исчерпан ровно к ревью → исход budget, неудач подряд 0.
+      Рядом: `--budget` — общий потолок DB-домена плана, а не «на запуск»; в операторском
+      чек-листе #480 (этап 4) это стоит сказать явно.
+
+- [ ] **evidence-export-followups** (spec-runner#480, ревью и приёмка PR #665, TASK-004) @owner:TBD @id:evidence-export-followups @epic:eco.spec-toolchain
+      Не блокировали мерж; к DT-13 (`test_evidence_every_outcome.py`) или отдельными
+      исправлениями:
+      - `on_task_failure: ask` → `r`: сброс попыток в том же `run_id` начинает нумерацию
+        заново; экспорт `(run, T, n)` первого раунда уже есть, терминальная попытка второго
+        раунда не экспортируется, ключ из closure держит строку брошенного раунда.
+      - Прерванная попытка экспортируется, если она последняя разрешённая — вопреки
+        заявленному инварианту «interrupted не экспортируется».
+      - Degraded mode: обёртка `run_with_retries` экспортирует, хотя `record_attempt` не
+        записал строку — экспорт с пустым/чужим срезом `attempts`.
+      - AC-21 требует namespace на каждой строке экспорта; у `phase_waivers`,
+        `phase_results`, `gate_verdicts`, `verify_evidence` колонки нет, конверт записи
+        namespace не несёт.
+      - Таблицы без ключа attempt/run копируют всю историю задачи в каждый экспорт (по
+        §6.4 `[AND attempt = ?]` необязателен, но спорит с «только свои строки» AC-21).
+      - `test_every_printed_command_parses` ничего не проверяет: ни одна рекомендация не
+        содержит искомой строки.
+      - Мерж #665 прошёл с NEUTRAL GitGuardian («could not complete scanning», перезапрос
+        недоступен; проверка не обязательная): локальный скан дифа на шаблоны секретов чист.
+
 - [ ] **checkpoint-snapshot-failure-fail-open** (spec-runner#480, приёмка PR #663, круг 2 — major, confidence medium) @owner:TBD @id:checkpoint-snapshot-failure-fail-open @epic:eco.spec-toolchain
       Если снимок не удалось снять (`checkpoints_dir` недоступен на запись, read-only spec,
       полный диск), `after_mutation` печатает предупреждение и возвращает None — в очередь
