@@ -41,8 +41,12 @@ that needs an operator is the migration below.
   or without gates or review — right after its start, before the
   pre-implementation gates and the paid call (and again, as a backstop,
   before the tests, review, gates and merge of `post_done`): set
-  `auto_commit: true`, or commit or squash the WIP by hand. WIP therefore
-  never reaches a merge or DONE as the task's result. No `gate_verdicts` row
+  `auto_commit: true`, or commit or squash the WIP by hand. A commit of the
+  task's work that fails (a rejecting pre-commit hook, a locked index) while
+  HEAD is the WIP commit is refused too — at the candidate stage and at the
+  final commit alike (instrument, not retried): nothing is merged, the DONE
+  flip is put back and the work stays in the tree. WIP therefore never
+  reaches a merge or DONE as the task's result. No `gate_verdicts` row
   and no bookkeeping `Gate-Candidate:` trailer names a WIP SHA (a project
   with no review and no gates keeps its single task commit, and its refusal
   records name no judged commit). The no-op check

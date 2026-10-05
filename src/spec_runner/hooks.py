@@ -514,10 +514,15 @@ def _candidate_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
     return None
 
 
-def _wip_head_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
-    """INSTRUMENT refusal when the candidate-stage commit failed with HEAD on WIP.
+def _wip_head_refusal(
+    task: Task, config: ExecutorConfig, commit: str = "candidate"
+) -> Refusal | None:
+    """INSTRUMENT refusal when a commit of the task's work failed with HEAD on WIP.
 
-    The verdict would bind to a WIP commit; an unreadable HEAD is no better.
+    Both commit sites ask it — the candidate stage and the final commit
+    (``commit="final"``; PR #661 acceptance round 1). The verdict, the merge
+    and DONE would all take the WIP as the task's result; an unreadable HEAD
+    is no better.
     """
     from .wip import WipReadError, head_is_wip_of
 
@@ -525,18 +530,43 @@ def _wip_head_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
         on_wip = head_is_wip_of(config, task.id)
     except WipReadError as exc:
         return Refusal(
-            f"Cannot read HEAD after the candidate commit failed: {exc}",
+            f"Cannot read HEAD after the {commit} commit failed: {exc}",
             RefusalKind.INSTRUMENT,
             terminal=True,
         )
     if not on_wip:
         return None
     return Refusal(
-        "The candidate commit failed and HEAD is this task's WIP commit; a verdict "
-        "would bind to WIP",
+        f"The {commit} commit failed and HEAD is this task's WIP commit; a verdict, "
+        "merge or DONE would take the WIP as the task's result. The work is still in "
+        "the tree: fix what refused the commit (see the log), then retry",
         RefusalKind.INSTRUMENT,
         terminal=True,
     )
+
+
+def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None) -> None:
+    """Put back the `tasks.md` DONE flip a refusal after it must not leave.
+
+    `post_done_hook` writes DONE before the final commit so the commit carries
+    it; a refusal past that point (the final commit over WIP, PR #661) would
+    otherwise leave a refused task reading DONE in the tree — and staged, if
+    the failed commit's `git add` got that far. Best effort: a failure is
+    logged, never raised over the refusal it accompanies.
+    """
+    if tasks_before is None:
+        return
+    try:
+        config.tasks_file.write_text(tasks_before)
+        rel = os.path.relpath(config.tasks_file, config.project_root)
+        subprocess.run(
+            ["git", "reset", "-q", "--", rel],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        logger.warning("Could not undo the DONE flip", task_id=task.id, error=str(exc))
 
 
 def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
@@ -2229,7 +2259,9 @@ def post_done_hook(
     # so it is included in the commit/merge. Writing it after the commit (as the
     # old code did in execution.py) left the update in the working tree post-merge
     # where it was never committed and got clobbered by the next task's branch.
+    tasks_before: str | None = None
     if config.tasks_file.exists():
+        tasks_before = config.tasks_file.read_text()
         if not update_task_status(config.tasks_file, task.id, "done"):
             logger.error(
                 "Could not record DONE status in tasks.md",
@@ -2253,10 +2285,19 @@ def post_done_hook(
         except Exception as e:
             logger.error("Commit failed", error=str(e))
             final = "failed"
+        if final == "failed" and config.create_git_branch:
+            # PR #661 acceptance round 1: the same answer as the candidate
+            # stage — a failed commit over a WIP HEAD must not be merged or
+            # recorded DONE.
+            final_refusal = _wip_head_refusal(task, config, commit="final")
+            if final_refusal is not None:
+                _undo_done_flip(task, config, tasks_before)
+                return (False, final_refusal, review_verdict.value, "", False)
         if final == "empty" and config.create_git_branch:
             before_candidate = _head_sha(config)
             candidate_refusal = _candidate_refusal(task, config)
             if candidate_refusal is not None:
+                _undo_done_flip(task, config, tasks_before)
                 return (False, candidate_refusal, review_verdict.value, "", False)
             # Nothing judged a WIP sha (no review, no gate), so the drift
             # check may be re-bound to the candidate that replaces it.
@@ -2278,6 +2319,7 @@ def post_done_hook(
             try:
                 no_op = not task_changed_since_base(config)
             except WipReadError as exc:
+                _undo_done_flip(task, config, tasks_before)
                 return (
                     False,
                     Refusal(
