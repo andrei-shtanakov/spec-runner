@@ -833,7 +833,7 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Traces to:** [FR-03]
 
 ### TASK-004: Read-surface `evidence <run_id>`: один `collect()`, `--json`, статусы, экспорт terminal attempt
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-36, BEH-37 (DT-04, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-04
@@ -841,11 +841,11 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Depends on:** [TASK-003]
 
 **Checklist:**
-- [ ] реализовать BEH-36: `evidence <run_id>` отвечает без клона, DB и Git, из одного `collect()` (DEL-23 (module): Новый `evidence_cmd.py`: subparser `evidence <run_id> [--json]`, `collect(store, run_id) → EvidenceView` — один сбор для человека и `--json` по образцу `tdd_status.py`; читает только store через `open_store_readonly`, без `project_root`, DB и Git)
-- [ ] реализовать BEH-37: Read-surface называет crash/unknown, open call, legacy и недоступный store, но не решает за оператора (DEL-24 (capability): Read-surface показывает статус `closed:<kind>` либо `crash/unknown` с пометкой «не доказуемо», последний acknowledged checkpoint, open calls, attempts с исходом и стоимостью (`unknown` при `null`), суммарную стоимость, `deletions[]`, стоимость хранения при поддержке адаптером; store недоступен → exit 2; legacy → «нет evidence-контракта» с перечнем недостающего; следующий шаг — рекомендация с пометкой «не доказуемо», ответ ограничен одним `run_id`)
-- [ ] DEL-25 (capability): При terminal `record_attempt` (`success`/`failed`/`blocked`) `evidence.export_attempt(state, task_id, n)` собирает строки этой задачи/attempt-а из таблиц §6.4 в JSONL и публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а; при поднятом `probe_provenance` не публикует ничего
-- [ ] DEL-26 (document): `schemas/evidence-view.schema.json` и `schemas/evidence-record.schema.json`
-- [ ] проверка группы: tests/test_evidence_read_surface.py (kind: integration) зелёные на BEH-36, BEH-37
+- [x] реализовать BEH-36: `evidence <run_id>` отвечает без клона, DB и Git, из одного `collect()` (DEL-23 (module): Новый `evidence_cmd.py`: subparser `evidence <run_id> [--json]`, `collect(store, run_id) → EvidenceView` — один сбор для человека и `--json` по образцу `tdd_status.py`; читает только store через `open_store_readonly`, без `project_root`, DB и Git)
+- [x] реализовать BEH-37: Read-surface называет crash/unknown, open call, legacy и недоступный store, но не решает за оператора (DEL-24 (capability): Read-surface показывает статус `closed:<kind>` либо `crash/unknown` с пометкой «не доказуемо», последний acknowledged checkpoint, open calls, attempts с исходом и стоимостью (`unknown` при `null`), суммарную стоимость, `deletions[]`, стоимость хранения при поддержке адаптером; store недоступен → exit 2; legacy → «нет evidence-контракта» с перечнем недостающего; следующий шаг — рекомендация с пометкой «не доказуемо», ответ ограничен одним `run_id`)
+- [x] DEL-25 (capability): При terminal `record_attempt` (`success`/`failed`/`blocked`) `evidence.export_attempt(state, task_id, n)` собирает строки этой задачи/attempt-а из таблиц §6.4 в JSONL и публикует `attempts/<task>-<n>.jsonl` через ту же очередь publisher-а; при поднятом `probe_provenance` не публикует ничего
+- [x] DEL-26 (document): `schemas/evidence-view.schema.json` и `schemas/evidence-record.schema.json`
+- [x] проверка группы: tests/test_evidence_read_surface.py (kind: integration) зелёные на BEH-36, BEH-37
 
 **Traces to:** [FR-09], [FR-07]
 
