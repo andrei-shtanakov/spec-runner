@@ -23,6 +23,7 @@ Usage:
 import argparse
 import contextlib
 import re
+import shlex
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -117,7 +118,8 @@ def forget_ended_tasks(
         print(
             f"⛔ {', '.join(ended)} marked done in {tasks_file}, but the workspace and "
             f"harness baseline records could not be deleted: {exc}. Re-run "
-            f"`spec-runner task done <id>` once the state DB is writable.",
+            f"`spec-runner task done {shlex.quote(ended[0])}` (and so for each id) once the "
+            "state DB is writable.",
             file=sys.stderr,
         )
         raise SystemExit(2) from exc

@@ -34,6 +34,7 @@ never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
+import shlex
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -266,11 +267,14 @@ def trust_remedy(config: ExecutorConfig, task_id: str, *, bind: bool) -> str:
     if bind and config.create_git_branch:
         from .git_ops import current_branch
 
-        flag = f" --bind-branch {current_branch(config) or '<current branch>'}"
+        branch = current_branch(config)
+        # Quoted (PR #661 item 5): an agent can name a branch `x$(…)`, and an
+        # operator copies this command into a shell.
+        flag = f" --bind-branch {shlex.quote(branch) if branch else '<current branch>'}"
     return (
         "restore the harness files of this task's tree to a state you have checked "
         "(e.g. against the main branch), then confirm it with "
-        f'`spec-runner harness trust {task_id}{flag} --reason "…"`'
+        f'`spec-runner harness trust {shlex.quote(task_id)}{flag} --reason "…"`'
     )
 
 

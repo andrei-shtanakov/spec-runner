@@ -217,6 +217,11 @@ def environment_id(project_root: Path) -> str:
     return lockfile_identity(project_root)
 
 
+def _quoted_reset(sha: str) -> str:
+    """`git reset --hard <sha>` for an operator to copy, the value shell-quoted."""
+    return f"git reset --hard {shlex.quote(sha)}"
+
+
 def resolve_namespace(config: ExecutorConfig) -> str:
     """Which workstream a checkpoint belongs to.
 
@@ -1049,7 +1054,7 @@ def _wip_refusal_text(
     wip = _head(config)[:12] or "?"
     remedy = (
         f"make the red HEAD again — save any WIP you want to keep elsewhere, then "
-        f"`git reset --hard {sha[:12]}` — fix the findings in the red's file, and retry"
+        f"`{_quoted_reset(sha[:12])}` — fix the findings in the red's file, and retry"
         if finding
         else "revert the WIP's change to the red's file (a new commit on top is enough) "
         "or drop the WIP commit, then retry"

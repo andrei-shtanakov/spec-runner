@@ -7,6 +7,7 @@ functions used by hooks during task execution.
 import contextlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -269,6 +270,11 @@ def unstage_vanished_paths(config: ExecutorConfig, paths: list[str]) -> None:
     gone = [p for p in paths if p not in indexed and not os.path.lexists(config.project_root / p)]
     if gone:
         git_with_paths(config, ["reset", "-q", "HEAD"], gone)
+
+
+def checkout_back_hint(base: str) -> str:
+    """How to get back to ``base`` by hand; the branch name shell-quoted (PR #661)."""
+    return f"Resolve manually: commit/stash local changes, then `git checkout {shlex.quote(base)}`."
 
 
 def stage_all_except_runtime(config: ExecutorConfig) -> bool:
@@ -734,8 +740,7 @@ def finalize_integration_branch(
                 f"❌ Could not return to base branch '{run.base}' "
                 f"(working copy left on '{run.branch}'):\n"
                 f"   {stderr}\n"
-                f"   Resolve manually: commit/stash local changes, "
-                f"then `git checkout {run.base}`.",
+                f"   {checkout_back_hint(run.base)}",
                 file=sys.stderr,
             )
 

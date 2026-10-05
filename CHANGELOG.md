@@ -96,7 +96,10 @@ that needs an operator is the migration below.
   `strict` the next start on the surviving branch is refused until the
   operator restores and checks the harness and runs
   `spec-runner harness trust TASK-X --bind-branch <current branch> --reason "…"`;
-  both the abandon output and the refusal name that command. A DONE whose DB write fails
+  both the abandon output and the refusal name that command. Every value
+  interpolated into a command the operator is told to run (branch names,
+  task ids, SHAs, PR head refs) is shell-quoted, so a branch an agent named
+  `x$(…)` cannot inject a command into a copied remedy. A DONE whose DB write fails
   (degraded mode) keeps the baseline, consistently with the DONE row not being
   durable.
 
