@@ -26,7 +26,7 @@ def _config(tmp_path: Path) -> ExecutorConfig:
 
 
 def _dirs(config: ExecutorConfig) -> list[Path]:
-    root = config.state_file.parent / checkpoint.CHECKPOINT_DIR
+    root = config.checkpoints_dir
     return sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
 
@@ -64,7 +64,7 @@ def test_probe_publishes_nothing(tmp_path: Path) -> None:
 
 def test_snapshot_failure_does_not_fail_the_mutation(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    (config.state_file.parent / checkpoint.CHECKPOINT_DIR).write_text("in the way")
+    config.checkpoints_dir.write_text("in the way")
     with ExecutorState(config) as state:
         state.record_attempt("T-1", True, 1.0)
         assert state.get_task_state("T-1").status == "success"
@@ -153,3 +153,59 @@ def test_backup_is_taken_without_a_connection(tmp_path: Path) -> None:
 
 def test_jsonschema_available() -> None:
     assert pytest.importorskip("jsonschema")
+
+
+# -- the directory is the config's, namespaced and never committed (PR #663) --
+
+
+def _prefixed(root: Path, prefix: str) -> ExecutorConfig:
+    (root / "spec").mkdir(parents=True, exist_ok=True)
+    return ExecutorConfig(project_root=root, spec_prefix=prefix)
+
+
+def test_two_spec_prefixes_write_to_their_own_directories(tmp_path: Path) -> None:
+    one, two = _prefixed(tmp_path, "ws1-"), _prefixed(tmp_path, "ws2-")
+    for config in (one, two):
+        with ExecutorState(config) as state:
+            state.record_attempt("T-1", True, 1.0)
+    assert one.checkpoints_dir != two.checkpoints_dir
+    assert len(_dirs(one)) == 1 and len(_dirs(two)) == 1
+    assert not (tmp_path / "spec" / ".executor-checkpoints").exists()
+
+
+def _git(root: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+
+
+def test_checkpoints_are_never_staged_or_reported_as_work(tmp_path: Path) -> None:
+    from spec_runner import git_ops
+
+    root = tmp_path / "proj"
+    _git(tmp_path, "init", "-q", str(root))
+    config = _prefixed(root, "ws-")
+    with ExecutorState(config) as state:
+        state.record_attempt("T-1", True, 1.0)
+    assert _dirs(config), "nothing was written: the test would prove nothing"
+    rel = str(config.checkpoints_dir.relative_to(root))
+    assert not [p for p in git_ops.uncommitted_work_paths(config) if p.startswith(rel)]
+    git_ops.stage_all_except_runtime(config)
+    staged = _git(root, "diff", "--cached", "--name-only").splitlines()
+    assert not [p for p in staged if p.startswith(rel)], staged
+
+
+def test_runtime_gitignore_covers_the_checkpoint_directory(tmp_path: Path) -> None:
+    from spec_runner import git_ops
+
+    root = tmp_path / "proj"
+    _git(tmp_path, "init", "-q", str(root))
+    config = _prefixed(root, "ws-")
+    git_ops.ensure_runtime_gitignore(config)
+    with ExecutorState(config) as state:
+        state.record_attempt("T-1", True, 1.0)
+    (snap,) = _dirs(config)
+    rel = str((snap / checkpoint.DB_FILE).relative_to(root))
+    assert _git(root, "check-ignore", rel).strip() == rel

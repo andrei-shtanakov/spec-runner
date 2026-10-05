@@ -29,7 +29,6 @@ from .evidence import CONTRACT_VERSION, MANIFEST_FILE, PendingCheckpoint, policy
 if TYPE_CHECKING:
     from .config import ExecutorConfig
 
-CHECKPOINT_DIR = ".executor-checkpoints"
 DB_FILE = "state.db"
 #: Local copies kept: the latest and the one before it.
 KEEP_LOCAL = 2
@@ -81,7 +80,9 @@ def _publish(
     live = sqlite3.connect(str(config.state_file)) if conn is None else conn
     try:
         sequence, checkpoint_id, supersedes = _next_identity(live, run_id)
-        root = Path(config.state_file).parent / CHECKPOINT_DIR
+        # The config's path, not a literal: it is namespaced like the state DB
+        # and it is the one `runtime_state_paths` keeps out of commits (#663).
+        root = Path(config.checkpoints_dir)
         directory = root / f"{sequence:06d}-{checkpoint_id}"
         _snapshot(live, directory / DB_FILE)
     finally:
