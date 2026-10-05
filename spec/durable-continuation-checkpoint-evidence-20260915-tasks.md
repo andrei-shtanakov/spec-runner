@@ -813,7 +813,7 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Traces to:** [FR-01], [FR-02], [FR-07], [FR-06], [FR-09]
 
 ### TASK-003: Checkpoint: seam «после mutation», backup-snapshot, `sequence`, `PolicyIdentity`, manifest и очередь publisher-а
-P2 | 🔍 REVIEW   Est: 0.5d
+P2 | ✅ DONE   Est: 0.5d
 
 Реализовать сценарии BEH-12 (DT-03, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-03
@@ -821,14 +821,14 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Depends on:** [TASK-002]
 
 **Checklist:**
-- [ ] реализовать BEH-12: Checkpoint — snapshot с WAL-only страницами, а не копия файла (DEL-16 (module): Новый `checkpoint.py`: `after_mutation(config, *, table, task_id=None, conn=None)` — единственная точка публикации; snapshot через `sqlite3.Connection.backup()` с живого соединения в `<state_dir>/.executor-checkpoints/<seq:06d>-<id>/state.db`; `sequence` — монотонный счётчик в `executor_meta`; ротация локальных копий (последняя + предыдущая))
-- [ ] DEL-17 (module): `PolicyIdentity` (`contract_version`, `config_hash` над `POLICY_KEYS`, `namespace`, `namespace_source`, `spec_prefix`, `change_id`) — одна dataclass для run-start, call-start и manifest-а; `facts` рядом, не в identity
-- [ ] DEL-18 (document): `schemas/checkpoint-manifest.schema.json` — полный состав §3.3 (identity, `sequence`, `supersedes`, `join_keys`, `digests`, `degraded`, `wip`, `spool`, `manifest_sha256`), введён отдельным коммитом
-- [ ] DEL-19 (capability): `Publisher` получает очередь по `sequence`, `drain(timeout)` и `last_acknowledged()`; manifest кладётся последним, и ack manifest-а есть ack checkpoint-а
-- [ ] DEL-20 (capability): Два сайта правила Q-05: перед call-start — шаг 1 `execute` (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind=instrument)`, вызова нет) и гейт перед closure (недоставленный checkpoint → closure `failed`, exit 2, строка в stderr «решение записано локально, но не доставлено»); синхронного ожидания внутри `after_mutation` нет
-- [ ] DEL-21 (capability): `after_mutation` выходит без публикации при поднятом `config.probe_provenance`: mutation эфемерной пробы `doctor` не continuation-relevant
-- [ ] DEL-22 (capability): В этой задаче seam подключён к одному сайту записи — `record_attempt`; остальные сайты §3.1 подключает DT-05
-- [ ] проверка группы: tests/test_checkpoint_is_a_snapshot.py (kind: integration) зелёные на BEH-12
+- [x] реализовать BEH-12: Checkpoint — snapshot с WAL-only страницами, а не копия файла (DEL-16 (module): Новый `checkpoint.py`: `after_mutation(config, *, table, task_id=None, conn=None)` — единственная точка публикации; snapshot через `sqlite3.Connection.backup()` с живого соединения в `<state_dir>/.executor-checkpoints/<seq:06d>-<id>/state.db`; `sequence` — монотонный счётчик в `executor_meta`; ротация локальных копий (последняя + предыдущая))
+- [x] DEL-17 (module): `PolicyIdentity` (`contract_version`, `config_hash` над `POLICY_KEYS`, `namespace`, `namespace_source`, `spec_prefix`, `change_id`) — одна dataclass для run-start, call-start и manifest-а; `facts` рядом, не в identity
+- [x] DEL-18 (document): `schemas/checkpoint-manifest.schema.json` — полный состав §3.3 (identity, `sequence`, `supersedes`, `join_keys`, `digests`, `degraded`, `wip`, `spool`, `manifest_sha256`), введён отдельным коммитом
+- [x] DEL-19 (capability): `Publisher` получает очередь по `sequence`, `drain(timeout)` и `last_acknowledged()`; manifest кладётся последним, и ack manifest-а есть ack checkpoint-а
+- [x] DEL-20 (capability): Два сайта правила Q-05: перед call-start — шаг 1 `execute` (таймаут `checkpoint_ack_timeout_seconds` → `Refusal(kind=instrument)`, вызова нет) и гейт перед closure (недоставленный checkpoint → closure `failed`, exit 2, строка в stderr «решение записано локально, но не доставлено»); синхронного ожидания внутри `after_mutation` нет
+- [x] DEL-21 (capability): `after_mutation` выходит без публикации при поднятом `config.probe_provenance`: mutation эфемерной пробы `doctor` не continuation-relevant
+- [x] DEL-22 (capability): В этой задаче seam подключён к одному сайту записи — `record_attempt`; остальные сайты §3.1 подключает DT-05
+- [x] проверка группы: tests/test_checkpoint_is_a_snapshot.py (kind: integration) зелёные на BEH-12
 
 **Traces to:** [FR-03]
 
