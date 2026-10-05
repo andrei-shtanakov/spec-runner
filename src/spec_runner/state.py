@@ -3126,8 +3126,20 @@ class ExecutorState:
             from .checkpoint import after_mutation
 
             after_mutation(self.config, table="attempts", task_id=task_id, conn=self._conn)
+            self._export_terminal_attempt(task_id, state, attempt)
 
         self._audit_attempt(task_id, attempt, state)
+
+    def _export_terminal_attempt(
+        self, task_id: str, state: TaskState, attempt: TaskAttempt
+    ) -> None:
+        """Publish the evidence of a terminal attempt: success, failed or blocked."""
+        if not (attempt.success or state.status == "failed" or attempt.error_kind == "blocked"):
+            return
+        from .evidence import export_attempt
+
+        ordinal = sum(1 for a in state.attempts if a.run_id == attempt.run_id)
+        export_attempt(self, task_id, ordinal)
 
     def _audit_attempt(
         self,
