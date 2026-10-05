@@ -362,7 +362,10 @@ def execute(config: ExecutorConfig, state: ExecutorState | None, call: PaidCall)
     started_at = datetime.now().isoformat()
     run_id = ctx.run_id if ctx is not None else None
 
-    if publisher is not None and not publisher.drain(config.durability_ack_timeout_seconds):
+    if publisher is not None and not publisher.drain(
+        config.durability_ack_timeout_seconds,
+        checkpoint_timeout=config.durability_checkpoint_ack_timeout_seconds,
+    ):
         raise _refuse("records owed to the store are undelivered; the call was not started")
 
     ledger = call.ledger
