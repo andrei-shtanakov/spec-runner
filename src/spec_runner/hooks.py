@@ -546,7 +546,7 @@ def _wip_head_refusal(
     )
 
 
-def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None) -> None:
+def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None) -> str:
     """Put back the `tasks.md` DONE flip a refusal after it must not leave.
 
     `post_done_hook` writes DONE before the final commit so the commit carries
@@ -561,11 +561,23 @@ def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None
       committed as bookkeeping (status-only, #192), so the next run does not
       meet the dirty-spec guard. The checklist marks stay.
 
+    Never a bookkeeping commit off the task branch (pre-acceptance M2): with
+    per-task branches, when HEAD is not this task's branch (a failed merge
+    whose return checkout failed leaves the base checked out), tasks.md is
+    restored in the working tree only and the returned note says so.
+
     Best effort: a failure is logged, never raised over the refusal it
-    accompanies.
+    accompanies. Returns a note for the refusal, or "".
     """
     if tasks_before is None:
-        return
+        return ""
+    off_branch = ""
+    if config.create_git_branch:
+        from .git_ops import current_branch
+
+        here = current_branch(config)
+        if here != get_task_branch_name(task):
+            off_branch = here or "a detached HEAD"
     try:
         rel = os.path.relpath(config.tasks_file, config.project_root)
         current = config.tasks_file.read_text()
@@ -575,22 +587,40 @@ def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None
             capture_output=True,
             text=True,
         )
-        if head.returncode == 0 and head.stdout == current and current != tasks_before:
+        committed_flip = head.returncode == 0 and head.stdout == current
+        if committed_flip and current != tasks_before and not off_branch:
             _revert_committed_done(task, config, tasks_before)
-            return
+            return ""
         config.tasks_file.write_text(tasks_before)
-        subprocess.run(
-            ["git", "reset", "-q", "--", rel],
-            cwd=config.project_root,
-            capture_output=True,
-            text=True,
-        )
+        if not off_branch:
+            subprocess.run(
+                ["git", "reset", "-q", "--", rel],
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
     except OSError as exc:
         logger.warning("Could not undo the DONE flip", task_id=task.id, error=str(exc))
+    if not off_branch:
+        return ""
+    return (
+        f"HEAD is {off_branch}, not {get_task_branch_name(task)}: {_rel_tasks(config)} was "
+        "restored in the working tree only (nothing committed there) — check it before "
+        "committing"
+    )
+
+
+def _rel_tasks(config: ExecutorConfig) -> str:
+    """tasks.md as the operator sees it, relative to the project."""
+    return os.path.relpath(config.tasks_file, config.project_root)
 
 
 def _revert_committed_done(task: Task, config: ExecutorConfig, tasks_before: str) -> None:
-    """The committed DONE flip back to the task's previous status (bookkeeping)."""
+    """The committed DONE flip back to the task's previous status (bookkeeping).
+
+    Called only with HEAD on the task's own branch (or without per-task
+    branches), so the bookkeeping commit never lands on the base (M2).
+    """
     from .bookkeeping import commit_status_flip
     from .task import parse_tasks_text
 
@@ -620,8 +650,8 @@ def _refuse_after_done_write(
     One door (PR #661 owner item 4), so no future refusal path past the DONE
     write can forget to put the flip back.
     """
-    _undo_done_flip(task, config, tasks_before)
-    return (False, refusal, verdict, findings, False)
+    note = _undo_done_flip(task, config, tasks_before)
+    return (False, _with_note(refusal, note) if note else refusal, verdict, findings, False)
 
 
 def _merge_refusal(

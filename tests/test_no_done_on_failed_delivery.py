@@ -143,3 +143,39 @@ def test_a_clean_merge_still_completes(tmp_path, monkeypatch):
     assert cc_git(root, "branch", "--show-current").stdout.strip() == base
     assert "work.py" in cc_git(root, "ls-tree", "--name-only", "HEAD").stdout
     assert _status(root) == "done"
+
+
+def test_no_bookkeeping_commit_on_the_base_when_the_task_branch_is_lost(tmp_path, monkeypatch):
+    """Pre-acceptance M2: the merge failed and `git checkout <task branch>` failed
+    too, so the refusal runs on the base. The DONE revert must not commit there:
+    tasks.md is restored in the working tree only, and the refusal says so."""
+    import subprocess
+
+    from spec_runner import hooks
+
+    root, base = _branch_with_own_commit(tmp_path)
+    cc_git(root, "checkout", "-q", base)
+    (root / "own.py").write_text("base's own\n")
+    cc_git(root, "add", "-A")
+    cc_git(root, "commit", "-qm", "base moves on")
+    base_before = cc_git(root, "rev-parse", base).stdout
+    cc_git(root, "checkout", "-q", BRANCH)
+    (root / "work.py").write_text("work\n")
+    _no_gates(monkeypatch)
+    real_run = subprocess.run
+
+    def run(cmd, *a, **k):
+        if list(cmd) == ["git", "checkout", BRANCH]:
+            return subprocess.CompletedProcess(cmd, 1, "", "error: simulated")
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(hooks.subprocess, "run", run)
+    cfg = cc_cfg(root, create_git_branch=True)
+
+    ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
+
+    assert ok is False
+    assert cc_git(root, "branch", "--show-current").stdout.strip() == base
+    assert cc_git(root, "rev-parse", base).stdout == base_before, "a commit landed on the base"
+    assert "working tree only" in err
+    assert _status(root) != "done"
