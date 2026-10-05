@@ -37,15 +37,15 @@ that needs an operator is the migration below.
   red gate, confirms no claim and is never the SHA a gate verdict is bound to;
   an explicit `TASK-X: candidate` commit is made over it. Under
   `auto_commit: false` no candidate can be made, so a task whose HEAD is its
-  WIP commit is refused (policy, not retried) right after its start — before
-  the pre-implementation gates and the paid call — when a gate is registered
-  or the task runs under `tdd`/`verify_first`: commit the work or enable
-  `auto_commit`. No `gate_verdicts` row and no bookkeeping `Gate-Candidate:`
-  trailer names a WIP SHA (a project with no review and no gates keeps its
-  single task commit, and its refusal records name no judged commit). Known
-  limit: with `auto_commit: false` and no registered gate (no review, or
-  `review_policy: advisory`), nothing refuses, and the task branch — WIP
-  commits included — is merged as it stands. The no-op check
+  WIP commit is refused (policy, not retried) in every configuration — with
+  or without gates or review — right after its start, before the
+  pre-implementation gates and the paid call (and again, as a backstop,
+  before the tests, review, gates and merge of `post_done`): set
+  `auto_commit: true`, or commit or squash the WIP by hand. WIP therefore
+  never reaches a merge or DONE as the task's result. No `gate_verdicts` row
+  and no bookkeeping `Gate-Candidate:` trailer names a WIP SHA (a project
+  with no review and no gates keeps its single task commit, and its refusal
+  records name no judged commit). The no-op check
   judges the task's cumulative diff, and the next attempt's prompt says it is
   continuing unverified work. If the work cannot be saved, nothing destructive
   runs; a partially staged path is refused by name. A repository git cannot

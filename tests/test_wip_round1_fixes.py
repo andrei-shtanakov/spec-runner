@@ -126,16 +126,61 @@ class TestRefusedBeforeThePaidCall:
         assert result == "TERMINAL_REFUSAL"
         assert red == [] and spawned == []
 
-    def test_no_gate_no_refusal(self, repo, monkeypatch):
+    @pytest.mark.parametrize(
+        "extra",
+        [{"run_review": False}, {"run_review": True, "review_policy": "advisory"}],
+        ids=["no-review", "advisory-review"],
+    )
+    def test_refused_without_any_gate(self, repo, monkeypatch, extra):
+        """Round 2: no gate, no or advisory review — WIP still is no candidate."""
+        from spec_runner import gates as gates_mod
+        from spec_runner import hooks
+        from spec_runner.execution import execute_task
+        from spec_runner.gates import GateRegistry
+        from spec_runner.task import get_task_by_id, parse_tasks
+
+        cfg, spawned = _wip_head_start(repo, monkeypatch, run_lint_on_done=False, **extra)
+        monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
+        reviewed: list[int] = []
+        monkeypatch.setattr(hooks, "run_code_review", lambda *a, **k: reviewed.append(1))
+        main_before = _git(repo, "rev-parse", "main")
+        with ExecutorState(cfg) as st:
+            result = execute_task(_task(), cfg, st)
+            ts = st.get_task_state("TASK-070")
+            last = ts.attempts[-1]
+            assert ts.status != "success"
+        assert result == "TERMINAL_REFUSAL"
+        assert spawned == [] and reviewed == []
+        assert last.error_kind == "policy"
+        assert "auto_commit: true" in (last.error or "")
+        assert "squash" in (last.error or "")
+        assert _git(repo, "rev-parse", "main") == main_before, "something was merged"
+        assert _git(repo, "branch", "--show-current").strip() == BRANCH
+        task = get_task_by_id(parse_tasks(repo / "spec" / "tasks.md"), "TASK-070")
+        assert task is not None and task.status != "done"
+
+    def test_head_not_on_wip_runs_as_before(self, repo, monkeypatch):
+        """A first start under `auto_commit: false`: no WIP, nothing refused."""
         from spec_runner import gates as gates_mod
         from spec_runner.execution import execute_task
         from spec_runner.gates import GateRegistry
 
-        cfg, spawned = _wip_head_start(repo, monkeypatch, run_lint_on_done=False)
+        spawned: list[int] = []
+
+        def _spawn(invocation, *, timeout, cwd, env):
+            spawned.append(1)
+            (repo / "feature.py").write_text("x\n")
+            return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+        monkeypatch.setattr(paid_call, "_spawn", _spawn)
         monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
+        cfg = _cfg(repo, max_retries=1, auto_commit=False, run_lint_on_done=False)
         with ExecutorState(cfg) as st:
-            execute_task(_task(), cfg, st)
-        assert len(spawned) == 1
+            result = execute_task(_task(), cfg, st)
+            assert st.get_task_state("TASK-070").status == "success"
+        assert result is True
+        assert spawned == [1]
+        assert "Spec-Runner-WIP" not in _git(repo, "log", "--all", "--format=%B")
 
 
 TASKS_MD = "# Tasks\n\n### TASK-001: one\n🔴 P0 | 🔄 IN_PROGRESS | Est: 1d\n\n- [x] done\n"

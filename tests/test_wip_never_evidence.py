@@ -54,17 +54,20 @@ class TestNoCandidateWithoutAutoCommit:
         assert ok is False and isinstance(err, Refusal)
         assert reviewed == []
 
-    def test_no_gate_no_refusal(self, tmp_path, monkeypatch):
-        """Nothing judges the tree: nothing would bind to WIP."""
+    def test_no_gate_is_refused_too(self, tmp_path, monkeypatch):
+        """Round 2: the backstop refuses in every configuration, before the merge."""
         from spec_runner import gates as gates_mod
         from spec_runner import hooks
         from spec_runner.gates import GateRegistry
 
         root = _cc_branch_with_wip(tmp_path)
+        refs_before = cc_git(root, "show-ref", "--heads").stdout
         cfg = cc_cfg(root, create_git_branch=True, auto_commit=False)
         monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
         ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
-        assert ok is True, err
+        assert ok is False
+        assert isinstance(err, Refusal) and err.kind == RefusalKind.POLICY and err.terminal
+        assert cc_git(root, "show-ref", "--heads").stdout == refs_before, "a branch moved"
 
     def test_a_commit_above_the_wip_is_judged_normally(self, tmp_path, monkeypatch):
         """Only a WIP HEAD is refused; the operator's own commit is a candidate."""

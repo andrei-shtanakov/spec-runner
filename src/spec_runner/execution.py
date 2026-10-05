@@ -70,18 +70,15 @@ def _wip_continuation(
 def _no_candidate_at_start(task, config) -> "Refusal | None":
     """`hooks._no_candidate_over_wip_refusal`, asked before any gate or paid call.
 
-    Only where a gate will judge the work: one is registered, or the task's
-    mode registers the RED/claims gates on its own path (`tdd`,
-    `verify_first`). The WIP history is read only then; unreadable is
-    INSTRUMENT, as at every other WIP read.
+    In every configuration (round 2, owner's blocker-1 wording): WIP is never
+    a candidate, and without `auto_commit` none can be made over it — with
+    or without gates or review, the result would otherwise be the WIP itself.
+    Unreadable WIP history is INSTRUMENT, as at every other WIP read.
     """
     from . import wip
-    from .gates import has_gates
     from .hooks import _no_candidate_over_wip_refusal
 
     if config.auto_commit or not config.create_git_branch:
-        return None
-    if not has_gates() and config.resolve_execution_mode(task) not in ("tdd", "verify_first"):
         return None
     try:
         base = wip.wip_base(config)
