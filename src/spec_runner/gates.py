@@ -198,6 +198,7 @@ def evaluate_gates(
         return GateOutcome(GateStatus.SATISFIED, [])
 
     budget = max(0, int(getattr(ctx.config, "gate_recovery_attempts", 1)))
+    bindable = ctx.state is not None and _verdict_bindable(ctx)
     results: list[GateResult] = []
     for gate_id, evaluate in gates:
         result = _evaluate_one(gate_id, evaluate, ctx, budget, phase)
@@ -215,6 +216,8 @@ def evaluate_gates(
                     phase=phase,
                     error=str(exc),
                 )
+            if not bindable:
+                continue
             ctx.state.record_gate_verdict(
                 ctx.task_id,
                 gate_id,
@@ -224,6 +227,27 @@ def evaluate_gates(
                 result.detail,
             )
     return GateOutcome(_aggregate(results), results)
+
+
+def _verdict_bindable(ctx: GateContext) -> bool:
+    """Whether a verdict may be stored against ``ctx.checkpoint_sha``.
+
+    Never against this task's WIP commit (retry-from-WIP spec §4, PR #661
+    blocker 1): a retry's pre-implementation gates legitimately judge the tree
+    in hand, which may be WIP, and their answer still decides — it just is not
+    written down as a verdict about that SHA. A SHA git cannot classify is not
+    written either; omitting evidence is the safe side.
+    """
+    from .wip import wip_status
+
+    bindable = wip_status(ctx.config, ctx.checkpoint_sha, ctx.task_id) is False
+    if not bindable:
+        logger.warning(
+            "Gate verdict not recorded: the checkpoint is (or may be) WIP",
+            task_id=ctx.task_id,
+            checkpoint=ctx.checkpoint_sha[:12],
+        )
+    return bindable
 
 
 def _evaluate_one(

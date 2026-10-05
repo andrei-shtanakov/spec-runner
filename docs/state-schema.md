@@ -306,6 +306,11 @@ One row per pre-terminal policy gate evaluation. Columns: `task_id`,
 `instrument_error`. Three, not two: "the gate says no" and "the gate could not
 answer" have different owners, and only the second is retried.
 
+Since 5.0.0 `checkpoint_sha` never names a task's WIP commit
+(`Spec-Runner-WIP` trailer): an evaluation against one — a retry's
+pre-implementation gates judge the tree in hand — still decides, but writes no
+row, and neither does one whose SHA git cannot classify.
+
 The load-bearing detail is the key. A lookup is
 `(task_id, gate_id, checkpoint_sha, config_hash)` and deliberately **not**
 "the latest verdict for this task": a verdict is a statement about a specific

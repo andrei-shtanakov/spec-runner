@@ -35,7 +35,13 @@ that needs an operator is the migration below.
   path), it says so and stays on the task branch with the tree untouched. The
   WIP commit is not a candidate: it gives no ground to the
   red gate, confirms no claim and is never the SHA a gate verdict is bound to;
-  an explicit `TASK-X: candidate` commit is made over it. The no-op check
+  an explicit `TASK-X: candidate` commit is made over it. Under
+  `auto_commit: false` no candidate can be made, so a task whose HEAD is its
+  WIP commit is refused (policy, not retried) before any test, review or gate
+  when a gate is registered: commit the work or enable `auto_commit`. No
+  `gate_verdicts` row and no bookkeeping `Gate-Candidate:` trailer names a WIP
+  SHA (a project with no review and no gates keeps its single task commit, and
+  its refusal records name no judged commit). The no-op check
   judges the task's cumulative diff, and the next attempt's prompt says it is
   continuing unverified work. If the work cannot be saved, nothing destructive
   runs; a partially staged path is refused by name. `create_git_branch: false`

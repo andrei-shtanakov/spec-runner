@@ -183,6 +183,21 @@ def _trailer_values(config: ExecutorConfig, sha: str, key: str) -> list[str]:
     return body.stdout.split()
 
 
+def wip_status(config: ExecutorConfig, sha: str, task_id: str) -> bool | None:
+    """Whether `sha` is this task's WIP commit: True, False, or None (git cannot tell).
+
+    The question every evidence writer asks before naming a SHA (PR #661
+    blocker 1). Without a per-task branch no WIP exists, so the answer is False
+    without a git call; an empty SHA names nothing and is False too.
+    """
+    if not sha or not config.create_git_branch:
+        return False
+    try:
+        return task_id in _trailer_values(config, sha, WIP_TRAILER)
+    except WipReadError:
+        return None
+
+
 def wip_base(config: ExecutorConfig) -> str | None:
     """Where the task's branch forked, or None when there provably is no WIP.
 

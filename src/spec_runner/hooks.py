@@ -539,6 +539,54 @@ def _wip_head_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
     )
 
 
+def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
+    """Refuse when a gate would judge this task's WIP commit (PR #661 blocker 1).
+
+    Under `auto_commit: false` the run makes no candidate, so a registered gate
+    (and the review checkpoint, which exists only beside one) would bind its
+    verdict to HEAD — and with HEAD on this task's WIP commit that is the one
+    SHA spec §4 says a verdict never names. The configuration forbids the only
+    cure, so this is POLICY and terminal: no retry can change it.
+    """
+    from .wip import WipReadError, head_is_wip_of
+
+    try:
+        on_wip = head_is_wip_of(config, task.id)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot tell whether HEAD is this task's WIP commit before the gates: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+    if not on_wip:
+        return None
+    return Refusal(
+        f"HEAD is {task.id}'s WIP commit and `auto_commit: false` forbids making a "
+        "candidate over it, so a gate verdict would bind to unverified WIP; commit the "
+        "task's work yourself (any non-WIP commit on the branch), or enable "
+        "`auto_commit`, then retry",
+        RefusalKind.POLICY,
+        terminal=True,
+    )
+
+
+def _is_wip_sha(config: ExecutorConfig, task_id: str, sha: str) -> bool | None:
+    """Whether `sha` is this task's WIP commit; None when git cannot tell."""
+    from .wip import wip_status
+
+    return wip_status(config, sha, task_id)
+
+
+def _evidence_sha(config: ExecutorConfig, task_id: str, sha: str) -> str:
+    """`sha` as evidence, or "" when it is (or may be) this task's WIP commit.
+
+    R7 keeps `gated_sha` on HEAD without a candidate when nothing judges the
+    tree; it may then name WIP, and must not be written down as the judged
+    commit. Omitting is the safe answer when git cannot tell.
+    """
+    return sha if _is_wip_sha(config, task_id, sha) is False else ""
+
+
 def task_changed_since_base(config: ExecutorConfig) -> bool:
     """Whether the task's cumulative diff against its base is non-empty.
 
@@ -982,6 +1030,17 @@ def _run_pre_terminal_gates(
         # over bookkeeping, so the gates simply have nothing to run against.
         logger.warning("No checkpoint commit — pre-terminal gates skipped", task_id=task.id)
         return None
+    # PR #661 blocker 1, the invariant at the one site that writes gate
+    # verdicts: neither the judged SHA nor the review checkpoint is WIP.
+    reviewed = str((facts or {}).get("review_checkpoint_sha") or "")
+    for sha in (merge_candidate, reviewed):
+        if _is_wip_sha(config, task.id, sha) is not False:
+            return Refusal(
+                f"{GATE_INSTRUMENT_ERROR_PREFIX}: refusing to bind a gate verdict to "
+                f"{sha[:12]}, which is (or cannot be proven not to be) {task.id}'s WIP commit",
+                RefusalKind.INSTRUMENT,
+                terminal=True,
+            )
 
     with ExecutorState(config) as state:
         outcome = evaluate_pre_terminal(
@@ -1125,6 +1184,9 @@ def _commit_blocked_status(
     if not config.auto_commit:
         return blocked
     from .bookkeeping import commit_status_flip
+
+    # PR #661 blocker 1: `Gate-Candidate` is evidence; a WIP SHA never is.
+    candidate_sha = _evidence_sha(config, task.id, candidate_sha)
 
     try:
         problem = commit_status_flip(config, task.id, reason=blocked, candidate_sha=candidate_sha)
@@ -1373,6 +1435,12 @@ def post_done_hook(
             "",
             False,
         )
+    # PR #661 blocker 1: no candidate can be made without `auto_commit`, so a
+    # gate would judge HEAD — refused here, before any test, review or gate.
+    if has_wip and not config.auto_commit and has_gates():
+        no_candidate = _no_candidate_over_wip_refusal(task, config)
+        if no_candidate is not None:
+            return (False, no_candidate, ReviewVerdict.SKIPPED.value, "", False)
 
     # Run tests — capture output for review context
     test_output_str: str | None = None
