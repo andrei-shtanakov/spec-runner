@@ -10,7 +10,134 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-05
+
+Major by rule, not by breakage of `--json-result`: the state DB gains four
+tables (`task_workspaces`, `harness_baselines`, `harness_baseline_files`,
+`harness_trust_audit`; `docs/state-schema.md`), and `AGENTS.md` makes any change
+to the SQLite surface a major. `--json-result` is unchanged. The one behaviour
+that needs an operator is the migration below.
+
+### Changed (breaking)
+
+- **Retries continue from the previous attempt's work.** Under
+  `create_git_branch: true` (`integration_pr` included) the uncommitted work of
+  a failed attempt is saved as a `wip(TASK): unfinished work of attempt N — not
+  a candidate` commit (trailers `Spec-Runner-WIP`, `Spec-Runner-WIP-Attempt`)
+  before the next destructive tree switch, instead of a rescue stash. The run's
+  end saves it too before returning to the main branch (or, under
+  `integration_pr`, to the run's base), so the work stays on the task's branch.
+  The next attempt therefore continues from it: the in-run retry, a separate
+  `spec-runner retry` after `run`/`run --all` gave up on the task, and a restart
+  after a killed process. Only the work of a task whose workspace record names
+  the current branch is saved this way; other uncommitted work is stashed as
+  before (under `strict`, dirt on a `task/*` branch no task owns is refused). When the run's end cannot save the WIP (e.g. a partially staged
+  path), it says so and stays on the task branch with the tree untouched. The
+  WIP commit is not a candidate: it gives no ground to the
+  red gate, confirms no claim and is never the SHA a gate verdict is bound to;
+  an explicit `TASK-X: candidate` commit is made over it. Under
+  `auto_commit: false` no candidate is ever made automatically (WIP is still
+  saved under `create_git_branch: true`). Where a review or a gate would judge
+  the work (`run_review`, a registered gate, a `tdd`/`verify_first` task), a
+  task whose HEAD is its WIP commit is refused (policy, not retried) right
+  after its start, before the pre-implementation gates and any paid call.
+  Without review and gates the attempt runs — a retry continues from the WIP —
+  but a WIP tip is never delivered: `post_done` refuses it (policy) before the
+  tests, the DONE write and the merge. Either way: check the work and create
+  an ordinary candidate commit by hand, or enable `auto_commit`. A commit of the
+  task's work that fails (a rejecting pre-commit hook, a locked index) while
+  HEAD is the WIP commit is refused too — at the candidate stage and at the
+  final commit alike (instrument, not retried): nothing is merged, the DONE
+  flip is put back and the work stays in the tree. WIP therefore never
+  reaches a merge or DONE as the task's result. No `gate_verdicts` row
+  and no bookkeeping `Gate-Candidate:` trailer names a WIP SHA (a project
+  with no review and no gates keeps its single task commit, and its refusal
+  records name no judged commit). The no-op check
+  judges the task's cumulative diff, and the next attempt's prompt says it is
+  continuing unverified work. If the work cannot be saved, nothing destructive
+  runs; a partially staged path is refused by name. A repository git cannot
+  read (a corrupt `.git`, HEAD naming a missing object, dubious ownership, a
+  permission error) is an instrument refusal before the paid call, never "no
+  WIP": only a directory git calls "not a git repository" with no `.git` at or
+  above it, and a repository with no commit yet, count as having none. An
+  unborn HEAD (e.g. a fresh `--orphan` branch) in a repository that has
+  commits elsewhere is refused as damaged. `N` is the attempt the
+  work came from: `retry --fresh`, `run --all`'s failed → pending reset and
+  `reset` erase attempt records, so each first saves the checked-out task's
+  work as WIP. **`reset` and `run --all` can therefore create a WIP git
+  commit**, and can refuse on a partially staged path; a refusal erases
+  nothing (exit 1, or 2 when the tree or the DB cannot be read). `reset` takes
+  the executor lock before that save and holds it through the rebuild, so it
+  refuses while a `run` holds the lock; `watch`, `retry` and `run --force` do
+  not take that lock, so `reset` cannot see them — do not reset while they
+  run. `run --all` saves under the run's own lock (except under `--force`).
+  `create_git_branch: false` is unchanged (no WIP, tree untouched).
+- **The harness baseline is persisted** (`harness_baselines`) before the first
+  agent call and reused by every later attempt and invocation; it is never
+  re-captured from carried work, so a harness edit in a WIP or red commit stays a
+  violation until reverted. Under `harness_guard: strict` a started task with no
+  trusted snapshot (none, `recaptured`, `unreadable`, or a surface that grew) is
+  refused before any agent call or destructive step.
+- **`spec-runner reset` keeps workspaces, baselines and the trust audit.** The
+  DB is rebuilt in a temporary file and swapped atomically; any failure before
+  the swap leaves the original untouched (exit 2), and reset refuses while a run
+  holds the executor lock.
+- **Every final DONE and `tdd abandon` drop the workspace and baseline
+  atomically** with their own records; the trust audit is kept. A run's DONE
+  does it in the transaction that writes the successful attempt, `tdd complete`
+  in the one that writes lifecycle DONE, the claim release and the remedy row,
+  and the stale-run reconciliation of a task the main branch shows DONE in the
+  save that records the success. `task done` and `task sync-from-gh` record
+  nothing in the DB, so for a task they flip to DONE the deletion is its own
+  transaction after the `tasks.md` write; if it fails the command says so and
+  exits 2, and re-running `task done` finishes it. Both refuse (exit 2, nothing
+  written) while a run holds the executor lock. `tdd abandon` does not confirm
+  the current harness and never leads to a new `initial` capture: under
+  `strict` the next start on the surviving branch is refused until the
+  operator restores and checks the harness and runs
+  `git checkout <task branch> && spec-runner harness trust TASK-X --bind-branch <task branch> --reason "…"`;
+  both the abandon output and the refusal name that command. Every value
+  interpolated into a command the operator is told to run (branch names,
+  task ids, SHAs, PR head refs, and every `gh issue create` argument that
+  `task export-gh` prints from tasks.md) is shell-quoted, so a branch an agent named
+  `x$(…)` cannot inject a command into a copied remedy. A DONE whose DB write fails
+  (degraded mode) keeps the baseline, consistently with the DONE row not being
+  durable.
+
+- **A failed mandatory commit or merge no longer completes the task.** With
+  `auto_commit: true`, a final commit that fails (a rejecting pre-commit hook,
+  a locked index, a `git add` error) used to be logged while the task was
+  still recorded DONE with its last edit uncommitted; a merge stage that could
+  not switch to the base or merge (a conflict) did the same. Both now fail the
+  attempt with kind `instrument` (exit 2): nothing is merged, a half-done
+  merge is aborted, the refusal says where the work is (committed on its
+  branch, or uncommitted in the tree), the stash the merge stage takes for a
+  dirty checkout — now labelled `spec-runner merge: TASK-X at …` instead of a
+  bare `git stash` — is popped back by its own SHA, and only onto the task's
+  branch (or named, with the `git checkout … && git stash apply` to run, when
+  it cannot be — e.g. the return checkout failed after a conflict), and `tasks.md` is not left DONE
+  (never by a commit off the task's branch: if the return to it failed,
+  `tasks.md` is restored in the working tree only and the refusal says so) (an uncommitted flip is
+  put back, a committed one is reverted by a status-only bookkeeping commit).
+  A failed final commit stays retryable; a failed merge is not retried (the
+  repository state needs an operator). Outside a git repository there is no
+  commit to require and the old warning stands. The drift check before the
+  merge puts the DONE flip back the same way. A blocking `post_done` plugin
+  is the one exception: it fires after the merge, with the work already in
+  the base, so it keeps the earlier behaviour (no revert).
+
 ### Added
+
+- `spec-runner harness trust TASK-X --reason "…" [--bind-branch <branch>]`: an
+  audited operator confirmation that the task's restored, checked harness is its
+  trusted baseline. Mandatory reason, recorded actor, refused while the executor
+  lock is held or under `SPEC_RUNNER_AGENT`; binding, snapshot and audit row are
+  one transaction. `--bind-branch` binds a task with no workspace record, or
+  one whose record names no branch; it must be the task's own branch
+  (`task/<task-id>-…`, as the run names it) and the one checked out — the main
+  branch, an integration branch or another task's branch is refused (exit 1),
+  since a bound branch is where the task's WIP is committed. It is not a way
+  around a refusal.
 
 - **Run identity, run-start/closure and one seam for every paid call** (#480
   DT-02). `cli.main` mints one full UUIDv4 `run_id` per invocation (the
@@ -142,6 +269,20 @@ is a **breaking change** and requires a major version bump plus an entry here.
   test left a read-only directory behind (permissions are repaired, as
   `TemporaryDirectory` does); a workspace that still cannot be removed is
   reported as one warning line on stderr instead of being ignored silently.
+
+### Migration
+
+A task started before 5.0.0 has no trusted harness state. Under
+`harness_guard: strict` its next start is refused. `--bind-branch` must name the
+task's own branch, checked out, so: check out the task's branch
+(`git switch task/task-x-…`), restore the task's harness files there and check
+them (for instance against the main branch), and only then confirm them with
+`spec-runner harness trust TASK-X --bind-branch <that branch> --reason "…"`.
+The same command binds a workspace record that names no branch (a start before
+the first commit, or a failed checkout). Under `create_git_branch: false`
+`--bind-branch` is not needed. Under
+`warn`/`off` nothing is refused, but the snapshot taken is not trusted when
+`strict` is switched on later.
 
 ## [4.5.0] - 2026-10-01
 
@@ -4308,7 +4449,8 @@ Baseline release. See `TODO.md` and `docs/state-schema.md` for the frozen
 R-04 Maestro interop contract (SQLite state schema, `--json-result` stdout,
 golden fixtures under `tests/fixtures/maestro-interop/`).
 
-[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/andrei-shtanakov/spec-runner/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.5.0...v5.0.0
 [4.5.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/andrei-shtanakov/spec-runner/compare/v4.2.0...v4.3.0

@@ -25,6 +25,7 @@ from spec_runner.gates import (
     evaluate_claims,
     has_gates,
 )
+from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.task import NegativeControl, Task, parse_tasks
 from spec_runner.tdd import RedCheckpoint, RedOutcome, resolve_namespace
@@ -1380,8 +1381,7 @@ class TestPointOneStopsTheTaskBeforeThePaidCall:
         monkeypatch.setattr(
             execution,
             "build_cli_invocation",
-            lambda **k: paid.append(k)
-            or type("I", (), {"argv": ["true"], "result_format": "text"})(),
+            lambda **k: paid.append(k) or CliInvocation(argv=["true"], result_format="text"),
         )
         sha = _commit(root, {"tests/test_frozen.py": "def t():\n    assert False\n"})
         return root, cfg, sha, paid

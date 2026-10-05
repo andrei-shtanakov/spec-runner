@@ -240,16 +240,28 @@ class TestHarnessBaselineHelper:
         from spec_runner.harness import HarnessBaseline
 
         cfg = _cfg(project)
-        baseline = HarnessBaseline()
-        first = baseline.capture(cfg)
-        assert first is not None and "pyproject.toml" in first
+        with ExecutorState(cfg) as state:
+            baseline = HarnessBaseline()
+            assert baseline.prepare(cfg, state, _task(), started=False) is None
+            first = baseline.capture(cfg, state, _task())
+            assert first is not None and "pyproject.toml" in first
 
-        (project / "pyproject.toml").write_text(PYPROJECT + "\n# changed\n")
-        assert baseline.capture(cfg) == first, "re-capture must not follow the file"
+            (project / "pyproject.toml").write_text(PYPROJECT + "\n# changed\n")
+            assert baseline.capture(cfg, state, _task()) == first, (
+                "re-capture must not follow the file"
+            )
+            # A fresh holder (a later invocation) reads the persisted row.
+            again = HarnessBaseline()
+            assert again.prepare(cfg, state, _task(), started=True) is None
+            assert again.capture(cfg, state, _task()) == first
 
     def test_guard_off_captures_nothing(self, project):
         from spec_runner.harness import HarnessBaseline
+        from spec_runner.tdd import resolve_namespace
 
         cfg = _cfg(project, harness_guard="off")
-        baseline = HarnessBaseline()
-        assert baseline.capture(cfg) is None
+        with ExecutorState(cfg) as state:
+            baseline = HarnessBaseline()
+            assert baseline.prepare(cfg, state, _task(), started=False) is None
+            assert baseline.capture(cfg, state, _task()) is None
+            assert state.get_harness_baseline(resolve_namespace(cfg), "TASK-022") is None

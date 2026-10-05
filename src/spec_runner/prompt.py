@@ -713,6 +713,13 @@ def _render_task_prompt(
         )
         if retry_context.test_failures:
             attempts_section += f"\n**Test failures:**\n```\n{retry_context.test_failures}\n```\n"
+        for sha, wip_attempt, files in retry_context.continuation:
+            shown = ", ".join(files[:20]) + (" …" if len(files) > 20 else "")
+            attempts_section += (
+                f"\n**You are continuing unfinished work of attempt {wip_attempt}**, "
+                f"committed as `{sha[:12]}` ({neutralise_markers(shown)}). It is not "
+                "verified — review it before relying on it. You may revise the approach.\n"
+            )
         attempts_section += (
             "\n**IMPORTANT:** Review the error above and fix the issue. "
             "Do not repeat the same mistake.\n\n"

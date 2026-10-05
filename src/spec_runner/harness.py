@@ -34,12 +34,20 @@ never exempt: it is the policy the attempt is judged by.
 """
 
 import hashlib
+import shlex
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from .config import CONFIG_FILE, LEGACY_CONFIG_FILE, ExecutorConfig
 from .logging import get_logger
+from .state import StoredBaseline
+
+if TYPE_CHECKING:
+    from .state import ExecutorState
+    from .task import Task
 
 logger = get_logger("harness")
 
@@ -212,6 +220,107 @@ def snapshot_contents(config: ExecutorConfig) -> dict[str, bytes | None] | None:
     return contents
 
 
+TRUST_REMEDY = (
+    "restore the harness files of this task's tree to a state you have checked "
+    "(e.g. against the main branch), then confirm it with "
+    '`spec-runner harness trust <TASK> --reason "…"`'
+    " (if the task has no workspace record or its record names no branch, run it"
+    " on the task's own branch, `task/<task-id>-…`, with `--bind-branch <that branch>`)"
+)
+
+
+def _candidates(config: ExecutorConfig) -> list[str]:
+    """Every surface candidate key, in a stable order, without duplicates."""
+    keys = [*HARNESS_CANDIDATES, *_control_plane_keys(config), *config.harness_files]
+    return list(dict.fromkeys(_surface_key(config, config.project_root / k) for k in keys))
+
+
+def surface_snapshot(
+    config: ExecutorConfig,
+) -> tuple[dict[str, str], dict[str, bytes | None]]:
+    """Candidate states and file bytes — the persisted baseline's shape.
+
+    A directory candidate is snapshotted whole: every file under it gets an
+    entry, so a file that appears there later is `created`, not unknown.
+    """
+    surface: dict[str, str] = {}
+    files: dict[str, bytes | None] = {}
+    for key in _candidates(config):
+        path = Path(key) if Path(key).is_absolute() else config.project_root / key
+        surface[key] = "dir" if path.is_dir() else "file" if path.is_file() else "absent"
+        for f in _iter_files(path):
+            try:
+                files[_surface_key(config, f)] = f.read_bytes()
+            except OSError:
+                files[_surface_key(config, f)] = None
+    return surface, files
+
+
+def trust_remedy(
+    config: ExecutorConfig, task_id: str, *, bind: bool, task_branch: str | None
+) -> str:
+    """`TRUST_REMEDY` with the exact command for this task (PR #661).
+
+    ``bind``: the task has no workspace record naming a branch (e.g. after
+    `tdd abandon`), so `harness trust` must bind one — always the task's own
+    branch (``task_branch``, `get_task_branch_name`), never the branch that
+    happens to be checked out: `prepare` runs before `pre_start_hook`, and a
+    finished run leaves the operator on main (pre-acceptance C1). The command
+    checks that branch out first. Every value is shell-quoted (item 5).
+    """
+    quoted_id = shlex.quote(task_id)
+    if bind and config.create_git_branch:
+        branch = shlex.quote(task_branch) if task_branch else "<the task's branch>"
+        command = (
+            f"git checkout {branch} && spec-runner harness trust {quoted_id} "
+            f'--bind-branch {branch} --reason "…"'
+        )
+        # The checkout carries untracked files along; a later WIP save on the
+        # task branch would sweep them into the task's WIP commit.
+        command_note = " (commit or stash your own untracked files first)"
+    else:
+        command_note = ""
+        command = f'spec-runner harness trust {quoted_id} --reason "…"'
+    return (
+        "restore the harness files of this task's tree to a state you have checked "
+        f"(e.g. against the main branch), then confirm it with `{command}`{command_note}"
+    )
+
+
+def trust_refusal(
+    config: ExecutorConfig,
+    stored: "StoredBaseline | None",
+    *,
+    started: bool,
+    remedy: str = TRUST_REMEDY,
+) -> str | None:
+    """Why `strict` cannot trust this task's harness baseline, or None."""
+    if config.harness_guard != "strict":
+        return None
+    if stored is None:
+        if not started:
+            return None
+        return f"this task started without a trusted harness baseline — {remedy}"
+    if stored.provenance not in ("initial", "operator"):
+        return (
+            f"the harness baseline was re-captured automatically ({stored.provenance}) "
+            f"and is not trusted under strict — {TRUST_REMEDY}"
+        )
+    unknown = [k for k in _candidates(config) if k not in stored.surface]
+    if unknown:
+        return (
+            f"the harness surface grew since the baseline ({', '.join(unknown)}); "
+            f"the new surface cannot be checked — {TRUST_REMEDY}"
+        )
+    unreadable = sorted(p for p, data in stored.files.items() if data is None)
+    if unreadable:
+        return (
+            f"baseline holds unreadable files ({', '.join(unreadable)}); fix them, "
+            f"then {TRUST_REMEDY}"
+        )
+    return None
+
+
 def content_hashes(contents: dict[str, bytes | None] | None) -> dict[str, str] | None:
     """`snapshot_contents` in `snapshot_harness`'s shape, for `harness_violations`."""
     if contents is None:
@@ -279,33 +388,169 @@ def restore_surface(config: ExecutorConfig, before: dict[str, bytes | None] | No
     return unrestored
 
 
+class HarnessStateError(RuntimeError):
+    """The persisted harness state could not be read or written."""
+
+
+# What a failed read or write of the persisted rows can raise: SQLite itself,
+# a JSON column that does not parse, the filesystem under the DB.
+_STATE_ERRORS = (sqlite3.Error, ValueError, OSError)
+
+
+# Stages before the baseline capture: an attempt that failed in one of them
+# ran no agent, so it does not make the task "started" (a failed `uv sync`
+# must not lock a strict task behind `harness trust`).
+PRE_CAPTURE_STAGES = frozenset({"setup", "sync_deps", "branch"})
+
+
+def task_started(config: ExecutorConfig, state: "ExecutorState", task: "Task") -> bool:
+    """Whether the task started before this attempt (spec 2026-10-04 §2).
+
+    Called **before** `pre_start_hook`: a branch this attempt's `pre_start`
+    creates and this attempt's own row must not count. Started means a
+    workspace row, a recorded attempt past the pre-capture stages, or — only
+    when the run branches — an existing task branch. Raises
+    `HarnessStateError` when the DB cannot be read.
+    """
+    from .tdd import resolve_namespace
+
+    try:
+        if state.get_workspace(resolve_namespace(config), task.id) is not None:
+            return True
+    except _STATE_ERRORS as exc:
+        raise HarnessStateError(f"could not read the task workspace: {exc}") from exc
+    attempts = state.get_task_state(task.id).attempts
+    if any(a.error_stage not in PRE_CAPTURE_STAGES for a in attempts):
+        return True
+    if config.create_git_branch:
+        from .git_ops import _git, get_task_branch_name
+
+        ref = f"refs/heads/{get_task_branch_name(task)}"
+        try:
+            probe = _git(config, "rev-parse", "--verify", "--quiet", ref)
+        except FileNotFoundError:  # git is not installed: no branch exists
+            return False
+        return probe.returncode == 0
+    return False
+
+
+def record_task_workspace(config: ExecutorConfig, state: "ExecutorState", task: "Task") -> None:
+    """Record that the task started (`task_workspaces`), in every guard mode.
+
+    Bound to the task branch only when this run checked it out (HEAD is the
+    task branch under `create_git_branch`); otherwise the branch is NULL —
+    no branching, no repository, or a failed checkout. Ownership comes from
+    our own checkout, never from a name. Raises `HarnessStateError`.
+    """
+    from .git_ops import current_branch, get_task_branch_name
+    from .tdd import resolve_namespace
+
+    branch: str | None = None
+    if config.create_git_branch:
+        try:
+            head = current_branch(config)
+        except FileNotFoundError:  # git is not installed
+            head = None
+        if head == get_task_branch_name(task):
+            branch = head
+    try:
+        state.record_workspace(resolve_namespace(config), task.id, branch=branch, run_id=None)
+    except _STATE_ERRORS as exc:
+        raise HarnessStateError(f"could not record the task workspace: {exc}") from exc
+
+
 class HarnessBaseline:
-    """A task's harness snapshot, captured once and reused by every attempt.
+    """The task's persisted harness baseline (#137, spec 2026-10-04 §2).
 
     The guard used to snapshot inside each attempt, so a forbidden edit that
-    outlived a failed attempt silently became the next attempt's baseline: the
-    barrier held once and was disarmed by a plain retry (#137, seen in
-    production with the default ``max_retries: 3``). Binding the baseline to
-    the task's lifecycle instead means a divergence blocks every attempt,
-    whatever its number.
+    outlived a failed attempt became the next attempt's baseline (#137); then
+    inside each invocation, so a separate `retry` re-captured the carried
+    work the same way. The baseline now lives in the state DB: captured once,
+    after `pre_start_hook` (so `uv sync` is preparation, not a mutation) and
+    before any agent call, then read by every later attempt and invocation.
 
-    Capture stays lazy because it must happen *after* ``pre_start_hook`` —
-    ``uv sync`` legitimately rewrites `uv.lock`/`pyproject.toml`, and counting
-    that as an agent mutation would make dependency sync a violation.
+    `prepare` runs before `pre_start_hook` and answers whether `strict` may
+    trust what is stored; `capture` runs after it and writes the first
+    snapshot if there is none.
     """
 
-    __slots__ = ("_snapshot", "_captured")
+    __slots__ = ("_hashes", "_loaded", "_started", "_stored")
 
     def __init__(self) -> None:
-        self._snapshot: dict[str, str] | None = None
-        self._captured = False
+        self._hashes: dict[str, str] | None = None
+        self._loaded = False
+        self._stored: StoredBaseline | None = None
+        self._started = False
 
-    def capture(self, config: ExecutorConfig) -> dict[str, str] | None:
-        """Snapshot on first call; every later call replays the same one."""
-        if not self._captured:
-            self._snapshot = snapshot_harness(config)
-            self._captured = True
-        return self._snapshot
+    def prepare(
+        self, config: ExecutorConfig, state: "ExecutorState", task: "Task", *, started: bool
+    ) -> str | None:
+        """Read the persisted baseline; return the `strict` refusal, if any.
+
+        Raises `HarnessStateError` when the row cannot be read.
+        """
+        from .tdd import resolve_namespace
+
+        self._started = started
+        if config.harness_guard == "off":
+            return None
+        try:
+            namespace = resolve_namespace(config)
+            self._stored = state.get_harness_baseline(namespace, task.id)
+            workspace = state.get_workspace(namespace, task.id)
+        except _STATE_ERRORS as exc:
+            raise HarnessStateError(f"could not read the harness baseline: {exc}") from exc
+        bind = workspace is None or workspace.get("branch") is None
+        from .git_ops import get_task_branch_name
+
+        remedy = trust_remedy(config, task.id, bind=bind, task_branch=get_task_branch_name(task))
+        return trust_refusal(config, self._stored, started=started, remedy=remedy)
+
+    def capture(
+        self, config: ExecutorConfig, state: "ExecutorState", task: "Task"
+    ) -> dict[str, str] | None:
+        """File hashes to judge against; writes the first snapshot once.
+
+        `initial` for a task that had not started, `recaptured` (with a
+        warning) for a started one without a snapshot — reachable only under
+        `warn`, since `prepare` refuses it under `strict`. None under `off`.
+        Raises `HarnessStateError` when the snapshot cannot be written.
+        """
+        from .tdd import resolve_namespace
+
+        if config.harness_guard == "off":
+            return None
+        if self._loaded:
+            return self._hashes
+        if self._stored is None:
+            provenance = "recaptured" if self._started else "initial"
+            if self._started:
+                logger.warning(
+                    "No harness baseline for a started task; re-captured (not trusted "
+                    "under strict)",
+                    task_id=task.id,
+                )
+            surface, files = surface_snapshot(config)
+            try:
+                state.store_harness_baseline(
+                    resolve_namespace(config),
+                    task.id,
+                    provenance=provenance,
+                    guard_mode=config.harness_guard,
+                    surface=surface,
+                    files=files,
+                    run_id=None,
+                )
+                # Re-read: the in-memory baseline carries what was persisted,
+                # `captured_at` included.
+                self._stored = state.get_harness_baseline(resolve_namespace(config), task.id)
+            except _STATE_ERRORS as exc:
+                raise HarnessStateError(f"could not store the harness baseline: {exc}") from exc
+            if self._stored is None:
+                raise HarnessStateError("the harness baseline was not stored")
+        self._hashes = content_hashes(self._stored.files)
+        self._loaded = True
+        return self._hashes
 
 
 def harness_violations(config: ExecutorConfig, before: dict[str, str] | None) -> list[str]:

@@ -6,6 +6,7 @@ import json
 import math
 import shlex
 import signal
+import sqlite3
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -29,6 +30,7 @@ from .cli_info import (  # noqa: E402, F401
     cmd_tui,
     cmd_validate,
     cmd_verify,
+    refuse_forgetting_attempts,
 )
 from .cli_plan import cmd_plan  # noqa: E402, F401
 from .config import (
@@ -53,6 +55,7 @@ from .git_ops import (
 )
 from .hooks import rescue_run_uncommitted
 from .logging import get_logger
+from .phases import Refusal, RefusalKind
 from .preflight import cmd_preflight
 from .preset_cmd import cmd_config
 from .runner import (
@@ -82,6 +85,7 @@ from .task import (
     update_task_status,
 )
 from .validate import format_results, validate_all
+from .wip import save_wip_before_forgetting_attempts
 
 logger = get_logger("cli")
 
@@ -344,14 +348,15 @@ def _enforce_spec_governance(config: ExecutorConfig) -> None:
     sys.exit(1)
 
 
-def _maybe_start_integration(args, config: ExecutorConfig):
+def _maybe_start_integration(args, config: ExecutorConfig, state: ExecutorState | None = None):
     """Fork a per-run integration branch when ``integration_pr`` is enabled.
 
     Returns an ``IntegrationRun`` (and redirects task merges onto it via
     ``config.main_branch``) or None when the mode is off or not applicable
     (no branch automation, a dry run).
 
-    A declared mode that cannot be honoured **refuses the run** (exit 1). It
+    A declared mode that cannot be honoured **refuses the run** (exit 1; exit 2
+    when the refusal is an ``instrument`` failure, e.g. an unreadable state DB). It
     used to fall back silently to per-task branches off main: on the work an
     interrupted attempt left in the tree, `git checkout <base>` refused, and
     the restart ran every task from master, re-executed an accepted task and
@@ -359,6 +364,10 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     run, 2026-09-30). Stray uncommitted work is therefore rescued into a
     stash first — once per run, the task start's mechanism (#231) — and a
     rescue that cannot save it refuses rather than forks over it.
+
+    Before that rescue, the owned task's work is committed as WIP (spec
+    2026-10-04 §1), after that task's harness trust check; ``state`` is the
+    caller's open state DB, if it has one.
     """
     if not getattr(config, "integration_pr", False):
         return None
@@ -367,6 +376,9 @@ def _maybe_start_integration(args, config: ExecutorConfig):
         return None
     if getattr(args, "dry_run", False):
         return None
+    refusal = _wip_before_fork(config, state)
+    if refusal is not None:
+        _refuse_integration(str(refusal), kind=refusal.kind)
     rescued, detail = rescue_run_uncommitted(config)
     if not rescued:
         _refuse_integration(f"uncommitted work could not be saved before forking: {detail}")
@@ -381,8 +393,144 @@ def _maybe_start_integration(args, config: ExecutorConfig):
     return run
 
 
-def _refuse_integration(reason: str) -> NoReturn:
-    """Stop a run whose declared ``integration_pr`` cannot be honoured."""
+def _wip_before_fork(config: ExecutorConfig, state: ExecutorState | None) -> Refusal | None:
+    """Trust-check and save the owned task's work before the fork; the refusal, if any.
+
+    A state DB that cannot be opened or read is an ``instrument`` refusal:
+    ownership is the DB's to answer, never guessed (spec 2026-10-04 §2).
+    """
+    from .git_ops import WorktreeStatusError
+
+    try:
+        if state is not None:
+            return _owned_work_refusal(config, state)
+        with ExecutorState(config) as opened:
+            return _owned_work_refusal(config, opened)
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        return Refusal(
+            f"could not tell whose uncommitted work the tree holds before forking ({exc}); "
+            "nothing destructive ran",
+            RefusalKind.INSTRUMENT,
+        )
+
+
+def _save_owned_work_before_switch(config: ExecutorConfig, state: ExecutorState | None) -> bool:
+    """Commit the owned task's work as WIP before a switch off its branch; False on refusal.
+
+    The run's end checks out the main branch (or, under ``integration_pr``, the
+    run's base). A plain ``git checkout`` carries untracked and unconflicting
+    dirt along, off the branch its workspace row names — the next ``retry``
+    then found no owner and stashed the work (final review, Critical #1).
+    Spec §1: WIP is saved before every switch that leaves the owned branch.
+    Dirt nobody owns switches as before. A refusal is printed and the caller
+    must not switch: the tree and the branch stay exactly as they are.
+    """
+    refusal = _wip_before_switch(config, state)
+    if refusal is None:
+        return True
+    branch = current_branch(config) or "the current branch"
+    logger.error("Not leaving the task branch: WIP not saved", branch=branch, reason=str(refusal))
+    print(
+        f"⛔ Not leaving '{branch}': {refusal}.\n"
+        "   The working tree and the branch were left as they are, so the next\n"
+        "   `spec-runner retry` still finds this task's work there.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _wip_before_switch(config: ExecutorConfig, state: ExecutorState | None) -> Refusal | None:
+    """`save_wip` with the start's refusal semantics; no trust check (nothing is destroyed)."""
+    from .git_ops import WorktreeStatusError
+    from .wip import save_wip
+
+    try:
+        if state is not None:
+            return save_wip(config, state).refusal
+        with ExecutorState(config) as opened:
+            return save_wip(config, opened).refusal
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        return Refusal(
+            f"could not tell whether the tree holds a task's unfinished work ({exc})",
+            RefusalKind.INSTRUMENT,
+        )
+
+
+def _leave_owned_branch(
+    config: ExecutorConfig,
+    state: ExecutorState | None,
+    switch: Callable[[ExecutorConfig], object],
+) -> bool:
+    """Run ``switch`` once the owned task's work is safe; whether it ran."""
+    if not _save_owned_work_before_switch(config, state):
+        return False
+    switch(config)
+    return True
+
+
+def _finalize_integration(
+    config: ExecutorConfig, integration, state: ExecutorState | None, *, post_pr: bool
+) -> None:
+    """Finalize the integration branch, returning to the base only once WIP is saved."""
+    back = _save_owned_work_before_switch(config, state)
+    pr_url = finalize_integration_branch(config, integration, return_to_base=back)
+    if not pr_url:
+        return
+    _announce_integration_pr(config, pr_url)
+    if post_pr and back:
+        _post_pr_review_stage(config, pr_url, integration)
+
+
+def _owned_work_refusal(config: ExecutorConfig, state: ExecutorState) -> Refusal | None:
+    """R4: the current branch's owner is trust-checked, then its work saved as WIP.
+
+    Other tasks are checked at their own start, which precedes their own
+    destructive step. Under ``strict``, dirt on a ``task/*`` branch no recorded
+    task owns refuses: whose work it is cannot be told.
+    """
+    from .wip import owner, save_wip, unowned_dirt_refusal
+
+    task_id = owner(config, state)
+    refusal = (
+        unowned_dirt_refusal(config, state)
+        if task_id is None
+        else _owner_trust_refusal(config, state, task_id)
+    )
+    return refusal if refusal is not None else save_wip(config, state).refusal
+
+
+def _owner_trust_refusal(
+    config: ExecutorConfig, state: ExecutorState, task_id: str
+) -> Refusal | None:
+    """The owner's `strict` trust check (`task_started` + `prepare`), as at its start."""
+    from .harness import HarnessBaseline, HarnessStateError, task_started
+
+    try:
+        task = get_task_by_id(parse_tasks(config.tasks_file), task_id)
+    except (OSError, ValueError) as exc:
+        return Refusal(
+            f"could not read {config.tasks_file} to check {task_id}: {exc}",
+            RefusalKind.INSTRUMENT,
+        )
+    if task is None:
+        return Refusal(
+            f"the current branch is recorded for {task_id}, which is not in "
+            f"{config.tasks_file}; its uncommitted work was left in the tree",
+            RefusalKind.POLICY,
+        )
+    try:
+        started = task_started(config, state, task)
+        trust = HarnessBaseline().prepare(config, state, task, started=started)
+    except HarnessStateError as exc:
+        return Refusal(str(exc), RefusalKind.INSTRUMENT)
+    return None if trust is None else Refusal(f"{task_id}: {trust}", RefusalKind.POLICY)
+
+
+def _refuse_integration(reason: str, *, kind: RefusalKind = RefusalKind.POLICY) -> NoReturn:
+    """Stop a run whose declared ``integration_pr`` cannot be honoured.
+
+    Exit 1, or 2 when the refusal is an ``instrument`` failure (spec §5).
+    """
     logger.error("Refusing to run: integration_pr cannot be honoured", reason=reason)
     print(f"⛔ integration_pr is on, but {reason}.", file=sys.stderr)
     print(
@@ -391,7 +539,7 @@ def _refuse_integration(reason: str) -> NoReturn:
         "   rerun, or turn the mode off for this run (`integration_pr: false`).",
         file=sys.stderr,
     )
-    sys.exit(1)
+    sys.exit(2 if kind is RefusalKind.INSTRUMENT else 1)
 
 
 def run_exit_code(*, failed: int, infrastructure: int, prior: int) -> int:
@@ -440,10 +588,7 @@ def _run_tasks(args, config: ExecutorConfig, *, lock_held: bool = False):
         _run_tasks_inner(args, config, lock_held=lock_held)
     finally:
         if integration is not None:
-            pr_url = finalize_integration_branch(config, integration)
-            if pr_url:
-                _announce_integration_pr(config, pr_url)
-                _post_pr_review_stage(config, pr_url, integration)
+            _finalize_integration(config, integration, None, post_pr=True)
 
 
 def _post_pr_review_stage(config: ExecutorConfig, pr_url: str, integration) -> None:
@@ -1100,6 +1245,9 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         )
         previously_failed: set[str] = set()  # used by T17 second-pass detection
         if reset_enabled:
+            forget_refusal = save_wip_before_forgetting_attempts(config, state)
+            if forget_refusal is not None:
+                refuse_forgetting_attempts("run --all", forget_refusal)
             previously_failed = state.reset_failed_to_pending()
             state.consecutive_failures = 0
             state.clear_second_pass_fails()
@@ -1384,11 +1532,11 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
                         # "all done" branch below (todo_tasks was empty) and
                         # still got ensure_on_main_branch — keep that git side
                         # effect so only the diagnostics change.
-                        ensure_on_main_branch(config)
+                        _leave_owned_branch(config, state, ensure_on_main_branch)
                     else:
                         logger.info("All tasks completed")
                         # Ensure we're on main branch at the end
-                        ensure_on_main_branch(config)
+                        _leave_owned_branch(config, state, ensure_on_main_branch)
 
                     # Blocked-after-skip (#131/#136 item 2): work is left over
                     # and none of it can ever become ready — a task gave up
@@ -1742,12 +1890,19 @@ def cmd_retry(args, config: ExecutorConfig):
         # with nobody told what to do next. Forked before any state is reset:
         # the fork may now refuse, and a refused retry must not have zeroed the
         # consecutive-failure brake (local review of the 2026-09-30 fix).
-        integration = _maybe_start_integration(args, config)
+        integration = _maybe_start_integration(args, config, state)
 
         task_state = state.get_task_state(task.id)
 
         # Handle --fresh flag
         if hasattr(args, "fresh") and args.fresh:
+            # Before the clear: the WIP trailer names the attempt the work
+            # came from, which the clear would erase (PR #661 blocker 2).
+            forget_refusal = save_wip_before_forgetting_attempts(config, state)
+            if forget_refusal is not None:
+                if integration is not None:
+                    _finalize_integration(config, integration, state, post_pr=False)
+                refuse_forgetting_attempts("retry --fresh", forget_refusal)
             logger.info("Fresh start: clearing previous attempts", task_id=task.id)
             task_state.attempts = []
         else:
@@ -1788,9 +1943,7 @@ def cmd_retry(args, config: ExecutorConfig):
             _announce_budget_stop(state, config)
         finally:
             if integration is not None:
-                pr_url = finalize_integration_branch(config, integration)
-                if pr_url:
-                    _announce_integration_pr(config, pr_url)
+                _finalize_integration(config, integration, state, post_pr=False)
 
 
 def cmd_watch(args: argparse.Namespace, config: ExecutorConfig) -> None:
@@ -1948,7 +2101,7 @@ def cmd_doctor(args: argparse.Namespace, config: ExecutorConfig) -> None:
 # === Main ===
 
 
-def _dispatch_task_command(args: argparse.Namespace) -> None:
+def _dispatch_task_command(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Dispatch `spec-runner task <subcommand>` to task_commands functions."""
     from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh, export_gh
     from .task import parse_tasks
@@ -1963,6 +2116,9 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         cmd_show,
         cmd_start,
         cmd_stats,
+        done_ids,
+        forget_ended_tasks,
+        no_live_run,
     )
 
     task_cmd = getattr(args, "task_command", None)
@@ -2008,7 +2164,14 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         "sync-to-gh": cmd_sync_to_gh,
     }
 
-    if task_cmd in write_commands:
+    if task_cmd in ("done", "sync-from-gh"):
+        # Ends tasks: never under a live run (PR #661 round 1 #5).
+        with no_live_run(config, task_cmd):
+            done_before = done_ids(tasks)
+            write_commands[task_cmd](args, tasks, tasks_file)
+            named = args.task_id.upper() if task_cmd == "done" else ""
+            forget_ended_tasks(config, tasks_file, done_before, named)
+    elif task_cmd in write_commands:
         write_commands[task_cmd](args, tasks, tasks_file)
     elif task_cmd in read_commands:
         read_commands[task_cmd](args, tasks)
@@ -2640,6 +2803,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "required once one exists, and quoted in every refusal",
     )
 
+    # harness trust: an operator confirms a harness they already restored and checked
+    harness_parser = subparsers.add_parser(
+        "harness", parents=[common], help="Harness guard state (operator, audited)"
+    )
+    harness_sub = harness_parser.add_subparsers(dest="harness_command", required=True)
+    harness_trust = harness_sub.add_parser(
+        "trust",
+        parents=[common],
+        help="Confirm a harness you have already restored and checked as this task's "
+        "trusted baseline (not a way around a refusal)",
+    )
+    harness_trust.add_argument("task_id")
+    harness_trust.add_argument("--reason", required=True, help="Why — recorded, and not optional")
+    harness_trust.add_argument(
+        "--bind-branch",
+        dest="bind_branch",
+        help="Bind the task to the current branch (no workspace record, or one with no branch)",
+    )
+    harness_trust.add_argument("--actor", help="Who (default: git user.email)")
+
     # doctor
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common], help="Probe CLI/model compatibility (real mini-task)"
@@ -2877,6 +3060,11 @@ def _dispatch(args, config) -> None:
 
             raise SystemExit(cmd_budget(args, config))
 
+        if args.command == "harness":
+            from .harness_cmd import cmd_harness
+
+            raise SystemExit(cmd_harness(args, config))
+
         # tdd remedies: a refusal is an operator-facing message, not a traceback
         if args.command == "tdd":
             if args.tdd_command in ("status", "checkpoints"):
@@ -2895,7 +3083,7 @@ def _dispatch(args, config) -> None:
 
         # Handle unified task subcommand
         if args.command == "task":
-            _dispatch_task_command(args)
+            _dispatch_task_command(args, config)
             return
 
         # Handle change-as-folder subcommand (new/list/archive)

@@ -189,7 +189,7 @@ class TestWhenItCannotBeSaved:
         real = subprocess.run
 
         def fake(argv, *a, **k):
-            if isinstance(argv, list) and argv[:2] == ["git", "stash"]:
+            if isinstance(argv, list) and "stash" in argv[:3]:
                 return subprocess.CompletedProcess(argv, 1, "", "fatal: cannot stash")
             return real(argv, *a, **k)
 
@@ -263,3 +263,24 @@ class TestWhenItCannotBeSaved:
         assert ok is False
         assert "could not preserve" in detail
         assert "lib.py" in detail
+
+
+class TestRenamesAndLiteralPaths:
+    def test_a_staged_rename_is_stashed_whole(self, tmp_path):
+        root = _repo(tmp_path)
+        _git(root, "mv", "lib.py", "moved.py")
+        ok, _ = rescue_uncommitted(_task(), _cfg(root))
+        assert ok
+        assert _git(root, "status", "--porcelain").stdout == ""
+        assert (root / "lib.py").exists() and not (root / "moved.py").exists()
+
+    def test_glob_and_magic_names_are_literal(self, tmp_path):
+        root = _repo(tmp_path)
+        (root / "*").write_text("s\n")
+        (root / ":(top)x").write_text("m\n")
+        ok, _ = rescue_uncommitted(_task(), _cfg(root))
+        assert ok
+        assert _git(root, "status", "--porcelain").stdout == ""
+        assert not (root / "*").exists() and not (root / ":(top)x").exists()
+        listed = _git(root, "stash", "show", "--include-untracked", "--name-only").stdout
+        assert "*" in listed.splitlines() and ":(top)x" in listed.splitlines()

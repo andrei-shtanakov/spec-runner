@@ -4,11 +4,13 @@ Tracks task execution state: attempts, results, and persistence via SQLite.
 """
 
 import contextlib
+import copy
 import fcntl
+import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -178,6 +180,17 @@ class TaskAttempt:
     run_id: str | None = None  # #480: the invocation that recorded it; None before the contract
 
 
+@dataclass(frozen=True)
+class StoredBaseline:
+    """A persisted harness baseline (spec 2026-10-04 §2)."""
+
+    provenance: str
+    guard_mode: str
+    surface: dict[str, str]
+    files: dict[str, bytes | None]
+    captured_at: str
+
+
 @dataclass
 class RetryContext:
     """Structured context for retry attempts."""
@@ -188,6 +201,8 @@ class RetryContext:
     previous_error: str
     what_was_tried: str
     test_failures: str | None
+    # (sha, attempt from the WIP trailer, files) of unfinished work to continue
+    continuation: tuple[tuple[str, int, tuple[str, ...]], ...] = ()
 
 
 @dataclass
@@ -268,6 +283,26 @@ def _decode_composition(raw: str | None) -> "tuple[CompositionMemberT, ...]":
     return tuple(
         CompositionMember(member=e["member"], outcome=e["outcome"], reason=e.get("reason"))
         for e in json.loads(raw)
+    )
+
+
+_REMEDY_INSERT = (
+    "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, reason, "
+    "actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+def _remedy_params(remedy: "RemedyRecordT") -> tuple:
+    """The `tdd_remedies` row for one remedy."""
+    return (
+        remedy.namespace,
+        remedy.task_id,
+        remedy.checkpoint_id,
+        getattr(remedy.operation, "value", remedy.operation),
+        remedy.reason,
+        remedy.actor,
+        remedy.timestamp,
+        remedy.new_checkpoint_id,
     )
 
 
@@ -716,6 +751,58 @@ class ExecutorState:
             "CREATE INDEX IF NOT EXISTS idx_verify_evidence_lookup "
             "ON verify_evidence (task_id, namespace, id DESC)"
         )
+        # Retry-from-WIP (spec 2026-10-04 §2). `task_workspaces`: the task
+        # started, and on which exact branch (NULL without per-task branches).
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_workspaces (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                branch TEXT,
+                started_at TEXT NOT NULL,
+                run_id TEXT,
+                bound_by TEXT NOT NULL,
+                PRIMARY KEY (namespace, task_id),
+                CHECK (bound_by IN ('run', 'operator'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_baselines (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                run_id TEXT,
+                guard_mode TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                surface TEXT NOT NULL,
+                PRIMARY KEY (namespace, task_id),
+                CHECK (provenance IN ('initial', 'operator', 'recaptured'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_baseline_files (
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                state TEXT NOT NULL,
+                digest TEXT,
+                content BLOB,
+                PRIMARY KEY (namespace, task_id, path),
+                CHECK (state IN ('present', 'unreadable'))
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS harness_trust_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                at TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                branch TEXT,
+                bound_branch INTEGER NOT NULL,
+                replaced_provenance TEXT
+            )
+        """)
         self._conn.commit()
 
     def _init_db_for_read(self) -> None:
@@ -1024,14 +1111,19 @@ class ExecutorState:
                 (key, value),
             )
 
-    def _save(self) -> None:
+    def _save(self, forget_workspaces: Iterable[tuple[str, str]] = ()) -> None:
         """Persist current in-memory state to SQLite.
 
         Called by external code (e.g. executor.py) when direct
         mutations are made to in-memory state outside record_attempt/mark_running.
+        ``forget_workspaces``: ``(namespace, task_id)`` pairs whose workspace and
+        baseline rows are deleted in the same transaction — for a caller whose
+        save is the record that ends those tasks (spec 2026-10-04 §2).
         """
         assert self._conn is not None
         with self._conn:
+            for namespace, task_id in forget_workspaces:
+                self._forget_workspace_sql(namespace, task_id)
             # Upsert all tasks
             for task_id, ts in self.tasks.items():
                 self._conn.execute(
@@ -1751,6 +1843,17 @@ class ExecutorState:
         from more than one after a repair, and a remedy aimed at a specific
         checkpoint must not sweep claims belonging to another (F-3).
         """
+        with self._immediate():
+            return self._supersede_claims_sql(namespace, task_id, status, checkpoint_id)
+
+    def _supersede_claims_sql(
+        self,
+        namespace: str,
+        task_id: str,
+        status: "ClaimStatusT",
+        checkpoint_id: str | None = None,
+    ) -> int:
+        """`supersede_claims` without the commit; the caller holds the transaction."""
         assert self._conn is not None
         from .claims import ClaimStatus
 
@@ -1765,7 +1868,6 @@ class ExecutorState:
             sql += " AND checkpoint_id = ?"
             params.append(checkpoint_id)
         cursor = self._conn.execute(sql, params)
-        self._conn.commit()
         return cursor.rowcount
 
     def checkpoint_by_id(self, namespace: str, checkpoint_id: str) -> "RedCheckpointT | None":
@@ -1886,6 +1988,11 @@ class ExecutorState:
     def set_checkpoint_status(self, namespace: str, checkpoint_id: str, status) -> int:
         """Retire a checkpoint. Nothing is deleted — the row keeps its history
         and gains a new standing."""
+        with self._immediate():
+            return self._set_checkpoint_status_sql(namespace, checkpoint_id, status)
+
+    def _set_checkpoint_status_sql(self, namespace: str, checkpoint_id: str, status) -> int:
+        """`set_checkpoint_status` without the commit; the caller holds the transaction."""
         assert self._conn is not None
         rows = self._conn.execute(
             "SELECT id, task_id, commit_sha, selector, timestamp FROM red_checkpoints "
@@ -1913,7 +2020,6 @@ class ExecutorState:
                     (getattr(status, "value", status), row[0]),
                 )
                 changed += 1
-        self._conn.commit()
         return changed
 
     def reinstate_checkpoint_with_claims(
@@ -2050,7 +2156,280 @@ class ExecutorState:
                     remedy.new_checkpoint_id,
                 ),
             )
+            # PR #661 blocker 3: the record that ends the task drops its
+            # workspace and baseline in the same transaction (spec §2).
+            self._forget_workspace_sql(namespace, task_id)
         return int(cursor.rowcount or 0)
+
+    # === Task workspaces and harness baselines (spec 2026-10-04) ===
+
+    def get_workspace(self, namespace: str, task_id: str) -> dict | None:
+        """The started-task record, or None."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT branch, bound_by, started_at, run_id FROM task_workspaces "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"branch": row[0], "bound_by": row[1], "started_at": row[2], "run_id": row[3]}
+
+    def workspace_for_branch(self, namespace: str, branch: str) -> str | None:
+        """The task whose recorded branch is exactly `branch` in `namespace`."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT task_id FROM task_workspaces WHERE namespace = ? AND branch = ?",
+            (namespace, branch),
+        ).fetchone()
+        return row[0] if row else None
+
+    def record_workspace(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        branch: str | None,
+        run_id: str | None,
+        bound_by: str = "run",
+    ) -> None:
+        """Record that the task started; an existing record is kept.
+
+        One exception, in the same transaction: an existing row whose branch
+        is NULL (a start that did not end on the task branch — no commits
+        yet, a failed checkout) is bound to ``branch`` when this start
+        checked it out. A recorded branch is never replaced.
+        """
+        assert self._conn is not None
+        with self._immediate():
+            self._conn.execute(
+                "INSERT OR IGNORE INTO task_workspaces "
+                "(namespace, task_id, branch, started_at, run_id, bound_by) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (namespace, task_id, branch, datetime.now().isoformat(), run_id, bound_by),
+            )
+            if branch is not None:
+                self._conn.execute(
+                    "UPDATE task_workspaces SET branch = ? "
+                    "WHERE namespace = ? AND task_id = ? AND branch IS NULL",
+                    (branch, namespace, task_id),
+                )
+
+    def get_harness_baseline(self, namespace: str, task_id: str) -> StoredBaseline | None:
+        """The persisted baseline, or None."""
+        assert self._conn is not None
+        meta = self._conn.execute(
+            "SELECT provenance, guard_mode, surface, captured_at FROM harness_baselines "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ).fetchone()
+        if meta is None:
+            return None
+        files: dict[str, bytes | None] = {}
+        for path, state, content in self._conn.execute(
+            "SELECT path, state, content FROM harness_baseline_files "
+            "WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        ):
+            files[path] = bytes(content) if state == "present" else None
+        return StoredBaseline(
+            provenance=meta[0],
+            guard_mode=meta[1],
+            surface=json.loads(meta[2]),
+            files=files,
+            captured_at=meta[3],
+        )
+
+    def _write_baseline(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        provenance: str,
+        guard_mode: str,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        run_id: str | None,
+    ) -> None:
+        """Replace the baseline rows; the caller holds the transaction."""
+        assert self._conn is not None
+        self._conn.execute(
+            "DELETE FROM harness_baseline_files WHERE namespace = ? AND task_id = ?",
+            (namespace, task_id),
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO harness_baselines "
+            "(namespace, task_id, captured_at, run_id, guard_mode, provenance, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                namespace,
+                task_id,
+                datetime.now().isoformat(),
+                run_id,
+                guard_mode,
+                provenance,
+                json.dumps(surface, sort_keys=True),
+            ),
+        )
+        for path, data in sorted(files.items()):
+            self._conn.execute(
+                "INSERT INTO harness_baseline_files "
+                "(namespace, task_id, path, state, digest, content) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    namespace,
+                    task_id,
+                    path,
+                    "unreadable" if data is None else "present",
+                    None if data is None else hashlib.sha256(data).hexdigest(),
+                    data,
+                ),
+            )
+
+    def store_harness_baseline(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        provenance: str,
+        guard_mode: str,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        run_id: str | None,
+    ) -> None:
+        """Write a baseline in one transaction (replacing any)."""
+        with self._immediate():
+            self._write_baseline(
+                namespace,
+                task_id,
+                provenance=provenance,
+                guard_mode=guard_mode,
+                surface=surface,
+                files=files,
+                run_id=run_id,
+            )
+
+    def trust_harness(
+        self,
+        namespace: str,
+        task_id: str,
+        *,
+        bind: bool,
+        bind_branch: str | None,
+        branch: str | None,
+        surface: dict[str, str],
+        files: dict[str, bytes | None],
+        guard_mode: str,
+        actor: str,
+        reason: str,
+        run_id: str | None,
+        fill_branch: bool = False,
+    ) -> str | None:
+        """Binding (if asked) + operator snapshot + audit, all or nothing.
+
+        ``bind`` inserts a new workspace row; ``fill_branch`` binds an existing
+        row whose branch is NULL to ``bind_branch`` — and raises
+        `sqlite3.IntegrityError` when that row no longer exists with a NULL
+        branch (it changed since the caller read it). Either is audited with
+        ``bound_branch=1``. Returns the provenance of the snapshot it
+        replaced, if any.
+        """
+        assert self._conn is not None
+        with self._immediate():
+            prior = self._conn.execute(
+                "SELECT provenance FROM harness_baselines WHERE namespace = ? AND task_id = ?",
+                (namespace, task_id),
+            ).fetchone()
+            if bind:
+                self._conn.execute(
+                    "INSERT INTO task_workspaces "
+                    "(namespace, task_id, branch, started_at, run_id, bound_by) "
+                    "VALUES (?, ?, ?, ?, ?, 'operator')",
+                    (namespace, task_id, bind_branch, datetime.now().isoformat(), run_id),
+                )
+            if fill_branch:
+                filled = self._conn.execute(
+                    "UPDATE task_workspaces SET branch = ?, bound_by = 'operator' "
+                    "WHERE namespace = ? AND task_id = ? AND branch IS NULL",
+                    (bind_branch, namespace, task_id),
+                )
+                if filled.rowcount != 1:
+                    raise sqlite3.IntegrityError("the workspace row is no longer unbound")
+            self._write_baseline(
+                namespace,
+                task_id,
+                provenance="operator",
+                guard_mode=guard_mode,
+                surface=surface,
+                files=files,
+                run_id=run_id,
+            )
+            self._conn.execute(
+                "INSERT INTO harness_trust_audit "
+                "(namespace, task_id, at, actor, reason, branch, bound_branch, "
+                "replaced_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    namespace,
+                    task_id,
+                    datetime.now().isoformat(),
+                    actor,
+                    reason,
+                    branch,
+                    1 if (bind or fill_branch) else 0,
+                    prior[0] if prior else None,
+                ),
+            )
+        return prior[0] if prior else None
+
+    def harness_trust_audit(self, namespace: str, task_id: str) -> list[dict]:
+        """Every `harness trust` event for the task, oldest first."""
+        assert self._conn is not None
+        rows = self._conn.execute(
+            "SELECT at, actor, reason, branch, bound_branch, replaced_provenance "
+            "FROM harness_trust_audit WHERE namespace = ? AND task_id = ? ORDER BY id",
+            (namespace, task_id),
+        ).fetchall()
+        keys = ("at", "actor", "reason", "branch", "bound_branch", "replaced_provenance")
+        return [dict(zip(keys, r, strict=True)) for r in rows]
+
+    def forget_task_workspace(self, namespace: str, task_id: str) -> None:
+        """Drop workspace, baseline and file rows together; keep the audit."""
+        with self._immediate():
+            self._forget_workspace_sql(namespace, task_id)
+
+    def _forget_workspace_sql(self, namespace: str, task_id: str) -> None:
+        """Delete the task's workspace, baseline and file rows (no commit).
+
+        The caller holds the transaction: the deletion lands with the record
+        that ends the task (DONE, abandon) or not at all (spec §2). The trust
+        audit is never deleted.
+        """
+        assert self._conn is not None
+        for table in ("harness_baseline_files", "harness_baselines", "task_workspaces"):
+            self._conn.execute(
+                f"DELETE FROM {table} WHERE namespace = ? AND task_id = ?",
+                (namespace, task_id),
+            )
+
+    def abandon_atomically(
+        self, namespace: str, task_id: str, checkpoint_id: str, remedy: "RemedyRecordT"
+    ) -> None:
+        """Abandon's writes and the workspace deletion, all or nothing (spec §2).
+
+        Checkpoint -> abandoned, that lineage's active claims -> abandoned, the
+        remedy row, and the task's workspace/baseline/file rows: one
+        `BEGIN IMMEDIATE`. A repeat abandon that finds the remedy row therefore
+        also finds the rows gone.
+        """
+        from .claims import ClaimStatus
+        from .remedy import CheckpointStatus
+
+        with self._immediate():
+            self._set_checkpoint_status_sql(namespace, checkpoint_id, CheckpointStatus.ABANDONED)
+            self._supersede_claims_sql(
+                namespace, task_id, ClaimStatus.ABANDONED, checkpoint_id=checkpoint_id
+            )
+            self._insert_remedy_sql(remedy)
+            self._forget_workspace_sql(namespace, task_id)
 
     def reanchor_lineage(
         self,
@@ -2226,20 +2605,16 @@ class ExecutorState:
         """Persist one remedy. **Raises** on failure — like a claim and for the
         same reason: a remedy nobody can find is indistinguishable from one that
         never happened."""
-        self._insert_phase_row(
-            "INSERT INTO tdd_remedies (namespace, task_id, checkpoint_id, operation, reason, "
-            "actor, timestamp, new_checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                remedy.namespace,
-                remedy.task_id,
-                remedy.checkpoint_id,
-                getattr(remedy.operation, "value", remedy.operation),
-                remedy.reason,
-                remedy.actor,
-                remedy.timestamp,
-                remedy.new_checkpoint_id,
-            ),
-        )
+        self._insert_phase_row(_REMEDY_INSERT, _remedy_params(remedy))
+
+    def _insert_remedy_sql(self, remedy: "RemedyRecordT") -> None:
+        """`record_remedy` without the commit; the caller holds the transaction.
+
+        Not through `_insert_phase_row`: its `with self._conn` would commit an
+        enclosing transaction early.
+        """
+        assert self._conn is not None
+        self._conn.execute(_REMEDY_INSERT, _remedy_params(remedy))
 
     def remedies(self, task_id: str, namespace: str) -> list["RemedyRecordT"]:
         """Every remedy taken on this task in this workstream, oldest first."""
@@ -2661,8 +3036,15 @@ class ExecutorState:
         error_kind: str | None = None,
         error_stage: str | None = None,
         no_op: bool = False,
+        forget_workspace: str | None = None,
     ) -> None:
-        """Record execution attempt with atomic SQLite persistence."""
+        """Record execution attempt with atomic SQLite persistence.
+
+        ``forget_workspace``: on success, the namespace whose workspace,
+        baseline and file rows for this task are deleted in the **same**
+        transaction as the attempt row (spec §2). A DONE that does not land
+        (degraded mode) leaves them in place, so the two never disagree.
+        """
         state = self.get_task_state(task_id)
         now = datetime.now().isoformat()
         attempt = TaskAttempt(
@@ -2735,6 +3117,8 @@ class ExecutorState:
                         attempt.run_id,
                     ),
                 )
+                if success and forget_workspace is not None:
+                    self._forget_workspace_sql(forget_workspace, task_id)
                 self._save_meta()
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("record_attempt", e, task_id=task_id)
@@ -3163,6 +3547,128 @@ class ExecutorState:
         return False  # Don't suppress exceptions
 
 
+#: Carried over by `reset` (spec §2): the started-task record, the harness
+#: snapshot and its files, and the trust audit, which is never deleted.
+KEPT_ON_RESET = (
+    "task_workspaces",
+    "harness_baselines",
+    "harness_baseline_files",
+    "harness_trust_audit",
+)
+
+
+#: How long reset waits for another connection's write lock before refusing.
+_RESET_BUSY_TIMEOUT = 0.1
+
+
+class ResetRefused(RuntimeError):
+    """`reset` will not run now; nothing was touched."""
+
+
+def _sidecars(db: Path) -> tuple[Path, Path]:
+    return Path(f"{db}-wal"), Path(f"{db}-shm")
+
+
+def _read_kept_tables(db: Path) -> dict[str, tuple[list[str], list[tuple]]]:
+    """The kept tables' rows, after folding the WAL into the main file.
+
+    Raises when the TRUNCATE checkpoint is blocked: another connection is in
+    the middle of a transaction, and what it writes next would be lost.
+    """
+    kept: dict[str, tuple[list[str], list[tuple]]] = {}
+    conn = sqlite3.connect(db, timeout=_RESET_BUSY_TIMEOUT)
+    try:
+        busy, log, checkpointed = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        # Fail closed: a TRUNCATE that did not fold every frame leaves rows
+        # that the rebuilt file would not carry.
+        if busy or log != checkpointed:
+            raise ResetRefused(f"state DB is in use by another connection: {db}")
+        present = {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        for table in KEPT_ON_RESET:
+            if table not in present:
+                continue
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            rows = conn.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
+            kept[table] = (cols, rows)
+    finally:
+        conn.close()
+    return kept
+
+
+def _build_reset_db(
+    config: ExecutorConfig, tmp: Path, kept: dict[str, tuple[list[str], list[tuple]]]
+) -> None:
+    """A fresh schema at `tmp` holding only the kept rows, WAL folded in."""
+    tmp_config = copy.copy(config)
+    tmp_config.state_file = tmp
+    with ExecutorState(tmp_config) as fresh:
+        assert fresh._conn is not None
+        with fresh._immediate():
+            for table, (cols, rows) in kept.items():
+                marks = ", ".join("?" for _ in cols)
+                fresh._conn.executemany(
+                    f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({marks})", rows
+                )
+        fresh._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def reset_state_preserving_workspaces(
+    config: ExecutorConfig, *, before_rebuild: Callable[[], None] | None = None
+) -> None:
+    """Rebuild the state DB keeping the harness-trust tables (spec §2).
+
+    Built in a temporary file and swapped in with one `os.replace`: any failure
+    before the swap leaves the original DB file exactly as it was, and the
+    exception propagates. The original's WAL is checkpointed (TRUNCATE) and
+    its sidecars removed **before** the swap, so no stale WAL can be replayed
+    onto the new file.
+
+    The executor lock (the one `run` holds, at `state_file.with_suffix(".lock")`)
+    is held from the read through the replace: a live run is refused with
+    `ResetRefused` before anything is touched, and no run can start and write
+    rows that the rebuilt file would drop. A DB some other connection is
+    mid-transaction on is refused as well.
+
+    ``before_rebuild`` runs under the same lock, before anything is read
+    for the rebuild: `reset` saves the checked-out task's WIP there (PR #661),
+    so a live run's half-written tree is never committed under it. Whatever
+    it raises propagates with nothing rebuilt.
+    """
+    from .config import ExecutorLock
+
+    lock = ExecutorLock(config.state_file.with_suffix(".lock"))
+    if not lock.acquire():
+        raise ResetRefused("the executor lock is held (a run is live); stop the run before reset")
+    try:
+        if before_rebuild is not None:
+            before_rebuild()
+        _reset_locked(config)
+    finally:
+        lock.release()
+
+
+def _reset_locked(config: ExecutorConfig) -> None:
+    """The rebuild and swap; the caller holds the executor lock."""
+    src = config.state_file
+    kept = _read_kept_tables(src) if src.exists() else {}
+    tmp = src.with_name(src.name + ".reset-tmp")
+    for leftover in (tmp, *_sidecars(tmp)):
+        leftover.unlink(missing_ok=True)
+    try:
+        _build_reset_db(config, tmp, kept)
+        for sidecar in _sidecars(src):
+            sidecar.unlink(missing_ok=True)
+        os.replace(tmp, src)
+    except BaseException:
+        for leftover in (tmp, *_sidecars(tmp)):
+            leftover.unlink(missing_ok=True)
+        raise
+    for leftover in _sidecars(tmp):
+        leftover.unlink(missing_ok=True)
+
+
 def check_stop_requested(config: ExecutorConfig) -> bool:
     """Check if graceful shutdown was requested via stop file or signal."""
     from .executor import _shutdown_requested
@@ -3268,6 +3774,7 @@ def recover_stale_tasks(
 
     recovered: list[str] = []
     reset_to_todo: list[str] = []
+    reconciled_done: list[str] = []
     done_tasks: set[str] | None = None
     now = datetime.now()
 
@@ -3293,6 +3800,7 @@ def recover_stale_tasks(
             # `completed_at` NULL reads as "not finished" on the stable surface.
             ts.completed_at = ts.completed_at or now.isoformat()
             recovered.append(task_id)
+            reconciled_done.append(task_id)
             continue
 
         # Stale task — recover it
@@ -3311,7 +3819,12 @@ def recover_stale_tasks(
         reset_to_todo.append(task_id)
 
     if recovered:
-        state._save()
+        # A reconciled DONE ends the task: its workspace and baseline go in
+        # the same transaction as the success it records (PR #661 blocker 3).
+        from .tdd import resolve_namespace
+
+        namespace = resolve_namespace(state.config) if reconciled_done else ""
+        state._save(forget_workspaces=[(namespace, t) for t in reconciled_done])
 
         for task_id in reset_to_todo:
             update_task_status(tasks_file, task_id, "todo")

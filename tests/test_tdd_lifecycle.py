@@ -34,6 +34,7 @@ from spec_runner.lifecycle import (
     is_terminal,
     next_phase,
 )
+from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.tdd import resolve_namespace
 
@@ -261,7 +262,7 @@ class TestARealRunWalksTheMachine:
             monkeypatch.setattr(
                 execution,
                 "build_cli_invocation",
-                lambda **k: type("I", (), {"argv": ["true"], "result_format": "text"})(),
+                lambda **k: CliInvocation(argv=["true"], result_format="text"),
             )
             monkeypatch.setattr(hooks, "post_done_hook", hooks.post_done_hook)
 

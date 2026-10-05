@@ -306,6 +306,11 @@ One row per pre-terminal policy gate evaluation. Columns: `task_id`,
 `instrument_error`. Three, not two: "the gate says no" and "the gate could not
 answer" have different owners, and only the second is retried.
 
+Since 5.0.0 `checkpoint_sha` never names a task's WIP commit
+(`Spec-Runner-WIP` trailer): an evaluation against one — a retry's
+pre-implementation gates judge the tree in hand — still decides, but writes no
+row, and neither does one whose SHA git cannot classify.
+
 The load-bearing detail is the key. A lookup is
 `(task_id, gate_id, checkpoint_sha, config_hash)` and deliberately **not**
 "the latest verdict for this task": a verdict is a statement about a specific
@@ -350,6 +355,57 @@ Three, not two: "the test passes" is a fact about the code, "we could not find
 out" is a fact about us, and only the first refutes the claim.
 
 Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
+
+### `task_workspaces` (experimental, 5.0.0)
+
+The fact that a task started, and on which exact branch. Columns: `namespace`,
+`task_id`, `branch`, `started_at`, `run_id`, `bound_by` (`run` · `operator`).
+Key `(namespace, task_id)`. WIP is saved only for the task whose row names the
+current branch exactly. Written in every guard mode. Deleted at every final
+DONE (see below) and by `tdd abandon`; kept by `reset`.
+
+`branch` is NULL without per-task branches, and also when a start did not end
+on the task branch — the repository had no commits yet, or the checkout
+failed. A NULL branch owns no dirt. It is filled, never replaced: by a later
+start that checked the task branch out (in the same transaction as the
+insert-or-keep), or by `harness trust --bind-branch <the task's own branch, checked out>`
+(`bound_by` becomes `operator`, audited with `bound_branch` = 1).
+
+### `harness_baselines` (experimental, 5.0.0)
+
+The harness guard's trusted baseline, taken before the first agent call.
+Columns: `namespace`, `task_id`, `captured_at`, `run_id`, `guard_mode`,
+`provenance` (`initial` · `operator` · `recaptured`), `surface` (JSON: every
+candidate → `file` · `dir` · `absent`). Key `(namespace, task_id)`. Under
+`strict` only `initial`/`operator` are trusted. Deleted at every final DONE
+and by `tdd abandon`; kept by `reset`.
+
+### `harness_baseline_files` (experimental, 5.0.0)
+
+One row per file the surface held at capture. Columns: `namespace`, `task_id`,
+`path`, `state` (`present` · `unreadable`), `digest` (sha256; NULL when
+`unreadable`), `content` (BLOB, NULL when `unreadable`). Key `(namespace, task_id, path)`. Deleted with its
+baseline.
+
+### `harness_trust_audit` (experimental, 5.0.0)
+
+Append-only record of `spec-runner harness trust`. Columns: `id`, `namespace`,
+`task_id`, `at`, `actor`, `reason`, `branch`, `bound_branch` (1 when the
+command created the workspace binding or bound a row whose branch was NULL),
+`replaced_provenance`. Never deleted,
+not even by DONE, `tdd abandon` or `reset`.
+
+The three baseline-side tables are written and removed together with the record
+that ends the task: DONE inside the transaction that writes the successful
+attempt, `tdd complete` in the transaction that writes lifecycle DONE, the
+claim release and the remedy row, the stale-run reconciliation of a task the
+main branch shows DONE in the save that records its success, and `tdd abandon`
+in the same transaction as its checkpoint, claims and remedy writes. `task
+done` and `task sync-from-gh` write no DB record of their own: for a task they
+flip to DONE the rows are deleted in a transaction of their own after the
+`tasks.md` write (a failure exits 2; `task done` again finishes it). `reset` rebuilds the DB in a temporary file, carries these four
+tables over and replaces the file atomically. The trusted baseline lives in the
+state DB, i.e. at the same trust boundary as `tdd_claims` and `red_checkpoints`.
 
 ### `tdd_claims` (experimental, #141)
 

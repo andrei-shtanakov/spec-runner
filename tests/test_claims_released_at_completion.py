@@ -41,6 +41,7 @@ from spec_runner.claims import ClaimStatus, check_claims, record_claims
 from spec_runner.config import ExecutorConfig
 from spec_runner.lifecycle import TddPhase, advance
 from spec_runner.remedy import RemedyError, RemedyOperation, cmd_tdd, release
+from spec_runner.runner import CliInvocation
 from spec_runner.state import ExecutorState
 from spec_runner.tdd import RedCheckpoint, RedOutcome, _config_hash, resolve_namespace
 
@@ -203,7 +204,7 @@ class TestCompletionReleasesThem:
         monkeypatch.setattr(
             execution,
             "build_cli_invocation",
-            lambda **k: type("I", (), {"argv": ["true"], "result_format": "text"})(),
+            lambda **k: CliInvocation(argv=["true"], result_format="text"),
         )
         monkeypatch.setattr(hooks, "post_done_hook", hooks.post_done_hook)
 

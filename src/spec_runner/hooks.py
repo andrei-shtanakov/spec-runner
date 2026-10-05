@@ -6,6 +6,8 @@ code review, testing, linting, and plugin execution around task runs.
 
 import hashlib
 import os
+import shlex
+import sqlite3
 import stat
 import subprocess
 from pathlib import Path
@@ -47,6 +49,7 @@ from .state import PhaseOutcome, ReviewVerdict
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .negative_control import ControlResult
+    from .state import ExecutorState
 from .task import Task, mark_all_checklist_done, update_task_status
 
 logger = get_logger("hooks")
@@ -168,18 +171,27 @@ def _rescue_uncommitted(
     if not paths:
         return True, ""  # the ordinary case: nothing to rescue, nothing to say
 
+    from .git_ops import git_with_paths, stash_pathspecs, unstage_vanished_paths
+
     label = f"spec-runner rescue: {owner} at {datetime.now().isoformat(timespec='seconds')}"
-    stash = subprocess.run(
-        ["git", "stash", "push", "--include-untracked", "-m", label, "--", *paths],
-        capture_output=True,
-        text=True,
-        cwd=config.project_root,
-    )
-    if stash.returncode != 0:
+    try:
+        unstage_vanished_paths(config, paths)
+        # Paths on stdin, not argv: `-uall` can list more than execve accepts;
+        # whole untracked directories collapsed, since stash re-execs `git add`
+        # with its pathspecs as arguments.
+        stash = git_with_paths(
+            config,
+            ["stash", "push", "--include-untracked", "-m", label],
+            stash_pathspecs(config, paths),
+        )
+        failure = None if stash.returncode == 0 else stash.stderr.strip()[:200]
+    except OSError as exc:
+        failure = str(exc)[:200]
+    if failure is not None:
         detail = (
             f"could not preserve {len(paths)} uncommitted path(s) before cleaning the tree "
             f"({', '.join(paths[:STRANDED_PATHS_SHOWN])}): "
-            f"{stash.stderr.strip()[:200] or 'git stash failed'}"
+            f"{failure or 'git stash failed'}"
         )
         logger.error("Refusing to start: uncommitted work cannot be saved", task_id=task_id)
         log_progress(f"⛔ {detail} — not starting, your changes are untouched", task_id)
@@ -197,9 +209,18 @@ def _rescue_uncommitted(
 
 
 def pre_start_hook(
-    task: Task, config: ExecutorConfig, *, reporter: StageReporter | None = None
+    task: Task,
+    config: ExecutorConfig,
+    *,
+    reporter: StageReporter | None = None,
+    state: "ExecutorState | None" = None,
 ) -> bool:
-    """Hook before starting task"""
+    """Hook before starting task.
+
+    With `state`, the branch stage first saves the owned task's uncommitted
+    work as a WIP commit (spec 2026-10-04 §1). A WIP refusal raises
+    `StartRefused` carrying its typed `Refusal`, before anything destructive.
+    """
     logger.info("Pre-start hook", task_id=task.id)
 
     # Sync dependencies (skippable — doctor and other lightweight runs disable
@@ -283,6 +304,8 @@ def pre_start_hook(
             # two cleanup commands and the checkout that precedes them are what
             # deleted a review agent's stranded fixes in the pilot. Save first,
             # and if saving fails, stop instead of cleaning.
+            if state is not None:
+                _save_wip_or_refuse(task, config, state, reporter)
             rescued, rescue_detail = rescue_uncommitted(task, config)
             if not rescued:
                 if reporter:
@@ -310,9 +333,10 @@ def pre_start_hook(
                 cwd=config.project_root,
             )
 
-            # Check if branch exists
+            # Check if the *branch* exists: a bare name also resolves a tag of
+            # the same name, whose checkout detaches HEAD (final review #2).
             result = subprocess.run(
-                ["git", "rev-parse", "--verify", branch_name],
+                ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name}"],
                 capture_output=True,
                 text=True,
                 cwd=config.project_root,
@@ -344,6 +368,42 @@ def pre_start_hook(
 
     # Run plugin pre_start hooks
     return run_plugin_hooks_for("pre_start", task, config, success=None) is None
+
+
+class StartRefused(Exception):
+    """`pre_start_hook` refused before anything destructive; carries the typed refusal."""
+
+    def __init__(self, refusal: Refusal) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
+
+def _save_wip_or_refuse(
+    task: Task, config: ExecutorConfig, state: "ExecutorState", reporter: StageReporter | None
+) -> None:
+    """Commit the owned task's work as WIP before the branch stage cleans the tree.
+
+    Under `strict`, dirt on an unowned ``task/*`` branch refuses first. Raises
+    `StartRefused` on a refusal or when ownership cannot be read (an
+    `instrument` refusal): the work stays in the tree, nothing ran.
+    """
+    from .git_ops import WorktreeStatusError
+    from .wip import save_wip, unowned_dirt_refusal
+
+    try:
+        refusal = unowned_dirt_refusal(config, state) or save_wip(config, state).refusal
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        refusal = Refusal(
+            f"could not decide whether the tree holds a task's unfinished work ({exc}); "
+            "the work is in the tree and nothing destructive ran",
+            RefusalKind.INSTRUMENT,
+        )
+    if refusal is None:
+        return
+    logger.error("Refusing to start: WIP not saved", task_id=task.id)
+    if reporter:
+        reporter.record_for("branch", PhaseOutcome.ERROR, str(refusal))
+    raise StartRefused(refusal)
 
 
 def commit_task_work(task: Task, config: ExecutorConfig) -> str:
@@ -417,6 +477,392 @@ def _head_sha(config: ExecutorConfig) -> str:
         cwd=config.project_root,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def commit_candidate_over_wip(task: Task, config: ExecutorConfig) -> None:
+    """Make HEAD a candidate when it is a WIP commit (retry-from-WIP spec §4).
+
+    A gate verdict is bound to a SHA; it must never name a WIP commit. Raises
+    `WipReadError` when HEAD cannot be read or the candidate cannot be made:
+    the caller must not go on to bind a verdict to a WIP commit.
+    """
+    from .wip import WipReadError, head_is_wip_of
+
+    if not head_is_wip_of(config, task.id):
+        return
+    made = subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", f"{task.id}: candidate"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if made.returncode != 0:
+        raise WipReadError(f"candidate commit failed: {made.stderr.strip()[:200]}")
+
+
+def _candidate_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
+    """`commit_candidate_over_wip` as a typed INSTRUMENT refusal."""
+    from .wip import WipReadError
+
+    try:
+        commit_candidate_over_wip(task, config)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot make a candidate over this task's WIP: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+    return None
+
+
+def _wip_head_refusal(
+    task: Task, config: ExecutorConfig, commit: str = "candidate"
+) -> Refusal | None:
+    """INSTRUMENT refusal when a commit of the task's work failed with HEAD on WIP.
+
+    Both commit sites ask it — the candidate stage and the final commit
+    (``commit="final"``; PR #661 acceptance round 1). The verdict, the merge
+    and DONE would all take the WIP as the task's result; an unreadable HEAD
+    is no better.
+    """
+    from .wip import WipReadError, head_is_wip_of
+
+    try:
+        on_wip = head_is_wip_of(config, task.id)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot read HEAD after the {commit} commit failed: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+    if not on_wip:
+        return None
+    return Refusal(
+        f"The {commit} commit failed and HEAD is this task's WIP commit; a verdict, "
+        "merge or DONE would take the WIP as the task's result. The work is still in "
+        "the tree: fix what refused the commit (see the log), then retry",
+        RefusalKind.INSTRUMENT,
+        terminal=True,
+    )
+
+
+def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None) -> str:
+    """Put back the `tasks.md` DONE flip a refusal after it must not leave.
+
+    `post_done_hook` writes DONE before the final commit so the commit carries
+    it; a refusal past that point would otherwise leave a refused task reading
+    DONE. Two shapes:
+
+    - the flip is still uncommitted (the final commit failed or did not run):
+      the file goes back to its pre-flip text and is unstaged, in case the
+      failed commit's `git add` got that far;
+    - the final commit carried it (a merge or drift refusal after it): the
+      task's status goes back to what it was, and under `auto_commit` that is
+      committed as bookkeeping (status-only, #192), so the next run does not
+      meet the dirty-spec guard. The checklist marks stay.
+
+    Never a bookkeeping commit off the task branch (pre-acceptance M2): with
+    per-task branches, when HEAD is not this task's branch (a failed merge
+    whose return checkout failed leaves the base checked out), tasks.md is
+    restored in the working tree only and the returned note says so.
+
+    Best effort: a failure is logged, never raised over the refusal it
+    accompanies. Returns a note for the refusal, or "".
+    """
+    if tasks_before is None:
+        return ""
+    off_branch = ""
+    if config.create_git_branch:
+        # `_checked_out` never raises (final pre-acceptance item 2): with git
+        # missing, "unknown" is off the task branch — no commit, tree only.
+        here = _checked_out(config)
+        if here != get_task_branch_name(task):
+            off_branch = here or "unknown (git could not say)"
+    try:
+        rel = os.path.relpath(config.tasks_file, config.project_root)
+        current = config.tasks_file.read_text()
+        head = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        committed_flip = head.returncode == 0 and head.stdout == current
+        if committed_flip and current != tasks_before and not off_branch:
+            _revert_committed_done(task, config, tasks_before)
+            return ""
+        config.tasks_file.write_text(tasks_before)
+        if not off_branch:
+            subprocess.run(
+                ["git", "reset", "-q", "--", rel],
+                cwd=config.project_root,
+                capture_output=True,
+                text=True,
+            )
+    except OSError as exc:
+        logger.warning("Could not undo the DONE flip", task_id=task.id, error=str(exc))
+    if not off_branch:
+        return ""
+    return (
+        f"HEAD is {off_branch}, not {get_task_branch_name(task)}: {_rel_tasks(config)} was "
+        "restored in the working tree only (nothing committed there) — check it before "
+        "committing"
+    )
+
+
+def _rel_tasks(config: ExecutorConfig) -> str:
+    """tasks.md as the operator sees it, relative to the project."""
+    return os.path.relpath(config.tasks_file, config.project_root)
+
+
+def _revert_committed_done(task: Task, config: ExecutorConfig, tasks_before: str) -> None:
+    """The committed DONE flip back to the task's previous status (bookkeeping).
+
+    Called only with HEAD on the task's own branch (or without per-task
+    branches), so the bookkeeping commit never lands on the base (M2).
+    """
+    from .bookkeeping import commit_status_flip
+    from .task import parse_tasks_text
+
+    prior = next((t.status for t in parse_tasks_text(tasks_before) if t.id == task.id), None)
+    if prior is None or prior == "done":
+        return
+    update_task_status(config.tasks_file, task.id, prior)
+    if not config.auto_commit:
+        return
+    problem = commit_status_flip(
+        config, task.id, reason="the attempt was refused after its DONE was committed"
+    )
+    if problem:
+        logger.warning("Could not commit the reverted DONE flip", task_id=task.id, detail=problem)
+
+
+def _refuse_after_done_write(
+    task: Task,
+    config: ExecutorConfig,
+    refusal: RefusalT,
+    tasks_before: str | None,
+    verdict: str,
+    findings: str = "",
+) -> tuple[bool, RefusalT, str, str, bool]:
+    """Every `post_done_hook` refusal after the DONE write goes through here.
+
+    One door (PR #661 owner item 4), so no future refusal path past the DONE
+    write can forget to put the flip back.
+    """
+    note = _undo_done_flip(task, config, tasks_before)
+    return (False, _with_note(refusal, note) if note else refusal, verdict, findings, False)
+
+
+def _merge_refusal(
+    config: ExecutorConfig, stage: str, detail: str, branch: str, stash_note: str = ""
+) -> Refusal:
+    """A merge stage that could not deliver: INSTRUMENT, terminal (PR #661 item 3).
+
+    Nothing was judged wrong with the work; the harness could not deliver it,
+    and a retry would meet the same repository state. The message says where
+    the work actually is (pre-acceptance I1): committed on its branch, or
+    uncommitted in the working tree, and — when the stage's own stash could
+    not be put back — in which stash entry.
+    """
+    from .git_ops import uncommitted_work_paths
+
+    here = _checked_out(config)
+    if here != branch:
+        # The tree in hand is not the task's (final pre-acceptance item 1).
+        where = (
+            f"{branch} is not checked out (HEAD is {here or 'unknown'}); its committed "
+            "work is on that branch"
+        )
+    else:
+        try:
+            dirty = uncommitted_work_paths(config, exclude=[config.tasks_file])
+            where = (
+                f"uncommitted work is in the working tree of {branch} ({len(dirty)} path(s))"
+                if dirty
+                else f"the task's work is committed on its branch {branch}"
+            )
+        except Exception:  # noqa: BLE001 - the refusal must not fail on its own wording
+            where = "the state of the working tree could not be read"
+    return Refusal(
+        f"Could not merge the task's branch ({stage}): {detail.strip()[:300] or 'git failed'}. "
+        f"Nothing was merged and the task is not done; {where}"
+        f"{'; ' + stash_note if stash_note else ''} — resolve the repository state, "
+        "then retry",
+        RefusalKind.INSTRUMENT,
+        terminal=True,
+    )
+
+
+def _merge_stash_push(config: ExecutorConfig, task: Task) -> tuple[str, str] | None:
+    """Stash the tree for the merge's checkout under a unique label; ``(sha, label)``.
+
+    Replaces a bare `git stash` (pre-acceptance I1): the entry is recognisable
+    and is later popped by its own SHA, never as "the top one". None when git
+    stashed nothing.
+    """
+    from datetime import datetime
+
+    label = f"spec-runner merge: {task.id} at {datetime.now().isoformat(timespec='seconds')}"
+    pushed = subprocess.run(
+        ["git", "stash", "push", "-m", label],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if pushed.returncode != 0:
+        return None
+    top = subprocess.run(
+        ["git", "stash", "list", "-n", "1", "--format=%H%x00%gs"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    sha, _, subject = top.stdout.strip().partition("\0")
+    return (sha, label) if sha and label in subject else None
+
+
+def _checked_out(config: ExecutorConfig) -> str | None:
+    """The checked-out branch, or None when git cannot say (never raises)."""
+    from .git_ops import current_branch
+
+    try:
+        return current_branch(config)
+    except Exception:  # noqa: BLE001 - callers fail safe on "unknown"
+        return None
+
+
+def _merge_in_progress(config: ExecutorConfig) -> bool:
+    probe = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    return probe.returncode == 0
+
+
+def _merge_stash_pop(config: ExecutorConfig, stashed: tuple[str, str] | None, branch: str) -> str:
+    """Pop exactly the merge stage's own stash; "" when restored, else a note naming it.
+
+    Only onto the task's own branch (final pre-acceptance item 1): when the
+    return checkout failed after a conflicting merge, popping would apply the
+    task's work onto the base's tree mid-conflict. Then nothing is popped and
+    the note says where the work is and what to do once the base is resolved.
+    """
+    if stashed is None:
+        return ""
+    sha, label = stashed
+    here = _checked_out(config)
+    if here != branch:
+        state = (
+            "a merge is still in progress there (`git merge --abort`)"
+            if _merge_in_progress(config)
+            else f"the checkout back to {branch} failed"
+        )
+        return (
+            f"its uncommitted work is in the stash entry “{label}” ({sha[:12]}), not in any "
+            f"working tree: HEAD is {here or 'unknown'} and {state}. Once that is resolved, "
+            f"recover it with `git checkout {shlex.quote(branch)} && "
+            f"git stash apply {shlex.quote(sha)}`"
+        )
+    listed = subprocess.run(
+        ["git", "stash", "list", "--format=%H"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    shas = listed.stdout.split() if listed.returncode == 0 else []
+    note = (
+        f"its uncommitted work is in the stash entry “{label}” ({sha[:12]}); recover it "
+        f"with `git stash apply {shlex.quote(sha)}`"
+    )
+    if sha not in shas:
+        return note
+    popped = subprocess.run(
+        ["git", "stash", "pop", f"stash@{{{shas.index(sha)}}}"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    return "" if popped.returncode == 0 else note
+
+
+def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
+    """Refuse when HEAD is this task's WIP and no candidate may be made (PR #661).
+
+    Under `auto_commit: false` the run makes no candidate, so whatever judged
+    or merged the task — a gate, a review, the merge itself — would take HEAD,
+    and with HEAD on this task's WIP commit that makes the WIP the candidate,
+    which spec §4 forbids. POLICY and terminal: the operator checks the work
+    and makes an ordinary candidate commit, or enables `auto_commit`.
+    """
+    from .wip import WipReadError, head_is_wip_of
+
+    try:
+        on_wip = head_is_wip_of(config, task.id)
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot tell whether HEAD is this task's WIP commit before the gates: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+    if not on_wip:
+        return None
+    return Refusal(
+        f"HEAD is {task.id}'s WIP commit and `auto_commit: false` makes no candidate, "
+        "so a review, a gate or the merge would take unverified WIP as the task's "
+        "result; check the work and create an ordinary candidate commit by hand (any "
+        "non-WIP commit on the branch), or enable `auto_commit`, then retry",
+        RefusalKind.POLICY,
+        terminal=True,
+    )
+
+
+def _is_wip_sha(config: ExecutorConfig, task_id: str, sha: str) -> bool | None:
+    """Whether `sha` is this task's WIP commit; None when git cannot tell."""
+    from .wip import wip_status
+
+    return wip_status(config, sha, task_id)
+
+
+def _evidence_sha(config: ExecutorConfig, task_id: str, sha: str) -> str:
+    """`sha` as evidence, or "" when it is (or may be) this task's WIP commit.
+
+    R7 keeps `gated_sha` on HEAD without a candidate when nothing judges the
+    tree; it may then name WIP, and must not be written down as the judged
+    commit. Omitting is the safe answer when git cannot tell.
+    """
+    return sha if _is_wip_sha(config, task_id, sha) is False else ""
+
+
+def task_changed_since_base(config: ExecutorConfig) -> bool:
+    """Whether the task's cumulative diff against its base is non-empty.
+
+    The harness's own files (tasks.md flips, runtime state) are not the task's
+    work. Raises `WipReadError` when git cannot answer.
+    """
+    import os
+
+    from .git_ops import runtime_state_paths
+    from .review import task_base
+    from .wip import WipReadError
+
+    root = Path(config.project_root).resolve()
+    excluded: list[str] = []
+    for path in [config.tasks_file, *runtime_state_paths(config)]:
+        rel = os.path.relpath(Path(path).resolve(), root)
+        if not rel.startswith(".."):
+            excluded.append(f":(exclude,literal){rel}")
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", task_base(config), "HEAD", "--", ".", *excluded],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if diff.returncode not in (0, 1):
+        raise WipReadError(diff.stderr.strip()[:200] or "git diff failed")
+    return diff.returncode == 1
 
 
 def _review_tree_fingerprint(config: ExecutorConfig) -> str | None:
@@ -833,6 +1279,17 @@ def _run_pre_terminal_gates(
         # over bookkeeping, so the gates simply have nothing to run against.
         logger.warning("No checkpoint commit — pre-terminal gates skipped", task_id=task.id)
         return None
+    # PR #661 blocker 1, the invariant at the one site that writes gate
+    # verdicts: neither the judged SHA nor the review checkpoint is WIP.
+    reviewed = str((facts or {}).get("review_checkpoint_sha") or "")
+    for sha in (merge_candidate, reviewed):
+        if _is_wip_sha(config, task.id, sha) is not False:
+            return Refusal(
+                f"{GATE_INSTRUMENT_ERROR_PREFIX}: refusing to bind a gate verdict to "
+                f"{sha[:12]}, which is (or cannot be proven not to be) {task.id}'s WIP commit",
+                RefusalKind.INSTRUMENT,
+                terminal=True,
+            )
 
     with ExecutorState(config) as state:
         outcome = evaluate_pre_terminal(
@@ -976,6 +1433,9 @@ def _commit_blocked_status(
     if not config.auto_commit:
         return blocked
     from .bookkeeping import commit_status_flip
+
+    # PR #661 blocker 1: `Gate-Candidate` is evidence; a WIP SHA never is.
+    candidate_sha = _evidence_sha(config, task.id, candidate_sha)
 
     try:
         problem = commit_status_flip(config, task.id, reason=blocked, candidate_sha=candidate_sha)
@@ -1204,6 +1664,37 @@ def post_done_hook(
     if not success:
         return False, None, ReviewVerdict.SKIPPED.value, "", False
 
+    # WIP of this task on the branch (retry-from-WIP spec §4). An unreadable
+    # history is not "no WIP": the no-op verdict and the candidate depend on it.
+    from .wip import WipReadError, wip_base, wip_commits
+
+    has_wip = False
+    try:
+        base = wip_base(config)
+        has_wip = base is not None and bool(wip_commits(config, task.id, base))
+    except WipReadError as e:
+        return (
+            False,
+            Refusal(
+                f"Cannot read this task's WIP history: {e}",
+                RefusalKind.INSTRUMENT,
+                terminal=True,
+            ),
+            ReviewVerdict.SKIPPED.value,
+            "",
+            False,
+        )
+    # PR #661 owner decision 2: `auto_commit: false` never makes a candidate,
+    # so a WIP HEAD here is the tip a review, a gate or the merge would take as
+    # the task's result. Refused before all of them — tests, review, gates,
+    # the DONE write and the merge — in every configuration. Where a review or
+    # a gate exists the start already refused (`execution._no_candidate_at_start`)
+    # and this is the backstop; without them, this is where a WIP tip stops.
+    if has_wip and not config.auto_commit:
+        no_candidate = _no_candidate_over_wip_refusal(task, config)
+        if no_candidate is not None:
+            return (False, no_candidate, ReviewVerdict.SKIPPED.value, "", False)
+
     # Run tests — capture output for review context
     test_output_str: str | None = None
     if config.run_tests_on_done:
@@ -1423,7 +1914,16 @@ def post_done_hook(
     if wants_candidate:
         if reporter:
             reporter.enter("commit")
-        committed_pre_review = commit_task_work(task, config) == "committed"
+        pre_review = commit_task_work(task, config)
+        committed_pre_review = pre_review == "committed"
+        if pre_review in ("empty", "failed") and config.create_git_branch:
+            candidate_refusal = (
+                _candidate_refusal(task, config)
+                if pre_review == "empty"
+                else _wip_head_refusal(task, config)
+            )
+            if candidate_refusal is not None:
+                return (False, candidate_refusal, ReviewVerdict.SKIPPED.value, "", False)
         # #157 §2.1: the tree review is about to judge. Recorded only when a
         # gate will actually use it — the dormant path stays free of git calls.
         if has_gates() and config.run_review:
@@ -1979,7 +2479,9 @@ def post_done_hook(
     # so it is included in the commit/merge. Writing it after the commit (as the
     # old code did in execution.py) left the update in the working tree post-merge
     # where it was never committed and got clobbered by the next task's branch.
+    tasks_before: str | None = None
     if config.tasks_file.exists():
+        tasks_before = config.tasks_file.read_text()
         if not update_task_status(config.tasks_file, task.id, "done"):
             logger.error(
                 "Could not record DONE status in tasks.md",
@@ -2003,6 +2505,51 @@ def post_done_hook(
         except Exception as e:
             logger.error("Commit failed", error=str(e))
             final = "failed"
+        if final == "failed" and config.create_git_branch:
+            # PR #661 acceptance round 1: the same answer as the candidate
+            # stage — a failed commit over a WIP HEAD must not be merged or
+            # recorded DONE.
+            final_refusal = _wip_head_refusal(task, config, commit="final")
+            if final_refusal is not None:
+                return _refuse_after_done_write(
+                    task, config, final_refusal, tasks_before, review_verdict.value
+                )
+        if final == "failed":
+            # PR #661 owner item 3: the commit was required and did not happen,
+            # so the attempt did not deliver. Outside a repository there is no
+            # commit to require (today's warning stands); a repository git
+            # cannot read is no better than a failed commit.
+            from .wip import WipReadError, _is_repository
+
+            try:
+                in_repo = _is_repository(config)
+            except WipReadError:
+                in_repo = True
+            if in_repo:
+                return _refuse_after_done_write(
+                    task,
+                    config,
+                    Refusal(
+                        "The final commit of the task's work failed (see the log: a "
+                        "rejecting pre-commit hook, a locked index, a `git add` error); "
+                        "nothing was merged and the task is not done. The work is still "
+                        "in the tree",
+                        RefusalKind.INSTRUMENT,
+                    ),
+                    tasks_before,
+                    review_verdict.value,
+                )
+        if final == "empty" and config.create_git_branch:
+            before_candidate = _head_sha(config)
+            candidate_refusal = _candidate_refusal(task, config)
+            if candidate_refusal is not None:
+                return _refuse_after_done_write(
+                    task, config, candidate_refusal, tasks_before, review_verdict.value
+                )
+            # Nothing judged a WIP sha (no review, no gate), so the drift
+            # check may be re-bound to the candidate that replaces it.
+            if gated_sha and gated_sha == before_candidate:
+                gated_sha = _head_sha(config)
         if wants_candidate:
             # The candidate carried the work, so this commit only ever carries
             # bookkeeping — "was it empty?" no longer answers the question. The
@@ -2013,6 +2560,23 @@ def post_done_hook(
             # Single-commit shape (#97/#103): the one commit is the work, so an
             # empty one means there was none.
             no_op = final == "empty"
+        if has_wip:
+            # The WIP commits already carry the work, so "nothing new in this
+            # attempt" says nothing; ask whether the task changed anything.
+            try:
+                no_op = not task_changed_since_base(config)
+            except WipReadError as exc:
+                return _refuse_after_done_write(
+                    task,
+                    config,
+                    Refusal(
+                        f"Cannot tell whether the task changed anything: {exc}",
+                        RefusalKind.INSTRUMENT,
+                        terminal=True,
+                    ),
+                    tasks_before,
+                    review_verdict.value,
+                )
         if no_op:
             logger.info("No changes to commit — marking task as no-op")
 
@@ -2025,12 +2589,21 @@ def post_done_hook(
         drift = _detect_candidate_drift(config, gated_sha, task.id)
         if drift is not None:
             logger.error("Refusing to merge", task_id=task.id, reason=drift)
-            return (False, drift, review_verdict.value, (review_output or "")[:2048], no_op)
+            # PR #661 owner item 4: not left DONE.
+            return _refuse_after_done_write(
+                task,
+                config,
+                drift,
+                tasks_before,
+                review_verdict.value,
+                (review_output or "")[:2048],
+            )
 
     # Merge branch to main
     if config.create_git_branch:
         if reporter:
             reporter.enter("merge")
+        merge_stash: tuple[str, str] | None = None
         try:
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)
@@ -2099,12 +2672,9 @@ def post_done_hook(
                 # Try with -f flag if there are uncommitted changes
                 error_msg = result.stderr.strip()
                 if "uncommitted" in error_msg.lower() or "changes" in error_msg.lower():
-                    # Stash changes first
-                    subprocess.run(
-                        ["git", "stash"],
-                        capture_output=True,
-                        cwd=config.project_root,
-                    )
+                    # Stash changes first — labelled, and popped back by its own
+                    # SHA on every refusal below (pre-acceptance I1).
+                    merge_stash = _merge_stash_push(config, task)
                     result = subprocess.run(
                         ["git", "checkout", main_branch],
                         capture_output=True,
@@ -2118,12 +2688,21 @@ def post_done_hook(
                         branch=main_branch,
                         stderr=error_msg,
                     )
-                    return (
-                        True,
-                        None,
+                    # PR #661 owner item 3: an undelivered task is not done.
+                    stash_note = _merge_stash_pop(config, merge_stash, branch_name)
+                    return _refuse_after_done_write(
+                        task,
+                        config,
+                        _merge_refusal(
+                            config,
+                            f"switching to {main_branch}",
+                            result.stderr or error_msg,
+                            branch_name,
+                            stash_note,
+                        ),
+                        tasks_before,
                         review_verdict.value,
                         (review_output or "")[:2048],
-                        no_op,
                     )
 
             # Merge task branch
@@ -2135,6 +2714,14 @@ def post_done_hook(
             )
             if result.returncode == 0:
                 logger.info("Merged branch", source=branch_name, target=main_branch)
+                if merge_stash is not None:
+                    # Unchanged behaviour on success (the dirt stays stashed),
+                    # but now recognisable: say which entry holds it.
+                    logger.warning(
+                        "Uncommitted changes from the task branch were stashed for the merge",
+                        stash=merge_stash[1],
+                        sha=merge_stash[0][:12],
+                    )
 
                 # Delete task branch
                 subprocess.run(
@@ -2145,18 +2732,60 @@ def post_done_hook(
                 logger.info("Deleted branch", branch=branch_name)
             else:
                 logger.warning("Merge failed", stderr=result.stderr)
-                # Return to task branch on failure
+                # Leave no half-done merge behind, then return to the task branch.
+                subprocess.run(
+                    ["git", "merge", "--abort"],
+                    capture_output=True,
+                    cwd=config.project_root,
+                )
                 subprocess.run(
                     ["git", "checkout", branch_name],
                     capture_output=True,
                     cwd=config.project_root,
                 )
+                stash_note = _merge_stash_pop(config, merge_stash, branch_name)
+                # PR #661 owner item 3: an unmerged task is not done.
+                return _refuse_after_done_write(
+                    task,
+                    config,
+                    _merge_refusal(
+                        config,
+                        f"merging into {main_branch}",
+                        f"{result.stdout}\n{result.stderr}",
+                        branch_name,
+                        stash_note,
+                    ),
+                    tasks_before,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
         except Exception as e:
             logger.error("Merge failed", error=str(e))
+            stash_note = _merge_stash_pop(config, merge_stash, get_task_branch_name(task))
+            return _refuse_after_done_write(
+                task,
+                config,
+                _merge_refusal(
+                    config,
+                    "unexpected error",
+                    str(e),
+                    get_task_branch_name(task),
+                    stash_note,
+                ),
+                tasks_before,
+                review_verdict.value,
+                (review_output or "")[:2048],
+            )
 
     # Run plugin post_done hooks
     post_done_blocked = run_plugin_hooks_for("post_done", task, config, success=success)
     if post_done_blocked is not None:
+        # Ruling R9: the ONE refusal after the DONE write that does not put the
+        # flip back. It fires after the merge and the branch deletion — the
+        # work is already in the base — so reverting DONE there (a bookkeeping
+        # commit on the base) would claim "not done" about merged work. The
+        # pre-PR behaviour stands; the DB/tasks.md disagreement is tracked in
+        # TODO `retry-wip-followups`.
         return (
             False,
             post_done_blocked,

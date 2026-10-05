@@ -174,7 +174,13 @@ class TestPreStartHook:
                 or cmd == ["git", "clean", "-fd", "--exclude=spec/"]
             ):
                 mock_result.returncode = 0
-            elif cmd == ["git", "rev-parse", "--verify", "task/task-005-setup-ci"]:
+            elif cmd == [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/heads/task/task-005-setup-ci",
+            ]:
                 # Branch does not exist yet
                 mock_result.returncode = 1
                 mock_result.stdout = ""
@@ -993,9 +999,11 @@ class TestStageEmissionPreStart:
 
 
 class TestStageEmissionPostDone:
+    @patch("spec_runner.hooks.commit_candidate_over_wip")  # git is blanket-mocked here
+    @patch("spec_runner.wip.wip_base", return_value=None)
     @patch("spec_runner.hooks.run_code_review", return_value=(ReviewVerdict.PASSED, None, "ok"))
     @patch("spec_runner.hooks.subprocess.run")
-    def test_tests_lint_commit_merge_emitted(self, mock_run, _mock_review):
+    def test_tests_lint_commit_merge_emitted(self, mock_run, _mock_review, _mock_base, _mock_cand):
         from spec_runner.stages import StageReporter
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")

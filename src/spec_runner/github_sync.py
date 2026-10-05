@@ -2,6 +2,7 @@
 
 import json
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -195,7 +196,21 @@ def export_gh(args, tasks: list[Task]):
         if task.depends_on:
             body += f"\\n**Depends on:** {', '.join(task.depends_on)}"
 
-        cmd = f'gh issue create --title "{task.id}: {task.name}" --body "{body}" --label "{labels}"'
+        # Every argument shell-quoted (pre-acceptance I3): tasks.md is text an
+        # agent can write, and this line is meant to be pasted into a shell.
+        cmd = shlex.join(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                f"{task.id}: {task.name}",
+                "--body",
+                body,
+                "--label",
+                labels,
+            ]
+        )
         print(cmd)
 
     print("```")

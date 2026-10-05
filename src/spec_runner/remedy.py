@@ -159,13 +159,12 @@ def abandon(
         return RemedyResult(RemedyOperation.ABANDON, checkpoint_id, already_applied=True)
 
     active = _swap(state, namespace, task_id, checkpoint_id)
-    state.set_checkpoint_status(namespace, active.checkpoint_id, CheckpointStatus.ABANDONED)
-    state.supersede_claims(
-        namespace, task_id, ClaimStatus.ABANDONED, checkpoint_id=active.checkpoint_id
+    # One transaction (spec 2026-10-04 §2): checkpoint, claims, remedy row and
+    # the task's workspace/baseline rows land together or not at all.
+    record = _remedy_record(
+        namespace, task_id, checkpoint_id, RemedyOperation.ABANDON, reason, actor, config
     )
-    _record(
-        state, namespace, task_id, checkpoint_id, RemedyOperation.ABANDON, reason, actor, config
-    )
+    state.abandon_atomically(namespace, task_id, active.checkpoint_id, record)
     logger.info("Red abandoned", task_id=task_id, checkpoint=checkpoint_id)
     return RemedyResult(RemedyOperation.ABANDON, checkpoint_id)
 
@@ -1202,16 +1201,62 @@ def _record(
     new_checkpoint_id: str | None = None,
 ) -> None:
     state.record_remedy(
-        RemedyRecord(
-            namespace=namespace,
-            task_id=task_id,
-            checkpoint_id=checkpoint_id,
-            operation=operation,
-            reason=reason.strip(),
-            actor=resolve_actor(config, actor),
-            timestamp=datetime.now().isoformat(),
+        _remedy_record(
+            namespace,
+            task_id,
+            checkpoint_id,
+            operation,
+            reason,
+            actor,
+            config,
             new_checkpoint_id=new_checkpoint_id,
         )
+    )
+
+
+def _remedy_record(
+    namespace: str,
+    task_id: str,
+    checkpoint_id: str,
+    operation: RemedyOperation,
+    reason: str,
+    actor: str | None,
+    config: ExecutorConfig,
+    new_checkpoint_id: str | None = None,
+) -> RemedyRecord:
+    """The record a remedy writes: stripped reason, resolved actor, now."""
+    return RemedyRecord(
+        namespace=namespace,
+        task_id=task_id,
+        checkpoint_id=checkpoint_id,
+        operation=operation,
+        reason=reason.strip(),
+        actor=resolve_actor(config, actor),
+        timestamp=datetime.now().isoformat(),
+        new_checkpoint_id=new_checkpoint_id,
+    )
+
+
+def _abandon_trust_note(config: ExecutorConfig, task_id: str) -> str:
+    """What the next start needs: abandon dropped the trusted baseline (owner, PR #661).
+
+    Abandon does not confirm the current harness, and nothing re-captures an
+    `initial` one for a started task.
+    """
+    from .git_ops import get_task_branch_name
+    from .harness import trust_remedy
+    from .task import get_task_by_id, parse_tasks_text
+
+    try:
+        task = get_task_by_id(parse_tasks_text(config.tasks_file.read_text()), task_id.upper())
+    except (OSError, ValueError):
+        task = None
+    task_branch = get_task_branch_name(task) if task is not None else None
+    return (
+        f"ℹ️  {task_id}'s workspace record and trusted harness baseline were dropped with "
+        "the red; abandon does not confirm the current harness. Under "
+        "`harness_guard: strict` the next start is refused until you "
+        f"{trust_remedy(config, task_id.upper(), bind=True, task_branch=task_branch)}."
     )
 
 
@@ -1283,6 +1328,7 @@ def cmd_tdd(args, config: ExecutorConfig) -> int:
         return 0
     if result.operation is RemedyOperation.ABANDON:
         print(f"✔️  Abandoned {result.checkpoint_id}; {args.task_id} returns to RED authoring")
+        print(_abandon_trust_note(config, args.task_id))
         return 0
 
     if result.new_checkpoint_id is None:

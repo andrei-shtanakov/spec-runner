@@ -7,9 +7,11 @@ functions used by hooks during task execution.
 import contextlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -132,7 +134,7 @@ def uncommitted_work_paths(
     """
     if _git(config, "rev-parse", "--git-dir").returncode != 0:
         return []
-    status = _git(config, "status", "--porcelain")
+    status = _git(config, "status", "--porcelain", "-z", "-uall")
     if status.returncode != 0:
         if strict:
             raise WorktreeStatusError(
@@ -147,14 +149,132 @@ def uncommitted_work_paths(
             continue
     skip.add("spec/.gitignore")  # harness-owned (#96)
     out: list[str] = []
-    for line in status.stdout.splitlines():
-        path = line[3:].strip().strip('"')
+    # `-z`: raw names (no C-quoting, so `git add -- <path>` works for a name with
+    # a space or non-ASCII); a rename/copy entry is followed by its source name.
+    # `-uall` lists untracked files singly, so an excluded file inside an untracked
+    # directory (spec/changes/<id>/tasks.md) is excluded, not carried with its folder.
+    entries = status.stdout.split("\0")
+    out_paths: list[str] = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        out_paths.append(entry[3:])
+        if (entry[0] in "RC" or entry[1] in "RC") and i < len(entries) and entries[i]:
+            # The source is part of the change: dropping it turns a staged
+            # rename into a copy (`D src` left behind) and strands it in a stash.
+            out_paths.append(entries[i])
+            i += 1
+    for path in out_paths:
         # `-wal`/`-shm` sidecars sit next to the state file, hence the prefix
         # forms — the same filter `review_pr` applies to its own dirt check.
         if any(path == s or path.startswith(s + "/") or path.startswith(s + "-") for s in skip):
             continue
         out.append(path)
     return out
+
+
+def git_with_paths(
+    config: ExecutorConfig, args: Sequence[str], paths: Sequence[str]
+) -> subprocess.CompletedProcess[str]:
+    """``git --literal-pathspecs <args>`` with ``paths`` on stdin, NUL-separated.
+
+    `uncommitted_work_paths` lists every untracked file singly (``-uall``);
+    passed as arguments, tens of thousands of them exceed the argv limit and
+    `execve` raises ``OSError: [Errno 7] Argument list too long`` (final review
+    #3). ``--pathspec-from-file=- --pathspec-file-nul`` carries any number of
+    raw names; ``--literal-pathspecs`` still applies to them. An empty list is
+    refused: for `commit --only` no pathspec would mean "the whole index".
+    Measured on git 2.54 for `add`, `commit --only`, `stash push` and `reset`.
+    """
+    if not paths:
+        raise ValueError("git_with_paths needs at least one path")
+    return subprocess.run(
+        [
+            "git",
+            "--literal-pathspecs",
+            *args,
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        input="\0".join(paths),
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+
+
+def stash_pathspecs(config: ExecutorConfig, paths: list[str]) -> list[str]:
+    """``paths`` with each wholly untracked directory collapsed to ``dir/``.
+
+    `git stash push --include-untracked -- <pathspecs>` hands its pathspecs to
+    an internal `git add` **as arguments**, even when they arrived on stdin —
+    measured on git 2.54: ``fatal: cannot exec 'add': Argument list too long``
+    with 6000 long names. Git's own default listing (``-unormal``) names an
+    untracked directory once when nothing under it is tracked; such a
+    directory is collapsed only when every untracked file under it is in
+    ``paths`` (none was excluded), so the stash takes exactly the same set.
+    Ignored files stay out either way: ``--include-untracked`` never takes
+    them. When the listing cannot be read the per-file list is returned.
+    """
+    normal = _git(config, "status", "--porcelain", "-z")
+    every = _git(config, "status", "--porcelain", "-z", "-uall")
+    if normal.returncode != 0 or every.returncode != 0:
+        return paths
+    dirs = {e[3:] for e in normal.stdout.split("\0") if e.startswith("?? ") and e.endswith("/")}
+    wanted = set(paths)
+    seen: set[str] = set()
+    spoiled: set[str] = set()
+    for entry in every.stdout.split("\0"):
+        if not entry.startswith("?? "):
+            continue
+        covering = _covering_dir(entry[3:], dirs)
+        if covering is not None:
+            seen.add(covering)
+            if entry[3:] not in wanted:
+                spoiled.add(covering)
+    collapsed = seen - spoiled
+    if not collapsed:
+        return paths
+    rest = [p for p in paths if _covering_dir(p, collapsed) is None]
+    return [*sorted(collapsed), *rest]
+
+
+def _covering_dir(path: str, dirs: set[str]) -> str | None:
+    """The member of ``dirs`` (each ending in ``/``) that ``path`` lies under, if any."""
+    parts = path.split("/")
+    for i in range(1, len(parts)):
+        prefix = "/".join(parts[:i]) + "/"
+        if prefix in dirs:
+            return prefix
+    return None
+
+
+def indexed_paths(config: ExecutorConfig) -> set[str]:
+    """Every path in the index (`ls-files` takes no pathspec file, so no argv list)."""
+    return set(_git(config, "ls-files", "-z").stdout.split("\0")) - {""}
+
+
+def unstage_vanished_paths(config: ExecutorConfig, paths: list[str]) -> None:
+    """Put back the index entry of a path gone from both index and tree.
+
+    A staged rename's source is such a path; `git stash push -- <source>`
+    refuses it ("did not match any files"), so the rename would be stashed
+    without its removal half. Restoring the entry makes it an ordinary
+    unstaged deletion that a pathspec can name. Literal pathspecs throughout;
+    `lexists`, so a dangling symlink is a path that exists, not a vanished one.
+    """
+    indexed = indexed_paths(config)
+    gone = [p for p in paths if p not in indexed and not os.path.lexists(config.project_root / p)]
+    if gone:
+        git_with_paths(config, ["reset", "-q", "HEAD"], gone)
+
+
+def checkout_back_hint(base: str) -> str:
+    """How to get back to ``base`` by hand; the branch name shell-quoted (PR #661)."""
+    return f"Resolve manually: commit/stash local changes, then `git checkout {shlex.quote(base)}`."
 
 
 def stage_all_except_runtime(config: ExecutorConfig) -> bool:
@@ -505,12 +625,19 @@ def has_remote(config: ExecutorConfig) -> bool:
 
 
 def current_branch(config: ExecutorConfig) -> str | None:
-    """The checked-out branch name, or None when detached or unreadable."""
-    result = _git(config, "rev-parse", "--abbrev-ref", "HEAD")
-    name = str(result.stdout).strip()
-    if result.returncode != 0 or not name or name == "HEAD":
+    """The checked-out branch name, or None when detached, not a repo, or unreadable.
+
+    Exact: read from the symbolic ref, never `rev-parse --abbrev-ref`, which
+    answers ``heads/<name>`` when a tag carries the branch's name — a parser
+    differential against the exact branch a workspace row records (final
+    review #2). An unborn branch (no commits yet) is named.
+    """
+    result = _git(config, "symbolic-ref", "-q", "HEAD")
+    ref = str(result.stdout).strip()
+    prefix = "refs/heads/"
+    if result.returncode != 0 or not ref.startswith(prefix) or ref == prefix:
         return None
-    return name
+    return ref[len(prefix) :]
 
 
 def make_integration_branch_name(now: datetime | None = None) -> str:
@@ -546,12 +673,18 @@ def create_integration_branch(config: ExecutorConfig, branch_name: str) -> Integ
     return IntegrationRun(branch=branch_name, base=base)
 
 
-def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> str | None:
+def finalize_integration_branch(
+    config: ExecutorConfig, run: IntegrationRun, *, return_to_base: bool = True
+) -> str | None:
     """Push the integration branch and open one PR; clean up when empty.
 
     Returns the PR URL on success, else None. When no task produced a commit,
     the empty integration branch is deleted and no PR is opened. A missing
     remote or ``gh`` degrades to a warning, leaving the branch local.
+
+    ``return_to_base=False`` leaves the working copy where it is: the caller
+    could not save an owned task's work as WIP, and a checkout would carry it
+    off its branch (spec 2026-10-04 §1).
     """
     count = _git(config, "rev-list", "--count", f"{run.base}..{run.branch}")
     try:
@@ -561,7 +694,8 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
 
     if commits == 0:
         logger.info("Integration branch empty, cleaning up", branch=run.branch)
-        _git(config, "checkout", run.base)
+        if return_to_base:
+            _git(config, "checkout", run.base)
         _git(config, "branch", "-D", run.branch)
         return None
 
@@ -589,8 +723,8 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
 
         return _open_pr(config, run, commits)
     finally:
-        back = _git(config, "checkout", run.base)
-        if back.returncode != 0:
+        back = _git(config, "checkout", run.base) if return_to_base else None
+        if back is not None and back.returncode != 0:
             # Loud, operator-facing failure (#62): a warning that scrolls away
             # left operators stranded on the run branch with a dirty tree.
             stderr = back.stderr.strip()[:200]
@@ -606,8 +740,7 @@ def finalize_integration_branch(config: ExecutorConfig, run: IntegrationRun) -> 
                 f"❌ Could not return to base branch '{run.base}' "
                 f"(working copy left on '{run.branch}'):\n"
                 f"   {stderr}\n"
-                f"   Resolve manually: commit/stash local changes, "
-                f"then `git checkout {run.base}`.",
+                f"   {checkout_back_hint(run.base)}",
                 file=sys.stderr,
             )
 

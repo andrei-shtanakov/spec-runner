@@ -6,12 +6,14 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 from .config import (
     ExecutorConfig,
     _resolve_config_path,
 )
 from .logging import get_logger
+from .phases import Refusal, RefusalKind
 from .review_pr import pr_cost_rows
 from .state import (
     ExecutorState,
@@ -645,11 +647,61 @@ def cmd_stop(args, config: ExecutorConfig):
     logger.info("Stop requested", stop_file=str(stop_file))
 
 
+class _WipNotSaved(Exception):
+    """`reset`'s WIP save refused; carries the refusal out of the locked section."""
+
+    def __init__(self, refusal: Refusal) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
+
+def refuse_forgetting_attempts(command: str, refusal: Refusal) -> NoReturn:
+    """Stop `command` before it erased any attempt record (PR #661 blocker 2).
+
+    Exit 1, or 2 for an ``instrument`` refusal (spec §5).
+    """
+    logger.error("WIP not saved; attempts kept", command=command, reason=str(refusal))
+    print(
+        f"⛔ {command}: the task's work could not be saved as WIP before its attempt "
+        f"records are erased: {refusal}.\n"
+        "   Nothing was erased and nothing destructive ran.",
+        file=sys.stderr,
+    )
+    sys.exit(2 if refusal.kind is RefusalKind.INSTRUMENT else 1)
+
+
 def cmd_reset(args, config: ExecutorConfig):
-    """Reset executor state"""
+    """Reset executor state, keeping workspaces, harness baselines and the trust audit.
+
+    The DB is rebuilt in a temporary file and swapped in atomically; any
+    failure before the swap leaves it unchanged and exits 2 (spec 2026-10-04 §2).
+    """
+    from . import state as state_mod
 
     if config.state_file.exists():
-        config.state_file.unlink()
+        # PR #661 blocker 2: the owned task's work is saved as WIP while its
+        # attempt number is still on record; a refusal erases nothing. Under
+        # the executor lock (taken by the reset, round 1 #2), so a live run's
+        # tree is never committed; an unreadable DB is the exit-2 message.
+        from .wip import save_wip_before_forgetting_attempts
+
+        def save_wip_first() -> None:
+            with ExecutorState(config) as state:
+                refusal = save_wip_before_forgetting_attempts(config, state)
+            if refusal is not None:
+                raise _WipNotSaved(refusal)
+
+        try:
+            state_mod.reset_state_preserving_workspaces(config, before_rebuild=save_wip_first)
+        except _WipNotSaved as refused:
+            refuse_forgetting_attempts("reset", refused.refusal)
+        except Exception as exc:
+            print(f"⛔ reset failed, the state DB is unchanged: {exc}")
+            raise SystemExit(2) from exc
+        print(
+            "State reset. Kept: task workspace records, harness baselines "
+            "and the harness trust audit."
+        )
         logger.info("State reset", state_file=str(config.state_file))
 
     clear_stop_file(config)

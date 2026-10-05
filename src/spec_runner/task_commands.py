@@ -21,8 +21,14 @@ Usage:
 """
 
 import argparse
+import contextlib
 import re
+import shlex
+import sqlite3
+import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh, export_gh
 from .task import (
@@ -37,6 +43,87 @@ from .task import (
     update_checklist_item,
     update_task_status,
 )
+
+if TYPE_CHECKING:
+    from .config import ExecutorConfig
+
+# === Workspace lifecycle ===
+
+
+def done_ids(tasks: list[Task]) -> set[str]:
+    """The ids `tasks.md` shows DONE."""
+    return {t.id for t in tasks if t.status == "done"}
+
+
+@contextlib.contextmanager
+def no_live_run(config: "ExecutorConfig", command: str) -> Iterator[None]:
+    """Hold the executor lock around a command that can end a task (round 1 #5).
+
+    `task done` / `task sync-from-gh` delete the ended task's baseline; under
+    a live run that would pull the trusted baseline from under an attempt in
+    progress. Refused with exit 2 before anything is written.
+    """
+    from .config import ExecutorLock
+
+    lock_path = config.state_file.with_suffix(".lock")
+    if not lock_path.parent.is_dir():
+        yield  # no state directory: no run can hold the lock
+        return
+    lock = ExecutorLock(lock_path)
+    if not lock.acquire():
+        print(
+            f"⛔ task {command}: a run holds the executor lock ({lock_path}); nothing was "
+            "written. Retry once the run has stopped.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def forget_ended_tasks(
+    config: "ExecutorConfig", tasks_file: Path, done_before: set[str], named: str = ""
+) -> None:
+    """Drop the workspace and baseline of every task a `task` command ended.
+
+    PR #661 blocker 3 (spec 2026-10-04 §2): every final DONE deletes them;
+    the trust audit is never deleted. `task done` and `task sync-from-gh`
+    record nothing in the state DB — their record of completion is the
+    `tasks.md` write — so the deletion is its own transaction, **after** that
+    write is on disk: re-read here, it is the proof the task ended. The other
+    order would lose the baseline of a task that is still open whenever the
+    status write fails, and its next start would recapture the harness from
+    carried work (the #137 class). This order's failure mode is a done task
+    with leftover rows, which is reported (exit 2) and cured by re-running
+    `task done`: the named task is forgotten whenever it is DONE, not only on
+    the flip. No state DB: nothing to delete, and none is created.
+    """
+    from .state import ExecutorState
+    from .tdd import resolve_namespace
+
+    if not config.state_file.exists():
+        return
+    done_now = done_ids(parse_tasks(tasks_file))
+    ended = sorted((done_now - done_before) | ({named} & done_now))
+    if not ended:
+        return
+    namespace = resolve_namespace(config)
+    try:
+        with ExecutorState(config) as state:
+            for task_id in ended:
+                state.forget_task_workspace(namespace, task_id)
+    except (sqlite3.Error, OSError) as exc:
+        print(
+            f"⛔ {', '.join(ended)} marked done in {tasks_file}, but the workspace and "
+            f"harness baseline records could not be deleted: {exc}. Re-run "
+            f"`spec-runner task done {shlex.quote(ended[0])}` (and so for each id) once the "
+            "state DB is writable.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+
 
 # === CLI Commands ===
 
@@ -323,8 +410,6 @@ def main():
         DeprecationWarning,
         stacklevel=2,
     )
-    import sys
-
     print(
         "WARNING: spec-task is deprecated. Use 'spec-runner task <command>' instead.",
         file=sys.stderr,
@@ -432,7 +517,16 @@ def main():
         "sync-to-gh": cmd_sync_to_gh,
     }
 
-    if args.command in write_commands:
+    if args.command in ("done", "sync-from-gh"):
+        from .config import _resolve_config_path, build_config, load_config_from_yaml
+
+        config = build_config(load_config_from_yaml(_resolve_config_path()), args)
+        with no_live_run(config, args.command):
+            done_before = done_ids(tasks)
+            write_commands[args.command](args, tasks, tasks_file)
+            named = args.task_id.upper() if args.command == "done" else ""
+            forget_ended_tasks(config, tasks_file, done_before, named)
+    elif args.command in write_commands:
         write_commands[args.command](args, tasks, tasks_file)
     elif args.command in read_commands:
         read_commands[args.command](args, tasks)

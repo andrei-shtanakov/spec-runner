@@ -223,3 +223,61 @@ class TestStatusShowsTheLastRunId:
         cmd_status(Namespace(json_output=True), config)
         payload = json.loads(capsys.readouterr().out)
         assert payload.get("run_id") is None
+
+
+class TestReset:
+    """`reset` rebuilds the DB keeping workspaces, baselines and the trust audit."""
+
+    def test_a_failing_reset_exits_2_and_leaves_the_db(self, tmp_path, monkeypatch, capsys):
+        import pytest
+
+        import spec_runner.state as state_mod
+        from spec_runner.cli_info import cmd_reset
+
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", False, 1.0, error="x")
+        before = cfg.state_file.read_bytes()
+
+        def broken(config, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(state_mod, "reset_state_preserving_workspaces", broken)
+        with pytest.raises(SystemExit) as exc:
+            cmd_reset(Namespace(logs=False), cfg)
+        assert exc.value.code == 2
+        assert cfg.state_file.read_bytes() == before
+        assert "unchanged" in capsys.readouterr().out
+
+    def test_reset_says_what_it_kept(self, tmp_path, capsys):
+        from spec_runner.cli_info import cmd_reset
+
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", False, 1.0, error="x")
+        cmd_reset(Namespace(logs=False), cfg)
+        out = capsys.readouterr().out
+        assert "workspace" in out and "baseline" in out and "trust audit" in out
+        with ExecutorState(cfg) as state:
+            assert state.get_task_state("TASK-001").attempt_count == 0
+
+    def test_a_held_lock_exits_2_and_touches_nothing(self, tmp_path, capsys):
+        import pytest
+
+        from spec_runner.cli_info import cmd_reset
+        from spec_runner.config import ExecutorLock
+
+        cfg = _cfg(tmp_path)
+        with ExecutorState(cfg) as state:
+            state.record_attempt("TASK-001", False, 1.0, error="x")
+        before = cfg.state_file.read_bytes()
+        lock = ExecutorLock(cfg.state_file.with_suffix(".lock"))
+        assert lock.acquire()
+        try:
+            with pytest.raises(SystemExit) as exc:
+                cmd_reset(Namespace(logs=False), cfg)
+        finally:
+            lock.release()
+        assert exc.value.code == 2
+        assert cfg.state_file.read_bytes() == before
+        assert "lock" in capsys.readouterr().out

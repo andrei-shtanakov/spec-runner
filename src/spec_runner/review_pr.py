@@ -23,6 +23,7 @@ Exit-code contract (stable for external callers, e.g. a Maestro hook):
 
 import json
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -1172,7 +1173,7 @@ def _check_apply_preconditions(
     if local_head != meta["head_sha"]:
         raise ReviewPrError(
             f"local HEAD {local_head[:12]} != PR head {meta['head_sha'][:12]} — "
-            f"check out the PR branch first (git checkout {meta['head_ref']})"
+            f"check out the PR branch first (`git checkout {shlex.quote(meta['head_ref'])}`)"
         )
     prev_sha = state.previous_round_sha(repo, pr_number, meta["head_sha"])
     if prev_sha:

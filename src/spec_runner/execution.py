@@ -9,8 +9,16 @@ from .bookkeeping import commit_status_flip_quietly
 from .budget import BudgetRefused, check_before_call
 from .config import ExecutorConfig
 from .errors import classify
-from .harness import HarnessBaseline, guard_error, refuse_and_restore, snapshot_contents
-from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, post_done_hook, pre_start_hook
+from .harness import (
+    HarnessBaseline,
+    HarnessStateError,
+    guard_error,
+    record_task_workspace,
+    refuse_and_restore,
+    snapshot_contents,
+    task_started,
+)
+from .hooks import GATE_INSTRUMENT_ERROR_PREFIX, StartRefused, post_done_hook, pre_start_hook
 from .lifecycle import TddPhase
 from .live_verify import VerifyOutcome, VerifyRunResult, run_live_verify
 from .logging import get_logger
@@ -39,11 +47,59 @@ from .task import (
     Task,
     update_task_status,
 )
+from .wip import WipReadError, wip_commits
 
 logger = get_logger("execution")
 
 
 # === Task Executor ===
+
+
+def _wip_continuation(
+    config: ExecutorConfig, task_id: str
+) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """The task's WIP commits as prompt input; raises `WipReadError` on git failure."""
+    from . import wip
+
+    base = wip.wip_base(config)
+    if base is None:
+        return ()
+    return tuple((sha, n, tuple(files)) for sha, n, files in wip_commits(config, task_id, base))
+
+
+def _no_candidate_at_start(task, config) -> "Refusal | None":
+    """`hooks._no_candidate_over_wip_refusal`, asked before any gate or paid call.
+
+    Owner decision (PR #661, supersedes round 2): only where a review or a gate
+    would judge the WIP — `run_review`, a registered gate, or a task mode that
+    registers the RED/claims gates on its own path (`tdd`, `verify_first`).
+    The outcome is certain there, so it is refused before any paid call.
+    Without review and gates the attempt runs (a retry continues from WIP);
+    `post_done_hook` then refuses to deliver a WIP tip. Unreadable WIP history
+    is INSTRUMENT, as at every other WIP read.
+    """
+    from . import wip
+    from .gates import has_gates
+    from .hooks import _no_candidate_over_wip_refusal
+
+    if config.auto_commit or not config.create_git_branch:
+        return None
+    judged = (
+        config.run_review
+        or has_gates()
+        or config.resolve_execution_mode(task) in ("tdd", "verify_first")
+    )
+    if not judged:
+        return None
+    try:
+        base = wip.wip_base(config)
+        if base is None or not wip_commits(config, task.id, base):
+            return None
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot read this task's WIP history: {exc}", RefusalKind.INSTRUMENT, terminal=True
+        )
+    return _no_candidate_over_wip_refusal(task, config)
 
 
 def _refuse_task(
@@ -684,8 +740,29 @@ def _execute_task(
     log_progress(f"\U0001f680 Starting: {task.name}", task_id)
     logger.info("Executing task", task_id=task_id, name=task.name)
 
-    # Pre-start hook
-    if not pre_start_hook(task, config, reporter=reporter):
+    # The persisted harness baseline (spec 2026-10-04 §2): whether the task
+    # had started is decided from what existed BEFORE this attempt's
+    # pre_start, and an untrusted or unreadable baseline refuses here —
+    # before anything destructive and before any agent call.
+    baseline = harness_baseline or HarnessBaseline()
+    try:
+        started = task_started(config, state, task)
+        trust = baseline.prepare(config, state, task, started=started)
+    except HarnessStateError as exc:
+        return _refuse_task(task, config, state, str(exc), kind=RefusalKind.INSTRUMENT)
+    if trust is not None:
+        return _refuse_task(task, config, state, trust, kind=RefusalKind.POLICY)
+
+    # Pre-start hook. A WIP refusal (spec 2026-10-04 §1) keeps its kind and
+    # names the stage it happened in — `branch`, a pre-capture stage, so the
+    # refused start does not make the task "started".
+    try:
+        hook_ok = pre_start_hook(task, config, reporter=reporter, state=state)
+    except StartRefused as exc:
+        return _refuse_task(
+            task, config, state, str(exc.refusal), kind=exc.refusal.kind, stage="branch"
+        )
+    if not hook_ok:
         logger.error("Pre-start hook failed", task_id=task_id)
         state.record_attempt(
             task_id,
@@ -694,7 +771,9 @@ def _execute_task(
             error="Pre-start hook failed",
             error_code=ErrorCode.HOOK_FAILURE,
             error_kind="hook_failure",
-            error_stage=reporter.current,
+            # A pre-capture stage (`harness.PRE_CAPTURE_STAGES`): no agent
+            # ran, so this attempt must not make the task "started".
+            error_stage=reporter.current or "setup",
         )
         return "HOOK_ERROR"
 
@@ -704,13 +783,31 @@ def _execute_task(
     # RED passes, whose writes `_commit_red` commits with the red — a snapshot
     # taken after them took their edits as the baseline. #137: the snapshot
     # belongs to the task, not the attempt, so a retry cannot re-baseline a
-    # forbidden edit into legitimacy.
-    harness_before = (harness_baseline or HarnessBaseline()).capture(config)
+    # forbidden edit into legitimacy — and, persisted (spec 2026-10-04 §2),
+    # neither can a separate `retry` invocation.
+    # The workspace row (every guard mode) is written only once the capture
+    # succeeded and before any agent call: a start that failed earlier left
+    # nothing an agent touched, and must not mark the task "started".
+    try:
+        harness_before = baseline.capture(config, state, task)
+        record_task_workspace(config, state, task)
+    except HarnessStateError as exc:
+        return _refuse_task(task, config, state, str(exc), kind=RefusalKind.INSTRUMENT)
     # What the RED/verify-first passes of *this* attempt are judged against —
     # not the task baseline: an edit an earlier attempt left behind is the
     # GREEN agent's to revert (the retry prompt says so), and refusing here
     # would take that chance away and fail every retry unpaid.
     passes_before = snapshot_contents(config)
+
+    # PR #661 blocker 1, round 1: under `auto_commit: false` no candidate can
+    # be made over a WIP HEAD, so the pre-implementation gates and the paid
+    # call would only lead to a verdict on WIP. Refused here, before both;
+    # `post_done_hook` keeps the same check as a backstop.
+    no_candidate = _no_candidate_at_start(task, config)
+    if no_candidate is not None:
+        return _refuse_task(
+            task, config, state, str(no_candidate), kind=no_candidate.kind, stage="setup"
+        )
 
     # Update status
     state.mark_running(task_id)
@@ -766,8 +863,6 @@ def _execute_task(
             # соседние отказные ветки — claims выше и запись waiver'а ниже —
             # откатывают статус ровно по этой причине.
             update_task_status(config.tasks_file, task_id, "todo")
-            from .phases import RefusalKind
-
             return _refuse_task(
                 task,
                 config,
@@ -906,25 +1001,61 @@ def _execute_task(
     task_state = state.get_task_state(task_id)
     previous_attempts = task_state.attempts if task_state.attempts else None
 
+    # Unfinished work of earlier attempts, read from the WIP trailers (never
+    # the state counter). Unreadable history is not "no WIP": refuse before
+    # the paid GREEN call rather than silently drop the continuation.
+    try:
+        continuation = _wip_continuation(config, task_id)
+    except WipReadError as exc:
+        refusal = Refusal(
+            f"Cannot read this task's WIP history: {exc}",
+            RefusalKind.INSTRUMENT,
+            terminal=True,
+        )
+        log_progress(f"⛔ {refusal}", task_id)
+        state.record_attempt(
+            task_id,
+            False,
+            0.0,
+            error=refusal,
+            error_code=_refusal_error_code(refusal),
+            error_kind=_refusal_error_kind(refusal),
+            error_stage=reporter.current,
+        )
+        # Terminal, as built: the next attempt would ask the same history the
+        # same question before any paid call (final review #8).
+        return "TERMINAL_REFUSAL"
+
     # Build RetryContext from previous failed attempts
     retry_context: RetryContext | None = None
-    if previous_attempts:
-        failed = [a for a in previous_attempts if not a.success]
-        if failed:
-            last = failed[-1]
-            retry_context = RetryContext(
-                attempt_number=task_state.attempt_count + 1,
-                max_attempts=config.max_retries,
-                previous_error_code=last.error_code or ErrorCode.UNKNOWN,
-                previous_error=last.error or "Unknown error",
-                what_was_tried=f"Previous attempt for {task.name}",
-                test_failures=(
-                    extract_test_failures(last.claude_output)
-                    if last.claude_output
-                    and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
-                    else None
-                ),
-            )
+    failed = [a for a in previous_attempts or [] if not a.success]
+    if failed:
+        last = failed[-1]
+        retry_context = RetryContext(
+            attempt_number=task_state.attempt_count + 1,
+            max_attempts=config.max_retries,
+            previous_error_code=last.error_code or ErrorCode.UNKNOWN,
+            previous_error=last.error or "Unknown error",
+            what_was_tried=f"Previous attempt for {task.name}",
+            test_failures=(
+                extract_test_failures(last.claude_output)
+                if last.claude_output
+                and last.error_code in (ErrorCode.TEST_FAILURE, ErrorCode.LINT_FAILURE)
+                else None
+            ),
+            continuation=continuation,
+        )
+    elif continuation:
+        # A fresh `retry` invocation: no failures in memory, but WIP on the branch.
+        retry_context = RetryContext(
+            attempt_number=task_state.attempt_count + 1,
+            max_attempts=config.max_retries,
+            previous_error_code=ErrorCode.UNKNOWN,
+            previous_error="previous attempt did not finish",
+            what_was_tried=f"Previous attempt for {task.name}",
+            test_failures=None,
+            continuation=continuation,
+        )
 
     # #213: the guard immediately before the implementation call — the second
     # of the three paid calls a TDD attempt makes, and the most expensive.
@@ -1178,6 +1309,8 @@ def _execute_task(
                 if config.resolve_execution_mode(task) in ("tdd", "verify_first"):
                     _record_phase(state, config, task, TddPhase.DONE)
                     _release_claims(state, config, task)
+                from .tdd import resolve_namespace
+
                 state.record_attempt(
                     task_id,
                     True,
@@ -1189,6 +1322,9 @@ def _execute_task(
                     review_status=review_status,
                     review_findings=(review_findings[:2048] if review_findings else None),
                     no_op=hook_no_op,
+                    # DONE drops the task's workspace/baseline rows in the
+                    # same transaction, in every mode (spec 2026-10-04 §2).
+                    forget_workspace=resolve_namespace(config),
                 )
                 if hook_no_op:
                     log_progress("✔️ No-op: completed without changes", task_id)

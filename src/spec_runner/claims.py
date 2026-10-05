@@ -21,6 +21,7 @@ Contract: ``docs/superpowers/specs/2026-08-11-claim-and-remedy-contracts.md`` §
 from __future__ import annotations
 
 import posixpath
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -564,7 +565,7 @@ def check_claims(
         door = (
             f"; a verify-first freeze with no confirmed red behind it — if "
             f"{claim.task_id} never reached DONE, an operator can retire it via "
-            f"`spec-runner tdd release {claim.task_id}`"
+            f"`spec-runner tdd release {shlex.quote(claim.task_id)}`"
             if state.checkpoint_by_id(namespace, claim.checkpoint_id) is None
             else ""
         )

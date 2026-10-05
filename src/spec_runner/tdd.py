@@ -217,6 +217,11 @@ def environment_id(project_root: Path) -> str:
     return lockfile_identity(project_root)
 
 
+def _quoted_reset(sha: str) -> str:
+    """`git reset --hard <sha>` for an operator to copy, the value shell-quoted."""
+    return f"git reset --hard {shlex.quote(sha)}"
+
+
 def resolve_namespace(config: ExecutorConfig) -> str:
     """Which workstream a checkpoint belongs to.
 
@@ -1037,6 +1042,47 @@ def run_red_phase(
     )
 
 
+def _wip_refusal_text(
+    config: ExecutorConfig, sha: str, what: list[str], *, finding: bool = False
+) -> str:
+    """The adoption refusal naming the red, the WIP above it and the way out.
+
+    This wedges: HEAD does not change, so every retry refuses the same way.
+    `spec-runner tdd abandon/repair` act on a recorded checkpoint and none
+    exists for an unregistered red, so the remedy is in git.
+    """
+    wip = _head(config)[:12] or "?"
+    remedy = (
+        f"make the red HEAD again — save any WIP you want to keep elsewhere, then "
+        f"`{_quoted_reset(sha[:12])}` — fix the findings in the red's file, and retry"
+        if finding
+        else "revert the WIP's change to the red's file (a new commit on top is enough) "
+        "or drop the WIP commit, then retry"
+    )
+    return (
+        f"the unregistered red {sha[:12]} sits below WIP {wip} and cannot be adopted: "
+        f"{'; '.join(what)}. A WIP commit never creates, adopts or confirms a red, and "
+        f"nothing was amended or committed. To continue: {remedy} "
+        "(`tdd abandon`/`repair` do not apply: no checkpoint exists for this red)."
+    )
+
+
+def _wip_tree_differs(config: ExecutorConfig, sha: str, selector: Selector) -> list[str]:
+    """Claimed paths whose working-tree bytes are not the red's (or unreadable)."""
+    from .claims import claim_paths_for
+
+    paths = [str(p) for p in claim_paths_for(selector)]
+    diff = subprocess.run(
+        ["git", "--literal-pathspecs", "diff", "--quiet", sha, "--", *paths],
+        cwd=config.project_root,
+        capture_output=True,
+        text=True,
+    )
+    if diff.returncode == 0:
+        return []
+    return [f"{', '.join(paths)} differ from the red's bytes (or could not be compared)"]
+
+
 def _judge_red_commit(
     config: ExecutorConfig,
     state: ExecutorState,
@@ -1084,17 +1130,40 @@ def _judge_red_commit(
             f"the red commit violates an active claim — {describe_violations(violations)}",
         )
 
+    # A red adopted from below WIP commits (retry-from-WIP spec §4): the
+    # working tree is the WIP's, not the red's. Never judge those bytes as the
+    # red's, and never repair/amend — HEAD is the WIP commit.
+    under_wip = _head(config) != sha
+    if under_wip:
+        stale = _wip_tree_differs(config, sha, parsed_selector)
+        if stale:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                _wip_refusal_text(config, sha, stale),
+                instrument_error=True,
+            )
+
     # Second: lint what is about to be frozen. After the checkpoint the file is
     # byte-immutable, so lint debt that got in is uncurable without an operator
     # and hits every later task in the suite — the same I001 trap fired three
     # times in one of the pilot's waves.
+    # Below WIP nothing may be repaired (the refusal would be certain once a
+    # fix changed bytes), so the checks run check-only: no declared fix and no
+    # paid agent round (`task`/`state` withheld).
+    judged = config
+    if under_wip:
+        from dataclasses import replace
+
+        judged = replace(config, lint_fix_command_declared=False, format_command_declared=False)
     lint_failure, tree_before_fix, lint_instrument = _lint_claimed(
-        config,
+        judged,
         parsed_selector,
-        task=task,
-        state=state,
+        task=None if under_wip else task,
+        state=None if under_wip else state,
         raw_selector=selector,
     )
+    if lint_failure and under_wip:
+        lint_failure = _wip_refusal_text(config, sha, [lint_failure], finding=True)
     if lint_failure:
         if tree_before_fix is not None:
             # A fix that ran but did not cure leaves its bytes in the tree;
@@ -1110,7 +1179,9 @@ def _judge_red_commit(
     # file is byte-locked — drift that gets in here fails every attempt by
     # construction. The earliest snapshot wins: judged against it, the absorb
     # below folds the lint fix and the format fix into the one candidate.
-    format_failure, tree_before_format, format_instrument = _format_claimed(config, parsed_selector)
+    format_failure, tree_before_format, format_instrument = _format_claimed(judged, parsed_selector)
+    if format_failure and under_wip:
+        format_failure = _wip_refusal_text(config, sha, [format_failure], finding=True)
     if tree_before_fix is None:
         tree_before_fix = tree_before_format
     if format_failure:
@@ -1120,7 +1191,19 @@ def _judge_red_commit(
             RedOutcome.UNVERIFIABLE, format_failure, instrument_error=format_instrument
         )
 
-    if tree_before_fix is not None:
+    if tree_before_fix is not None and under_wip:
+        # The repair would have to rewrite a red that sits below a WIP commit:
+        # amending would rewrite the WIP commit and put the checkpoint on a WIP
+        # tree. Refuse, leave the history as it is, undo the working-tree edit.
+        changed, created, delta_error = _fix_delta(config, tree_before_fix)
+        _rollback_fix(config, tree_before_fix)
+        if delta_error or changed or created:
+            return RedPhaseResult(
+                RedOutcome.UNVERIFIABLE,
+                _wip_refusal_text(config, sha, ["the pre-freeze lint/format repair"]),
+                instrument_error=True,
+            )
+    elif tree_before_fix is not None:
         # The fix rewrote the working tree after `_commit_red`; absorb its
         # delta into the candidate before anything replays or byte-locks, so
         # the checkpoint commit, the replayed bytes and the claim are the
@@ -2298,6 +2381,21 @@ def _parent_of(config: ExecutorConfig, sha: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _head_below_wip(config: ExecutorConfig, task_id: str) -> str:
+    """HEAD, seen through a contiguous chain of this task's WIP commits.
+
+    Only the task's own WIP commits (first parents) are skipped; the walk stops
+    at the first other commit, so another task's WIP or a foreign commit hides
+    nothing. "" when there is no commit or the chain reaches a root.
+    """
+    from .wip import is_wip_of
+
+    head = _head(config)
+    while head and is_wip_of(config, head, task_id):
+        head = _parent_of(config, head)
+    return head
+
+
 def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, selector: str) -> str:
     """A red commit this task left on the branch and never registered (#261).
 
@@ -2315,7 +2413,9 @@ def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, select
     Two conditions, both narrow, because adopting the wrong commit would put a
     checkpoint on a tree nobody proposed:
 
-    - HEAD's subject is exactly what `_commit_red` writes for **this** task and
+    - the red is HEAD, or HEAD seen through a contiguous chain of this task's
+      own WIP commits (`_head_below_wip`); the walk stops at the first other
+      commit. Its subject is exactly what `_commit_red` writes for **this** task and
       **the selector the agent just reported** — an agent that names a different
       test is not talking about this commit;
     - no checkpoint was ever recorded for it, in any status: a commit that had
@@ -2323,13 +2423,16 @@ def _unregistered_red(config: ExecutorConfig, state: ExecutorState, task, select
       it.
 
     The subject check subsumes what a baseline comparison would have caught: a
-    HEAD that is still the baseline cannot carry this task's red-commit
-    subject, because that subject is only ever written by `_commit_red`. And
+    commit that is still the baseline cannot carry this task's red-commit
+    subject, because that subject is only ever written by `_commit_red` (the
+    WIP commits skipped above carry a different subject and trailer, so they
+    cannot be mistaken for it). A red found below WIP is adopted only when it
+    needs no repair (`_judge_red_commit`). And
     the caller has already established that nothing is staged — the difference
     between "there was nothing to commit" and "the commit failed with the work
     pending", of which only the first may be adopted over.
     """
-    head = _head(config)
+    head = _head_below_wip(config, task.id)
     if not head:
         return ""
     subject = _commit_subject(config, head)
@@ -2358,10 +2461,11 @@ def _pending_unregistered_red(
     paying for a fresh authoring call (#341 BEH-28).
 
     `_unregistered_red` (#261) adopts the same residue, but only after an
-    authoring call already ran, by matching HEAD's subject against the
+    authoring call already ran, by matching the red commit's subject (HEAD, or
+    the commit below this task's WIP chain, `_head_below_wip`) against the
     selector the agent *just* reported. Before that call there is no reported
     selector to match against — so it is read back out of HEAD's own subject
-    instead: `_commit_red` writes exactly ``"{task.id}: red for {selector}"``,
+    instead (the commit below the WIP chain, not necessarily HEAD): `_commit_red` writes exactly ``"{task.id}: red for {selector}"``,
     the only place that subject is ever produced, so recovering the selector
     from it is not a guess.
 
@@ -2370,7 +2474,7 @@ def _pending_unregistered_red(
     for it in any status — adopting a registered or unrelated commit would put
     a checkpoint on a tree nobody proposed.
     """
-    head = _head(config)
+    head = _head_below_wip(config, task.id)
     if not head:
         return None
     subject = _commit_subject(config, head)
