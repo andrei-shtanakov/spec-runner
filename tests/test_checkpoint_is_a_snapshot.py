@@ -130,6 +130,17 @@ def test_rotation_spares_a_checkpoint_still_owed(tmp_path: Path) -> None:
     assert sorted(p.name for p in root.iterdir()) == ["000001-x", "000003-x", "000004-x"]
 
 
+def test_rotation_orders_copies_across_runs_by_age(tmp_path: Path) -> None:
+    import os
+
+    dirs = [tmp_path / "000007-a", tmp_path / "000008-a", tmp_path / "000001-b"]
+    for i, d in enumerate(dirs):
+        d.mkdir()
+        os.utime(d, ns=(10**18 + i, 10**18 + i))
+    checkpoint._rotate(tmp_path, set())
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["000001-b", "000008-a"]
+
+
 def test_backup_is_taken_without_a_connection(tmp_path: Path) -> None:
     config = _config(tmp_path)
     with ExecutorState(config):

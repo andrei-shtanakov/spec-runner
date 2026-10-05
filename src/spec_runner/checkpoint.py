@@ -180,7 +180,11 @@ def _canonical(body: dict[str, Any], indent: int | None = None) -> bytes:
 
 def _rotate(root: Path, owed: set[Path]) -> None:
     """Keep the newest ``KEEP_LOCAL`` copies; older ones go once delivered."""
-    copies = sorted(p for p in root.iterdir() if p.is_dir())
+    # ``sequence`` restarts per run, so names alone do not order copies of
+    # different runs; the directory's age does.
+    copies = sorted(
+        (p for p in root.iterdir() if p.is_dir()), key=lambda p: (p.stat().st_mtime_ns, p.name)
+    )
     for old in copies[:-KEEP_LOCAL]:
         if old not in owed:
             shutil.rmtree(old, ignore_errors=True)
