@@ -461,3 +461,190 @@ class TestCallsStitchToTheirAttempt:
         (attempt,) = view.attempts
         assert (attempt.task_id, attempt.attempt, attempt.outcome) == ("TASK-001", 1, "success")
         assert sorted(attempt.calls) == sorted(b_starts)
+
+
+class TestEveryTerminalPathExportsOnce:
+    """DEL-25 / AC-21: a task that ends this invocation done, failed or blocked
+    leaves exactly one attempt export -- also where `record_attempt` alone does
+    not make the task `failed` (terminal refusal, budget, a fatal error code,
+    a pre-start hook failure, `retry`). An interrupted attempt is not terminal:
+    the task is resumable, and nothing is exported for it.
+    """
+
+    TASKS_MD = "# Tasks\n\n### TASK-001: t\n🟠 P1 | ⬜ TODO | Est: 1d\n\n**Checklist:**\n- [ ] x\n"
+
+    def _config_over(self, tmp_path: Path, **over: Any) -> dict[str, Any]:
+        (tmp_path / "spec").mkdir(exist_ok=True)
+        (tmp_path / "spec" / "tasks.md").write_text(self.TASKS_MD)
+        return {
+            "state_file": tmp_path / "spec" / ".executor-state.db",
+            "logs_dir": tmp_path / "spec" / ".executor-logs",
+            "create_git_branch": False,
+            "auto_commit": False,
+            "run_tests_on_done": False,
+            "run_review": False,
+            "callback_url": "",
+            "retry_delay_seconds": 0,
+            "max_retries": 3,
+            **over,
+        }
+
+    @staticmethod
+    def _fake(result: Any, **attempt: Any) -> Any:
+        def _execute(task: Any, config: Any, state: Any, **_: Any) -> Any:
+            state.record_attempt(task.id, False, 0.1, error="x", **attempt)
+            return result
+
+        return _execute
+
+    @staticmethod
+    def _count_exports(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        from spec_runner.evidence import AttemptExport, Publisher
+
+        published: list[str] = []
+        original = Publisher.publish_or_queue
+
+        def spy(self: Any, record: Any) -> Any:
+            if isinstance(record, AttemptExport):
+                published.append(record.key)
+            return original(self, record)
+
+        monkeypatch.setattr(Publisher, "publish_or_queue", spy)
+        return published
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fake: Any,
+        before: Any = None,
+        **over: Any,
+    ) -> tuple[LocalVolumeStore, list[str], list[dict[str, Any]]]:
+        from spec_runner import execution
+        from spec_runner.state import ExecutorState
+        from spec_runner.task import Task
+
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1d")
+        published = self._count_exports(monkeypatch)
+        monkeypatch.setattr(execution, "execute_task", fake)
+        with (
+            _live_run(tmp_path, **self._config_over(tmp_path, **over)) as (store, config),
+            ExecutorState(config) as state,
+        ):
+            if before is not None:
+                before(state)
+            assert execution.run_with_retries(task, config, state) is not True
+        keys = _attempt_keys(store)
+        rows = [r["row"] for k in keys for r in _export_lines(store, k) if r["table"] == "attempts"]
+        return store, published, rows
+
+    def test_terminal_refusal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(
+            "TERMINAL_REFUSAL", error_code=ErrorCode.HOOK_FAILURE, error_kind="policy"
+        )
+        store, published, rows = self._run(tmp_path, monkeypatch, fake)
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+        assert [r["error_kind"] for r in rows] == ["policy"]
+
+    def test_fatal_error_code(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(False, error_code=ErrorCode.REVIEW_REJECTED, error_kind="review")
+        _, published, rows = self._run(tmp_path, monkeypatch, fake)
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+        assert [r["error_kind"] for r in rows] == ["review"]
+
+    def test_pre_start_hook_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(
+            "HOOK_ERROR", error_code=ErrorCode.HOOK_FAILURE, error_kind="hook_failure"
+        )
+        _, published, rows = self._run(tmp_path, monkeypatch, fake)
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+        assert [r["error_kind"] for r in rows] == ["hook_failure"]
+
+    def test_budget_after_an_attempt(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(False, error_code=ErrorCode.TEST_FAILURE, cost_usd=2.0)
+        _, published, rows = self._run(tmp_path, monkeypatch, fake, task_budget_usd=1.0)
+
+        # The budget refusal is the attempt the task ended with: the second one.
+        assert published == [attempt_key(RUN, "TASK-001", 2)]
+        assert [r["error_kind"] for r in rows] == ["budget"]
+
+    def test_budget_before_any_attempt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def spent(state: Any) -> None:
+            state.record_agent_call("TASK-001", "green", cost_usd=2.0)
+
+        fake = self._fake(True)  # never reached
+        _, published, rows = self._run(
+            tmp_path, monkeypatch, fake, before=spent, task_budget_usd=1.0
+        )
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+        assert [r["error_kind"] for r in rows] == ["budget"]
+
+    def test_exhausted_retries_export_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(False, error_code=ErrorCode.TEST_FAILURE, error_kind="test_failure")
+        _, published, rows = self._run(tmp_path, monkeypatch, fake, max_retries=2)
+
+        assert published == [attempt_key(RUN, "TASK-001", 2)]
+        assert len(rows) == 1
+
+    def test_interrupted_is_not_terminal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from spec_runner.state import ErrorCode
+
+        fake = self._fake(False, error_code=ErrorCode.INTERRUPTED, error_kind="interrupted")
+        store, published, _ = self._run(tmp_path, monkeypatch, fake)
+
+        assert published == []
+        assert _attempt_keys(store) == []
+
+    def test_mark_failed_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from spec_runner.state import ExecutorState
+
+        published = self._count_exports(monkeypatch)
+        with (
+            _live_run(tmp_path, **self._config_over(tmp_path)) as (store, config),
+            ExecutorState(config) as state,
+        ):
+            state.record_attempt("TASK-001", False, 0.1, error="x", error_kind="policy")
+            assert published == []
+            state.mark_failed("TASK-001")
+            state.mark_failed("TASK-001")
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+
+    def test_retry_that_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import argparse
+
+        from spec_runner.state import ErrorCode
+
+        published = self._count_exports(monkeypatch)
+        fake = self._fake(False, error_code=ErrorCode.TEST_FAILURE, error_kind="test_failure")
+        monkeypatch.setattr(cli, "execute_task", fake)
+        monkeypatch.setattr(cli, "_maybe_start_integration", lambda *a, **k: None)
+        monkeypatch.setattr(cli, "_enforce_spec_governance", lambda *a, **k: None)
+        monkeypatch.setattr(cli, "_enforce_clean_spec", lambda *a, **k: None)
+        with _live_run(tmp_path, **self._config_over(tmp_path)) as (store, config):
+            cli.cmd_retry(argparse.Namespace(task_id="TASK-001", fresh=False), config)
+
+        assert published == [attempt_key(RUN, "TASK-001", 1)]
+        assert len(_attempt_keys(store)) == 1

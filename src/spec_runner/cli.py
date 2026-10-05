@@ -42,6 +42,7 @@ from .config import (
 )
 from .execution import (
     execute_task,
+    export_if_terminal,
     run_with_retries,
 )
 from .git_ops import (
@@ -1936,6 +1937,9 @@ def cmd_retry(args, config: ExecutorConfig):
                 mark_all_checklist_done(config.tasks_file, task.id)
             else:
                 update_task_status(config.tasks_file, task.id, "blocked")
+                # A retry is one attempt: failing it ends the task here, even
+                # below `max_retries` (#480 DEL-25).
+                export_if_terminal(state, task.id)
             # #255: a retry that ends over the ceiling used to say nothing —
             # the pilot's completing operation was a retry, and $0.92 of
             # overshoot went unmentioned. The task's own outcome is untouched:
