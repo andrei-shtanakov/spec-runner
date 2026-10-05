@@ -612,7 +612,7 @@ def _attempt_number(config: ExecutorConfig, task_id: str) -> int | None:
 
     try:
         with _LEDGER_LOCK, ExecutorState(config) as state:
-            return state.next_evidence_attempt(task_id)
+            return int(state.next_evidence_attempt(task_id))
     except Exception:  # noqa: BLE001
         return None
 
