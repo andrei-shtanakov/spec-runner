@@ -2544,9 +2544,7 @@ def post_done_hook(
                     return _refuse_after_done_write(
                         task,
                         config,
-                        _merge_refusal(
-                            f"switching to {main_branch}", result.stderr or error_msg
-                        ),
+                        _merge_refusal(f"switching to {main_branch}", result.stderr or error_msg),
                         tasks_before,
                         review_verdict.value,
                         (review_output or "")[:2048],
