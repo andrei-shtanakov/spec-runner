@@ -85,33 +85,57 @@ def _publish(
     pipeline_id = ctx.pipeline_id if ctx is not None else None
     owned = conn is None
     live = sqlite3.connect(str(config.state_file)) if conn is None else conn
+    # The config's path, not a literal: it is namespaced like the state DB
+    # and it is the one `runtime_state_paths` keeps out of commits (#663).
+    root = Path(config.checkpoints_dir)
     try:
         sequence, checkpoint_id, supersedes = _next_identity(live, run_id)
-        # The config's path, not a literal: it is namespaced like the state DB
-        # and it is the one `runtime_state_paths` keeps out of commits (#663).
-        root = Path(config.checkpoints_dir)
         directory = root / f"{sequence:06d}-{checkpoint_id}"
-        _snapshot(live, directory / DB_FILE)
+        try:
+            _snapshot(live, directory / DB_FILE)
+            manifest = _manifest(
+                config,
+                directory,
+                run_id,
+                pipeline_id,
+                checkpoint_id,
+                sequence,
+                supersedes,
+                table,
+                task_id,
+            )
+            (directory / MANIFEST_FILE).write_bytes(_canonical(manifest, indent=2))
+        except BaseException:
+            # Half a checkpoint is no checkpoint: no copy without its manifest
+            # and no `supersedes` link to it (the sequence stays reserved).
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        publisher = ctx.publisher if ctx is not None and ctx.started else None
+        if publisher is not None:
+            publisher.enqueue_checkpoint(
+                PendingCheckpoint(
+                    run_id, sequence, checkpoint_id, directory, (DB_FILE, MANIFEST_FILE)
+                )
+            )
+        else:
+            release_directory(directory)  # no queue owes it
+        # After the enqueue: a failed link write costs one `supersedes` hop
+        # to an older real checkpoint, never the checkpoint itself.
+        _remember_last(live, run_id, checkpoint_id)
     finally:
         if owned:
             live.close()
-    manifest = _manifest(
-        config, directory, run_id, pipeline_id, checkpoint_id, sequence, supersedes, table, task_id
-    )
-    (directory / MANIFEST_FILE).write_bytes(_canonical(manifest, indent=2))
-    publisher = ctx.publisher if ctx is not None and ctx.started else None
-    if publisher is not None:
-        publisher.enqueue_checkpoint(
-            PendingCheckpoint(run_id, sequence, checkpoint_id, directory, (DB_FILE, MANIFEST_FILE))
-        )
-    else:
-        release_directory(directory)  # no queue owes it
     _rotate(root, run_id, publisher.pending_directories() if publisher is not None else set())
     return checkpoint_id
 
 
 def _next_identity(conn: sqlite3.Connection, run_id: str) -> tuple[int, str, str | None]:
-    """Advance ``sequence`` and remember the id, in the DB the snapshot copies."""
+    """Reserve the next ``sequence``; ``supersedes`` is the last written checkpoint.
+
+    Only the sequence is advanced here, before the snapshot: the link to the
+    new checkpoint is recorded by ``_remember_last`` once its manifest is on
+    disk, so a failed snapshot never becomes a later manifest's ``supersedes``.
+    """
     seq_key, last_key = f"checkpoint_seq:{run_id}", f"checkpoint_last:{run_id}"
     with conn:
         meta = dict(
@@ -120,14 +144,21 @@ def _next_identity(conn: sqlite3.Connection, run_id: str) -> tuple[int, str, str
             ).fetchall()
         )
         sequence = int(meta.get(seq_key, "0")) + 1
-        checkpoint_id = str(uuid4())
-        for key, value in ((seq_key, str(sequence)), (last_key, checkpoint_id)):
-            conn.execute(
-                "INSERT INTO executor_meta (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value),
-            )
-    return sequence, checkpoint_id, meta.get(last_key)
+        _set_meta(conn, seq_key, str(sequence))
+    return sequence, str(uuid4()), meta.get(last_key)
+
+
+def _remember_last(conn: sqlite3.Connection, run_id: str, checkpoint_id: str) -> None:
+    with conn:
+        _set_meta(conn, f"checkpoint_last:{run_id}", checkpoint_id)
+
+
+def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO executor_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
 
 
 def _snapshot(conn: sqlite3.Connection, target: Path) -> None:

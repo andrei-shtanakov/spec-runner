@@ -339,3 +339,42 @@ def test_closure_names_a_checkpoint_lost_before_delivery(
     assert ctx.close(config, exit_code=0) == 2
     err = capsys.readouterr().err
     assert gone.name in err and "lost locally" in err
+
+
+def _manifests(config: ExecutorConfig) -> list[dict[str, object]]:
+    found = [json.loads((d / MANIFEST_FILE).read_text()) for d in _dirs(config)]
+    return sorted(found, key=lambda m: int(str(m["sequence"])))
+
+
+def test_supersedes_skips_a_checkpoint_that_was_never_written(tmp_path: Path) -> None:
+    """`supersedes` is the previous checkpoint *of the run*: a snapshot that
+    failed left nothing behind, so the next manifest must not name it."""
+    config = _config(tmp_path)
+    config.checkpoints_dir.write_text("in the way")
+    with ExecutorState(config) as state:
+        state.record_attempt("T-1", True, 1.0)
+        config.checkpoints_dir.unlink()
+        state.record_attempt("T-2", True, 1.0)
+        state.record_attempt("T-3", True, 1.0)
+    first, second = _manifests(config)
+    assert first["supersedes"] is None
+    assert second["supersedes"] == first["checkpoint_id"]
+
+
+def test_a_failed_manifest_leaves_no_copy_and_no_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    real = checkpoint._manifest
+
+    def broken(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    with ExecutorState(config) as state:
+        monkeypatch.setattr(checkpoint, "_manifest", broken)
+        state.record_attempt("T-1", True, 1.0)
+        assert _dirs(config) == [], "a copy without a manifest was left behind"
+        monkeypatch.setattr(checkpoint, "_manifest", real)
+        state.record_attempt("T-2", True, 1.0)
+    (only,) = _manifests(config)
+    assert only["supersedes"] is None
