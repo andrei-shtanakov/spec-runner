@@ -222,8 +222,8 @@ def _attempts(store: ArtifactStore, run_id: str, calls: list[_Call]) -> list[Att
 
 
 def _storage_cost(store: ArtifactStore) -> float | None:
-    value = getattr(store.capabilities(), "storage_cost", None)
-    return float(value) if isinstance(value, (int, float)) else None
+    value = store.capabilities().storage_cost
+    return None if value is None else float(value)
 
 
 def _next_step(view: EvidenceView) -> NextStep:

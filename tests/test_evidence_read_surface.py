@@ -686,3 +686,39 @@ class TestNextStepNamesOnlyWhatExists:
                     parser.parse_args(argv)
                 except SystemExit as exc:  # argparse refuses: the command would fail
                     raise AssertionError(f"{view.status}: `spec-runner {command}`") from exc
+
+
+class TestStorageCost:
+    """DEL-24 / design §7.4: storage cost when the adapter reports it
+    (`StoreCapabilities.storage_cost`), otherwise the field is absent."""
+
+    def test_reported_cost_is_shown_and_valid(self, tmp_path: Path) -> None:
+        import dataclasses
+
+        from spec_runner.artifact_store import StoreCapabilities
+
+        _completed(tmp_path)
+        inner = open_store_readonly("local_volume", {"root": str(tmp_path)})
+
+        class Priced:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(inner, name)
+
+            def capabilities(self) -> StoreCapabilities:
+                return dataclasses.replace(inner.capabilities(), storage_cost=0.12)
+
+        view = evidence_cmd.collect(Priced(), RUN)  # type: ignore[arg-type]
+        data = evidence_cmd.as_dict(view)
+
+        jsonschema.validate(data, _schema("evidence-view.schema.json"))
+        assert data["storage_cost"] == 0.12
+        assert "storage cost: $0.1200" in evidence_cmd.render(view)
+
+    def test_local_volume_reports_none_and_the_field_is_absent(self, tmp_path: Path) -> None:
+        _completed(tmp_path)
+        store = open_store_readonly("local_volume", {"root": str(tmp_path)})
+
+        assert store.capabilities().storage_cost is None
+        data = evidence_cmd.as_dict(evidence_cmd.collect(store, RUN))
+        assert "storage_cost" not in data
+        jsonschema.validate(data, _schema("evidence-view.schema.json"))
