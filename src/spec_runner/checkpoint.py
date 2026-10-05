@@ -41,15 +41,9 @@ DB_FILE = "state.db"
 KEEP_LOCAL = 2
 #: ``run_id`` of a mutation made outside any invocation (library use, tests).
 LOCAL_RUN = "local"
-#: Local facts a checkpoint deliberately leaves out (CON-06).
-EXCLUDED = (
-    ".executor.lock",
-    ".<prefix>spec.lock",
-    ".executor-stop",
-    ".executor-ready",
-    "spec-runner-*",
-    ".executor-progress.txt",
-)
+#: Temporary worktrees (``tempfile.mkdtemp(prefix="spec-runner-…")``): outside
+#: the project, so a name pattern is all a manifest can say about them.
+WORKTREE_PATTERN = "spec-runner-*"
 
 
 def after_mutation(
@@ -202,13 +196,37 @@ def _manifest(
             "task_id": task_id,
         },
         "digests": {DB_FILE: _sha256(directory / DB_FILE)},
-        "excluded": list(EXCLUDED),
+        "excluded": _excluded(config),
         "degraded": False,
         "wip": "none",
         "spool": "none",
     }
     body["manifest_sha256"] = hashlib.sha256(_canonical(body)).hexdigest()
     return body
+
+
+def _excluded(config: ExecutorConfig) -> list[str]:
+    """Local facts a checkpoint deliberately leaves out (CON-06), as this
+    namespace names them: resolved from config, project-relative (BEH-14)."""
+    from .config import PROGRESS_FILE
+
+    root = Path(config.project_root)
+    paths = (
+        Path(config.state_file).with_suffix(".lock"),  # the run lock
+        config.spec_lock_file,
+        config.stop_file,
+        config.ready_file,
+    )
+    names = [_relative(path, root) for path in paths]
+    return [*names, WORKTREE_PATTERN, _relative(root / PROGRESS_FILE, root)]
+
+
+def _relative(path: Path, root: Path) -> str:
+    """Project-relative, or the bare name for a path outside the project."""
+    try:
+        return Path(path).relative_to(root).as_posix()
+    except ValueError:
+        return Path(path).name
 
 
 def _canonical(body: dict[str, Any], indent: int | None = None) -> bytes:

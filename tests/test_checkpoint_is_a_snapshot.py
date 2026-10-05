@@ -378,3 +378,42 @@ def test_a_failed_manifest_leaves_no_copy_and_no_link(
         state.record_attempt("T-2", True, 1.0)
     (only,) = _manifests(config)
     assert only["supersedes"] is None
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        (
+            "",
+            [
+                "spec/.executor-state.lock",
+                "spec/.spec.lock",
+                "spec/.executor-stop",
+                "spec/.executor-ready",
+                "spec-runner-*",
+                "spec/.executor-progress.txt",
+            ],
+        ),
+        (
+            "ws-",
+            [
+                "spec/.executor-ws-state.lock",
+                "spec/.ws-spec.lock",
+                "spec/.executor-stop",
+                "spec/.executor-ws-ready",
+                "spec-runner-*",
+                "spec/.executor-progress.txt",
+            ],
+        ),
+    ],
+)
+def test_excluded_names_the_files_of_this_namespace(
+    tmp_path: Path, prefix: str, expected: list[str]
+) -> None:
+    """CON-06: the names a consumer checks for absence are the ones this
+    namespace would write, resolved from config -- no `<prefix>` template."""
+    config = _prefixed(tmp_path / "proj", prefix)
+    with ExecutorState(config) as state:
+        state.record_attempt("T-1", True, 1.0)
+    (manifest,) = _manifests(config)
+    assert manifest["excluded"] == expected
