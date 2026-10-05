@@ -10,6 +10,7 @@ import os
 import sqlite3
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .config import ExecutorConfig
 from .git_ops import (
@@ -39,12 +40,18 @@ class WipResult:
     refusal: Refusal | None
 
 
+#: git's own words for "this is not a repository", matched in the C locale.
+NOT_A_REPOSITORY = "not a git repository"
+
+
 def _git(config: ExecutorConfig, *args: str) -> subprocess.CompletedProcess[str]:
+    """git in the C locale: a refusal is told from "no repository" by its words."""
     return subprocess.run(
         ["git", "--literal-pathspecs", *args],
         cwd=config.project_root,
         capture_output=True,
         text=True,
+        env={**os.environ, "LC_ALL": "C", "LANGUAGE": ""},
     )
 
 
@@ -220,12 +227,53 @@ def wip_status(config: ExecutorConfig, sha: str, task_id: str) -> bool | None:
         return None
 
 
+def _is_repository(config: ExecutorConfig) -> bool:
+    """Whether the project is in a repository; False only when provably not.
+
+    PR #661 blocker 4: "provably not" is git's own "not a git repository"
+    **and** no `.git` entry at the project root or above it — git reads a
+    `.git` with a corrupt `HEAD` as no repository at all and keeps walking
+    up. Any other failure (dubious ownership, a permission error) raises.
+    """
+    found = _git(config, "rev-parse", "--git-dir")
+    if found.returncode == 0:
+        return True
+    detail = found.stderr.strip()[:300] or "git rev-parse --git-dir failed"
+    if NOT_A_REPOSITORY not in found.stderr:
+        raise WipReadError(detail)
+    root = Path(config.project_root).resolve()
+    damaged = next((p for p in (root, *root.parents) if (p / ".git").exists()), None)
+    if damaged is not None:
+        raise WipReadError(f"{damaged / '.git'} exists but git cannot read it: {detail}")
+    return False
+
+
+def _require_unborn(config: ExecutorConfig, head: subprocess.CompletedProcess[str]) -> None:
+    """Return only when HEAD is provably unborn (no commit anywhere); else raise.
+
+    Unborn: HEAD is a symbolic ref and `rev-list -n1 --all` succeeds with
+    nothing. A detached HEAD, a branch naming a missing object or an
+    unreadable object store is a damaged repository, not an empty one.
+    """
+    reason = head.stderr.strip()[:200] or "HEAD does not name a commit"
+    if _git(config, "symbolic-ref", "-q", "HEAD").returncode != 0:
+        raise WipReadError(f"cannot read HEAD: {reason}")
+    listed = _git(config, "rev-list", "-n1", "--all")
+    if listed.returncode != 0:
+        raise WipReadError(
+            f"cannot read HEAD ({reason}): {listed.stderr.strip()[:200] or 'rev-list failed'}"
+        )
+    if listed.stdout.strip():
+        raise WipReadError(f"HEAD names no commit although the repository has some: {reason}")
+
+
 def wip_base(config: ExecutorConfig) -> str | None:
     """Where the task's branch forked, or None when there provably is no WIP.
 
-    No WIP can exist without a per-task branch, without a repository or any
-    commit yet (bootstrap tasks run `git init`), on the main branch itself, or
-    on a task branch with no commit of its own (merge-base == HEAD). Anything
+    No WIP can exist without a per-task branch, outside a repository or before
+    its first commit (bootstrap tasks run `git init`) — each *proven*, see
+    `_is_repository` and `_require_unborn` — on the main branch itself, or on
+    a task branch with no commit of its own (merge-base == HEAD). Anything
     else that cannot be computed raises `WipReadError` instead of reading as
     "no WIP" (review.task_base falls back to ``HEAD~1`` there).
     """
@@ -233,11 +281,12 @@ def wip_base(config: ExecutorConfig) -> str | None:
 
     if not config.create_git_branch:
         return None
-    if _git(config, "rev-parse", "--git-dir").returncode != 0:
+    if not _is_repository(config):
         return None
-    head = _git(config, "rev-parse", "--verify", "HEAD")
+    head = _git(config, "rev-parse", "--verify", "HEAD^{commit}")
     tip = head.stdout.strip()
     if head.returncode != 0 or not tip:
+        _require_unborn(config, head)
         return None
     main = get_main_branch(config)
     if current_branch(config) == main:
