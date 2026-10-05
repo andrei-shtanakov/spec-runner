@@ -287,7 +287,7 @@ class TestTaskFamilyChange:
         from spec_runner.cli import _build_parser
 
         args = _build_parser().parse_args(["task", "list", "--change", "add-x"])
-        _dispatch_task_command(args)
+        _dispatch_task_command(args, cfg)
         out = capsys.readouterr().out
         assert "TASK-002" in out
 
@@ -299,7 +299,7 @@ class TestTaskFamilyChange:
             ["task", "list", "--change", "add-x", "--spec-prefix", "p-"]
         )
         with pytest.raises(SystemExit):
-            _dispatch_task_command(args)
+            _dispatch_task_command(args, ExecutorConfig(project_root=tmp_path))
 
 
 class TestChangeParserSurface:

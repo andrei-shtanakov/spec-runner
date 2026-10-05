@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -1111,14 +1111,19 @@ class ExecutorState:
                 (key, value),
             )
 
-    def _save(self) -> None:
+    def _save(self, forget_workspaces: Iterable[tuple[str, str]] = ()) -> None:
         """Persist current in-memory state to SQLite.
 
         Called by external code (e.g. executor.py) when direct
         mutations are made to in-memory state outside record_attempt/mark_running.
+        ``forget_workspaces``: ``(namespace, task_id)`` pairs whose workspace and
+        baseline rows are deleted in the same transaction — for a caller whose
+        save is the record that ends those tasks (spec 2026-10-04 §2).
         """
         assert self._conn is not None
         with self._conn:
+            for namespace, task_id in forget_workspaces:
+                self._forget_workspace_sql(namespace, task_id)
             # Upsert all tasks
             for task_id, ts in self.tasks.items():
                 self._conn.execute(
@@ -2151,6 +2156,9 @@ class ExecutorState:
                     remedy.new_checkpoint_id,
                 ),
             )
+            # PR #661 blocker 3: the record that ends the task drops its
+            # workspace and baseline in the same transaction (spec §2).
+            self._forget_workspace_sql(namespace, task_id)
         return int(cursor.rowcount or 0)
 
     # === Task workspaces and harness baselines (spec 2026-10-04) ===
@@ -3757,6 +3765,7 @@ def recover_stale_tasks(
 
     recovered: list[str] = []
     reset_to_todo: list[str] = []
+    reconciled_done: list[str] = []
     done_tasks: set[str] | None = None
     now = datetime.now()
 
@@ -3782,6 +3791,7 @@ def recover_stale_tasks(
             # `completed_at` NULL reads as "not finished" on the stable surface.
             ts.completed_at = ts.completed_at or now.isoformat()
             recovered.append(task_id)
+            reconciled_done.append(task_id)
             continue
 
         # Stale task — recover it
@@ -3800,7 +3810,12 @@ def recover_stale_tasks(
         reset_to_todo.append(task_id)
 
     if recovered:
-        state._save()
+        # A reconciled DONE ends the task: its workspace and baseline go in
+        # the same transaction as the success it records (PR #661 blocker 3).
+        from .tdd import resolve_namespace
+
+        namespace = resolve_namespace(state.config) if reconciled_done else ""
+        state._save(forget_workspaces=[(namespace, t) for t in reconciled_done])
 
         for task_id in reset_to_todo:
             update_task_status(tasks_file, task_id, "todo")

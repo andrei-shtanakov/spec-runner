@@ -2101,7 +2101,7 @@ def cmd_doctor(args: argparse.Namespace, config: ExecutorConfig) -> None:
 # === Main ===
 
 
-def _dispatch_task_command(args: argparse.Namespace) -> None:
+def _dispatch_task_command(args: argparse.Namespace, config: ExecutorConfig) -> None:
     """Dispatch `spec-runner task <subcommand>` to task_commands functions."""
     from .github_sync import cmd_sync_from_gh, cmd_sync_to_gh, export_gh
     from .task import parse_tasks
@@ -2116,6 +2116,8 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
         cmd_show,
         cmd_start,
         cmd_stats,
+        done_ids,
+        forget_ended_tasks,
     )
 
     task_cmd = getattr(args, "task_command", None)
@@ -2162,7 +2164,11 @@ def _dispatch_task_command(args: argparse.Namespace) -> None:
     }
 
     if task_cmd in write_commands:
+        done_before = done_ids(tasks)
         write_commands[task_cmd](args, tasks, tasks_file)
+        if task_cmd in ("done", "sync-from-gh"):
+            named = args.task_id.upper() if task_cmd == "done" else ""
+            forget_ended_tasks(config, tasks_file, done_before, named)
     elif task_cmd in read_commands:
         read_commands[task_cmd](args, tasks)
 
@@ -3073,7 +3079,7 @@ def _dispatch(args, config) -> None:
 
         # Handle unified task subcommand
         if args.command == "task":
-            _dispatch_task_command(args)
+            _dispatch_task_command(args, config)
             return
 
         # Handle change-as-folder subcommand (new/list/archive)

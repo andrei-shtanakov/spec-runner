@@ -361,8 +361,8 @@ Experimental: nothing reads this yet; the gate that consumes it is slice 1c.
 The fact that a task started, and on which exact branch. Columns: `namespace`,
 `task_id`, `branch`, `started_at`, `run_id`, `bound_by` (`run` · `operator`).
 Key `(namespace, task_id)`. WIP is saved only for the task whose row names the
-current branch exactly. Written in every guard mode. Deleted at DONE and by
-`tdd abandon`; kept by `reset`.
+current branch exactly. Written in every guard mode. Deleted at every final
+DONE (see below) and by `tdd abandon`; kept by `reset`.
 
 `branch` is NULL without per-task branches, and also when a start did not end
 on the task branch — the repository had no commits yet, or the checkout
@@ -377,8 +377,8 @@ The harness guard's trusted baseline, taken before the first agent call.
 Columns: `namespace`, `task_id`, `captured_at`, `run_id`, `guard_mode`,
 `provenance` (`initial` · `operator` · `recaptured`), `surface` (JSON: every
 candidate → `file` · `dir` · `absent`). Key `(namespace, task_id)`. Under
-`strict` only `initial`/`operator` are trusted. Deleted at DONE and by
-`tdd abandon`; kept by `reset`.
+`strict` only `initial`/`operator` are trusted. Deleted at every final DONE
+and by `tdd abandon`; kept by `reset`.
 
 ### `harness_baseline_files` (experimental, 5.0.0)
 
@@ -397,8 +397,13 @@ not even by DONE, `tdd abandon` or `reset`.
 
 The three baseline-side tables are written and removed together with the record
 that ends the task: DONE inside the transaction that writes the successful
-attempt, `tdd abandon` in the same transaction as its checkpoint, claims and
-remedy writes. `reset` rebuilds the DB in a temporary file, carries these four
+attempt, `tdd complete` in the transaction that writes lifecycle DONE, the
+claim release and the remedy row, the stale-run reconciliation of a task the
+main branch shows DONE in the save that records its success, and `tdd abandon`
+in the same transaction as its checkpoint, claims and remedy writes. `task
+done` and `task sync-from-gh` write no DB record of their own: for a task they
+flip to DONE the rows are deleted in a transaction of their own after the
+`tasks.md` write (a failure exits 2; `task done` again finishes it). `reset` rebuilds the DB in a temporary file, carries these four
 tables over and replaces the file atomically. The trusted baseline lives in the
 state DB, i.e. at the same trust boundary as `tdd_claims` and `red_checkpoints`.
 

@@ -60,9 +60,17 @@ that needs an operator is the migration below.
   DB is rebuilt in a temporary file and swapped atomically; any failure before
   the swap leaves the original untouched (exit 2), and reset refuses while a run
   holds the executor lock.
-- **DONE and `tdd abandon` drop the workspace and baseline atomically** with
-  their own records. A DONE whose DB write fails (degraded mode) keeps the
-  baseline, consistently with the DONE row not being durable.
+- **Every final DONE and `tdd abandon` drop the workspace and baseline
+  atomically** with their own records; the trust audit is kept. A run's DONE
+  does it in the transaction that writes the successful attempt, `tdd complete`
+  in the one that writes lifecycle DONE, the claim release and the remedy row,
+  and the stale-run reconciliation of a task the main branch shows DONE in the
+  save that records the success. `task done` and `task sync-from-gh` record
+  nothing in the DB, so for a task they flip to DONE the deletion is its own
+  transaction after the `tasks.md` write; if it fails the command says so and
+  exits 2, and re-running `task done` finishes it. A DONE whose DB write fails
+  (degraded mode) keeps the baseline, consistently with the DONE row not being
+  durable.
 
 ### Added
 
