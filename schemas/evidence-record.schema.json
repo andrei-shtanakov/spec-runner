@@ -8,16 +8,21 @@
   "required": ["table", "task_id", "attempt", "row"],
   "properties": {
     "table": {
-      "description": "The state-DB table the row came from.",
+      "description": "The state-DB table the row came from: the tables FR-06 / AC-21 list, plus `phase_results`. `budget_authorizations` carries task-scope rows only.",
       "type": "string",
       "enum": [
         "attempts",
         "agent_calls",
-        "phase_results",
-        "tdd_phases",
         "red_checkpoints",
+        "tdd_claims",
+        "tdd_phases",
+        "tdd_remedies",
+        "phase_waivers",
+        "waivers_applied",
+        "budget_authorizations",
         "gate_verdicts",
-        "verify_evidence"
+        "verify_evidence",
+        "phase_results"
       ]
     },
     "task_id": { "type": "string" },

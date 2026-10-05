@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -288,3 +290,101 @@ class TestExportAttempt:
             jsonschema.validate(line, _schema("evidence-record.schema.json"))
         attempts = [x for x in lines if x["table"] == "attempts"]
         assert attempts[0]["row"]["cost_usd"] == 0.5
+
+
+# --- PR #665 acceptance findings ---------------------------------------------
+
+
+@contextlib.contextmanager
+def _live_run(tmp_path: Path, run_id: str = RUN, **config_over: Any) -> Iterator[tuple[Any, Any]]:
+    """A started run whose publisher writes into a local store under tmp_path."""
+    from spec_runner import run_context
+    from spec_runner.config import ExecutorConfig
+    from spec_runner.evidence import Publisher
+
+    store = LocalVolumeStore(tmp_path / "store")
+    ctx = run_context.RunContext(run_id, None, "run", "2026-10-05T10:00:00Z")
+    ctx.publisher = Publisher(store)
+    ctx.started = True
+    config = ExecutorConfig(project_root=tmp_path, **config_over)
+    run_context.install(ctx)
+    try:
+        yield store, config
+    finally:
+        run_context.install(None)
+
+
+def _export_lines(store: LocalVolumeStore, key: str) -> list[dict[str, Any]]:
+    lines = [json.loads(x) for x in (store.get(key) or b"").decode().splitlines()]
+    for line in lines:
+        jsonschema.validate(line, _schema("evidence-record.schema.json"))
+    return lines
+
+
+def _attempt_keys(store: LocalVolumeStore) -> list[str]:
+    return [k for k in store.list("") if "/attempts/" in k]
+
+
+class TestExportCarriesEveryListedTable:
+    """FR-06 / AC-21: the export lists every table the requirement names."""
+
+    def test_claim_waivers_authorization_and_remedy_are_exported(self, tmp_path: Path) -> None:
+        from spec_runner.claims import Claim
+        from spec_runner.remedy import RemedyOperation, RemedyRecord
+        from spec_runner.state import ExecutorState, PhaseOutcome
+        from spec_runner.tdd import resolve_namespace
+
+        with _live_run(tmp_path) as (store, config):
+            ns = resolve_namespace(config)
+            with ExecutorState(config) as state:
+                for task in ("TASK-001", "TASK-002"):
+                    state.record_claim(
+                        Claim(ns, task, "cp1", "sha1", f"tests/{task}.py", "blob", "t0")
+                    )
+                    state.record_waiver(task, "tests", PhaseOutcome.SKIPPED, "why", "op")
+                    state.record_waiver_applied(task, ns, "class", "sanction", "base")
+                    state.record_budget_authorization(
+                        scope="task",
+                        task_id=task,
+                        namespace=ns,
+                        new_limit_usd=5.0,
+                        recorded_spend_usd=1.0,
+                        unmeasured_calls=0,
+                        actor="op",
+                        reason="raise",
+                    )
+                    state.record_remedy(
+                        RemedyRecord(ns, task, "cp1", RemedyOperation.ABANDON, "r", "op", "t1")
+                    )
+                state.record_attempt("TASK-001", success=True, duration=1.0, cost_usd=0.5)
+
+        (key,) = _attempt_keys(store)
+        lines = _export_lines(store, key)
+        tables = {line["table"] for line in lines}
+        for table in (
+            "attempts",
+            "tdd_claims",
+            "phase_waivers",
+            "waivers_applied",
+            "budget_authorizations",
+            "tdd_remedies",
+        ):
+            assert table in tables, table
+        assert {line["row"]["task_id"] for line in lines} == {"TASK-001"}
+
+    def test_schema_enumerates_the_requirement_tables(self) -> None:
+        enum = set(_schema("evidence-record.schema.json")["properties"]["table"]["enum"])
+        required = {
+            "attempts",
+            "red_checkpoints",
+            "tdd_claims",
+            "tdd_phases",
+            "tdd_remedies",
+            "phase_waivers",
+            "waivers_applied",
+            "budget_authorizations",
+            "gate_verdicts",
+            "verify_evidence",
+            "agent_calls",
+        }
+        assert required <= enum

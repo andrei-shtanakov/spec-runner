@@ -586,17 +586,24 @@ class Publisher:
         return len(self._queue) + len(self._checkpoints) + len(self.unrecovered_losses())
 
 
-#: Tables whose rows of one task go into its attempt export (design § 6.4).
-#: `attempts` and `agent_calls` are narrowed to the invocation's `run_id`;
-#: those with a `namespace` column to the namespace (the TDD tables).
+#: Tables whose rows of one task go into its attempt export: the list of
+#: FR-06 / AC-21 (design § 6.4), plus `phase_results`. `attempts` and
+#: `agent_calls` are narrowed to the invocation's `run_id`; those with a
+#: `namespace` column to the namespace. `budget_authorizations` contributes
+#: its task-scope rows only (a run-scope row has no task).
 ATTEMPT_TABLES: tuple[str, ...] = (
     "attempts",
     "agent_calls",
-    "phase_results",
-    "tdd_phases",
     "red_checkpoints",
+    "tdd_claims",
+    "tdd_phases",
+    "tdd_remedies",
+    "phase_waivers",
+    "waivers_applied",
+    "budget_authorizations",
     "gate_verdicts",
     "verify_evidence",
+    "phase_results",
 )
 
 
@@ -609,7 +616,7 @@ def _table_rows(
     where: list[str] = ["task_id = ?"]
     params: list[str | None] = [task_id]
     if "namespace" in columns:
-        where.append("namespace = ?")
+        where.append("namespace IS ?")
         params.append(namespace)
     if table in ("attempts", "agent_calls") and "run_id" in columns:
         where.append("run_id IS ?")
