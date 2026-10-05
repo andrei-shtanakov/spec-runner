@@ -648,3 +648,41 @@ class TestEveryTerminalPathExportsOnce:
 
         assert published == [attempt_key(RUN, "TASK-001", 1)]
         assert len(_attempt_keys(store)) == 1
+
+
+class TestNextStepNamesOnlyWhatExists:
+    """BEH-37: the next step is a recommendation -- and a command it prints must run.
+
+    `restore` is DT-06 and not in this version; a recommendation that prints
+    `spec-runner restore ...` hands the operator an `invalid choice`.
+    """
+
+    @staticmethod
+    def _views(root: Path) -> list[evidence_cmd.EvidenceView]:
+        _completed(root / "closed")
+        crash = LocalVolumeStore(root / "crash")
+        _put(crash, run_start_key(RUN), _start())
+        open_call = LocalVolumeStore(root / "open")
+        _put(open_call, run_start_key(RUN), _start())
+        _call(open_call, "c9", result=False, cost=None)
+        legacy = LocalVolumeStore(root / "legacy")
+        _put(legacy, f"runs/{RUN}/task-history.log", b"x")
+        return [
+            evidence_cmd.collect(open_store_readonly("local_volume", {"root": str(root / d)}), RUN)
+            for d in ("closed", "crash", "open", "legacy")
+        ]
+
+    def test_every_printed_command_parses(self, tmp_path: Path) -> None:
+        import re
+        import shlex
+
+        parser = cli._build_parser()
+        for view in self._views(tmp_path):
+            assert view.next_step is not None
+            text = view.next_step.recommendation
+            for command in re.findall(r"spec-runner ([^`;,()\n]+)", text):
+                argv = [a for a in shlex.split(command) if not a.startswith("<")]
+                try:
+                    parser.parse_args(argv)
+                except SystemExit as exc:  # argparse refuses: the command would fail
+                    raise AssertionError(f"{view.status}: `spec-runner {command}`") from exc

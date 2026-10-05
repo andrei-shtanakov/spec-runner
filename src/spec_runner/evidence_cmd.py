@@ -30,6 +30,12 @@ STATUS_CRASH = "crash/unknown"
 STATUS_LEGACY = "legacy"
 NOT_PROVABLE_ALIVE = "не доказуемо: процесс мог быть жив"
 COST_UNKNOWN = "unknown"
+#: The recommendation names no command this version cannot run: `restore`
+#: (experimental, behind `--experimental`) is DT-06 and not shipped yet.
+RESTORE_NOT_SHIPPED = (
+    "восстановление этого прогона — подкомандой restore (экспериментальной), "
+    "которой в этой версии ещё нет"
+)
 
 
 class EvidenceError(Exception):
@@ -226,11 +232,11 @@ def _next_step(view: EvidenceView) -> NextStep:
             "restore невозможен: у прогона нет evidence-контракта",
             "не доказуемо: " + ", ".join(view.missing),
         )
-    restore = f"spec-runner restore {view.run_id} --into <dir>"
+    restore = RESTORE_NOT_SHIPPED
     if view.open_calls:
         ids = ", ".join(c.call_id for c in view.open_calls)
         return NextStep(
-            f"{restore} откажет, пока открыты вызовы ({ids}); решение по ним — за оператором",
+            f"{restore}; открыты вызовы ({ids}) — решение по ним за оператором",
             "не доказуемо: исход вызова без call-result неизвестен",
         )
     if view.status == STATUS_CRASH:
