@@ -203,6 +203,9 @@ class TestTheRunSaysWhyItFailed:
         records = [
             json.loads(line)
             for path in root.rglob("*.jsonl")
+            # The evidence store holds attempt exports (`attempts/<task>-<n>.jsonl`,
+            # #480 DEL-25): JSONL too, but evidence records, not log records.
+            if "evidence-local" not in path.parts
             for line in path.read_text().splitlines()
             if line.strip()
         ]
