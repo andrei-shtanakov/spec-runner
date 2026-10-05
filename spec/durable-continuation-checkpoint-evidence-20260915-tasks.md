@@ -833,7 +833,7 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Traces to:** [FR-03]
 
 ### TASK-004: Read-surface `evidence <run_id>`: один `collect()`, `--json`, статусы, экспорт terminal attempt
-P2 | 🔄 IN_PROGRESS   Est: 0.5d
+P2 | 🔍 REVIEW   Est: 0.5d
 
 Реализовать сценарии BEH-36, BEH-37 (DT-04, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-04
