@@ -3122,6 +3122,10 @@ class ExecutorState:
                 self._save_meta()
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("record_attempt", e, task_id=task_id)
+        else:
+            from .checkpoint import after_mutation
+
+            after_mutation(self.config, table="attempts", task_id=task_id, conn=self._conn)
 
         self._audit_attempt(task_id, attempt, state)
 

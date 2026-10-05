@@ -90,6 +90,8 @@ class RecordingStore:
     def records(self, kind: str) -> list[dict[str, Any]]:
         out = []
         for key in self.list(""):
+            if "/checkpoints/" in key:  # checkpoint files are bytes, not records
+                continue
             record = json.loads(self.objects[key])
             if record.get("kind") == kind:
                 out.append(record)
