@@ -115,3 +115,28 @@ def test_git_reset_remedy_quotes_its_sha():
     command = _quoted_reset("abc$(id)def")
     assert _no_unquoted_substitution(command)
     assert shlex.split(command) == ["git", "reset", "--hard", "abc$(id)def"]
+
+
+def test_export_gh_quotes_every_argument(capsys):
+    """Pre-acceptance I3: `task export-gh` prints `gh issue create` lines built
+    from tasks.md, which an agent can write."""
+    from spec_runner.github_sync import export_gh
+    from spec_runner.task import Task
+
+    task = Task(
+        id="TASK-001",
+        name="evil $(touch pwned) `id` \"q\"",
+        priority="p1",
+        status="todo",
+        estimate="1d $(id)",
+        milestone="M0 $(id)",
+        checklist=[("step $(touch pwned2)", False)],
+    )
+    export_gh(None, [task])
+    [line] = [x for x in capsys.readouterr().out.splitlines() if x.startswith("gh issue")]
+    assert _no_unquoted_substitution(line), line
+    argv = shlex.split(line)
+    assert argv[:3] == ["gh", "issue", "create"]
+    assert argv[argv.index("--title") + 1] == 'TASK-001: evil $(touch pwned) `id` "q"'
+    assert "step $(touch pwned2)" in argv[argv.index("--body") + 1]
+    assert argv[argv.index("--label") + 1].startswith("priority:p1,milestone:m0-$(id)")

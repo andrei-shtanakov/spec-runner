@@ -98,7 +98,8 @@ that needs an operator is the migration below.
   `git checkout <task branch> && spec-runner harness trust TASK-X --bind-branch <task branch> --reason "…"`;
   both the abandon output and the refusal name that command. Every value
   interpolated into a command the operator is told to run (branch names,
-  task ids, SHAs, PR head refs) is shell-quoted, so a branch an agent named
+  task ids, SHAs, PR head refs, and every `gh issue create` argument that
+  `task export-gh` prints from tasks.md) is shell-quoted, so a branch an agent named
   `x$(…)` cannot inject a command into a copied remedy. A DONE whose DB write fails
   (degraded mode) keeps the baseline, consistently with the DONE row not being
   durable.
