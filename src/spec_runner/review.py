@@ -605,13 +605,14 @@ def _run_reviewer(
 
 def _attempt_number(config: ExecutorConfig, task_id: str) -> int | None:
     """The attempt this review belongs to: the one `record_attempt` has not yet
-    written (a review runs before its attempt is recorded). None when the
-    state cannot be read -- a number is evidence, not a reason to skip a call."""
+    written (a review runs before its attempt is recorded), numbered within the
+    invocation like every call-start (`next_evidence_attempt`, #480). None when
+    the state cannot be read -- a number is evidence, not a reason to skip a call."""
     from .state import ExecutorState
 
     try:
         with _LEDGER_LOCK, ExecutorState(config) as state:
-            return int(state.get_task_state(task_id).attempt_count) + 1
+            return state.next_evidence_attempt(task_id)
     except Exception:  # noqa: BLE001
         return None
 

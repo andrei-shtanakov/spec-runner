@@ -1119,7 +1119,7 @@ def _execute_task(
         with paid_call.scope(
             task_id=task_id,
             provenance="green",
-            attempt=state.get_task_state(task_id).attempt_count + 1,
+            attempt=state.next_evidence_attempt(task_id),
             state=state,
             price_on_attempt=True,
             prompt=prompt,

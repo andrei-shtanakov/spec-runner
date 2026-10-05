@@ -388,3 +388,76 @@ class TestExportCarriesEveryListedTable:
             "agent_calls",
         }
         assert required <= enum
+
+
+class TestCallsStitchToTheirAttempt:
+    """BEH-36: an attempt's view links its call records, also after a plain `retry`.
+
+    Invocation A records a failed attempt; invocation B (a `retry` keeps A's
+    attempts) succeeds. B's export is `TASK-001-1` (the ordinal within B, the
+    numbering of closure `attempt_ids`), so B's call-starts -- GREEN and review
+    -- must carry 1 too, not the lifetime count 2.
+    """
+
+    def test_retry_in_a_second_invocation_links_green_and_review(self, tmp_path: Path) -> None:
+        from spec_runner import execution
+        from spec_runner.state import ExecutorState
+        from spec_runner.task import Task
+        from tests.call_doubles import (
+            Journal,
+            RecordingStore,
+            completed,
+            make_run,
+            project,
+            spawn_double,
+        )
+
+        task = Task(id="TASK-001", name="t", priority="p1", status="todo", estimate="1d")
+        cfg = project(tmp_path, run_review=True)
+        (cfg.project_root / "spec" / "tasks.md").write_text(
+            "# Tasks\n\n### TASK-001: t\n🟠 P1 | ⬜ TODO | Est: 1d\n\n**Checklist:**\n- [ ] x\n"
+        )
+        journal = Journal()
+        store = RecordingStore(journal)
+
+        def priced(text: str) -> str:
+            return json.dumps({"result": text, "total_cost_usd": 0.01, "usage": {}})
+
+        def answer(green: str) -> Any:
+            def _answer(argv: list[str]) -> Any:
+                if "Code Review Request" in " ".join(argv):
+                    return completed(argv, priced("REVIEW_PASSED"))
+                return completed(argv, priced(green))
+
+            return _answer
+
+        from spec_runner import run_context
+
+        try:
+            make_run(journal, store)
+            with spawn_double(journal, answer("TASK_FAILED: not yet")), ExecutorState(cfg) as st:
+                assert execution.execute_task(task, cfg, st) is not True
+            ctx_b = make_run(journal, store)
+            with spawn_double(journal, answer("TASK_COMPLETE")), ExecutorState(cfg) as st:
+                assert execution.execute_task(task, cfg, st) is True
+            assert ctx_b.publisher is not None
+            assert ctx_b.publisher.drain(1.0)
+        finally:
+            run_context.install(None)
+
+        prefix = f"runs/{ctx_b.run_id}/calls/"
+        b_starts = {
+            json.loads(store.objects[k])["call_id"]: json.loads(store.objects[k])
+            for k in store.list(prefix)
+            if k.endswith("/start.json")
+        }
+        assert {s["provenance"] for s in b_starts.values()} >= {"green", "review"}
+        assert {s["attempt"] for s in b_starts.values()} == {1}
+
+        store.objects[run_start_key(ctx_b.run_id)] = json.dumps(
+            _start(run_id=ctx_b.run_id)
+        ).encode()
+        view = evidence_cmd.collect(store, ctx_b.run_id)  # type: ignore[arg-type]
+        (attempt,) = view.attempts
+        assert (attempt.task_id, attempt.attempt, attempt.outcome) == ("TASK-001", 1, "success")
+        assert sorted(attempt.calls) == sorted(b_starts)

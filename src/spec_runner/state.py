@@ -219,6 +219,16 @@ class TaskState:
     def attempt_count(self) -> int:
         return len(self.attempts)
 
+    def attempts_in(self, run_id: str | None) -> int:
+        """How many of this task's attempts the invocation ``run_id`` recorded.
+
+        #480: the evidence number of an attempt -- `<task>-<n>` in closure
+        `attempt_ids`, the `attempts/<task>-<n>.jsonl` export key and the
+        call-start `attempt` -- is this ordinal within one invocation, never
+        the lifetime `attempt_count` (a `retry` keeps earlier attempts).
+        """
+        return sum(1 for a in self.attempts if a.run_id == run_id)
+
     @property
     def last_error(self) -> str | None:
         if self.attempts:
@@ -3138,8 +3148,15 @@ class ExecutorState:
             return
         from .evidence import export_attempt
 
-        ordinal = sum(1 for a in state.attempts if a.run_id == attempt.run_id)
-        export_attempt(self, task_id, ordinal)
+        export_attempt(self, task_id, state.attempts_in(attempt.run_id))
+
+    def next_evidence_attempt(self, task_id: str) -> int:
+        """The evidence number of the attempt about to be recorded (#480).
+
+        What every paid-call site puts in call-start `attempt`, so that
+        `evidence <run_id>` can join a call to the attempt export by number.
+        """
+        return self.get_task_state(task_id).attempts_in(_current_run_id()) + 1
 
     def _audit_attempt(
         self,
