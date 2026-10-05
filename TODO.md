@@ -983,13 +983,20 @@ runtime-state по инварианту конвейера «нужное для
       сохраняет их, DONE и `tdd abandon` удаляют атомарно. Таймаут, соразмерный
       задаче, — отдельная тема, здесь не делался.
       **Блокеры владельца до approve PR #661 (закрыты 2026-10-05):** (1) вердикт гейта и
-      evidence никогда не привязаны к WIP-sha — `auto_commit: false` + гейт + HEAD на WIP
-      отказан (policy, терминально) до любого гейта/ревью; `Gate-Candidate:` и строки
-      `gate_verdicts` WIP-sha не называют; (2) `retry --fresh`, сброс `run --all` и `reset`
-      сохраняют WIP до стирания попыток — трейлер больше не пишет «attempt 0»; (3) каждый
-      финальный DONE (`tdd complete`, `task done`, `task sync-from-gh`, сверка зависшей
-      задачи) удаляет workspace/baseline, аудит остаётся; (4) `wip_base` отличает «не репо»
-      и «нет коммитов» от повреждённого репо — ошибка чтения git теперь instrument-отказ.
+      evidence никогда не привязаны к WIP-sha; `auto_commit: false` кандидата не создаёт:
+      при ревью/гейте и HEAD на WIP — отказ на старте (policy, терминально), без них
+      попытки идут, но WIP-верхушка не мержится и не становится DONE; `Gate-Candidate:` и
+      строки `gate_verdicts` WIP-sha не называют; (2) `retry --fresh`, сброс `run --all` и
+      `reset` сохраняют WIP до стирания попыток — трейлер больше не пишет «attempt 0»;
+      (3) каждый финальный DONE (`tdd complete`, `task done`, `task sync-from-gh`, сверка
+      зависшей задачи) удаляет workspace/baseline, аудит остаётся; `tdd abandon` удаляет
+      их же и называет путь назад (`harness trust --bind-branch`), новый `initial` не
+      снимается; (4) `wip_base` отличает «не репо» и «нет коммитов» от повреждённого репо —
+      ошибка чтения git теперь instrument-отказ. Сверх блокеров в этом же PR:
+      упавший обязательный коммит или мерж (и без WIP) больше не завершает задачу DONE
+      (instrument), а любой отказ после записи DONE (drift-check, блокирующий `post_done`
+      плагин) возвращает статус в `tasks.md`; значения в предлагаемых shell-командах
+      (ветка, id, sha) экранируются `shlex.quote`.
 
 - [ ] **harness-baseline-trust-anchor** — доверенный baseline лежит в state DB, до которой у агента есть право записи @owner:github:andrei-shtanakov @id:harness-baseline-trust-anchor @epic:eco.spec-toolchain
       Найдено при проектировании `retry-continues-from-wip` (2026-10-05). Доверенный
@@ -1002,7 +1009,8 @@ runtime-state по инварианту конвейера «нужное для
 
 - [ ] **retry-wip-followups** — отложенное из финального ревью `retry-continues-from-wip` (решение R8, 2026-10-05) @owner:github:andrei-shtanakov @id:retry-wip-followups @epic:eco.spec-toolchain
       Известные ограничения ветки 5.0.0 (релиз ещё не опубликован). Четыре блокера
-      владельца (2026-10-05) закрыты до approve — см. done-заметку
+      владельца (2026-10-05) и два смежных случая (упавший коммит/мерж без WIP,
+      DONE-флип на drift-отказе) закрыты в PR #661 — см. done-заметку
       `retry-continues-from-wip`; ниже — отдельные исправления. По строке на пункт:
       - N в WIP-трейлере считает и отказанные старты (попытки без вызова агента).
       - Тесты: `_candidates` в детерминированном порядке; абсолютный control-plane ключ,
