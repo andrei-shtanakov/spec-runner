@@ -171,6 +171,10 @@ class RunContext:
         ):
             kind, exit_code = "failed", 2
             reason = f"{publisher.pending} record(s) were not acknowledged by the store"
+            lost = publisher.unrecovered_losses()
+            if lost:
+                names = ", ".join(f"{c.sequence:06d}-{c.checkpoint_id}" for c in lost)
+                reason += f"; checkpoint(s) lost locally before delivery: {names}"
             print(
                 f"⚠️  решение записано локально, но не доставлено: {reason}",
                 file=sys.stderr,

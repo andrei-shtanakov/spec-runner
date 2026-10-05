@@ -24,7 +24,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from .evidence import CONTRACT_VERSION, MANIFEST_FILE, PendingCheckpoint, policy_identity
+from .evidence import (
+    CONTRACT_VERSION,
+    MANIFEST_FILE,
+    RELEASED_MARKER,
+    PendingCheckpoint,
+    policy_identity,
+    release_directory,
+)
 
 if TYPE_CHECKING:
     from .config import ExecutorConfig
@@ -97,7 +104,9 @@ def _publish(
         publisher.enqueue_checkpoint(
             PendingCheckpoint(run_id, sequence, checkpoint_id, directory, (DB_FILE, MANIFEST_FILE))
         )
-    _rotate(root, publisher.pending_directories() if publisher is not None else set())
+    else:
+        release_directory(directory)  # no queue owes it
+    _rotate(root, run_id, publisher.pending_directories() if publisher is not None else set())
     return checkpoint_id
 
 
@@ -179,13 +188,37 @@ def _canonical(body: dict[str, Any], indent: int | None = None) -> bytes:
     return json.dumps(body, sort_keys=True, indent=indent).encode()
 
 
-def _rotate(root: Path, owed: set[Path]) -> None:
-    """Keep the newest ``KEEP_LOCAL`` copies; older ones go once delivered."""
+def _rotate(root: Path, run_id: str, owed: set[Path]) -> None:
+    """Keep the newest ``KEEP_LOCAL`` copies; older ones go once nobody owes them.
+
+    ``owed`` is only this process's queue. Several invocations can share one
+    state dir (``retry``/``watch`` take no lock, ``run --force`` skips it), and
+    another process's queue is invisible here, so a copy of another run is
+    deleted only when it carries ``RELEASED_MARKER``; a copy whose manifest
+    is not on disk yet is someone's write in progress and is left alone.
+    Deleting an owed copy poisoned its owner's queue for good (#663).
+    """
+    copies = []
+    for path in root.iterdir():
+        owner = _owner(path)
+        if owner is not None:
+            copies.append((owner[1], path.name, path, owner[0]))
     # ``sequence`` restarts per run, so names alone do not order copies of
-    # different runs; the directory's age does.
-    copies = sorted(
-        (p for p in root.iterdir() if p.is_dir()), key=lambda p: (p.stat().st_mtime_ns, p.name)
-    )
-    for old in copies[:-KEEP_LOCAL]:
-        if old not in owed:
+    # different runs; the manifest's age does (the directory's would move
+    # when the release marker is added).
+    copies.sort()
+    for _, _, old, owner_run in copies[:-KEEP_LOCAL]:
+        if old in owed:
+            continue
+        if owner_run == run_id or (old / RELEASED_MARKER).exists():
             shutil.rmtree(old, ignore_errors=True)
+
+
+def _owner(path: Path) -> tuple[str, int] | None:
+    """``(run_id, manifest mtime)`` of a finished copy, else None."""
+    manifest = path / MANIFEST_FILE
+    try:
+        run_id = json.loads(manifest.read_bytes())["run_id"]
+        return (str(run_id), manifest.stat().st_mtime_ns)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
