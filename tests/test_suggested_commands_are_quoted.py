@@ -125,7 +125,7 @@ def test_export_gh_quotes_every_argument(capsys):
 
     task = Task(
         id="TASK-001",
-        name="evil $(touch pwned) `id` \"q\"",
+        name='evil $(touch pwned) `id` "q"',
         priority="p1",
         status="todo",
         estimate="1d $(id)",
