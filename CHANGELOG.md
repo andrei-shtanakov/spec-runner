@@ -36,12 +36,15 @@ that needs an operator is the migration below.
   WIP commit is not a candidate: it gives no ground to the
   red gate, confirms no claim and is never the SHA a gate verdict is bound to;
   an explicit `TASK-X: candidate` commit is made over it. Under
-  `auto_commit: false` no candidate can be made, so a task whose HEAD is its
-  WIP commit is refused (policy, not retried) in every configuration — with
-  or without gates or review — right after its start, before the
-  pre-implementation gates and the paid call (and again, as a backstop,
-  before the tests, review, gates and merge of `post_done`): set
-  `auto_commit: true`, or commit or squash the WIP by hand. A commit of the
+  `auto_commit: false` no candidate is ever made automatically (WIP is still
+  saved under `create_git_branch: true`). Where a review or a gate would judge
+  the work (`run_review`, a registered gate, a `tdd`/`verify_first` task), a
+  task whose HEAD is its WIP commit is refused (policy, not retried) right
+  after its start, before the pre-implementation gates and any paid call.
+  Without review and gates the attempt runs — a retry continues from the WIP —
+  but a WIP tip is never delivered: `post_done` refuses it (policy) before the
+  tests, the DONE write and the merge. Either way: check the work and create
+  an ordinary candidate commit by hand, or enable `auto_commit`. A commit of the
   task's work that fails (a rejecting pre-commit hook, a locked index) while
   HEAD is the WIP commit is refused too — at the candidate stage and at the
   final commit alike (instrument, not retried): nothing is merged, the DONE

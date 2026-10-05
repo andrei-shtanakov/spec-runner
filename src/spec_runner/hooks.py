@@ -575,8 +575,8 @@ def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusa
     Under `auto_commit: false` the run makes no candidate, so whatever judged
     or merged the task — a gate, a review, the merge itself — would take HEAD,
     and with HEAD on this task's WIP commit that makes the WIP the candidate,
-    which spec §4 forbids. The configuration forbids the only cure, so this is
-    POLICY and terminal: no retry can change it.
+    which spec §4 forbids. POLICY and terminal: the operator checks the work
+    and makes an ordinary candidate commit, or enables `auto_commit`.
     """
     from .wip import WipReadError, head_is_wip_of
 
@@ -591,10 +591,10 @@ def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusa
     if not on_wip:
         return None
     return Refusal(
-        f"HEAD is {task.id}'s WIP commit and `auto_commit: false` forbids making a "
-        "candidate over it, so the task's result would be unverified WIP; set "
-        "`auto_commit: true`, or commit or squash the WIP by hand (any non-WIP commit "
-        "on the branch), then retry",
+        f"HEAD is {task.id}'s WIP commit and `auto_commit: false` makes no candidate, "
+        "so a review, a gate or the merge would take unverified WIP as the task's "
+        "result; check the work and create an ordinary candidate commit by hand (any "
+        "non-WIP commit on the branch), or enable `auto_commit`, then retry",
         RefusalKind.POLICY,
         terminal=True,
     )
@@ -1465,11 +1465,12 @@ def post_done_hook(
             "",
             False,
         )
-    # PR #661 blocker 1: no candidate can be made without `auto_commit`, so
-    # the task's result would be its WIP — refused in every configuration
-    # (round 2), before any test, candidate step, review, gate or merge. The
-    # same check runs right after the start (`execution._no_candidate_at_start`);
-    # this one is the backstop.
+    # PR #661 owner decision 2: `auto_commit: false` never makes a candidate,
+    # so a WIP HEAD here is the tip a review, a gate or the merge would take as
+    # the task's result. Refused before all of them — tests, review, gates,
+    # the DONE write and the merge — in every configuration. Where a review or
+    # a gate exists the start already refused (`execution._no_candidate_at_start`)
+    # and this is the backstop; without them, this is where a WIP tip stops.
     if has_wip and not config.auto_commit:
         no_candidate = _no_candidate_over_wip_refusal(task, config)
         if no_candidate is not None:

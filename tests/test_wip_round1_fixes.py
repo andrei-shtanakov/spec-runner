@@ -98,6 +98,8 @@ def _wip_head_start(repo: Path, monkeypatch, **cfg_kw):
 
 @pytest.mark.slow
 class TestRefusedBeforeThePaidCall:
+    """Round 1 + owner decision 2: refused at start where a review or gate would judge."""
+
     def test_standard_task_with_a_gate(self, repo, monkeypatch):
         from spec_runner.execution import execute_task
         from tests.test_candidate_commit import _recording_gate
@@ -112,6 +114,7 @@ class TestRefusedBeforeThePaidCall:
         assert seen == []
         assert last.error_kind == "policy"
         assert "auto_commit" in (last.error or "")
+        assert "ordinary candidate commit by hand" in (last.error or "")
         body = _git(repo, "log", "-1", "--format=%B")
         assert "Spec-Runner-WIP: TASK-070" in body, "HEAD is not the WIP (setup)"
 
@@ -126,20 +129,16 @@ class TestRefusedBeforeThePaidCall:
         assert result == "TERMINAL_REFUSAL"
         assert red == [] and spawned == []
 
-    @pytest.mark.parametrize(
-        "extra",
-        [{"run_review": False}, {"run_review": True, "review_policy": "advisory"}],
-        ids=["no-review", "advisory-review"],
-    )
-    def test_refused_without_any_gate(self, repo, monkeypatch, extra):
-        """Round 2: no gate, no or advisory review — WIP still is no candidate."""
+    def test_review_enabled_is_refused_at_start(self, repo, monkeypatch):
+        """Owner decision 2: review would judge the WIP — refused before any paid call."""
         from spec_runner import gates as gates_mod
         from spec_runner import hooks
         from spec_runner.execution import execute_task
         from spec_runner.gates import GateRegistry
-        from spec_runner.task import get_task_by_id, parse_tasks
 
-        cfg, spawned = _wip_head_start(repo, monkeypatch, run_lint_on_done=False, **extra)
+        cfg, spawned = _wip_head_start(
+            repo, monkeypatch, run_lint_on_done=False, run_review=True, review_policy="advisory"
+        )
         monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
         reviewed: list[int] = []
         monkeypatch.setattr(hooks, "run_code_review", lambda *a, **k: reviewed.append(1))
@@ -147,14 +146,35 @@ class TestRefusedBeforeThePaidCall:
         with ExecutorState(cfg) as st:
             result = execute_task(_task(), cfg, st)
             ts = st.get_task_state("TASK-070")
-            last = ts.attempts[-1]
             assert ts.status != "success"
+            last = ts.attempts[-1]
         assert result == "TERMINAL_REFUSAL"
         assert spawned == [] and reviewed == []
         assert last.error_kind == "policy"
-        assert "auto_commit: true" in (last.error or "")
-        assert "squash" in (last.error or "")
-        assert _git(repo, "rev-parse", "main") == main_before, "something was merged"
+        assert "ordinary candidate commit by hand" in (last.error or "")
+        assert "enable `auto_commit`" in (last.error or "")
+        assert _git(repo, "rev-parse", "main") == main_before
+
+    def test_no_review_no_gates_runs_then_never_delivers_wip(self, repo, monkeypatch):
+        """Owner decision 2: the attempt runs over WIP; its WIP tip is never merged/DONE."""
+        from spec_runner import gates as gates_mod
+        from spec_runner.execution import execute_task
+        from spec_runner.gates import GateRegistry
+        from spec_runner.task import get_task_by_id, parse_tasks
+
+        cfg, spawned = _wip_head_start(repo, monkeypatch, run_lint_on_done=False)
+        monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
+        main_before = _git(repo, "rev-parse", "main")
+        with ExecutorState(cfg) as st:
+            result = execute_task(_task(), cfg, st)
+            ts = st.get_task_state("TASK-070")
+            assert ts.status != "success"
+            last = ts.attempts[-1]
+        assert len(spawned) == 1, "the attempt over WIP did not run"
+        assert result == "TERMINAL_REFUSAL"
+        assert last.error_kind == "policy"
+        assert "ordinary candidate commit by hand" in (last.error or "")
+        assert _git(repo, "rev-parse", "main") == main_before, "the WIP tip was merged"
         assert _git(repo, "branch", "--show-current").strip() == BRANCH
         task = get_task_by_id(parse_tasks(repo / "spec" / "tasks.md"), "TASK-070")
         assert task is not None and task.status != "done"
@@ -245,3 +265,36 @@ def test_refusal_kind_is_policy_and_terminal_at_the_start(tmp_path):
     refusal = _no_candidate_over_wip_refusal(_task(), _cfg(tmp_path, auto_commit=False))
     assert isinstance(refusal, Refusal)
     assert refusal.kind is RefusalKind.POLICY and refusal.terminal
+
+
+@pytest.mark.slow
+def test_no_commit_retry_continues_over_wip_but_never_delivers_it(repo, monkeypatch):
+    """`--no-commit`, branching, no review or gates: attempt 1 times out, attempt 2
+    runs over the WIP (the agent is called), and the WIP tip is neither merged
+    nor recorded DONE."""
+    from spec_runner import gates as gates_mod
+    from spec_runner.execution import run_with_retries
+    from spec_runner.gates import GateRegistry
+
+    calls: list[int] = []
+
+    def _spawn(invocation, *, timeout, cwd, env):
+        calls.append(1)
+        if len(calls) == 1:
+            (repo / "feature.py").write_text("def f():\n    return 1\n")
+            raise subprocess.TimeoutExpired(invocation.argv, timeout)
+        assert (repo / "feature.py").exists(), "attempt 2 did not continue from the WIP"
+        return subprocess.CompletedProcess(invocation.argv, 0, "TASK_COMPLETE\n", "")
+
+    monkeypatch.setattr(paid_call, "_spawn", _spawn)
+    monkeypatch.setattr(gates_mod, "REGISTRY", GateRegistry())
+    cfg = _cfg(repo, auto_commit=False, run_lint_on_done=False, max_retries=3)
+    main_before = _git(repo, "rev-parse", "main")
+    with ExecutorState(cfg) as st:
+        run_with_retries(_task(), cfg, st)
+        ts = st.get_task_state("TASK-070")
+        assert ts.status != "success"
+        assert ts.attempts[-1].error_kind == "policy"
+    assert len(calls) == 2, "attempt 2 did not run, or a refused attempt was retried"
+    assert "Spec-Runner-WIP: TASK-070" in _git(repo, "log", BRANCH, "--format=%B")
+    assert _git(repo, "rev-parse", "main") == main_before

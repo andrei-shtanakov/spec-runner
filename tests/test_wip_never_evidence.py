@@ -40,7 +40,7 @@ class TestNoCandidateWithoutAutoCommit:
         assert isinstance(err, Refusal)
         assert err.kind == RefusalKind.POLICY
         assert err.terminal is True
-        assert "auto_commit" in err and "commit" in err
+        assert "auto_commit" in err and "ordinary candidate commit by hand" in err
 
     def test_review_is_not_paid_for_either(self, tmp_path, monkeypatch):
         from spec_runner import hooks
