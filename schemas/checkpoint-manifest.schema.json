@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/checkpoint-manifest.schema.json",
+  "title": "SpecRunnerCheckpointManifest",
+  "description": "The manifest of one continuation checkpoint (`runs/<run_id>/checkpoints/<seq:06d>-<checkpoint_id>/manifest.json`, #480 FR-03, design 3.3). It is put last: its acknowledgement is the checkpoint's acknowledgement. Every path is project-relative; no absolute path, PID or temporary worktree name appears. `repository`, `workstream`, `head`, `refs` and `excluded` are filled once every write site publishes (DT-05); `wip` and `spool` are `none` until WIP collection and the spool exist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "run_id",
+    "pipeline_id",
+    "checkpoint_id",
+    "sequence",
+    "supersedes",
+    "identity",
+    "join_keys",
+    "digests",
+    "excluded",
+    "degraded",
+    "wip",
+    "spool",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "contract_version": { "type": "integer", "minimum": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "pipeline_id": { "type": ["string", "null"] },
+    "checkpoint_id": {
+      "description": "UUIDv4 of this checkpoint.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sequence": {
+      "description": "Monotonic inside `run_id`, starting at 1.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "supersedes": {
+      "description": "`checkpoint_id` of the previous checkpoint of the run; null for the first.",
+      "type": ["string", "null"]
+    },
+    "identity": {
+      "description": "`evidence.PolicyIdentity`: the one identity run-start, call-start and manifest share.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "config_hash",
+        "namespace",
+        "namespace_source",
+        "spec_prefix",
+        "change_id"
+      ],
+      "properties": {
+        "contract_version": { "type": "integer", "minimum": 1 },
+        "config_hash": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string" },
+        "namespace_source": { "type": "string", "enum": ["declared", "derived", "computed"] },
+        "spec_prefix": { "type": "string" },
+        "change_id": { "type": "string" }
+      }
+    },
+    "join_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "pipeline_id", "table", "task_id"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "pipeline_id": { "type": ["string", "null"] },
+        "table": { "description": "The table whose mutation was published.", "type": "string" },
+        "task_id": { "type": ["string", "null"] }
+      }
+    },
+    "digests": {
+      "description": "file name inside the checkpoint directory -> sha256 of its bytes.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "excluded": {
+      "description": "Local facts that are deliberately not part of the checkpoint (CON-06).",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "degraded": { "type": "boolean" },
+    "wip": {
+      "description": "`none`, or the WIP artefact (DT-05).",
+      "oneOf": [
+        { "type": "string", "enum": ["none"] },
+        {
+          "type": "object",
+          "required": ["file"],
+          "properties": { "file": { "type": "string" } }
+        }
+      ]
+    },
+    "spool": {
+      "description": "`none`, or the emergency spool (DT-08).",
+      "oneOf": [
+        { "type": "string", "enum": ["none"] },
+        {
+          "type": "object",
+          "required": ["file"],
+          "properties": { "file": { "type": "string" } }
+        }
+      ]
+    },
+    "repository": {
+      "description": "Normalised remote `host/owner/repo` and every root commit (DT-05).",
+      "type": "object",
+      "properties": {
+        "remote": { "type": ["string", "null"] },
+        "root_commits": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "workstream": {
+      "type": "object",
+      "properties": {
+        "namespace": { "type": "string" },
+        "namespace_source": { "type": "string", "enum": ["declared", "derived", "computed"] }
+      }
+    },
+    "head": { "type": ["string", "null"] },
+    "refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "sha", "published"],
+        "properties": {
+          "name": { "type": "string" },
+          "sha": { "type": "string" },
+          "published": { "type": "boolean" },
+          "published_ref": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "manifest_sha256": {
+      "description": "sha256 of the canonical JSON (sorted keys, no whitespace) of this manifest without this field.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
