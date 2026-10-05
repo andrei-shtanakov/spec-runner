@@ -2439,7 +2439,15 @@ def post_done_hook(
         drift = _detect_candidate_drift(config, gated_sha, task.id)
         if drift is not None:
             logger.error("Refusing to merge", task_id=task.id, reason=drift)
-            return (False, drift, review_verdict.value, (review_output or "")[:2048], no_op)
+            # PR #661 owner item 4: not left DONE.
+            return _refuse_after_done_write(
+                task,
+                config,
+                drift,
+                tasks_before,
+                review_verdict.value,
+                (review_output or "")[:2048],
+            )
 
     # Merge branch to main
     if config.create_git_branch:
@@ -2599,12 +2607,15 @@ def post_done_hook(
     # Run plugin post_done hooks
     post_done_blocked = run_plugin_hooks_for("post_done", task, config, success=success)
     if post_done_blocked is not None:
-        return (
-            False,
+        # The attempt is recorded unsuccessful, so tasks.md must not say DONE
+        # either (PR #661 owner item 4) — even though the merge already ran.
+        return _refuse_after_done_write(
+            task,
+            config,
             post_done_blocked,
+            tasks_before,
             review_verdict.value,
             (review_output or "")[:2048],
-            False,
         )
 
     return True, None, review_verdict.value, (review_output or "")[:2048], no_op

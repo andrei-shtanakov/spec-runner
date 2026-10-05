@@ -110,7 +110,9 @@ that needs an operator is the migration below.
   put back, a committed one is reverted by a status-only bookkeeping commit).
   A failed final commit stays retryable; a failed merge is not retried (the
   repository state needs an operator). Outside a git repository there is no
-  commit to require and the old warning stands.
+  commit to require and the old warning stands. Every other refusal after the
+  DONE write — the drift check before the merge, and a blocking `post_done`
+  plugin after it — puts the DONE flip back the same way.
 
 ### Added
 
