@@ -1097,6 +1097,18 @@ runtime-state по инварианту конвейера «нужное для
       в `checkpoints_dir` не возвращаются никем. Закрыть в retention / `evidence purge`
       (TASK-012, DT-12) — по возрасту и по store, а не в ротации.
 
+- [ ] **checkpoint-snapshot-failure-fail-open** (spec-runner#480, приёмка PR #663, круг 2 — major, confidence medium) @owner:TBD @id:checkpoint-snapshot-failure-fail-open @epic:eco.spec-toolchain
+      Если снимок не удалось снять (`checkpoints_dir` недоступен на запись, read-only spec,
+      полный диск), `after_mutation` печатает предупреждение и возвращает None — в очередь
+      ничего не попадает, `drain` видит пусто, прогон закрывается успешно: гейт перед
+      closure пропускает ровно тот случай, ради которого существует. Решить вместе с
+      TASK-005 (все сайты записи, синхронный ack) / TASK-008 (degraded mode пишет spool):
+      неснятый снимок должен быть долгом, а не тишиной.
+      Рядом, minor того же круга: каждый `record_attempt` публикует полную копию state DB
+      в неизменяемый store без retention (рост O(N²) на дефолтной конфигурации — к
+      TASK-012); описание `schemas/checkpoint-manifest.schema.json` говорит «`excluded`
+      заполняется в DT-05», а поле уже `required` и заполняется в DT-03 — поправить текст.
+
 - [ ] **runtime-state-artifact-export** (spec-runner#480) @owner:TBD @id:runtime-state-artifact-export @epic:eco.spec-toolchain
       **Операторский чек-лист возобновления (2026-10-01):**
       `docs/plans/2026-10-01-operator-checklist-480-600.md` — переодобрение ЧЕТЫРЁХ узлов
