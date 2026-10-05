@@ -61,9 +61,10 @@ that needs an operator is the migration below.
   commit**, and can refuse on a partially staged path; a refusal erases
   nothing (exit 1, or 2 when the tree or the DB cannot be read). `reset` takes
   the executor lock before that save and holds it through the rebuild, so it
-  never commits a live run's tree; `run --all` saves under the run's own lock
-  (except under `--force`, which skips the lock for the whole run). `create_git_branch: false`
-  is unchanged (no WIP, tree untouched).
+  refuses while a `run` holds the lock; `watch`, `retry` and `run --force` do
+  not take that lock, so `reset` cannot see them — do not reset while they
+  run. `run --all` saves under the run's own lock (except under `--force`).
+  `create_git_branch: false` is unchanged (no WIP, tree untouched).
 - **The harness baseline is persisted** (`harness_baselines`) before the first
   agent call and reused by every later attempt and invocation; it is never
   re-captured from carried work, so a harness edit in a WIP or red commit stays a
