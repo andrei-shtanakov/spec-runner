@@ -109,7 +109,11 @@ that needs an operator is the migration below.
   still recorded DONE with its last edit uncommitted; a merge stage that could
   not switch to the base or merge (a conflict) did the same. Both now fail the
   attempt with kind `instrument` (exit 2): nothing is merged, a half-done
-  merge is aborted, and `tasks.md` is not left DONE (an uncommitted flip is
+  merge is aborted, the refusal says where the work is (committed on its
+  branch, or uncommitted in the tree), the stash the merge stage takes for a
+  dirty checkout — now labelled `spec-runner merge: TASK-X at …` instead of a
+  bare `git stash` — is popped back by its own SHA (or named, with the
+  `git stash apply` to run, when it cannot be), and `tasks.md` is not left DONE (an uncommitted flip is
   put back, a committed one is reverted by a status-only bookkeeping commit).
   A failed final commit stays retryable; a failed merge is not retried (the
   repository state needs an operator). Outside a git repository there is no

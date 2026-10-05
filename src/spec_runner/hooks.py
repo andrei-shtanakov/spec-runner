@@ -6,6 +6,7 @@ code review, testing, linting, and plugin execution around task runs.
 
 import hashlib
 import os
+import shlex
 import sqlite3
 import stat
 import subprocess
@@ -623,19 +624,91 @@ def _refuse_after_done_write(
     return (False, refusal, verdict, findings, False)
 
 
-def _merge_refusal(stage: str, detail: str) -> Refusal:
+def _merge_refusal(
+    config: ExecutorConfig, stage: str, detail: str, branch: str, stash_note: str = ""
+) -> Refusal:
     """A merge stage that could not deliver: INSTRUMENT, terminal (PR #661 item 3).
 
     Nothing was judged wrong with the work; the harness could not deliver it,
-    and a retry would meet the same repository state.
+    and a retry would meet the same repository state. The message says where
+    the work actually is (pre-acceptance I1): committed on its branch, or
+    uncommitted in the working tree, and — when the stage's own stash could
+    not be put back — in which stash entry.
     """
+    from .git_ops import uncommitted_work_paths
+
+    try:
+        dirty = uncommitted_work_paths(config, exclude=[config.tasks_file])
+        where = (
+            f"uncommitted work is in the working tree of {branch} ({len(dirty)} path(s))"
+            if dirty
+            else f"the task's work is committed on its branch {branch}"
+        )
+    except Exception:  # noqa: BLE001 - the refusal must not fail on its own wording
+        where = "the state of the working tree could not be read"
     return Refusal(
         f"Could not merge the task's branch ({stage}): {detail.strip()[:300] or 'git failed'}. "
-        "Nothing was merged and the task is not done; the work is committed on its "
-        "branch — resolve the repository state, then retry",
+        f"Nothing was merged and the task is not done; {where}"
+        f"{'; ' + stash_note if stash_note else ''} — resolve the repository state, "
+        "then retry",
         RefusalKind.INSTRUMENT,
         terminal=True,
     )
+
+
+def _merge_stash_push(config: ExecutorConfig, task: Task) -> tuple[str, str] | None:
+    """Stash the tree for the merge's checkout under a unique label; ``(sha, label)``.
+
+    Replaces a bare `git stash` (pre-acceptance I1): the entry is recognisable
+    and is later popped by its own SHA, never as "the top one". None when git
+    stashed nothing.
+    """
+    from datetime import datetime
+
+    label = f"spec-runner merge: {task.id} at {datetime.now().isoformat(timespec='seconds')}"
+    pushed = subprocess.run(
+        ["git", "stash", "push", "-m", label],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    if pushed.returncode != 0:
+        return None
+    top = subprocess.run(
+        ["git", "stash", "list", "-n", "1", "--format=%H%x00%gs"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    sha, _, subject = top.stdout.strip().partition("\0")
+    return (sha, label) if sha and label in subject else None
+
+
+def _merge_stash_pop(config: ExecutorConfig, stashed: tuple[str, str] | None) -> str:
+    """Pop exactly the merge stage's own stash; "" when restored, else a note naming it."""
+    if stashed is None:
+        return ""
+    sha, label = stashed
+    listed = subprocess.run(
+        ["git", "stash", "list", "--format=%H"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    shas = listed.stdout.split() if listed.returncode == 0 else []
+    note = (
+        f"its uncommitted work is in the stash entry “{label}” ({sha[:12]}); recover it "
+        f"with `git stash apply {shlex.quote(sha)}`"
+    )
+    if sha not in shas:
+        return note
+    popped = subprocess.run(
+        ["git", "stash", "pop", f"stash@{{{shas.index(sha)}}}"],
+        capture_output=True,
+        text=True,
+        cwd=config.project_root,
+    )
+    return "" if popped.returncode == 0 else note
 
 
 def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
@@ -2453,6 +2526,7 @@ def post_done_hook(
     if config.create_git_branch:
         if reporter:
             reporter.enter("merge")
+        merge_stash: tuple[str, str] | None = None
         try:
             branch_name = get_task_branch_name(task)
             main_branch = get_main_branch(config)
@@ -2521,12 +2595,9 @@ def post_done_hook(
                 # Try with -f flag if there are uncommitted changes
                 error_msg = result.stderr.strip()
                 if "uncommitted" in error_msg.lower() or "changes" in error_msg.lower():
-                    # Stash changes first
-                    subprocess.run(
-                        ["git", "stash"],
-                        capture_output=True,
-                        cwd=config.project_root,
-                    )
+                    # Stash changes first — labelled, and popped back by its own
+                    # SHA on every refusal below (pre-acceptance I1).
+                    merge_stash = _merge_stash_push(config, task)
                     result = subprocess.run(
                         ["git", "checkout", main_branch],
                         capture_output=True,
@@ -2541,10 +2612,17 @@ def post_done_hook(
                         stderr=error_msg,
                     )
                     # PR #661 owner item 3: an undelivered task is not done.
+                    stash_note = _merge_stash_pop(config, merge_stash)
                     return _refuse_after_done_write(
                         task,
                         config,
-                        _merge_refusal(f"switching to {main_branch}", result.stderr or error_msg),
+                        _merge_refusal(
+                            config,
+                            f"switching to {main_branch}",
+                            result.stderr or error_msg,
+                            branch_name,
+                            stash_note,
+                        ),
                         tasks_before,
                         review_verdict.value,
                         (review_output or "")[:2048],
@@ -2559,6 +2637,14 @@ def post_done_hook(
             )
             if result.returncode == 0:
                 logger.info("Merged branch", source=branch_name, target=main_branch)
+                if merge_stash is not None:
+                    # Unchanged behaviour on success (the dirt stays stashed),
+                    # but now recognisable: say which entry holds it.
+                    logger.warning(
+                        "Uncommitted changes from the task branch were stashed for the merge",
+                        stash=merge_stash[1],
+                        sha=merge_stash[0][:12],
+                    )
 
                 # Delete task branch
                 subprocess.run(
@@ -2580,12 +2666,17 @@ def post_done_hook(
                     capture_output=True,
                     cwd=config.project_root,
                 )
+                stash_note = _merge_stash_pop(config, merge_stash)
                 # PR #661 owner item 3: an unmerged task is not done.
                 return _refuse_after_done_write(
                     task,
                     config,
                     _merge_refusal(
-                        f"merging into {main_branch}", f"{result.stdout}\n{result.stderr}"
+                        config,
+                        f"merging into {main_branch}",
+                        f"{result.stdout}\n{result.stderr}",
+                        branch_name,
+                        stash_note,
                     ),
                     tasks_before,
                     review_verdict.value,
@@ -2593,10 +2684,17 @@ def post_done_hook(
                 )
         except Exception as e:
             logger.error("Merge failed", error=str(e))
+            stash_note = _merge_stash_pop(config, merge_stash)
             return _refuse_after_done_write(
                 task,
                 config,
-                _merge_refusal("unexpected error", str(e)),
+                _merge_refusal(
+                    config,
+                    "unexpected error",
+                    str(e),
+                    get_task_branch_name(task),
+                    stash_note,
+                ),
                 tasks_before,
                 review_verdict.value,
                 (review_output or "")[:2048],
