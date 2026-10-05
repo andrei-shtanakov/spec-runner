@@ -95,7 +95,7 @@ that needs an operator is the migration below.
   the current harness and never leads to a new `initial` capture: under
   `strict` the next start on the surviving branch is refused until the
   operator restores and checks the harness and runs
-  `spec-runner harness trust TASK-X --bind-branch <current branch> --reason "…"`;
+  `git checkout <task branch> && spec-runner harness trust TASK-X --bind-branch <task branch> --reason "…"`;
   both the abandon output and the refusal name that command. Every value
   interpolated into a command the operator is told to run (branch names,
   task ids, SHAs, PR head refs) is shell-quoted, so a branch an agent named
@@ -123,9 +123,12 @@ that needs an operator is the migration below.
   audited operator confirmation that the task's restored, checked harness is its
   trusted baseline. Mandatory reason, recorded actor, refused while the executor
   lock is held or under `SPEC_RUNNER_AGENT`; binding, snapshot and audit row are
-  one transaction. `--bind-branch` names the current branch and binds a task
-  with no workspace record, or one whose record names no branch. It is not a
-  way around a refusal.
+  one transaction. `--bind-branch` binds a task with no workspace record, or
+  one whose record names no branch; it must be the task's own branch
+  (`task/<task-id>-…`, as the run names it) and the one checked out — the main
+  branch, an integration branch or another task's branch is refused (exit 1),
+  since a bound branch is where the task's WIP is committed. It is not a way
+  around a refusal.
 
 - **Run identity, run-start/closure and one seam for every paid call** (#480
   DT-02). `cli.main` mints one full UUIDv4 `run_id` per invocation (the
@@ -262,7 +265,7 @@ that needs an operator is the migration below.
 
 A task started before 5.0.0 has no trusted harness state. Under
 `harness_guard: strict` its next start is refused. `--bind-branch` must name the
-branch that is checked out, so: check out the task's branch
+task's own branch, checked out, so: check out the task's branch
 (`git switch task/task-x-…`), restore the task's harness files there and check
 them (for instance against the main branch), and only then confirm them with
 `spec-runner harness trust TASK-X --bind-branch <that branch> --reason "…"`.

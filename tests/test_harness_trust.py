@@ -15,7 +15,7 @@ from spec_runner.state import ExecutorState
 from spec_runner.tdd import resolve_namespace
 from tests.test_task_workspace_state import _Proxy
 
-BRANCH = "task/task-100-w"
+BRANCH = "task/task-100-work"
 
 
 def _git(root: Path, *a: str) -> str:
@@ -82,8 +82,12 @@ def test_without_a_workspace_bind_branch_is_required_and_must_be_current(repo):
     cfg = _cfg(repo)
     with pytest.raises(TrustError, match="--bind-branch"):
         _trust(cfg, reason="checked")
-    with pytest.raises(TrustError, match="current branch"):
+    with pytest.raises(TrustError, match="task's branch"):
         _trust(cfg, reason="checked", bind_branch="task/other")
+    _git(repo, "switch", "-q", "main")
+    with pytest.raises(TrustError, match="current branch"):
+        _trust(cfg, reason="checked", bind_branch=BRANCH)
+    _git(repo, "switch", "-q", BRANCH)
     _trust(cfg, reason="checked", bind_branch=BRANCH)
     with ExecutorState(cfg) as st:
         ns = resolve_namespace(cfg)

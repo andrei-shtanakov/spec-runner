@@ -119,7 +119,7 @@ class TestTrustBindsANullRow:
 
     def test_bind_branch_must_be_the_current_branch(self, repo):  # noqa: F811
         self._null_row_with_dirt(repo)
-        with ExecutorState(_cfg(repo)) as st, pytest.raises(TrustError, match="current branch"):
+        with ExecutorState(_cfg(repo)) as st, pytest.raises(TrustError, match="task's branch"):
             trust(_cfg(repo), st, "TASK-070", reason="checked", bind_branch="task/other")
         assert _row(repo)["branch"] is None
 

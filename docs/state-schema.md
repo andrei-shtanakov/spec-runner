@@ -368,7 +368,7 @@ DONE (see below) and by `tdd abandon`; kept by `reset`.
 on the task branch — the repository had no commits yet, or the checkout
 failed. A NULL branch owns no dirt. It is filled, never replaced: by a later
 start that checked the task branch out (in the same transaction as the
-insert-or-keep), or by `harness trust --bind-branch <current branch>`
+insert-or-keep), or by `harness trust --bind-branch <the task's own branch, checked out>`
 (`bound_by` becomes `operator`, audited with `bound_branch` = 1).
 
 ### `harness_baselines` (experimental, 5.0.0)

@@ -1243,13 +1243,20 @@ def _abandon_trust_note(config: ExecutorConfig, task_id: str) -> str:
     Abandon does not confirm the current harness, and nothing re-captures an
     `initial` one for a started task.
     """
+    from .git_ops import get_task_branch_name
     from .harness import trust_remedy
+    from .task import get_task_by_id, parse_tasks_text
 
+    try:
+        task = get_task_by_id(parse_tasks_text(config.tasks_file.read_text()), task_id.upper())
+    except (OSError, ValueError):
+        task = None
+    task_branch = get_task_branch_name(task) if task is not None else None
     return (
         f"ℹ️  {task_id}'s workspace record and trusted harness baseline were dropped with "
         "the red; abandon does not confirm the current harness. Under "
         "`harness_guard: strict` the next start is refused until you "
-        f"{trust_remedy(config, task_id.upper(), bind=True)}."
+        f"{trust_remedy(config, task_id.upper(), bind=True, task_branch=task_branch)}."
     )
 
 

@@ -224,8 +224,8 @@ TRUST_REMEDY = (
     "restore the harness files of this task's tree to a state you have checked "
     "(e.g. against the main branch), then confirm it with "
     '`spec-runner harness trust <TASK> --reason "…"`'
-    " (add `--bind-branch <current branch>` if the task has no workspace record"
-    " or its record names no branch)"
+    " (if the task has no workspace record or its record names no branch, run it"
+    " on the task's own branch, `task/<task-id>-…`, with `--bind-branch <that branch>`)"
 )
 
 
@@ -256,25 +256,30 @@ def surface_snapshot(
     return surface, files
 
 
-def trust_remedy(config: ExecutorConfig, task_id: str, *, bind: bool) -> str:
-    """`TRUST_REMEDY` with the exact command for this task (PR #661 owner item 1).
+def trust_remedy(
+    config: ExecutorConfig, task_id: str, *, bind: bool, task_branch: str | None
+) -> str:
+    """`TRUST_REMEDY` with the exact command for this task (PR #661).
 
     ``bind``: the task has no workspace record naming a branch (e.g. after
-    `tdd abandon`), so `harness trust` needs ``--bind-branch`` with the
-    current branch — named when it can be read.
+    `tdd abandon`), so `harness trust` must bind one — always the task's own
+    branch (``task_branch``, `get_task_branch_name`), never the branch that
+    happens to be checked out: `prepare` runs before `pre_start_hook`, and a
+    finished run leaves the operator on main (pre-acceptance C1). The command
+    checks that branch out first. Every value is shell-quoted (item 5).
     """
-    flag = ""
+    quoted_id = shlex.quote(task_id)
     if bind and config.create_git_branch:
-        from .git_ops import current_branch
-
-        branch = current_branch(config)
-        # Quoted (PR #661 item 5): an agent can name a branch `x$(…)`, and an
-        # operator copies this command into a shell.
-        flag = f" --bind-branch {shlex.quote(branch) if branch else '<current branch>'}"
+        branch = shlex.quote(task_branch) if task_branch else "<the task's branch>"
+        command = (
+            f"git checkout {branch} && spec-runner harness trust {quoted_id} "
+            f'--bind-branch {branch} --reason "…"'
+        )
+    else:
+        command = f'spec-runner harness trust {quoted_id} --reason "…"'
     return (
         "restore the harness files of this task's tree to a state you have checked "
-        "(e.g. against the main branch), then confirm it with "
-        f'`spec-runner harness trust {shlex.quote(task_id)}{flag} --reason "…"`'
+        f"(e.g. against the main branch), then confirm it with `{command}`"
     )
 
 
@@ -492,7 +497,9 @@ class HarnessBaseline:
         except _STATE_ERRORS as exc:
             raise HarnessStateError(f"could not read the harness baseline: {exc}") from exc
         bind = workspace is None or workspace.get("branch") is None
-        remedy = trust_remedy(config, task.id, bind=bind)
+        from .git_ops import get_task_branch_name
+
+        remedy = trust_remedy(config, task.id, bind=bind, task_branch=get_task_branch_name(task))
         return trust_refusal(config, self._stored, started=started, remedy=remedy)
 
     def capture(

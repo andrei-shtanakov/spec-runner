@@ -113,7 +113,7 @@ spec-runner tdd resume TASK-101 --reason "..."      # Green established: reinsta
 spec-runner tdd release TASK-102 --reason "..."     # Task is done: unlock the files its red froze (#260)
 spec-runner tdd complete TASK-001 --commit <sha> --reason "..."  # Finished by hand after the gate refused: prove, close, unlock (#576)
 spec-runner tdd reanchor TASK-001 --checkpoint <id> --commit <sha> --reason "..."  # Carry a confirmed red across a rebase (same patch-id, same claimed bytes)
-spec-runner harness trust TASK-001 --reason "..." [--bind-branch <branch>]   # Confirm a restored, checked harness as the task's trusted baseline (audited; not a way around a refusal)
+spec-runner harness trust TASK-001 --reason "..." [--bind-branch <task branch>]   # Confirm a restored, checked harness as the task's trusted baseline (audited; not a way around a refusal)
 spec-runner tdd status [TASK-ID] [--json]  # Checkpoints, claims, remedies, lifecycle
 spec-runner tdd checkpoints [TASK-ID] [--json]  # Active checkpoint ids (for --checkpoint)
 spec-runner sync                           # Post-merge closer: pull base, prune merged task/run branches, state check

@@ -54,7 +54,10 @@ def test_trust_remedy_quotes_the_branch(evil_repo):
     from spec_runner.harness import trust_remedy
 
     cfg = ExecutorConfig(project_root=evil_repo, create_git_branch=True)
-    _assert_quoted(trust_remedy(cfg, "TASK-070", bind=True), "--bind-branch", EVIL)
+    message = trust_remedy(cfg, "TASK-070", bind=True, task_branch=EVIL)
+    _assert_quoted(message, "--bind-branch", EVIL)
+    argv = shlex.split(_commands(message)[0])
+    assert argv[:3] == ["git", "checkout", EVIL]
 
 
 def test_the_strict_refusal_quotes_the_branch(evil_repo):
@@ -73,21 +76,25 @@ def test_the_strict_refusal_quotes_the_branch(evil_repo):
     with ExecutorState(cfg) as st:
         refusal = HarnessBaseline().prepare(cfg, st, task, started=True)
     assert refusal is not None
-    _assert_quoted(refusal, "--bind-branch", EVIL)
+    # C1: the remedy names the task's own branch, never the checked-out one.
+    assert "$(" not in refusal
+    _assert_quoted(refusal, "--bind-branch", "task/task-070-w")
 
 
 def test_the_abandon_note_quotes_the_branch(evil_repo):
     from spec_runner.remedy import _abandon_trust_note
 
     cfg = ExecutorConfig(project_root=evil_repo, create_git_branch=True)
-    _assert_quoted(_abandon_trust_note(cfg, "TASK-070"), "--bind-branch", EVIL)
+    note = _abandon_trust_note(cfg, "TASK-070")
+    assert "$(" not in note
+    assert EVIL not in note
 
 
 def test_the_task_id_is_quoted_too(evil_repo):
     from spec_runner.harness import trust_remedy
 
     cfg = ExecutorConfig(project_root=evil_repo, create_git_branch=True)
-    [command] = _commands(trust_remedy(cfg, "T$(id)", bind=False))
+    [command] = _commands(trust_remedy(cfg, "T$(id)", bind=False, task_branch=None))
     assert _no_unquoted_substitution(command)
     assert shlex.split(command)[3] == "T$(id)"
 
