@@ -549,16 +549,35 @@ def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None
     """Put back the `tasks.md` DONE flip a refusal after it must not leave.
 
     `post_done_hook` writes DONE before the final commit so the commit carries
-    it; a refusal past that point (the final commit over WIP, PR #661) would
-    otherwise leave a refused task reading DONE in the tree — and staged, if
-    the failed commit's `git add` got that far. Best effort: a failure is
-    logged, never raised over the refusal it accompanies.
+    it; a refusal past that point would otherwise leave a refused task reading
+    DONE. Two shapes:
+
+    - the flip is still uncommitted (the final commit failed or did not run):
+      the file goes back to its pre-flip text and is unstaged, in case the
+      failed commit's `git add` got that far;
+    - the final commit carried it (a merge or drift refusal after it): the
+      task's status goes back to what it was, and under `auto_commit` that is
+      committed as bookkeeping (status-only, #192), so the next run does not
+      meet the dirty-spec guard. The checklist marks stay.
+
+    Best effort: a failure is logged, never raised over the refusal it
+    accompanies.
     """
     if tasks_before is None:
         return
     try:
-        config.tasks_file.write_text(tasks_before)
         rel = os.path.relpath(config.tasks_file, config.project_root)
+        current = config.tasks_file.read_text()
+        head = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"],
+            cwd=config.project_root,
+            capture_output=True,
+            text=True,
+        )
+        if head.returncode == 0 and head.stdout == current and current != tasks_before:
+            _revert_committed_done(task, config, tasks_before)
+            return
+        config.tasks_file.write_text(tasks_before)
         subprocess.run(
             ["git", "reset", "-q", "--", rel],
             cwd=config.project_root,
@@ -567,6 +586,56 @@ def _undo_done_flip(task: Task, config: ExecutorConfig, tasks_before: str | None
         )
     except OSError as exc:
         logger.warning("Could not undo the DONE flip", task_id=task.id, error=str(exc))
+
+
+def _revert_committed_done(task: Task, config: ExecutorConfig, tasks_before: str) -> None:
+    """The committed DONE flip back to the task's previous status (bookkeeping)."""
+    from .bookkeeping import commit_status_flip
+    from .task import parse_tasks_text
+
+    prior = next((t.status for t in parse_tasks_text(tasks_before) if t.id == task.id), None)
+    if prior is None or prior == "done":
+        return
+    update_task_status(config.tasks_file, task.id, prior)
+    if not config.auto_commit:
+        return
+    problem = commit_status_flip(
+        config, task.id, reason="the attempt was refused after its DONE was committed"
+    )
+    if problem:
+        logger.warning("Could not commit the reverted DONE flip", task_id=task.id, detail=problem)
+
+
+def _refuse_after_done_write(
+    task: Task,
+    config: ExecutorConfig,
+    refusal: RefusalT,
+    tasks_before: str | None,
+    verdict: str,
+    findings: str = "",
+) -> tuple[bool, RefusalT, str, str, bool]:
+    """Every `post_done_hook` refusal after the DONE write goes through here.
+
+    One door (PR #661 owner item 4), so no future refusal path past the DONE
+    write can forget to put the flip back.
+    """
+    _undo_done_flip(task, config, tasks_before)
+    return (False, refusal, verdict, findings, False)
+
+
+def _merge_refusal(stage: str, detail: str) -> Refusal:
+    """A merge stage that could not deliver: INSTRUMENT, terminal (PR #661 item 3).
+
+    Nothing was judged wrong with the work; the harness could not deliver it,
+    and a retry would meet the same repository state.
+    """
+    return Refusal(
+        f"Could not merge the task's branch ({stage}): {detail.strip()[:300] or 'git failed'}. "
+        "Nothing was merged and the task is not done; the work is committed on its "
+        "branch — resolve the repository state, then retry",
+        RefusalKind.INSTRUMENT,
+        terminal=True,
+    )
 
 
 def _no_candidate_over_wip_refusal(task: Task, config: ExecutorConfig) -> Refusal | None:
@@ -2292,14 +2361,41 @@ def post_done_hook(
             # recorded DONE.
             final_refusal = _wip_head_refusal(task, config, commit="final")
             if final_refusal is not None:
-                _undo_done_flip(task, config, tasks_before)
-                return (False, final_refusal, review_verdict.value, "", False)
+                return _refuse_after_done_write(
+                    task, config, final_refusal, tasks_before, review_verdict.value
+                )
+        if final == "failed":
+            # PR #661 owner item 3: the commit was required and did not happen,
+            # so the attempt did not deliver. Outside a repository there is no
+            # commit to require (today's warning stands); a repository git
+            # cannot read is no better than a failed commit.
+            from .wip import WipReadError, _is_repository
+
+            try:
+                in_repo = _is_repository(config)
+            except WipReadError:
+                in_repo = True
+            if in_repo:
+                return _refuse_after_done_write(
+                    task,
+                    config,
+                    Refusal(
+                        "The final commit of the task's work failed (see the log: a "
+                        "rejecting pre-commit hook, a locked index, a `git add` error); "
+                        "nothing was merged and the task is not done. The work is still "
+                        "in the tree",
+                        RefusalKind.INSTRUMENT,
+                    ),
+                    tasks_before,
+                    review_verdict.value,
+                )
         if final == "empty" and config.create_git_branch:
             before_candidate = _head_sha(config)
             candidate_refusal = _candidate_refusal(task, config)
             if candidate_refusal is not None:
-                _undo_done_flip(task, config, tasks_before)
-                return (False, candidate_refusal, review_verdict.value, "", False)
+                return _refuse_after_done_write(
+                    task, config, candidate_refusal, tasks_before, review_verdict.value
+                )
             # Nothing judged a WIP sha (no review, no gate), so the drift
             # check may be re-bound to the candidate that replaces it.
             if gated_sha and gated_sha == before_candidate:
@@ -2320,17 +2416,16 @@ def post_done_hook(
             try:
                 no_op = not task_changed_since_base(config)
             except WipReadError as exc:
-                _undo_done_flip(task, config, tasks_before)
-                return (
-                    False,
+                return _refuse_after_done_write(
+                    task,
+                    config,
                     Refusal(
                         f"Cannot tell whether the task changed anything: {exc}",
                         RefusalKind.INSTRUMENT,
                         terminal=True,
                     ),
+                    tasks_before,
                     review_verdict.value,
-                    "",
-                    False,
                 )
         if no_op:
             logger.info("No changes to commit — marking task as no-op")
@@ -2437,12 +2532,16 @@ def post_done_hook(
                         branch=main_branch,
                         stderr=error_msg,
                     )
-                    return (
-                        True,
-                        None,
+                    # PR #661 owner item 3: an undelivered task is not done.
+                    return _refuse_after_done_write(
+                        task,
+                        config,
+                        _merge_refusal(
+                            f"switching to {main_branch}", result.stderr or error_msg
+                        ),
+                        tasks_before,
                         review_verdict.value,
                         (review_output or "")[:2048],
-                        no_op,
                     )
 
             # Merge task branch
@@ -2464,14 +2563,38 @@ def post_done_hook(
                 logger.info("Deleted branch", branch=branch_name)
             else:
                 logger.warning("Merge failed", stderr=result.stderr)
-                # Return to task branch on failure
+                # Leave no half-done merge behind, then return to the task branch.
+                subprocess.run(
+                    ["git", "merge", "--abort"],
+                    capture_output=True,
+                    cwd=config.project_root,
+                )
                 subprocess.run(
                     ["git", "checkout", branch_name],
                     capture_output=True,
                     cwd=config.project_root,
                 )
+                # PR #661 owner item 3: an unmerged task is not done.
+                return _refuse_after_done_write(
+                    task,
+                    config,
+                    _merge_refusal(
+                        f"merging into {main_branch}", f"{result.stdout}\n{result.stderr}"
+                    ),
+                    tasks_before,
+                    review_verdict.value,
+                    (review_output or "")[:2048],
+                )
         except Exception as e:
             logger.error("Merge failed", error=str(e))
+            return _refuse_after_done_write(
+                task,
+                config,
+                _merge_refusal("unexpected error", str(e)),
+                tasks_before,
+                review_verdict.value,
+                (review_output or "")[:2048],
+            )
 
     # Run plugin post_done hooks
     post_done_blocked = run_plugin_hooks_for("post_done", task, config, success=success)

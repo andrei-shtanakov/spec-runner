@@ -105,12 +105,12 @@ def test_failed_final_commit_over_wip_through_execute_task(tmp_path, monkeypatch
     assert _status(root) != "done"
 
 
-def test_failed_final_commit_without_wip_keeps_todays_behaviour(tmp_path, monkeypatch):
-    """No WIP: unchanged. The failed final commit is logged, not refused; the
-    merge stage then meets the uncommitted work (`git merge` refuses to
-    overwrite it), logs "Merge failed", returns to the task branch and the
-    hook still answers success — the task completes with its last edit
-    uncommitted on its branch. Pinned as today's behaviour, not endorsed."""
+def test_failed_final_commit_without_wip_is_refused_too(tmp_path, monkeypatch):
+    """No WIP. Acceptance round 1 pinned the old answer here: the failed commit
+    was logged, the merge then failed on the uncommitted work, and the hook
+    still answered success (DONE with the last edit uncommitted). Owner item 3
+    retired it: the required commit failed, so the attempt is not successful
+    (INSTRUMENT), nothing is merged and tasks.md is not left DONE."""
     from spec_runner import hooks
 
     root = cc_repo(tmp_path)
@@ -128,9 +128,10 @@ def test_failed_final_commit_without_wip_keeps_todays_behaviour(tmp_path, monkey
 
     ok, err, *_ = hooks.post_done_hook(cc_task(), cfg, True)
 
-    assert ok is True, err
+    assert ok is False
+    assert isinstance(err, Refusal) and err.kind == RefusalKind.INSTRUMENT
     assert cc_git(root, "branch", "--show-current").stdout.strip() == BRANCH
     assert cc_git(root, "rev-parse", "HEAD").stdout.strip() == own_sha
     assert cc_git(root, "rev-parse", base).stdout == base_before
     assert (root / "work.py").read_text() == "late\n"
-    assert _status(root) == "done"
+    assert _status(root) != "done"
