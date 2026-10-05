@@ -2703,15 +2703,18 @@ def post_done_hook(
     # Run plugin post_done hooks
     post_done_blocked = run_plugin_hooks_for("post_done", task, config, success=success)
     if post_done_blocked is not None:
-        # The attempt is recorded unsuccessful, so tasks.md must not say DONE
-        # either (PR #661 owner item 4) — even though the merge already ran.
-        return _refuse_after_done_write(
-            task,
-            config,
+        # Ruling R9: the ONE refusal after the DONE write that does not put the
+        # flip back. It fires after the merge and the branch deletion — the
+        # work is already in the base — so reverting DONE there (a bookkeeping
+        # commit on the base) would claim "not done" about merged work. The
+        # pre-PR behaviour stands; the DB/tasks.md disagreement is tracked in
+        # TODO `retry-wip-followups`.
+        return (
+            False,
             post_done_blocked,
-            tasks_before,
             review_verdict.value,
             (review_output or "")[:2048],
+            False,
         )
 
     return True, None, review_verdict.value, (review_output or "")[:2048], no_op

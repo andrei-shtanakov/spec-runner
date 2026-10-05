@@ -56,8 +56,12 @@ def test_drift_refusal_without_auto_commit_restores_the_tree(tmp_path, monkeypat
     assert (root / "spec" / "tasks.md").read_text() == before
 
 
-def test_a_blocking_post_done_plugin_does_not_leave_done(tmp_path, monkeypatch):
-    """The last refusal after the DONE write (after the merge): same helper."""
+def test_a_blocking_post_done_plugin_keeps_the_pre_pr_behaviour(tmp_path, monkeypatch):
+    """Ruling R9: the post_done plugin fires after the merge; no DONE revert there.
+
+    The work is already merged into the base, so tasks.md keeps DONE (pre-PR
+    behaviour) and no bookkeeping commit lands on the base.
+    """
     from spec_runner import hooks
 
     root, base = _branch_with_own_commit(tmp_path)
@@ -77,8 +81,8 @@ def test_a_blocking_post_done_plugin_does_not_leave_done(tmp_path, monkeypatch):
 
     assert ok is False and "notify" in err
     assert cc_git(root, "branch", "--show-current").stdout.strip() == base
-    assert _status(root) != "done"
-    assert cc_git(root, "status", "--porcelain", "--", "spec/tasks.md").stdout == ""
+    assert cc_git(root, "log", "-1", "--format=%s").stdout.startswith("Merge ")
+    assert _status(root) == "done"
 
 
 def test_every_return_after_the_done_write_goes_through_the_helper():
@@ -90,5 +94,9 @@ def test_every_return_after_the_done_write_goes_through_the_helper():
 
     source = inspect.getsource(hooks.post_done_hook)
     after = source[source.index("tasks_before = config.tasks_file.read_text()") :]
-    raw_refusals = re.findall(r"return \(\s*False,", after)
-    assert raw_refusals == [], "a refusal after the DONE write bypasses the helper"
+    # Exempt by ruling R9, and only that site: the blocking post_done plugin
+    # fires after the merge, when reverting DONE would deny merged work.
+    exempt = after.index("post_done_blocked = run_plugin_hooks_for(")
+    raw_refusals = [m.start() for m in re.finditer(r"return \(\s*False,", after)]
+    assert all(pos > exempt for pos in raw_refusals), "a refusal bypasses the helper"
+    assert len(raw_refusals) == 1, "only the post_done plugin site is exempt"
