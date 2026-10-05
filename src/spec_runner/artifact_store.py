@@ -59,6 +59,10 @@ class StoreCapabilities:
     encryption_at_rest: bool
     immutable_put: bool
     lifecycle: str
+    #: Storage cost in USD as the adapter reports it, `None` when it reports
+    #: none (the local volume): `evidence <run_id>` then omits the field
+    #: rather than show a guessed zero (design § 7.4, DEL-24).
+    storage_cost: float | None = None
 
 
 @dataclass(frozen=True)

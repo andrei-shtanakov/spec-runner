@@ -42,6 +42,7 @@ from .config import (
 )
 from .execution import (
     execute_task,
+    export_if_terminal,
     run_with_retries,
 )
 from .git_ops import (
@@ -1936,6 +1937,9 @@ def cmd_retry(args, config: ExecutorConfig):
                 mark_all_checklist_done(config.tasks_file, task.id)
             else:
                 update_task_status(config.tasks_file, task.id, "blocked")
+                # A retry is one attempt: failing it ends the task here, even
+                # below `max_retries` (#480 DEL-25).
+                export_if_terminal(state, task.id)
             # #255: a retry that ends over the ceiling used to say nothing —
             # the pilot's completing operation was a retry, and $0.92 of
             # overshoot went unmentioned. The task's own outcome is untouched:
@@ -2766,6 +2770,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     tdd_control.add_argument("--json", action="store_true", help="Machine-readable output")
 
+    # #480 FR-09: the read-surface of one run, from the store alone
+    evidence_parser = subparsers.add_parser(
+        "evidence", parents=[common], help="Show one run's evidence from the store (read-only)"
+    )
+    evidence_parser.add_argument("run_id", help="The run to show (see `status`)")
+    evidence_parser.add_argument("--json", action="store_true", help="Machine-readable output")
+
     # budget authorization (#230 part 2): an operator raising a ceiling
     budget_parser = subparsers.add_parser(
         "budget", parents=[common], help="Budget authorization (raise a ceiling, audited)"
@@ -3054,6 +3065,11 @@ def _dispatch(args, config) -> None:
             from .review_pr import cmd_review_pr
 
             raise SystemExit(cmd_review_pr(args, config))
+
+        if args.command == "evidence":
+            from .evidence_cmd import cmd_evidence
+
+            raise SystemExit(cmd_evidence(args, config))
 
         if args.command == "budget":
             from .budget_cmd import cmd_budget

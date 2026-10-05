@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/evidence-record.schema.json",
+  "title": "SpecRunnerEvidenceRecord",
+  "description": "One line of `runs/<run_id>/attempts/<task>-<n>.jsonl` (#480 FR-06, design § 6.4): a row of one state-DB table that belongs to one terminal attempt of one task, published once through the run's publisher. `<n>` is the ordinal of the task's attempts within the invocation, the numbering closure's `attempt_ids` uses. Text fields are redacted before they are written; identity and digest fields are verbatim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["table", "task_id", "attempt", "row"],
+  "properties": {
+    "table": {
+      "description": "The state-DB table the row came from: the tables FR-06 / AC-21 list, plus `phase_results`. `budget_authorizations` carries task-scope rows only.",
+      "type": "string",
+      "enum": [
+        "attempts",
+        "agent_calls",
+        "red_checkpoints",
+        "tdd_claims",
+        "tdd_phases",
+        "tdd_remedies",
+        "phase_waivers",
+        "waivers_applied",
+        "budget_authorizations",
+        "gate_verdicts",
+        "verify_evidence",
+        "phase_results"
+      ]
+    },
+    "task_id": { "type": "string" },
+    "attempt": {
+      "description": "Ordinal of the attempt within the invocation (1-based).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "row": {
+      "description": "The row, column name to value, as the table stores it. For `attempts`: `success`, `error_kind`, `cost_usd` (null when unreported) and the rest of the columns.",
+      "type": "object"
+    }
+  }
+}

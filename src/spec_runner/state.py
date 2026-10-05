@@ -219,6 +219,16 @@ class TaskState:
     def attempt_count(self) -> int:
         return len(self.attempts)
 
+    def attempts_in(self, run_id: str | None) -> int:
+        """How many of this task's attempts the invocation ``run_id`` recorded.
+
+        #480: the evidence number of an attempt -- `<task>-<n>` in closure
+        `attempt_ids`, the `attempts/<task>-<n>.jsonl` export key and the
+        call-start `attempt` -- is this ordinal within one invocation, never
+        the lifetime `attempt_count` (a `retry` keeps earlier attempts).
+        """
+        return sum(1 for a in self.attempts if a.run_id == run_id)
+
     @property
     def last_error(self) -> str | None:
         if self.attempts:
@@ -333,6 +343,10 @@ class ExecutorState:
         self._degraded: bool = False
         self._degraded_reason: str | None = None
         self._degraded_notified: bool = False
+        # #480 DEL-25: (run_id, task_id, n) of the attempt exports this
+        # instance queued, so a task's terminal attempt is exported once
+        # however many terminal paths it passes through.
+        self._exported_attempts: set[tuple[str | None, str, int]] = set()
         # Optional compliance audit trail. Opt-in via `audit_log_path` in the
         # project config; otherwise a no-op logger. Created lazily so tests
         # that construct ExecutorState with tmp state files don't
@@ -3126,8 +3140,46 @@ class ExecutorState:
             from .checkpoint import after_mutation
 
             after_mutation(self.config, table="attempts", task_id=task_id, conn=self._conn)
+            self._export_terminal_attempt(task_id, state, attempt)
 
         self._audit_attempt(task_id, attempt, state)
+
+    def _export_terminal_attempt(
+        self, task_id: str, state: TaskState, attempt: TaskAttempt
+    ) -> None:
+        """Publish the evidence of a terminal attempt: success, failed or blocked."""
+        if attempt.success or state.status == "failed" or attempt.error_kind == "blocked":
+            self.export_terminal_attempt(task_id)
+
+    def export_terminal_attempt(self, task_id: str) -> bool:
+        """Export the task's latest attempt of this invocation, once (#480 DEL-25).
+
+        For the terminal paths `record_attempt` cannot recognise on its own --
+        `mark_failed`, a budget stop, a fatal error code, a pre-start hook
+        failure, a `retry` that fails before `max_retries` -- the caller that
+        ends the task says so here. Idempotent per `(run_id, task, n)`: a task
+        passing through two terminal paths is exported once. Returns whether
+        an export was queued now; never raises.
+        """
+        run_id = _current_run_id()
+        number = self.get_task_state(task_id).attempts_in(run_id)
+        key = (run_id, task_id, number)
+        if number == 0 or key in self._exported_attempts:
+            return False
+        from .evidence import export_attempt
+
+        if not export_attempt(self, task_id, number):
+            return False
+        self._exported_attempts.add(key)
+        return True
+
+    def next_evidence_attempt(self, task_id: str) -> int:
+        """The evidence number of the attempt about to be recorded (#480).
+
+        What every paid-call site puts in call-start `attempt`, so that
+        `evidence <run_id>` can join a call to the attempt export by number.
+        """
+        return self.get_task_state(task_id).attempts_in(_current_run_id()) + 1
 
     def _audit_attempt(
         self,
@@ -3205,6 +3257,8 @@ class ExecutorState:
                 self._save_meta()
         except sqlite3.OperationalError as e:
             self._enter_degraded_mode("mark_failed", e, task_id=task_id)
+        else:
+            self.export_terminal_attempt(task_id)
 
         from .audit_log import EVENT_TASK_FAILED
 

@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/andrei-shtanakov/spec-runner/schemas/evidence-view.schema.json",
+  "title": "SpecRunnerEvidenceView",
+  "description": "`spec-runner evidence <run_id> --json` (#480 FR-09): one run as the store knows it. Built by the same `collect()` as the text output. A run-start without a closure is always `crash/unknown` -- a live process cannot be told from a dead one, so the view says so instead of guessing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "status",
+    "status_note",
+    "missing",
+    "run_start",
+    "closure",
+    "last_checkpoint",
+    "open_calls",
+    "attempts",
+    "total_cost_usd",
+    "unpriced_calls",
+    "deletions",
+    "next_step"
+  ],
+  "properties": {
+    "run_id": { "type": "string" },
+    "status": {
+      "description": "`closed:<closure kind>`, `crash/unknown` (no closure) or `legacy` (no evidence contract).",
+      "type": "string",
+      "pattern": "^(closed:(completed|refused|failed|interrupted|crashed)|crash/unknown|legacy)$"
+    },
+    "status_note": { "type": ["string", "null"] },
+    "missing": {
+      "description": "What a legacy run lacks to carry the evidence contract; empty otherwise.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "run_start": {
+      "description": "The run-start record (subcommand, policy identity, repository identity, ...), verbatim; null when absent.",
+      "type": ["object", "null"]
+    },
+    "closure": {
+      "description": "The closure record, verbatim; null without one. Validates against run-closure.schema.json.",
+      "type": ["object", "null"]
+    },
+    "last_checkpoint": {
+      "description": "The newest checkpoint whose manifest the store acknowledged.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["checkpoint_id", "sequence", "namespace", "timestamp"],
+          "properties": {
+            "checkpoint_id": { "type": "string" },
+            "sequence": { "type": "integer", "minimum": 0 },
+            "namespace": { "type": ["string", "null"] },
+            "timestamp": {
+              "description": "Null: the manifest carries no clock.",
+              "type": ["string", "null"]
+            }
+          }
+        }
+      ]
+    },
+    "open_calls": {
+      "description": "Calls with a call-start and no call-result.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["call_id", "provenance", "task_id", "timestamp"],
+        "properties": {
+          "call_id": { "type": "string" },
+          "provenance": { "type": ["string", "null"] },
+          "task_id": { "type": ["string", "null"] },
+          "timestamp": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "attempt", "outcome", "cost_usd", "calls", "key"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "attempt": { "type": "integer", "minimum": 1 },
+          "outcome": { "type": "string" },
+          "cost_usd": {
+            "description": "A number, or the string `unknown` when the record carries none.",
+            "oneOf": [{ "type": "number" }, { "type": "string", "enum": ["unknown"] }]
+          },
+          "calls": {
+            "description": "call_ids of the call records of this attempt.",
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "key": { "description": "Store key of the attempt's JSONL.", "type": "string" }
+        }
+      }
+    },
+    "total_cost_usd": {
+      "description": "Sum of the known costs of the run's paid calls.",
+      "type": "number"
+    },
+    "unpriced_calls": {
+      "description": "Calls whose cost is unknown (no result, or none reported).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "deletions": {
+      "description": "Keys of the run's deletion records.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "storage_cost": {
+      "description": "Present only when the adapter reports it.",
+      "type": "number"
+    },
+    "next_step": {
+      "description": "A recommendation, never an action.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["recommendation", "unprovable"],
+      "properties": {
+        "recommendation": { "type": "string" },
+        "unprovable": {
+          "description": "`не доказуемо: <причина>` where the data to decide is missing.",
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

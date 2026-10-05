@@ -2265,7 +2265,7 @@ def _paid_scope(task, provenance: str, ledger_provenance: str, state, prompt: st
         task_id=task.id,
         provenance=provenance,
         ledger_provenance=ledger_provenance,
-        attempt=state.get_task_state(task.id).attempt_count + 1,
+        attempt=state.next_evidence_attempt(task.id),
         state=state,
         prompt=prompt,
         prompt_log=prompt_log,

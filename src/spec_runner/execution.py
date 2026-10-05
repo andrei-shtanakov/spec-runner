@@ -1119,7 +1119,7 @@ def _execute_task(
         with paid_call.scope(
             task_id=task_id,
             provenance="green",
-            attempt=state.get_task_state(task_id).attempt_count + 1,
+            attempt=state.next_evidence_attempt(task_id),
             state=state,
             price_on_attempt=True,
             prompt=prompt,
@@ -1731,9 +1731,39 @@ def _fail_for_budget(
     # it (#127). "blocked" is what every other terminal failure writes here.
     update_task_status(config.tasks_file, task.id, "blocked")
     commit_status_flip_quietly(config, task.id, reason="budget exceeded")
+    # Terminal whatever `max_retries` says, so `record_attempt` cannot tell.
+    state.export_terminal_attempt(task.id)
 
 
 def run_with_retries(
+    task: Task,
+    config: ExecutorConfig,
+    state: ExecutorState,
+    harness_baseline: HarnessBaseline | None = None,
+) -> bool | str:
+    """Execute task with retries; export the attempt the task ended with.
+
+    Every return other than success leaves the task done with for this
+    invocation (failed, blocked, skipped), so its last attempt is terminal
+    evidence (#480 DEL-25) -- unless it was interrupted, which leaves the
+    task resumable. `export_terminal_attempt` is idempotent, so the paths
+    that already exported (`record_attempt`, `mark_failed`, a budget stop)
+    are not exported twice.
+    """
+    result = _run_with_retries(task, config, state, harness_baseline)
+    if result is not True:
+        export_if_terminal(state, task.id)
+    return result
+
+
+def export_if_terminal(state: ExecutorState, task_id: str) -> None:
+    """Export the task's last attempt unless it was interrupted (#480 DEL-25)."""
+    attempts = state.get_task_state(task_id).attempts
+    if attempts and attempts[-1].error_code is not ErrorCode.INTERRUPTED:
+        state.export_terminal_attempt(task_id)
+
+
+def _run_with_retries(
     task: Task,
     config: ExecutorConfig,
     state: ExecutorState,

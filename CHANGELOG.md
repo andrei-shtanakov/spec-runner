@@ -10,6 +10,52 @@ is a **breaking change** and requires a major version bump plus an entry here.
 
 ## [Unreleased]
 
+### Added
+
+- **`spec-runner evidence <run_id> [--json]`** (#480 TASK-004, FR-09): the
+  read-surface of one run, built only from the artifact store (read-only
+  door, never a `put`). It needs no clone, no state DB and no Git. One
+  `collect()` feeds both the text and `--json`. It shows:
+  - the status: `closed:<kind>`, or `crash/unknown` with «не доказуемо» when
+    there is a run-start and no closure;
+  - the last acknowledged checkpoint and the open calls;
+  - each attempt with its outcome, its cost (`unknown` when none was reported)
+    and the call records it links to;
+  - the total cost, `deletions[]`, and the storage cost when the adapter
+    reports one.
+
+  A legacy run is reported as «нет evidence-контракта», with what it lacks. A
+  store that cannot answer exits 2 with the reason. The next step is a
+  recommendation only: `restore` is not in this version yet.
+- **Terminal-attempt export** (FR-06, AC-21): a task that ends an invocation
+  done, failed or blocked publishes `runs/<run_id>/attempts/<task>-<n>.jsonl`,
+  exactly once, through the run's publisher. This covers a terminal refusal, a
+  budget stop, a fatal error code, a pre-start hook failure and a failing
+  `retry`. The file holds the task's rows from `attempts`, `agent_calls`,
+  `red_checkpoints`, `tdd_claims`, `tdd_phases`, `tdd_remedies`,
+  `phase_waivers`, `waivers_applied`, task-scope `budget_authorizations`,
+  `gate_verdicts`, `verify_evidence` and `phase_results`. `attempts` and
+  `agent_calls` are narrowed to the invocation. An interrupted attempt is not
+  exported, because the task stays resumable. The `doctor` probe exports
+  nothing.
+- **Schemas** `schemas/evidence-view.schema.json` (the `--json` output) and
+  `schemas/evidence-record.schema.json` (one line of an attempt export).
+- **`StoreCapabilities.storage_cost`** (`float | None`, default `None`): the
+  storage cost an adapter reports. The local volume reports none, so
+  `evidence` omits the field.
+
+### Changed
+
+- **Attempt numbering in evidence is per invocation.** The `attempt` in a
+  call-start record (GREEN, RED, review) is now the attempt's ordinal within
+  the invocation that made the call. Until now it was the task's lifetime
+  attempt count + 1. Closure `attempt_ids` and the export key `<task>-<n>`
+  already use the per-invocation ordinal, so the three now agree and
+  `evidence` can link calls to their attempt. After a plain `retry`, which
+  keeps the earlier attempts, the first attempt of the new run is `1` in all
+  three. The lifetime count in `status`, the audit log and WIP trailers is
+  unchanged.
+
 ## [5.0.0] - 2026-10-05
 
 Major by rule, not by breakage of `--json-result`: the state DB gains four

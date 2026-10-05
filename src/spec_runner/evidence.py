@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import sqlite3
 import sys
 import threading
 from collections import deque
@@ -29,6 +30,7 @@ from .artifact_store import (
     AlreadyExists,
     ArtifactStore,
     _open_store,
+    attempt_key,
     call_result_key,
     call_start_key,
     checkpoint_key,
@@ -231,7 +233,22 @@ class Closure:
         return closure_key(self.run_id)
 
 
-Record = RunStart | CallStart | CallResult | Closure
+@dataclass(frozen=True)
+class AttemptExport:
+    """One task's attempt as JSONL lines (design § 6.4), published once."""
+
+    run_id: str
+    task_id: str
+    attempt: int
+    lines: tuple[dict[str, Any], ...]
+    kind: str = "attempt"
+
+    @property
+    def key(self) -> str:
+        return attempt_key(self.run_id, self.task_id, self.attempt)
+
+
+Record = RunStart | CallStart | CallResult | Closure | AttemptExport
 
 
 def call_start_for(
@@ -315,6 +332,11 @@ def _redact_value(name: str, value: Any) -> Any:
 
 def serialise(record: Record) -> bytes:
     """Canonical JSON of ``record`` with every text field redacted."""
+    if isinstance(record, AttemptExport):
+        rows = [_redact_value("line", line) for line in record.lines]
+        return "".join(
+            json.dumps(r, sort_keys=True, ensure_ascii=False, default=str) + "\n" for r in rows
+        ).encode("utf-8")
     body = {k: _redact_value(k, v) for k, v in asdict(record).items()}
     return json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
@@ -562,6 +584,85 @@ class Publisher:
     def pending(self) -> int:
         """Records and checkpoints still owed to the store, lost ones included."""
         return len(self._queue) + len(self._checkpoints) + len(self.unrecovered_losses())
+
+
+#: Tables whose rows of one task go into its attempt export: the list of
+#: FR-06 / AC-21 (design § 6.4), plus `phase_results`. `attempts` and
+#: `agent_calls` are narrowed to the invocation's `run_id`; those with a
+#: `namespace` column to the namespace. `budget_authorizations` contributes
+#: its task-scope rows only (a run-scope row has no task).
+ATTEMPT_TABLES: tuple[str, ...] = (
+    "attempts",
+    "agent_calls",
+    "red_checkpoints",
+    "tdd_claims",
+    "tdd_phases",
+    "tdd_remedies",
+    "phase_waivers",
+    "waivers_applied",
+    "budget_authorizations",
+    "gate_verdicts",
+    "verify_evidence",
+    "phase_results",
+)
+
+
+def _table_rows(
+    conn: sqlite3.Connection, table: str, task_id: str, namespace: str, run_id: str | None
+) -> list[dict[str, Any]]:
+    columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if "task_id" not in columns:
+        return []  # table absent (an older DB) or not task-scoped
+    where: list[str] = ["task_id = ?"]
+    params: list[str | None] = [task_id]
+    if "namespace" in columns:
+        where.append("namespace IS ?")
+        params.append(namespace)
+    if table in ("attempts", "agent_calls") and "run_id" in columns:
+        where.append("run_id IS ?")
+        params.append(run_id)
+    cursor = conn.execute(f"SELECT * FROM {table} WHERE {' AND '.join(where)} ORDER BY 1", params)
+    names = [d[0] for d in cursor.description]
+    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+
+def export_attempt(state: Any, task_id: str, attempt: int) -> bool:
+    """Publish ``attempts/<task>-<n>.jsonl`` for a terminal attempt (§ 6.4).
+
+    ``attempt`` is the ordinal of this task's attempts within the invocation,
+    the numbering closure's ``attempt_ids`` uses. Goes through the run's
+    publisher queue, so the drain before closure waits for it. Publishes
+    nothing under ``config.probe_provenance`` (the probe's task is not in the
+    workstream) or outside a started run. Returns whether a record was queued
+    or delivered; never raises -- the attempt is already recorded.
+    """
+    from . import run_context
+    from .tdd import resolve_namespace
+
+    config = state.config
+    ctx = run_context.current()
+    if getattr(config, "probe_provenance", None) or ctx is None or not ctx.started:
+        return False
+    publisher = ctx.publisher
+    if publisher is None:
+        return False
+    try:
+        namespace = resolve_namespace(config)
+        lines: list[dict[str, Any]] = []
+        for table in ATTEMPT_TABLES:
+            rows = _table_rows(state._conn, table, task_id, namespace, ctx.run_id)
+            if table == "attempts":
+                rows = rows[attempt - 1 : attempt]  # this invocation's n-th
+            lines.extend(
+                {"table": table, "task_id": task_id, "attempt": attempt, "row": row} for row in rows
+            )
+        publisher.publish_or_queue(AttemptExport(ctx.run_id, task_id, attempt, tuple(lines)))
+    except AlreadyExists:
+        return False  # the first export stands
+    except Exception as exc:  # noqa: BLE001 - never fail the mutation it follows
+        print(f"⚠️  attempt evidence for {task_id} was not exported: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def _local_root(config: ExecutorConfig) -> Path:
