@@ -30,6 +30,7 @@ from .cli_info import (  # noqa: E402, F401
     cmd_tui,
     cmd_validate,
     cmd_verify,
+    refuse_forgetting_attempts,
 )
 from .cli_plan import cmd_plan  # noqa: E402, F401
 from .config import (
@@ -84,6 +85,7 @@ from .task import (
     update_task_status,
 )
 from .validate import format_results, validate_all
+from .wip import save_wip_before_forgetting_attempts
 
 logger = get_logger("cli")
 
@@ -1243,6 +1245,9 @@ def _run_tasks_inner(args, config: ExecutorConfig, *, lock_held: bool = False):
         )
         previously_failed: set[str] = set()  # used by T17 second-pass detection
         if reset_enabled:
+            forget_refusal = save_wip_before_forgetting_attempts(config, state)
+            if forget_refusal is not None:
+                refuse_forgetting_attempts("run --all", forget_refusal)
             previously_failed = state.reset_failed_to_pending()
             state.consecutive_failures = 0
             state.clear_second_pass_fails()
@@ -1891,6 +1896,13 @@ def cmd_retry(args, config: ExecutorConfig):
 
         # Handle --fresh flag
         if hasattr(args, "fresh") and args.fresh:
+            # Before the clear: the WIP trailer names the attempt the work
+            # came from, which the clear would erase (PR #661 blocker 2).
+            forget_refusal = save_wip_before_forgetting_attempts(config, state)
+            if forget_refusal is not None:
+                if integration is not None:
+                    _finalize_integration(config, integration, state, post_pr=False)
+                refuse_forgetting_attempts("retry --fresh", forget_refusal)
             logger.info("Fresh start: clearing previous attempts", task_id=task.id)
             task_state.attempts = []
         else:

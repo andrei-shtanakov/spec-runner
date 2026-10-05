@@ -7,6 +7,7 @@ work is trusted is the harness baseline's question, never this commit's.
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 
@@ -163,6 +164,27 @@ def save_wip(config: ExecutorConfig, state: ExecutorState) -> WipResult:
     sha = _git(config, "rev-parse", "HEAD").stdout.strip()
     logger.info("Saved WIP", task_id=task_id, sha=sha, paths=len(paths))
     return WipResult(sha, None)
+
+
+def save_wip_before_forgetting_attempts(
+    config: ExecutorConfig, state: ExecutorState
+) -> Refusal | None:
+    """Save the owned task's work as WIP before its attempt records are erased.
+
+    PR #661 blocker 2: the trailer's ``N`` is the last recorded attempt
+    (spec §1). `retry --fresh`, `run --all`'s failed → pending reset and
+    `reset` erase those records, after which the next start would write
+    "attempt 0" about work a real attempt produced. Called first, it keeps
+    the real number. No eligible dirt, or a branch nobody owns: nothing to do.
+    A state DB or tree that cannot be read is an ``instrument`` refusal.
+    """
+    try:
+        return save_wip(config, state).refusal
+    except (sqlite3.Error, OSError, WorktreeStatusError) as exc:
+        return Refusal(
+            f"could not tell whether the tree holds a task's unfinished work ({exc})",
+            RefusalKind.INSTRUMENT,
+        )
 
 
 def is_wip_of(config: ExecutorConfig, sha: str, task_id: str) -> bool:

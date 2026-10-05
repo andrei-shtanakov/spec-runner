@@ -6,12 +6,14 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 from .config import (
     ExecutorConfig,
     _resolve_config_path,
 )
 from .logging import get_logger
+from .phases import Refusal, RefusalKind
 from .review_pr import pr_cost_rows
 from .state import (
     ExecutorState,
@@ -645,6 +647,21 @@ def cmd_stop(args, config: ExecutorConfig):
     logger.info("Stop requested", stop_file=str(stop_file))
 
 
+def refuse_forgetting_attempts(command: str, refusal: Refusal) -> NoReturn:
+    """Stop `command` before it erased any attempt record (PR #661 blocker 2).
+
+    Exit 1, or 2 for an ``instrument`` refusal (spec §5).
+    """
+    logger.error("WIP not saved; attempts kept", command=command, reason=str(refusal))
+    print(
+        f"⛔ {command}: the task's work could not be saved as WIP before its attempt "
+        f"records are erased: {refusal}.\n"
+        "   Nothing was erased and nothing destructive ran.",
+        file=sys.stderr,
+    )
+    sys.exit(2 if refusal.kind is RefusalKind.INSTRUMENT else 1)
+
+
 def cmd_reset(args, config: ExecutorConfig):
     """Reset executor state, keeping workspaces, harness baselines and the trust audit.
 
@@ -654,6 +671,14 @@ def cmd_reset(args, config: ExecutorConfig):
     from . import state as state_mod
 
     if config.state_file.exists():
+        # PR #661 blocker 2: the owned task's work is saved as WIP while its
+        # attempt number is still on record; a refusal erases nothing.
+        from .wip import save_wip_before_forgetting_attempts
+
+        with ExecutorState(config) as state:
+            forget_refusal = save_wip_before_forgetting_attempts(config, state)
+        if forget_refusal is not None:
+            refuse_forgetting_attempts("reset", forget_refusal)
         try:
             state_mod.reset_state_preserving_workspaces(config)
         except Exception as exc:

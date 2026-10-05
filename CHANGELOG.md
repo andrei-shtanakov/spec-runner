@@ -44,7 +44,11 @@ that needs an operator is the migration below.
   its refusal records name no judged commit). The no-op check
   judges the task's cumulative diff, and the next attempt's prompt says it is
   continuing unverified work. If the work cannot be saved, nothing destructive
-  runs; a partially staged path is refused by name. `create_git_branch: false`
+  runs; a partially staged path is refused by name. `N` is the attempt the
+  work came from: `retry --fresh`, `run --all`'s failed → pending reset and
+  `reset` erase attempt records, so each first saves the checked-out task's
+  work as WIP, and a refusal there erases nothing (exit 1, or 2 when the tree
+  or the DB cannot be read). `create_git_branch: false`
   is unchanged (no WIP, tree untouched).
 - **The harness baseline is persisted** (`harness_baselines`) before the first
   agent call and reused by every later attempt and invocation; it is never
