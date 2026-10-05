@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -3614,7 +3614,9 @@ def _build_reset_db(
         fresh._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
-def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
+def reset_state_preserving_workspaces(
+    config: ExecutorConfig, *, before_rebuild: Callable[[], None] | None = None
+) -> None:
     """Rebuild the state DB keeping the harness-trust tables (spec §2).
 
     Built in a temporary file and swapped in with one `os.replace`: any failure
@@ -3628,6 +3630,11 @@ def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
     `ResetRefused` before anything is touched, and no run can start and write
     rows that the rebuilt file would drop. A DB some other connection is
     mid-transaction on is refused as well.
+
+    ``before_rebuild`` runs under the same lock, before anything is read
+    for the rebuild: `reset` saves the checked-out task's WIP there (PR #661),
+    so a live run's half-written tree is never committed under it. Whatever
+    it raises propagates with nothing rebuilt.
     """
     from .config import ExecutorLock
 
@@ -3635,6 +3642,8 @@ def reset_state_preserving_workspaces(config: ExecutorConfig) -> None:
     if not lock.acquire():
         raise ResetRefused("the executor lock is held (a run is live); stop the run before reset")
     try:
+        if before_rebuild is not None:
+            before_rebuild()
         _reset_locked(config)
     finally:
         lock.release()

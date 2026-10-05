@@ -67,6 +67,33 @@ def _wip_continuation(
     return tuple((sha, n, tuple(files)) for sha, n, files in wip_commits(config, task_id, base))
 
 
+def _no_candidate_at_start(task, config) -> "Refusal | None":
+    """`hooks._no_candidate_over_wip_refusal`, asked before any gate or paid call.
+
+    Only where a gate will judge the work: one is registered, or the task's
+    mode registers the RED/claims gates on its own path (`tdd`,
+    `verify_first`). The WIP history is read only then; unreadable is
+    INSTRUMENT, as at every other WIP read.
+    """
+    from . import wip
+    from .gates import has_gates
+    from .hooks import _no_candidate_over_wip_refusal
+
+    if config.auto_commit or not config.create_git_branch:
+        return None
+    if not has_gates() and config.resolve_execution_mode(task) not in ("tdd", "verify_first"):
+        return None
+    try:
+        base = wip.wip_base(config)
+        if base is None or not wip_commits(config, task.id, base):
+            return None
+    except WipReadError as exc:
+        return Refusal(
+            f"Cannot read this task's WIP history: {exc}", RefusalKind.INSTRUMENT, terminal=True
+        )
+    return _no_candidate_over_wip_refusal(task, config)
+
+
 def _refuse_task(
     task,
     config,
@@ -763,6 +790,16 @@ def _execute_task(
     # GREEN agent's to revert (the retry prompt says so), and refusing here
     # would take that chance away and fail every retry unpaid.
     passes_before = snapshot_contents(config)
+
+    # PR #661 blocker 1, round 1: under `auto_commit: false` no candidate can
+    # be made over a WIP HEAD, so the pre-implementation gates and the paid
+    # call would only lead to a verdict on WIP. Refused here, before both;
+    # `post_done_hook` keeps the same check as a backstop.
+    no_candidate = _no_candidate_at_start(task, config)
+    if no_candidate is not None:
+        return _refuse_task(
+            task, config, state, str(no_candidate), kind=no_candidate.kind, stage="setup"
+        )
 
     # Update status
     state.mark_running(task_id)

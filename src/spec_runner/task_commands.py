@@ -21,9 +21,11 @@ Usage:
 """
 
 import argparse
+import contextlib
 import re
 import sqlite3
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,6 +52,34 @@ if TYPE_CHECKING:
 def done_ids(tasks: list[Task]) -> set[str]:
     """The ids `tasks.md` shows DONE."""
     return {t.id for t in tasks if t.status == "done"}
+
+
+@contextlib.contextmanager
+def no_live_run(config: "ExecutorConfig", command: str) -> Iterator[None]:
+    """Hold the executor lock around a command that can end a task (round 1 #5).
+
+    `task done` / `task sync-from-gh` delete the ended task's baseline; under
+    a live run that would pull the trusted baseline from under an attempt in
+    progress. Refused with exit 2 before anything is written.
+    """
+    from .config import ExecutorLock
+
+    lock_path = config.state_file.with_suffix(".lock")
+    if not lock_path.parent.is_dir():
+        yield  # no state directory: no run can hold the lock
+        return
+    lock = ExecutorLock(lock_path)
+    if not lock.acquire():
+        print(
+            f"⛔ task {command}: a run holds the executor lock ({lock_path}); nothing was "
+            "written. Retry once the run has stopped.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def forget_ended_tasks(
@@ -485,15 +515,17 @@ def main():
         "sync-to-gh": cmd_sync_to_gh,
     }
 
-    if args.command in write_commands:
-        done_before = done_ids(tasks)
-        write_commands[args.command](args, tasks, tasks_file)
-        if args.command in ("done", "sync-from-gh"):
-            from .config import _resolve_config_path, build_config, load_config_from_yaml
+    if args.command in ("done", "sync-from-gh"):
+        from .config import _resolve_config_path, build_config, load_config_from_yaml
 
-            config = build_config(load_config_from_yaml(_resolve_config_path()), args)
+        config = build_config(load_config_from_yaml(_resolve_config_path()), args)
+        with no_live_run(config, args.command):
+            done_before = done_ids(tasks)
+            write_commands[args.command](args, tasks, tasks_file)
             named = args.task_id.upper() if args.command == "done" else ""
             forget_ended_tasks(config, tasks_file, done_before, named)
+    elif args.command in write_commands:
+        write_commands[args.command](args, tasks, tasks_file)
     elif args.command in read_commands:
         read_commands[args.command](args, tasks)
 

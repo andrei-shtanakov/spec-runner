@@ -241,8 +241,12 @@ def _is_repository(config: ExecutorConfig) -> bool:
     detail = found.stderr.strip()[:300] or "git rev-parse --git-dir failed"
     if NOT_A_REPOSITORY not in found.stderr:
         raise WipReadError(detail)
-    root = Path(config.project_root).resolve()
-    damaged = next((p for p in (root, *root.parents) if (p / ".git").exists()), None)
+    try:
+        root = Path(config.project_root).resolve()
+        damaged = next((p for p in (root, *root.parents) if (p / ".git").exists()), None)
+    except OSError as exc:
+        # An unreadable parent cannot prove there is no `.git` above.
+        raise WipReadError(f"cannot look for a .git above the project: {exc}") from exc
     if damaged is not None:
         raise WipReadError(f"{damaged / '.git'} exists but git cannot read it: {detail}")
     return False

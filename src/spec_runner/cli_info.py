@@ -647,6 +647,14 @@ def cmd_stop(args, config: ExecutorConfig):
     logger.info("Stop requested", stop_file=str(stop_file))
 
 
+class _WipNotSaved(Exception):
+    """`reset`'s WIP save refused; carries the refusal out of the locked section."""
+
+    def __init__(self, refusal: Refusal) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
+
 def refuse_forgetting_attempts(command: str, refusal: Refusal) -> NoReturn:
     """Stop `command` before it erased any attempt record (PR #661 blocker 2).
 
@@ -672,15 +680,21 @@ def cmd_reset(args, config: ExecutorConfig):
 
     if config.state_file.exists():
         # PR #661 blocker 2: the owned task's work is saved as WIP while its
-        # attempt number is still on record; a refusal erases nothing.
+        # attempt number is still on record; a refusal erases nothing. Under
+        # the executor lock (taken by the reset, round 1 #2), so a live run's
+        # tree is never committed; an unreadable DB is the exit-2 message.
         from .wip import save_wip_before_forgetting_attempts
 
-        with ExecutorState(config) as state:
-            forget_refusal = save_wip_before_forgetting_attempts(config, state)
-        if forget_refusal is not None:
-            refuse_forgetting_attempts("reset", forget_refusal)
+        def save_wip_first() -> None:
+            with ExecutorState(config) as state:
+                refusal = save_wip_before_forgetting_attempts(config, state)
+            if refusal is not None:
+                raise _WipNotSaved(refusal)
+
         try:
-            state_mod.reset_state_preserving_workspaces(config)
+            state_mod.reset_state_preserving_workspaces(config, before_rebuild=save_wip_first)
+        except _WipNotSaved as refused:
+            refuse_forgetting_attempts("reset", refused.refusal)
         except Exception as exc:
             print(f"⛔ reset failed, the state DB is unchanged: {exc}")
             raise SystemExit(2) from exc

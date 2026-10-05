@@ -2118,6 +2118,7 @@ def _dispatch_task_command(args: argparse.Namespace, config: ExecutorConfig) -> 
         cmd_stats,
         done_ids,
         forget_ended_tasks,
+        no_live_run,
     )
 
     task_cmd = getattr(args, "task_command", None)
@@ -2163,12 +2164,15 @@ def _dispatch_task_command(args: argparse.Namespace, config: ExecutorConfig) -> 
         "sync-to-gh": cmd_sync_to_gh,
     }
 
-    if task_cmd in write_commands:
-        done_before = done_ids(tasks)
-        write_commands[task_cmd](args, tasks, tasks_file)
-        if task_cmd in ("done", "sync-from-gh"):
+    if task_cmd in ("done", "sync-from-gh"):
+        # Ends tasks: never under a live run (PR #661 round 1 #5).
+        with no_live_run(config, task_cmd):
+            done_before = done_ids(tasks)
+            write_commands[task_cmd](args, tasks, tasks_file)
             named = args.task_id.upper() if task_cmd == "done" else ""
             forget_ended_tasks(config, tasks_file, done_before, named)
+    elif task_cmd in write_commands:
+        write_commands[task_cmd](args, tasks, tasks_file)
     elif task_cmd in read_commands:
         read_commands[task_cmd](args, tasks)
 

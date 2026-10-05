@@ -37,22 +37,32 @@ that needs an operator is the migration below.
   red gate, confirms no claim and is never the SHA a gate verdict is bound to;
   an explicit `TASK-X: candidate` commit is made over it. Under
   `auto_commit: false` no candidate can be made, so a task whose HEAD is its
-  WIP commit is refused (policy, not retried) before any test, review or gate
-  when a gate is registered: commit the work or enable `auto_commit`. No
-  `gate_verdicts` row and no bookkeeping `Gate-Candidate:` trailer names a WIP
-  SHA (a project with no review and no gates keeps its single task commit, and
-  its refusal records name no judged commit). The no-op check
+  WIP commit is refused (policy, not retried) right after its start — before
+  the pre-implementation gates and the paid call — when a gate is registered
+  or the task runs under `tdd`/`verify_first`: commit the work or enable
+  `auto_commit`. No `gate_verdicts` row and no bookkeeping `Gate-Candidate:`
+  trailer names a WIP SHA (a project with no review and no gates keeps its
+  single task commit, and its refusal records name no judged commit). Known
+  limit: with `auto_commit: false` and no registered gate (no review, or
+  `review_policy: advisory`), nothing refuses, and the task branch — WIP
+  commits included — is merged as it stands. The no-op check
   judges the task's cumulative diff, and the next attempt's prompt says it is
   continuing unverified work. If the work cannot be saved, nothing destructive
   runs; a partially staged path is refused by name. A repository git cannot
   read (a corrupt `.git`, HEAD naming a missing object, dubious ownership, a
   permission error) is an instrument refusal before the paid call, never "no
   WIP": only a directory git calls "not a git repository" with no `.git` at or
-  above it, and a repository with no commit yet, count as having none. `N` is the attempt the
+  above it, and a repository with no commit yet, count as having none. An
+  unborn HEAD (e.g. a fresh `--orphan` branch) in a repository that has
+  commits elsewhere is refused as damaged. `N` is the attempt the
   work came from: `retry --fresh`, `run --all`'s failed → pending reset and
   `reset` erase attempt records, so each first saves the checked-out task's
-  work as WIP, and a refusal there erases nothing (exit 1, or 2 when the tree
-  or the DB cannot be read). `create_git_branch: false`
+  work as WIP. **`reset` and `run --all` can therefore create a WIP git
+  commit**, and can refuse on a partially staged path; a refusal erases
+  nothing (exit 1, or 2 when the tree or the DB cannot be read). `reset` takes
+  the executor lock before that save and holds it through the rebuild, so it
+  never commits a live run's tree; `run --all` saves under the run's own lock
+  (except under `--force`, which skips the lock for the whole run). `create_git_branch: false`
   is unchanged (no WIP, tree untouched).
 - **The harness baseline is persisted** (`harness_baselines`) before the first
   agent call and reused by every later attempt and invocation; it is never
@@ -72,7 +82,8 @@ that needs an operator is the migration below.
   save that records the success. `task done` and `task sync-from-gh` record
   nothing in the DB, so for a task they flip to DONE the deletion is its own
   transaction after the `tasks.md` write; if it fails the command says so and
-  exits 2, and re-running `task done` finishes it. A DONE whose DB write fails
+  exits 2, and re-running `task done` finishes it. Both refuse (exit 2, nothing
+  written) while a run holds the executor lock. A DONE whose DB write fails
   (degraded mode) keeps the baseline, consistently with the DONE row not being
   durable.
 

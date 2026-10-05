@@ -239,7 +239,7 @@ class TestReset:
             state.record_attempt("TASK-001", False, 1.0, error="x")
         before = cfg.state_file.read_bytes()
 
-        def broken(config):
+        def broken(config, **kw):
             raise OSError("disk full")
 
         monkeypatch.setattr(state_mod, "reset_state_preserving_workspaces", broken)

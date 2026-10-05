@@ -165,3 +165,30 @@ def test_the_attempt_refuses_before_the_paid_call(repo, monkeypatch):
     assert not last.success
     assert last.error_kind == "instrument"
     assert "dubious ownership" in (last.error or "")
+
+
+def test_an_unreadable_parent_is_a_refusal(tmp_path, monkeypatch):
+    """`Path.exists` raising (an unreadable parent) is not "no `.git` there"."""
+    real = wip._git
+
+    def not_a_repo(config, *args):
+        if args[:2] == ("rev-parse", "--git-dir"):
+            return subprocess.CompletedProcess(
+                args, 128, "", "fatal: not a git repository (or any of the parent directories)"
+            )
+        return real(config, *args)
+
+    def denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(wip, "_git", not_a_repo)
+    monkeypatch.setattr(Path, "exists", denied)
+    with pytest.raises(WipReadError, match="Permission denied"):
+        wip.wip_base(_cfg(tmp_path))
+
+
+def test_an_unborn_orphan_branch_beside_commits_is_damaged(repo):
+    """HEAD unborn, but the repository has commits elsewhere: refused."""
+    _git(repo, "checkout", "-q", "--orphan", "task/orphan")
+    with pytest.raises(WipReadError, match="repository has some"):
+        wip.wip_base(_cfg(repo))
