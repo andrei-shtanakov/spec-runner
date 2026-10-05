@@ -813,7 +813,7 @@ Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-de
 **Traces to:** [FR-01], [FR-02], [FR-07], [FR-06], [FR-09]
 
 ### TASK-003: Checkpoint: seam «после mutation», backup-snapshot, `sequence`, `PolicyIdentity`, manifest и очередь publisher-а
-P2 | TODO   Est: 0.5d
+P2 | 🔄 IN_PROGRESS   Est: 0.5d
 
 Реализовать сценарии BEH-12 (DT-03, группа core).
 Source: workstreams/durable-continuation-checkpoint-evidence-20260915/spec/30-decomposition.md#DT-03
